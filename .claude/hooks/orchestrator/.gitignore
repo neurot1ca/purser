@@ -1,0 +1,9 @@
+# The suite builds real temporary git repositories and imports the package, so
+# it leaves caches and scratch trees behind inside this directory. None of it
+# belongs in the repository.
+__pycache__/
+*.pyc
+.ledger-test-tmp/
+.reviewer-test-*/
+.reviewer1-*/
+.reviewer1-packet-*

@@ -1,0 +1,983 @@
+"""Git baselines, reviewable deltas, and durable orchestrator session records.
+
+All public results are plain JSON-serializable mappings.  Inspection failures
+are explicit UNKNOWN results and deliberately omit numeric delta fields, so a
+caller cannot accidentally interpret a failed inspection as an empty change.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+import hashlib
+import hmac
+import json
+import math
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import subprocess
+import tempfile
+import time
+from typing import Any
+
+
+OK = "OK"
+UNKNOWN = "UNKNOWN"
+PROCEED = "PROCEED"
+UNKNOWN_CONCURRENT_WRITER = "UNKNOWN_CONCURRENT_WRITER"
+MISSING = "MISSING"
+CORRUPT = "CORRUPT"
+MANIFEST_BUDGET_EXCEEDED = "MANIFEST_BUDGET_EXCEEDED"
+DEFAULT_MANIFEST_BUDGET_SECONDS = 3.0
+
+_LEDGER_SCHEMA_VERSION = 1
+_PROTECTED_EXACT = frozenset(
+    {
+        "state/current.yaml",
+        "AGENTS.md",
+        "docs/EVIDENCE_RULES.md",
+        ".gitattributes",
+    }
+)
+_SECRET_KEY_PARTS = (
+    "api_key",
+    "apikey",
+    "credential",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+    "wallet",
+)
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]{12,}", re.IGNORECASE),
+)
+
+
+class _InspectionError(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(f"{code}: {message}")
+
+
+def _unknown(code: str, message: str, **context: Any) -> dict[str, Any]:
+    return {
+        "status": UNKNOWN,
+        "code": code,
+        "message": message,
+        "changed_paths": None,
+        **context,
+    }
+
+
+def _run_git(
+    repo_root: Path,
+    arguments: Sequence[str],
+    timeout: float,
+    operation: str,
+) -> bytes:
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=repo_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise _InspectionError(
+            "GIT_TIMEOUT", f"Git timed out while {operation}."
+        ) from error
+    except OSError as error:
+        raise _InspectionError(
+            "GIT_UNAVAILABLE", f"Git could not run while {operation}."
+        ) from error
+    if completed.returncode != 0:
+        raise _InspectionError(
+            "GIT_FAILED",
+            f"Git failed with exit code {completed.returncode} while {operation}.",
+        )
+    return completed.stdout
+
+
+def _decode_path(value: bytes) -> str:
+    return os.fsdecode(value).replace("\\", "/")
+
+
+def _normalize_scope(scope: Iterable[str | os.PathLike[str]]) -> list[str]:
+    if isinstance(scope, (str, bytes, os.PathLike)):
+        scope = [scope]  # type: ignore[list-item]
+    normalized: list[str] = []
+    for raw in scope:
+        value = os.fspath(raw)
+        if not isinstance(value, str) or not value.strip():
+            raise _InspectionError("INVALID_SCOPE", "Scope paths must be non-empty strings.")
+        value = value.strip().replace("\\", "/")
+        path = PurePosixPath(value)
+        if (
+            "\x00" in value
+            or path.is_absolute()
+            or ".." in path.parts
+            or re.match(r"^[A-Za-z]:", value)
+        ):
+            raise _InspectionError(
+                "INVALID_SCOPE", "Scope paths must be literal repository-relative paths."
+            )
+        canonical = path.as_posix()
+        if canonical in ("", "."):
+            raise _InspectionError(
+                "UNBOUNDED_SCOPE",
+                "A whole-repository manifest scope is forbidden.",
+            )
+        normalized.append(canonical)
+    if not normalized:
+        raise _InspectionError("INVALID_SCOPE", "At least one scoped path is required.")
+    return sorted(set(normalized))
+
+
+def _normalize_optional_scope(
+    scope: Iterable[str | os.PathLike[str]] | None,
+) -> list[str]:
+    if scope is None:
+        return []
+    if not isinstance(scope, (str, bytes, os.PathLike)):
+        scope = list(scope)
+        if not scope:
+            return []
+    return _normalize_scope(scope)
+
+
+def _literal_pathspecs(paths: Iterable[str]) -> list[str]:
+    return [f":(literal){path}" for path in paths]
+
+
+def _parse_status(raw: bytes) -> list[dict[str, str]]:
+    records = raw.split(b"\0")
+    entries: list[dict[str, str]] = []
+    index = 0
+    while index < len(records) and records[index]:
+        record = records[index]
+        if len(record) < 4 or record[2:3] != b" ":
+            raise _InspectionError("GIT_OUTPUT_INVALID", "Git status output was malformed.")
+        xy = record[:2].decode("ascii", "strict")
+        entry = {"path": _decode_path(record[3:]), "state": xy}
+        index += 1
+        if "R" in xy or "C" in xy:
+            if index >= len(records) or not records[index]:
+                raise _InspectionError("GIT_OUTPUT_INVALID", "Git rename output was malformed.")
+            entry["original_path"] = _decode_path(records[index])
+            index += 1
+        entries.append(entry)
+    return sorted(entries, key=lambda item: (item["path"], item["state"]))
+
+
+def _status_entries(repo_root: Path, timeout: float) -> list[dict[str, str]]:
+    raw = _run_git(
+        repo_root,
+        ["status", "--porcelain=v1", "-z", "--untracked-files=no"],
+        timeout,
+        "reading tracked status",
+    )
+    return _parse_status(raw)
+
+
+def _manifest_budget_error() -> _InspectionError:
+    return _InspectionError(
+        MANIFEST_BUDGET_EXCEEDED,
+        "The scoped untracked/ignored manifest exceeded its wall-clock budget.",
+    )
+
+
+def _check_manifest_deadline(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise _manifest_budget_error()
+
+
+def _hash_file(path: Path, *, deadline: float | None = None) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    lines = 0
+    last = b""
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            _check_manifest_deadline(deadline)
+            digest.update(chunk)
+            lines += chunk.count(b"\n")
+            last = chunk[-1:]
+    _check_manifest_deadline(deadline)
+    size = path.stat().st_size
+    if size and last != b"\n":
+        lines += 1
+    return digest.hexdigest(), lines
+
+
+def _filesystem_fingerprint(path: Path) -> dict[str, Any]:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return {"kind": "missing"}
+    if stat.S_ISLNK(info.st_mode):
+        target = os.readlink(path).encode("utf-8", "surrogatepass")
+        return {
+            "kind": "symlink",
+            "sha256": hashlib.sha256(target).hexdigest(),
+            "mode": stat.S_IMODE(info.st_mode),
+        }
+    if stat.S_ISREG(info.st_mode):
+        digest, _ = _hash_file(path)
+        return {
+            "kind": "file",
+            "sha256": digest,
+            "mode": stat.S_IMODE(info.st_mode),
+        }
+    return {"kind": "other", "mode": stat.S_IMODE(info.st_mode)}
+
+
+def _index_entries(repo_root: Path, paths: Sequence[str], timeout: float) -> dict[str, list[str]]:
+    result = {path: [] for path in paths}
+    if not paths:
+        return result
+    raw = _run_git(
+        repo_root,
+        ["ls-files", "--stage", "-z", "--", *_literal_pathspecs(paths)],
+        timeout,
+        "fingerprinting index entries",
+    )
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, raw_path = record.partition(b"\t")
+        fields = metadata.split(b" ")
+        if not separator or len(fields) != 3:
+            raise _InspectionError("GIT_OUTPUT_INVALID", "Git index output was malformed.")
+        path = _decode_path(raw_path)
+        result.setdefault(path, []).append(metadata.decode("ascii", "strict"))
+    for entries in result.values():
+        entries.sort()
+    return result
+
+
+def _tracked_snapshots(
+    repo_root: Path,
+    status_entries: Sequence[Mapping[str, str]],
+    timeout: float,
+    extra_paths: Iterable[str] = (),
+) -> dict[str, dict[str, Any]]:
+    paths = set(extra_paths)
+    states: dict[str, list[str]] = {}
+    for entry in status_entries:
+        for key in ("path", "original_path"):
+            path = entry.get(key)
+            if path:
+                paths.add(path)
+        states.setdefault(entry["path"], []).append(entry["state"])
+    ordered = sorted(paths)
+    index = _index_entries(repo_root, ordered, timeout)
+    snapshots: dict[str, dict[str, Any]] = {}
+    for path in ordered:
+        snapshots[path] = {
+            "status": sorted(states.get(path, [])),
+            "index": index.get(path, []),
+            "worktree": _filesystem_fingerprint(repo_root / Path(path)),
+        }
+    return snapshots
+
+
+def _manifest_git(
+    repo_root: Path,
+    arguments: Sequence[str],
+    timeout: float,
+    operation: str,
+    deadline: float,
+) -> bytes:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _manifest_budget_error()
+    budget_limited = remaining <= timeout
+    try:
+        return _run_git(repo_root, arguments, min(timeout, remaining), operation)
+    except _InspectionError as error:
+        if error.code == "GIT_TIMEOUT" and budget_limited:
+            raise _manifest_budget_error() from error
+        raise
+
+
+def _manifest_paths(raw: bytes, deadline: float) -> set[str]:
+    paths: set[str] = set()
+    for index, value in enumerate(raw.split(b"\0")):
+        if index % 256 == 0:
+            _check_manifest_deadline(deadline)
+        if value:
+            paths.add(_decode_path(value))
+    _check_manifest_deadline(deadline)
+    return paths
+
+
+def _scoped_manifest(
+    repo_root: Path,
+    scope: Sequence[str],
+    timeout: float,
+    manifest_budget_seconds: float,
+) -> list[dict[str, Any]]:
+    if (
+        not isinstance(manifest_budget_seconds, (int, float))
+        or isinstance(manifest_budget_seconds, bool)
+        or not math.isfinite(manifest_budget_seconds)
+        or manifest_budget_seconds <= 0
+    ):
+        raise _InspectionError(
+            "INVALID_MANIFEST_BUDGET",
+            "The manifest wall-clock budget must be a positive number.",
+        )
+    deadline = time.monotonic() + float(manifest_budget_seconds)
+    pathspecs = _literal_pathspecs(scope)
+    untracked = _manifest_git(
+        repo_root,
+        ["ls-files", "--others", "--exclude-standard", "-z", "--", *pathspecs],
+        timeout,
+        "listing scoped untracked files",
+        deadline,
+    )
+    ignored = _manifest_git(
+        repo_root,
+        [
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+            "--",
+            *pathspecs,
+        ],
+        timeout,
+        "listing scoped ignored files",
+        deadline,
+    )
+    paths = sorted(_manifest_paths(untracked, deadline) | _manifest_paths(ignored, deadline))
+    manifest: list[dict[str, Any]] = []
+    try:
+        for relative in paths:
+            _check_manifest_deadline(deadline)
+            path = repo_root / Path(relative)
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                target = os.readlink(path).encode("utf-8", "surrogatepass")
+                manifest.append(
+                    {
+                        "path": relative,
+                        "sha256": hashlib.sha256(target).hexdigest(),
+                        "line_count": 0,
+                        "kind": "symlink",
+                    }
+                )
+            elif stat.S_ISREG(info.st_mode):
+                digest, lines = _hash_file(path, deadline=deadline)
+                manifest.append(
+                    {
+                        "path": relative,
+                        "sha256": digest,
+                        "line_count": lines,
+                        "kind": "file",
+                    }
+                )
+    except OSError as error:
+        raise _InspectionError(
+            "MANIFEST_IO_FAILED", "A scoped manifest file could not be fingerprinted."
+        ) from error
+    return manifest
+
+
+def _diff_fingerprint(repo_root: Path, cached: bool, timeout: float) -> str:
+    arguments = ["diff"]
+    if cached:
+        arguments.append("--cached")
+    arguments.extend(["--binary", "--no-ext-diff", "--no-textconv", "--"])
+    raw = _run_git(
+        repo_root,
+        arguments,
+        timeout,
+        "fingerprinting the staged diff" if cached else "fingerprinting the unstaged diff",
+    )
+    return hashlib.sha256(raw).hexdigest()
+
+
+def capture_baseline(
+    repo_root: str | os.PathLike[str],
+    scope: Iterable[str | os.PathLike[str]] | None,
+    *,
+    timeout: float = 10.0,
+    manifest_budget_seconds: float = DEFAULT_MANIFEST_BUDGET_SECONDS,
+) -> dict[str, Any]:
+    """Capture the pre-call Git and scoped-file state without storing contents."""
+
+    root = Path(repo_root).resolve()
+    try:
+        normalized_scope = _normalize_optional_scope(scope)
+        head = _decode_path(
+            _run_git(root, ["rev-parse", "--verify", "HEAD"], timeout, "reading HEAD")
+        ).strip()
+        status_entries = _status_entries(root, timeout)
+        return {
+            "status": OK,
+            "code": "BASELINE_CAPTURED",
+            "head": head,
+            "scope": normalized_scope,
+            "manifest_enabled": bool(normalized_scope),
+            "status_entries": status_entries,
+            "staged_diff_fingerprint": _diff_fingerprint(root, True, timeout),
+            "unstaged_diff_fingerprint": _diff_fingerprint(root, False, timeout),
+            "tracked_snapshots": _tracked_snapshots(root, status_entries, timeout),
+            "scoped_manifest": (
+                _scoped_manifest(
+                    root,
+                    normalized_scope,
+                    timeout,
+                    manifest_budget_seconds,
+                )
+                if normalized_scope
+                else []
+            ),
+        }
+    except _InspectionError as error:
+        return _unknown(error.code, error.message, baseline_head=None, current_head=None)
+    except OSError:
+        return _unknown(
+            "REPOSITORY_IO_FAILED",
+            "The repository could not be inspected while capturing the baseline.",
+            baseline_head=None,
+            current_head=None,
+        )
+
+
+def _parse_name_list(raw: bytes) -> set[str]:
+    return {_decode_path(value) for value in raw.split(b"\0") if value}
+
+
+def _parse_numstat(raw: bytes) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        added, separator, remainder = record.partition(b"\t")
+        deleted, separator_two, raw_path = remainder.partition(b"\t")
+        if not separator or not separator_two:
+            raise _InspectionError("GIT_OUTPUT_INVALID", "Git numstat output was malformed.")
+        path = _decode_path(raw_path)
+        if added == b"-" or deleted == b"-":
+            counts[path] = max(counts.get(path, 0), 1)
+        else:
+            try:
+                counts[path] = counts.get(path, 0) + int(added) + int(deleted)
+            except ValueError as error:
+                raise _InspectionError(
+                    "GIT_OUTPUT_INVALID", "Git numstat counts were malformed."
+                ) from error
+    return counts
+
+
+def _diff_stats(
+    repo_root: Path,
+    transition: Sequence[str],
+    timeout: float,
+    operation: str,
+) -> tuple[set[str], dict[str, int]]:
+    common = ["--no-renames", "--no-ext-diff", "--no-textconv"]
+    names = _parse_name_list(
+        _run_git(
+            repo_root,
+            ["diff", *transition, *common, "--name-only", "-z", "--"],
+            timeout,
+            f"listing {operation} paths",
+        )
+    )
+    counts = _parse_numstat(
+        _run_git(
+            repo_root,
+            ["diff", *transition, *common, "--numstat", "-z", "--"],
+            timeout,
+            f"counting {operation} lines",
+        )
+    )
+    for path in names:
+        counts.setdefault(path, 0)
+    return names, counts
+
+
+def _manifest_delta(
+    baseline: Sequence[Mapping[str, Any]], current: Sequence[Mapping[str, Any]]
+) -> tuple[set[str], dict[str, int]]:
+    before = {entry["path"]: entry for entry in baseline}
+    after = {entry["path"]: entry for entry in current}
+    paths: set[str] = set()
+    counts: dict[str, int] = {}
+    for path in sorted(set(before) | set(after)):
+        old = before.get(path)
+        new = after.get(path)
+        if old is not None and new is not None and old.get("sha256") == new.get("sha256"):
+            continue
+        paths.add(path)
+        old_lines = old.get("line_count", 0) if old else 0
+        new_lines = new.get("line_count", 0) if new else 0
+        if not isinstance(old_lines, int) or not isinstance(new_lines, int):
+            raise _InspectionError("BASELINE_INVALID", "Manifest line counts were invalid.")
+        counts[path] = max(old_lines, new_lines, 1)
+    return paths, counts
+
+
+def _baseline_valid(baseline: Mapping[str, Any]) -> bool:
+    return (
+        baseline.get("status") == OK
+        and isinstance(baseline.get("head"), str)
+        and bool(baseline["head"])
+        and isinstance(baseline.get("scope"), list)
+        and isinstance(baseline.get("manifest_enabled"), bool)
+        and isinstance(baseline.get("status_entries"), list)
+        and isinstance(baseline.get("tracked_snapshots"), Mapping)
+        and isinstance(baseline.get("scoped_manifest"), list)
+    )
+
+
+def compute_delta(
+    repo_root: str | os.PathLike[str],
+    baseline: Mapping[str, Any],
+    scope: Iterable[str | os.PathLike[str]] | None = None,
+    *,
+    timeout: float = 10.0,
+    manifest_budget_seconds: float = DEFAULT_MANIFEST_BUDGET_SECONDS,
+) -> dict[str, Any]:
+    """Compute the committed, staged, unstaged, and scoped-manifest union.
+
+    Line counts are the conservative sum of each Git transition's numstat.  A
+    path is counted once as a file, even when it appears in multiple sources.
+    Changed untracked/ignored files use the larger before/after line count.
+    """
+
+    if not isinstance(baseline, Mapping) or not _baseline_valid(baseline):
+        return _unknown(
+            "BASELINE_INVALID",
+            "A trustworthy baseline was not supplied.",
+            baseline_head=baseline.get("head") if isinstance(baseline, Mapping) else None,
+            current_head=None,
+        )
+    root = Path(repo_root).resolve()
+    baseline_head = baseline["head"]
+    try:
+        normalized_scope = _normalize_optional_scope(
+            scope if scope is not None else baseline["scope"]
+        )
+        if normalized_scope != baseline["scope"]:
+            raise _InspectionError(
+                "SCOPE_MISMATCH", "The delta scope does not match the captured baseline scope."
+            )
+        current_head = _decode_path(
+            _run_git(root, ["rev-parse", "--verify", "HEAD"], timeout, "reading current HEAD")
+        ).strip()
+        current_status = _status_entries(root, timeout)
+        baseline_snapshots = baseline["tracked_snapshots"]
+        current_snapshots = _tracked_snapshots(
+            root, current_status, timeout, extra_paths=baseline_snapshots.keys()
+        )
+
+        committed_paths, committed_counts = _diff_stats(
+            root, [baseline_head, current_head], timeout, "committed delta"
+        )
+        staged_paths, staged_counts = _diff_stats(root, ["--cached"], timeout, "staged delta")
+        unstaged_paths, unstaged_counts = _diff_stats(root, [], timeout, "unstaged delta")
+
+        unchanged_preexisting = {
+            path
+            for path, snapshot in baseline_snapshots.items()
+            if current_snapshots.get(path) == snapshot
+        }
+        mutated_preexisting = {
+            path
+            for path, snapshot in baseline_snapshots.items()
+            if current_snapshots.get(path) != snapshot
+        }
+        staged_paths.difference_update(unchanged_preexisting)
+        unstaged_paths.difference_update(unchanged_preexisting)
+        staged_counts = {path: count for path, count in staged_counts.items() if path in staged_paths}
+        unstaged_counts = {
+            path: count for path, count in unstaged_counts.items() if path in unstaged_paths
+        }
+
+        current_manifest = (
+            _scoped_manifest(
+                root,
+                normalized_scope,
+                timeout,
+                manifest_budget_seconds,
+            )
+            if baseline["manifest_enabled"]
+            else []
+        )
+        manifest_paths, manifest_counts = _manifest_delta(
+            baseline["scoped_manifest"], current_manifest
+        )
+        sources = {
+            "committed": (committed_paths, committed_counts),
+            "staged": (staged_paths, staged_counts),
+            "unstaged": (unstaged_paths, unstaged_counts),
+            "scoped_manifest": (manifest_paths, manifest_counts),
+        }
+        changed_paths = sorted(set().union(*(paths for paths, _ in sources.values())))
+        path_line_counts = {path: 0 for path in changed_paths}
+        source_result: dict[str, dict[str, Any]] = {}
+        for name, (paths, counts) in sources.items():
+            for path in paths:
+                path_line_counts[path] += counts.get(path, 0)
+            source_result[name] = {
+                "paths": sorted(paths),
+                "changed_line_count": sum(counts.get(path, 0) for path in paths),
+            }
+
+        preexisting_paths = sorted(baseline_snapshots)
+        return {
+            "status": OK,
+            "code": "DELTA_COMPUTED",
+            "baseline_head": baseline_head,
+            "current_head": current_head,
+            "changed_paths": changed_paths,
+            "changed_file_count": len(changed_paths),
+            "changed_line_count": sum(path_line_counts.values()),
+            "path_line_counts": path_line_counts,
+            "sources": source_result,
+            "preexisting_paths": preexisting_paths,
+            "ambiguous_paths": sorted(set(changed_paths).intersection(mutated_preexisting)),
+            "current_scoped_manifest": current_manifest,
+        }
+    except _InspectionError as error:
+        return _unknown(
+            error.code,
+            error.message,
+            baseline_head=baseline_head,
+            current_head=locals().get("current_head"),
+        )
+    except (KeyError, TypeError, OSError):
+        return _unknown(
+            "DELTA_INSPECTION_FAILED",
+            "The delta could not be determined trustworthily.",
+            baseline_head=baseline_head,
+            current_head=locals().get("current_head"),
+        )
+
+
+def _inside(path: str, scope: str) -> bool:
+    return scope == "." or path == scope or path.startswith(scope.rstrip("/") + "/")
+
+
+def classify_concurrent_writers(
+    delta: Mapping[str, Any],
+    delegated_scope: Iterable[str | os.PathLike[str]],
+    *,
+    material_paths: Iterable[str | os.PathLike[str]] = (),
+    verification_paths: Iterable[str | os.PathLike[str]] = (),
+) -> dict[str, Any]:
+    """Classify paths without assigning any path to a particular author."""
+
+    if not isinstance(delta, Mapping) or delta.get("status") != OK:
+        return {
+            "decision": UNKNOWN_CONCURRENT_WRITER,
+            "code": "UNKNOWN_DELTA",
+            "concurrent_writer": None,
+            "in_scope_paths": None,
+            "out_of_scope_paths": None,
+            "review_changed_file_count": None,
+            "review_changed_line_count": None,
+        }
+    try:
+        scope = _normalize_scope(delegated_scope)
+        material_values = list(material_paths)
+        verification_values = list(verification_paths)
+        material = _normalize_scope(material_values) if material_values else []
+        verification = _normalize_scope(verification_values) if verification_values else []
+    except _InspectionError as error:
+        return {
+            "decision": UNKNOWN_CONCURRENT_WRITER,
+            "code": error.code,
+            "concurrent_writer": None,
+            "in_scope_paths": None,
+            "out_of_scope_paths": None,
+            "review_changed_file_count": None,
+            "review_changed_line_count": None,
+        }
+
+    changed = list(delta.get("changed_paths", []))
+    in_scope = sorted(path for path in changed if any(_inside(path, item) for item in scope))
+    outside = sorted(set(changed).difference(in_scope))
+    preexisting_outside = sorted(
+        path
+        for path in delta.get("preexisting_paths", [])
+        if not any(_inside(path, item) for item in scope)
+    )
+    ambiguous = sorted(delta.get("ambiguous_paths", []))
+    overlap = sorted(path for path in ambiguous if path in in_scope)
+    material_touches = sorted(
+        path for path in outside if any(_inside(path, item) or _inside(item, path) for item in material)
+    )
+    verification_touches = sorted(
+        path
+        for path in outside
+        if any(_inside(path, item) or _inside(item, path) for item in verification)
+    )
+    protected_touches = detect_protected_paths(changed)
+    halt_paths = sorted(
+        set(overlap + material_touches + verification_touches + protected_touches + ambiguous)
+    )
+    line_counts = delta.get("path_line_counts", {})
+    decision = UNKNOWN_CONCURRENT_WRITER if halt_paths else PROCEED
+    return {
+        "decision": decision,
+        "code": decision,
+        "concurrent_writer": bool(outside),
+        "in_scope_paths": in_scope,
+        "out_of_scope_paths": outside,
+        "preserved_out_of_scope_paths": sorted(set(outside + preexisting_outside)),
+        "overlap_paths": overlap,
+        "material_boundary_paths": material_touches,
+        "verification_boundary_paths": verification_touches,
+        "protected_paths": protected_touches,
+        "ambiguous_paths": ambiguous,
+        "halt_paths": halt_paths,
+        "review_changed_file_count": len(in_scope),
+        "review_changed_line_count": sum(line_counts.get(path, 0) for path in in_scope),
+    }
+
+
+def detect_protected_paths(delta_or_paths: Mapping[str, Any] | Iterable[str]) -> list[str]:
+    """Return protected repository paths present in a known delta."""
+
+    if isinstance(delta_or_paths, Mapping):
+        paths = delta_or_paths.get("changed_paths")
+        if not isinstance(paths, list):
+            return []
+    else:
+        paths = list(delta_or_paths)
+    protected = []
+    for raw in paths:
+        if not isinstance(raw, str):
+            continue
+        path = raw.replace("\\", "/")
+        while path.startswith("./"):
+            path = path[2:]
+        if (
+            path in _PROTECTED_EXACT
+            or path.startswith("inputs/")
+            or path.startswith("review_artifacts/")
+        ):
+            protected.append(path)
+    return sorted(set(protected))
+
+
+def build_session_record(
+    task_id: str,
+    thread_id: str | None,
+    route: str,
+    model: str,
+    effort: str,
+    *,
+    pending_call_baseline: Mapping[str, Any] | None = None,
+    last_outcome: Any = None,
+) -> dict[str, Any]:
+    """Build the strict record shape; ``live_thread`` feeds policy directly."""
+
+    live_thread = None
+    if thread_id is not None:
+        live_thread = {
+            "task_id": task_id,
+            "thread_id": thread_id,
+            "route": route,
+            "model": model,
+            "effort": effort,
+        }
+    return {
+        "task_id": task_id,
+        "live_thread": live_thread,
+        "pending_call_baseline": pending_call_baseline,
+        "last_outcome": last_outcome,
+    }
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def _contains_secret(value: Any, key: str = "") -> bool:
+    normalized_key = key.casefold().replace("-", "_")
+    if key and any(part in normalized_key for part in _SECRET_KEY_PARTS):
+        return True
+    if isinstance(value, Mapping):
+        return any(_contains_secret(item, str(item_key)) for item_key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_secret(item) for item in value)
+    if isinstance(value, str):
+        return any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS)
+    return False
+
+
+def _valid_session_record(record: Any, expected_task_id: str | None = None) -> bool:
+    if not isinstance(record, Mapping) or set(record) != {
+        "task_id",
+        "live_thread",
+        "pending_call_baseline",
+        "last_outcome",
+    }:
+        return False
+    task_id = record.get("task_id")
+    if not isinstance(task_id, str) or not task_id or (
+        expected_task_id is not None and task_id != expected_task_id
+    ):
+        return False
+    thread = record.get("live_thread")
+    if thread is None:
+        pending = record.get("pending_call_baseline")
+        if pending is not None and not isinstance(pending, Mapping):
+            return False
+        try:
+            _canonical_json(record)
+        except (TypeError, ValueError):
+            return False
+        return not _contains_secret(record)
+    if not isinstance(thread, Mapping) or set(thread) != {
+        "task_id",
+        "thread_id",
+        "route",
+        "model",
+        "effort",
+    }:
+        return False
+    if thread.get("task_id") != task_id or any(
+        not isinstance(thread.get(field), str) or not thread.get(field)
+        for field in ("task_id", "thread_id", "route", "model", "effort")
+    ):
+        return False
+    pending = record.get("pending_call_baseline")
+    if pending is not None and not isinstance(pending, Mapping):
+        return False
+    try:
+        _canonical_json(record)
+    except (TypeError, ValueError):
+        return False
+    return not _contains_secret(record)
+
+
+class SessionLedger:
+    """Checksummed, atomic per-task session persistence."""
+
+    def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
+        if root is None:
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if not local_app_data:
+                raise ValueError("LOCALAPPDATA is unavailable; inject a ledger root.")
+            root = Path(local_app_data) / "claude-agent-orchestrator"
+        self.root = Path(root)
+        self.sessions_root = self.root / "sessions"
+
+    def path_for_task(self, task_id: str) -> Path:
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError("task_id must be a non-empty string")
+        name = hashlib.sha256(task_id.encode("utf-8")).hexdigest() + ".json"
+        return self.sessions_root / name
+
+    def save(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        task_id = record.get("task_id") if isinstance(record, Mapping) else None
+        if not isinstance(task_id, str) or not _valid_session_record(record, task_id):
+            return {
+                "status": UNKNOWN,
+                "code": "LEDGER_RECORD_INVALID",
+                "message": "The session record is invalid or contains forbidden secret material.",
+            }
+        payload = dict(record)
+        payload_bytes = _canonical_json(payload)
+        envelope = {
+            "schema_version": _LEDGER_SCHEMA_VERSION,
+            "checksum": hashlib.sha256(payload_bytes).hexdigest(),
+            "payload": payload,
+        }
+        target = self.path_for_task(task_id)
+        temporary: Path | None = None
+        try:
+            self.sessions_root.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=target.name + ".", suffix=".tmp", dir=self.sessions_root, delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(_canonical_json(envelope))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+            temporary = None
+            return {"status": OK, "code": "LEDGER_WRITTEN"}
+        except OSError:
+            return {
+                "status": UNKNOWN,
+                "code": "LEDGER_WRITE_FAILED",
+                "message": "The session record could not be written atomically.",
+            }
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
+
+    write = save
+
+    def load(self, task_id: str) -> dict[str, Any]:
+        try:
+            target = self.path_for_task(task_id)
+            raw = target.read_bytes()
+        except FileNotFoundError:
+            return {"status": MISSING, "code": "LEDGER_RECORD_MISSING", "record": None}
+        except (OSError, ValueError):
+            return {"status": CORRUPT, "code": "LEDGER_CORRUPT", "record": None}
+        try:
+            envelope = json.loads(raw.decode("utf-8"))
+            if not isinstance(envelope, Mapping) or set(envelope) != {
+                "schema_version",
+                "checksum",
+                "payload",
+            }:
+                raise ValueError
+            if envelope["schema_version"] != _LEDGER_SCHEMA_VERSION:
+                raise ValueError
+            payload = envelope["payload"]
+            expected = hashlib.sha256(_canonical_json(payload)).hexdigest()
+            if not isinstance(envelope["checksum"], str) or not hmac.compare_digest(
+                envelope["checksum"], expected
+            ):
+                raise ValueError
+            if not _valid_session_record(payload, task_id):
+                raise ValueError
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            return {"status": CORRUPT, "code": "LEDGER_CORRUPT", "record": None}
+        return {"status": OK, "code": "LEDGER_LOADED", "record": payload}
+
+    read = load
+
+
+__all__ = [
+    "CORRUPT",
+    "DEFAULT_MANIFEST_BUDGET_SECONDS",
+    "MANIFEST_BUDGET_EXCEEDED",
+    "MISSING",
+    "OK",
+    "PROCEED",
+    "SessionLedger",
+    "UNKNOWN",
+    "UNKNOWN_CONCURRENT_WRITER",
+    "build_session_record",
+    "capture_baseline",
+    "classify_concurrent_writers",
+    "compute_delta",
+    "detect_protected_paths",
+]

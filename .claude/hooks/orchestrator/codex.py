@@ -1,0 +1,906 @@
+"""Claude Code hook wiring for the codex-main MCP tools."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+from typing import Any
+
+import ledger
+import policy
+import reviewer as reviewer1
+
+
+CODEX_TOOL = "mcp__codex-main__codex"
+CODEX_REPLY_TOOL = "mcp__codex-main__codex-reply"
+CODEX_TOOLS = frozenset({CODEX_TOOL, CODEX_REPLY_TOOL})
+IMPLEMENTER_REPORT_LIMIT = 1200
+INDEPENDENCE_INSTRUCTIONS = (
+    "Codex must not blindly accept Claude's proposed solution. It should "
+    "independently verify the relevant repository state and project rules, "
+    "prefer the smallest correct implementation, and explicitly flag any "
+    "instruction that would introduce a regression, unnecessary complexity, "
+    "scope expansion, or conflict with existing contracts."
+)
+
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+_CONFIG_PATH = _PACKAGE_ROOT / "config.json"
+
+
+def _default_reviewer(**_: Any) -> dict[str, Any]:
+    return {
+        "available": False,
+        "result": policy.REVIEWER1_UNAVAILABLE,
+        "message": "Reviewer-1 is unavailable because reviewer.py is not installed.",
+    }
+
+
+_default_reviewer.available = False  # type: ignore[attr-defined]
+REVIEWER: Callable[..., Mapping[str, Any]] = reviewer1.review
+
+
+class WiringError(RuntimeError):
+    pass
+
+
+def _load_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if config is None:
+        loaded = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    else:
+        loaded = config
+    policy.validate_config(loaded)
+    if loaded.get("post_tool_output_field") not in {
+        "updatedToolOutput",
+        "updatedMCPToolOutput",
+    }:
+        raise WiringError("post_tool_output_field is not a supported hook field")
+    reviewer_model = loaded.get("reviewer1_model_requested")
+    if not isinstance(reviewer_model, str) or not reviewer_model:
+        raise WiringError("reviewer1_model_requested must be a non-empty string")
+    return loaded
+
+
+def _state_root(root: str | os.PathLike[str] | None) -> Path:
+    if root is not None:
+        return Path(root)
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        raise WiringError("LOCALAPPDATA is unavailable; inject a runtime state root")
+    return Path(local_app_data) / "claude-agent-orchestrator"
+
+
+def _repo_root(
+    event: Mapping[str, Any],
+    root: str | os.PathLike[str] | None,
+) -> Path:
+    if root is not None:
+        return Path(root).resolve()
+    tool_input = event.get("tool_input")
+    candidate = tool_input.get("cwd") if isinstance(tool_input, Mapping) else None
+    if not isinstance(candidate, str) or not candidate:
+        candidate = event.get("cwd")
+    return Path(candidate if isinstance(candidate, str) and candidate else Path.cwd()).resolve()
+
+
+def _call_key(event: Mapping[str, Any]) -> str:
+    tool_use_id = event.get("tool_use_id")
+    if not isinstance(tool_use_id, str) or not tool_use_id:
+        raise WiringError("tool_use_id is missing")
+    session_id = event.get("session_id")
+    identity = f"{session_id if isinstance(session_id, str) else ''}\0{tool_use_id}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _pending_path(root: Path, event: Mapping[str, Any]) -> Path:
+    return root / "pending" / f"{_call_key(event)}.json"
+
+
+def _bypass_path(root: Path, event: Mapping[str, Any]) -> Path:
+    tool_input = event.get("tool_input")
+    encoded_input = json.dumps(
+        tool_input,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    session_id = event.get("session_id")
+    identity = (
+        f"{session_id if isinstance(session_id, str) else ''}\0"
+        f"{event.get('tool_name')}\0{encoded_input}"
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return root / "pending" / f"bypass-{digest}.json"
+
+
+def _pending_candidates(root: Path, event: Mapping[str, Any]) -> list[Path]:
+    candidates: list[Path] = []
+    try:
+        candidates.append(_pending_path(root, event))
+    except WiringError:
+        pass
+    bypass = _bypass_path(root, event)
+    if bypass not in candidates:
+        candidates.append(bypass)
+    return candidates
+
+
+def _atomic_json_write(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=path.name + ".",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(value, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
+def _read_pending(root: Path, event: Mapping[str, Any]) -> dict[str, Any]:
+    for path in _pending_candidates(root, event):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise WiringError("pending call record is unreadable") from error
+        if not isinstance(value, dict):
+            raise WiringError("pending call record is invalid")
+        return value
+    raise WiringError("pending call record is missing")
+
+
+def _remove_pending(root: Path, event: Mapping[str, Any]) -> None:
+    for path in _pending_candidates(root, event):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _safe_error(error: BaseException) -> str:
+    message = str(error).strip()
+    return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+
+def _record_diagnostic(
+    root: Path | None,
+    event: Mapping[str, Any],
+    phase: str,
+    error: BaseException,
+) -> None:
+    record = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "phase": phase,
+        "hook_event_name": event.get("hook_event_name"),
+        "tool_name": event.get("tool_name"),
+        "tool_use_id": event.get("tool_use_id"),
+        "error": _safe_error(error),
+    }
+    if root is not None:
+        try:
+            path = root / "diagnostics.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+            return
+        except OSError:
+            pass
+    try:
+        sys.stderr.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:
+        pass
+
+
+def _deny(code: str, message: str) -> dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": f"{code}: {message}",
+        }
+    }
+
+
+def _internal_pre_allow(reason: str, recorded: bool) -> dict[str, Any]:
+    persistence = "The bypass was recorded for PostToolUse." if recorded else (
+        "The bypass record could not be persisted; this PreToolUse context is the only warning."
+    )
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                "Orchestrator routing was NOT enforced for this Codex call because of an "
+                f"internal error: {reason}. The call is allowed unmodified. {persistence}"
+            ),
+        }
+    }
+
+
+def _write_pre_bypass(
+    root: Path,
+    event: Mapping[str, Any],
+    reason: str,
+    metadata: Mapping[str, Any],
+) -> None:
+    record = {
+        "kind": "pretool_bypass",
+        "routing_enforced": False,
+        "baseline_captured": False,
+        "reason": reason,
+        "task_id": metadata.get("task_id"),
+        "phase": metadata.get("phase"),
+        "route": metadata.get("route"),
+        "model": metadata.get("model"),
+        "effort": metadata.get("effort"),
+        "scope": metadata.get("scope", []),
+        "repo_root": metadata.get("repo_root"),
+        "prior_thread_id": metadata.get("prior_thread_id"),
+    }
+    try:
+        path = _pending_path(root, event)
+    except WiringError:
+        path = _bypass_path(root, event)
+    _atomic_json_write(path, record)
+
+
+def _reviewer_available(reviewer: Callable[..., Mapping[str, Any]]) -> bool:
+    marker = getattr(reviewer, "available", None)
+    if isinstance(marker, bool):
+        return marker
+    return reviewer is not _default_reviewer
+
+
+def _requested_thread(parsed: policy.OrchParseResult, route: policy.RouteResolution) -> dict[str, str]:
+    assert parsed.task_id and parsed.route and route.model and route.effort
+    return {
+        "task_id": parsed.task_id,
+        "route": parsed.route,
+        "model": route.model,
+        "effort": route.effort,
+    }
+
+
+def internal_pre_error_response(
+    event: Mapping[str, Any],
+    error: BaseException,
+    *,
+    state_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Allow an internally failed PreToolUse call while making the bypass visible."""
+
+    runtime_root: Path | None = None
+    reason = _safe_error(error)
+    recorded = False
+    try:
+        runtime_root = _state_root(state_root)
+        _write_pre_bypass(runtime_root, event, reason, {})
+        recorded = True
+    except Exception as persistence_error:
+        reason = f"{reason}; bypass persistence failed: {_safe_error(persistence_error)}"
+    _record_diagnostic(runtime_root, event, "PreToolUse", error)
+    return _internal_pre_allow(reason, recorded)
+
+
+def pre_tool_use(
+    event: Mapping[str, Any],
+    *,
+    config: Mapping[str, Any] | None = None,
+    state_root: str | os.PathLike[str] | None = None,
+    repo_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Validate routing, capture a baseline, and rewrite a Codex MCP input."""
+
+    if event.get("tool_name") not in CODEX_TOOLS:
+        return {}
+    runtime_root: Path | None = None
+    pending_written = False
+    bypass_metadata: dict[str, Any] = {}
+    try:
+        loaded_config = _load_config(config)
+        tool_input = event.get("tool_input")
+        if not isinstance(tool_input, Mapping):
+            return _deny("MALFORMED_TOOL_INPUT", "tool_input must be an object")
+
+        parsed = policy.parse_orch_prompt(tool_input.get("prompt"), loaded_config)
+        if not parsed.valid:
+            if parsed.code == policy.CONFIG_INVALID:
+                raise WiringError(parsed.message)
+            return _deny(parsed.code, parsed.message)
+
+        route = policy.resolve_route(parsed.route, loaded_config)
+        if not route.valid:
+            if route.code == policy.CONFIG_INVALID:
+                raise WiringError(route.message)
+            return _deny(route.code, route.message)
+        requested = _requested_thread(parsed, route)
+        bypass_metadata.update(
+            task_id=parsed.task_id,
+            phase=parsed.phase,
+            route=parsed.route,
+            model=route.model,
+            effort=route.effort,
+            scope=list(parsed.scope),
+        )
+
+        runtime_root = _state_root(state_root)
+        _call_key(event)
+        session_ledger = ledger.SessionLedger(runtime_root)
+        loaded = session_ledger.load(parsed.task_id)
+        if loaded["status"] == ledger.CORRUPT:
+            raise WiringError("session ledger is unreadable")
+        record = loaded.get("record") if loaded["status"] == ledger.OK else None
+        live_thread = record.get("live_thread") if isinstance(record, Mapping) else None
+
+        tool_name = event["tool_name"]
+        if tool_name == CODEX_TOOL:
+            decision = policy.fresh_codex_decision(requested, live_thread)
+            if not decision.allowed:
+                return _deny(decision.code, decision.message)
+            continuation_thread_id = None
+        else:
+            forbidden = {"model", "config", "developer-instructions"}.intersection(tool_input)
+            if forbidden:
+                return _deny(
+                    "CODEX_REPLY_INPUT_INVALID",
+                    "codex-reply accepts only threadId and prompt; use a fresh thread to change routing.",
+                )
+            if not isinstance(live_thread, Mapping):
+                raise WiringError("no live thread is recorded for codex-reply")
+            compatibility = policy.thread_compatibility(requested, live_thread)
+            if not compatibility.compatible:
+                return _deny(compatibility.code, compatibility.message)
+            supplied_thread_id = tool_input.get("threadId")
+            if supplied_thread_id != live_thread.get("thread_id"):
+                return _deny(
+                    "THREAD_ID_MISMATCH",
+                    "codex-reply names a different thread; a fresh thread is required.",
+                )
+            continuation_thread_id = live_thread["thread_id"]
+        bypass_metadata["prior_thread_id"] = continuation_thread_id
+
+        updated = dict(tool_input)
+        updated["prompt"] = parsed.prompt
+        if tool_name == CODEX_TOOL:
+            updated["model"] = route.model
+            original_codex_config = tool_input.get("config", {})
+            if not isinstance(original_codex_config, Mapping):
+                raise WiringError("tool_input.config must be an object when supplied")
+            updated_config = dict(original_codex_config)
+            updated_config["model_reasoning_effort"] = route.effort
+            updated["config"] = updated_config
+            if "developer-instructions" not in tool_input:
+                updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
+
+        repository = _repo_root(event, repo_root)
+        bypass_metadata["repo_root"] = str(repository)
+        declared_scope = list(parsed.scope)
+        baseline = ledger.capture_baseline(
+            repository,
+            declared_scope if declared_scope else None,
+            manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
+        )
+        pending = {
+            "kind": "call",
+            "task_id": parsed.task_id,
+            "phase": parsed.phase,
+            "route": parsed.route,
+            "model": route.model,
+            "effort": route.effort,
+            "scope": declared_scope,
+            "repo_root": str(repository),
+            "baseline": baseline,
+            "prior_thread_id": continuation_thread_id,
+        }
+        _atomic_json_write(_pending_path(runtime_root, event), pending)
+        pending_written = True
+
+        session_record = ledger.build_session_record(
+            parsed.task_id,
+            pending["prior_thread_id"],
+            parsed.route,
+            route.model,
+            route.effort,
+            pending_call_baseline=baseline,
+            last_outcome=record.get("last_outcome") if isinstance(record, Mapping) else None,
+        )
+        saved = session_ledger.save(session_record)
+        if saved["status"] != ledger.OK:
+            raise WiringError(saved.get("message", "session ledger could not be updated"))
+
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": updated,
+            }
+        }
+    except Exception as error:
+        if pending_written and runtime_root is not None:
+            try:
+                _remove_pending(runtime_root, event)
+            except Exception:
+                pass
+        recorded = False
+        reason = _safe_error(error)
+        try:
+            runtime_root = runtime_root or _state_root(state_root)
+            _write_pre_bypass(runtime_root, event, reason, bypass_metadata)
+            recorded = True
+        except Exception as persistence_error:
+            reason = f"{reason}; bypass persistence failed: {_safe_error(persistence_error)}"
+        _record_diagnostic(runtime_root, event, "PreToolUse", error)
+        return _internal_pre_allow(reason, recorded)
+
+
+def _extract_codex_result(tool_response: Any) -> tuple[str, str]:
+    blocks = tool_response
+    if isinstance(blocks, Mapping) and isinstance(blocks.get("content"), list):
+        blocks = blocks["content"]
+    if not isinstance(blocks, list):
+        raise WiringError("Codex MCP output is not a content-block array")
+    for block in blocks:
+        if not isinstance(block, Mapping) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(decoded, Mapping):
+            continue
+        thread_id = decoded.get("threadId")
+        content = decoded.get("content")
+        if isinstance(thread_id, str) and thread_id:
+            return thread_id, content if isinstance(content, str) else ""
+    raise WiringError("thread id could not be recovered from Codex MCP text content")
+
+
+def _persist_raw_output(root: Path, event: Mapping[str, Any], value: Any, suffix: str = "") -> Path:
+    path = root / "raw_tool_outputs" / f"{_call_key(event)}{suffix}.json"
+    _atomic_json_write(path, value)
+    return path.resolve()
+
+
+def _finding(code: str, message: str) -> dict[str, str]:
+    return {"code": code, "message": message}
+
+
+def _base_bundle(error: str | None = None) -> dict[str, Any]:
+    findings = [_finding("INTERNAL_POST_ERROR", error)] if error else []
+    return {
+        "task_id": None,
+        "phase": None,
+        "implementer": "codex-main",
+        "thread_id": None,
+        "route": None,
+        "model": None,
+        "effort": None,
+        "baseline_head": None,
+        "current_head": None,
+        "changed_paths": None,
+        "delta_lines": None,
+        "delta_files": None,
+        "validation": "UNKNOWN",
+        "reviewer1_provider": None,
+        "reviewer1_result": None,
+        "reviewer1_skipped_reason": None,
+        "reviewer1_model_requested": None,
+        "served_model_attestation": "UNAVAILABLE",
+        "routing_enforced": False,
+        "findings": findings,
+        "claude_review_mode": policy.FULL,
+        "raw_output_path": None,
+        "protected_paths_touched": [],
+        "concurrent_writer": None,
+        "implementer_report": "",
+    }
+
+
+def _replacement(bundle: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
+    field = config["post_tool_output_field"]
+    text = json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            field: [{"type": "text", "text": text}],
+        }
+    }
+
+
+def _internal_post_response(
+    event: Mapping[str, Any],
+    error: BaseException,
+    *,
+    config: Mapping[str, Any] | None,
+    state_root: str | os.PathLike[str] | None,
+) -> dict[str, Any]:
+    try:
+        loaded_config = _load_config(config)
+    except Exception:
+        loaded_config = {
+            "post_tool_output_field": "updatedToolOutput",
+            "reviewer1_model_requested": None,
+        }
+    bundle = _base_bundle(_safe_error(error))
+    bundle["reviewer1_model_requested"] = loaded_config.get("reviewer1_model_requested")
+    runtime_root: Path | None = None
+    try:
+        runtime_root = _state_root(state_root)
+        raw_path = _persist_raw_output(runtime_root, event, event.get("tool_response"))
+        bundle["raw_output_path"] = str(raw_path)
+        try:
+            pending = _read_pending(runtime_root, event)
+        except WiringError:
+            pending = None
+        if isinstance(pending, Mapping):
+            bundle.update(
+                task_id=pending.get("task_id"),
+                phase=pending.get("phase"),
+                route=pending.get("route"),
+                model=pending.get("model"),
+                effort=pending.get("effort"),
+                routing_enforced=pending.get("kind") != "pretool_bypass",
+            )
+        if isinstance(pending, Mapping) and pending.get("kind") == "pretool_bypass":
+            reason = pending.get("reason")
+            bundle["findings"].append(
+                _finding(
+                    "PRETOOL_BYPASS_ROUTING_NOT_ENFORCED",
+                    (
+                        "Routing was NOT enforced for this call and no usable baseline was "
+                        f"captured. Internal PreToolUse reason: {reason}"
+                    ),
+                )
+            )
+            try:
+                thread_id, report = _extract_codex_result(event.get("tool_response"))
+                bundle["thread_id"] = thread_id
+                bundle["implementer_report"] = report[:IMPLEMENTER_REPORT_LIMIT]
+            except WiringError as thread_error:
+                bundle["findings"].append(
+                    _finding("THREAD_ID_UNRECOVERABLE", str(thread_error))
+                )
+            _remove_pending(runtime_root, event)
+    except Exception:
+        pass
+    _record_diagnostic(runtime_root, event, "PostToolUse", error)
+    return _replacement(bundle, loaded_config)
+
+
+def internal_post_error_response(
+    event: Mapping[str, Any],
+    error: BaseException,
+    *,
+    config: Mapping[str, Any] | None = None,
+    state_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Best-effort FULL-review response for failures above the Post handler."""
+
+    return _internal_post_response(
+        event,
+        error,
+        config=config,
+        state_root=state_root,
+    )
+
+
+def post_tool_use(
+    event: Mapping[str, Any],
+    *,
+    config: Mapping[str, Any] | None = None,
+    state_root: str | os.PathLike[str] | None = None,
+    repo_root: str | os.PathLike[str] | None = None,
+    reviewer: Callable[..., Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Replace a raw Codex result with the compact reviewed bundle."""
+
+    if event.get("tool_name") not in CODEX_TOOLS:
+        return {}
+    try:
+        loaded_config = _load_config(config)
+        runtime_root = _state_root(state_root)
+        pending = _read_pending(runtime_root, event)
+        raw_path = _persist_raw_output(runtime_root, event, event.get("tool_response"))
+
+        bundle = _base_bundle()
+        bundle.update(
+            {
+                "task_id": pending.get("task_id"),
+                "phase": pending.get("phase"),
+                "route": pending.get("route"),
+                "model": pending.get("model"),
+                "effort": pending.get("effort"),
+                "reviewer1_model_requested": loaded_config["reviewer1_model_requested"],
+                "raw_output_path": str(raw_path),
+                "routing_enforced": pending.get("kind") != "pretool_bypass",
+            }
+        )
+
+        try:
+            thread_id, report = _extract_codex_result(event.get("tool_response"))
+            bundle["thread_id"] = thread_id
+            bundle["implementer_report"] = report[:IMPLEMENTER_REPORT_LIMIT]
+        except WiringError as error:
+            thread_id = None
+            bundle["findings"].append(_finding("THREAD_ID_UNRECOVERABLE", str(error)))
+            bundle["claude_review_mode"] = policy.FULL
+
+        if pending.get("kind") == "pretool_bypass":
+            reason = pending.get("reason")
+            if not isinstance(reason, str) or not reason:
+                reason = "the PreToolUse bypass reason was unavailable"
+            bundle["findings"].append(
+                _finding(
+                    "PRETOOL_BYPASS_ROUTING_NOT_ENFORCED",
+                    (
+                        "Routing was NOT enforced for this call and no usable baseline was "
+                        f"captured. Internal PreToolUse reason: {reason}"
+                    ),
+                )
+            )
+            bundle["claude_review_mode"] = policy.FULL
+            identity_fields = ("task_id", "route", "model", "effort")
+            if all(isinstance(pending.get(field), str) and pending.get(field) for field in identity_fields):
+                saved = ledger.SessionLedger(runtime_root).save(
+                    ledger.build_session_record(
+                        pending["task_id"],
+                        thread_id,
+                        pending["route"],
+                        pending["model"],
+                        pending["effort"],
+                        pending_call_baseline=None,
+                        last_outcome=bundle,
+                    )
+                )
+                if saved["status"] != ledger.OK:
+                    bundle["findings"].append(
+                        _finding(
+                            saved.get("code", "LEDGER_WRITE_FAILED"),
+                            saved.get("message", "Bypass outcome ledger update failed."),
+                        )
+                    )
+            _remove_pending(runtime_root, event)
+            return _replacement(bundle, loaded_config)
+
+        repository = _repo_root(event, repo_root or pending.get("repo_root"))
+        scope = pending.get("scope")
+        if not isinstance(scope, list) or (pending.get("phase") == "implementation" and not scope):
+            raise WiringError("pending call scope is missing")
+        baseline = pending.get("baseline")
+        if not isinstance(baseline, Mapping):
+            raise WiringError("pending call baseline is missing")
+        if baseline.get("status") != ledger.OK:
+            delta = {
+                "status": ledger.UNKNOWN,
+                "code": baseline.get("code", "BASELINE_UNAVAILABLE"),
+                "message": baseline.get("message", "The baseline is unavailable."),
+                "baseline_head": baseline.get("baseline_head"),
+                "current_head": None,
+                "changed_paths": None,
+            }
+        else:
+            delta = ledger.compute_delta(
+                repository,
+                baseline,
+                scope if scope else None,
+                manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
+            )
+        bundle["baseline_head"] = delta.get("baseline_head")
+        bundle["current_head"] = delta.get("current_head")
+
+        classification: Mapping[str, Any] | None = None
+        if delta.get("status") == ledger.OK:
+            bundle["changed_paths"] = delta["changed_paths"]
+            bundle["delta_lines"] = delta["changed_line_count"]
+            bundle["delta_files"] = delta["changed_file_count"]
+            if scope:
+                classification = ledger.classify_concurrent_writers(delta, scope)
+                bundle["protected_paths_touched"] = classification.get("protected_paths", [])
+                bundle["concurrent_writer"] = classification.get("concurrent_writer")
+            else:
+                bundle["protected_paths_touched"] = ledger.detect_protected_paths(delta)
+        else:
+            bundle["findings"].append(
+                _finding(delta.get("code", "UNKNOWN_DELTA"), delta.get("message", "Delta is UNKNOWN."))
+            )
+
+        if delta.get("status") != ledger.OK:
+            bundle["claude_review_mode"] = policy.FULL
+        else:
+            reviewer_callable = reviewer if reviewer is not None else REVIEWER
+            gate = policy.reviewer1_gate(
+                phase=pending["phase"],
+                delta_files=delta["changed_file_count"],
+                delta_lines=delta["changed_line_count"],
+                route=pending["route"],
+                reviewer_available=_reviewer_available(reviewer_callable),
+                config=loaded_config,
+            )
+            if gate.should_run:
+                reviewer_report = reviewer_callable(
+                    task_id=pending["task_id"],
+                    phase=pending["phase"],
+                    route=pending["route"],
+                    model=pending["model"],
+                    effort=pending["effort"],
+                    repo_root=repository,
+                    delta=delta,
+                    classification=classification,
+                )
+                result = reviewer_report.get("result") if isinstance(reviewer_report, Mapping) else None
+                if result not in loaded_config["reviewer_results"]:
+                    result = policy.UNCERTAIN
+                    bundle["findings"].append(
+                        _finding("REVIEWER_RESULT_INVALID", "Reviewer-1 returned an invalid result.")
+                    )
+                provider = reviewer_report.get("provider", "agy") if isinstance(reviewer_report, Mapping) else "agy"
+                findings = reviewer_report.get("findings", []) if isinstance(reviewer_report, Mapping) else []
+                validation = reviewer_report.get("validation", "UNKNOWN") if isinstance(reviewer_report, Mapping) else "UNKNOWN"
+                bundle["reviewer1_provider"] = provider if isinstance(provider, str) else "agy"
+                bundle["reviewer1_result"] = result
+                if isinstance(findings, list):
+                    bundle["findings"].extend(findings)
+                bundle["validation"] = validation if validation in {"PASS", "FAIL", "UNKNOWN"} else "UNKNOWN"
+                outcome: policy.ReviewerOutcome = policy.ReviewerReport(result)
+            else:
+                bundle["reviewer1_skipped_reason"] = gate.skip_reason
+                outcome = gate
+            mode = policy.claude_review_mode(pending["route"], outcome, loaded_config)
+            bundle["claude_review_mode"] = mode.mode
+
+            if classification is not None and classification.get("decision") != ledger.PROCEED:
+                bundle["claude_review_mode"] = policy.FULL
+                bundle["findings"].append(
+                    _finding(
+                        classification.get("code", ledger.UNKNOWN_CONCURRENT_WRITER),
+                        "Concurrent-writer classification requires FULL Claude review.",
+                    )
+                )
+
+        if thread_id is None:
+            bundle["claude_review_mode"] = policy.FULL
+
+        session_ledger = ledger.SessionLedger(runtime_root)
+        session_record = ledger.build_session_record(
+            pending["task_id"],
+            thread_id,
+            pending["route"],
+            pending["model"],
+            pending["effort"],
+            pending_call_baseline=None,
+            last_outcome=bundle,
+        )
+        saved = session_ledger.save(session_record)
+        if saved["status"] != ledger.OK:
+            bundle["claude_review_mode"] = policy.FULL
+            bundle["findings"].append(
+                _finding(saved.get("code", "LEDGER_WRITE_FAILED"), saved.get("message", "Ledger update failed."))
+            )
+        else:
+            _remove_pending(runtime_root, event)
+        return _replacement(bundle, loaded_config)
+    except Exception as error:
+        return _internal_post_response(
+            event,
+            error,
+            config=config,
+            state_root=state_root,
+        )
+
+
+def post_tool_use_failure(
+    event: Mapping[str, Any],
+    *,
+    config: Mapping[str, Any] | None = None,
+    state_root: str | os.PathLike[str] | None = None,
+    reviewer: Callable[..., Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Archive ambiguous failure evidence without running Reviewer-1."""
+
+    del config, reviewer
+    if event.get("tool_name") not in CODEX_TOOLS:
+        return {}
+    runtime_root: Path | None = None
+    try:
+        runtime_root = _state_root(state_root)
+        pending = _read_pending(runtime_root, event)
+        evidence = {
+            "ambiguous_outcome": True,
+            "work_performed": "UNKNOWN",
+            "error": event.get("error"),
+            "is_interrupt": event.get("is_interrupt"),
+            "duration_ms": event.get("duration_ms"),
+            "pending_call": pending,
+        }
+        evidence_path = _persist_raw_output(runtime_root, event, evidence, "-failure")
+        routing_enforced = pending.get("kind") != "pretool_bypass"
+        outcome = {
+            "status": "AMBIGUOUS_TOOL_FAILURE",
+            "ambiguous_outcome": True,
+            "work_performed": "UNKNOWN",
+            "routing_enforced": routing_enforced,
+            "evidence_path": str(evidence_path),
+            "claude_review_mode": policy.FULL,
+        }
+        identity_fields = ("task_id", "route", "model", "effort")
+        if all(isinstance(pending.get(field), str) and pending.get(field) for field in identity_fields):
+            saved = ledger.SessionLedger(runtime_root).save(
+                ledger.build_session_record(
+                    pending["task_id"],
+                    pending.get("prior_thread_id"),
+                    pending["route"],
+                    pending["model"],
+                    pending["effort"],
+                    pending_call_baseline=None,
+                    last_outcome=outcome,
+                )
+            )
+            if saved["status"] != ledger.OK:
+                raise WiringError(saved.get("message", "ambiguous failure could not be recorded"))
+        elif routing_enforced:
+            raise WiringError("normal pending call identity is incomplete")
+        _remove_pending(runtime_root, event)
+        routing_note = (
+            " Routing was NOT enforced by PreToolUse."
+            if not routing_enforced
+            else ""
+        )
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUseFailure",
+                "additionalContext": (
+                    "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, "
+                    f"FULL Claude review is required, and evidence is at {evidence_path}."
+                    f"{routing_note}"
+                ),
+            }
+        }
+    except Exception as error:
+        _record_diagnostic(runtime_root, event, "PostToolUseFailure", error)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUseFailure",
+                "additionalContext": (
+                    "Codex failed with an ambiguous outcome; work_performed is UNKNOWN and "
+                    f"FULL Claude review is required. Evidence cleanup error: {_safe_error(error)}"
+                ),
+            }
+        }
+
+
+__all__ = [
+    "CODEX_REPLY_TOOL",
+    "CODEX_TOOL",
+    "CODEX_TOOLS",
+    "IMPLEMENTER_REPORT_LIMIT",
+    "INDEPENDENCE_INSTRUCTIONS",
+    "REVIEWER",
+    "internal_pre_error_response",
+    "internal_post_error_response",
+    "post_tool_use",
+    "post_tool_use_failure",
+    "pre_tool_use",
+]
