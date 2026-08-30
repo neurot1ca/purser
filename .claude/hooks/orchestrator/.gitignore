@@ -4,6 +4,8 @@
 __pycache__/
 *.pyc
 .ledger-test-tmp/
+.telemetry-test-tmp/
+.obsidian-projection-test-tmp/
 .reviewer-test-*/
 .reviewer1-*/
 .reviewer1-packet-*
