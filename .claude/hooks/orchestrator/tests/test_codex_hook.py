@@ -288,6 +288,27 @@ def test_compatible_reply_only_strips_orch(workspace, config):
     assert updated == {"threadId": "thread-1", "prompt": "Continue."}
 
 
+@pytest.mark.parametrize(
+    ("tool_response", "expected"),
+    [
+        (
+            [{"type": "text", "text": json.dumps({"threadId": "thread-array", "content": "array"})}],
+            ("thread-array", "array"),
+        ),
+        (
+            {"content": [{"type": "text", "text": json.dumps({"threadId": "thread-mapping"})}]},
+            ("thread-mapping", ""),
+        ),
+        (
+            json.dumps({"threadId": "thread-string", "content": "string"}),
+            ("thread-string", "string"),
+        ),
+    ],
+)
+def test_extract_codex_result_accepts_observed_transport_shapes(tool_response, expected):
+    assert codex._extract_codex_result(tool_response) == expected
+
+
 def test_thread_id_survives_mcp_output_replacement(workspace, config):
     repo, state = workspace
     call = event()
@@ -313,6 +334,8 @@ def test_thread_id_survives_mcp_output_replacement(workspace, config):
     assert len(bundle["implementer_report"]) == codex.IMPLEMENTER_REPORT_LIMIT
     assert Path(bundle["raw_output_path"]).is_file()
     assert "tool_response" not in bundle
+    loaded = ledger.SessionLedger(state).load("task-1")
+    assert loaded["record"]["live_thread"]["thread_id"] == "thread-9"
 
 
 def test_missing_thread_id_is_explicit_and_forces_full(workspace, config):

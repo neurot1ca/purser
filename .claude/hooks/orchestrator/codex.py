@@ -490,17 +490,22 @@ def pre_tool_use(
 
 
 def _extract_codex_result(tool_response: Any) -> tuple[str, str]:
-    blocks = tool_response
-    if isinstance(blocks, Mapping) and isinstance(blocks.get("content"), list):
-        blocks = blocks["content"]
-    if not isinstance(blocks, list):
-        raise WiringError("Codex MCP output is not a content-block array")
-    for block in blocks:
-        if not isinstance(block, Mapping) or block.get("type") != "text":
-            continue
-        text = block.get("text")
-        if not isinstance(text, str):
-            continue
+    if isinstance(tool_response, str):
+        texts = [tool_response]
+    else:
+        blocks = tool_response
+        if isinstance(blocks, Mapping) and isinstance(blocks.get("content"), list):
+            blocks = blocks["content"]
+        if not isinstance(blocks, list):
+            raise WiringError("Codex MCP output is not a content-block array")
+        texts = [
+            block["text"]
+            for block in blocks
+            if isinstance(block, Mapping)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ]
+    for text in texts:
         try:
             decoded = json.loads(text)
         except json.JSONDecodeError:
