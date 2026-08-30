@@ -15,6 +15,7 @@ import tempfile
 from typing import Any, Iterator
 
 import telemetry_schema as schema
+import obsidian_projection
 
 
 LOCK_TIMEOUT_SECONDS = 0.05
@@ -25,6 +26,7 @@ CLAUDE_RATE_LIMIT_DELTA_SCOPE = "account_window_observation"
 _CLAUDE_USAGE_EVENTS = frozenset({"IMPLEMENTER_STARTED", "IMPLEMENTER_FINISHED", "IMPLEMENTER_FAILED"})
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _SKILL_PATH = _PACKAGE_ROOT.parents[1] / "skills" / "codex-orchestrator" / "SKILL.md"
+_CONFIG_PATH = _PACKAGE_ROOT / "config.json"
 _stderr_reported = False
 _CURSOR_SCHEMA_VERSION = 1
 _HEALTH_ERROR_CODES = frozenset(
@@ -35,6 +37,7 @@ _HEALTH_ERROR_CODES = frozenset(
         "TELEMETRY_REBUILD_FAILED",
         "TELEMETRY_HEALTH_FAILED",
         "TELEMETRY_SPOOL_MERGE_FAILED",
+        "TELEMETRY_PROJECTION_FAILED",
         "MALFORMED_SPOOL_EVENT",
     }
 )
@@ -404,6 +407,60 @@ def _claude_usage_payload(root: Path, event_type: str) -> dict[str, Any]:
             "claude_rate_limit_delta_scope": CLAUDE_RATE_LIMIT_DELTA_SCOPE,
         }
     return payload
+
+
+def _projection_settings() -> tuple[bool, Path]:
+    """Read the optional local projection setting without making it authoritative."""
+
+    try:
+        config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False, obsidian_projection.DEFAULT_VAULT_ROOT
+    if not isinstance(config, Mapping):
+        return False, obsidian_projection.DEFAULT_VAULT_ROOT
+
+    setting = config.get("obsidian_projection")
+    if isinstance(setting, Mapping):
+        enabled = setting.get("enabled") is True
+        configured_root = setting.get("vault_root")
+    elif isinstance(setting, bool):
+        enabled = setting
+        configured_root = config.get("obsidian_vault_root")
+    else:
+        enabled = config.get("obsidian_projection_enabled") is True
+        configured_root = config.get("obsidian_vault_root")
+    if not enabled:
+        return False, obsidian_projection.DEFAULT_VAULT_ROOT
+    if configured_root is None:
+        return True, obsidian_projection.DEFAULT_VAULT_ROOT
+    if not isinstance(configured_root, str) or not configured_root.strip():
+        raise ValueError("obsidian projection vault_root is invalid")
+    return True, Path(configured_root)
+
+
+def _project_task(
+    task_id: str,
+    *,
+    state_root: Path,
+    projection_enabled: bool | None,
+    vault_root: str | os.PathLike[str] | None,
+) -> None:
+    try:
+        if projection_enabled is None and vault_root is not None:
+            enabled, configured_root = True, Path(vault_root)
+        elif projection_enabled is None:
+            enabled, configured_root = _projection_settings()
+        else:
+            enabled, configured_root = projection_enabled, obsidian_projection.DEFAULT_VAULT_ROOT
+        if not enabled:
+            return
+        obsidian_projection.project_task(
+            task_id,
+            state_root=state_root.parent,
+            vault_root=vault_root if vault_root is not None else configured_root,
+        )
+    except BaseException:
+        _record_failure(state_root, "TELEMETRY_PROJECTION_FAILED")
 
 
 def _hash_file(path: Path) -> str | None:
@@ -793,7 +850,13 @@ def _build_task(
     return aggregate
 
 
-def update_task(task_id: Any, *, state_root: str | os.PathLike[str] | None = None) -> None:
+def update_task(
+    task_id: Any,
+    *,
+    state_root: str | os.PathLike[str] | None = None,
+    projection_enabled: bool | None = None,
+    vault_root: str | os.PathLike[str] | None = None,
+) -> None:
     try:
         root = _root(state_root)
         normalized = schema.normalize_identifier(task_id)
@@ -820,6 +883,12 @@ def update_task(task_id: Any, *, state_root: str | os.PathLike[str] | None = Non
         aggregate = _build_task(root, normalized, events)
         _atomic_json(root / "tasks" / f"{normalized}.json", aggregate)
         _write_cursor(root, normalized, index_offset, consumed_spool_ids)
+        _project_task(
+            normalized,
+            state_root=root,
+            projection_enabled=projection_enabled,
+            vault_root=vault_root,
+        )
     except BaseException:
         try:
             _record_failure(_root(state_root), "TELEMETRY_UPDATE_TASK_FAILED")
