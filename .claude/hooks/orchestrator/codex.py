@@ -213,12 +213,48 @@ def _record_diagnostic(
         pass
 
 
+_PROTOCOL_CODES = frozenset(
+    {
+        policy.MISSING_ORCH_LINE,
+        policy.MALFORMED_ORCH_LINE,
+        policy.UNKNOWN_KEY,
+        policy.MISSING_REQUIRED_KEY,
+        policy.INVALID_ENUM_VALUE,
+        policy.VAGUE_SOL_BASIS,
+        "UNBOUNDED_SCOPE",
+    }
+)
+
+
+_PROTOCOL_HELP = (
+    "Prepend this as the FIRST line of the prompt; the hook removes it before Codex sees it:\n"
+    "  ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>"
+    "|reason=<reason>|basis=<specific-basis-or-na>|scope=<path[,path...]>\n"
+    "  route  mechanical -> luna/high | subtle -> luna/xhigh | normal -> sol/medium"
+    " | consequential -> sol/high | escalated -> sol/xhigh\n"
+    "  reason new_task | continue | route_change | reanchor | repeated_failure | user_override\n"
+    "  phase  'operation' for deploy, runner control, status, or read-only investigation;"
+    " it skips Reviewer-1. 'implementation' for anything that changes code.\n"
+    "  basis  required whenever the route resolves to sol, and must name the concrete"
+    " difficulty (e.g. monotonic_deadline_semantics). Vague values are rejected.\n"
+    "  scope  required for implementation; the paths the delegation may touch. It bounds"
+    " the baseline scan, so it cannot be the whole repository.\n"
+    "See .claude/skills/codex-orchestrator/SKILL.md for how to choose the route."
+)
+
+
 def _deny(code: str, message: str) -> dict[str, Any]:
+    # The denial has to teach the protocol, not merely name the violation. A
+    # session that has not loaded the skill would otherwise learn only that
+    # something is missing, and retry blind.
+    reason = f"{code}: {message}"
+    if code in _PROTOCOL_CODES:
+        reason = f"{reason}\n\n{_PROTOCOL_HELP}"
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": f"{code}: {message}",
+            "permissionDecisionReason": reason,
         }
     }
 
