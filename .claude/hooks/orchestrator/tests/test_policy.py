@@ -26,8 +26,9 @@ def orch(**overrides):
         "scope": ".claude/hooks/orchestrator",
     }
     values.update(overrides)
-    if values.get("scope") is None:
-        del values["scope"]
+    for key in tuple(values):
+        if values[key] is None:
+            del values[key]
     return "ORCH|" + "|".join(f"{key}={value}" for key, value in values.items())
 
 
@@ -58,11 +59,12 @@ def test_valid_orch_is_structured_and_removed(config):
         ("Do the work.", policy.MISSING_ORCH_LINE),
         ("ORCH task=task-1", policy.MALFORMED_ORCH_LINE),
         (orch(extra="x"), policy.UNKNOWN_KEY),
-        ("ORCH|task=task-1|phase=implementation|route=normal|reason=new_task", policy.MISSING_REQUIRED_KEY),
+        (orch(task=None), policy.MISSING_REQUIRED_KEY),
+        (orch(phase=None), policy.MISSING_REQUIRED_KEY),
+        (orch(route=None), policy.MISSING_REQUIRED_KEY),
+        (orch(scope=None), policy.MISSING_REQUIRED_KEY),
         (orch(phase="not-a-phase"), policy.INVALID_ENUM_VALUE),
         (orch(route="not-a-route"), policy.INVALID_ENUM_VALUE),
-        (orch(basis="complex"), policy.VAGUE_SOL_BASIS),
-        (orch(basis=""), policy.VAGUE_SOL_BASIS),
     ],
 )
 def test_orch_failures_are_typed_denials_and_remove_first_line(config, prompt, code):
@@ -95,6 +97,23 @@ def test_implementation_scope_is_required_bounded_and_normalized(config):
     assert absolute.code == policy.INVALID_SCOPE
     assert valid.valid is True
     assert valid.scope == ("src/module", "tests")
+
+
+def test_reason_and_basis_are_optional_but_recorded_and_validated_when_supplied(config):
+    absent = policy.parse_orch_prompt(orch(reason=None, basis=None), config)
+    supplied = policy.parse_orch_prompt(orch(reason="continue", basis="complex"), config)
+    empty_basis = policy.parse_orch_prompt(orch(basis=""), config)
+    invalid_reason = policy.parse_orch_prompt(orch(reason="invented"), config)
+
+    assert absent.valid is True
+    assert absent.reason is None
+    assert absent.basis is None
+    assert supplied.valid is True
+    assert supplied.reason == "continue"
+    assert supplied.basis == "complex"
+    assert empty_basis.valid is True
+    assert empty_basis.basis == ""
+    assert invalid_reason.code == policy.INVALID_ENUM_VALUE
 
 
 def test_operation_scope_is_optional_and_ignored(config):
@@ -143,13 +162,9 @@ def test_invalid_config_is_rejected_on_load_and_resolution(config):
         policy.validate_config(invalid_budget)
 
 
-def test_sol_basis_vagueness_is_configured_not_embedded_in_route_lookup(config):
-    for basis in config["vague_sol_bases"]:
-        result = policy.parse_orch_prompt(orch(basis=basis), config)
-        assert result.code == policy.VAGUE_SOL_BASIS
-
-    config["vague_sol_bases"].append("handwave")
-    assert policy.parse_orch_prompt(orch(basis="handwave"), config).code == policy.VAGUE_SOL_BASIS
+def test_vague_sol_basis_configuration_is_no_longer_required(config):
+    assert "vague_sol_bases" not in config
+    assert policy.validate_config(config) is None
 
 
 def test_reviewer_gate_reaches_every_skip_reason(config):

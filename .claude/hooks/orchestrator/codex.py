@@ -362,25 +362,26 @@ _PROTOCOL_CODES = frozenset(
         policy.UNKNOWN_KEY,
         policy.MISSING_REQUIRED_KEY,
         policy.INVALID_ENUM_VALUE,
-        policy.VAGUE_SOL_BASIS,
         "UNBOUNDED_SCOPE",
+        "NO_LIVE_THREAD",
     }
 )
 
 
 _PROTOCOL_HELP = (
     "Prepend this as the FIRST line of the prompt; the hook removes it before Codex sees it:\n"
-    "  ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>"
-    "|reason=<reason>|basis=<specific-basis-or-na>|scope=<path[,path...]>\n"
+    "  ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>\n"
+    "  Add |scope=<path[,path...]> for implementation; omit it for operation.\n"
     "  route  mechanical -> luna/high | subtle -> luna/xhigh | normal -> sol/medium"
     " | consequential -> sol/high | escalated -> sol/xhigh\n"
-    "  reason new_task | continue | route_change | reanchor | repeated_failure | user_override\n"
+    "  reason and basis are optional; reason, when supplied, is one of new_task | continue |"
+    " route_change | reanchor | repeated_failure | user_override.\n"
     "  phase  'operation' for deploy, runner control, status, or read-only investigation;"
     " it skips Reviewer-1. 'implementation' for anything that changes code.\n"
-    "  basis  required whenever the route resolves to sol, and must name the concrete"
-    " difficulty (e.g. monotonic_deadline_semantics). Vague values are rejected.\n"
     "  scope  required for implementation; the paths the delegation may touch. It bounds"
     " the baseline scan, so it cannot be the whole repository.\n"
+    "  codex-reply may omit ORCH only when its threadId identifies a recorded thread;"
+    " otherwise the reply is denied.\n"
     "See .claude/skills/codex-orchestrator/SKILL.md for how to choose the route."
 )
 
@@ -460,6 +461,37 @@ def _requested_thread(parsed: policy.OrchParseResult, route: policy.RouteResolut
     }
 
 
+def _inherited_reply_parse(
+    prompt: Any,
+    live_thread: Mapping[str, Any],
+) -> policy.OrchParseResult | None:
+    """Build protocol metadata from the durable thread record for a bare reply."""
+
+    task_id = live_thread.get("task_id")
+    phase = live_thread.get("phase")
+    route = live_thread.get("route")
+    scope = live_thread.get("scope")
+    if (
+        not isinstance(prompt, str)
+        or not isinstance(task_id, str)
+        or not isinstance(phase, str)
+        or not isinstance(route, str)
+        or not isinstance(scope, list)
+        or any(not isinstance(path, str) for path in scope)
+    ):
+        return None
+    return policy.OrchParseResult(
+        valid=True,
+        code=policy.VALID,
+        message="ORCH metadata inherited from the recorded reply thread.",
+        prompt=prompt,
+        task_id=task_id,
+        phase=phase,
+        route=route,
+        scope=tuple(scope),
+    )
+
+
 def internal_pre_error_response(
     event: Mapping[str, Any],
     error: BaseException,
@@ -506,13 +538,80 @@ def pre_tool_use(
                 state_root=state_root,
             )
 
+        tool_name = event["tool_name"]
         parsed = policy.parse_orch_prompt(tool_input.get("prompt"), loaded_config)
-        if not parsed.valid:
+        reply_without_orch = (
+            tool_name == CODEX_REPLY_TOOL
+            and parsed.code == policy.MISSING_ORCH_LINE
+            and isinstance(tool_input.get("prompt"), str)
+        )
+        if not parsed.valid and not reply_without_orch:
             if parsed.code == policy.CONFIG_INVALID:
                 raise WiringError(parsed.message)
             return _observed_denial(
                 event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
             )
+
+        runtime_root = _state_root(state_root)
+        try:
+            _cleanup_stale_pending(runtime_root, event)
+        except BaseException:
+            pass
+        _call_key(event)
+        session_ledger = ledger.SessionLedger(runtime_root)
+        record: Mapping[str, Any] | None
+        live_thread: Mapping[str, Any] | None
+        if tool_name == CODEX_REPLY_TOOL:
+            forbidden = {"model", "config", "developer-instructions"}.intersection(tool_input)
+            if forbidden:
+                return _observed_denial(
+                    event,
+                    "CODEX_REPLY_INPUT_INVALID",
+                    "codex-reply accepts only threadId and prompt; use a fresh thread to change routing.",
+                    state_root=state_root,
+                    task_id=parsed.task_id,
+                )
+        if reply_without_orch:
+            supplied_thread_id = tool_input.get("threadId")
+            recorded = session_ledger.find_by_thread_id(supplied_thread_id)
+            if recorded is None:
+                return _observed_denial(
+                    event,
+                    "NO_LIVE_THREAD",
+                    "No recoverable ledger record exists for this codex-reply thread.",
+                    state_root=state_root,
+                )
+            candidate_thread = recorded.get("live_thread")
+            if not isinstance(candidate_thread, Mapping):
+                return _observed_denial(
+                    event,
+                    "NO_LIVE_THREAD",
+                    "The codex-reply thread record has no recoverable live thread context.",
+                    state_root=state_root,
+                )
+            inherited = _inherited_reply_parse(tool_input.get("prompt"), candidate_thread)
+            if inherited is None:
+                return _observed_denial(
+                    event,
+                    "NO_LIVE_THREAD",
+                    "The codex-reply thread record lacks recoverable phase or scope context.",
+                    state_root=state_root,
+                )
+            parsed = inherited
+            record = recorded
+            live_thread = candidate_thread
+        else:
+            if not parsed.valid:
+                if parsed.code == policy.CONFIG_INVALID:
+                    raise WiringError(parsed.message)
+                return _observed_denial(
+                    event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
+                )
+            loaded = session_ledger.load(parsed.task_id)
+            if loaded["status"] == ledger.CORRUPT:
+                raise WiringError("session ledger is unreadable")
+            record = loaded.get("record") if loaded["status"] == ledger.OK else None
+            live_thread = record.get("live_thread") if isinstance(record, Mapping) else None
 
         route = policy.resolve_route(parsed.route, loaded_config)
         if not route.valid:
@@ -531,20 +630,6 @@ def pre_tool_use(
             scope=list(parsed.scope),
         )
 
-        runtime_root = _state_root(state_root)
-        try:
-            _cleanup_stale_pending(runtime_root, event)
-        except BaseException:
-            pass
-        _call_key(event)
-        session_ledger = ledger.SessionLedger(runtime_root)
-        loaded = session_ledger.load(parsed.task_id)
-        if loaded["status"] == ledger.CORRUPT:
-            raise WiringError("session ledger is unreadable")
-        record = loaded.get("record") if loaded["status"] == ledger.OK else None
-        live_thread = record.get("live_thread") if isinstance(record, Mapping) else None
-
-        tool_name = event["tool_name"]
         if tool_name == CODEX_TOOL:
             decision = policy.fresh_codex_decision(requested, live_thread)
             if not decision.allowed:
@@ -558,17 +643,6 @@ def pre_tool_use(
                 )
             continuation_thread_id = None
         else:
-            forbidden = {"model", "config", "developer-instructions"}.intersection(tool_input)
-            if forbidden:
-                return _observed_denial(
-                    event,
-                    "CODEX_REPLY_INPUT_INVALID",
-                    "codex-reply accepts only threadId and prompt; use a fresh thread to change routing.",
-                    state_root=state_root,
-                    task_id=parsed.task_id,
-                )
-            if not isinstance(live_thread, Mapping):
-                raise WiringError("no live thread is recorded for codex-reply")
             compatibility = policy.thread_compatibility(requested, live_thread)
             if not compatibility.compatible:
                 return _observed_denial(
@@ -634,6 +708,8 @@ def pre_tool_use(
             parsed.route,
             route.model,
             route.effort,
+            phase=parsed.phase,
+            scope=declared_scope,
             pending_call_baseline=baseline,
             last_outcome=record.get("last_outcome") if isinstance(record, Mapping) else None,
         )
@@ -998,6 +1074,8 @@ def post_tool_use(
                         pending["route"],
                         pending["model"],
                         pending["effort"],
+                        phase=pending.get("phase"),
+                        scope=pending.get("scope", []),
                         pending_call_baseline=None,
                         last_outcome=bundle,
                     )
@@ -1130,6 +1208,8 @@ def post_tool_use(
             pending["route"],
             pending["model"],
             pending["effort"],
+            phase=pending.get("phase"),
+            scope=pending.get("scope", []),
             pending_call_baseline=None,
             last_outcome=bundle,
         )
@@ -1211,6 +1291,8 @@ def post_tool_use_failure(
                     pending["route"],
                     pending["model"],
                     pending["effort"],
+                    phase=pending.get("phase"),
+                    scope=pending.get("scope", []),
                     pending_call_baseline=None,
                     last_outcome=outcome,
                 )

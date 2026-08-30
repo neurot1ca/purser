@@ -783,6 +783,8 @@ def build_session_record(
     model: str,
     effort: str,
     *,
+    phase: str | None = None,
+    scope: Iterable[str | os.PathLike[str]] = (),
     pending_call_baseline: Mapping[str, Any] | None = None,
     last_outcome: Any = None,
 ) -> dict[str, Any]:
@@ -797,6 +799,9 @@ def build_session_record(
             "model": model,
             "effort": effort,
         }
+        if phase is not None:
+            live_thread["phase"] = phase
+            live_thread["scope"] = [os.fspath(path) for path in scope]
     return {
         "task_id": task_id,
         "live_thread": live_thread,
@@ -847,19 +852,40 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         except (TypeError, ValueError):
             return False
         return not _contains_secret(record)
-    if not isinstance(thread, Mapping) or set(thread) != {
-        "task_id",
-        "thread_id",
-        "route",
-        "model",
-        "effort",
-    }:
+    if not isinstance(thread, Mapping) or set(thread) not in (
+        {
+            "task_id",
+            "thread_id",
+            "route",
+            "model",
+            "effort",
+        },
+        {
+            "task_id",
+            "thread_id",
+            "route",
+            "model",
+            "effort",
+            "phase",
+            "scope",
+        },
+    ):
         return False
     if thread.get("task_id") != task_id or any(
         not isinstance(thread.get(field), str) or not thread.get(field)
         for field in ("task_id", "thread_id", "route", "model", "effort")
     ):
         return False
+    if "phase" in thread:
+        if thread.get("phase") not in {"implementation", "operation"}:
+            return False
+        thread_scope = thread.get("scope")
+        if not isinstance(thread_scope, list) or any(
+            not isinstance(path, str) or not path for path in thread_scope
+        ):
+            return False
+        if thread["phase"] == "implementation" and not thread_scope:
+            return False
     pending = record.get("pending_call_baseline")
     if pending is not None and not isinstance(pending, Mapping):
         return False
@@ -963,6 +989,44 @@ class SessionLedger:
         return {"status": OK, "code": "LEDGER_LOADED", "record": payload}
 
     read = load
+
+    def find_by_thread_id(self, thread_id: str) -> dict[str, Any] | None:
+        """Find one valid session record by its live thread identity."""
+
+        if not isinstance(thread_id, str) or not thread_id:
+            return None
+        matches: list[dict[str, Any]] = []
+        try:
+            paths = sorted(self.sessions_root.glob("*.json"))
+        except OSError:
+            return None
+        for target in paths:
+            try:
+                raw = target.read_bytes()
+                envelope = json.loads(raw.decode("utf-8"))
+                if not isinstance(envelope, Mapping) or set(envelope) != {
+                    "schema_version",
+                    "checksum",
+                    "payload",
+                }:
+                    continue
+                if envelope["schema_version"] != _LEDGER_SCHEMA_VERSION:
+                    continue
+                payload = envelope["payload"]
+                expected = hashlib.sha256(_canonical_json(payload)).hexdigest()
+                if not isinstance(envelope["checksum"], str) or not hmac.compare_digest(
+                    envelope["checksum"], expected
+                ):
+                    continue
+                task_id = payload.get("task_id") if isinstance(payload, Mapping) else None
+                if not isinstance(task_id, str) or not _valid_session_record(payload, task_id):
+                    continue
+                thread = payload.get("live_thread")
+                if isinstance(thread, Mapping) and thread.get("thread_id") == thread_id:
+                    matches.append(dict(payload))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return matches[0] if len(matches) == 1 else None
 
 
 __all__ = [

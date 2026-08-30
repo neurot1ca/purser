@@ -72,18 +72,31 @@ def orch(
     route="normal",
     *,
     task="task-1",
+    reason="new_task",
     basis=None,
     phase="implementation",
     scope="file0.py,file1.py,file2.py",
+    include_reason=True,
+    include_basis=True,
 ):
-    if basis is None:
+    if basis is None and include_basis:
         basis = "specific repository boundary" if route in {
             "normal",
             "consequential",
             "escalated",
         } else "na"
-    line = f"ORCH|task={task}|phase={phase}|route={route}|reason=new_task|basis={basis}"
-    return line if scope is None else f"{line}|scope={scope}"
+    fields = []
+    for key, value, included in (
+        ("task", task, task is not None),
+        ("phase", phase, phase is not None),
+        ("route", route, route is not None),
+        ("reason", reason, include_reason),
+        ("basis", basis, include_basis),
+        ("scope", scope, scope is not None),
+    ):
+        if included:
+            fields.append(f"{key}={value}")
+    return "ORCH|" + "|".join(fields)
 
 
 def event(tool_name=codex.CODEX_TOOL, *, prompt=None, tool_use_id="call-1", **fields):
@@ -123,7 +136,15 @@ def test_pending_cleanup_failure_does_not_change_pretool_output(
     assert actual == expected
 
 
-def save_live_thread(state, *, route="normal", model="gpt-5.6-sol", effort="medium"):
+def save_live_thread(
+    state,
+    *,
+    route="normal",
+    model="gpt-5.6-sol",
+    effort="medium",
+    phase="implementation",
+    scope=("file0.py", "file1.py", "file2.py"),
+):
     result = ledger.SessionLedger(state).save(
         ledger.build_session_record(
             "task-1",
@@ -131,6 +152,8 @@ def save_live_thread(state, *, route="normal", model="gpt-5.6-sol", effort="medi
             route,
             model,
             effort,
+            phase=phase,
+            scope=scope,
         )
     )
     assert result["status"] == ledger.OK
@@ -141,7 +164,9 @@ def save_live_thread(state, *, route="normal", model="gpt-5.6-sol", effort="medi
     [
         ("Do the work.", policy.MISSING_ORCH_LINE),
         ("ORCH task=task-1\nDo the work.", policy.MALFORMED_ORCH_LINE),
-        (orch(basis="complex") + "\nDo the work.", policy.VAGUE_SOL_BASIS),
+        (orch(task=None) + "\nDo the work.", policy.MISSING_REQUIRED_KEY),
+        (orch(phase=None) + "\nDo the work.", policy.MISSING_REQUIRED_KEY),
+        (orch(route=None) + "\nDo the work.", policy.MISSING_REQUIRED_KEY),
         (orch(scope=None) + "\nDo the work.", policy.MISSING_REQUIRED_KEY),
         (orch(scope=".") + "\nDo the work.", policy.UNBOUNDED_SCOPE),
     ],
@@ -305,6 +330,71 @@ def test_compatible_reply_only_strips_orch(workspace, config):
     updated = result["hookSpecificOutput"]["updatedInput"]
 
     assert updated == {"threadId": "thread-1", "prompt": "Continue."}
+
+
+def test_reply_without_orch_inherits_recorded_thread_context(workspace, config):
+    repo, state = workspace
+    save_live_thread(state)
+    reply = event(
+        codex.CODEX_REPLY_TOOL,
+        prompt="Continue without repeating routing.",
+        threadId="thread-1",
+    )
+
+    result = codex.pre_tool_use(
+        reply, config=config, state_root=state, repo_root=repo
+    )
+    output = result["hookSpecificOutput"]
+
+    assert "permissionDecision" not in output
+    assert output["updatedInput"] == {
+        "threadId": "thread-1",
+        "prompt": "Continue without repeating routing.",
+    }
+    pending = next((state / "pending").glob("*.json"))
+    assert json.loads(pending.read_text(encoding="utf-8"))["scope"] == [
+        "file0.py",
+        "file1.py",
+        "file2.py",
+    ]
+
+
+def test_reply_without_orch_without_recoverable_thread_is_denied(workspace, config):
+    repo, state = workspace
+    reply = event(
+        codex.CODEX_REPLY_TOOL,
+        prompt="Continue without routing.",
+        threadId="missing-thread",
+    )
+
+    result = codex.pre_tool_use(
+        reply, config=config, state_root=state, repo_root=repo
+    )
+    output = result["hookSpecificOutput"]
+
+    assert output["permissionDecision"] == "deny"
+    assert output["permissionDecisionReason"].startswith("NO_LIVE_THREAD:")
+
+
+def test_pretool_strips_minimal_orch_and_pins_consequential_route(workspace, config):
+    repo, state = workspace
+    call = event(
+        prompt=(
+            "ORCH|task=t|phase=implementation|route=consequential|scope=some/path.rs\n"
+            "\nbody text"
+        ),
+        tool_use_id="minimal-consequential",
+    )
+
+    result = codex.pre_tool_use(
+        call, config=config, state_root=state, repo_root=repo
+    )
+    output = result["hookSpecificOutput"]
+
+    assert "permissionDecision" not in output
+    assert output["updatedInput"]["prompt"] == "\nbody text"
+    assert output["updatedInput"]["model"] == "gpt-5.6-sol"
+    assert output["updatedInput"]["config"]["model_reasoning_effort"] == "high"
 
 
 @pytest.mark.parametrize(

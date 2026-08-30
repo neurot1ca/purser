@@ -47,14 +47,6 @@
     }
   },
   "sol_model": "gpt-5.6-sol",
-  "vague_sol_bases": [
-    "complex",
-    "safer",
-    "better_model",
-    "hard",
-    "risky",
-    "na"
-  ],
   "always_full_routes": [
     "consequential",
     "escalated"

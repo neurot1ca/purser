@@ -21,7 +21,6 @@ MALFORMED_ORCH_LINE = "MALFORMED_ORCH_LINE"
 UNKNOWN_KEY = "UNKNOWN_KEY"
 MISSING_REQUIRED_KEY = "MISSING_REQUIRED_KEY"
 INVALID_ENUM_VALUE = "INVALID_ENUM_VALUE"
-VAGUE_SOL_BASIS = "VAGUE_SOL_BASIS"
 INVALID_SCOPE = "INVALID_SCOPE"
 UNBOUNDED_SCOPE = "UNBOUNDED_SCOPE"
 CONFIG_INVALID = "CONFIG_INVALID"
@@ -40,7 +39,7 @@ AUDIT = "AUDIT"
 FULL = "FULL"
 
 _ORCH_KEYS = ("task", "phase", "route", "reason", "basis", "scope")
-_REQUIRED_ORCH_KEYS = ("task", "phase", "route", "reason", "basis")
+_REQUIRED_ORCH_KEYS = ("task", "phase", "route")
 _REVIEWER_SKIP_PRECEDENCE = (
     PHASE_OPERATION,
     NO_DELTA,
@@ -91,7 +90,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "required_routes",
         "routes",
         "sol_model",
-        "vague_sol_bases",
         "always_full_routes",
         "reviewer_gate",
         "manifest_budget_seconds",
@@ -137,7 +135,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
     if not any(entry["model"] == sol_model for entry in routes.values()):
         raise ConfigError("INVALID_CONFIG_FIELD", "sol_model is absent from the route table")
 
-    _string_list(config, "vague_sol_bases")
     always_full_routes = set(_string_list(config, "always_full_routes"))
     if not always_full_routes.issubset(routes):
         raise ConfigError(
@@ -354,7 +351,7 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
         "route": set(config["routes"]),
     }
     for key, allowed in enum_fields.items():
-        if values[key] not in allowed:
+        if key in values and values[key] not in allowed:
             return _orch_failure(
                 remainder,
                 INVALID_ENUM_VALUE,
@@ -382,20 +379,6 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
             )
             return _orch_failure(remainder, code, message, values)
 
-    route_entry = config["routes"][values["route"]]
-    basis = values["basis"]
-    vague_bases = {item.casefold() for item in config["vague_sol_bases"]}
-    if (
-        route_entry["model"] == config["sol_model"]
-        and (not basis.strip() or basis.strip().casefold() in vague_bases)
-    ):
-        return _orch_failure(
-            remainder,
-            VAGUE_SOL_BASIS,
-            "A sol route requires a specific, non-vague basis.",
-            values,
-        )
-
     return OrchParseResult(
         valid=True,
         code=VALID,
@@ -404,8 +387,8 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
         task_id=values["task"],
         phase=values["phase"],
         route=values["route"],
-        reason=values["reason"],
-        basis=basis,
+        reason=values.get("reason"),
+        basis=values.get("basis"),
         scope=scope,
     )
 
@@ -802,7 +785,6 @@ __all__ = [
     "UNCERTAIN",
     "UNKNOWN_KEY",
     "UNBOUNDED_SCOPE",
-    "VAGUE_SOL_BASIS",
     "claude_review_mode",
     "decide_claude_review_mode",
     "decide_fresh_codex",

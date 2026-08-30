@@ -40,23 +40,28 @@ SKILL.md                judgment
 hooks/orchestrator      deterministic mechanics
 ```
 
-Every Codex prompt now begins with one line, which the hook strips before Codex
-sees it:
+Every fresh Codex prompt begins with one line, which the hook strips before Codex
+sees it; a `codex-reply` may inherit the line's metadata from its recorded
+thread:
 
 ```
-ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>|reason=<reason>|basis=<basis-or-na>|scope=<path[,path...]>
+ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>
 ```
 
-`reason` is `new_task | continue | route_change | reanchor | repeated_failure |
-user_override`. `scope` is required when the phase is `implementation` and names
-the paths the delegation may touch; it bounds the baseline manifest, and a scope
+`reason` and `basis` are optional metadata. When supplied, `reason` is
+`new_task | continue | route_change | reanchor | repeated_failure | user_override`,
+and both fields are recorded. `scope` is required when the phase is
+`implementation` and names the paths the delegation may touch; add it to the
+line as `|scope=<path[,path...]>`. It bounds the baseline manifest, and a scope
 resolving to the whole repository is refused — repository-wide enumeration here
 is 361,754 paths and does not finish inside a hook timeout.
 
-A missing or malformed line is denied, never defaulted. A route resolving to
-`sol` is denied without a specific `basis`. What the hook enforces you no longer
-have to remember; what it cannot judge — which route a task belongs to, whether
-a finding is real — is still entirely yours.
+A missing or malformed line is denied for a fresh `codex` call, never defaulted.
+`codex-reply` may omit the line because it inherits task, phase, route, and scope
+from its recorded thread; a reply without a line and without a recoverable
+thread record is denied. What the hook enforces you no longer have to remember;
+what it cannot judge — which route a task belongs to, whether a finding is real
+— is still entirely yours.
 
 `phase=operation` is what keeps ordinary operational work out of the review
 pipeline: a deploy, a runner start, a status fetch, a read-only investigation.
