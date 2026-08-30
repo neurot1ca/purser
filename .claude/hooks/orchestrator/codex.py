@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -15,6 +16,8 @@ from typing import Any
 import ledger
 import policy
 import reviewer as reviewer1
+import telemetry
+import telemetry_schema
 
 
 CODEX_TOOL = "mcp__codex-main__codex"
@@ -47,6 +50,102 @@ REVIEWER: Callable[..., Mapping[str, Any]] = reviewer1.review
 
 class WiringError(RuntimeError):
     pass
+
+
+def _observe(entrypoint: str, *args: Any, **kwargs: Any) -> None:
+    """Keep even a broken or monkeypatched telemetry entry point observational."""
+
+    try:
+        getattr(telemetry, entrypoint)(*args, **kwargs)
+    except BaseException:
+        try:
+            telemetry.record_health(
+                "DEGRADED",
+                error_code="TELEMETRY_ENTRYPOINT_FAILURE",
+                state_root=kwargs.get("state_root"),
+            )
+        except BaseException:
+            pass
+
+
+def _telemetry_envelope(
+    event: Mapping[str, Any],
+    repository: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    repo_name = Path(repository).name if repository is not None else None
+    return {
+        "session_id": event.get("session_id"),
+        "repo": repo_name,
+        "branch": None,
+        "agent_id": event.get("tool_use_id"),
+        "agent_type": "codex-main",
+    }
+
+
+def _observed_denial(
+    event: Mapping[str, Any],
+    code: str,
+    message: str,
+    *,
+    state_root: str | os.PathLike[str] | None,
+    task_id: str | None = None,
+    continuity: bool = False,
+) -> dict[str, Any]:
+    _observe(
+        "emit",
+        "THREAD_CONTINUITY_VIOLATION" if continuity else "ROUTING_PROTOCOL_VIOLATION",
+        task_id=task_id,
+        state_root=state_root,
+        violation_code=code,
+        **_telemetry_envelope(event),
+    )
+    return _deny(code, message)
+
+
+def _numeric_duration_ms(value: Any) -> int | float | None:
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
+        and math.isfinite(value)
+    ):
+        return value
+    return None
+
+
+def _codex_usage(tool_response: Any) -> dict[str, int | float]:
+    candidates: list[Any] = [tool_response]
+    if isinstance(tool_response, Mapping):
+        candidates.append(tool_response.get("usage"))
+        candidates.append(tool_response.get("content"))
+    if isinstance(tool_response, list):
+        candidates.extend(tool_response)
+    usage: Mapping[str, Any] | None = None
+    for candidate in candidates:
+        if isinstance(candidate, Mapping) and isinstance(candidate.get("usage"), Mapping):
+            usage = candidate["usage"]
+            break
+        text = candidate.get("text") if isinstance(candidate, Mapping) else candidate
+        if not isinstance(text, str):
+            continue
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, Mapping) and isinstance(decoded.get("usage"), Mapping):
+            usage = decoded["usage"]
+            break
+    if usage is None:
+        return {}
+    return {
+        key: value
+        for key, value in usage.items()
+        if key in telemetry_schema.TOKEN_FIELDS
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
+        and math.isfinite(value)
+    }
 
 
 def _load_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -357,19 +456,28 @@ def pre_tool_use(
         loaded_config = _load_config(config)
         tool_input = event.get("tool_input")
         if not isinstance(tool_input, Mapping):
-            return _deny("MALFORMED_TOOL_INPUT", "tool_input must be an object")
+            return _observed_denial(
+                event,
+                "MALFORMED_TOOL_INPUT",
+                "tool_input must be an object",
+                state_root=state_root,
+            )
 
         parsed = policy.parse_orch_prompt(tool_input.get("prompt"), loaded_config)
         if not parsed.valid:
             if parsed.code == policy.CONFIG_INVALID:
                 raise WiringError(parsed.message)
-            return _deny(parsed.code, parsed.message)
+            return _observed_denial(
+                event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
+            )
 
         route = policy.resolve_route(parsed.route, loaded_config)
         if not route.valid:
             if route.code == policy.CONFIG_INVALID:
                 raise WiringError(route.message)
-            return _deny(route.code, route.message)
+            return _observed_denial(
+                event, route.code, route.message, state_root=state_root, task_id=parsed.task_id
+            )
         requested = _requested_thread(parsed, route)
         bypass_metadata.update(
             task_id=parsed.task_id,
@@ -393,25 +501,46 @@ def pre_tool_use(
         if tool_name == CODEX_TOOL:
             decision = policy.fresh_codex_decision(requested, live_thread)
             if not decision.allowed:
-                return _deny(decision.code, decision.message)
+                return _observed_denial(
+                    event,
+                    decision.code,
+                    decision.message,
+                    state_root=state_root,
+                    task_id=parsed.task_id,
+                    continuity=True,
+                )
             continuation_thread_id = None
         else:
             forbidden = {"model", "config", "developer-instructions"}.intersection(tool_input)
             if forbidden:
-                return _deny(
+                return _observed_denial(
+                    event,
                     "CODEX_REPLY_INPUT_INVALID",
                     "codex-reply accepts only threadId and prompt; use a fresh thread to change routing.",
+                    state_root=state_root,
+                    task_id=parsed.task_id,
                 )
             if not isinstance(live_thread, Mapping):
                 raise WiringError("no live thread is recorded for codex-reply")
             compatibility = policy.thread_compatibility(requested, live_thread)
             if not compatibility.compatible:
-                return _deny(compatibility.code, compatibility.message)
+                return _observed_denial(
+                    event,
+                    compatibility.code,
+                    compatibility.message,
+                    state_root=state_root,
+                    task_id=parsed.task_id,
+                    continuity=True,
+                )
             supplied_thread_id = tool_input.get("threadId")
             if supplied_thread_id != live_thread.get("thread_id"):
-                return _deny(
+                return _observed_denial(
+                    event,
                     "THREAD_ID_MISMATCH",
                     "codex-reply names a different thread; a fresh thread is required.",
+                    state_root=state_root,
+                    task_id=parsed.task_id,
+                    continuity=True,
                 )
             continuation_thread_id = live_thread["thread_id"]
         bypass_metadata["prior_thread_id"] = continuation_thread_id
@@ -464,6 +593,21 @@ def pre_tool_use(
         saved = session_ledger.save(session_record)
         if saved["status"] != ledger.OK:
             raise WiringError(saved.get("message", "session ledger could not be updated"))
+
+        observation = {
+            "task_id": parsed.task_id,
+            "state_root": runtime_root,
+            "phase": parsed.phase,
+            "route": parsed.route,
+            "model": route.model,
+            "effort": route.effort,
+            "routing_enforced": True,
+            "fresh_thread": tool_name == CODEX_TOOL,
+            "reply_call": tool_name == CODEX_REPLY_TOOL,
+            **_telemetry_envelope(event, repository),
+        }
+        _observe("emit", "TASK_ROUTE_SELECTED", **observation)
+        _observe("emit", "IMPLEMENTER_STARTED", **observation)
 
         return {
             "hookSpecificOutput": {
@@ -648,6 +792,94 @@ def internal_post_error_response(
     )
 
 
+def _post_observations(
+    event: Mapping[str, Any],
+    runtime_root: Path,
+    pending: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+    *,
+    classification: Mapping[str, Any] | None = None,
+    reviewer_report: Mapping[str, Any] | None = None,
+    reviewer_started: bool = False,
+) -> None:
+    task_id = pending.get("task_id")
+    envelope = _telemetry_envelope(event, pending.get("repo_root"))
+    codex_tokens = _codex_usage(event.get("tool_response"))
+    finished_payload: dict[str, Any] = {
+        "state_root": runtime_root,
+        **envelope,
+        "duration_ms": _numeric_duration_ms(event.get("duration_ms")),
+        "changed_paths_count": bundle.get("delta_files"),
+        "validation": bundle.get("validation"),
+        "thread_id": (
+            telemetry_schema.normalize_identifier(bundle.get("thread_id"), fallback="thread")
+            if bundle.get("thread_id") is not None
+            else None
+        ),
+        "claude_review_mode": bundle.get("claude_review_mode"),
+        "routing_enforced": bundle.get("routing_enforced"),
+        "codex_usage_known": bool(codex_tokens),
+    }
+    finished_payload.update({f"codex_{key}": value for key, value in codex_tokens.items()})
+    _observe("emit", "IMPLEMENTER_FINISHED", task_id=task_id, **finished_payload)
+
+    model_requested = bundle.get("reviewer1_model_requested")
+    if reviewer_started:
+        usage = dict(getattr(reviewer_report, "usage", ()))
+        duration_seconds = getattr(reviewer_report, "duration_seconds", None)
+        duration_ms = (
+            duration_seconds * 1000
+            if isinstance(duration_seconds, (int, float)) and not isinstance(duration_seconds, bool)
+            else None
+        )
+        review_payload: dict[str, Any] = {
+            "state_root": runtime_root,
+            **envelope,
+            "reviewer1_provider": bundle.get("reviewer1_provider"),
+            "reviewer1_model_requested": model_requested,
+            "served_model_attestation": "UNAVAILABLE",
+            "reviewer1_result": bundle.get("reviewer1_result"),
+            "duration_ms": duration_ms,
+            "gemini_usage_known": bool(usage),
+        }
+        review_payload.update({f"gemini_{key}": value for key, value in usage.items()})
+        review_status = reviewer_report.get("review_status") if isinstance(reviewer_report, Mapping) else None
+        if review_status == "COMPLETED" or (
+            review_status is None
+            and bundle.get("reviewer1_result") != policy.REVIEWER1_UNAVAILABLE
+        ):
+            event_type = "REVIEWER1_FINISHED"
+        else:
+            event_type = "REVIEWER1_FAILED"
+            review_payload["failure_code"] = (
+                "REVIEWER1_UNAVAILABLE"
+                if bundle.get("reviewer1_result") == policy.REVIEWER1_UNAVAILABLE
+                else "REVIEWER1_INCOMPLETE"
+            )
+        _observe("emit", event_type, task_id=task_id, **review_payload)
+    elif bundle.get("reviewer1_skipped_reason") is not None:
+        _observe(
+            "emit",
+            "REVIEWER1_SKIPPED",
+            task_id=task_id,
+            state_root=runtime_root,
+            **envelope,
+            reviewer1_skipped_reason=bundle.get("reviewer1_skipped_reason"),
+            reviewer1_model_requested=model_requested,
+            served_model_attestation="UNAVAILABLE",
+        )
+    if classification is not None and classification.get("decision") == ledger.UNKNOWN_CONCURRENT_WRITER:
+        _observe(
+            "emit",
+            "UNKNOWN_CONCURRENT_WRITER",
+            task_id=task_id,
+            state_root=runtime_root,
+            **envelope,
+            concurrent_writer=True,
+        )
+    _observe("update_task", task_id, state_root=runtime_root)
+
+
 def post_tool_use(
     event: Mapping[str, Any],
     *,
@@ -679,6 +911,9 @@ def post_tool_use(
                 "routing_enforced": pending.get("kind") != "pretool_bypass",
             }
         )
+        classification: Mapping[str, Any] | None = None
+        reviewer_report: Mapping[str, Any] | None = None
+        reviewer_started = False
 
         try:
             thread_id, report = _extract_codex_result(event.get("tool_response"))
@@ -724,6 +959,10 @@ def post_tool_use(
                         )
                     )
             _remove_pending(runtime_root, event)
+            try:
+                _post_observations(event, runtime_root, pending, bundle)
+            except BaseException:
+                _observe("update_task", pending.get("task_id"), state_root=runtime_root)
             return _replacement(bundle, loaded_config)
 
         repository = _repo_root(event, repo_root or pending.get("repo_root"))
@@ -752,7 +991,6 @@ def post_tool_use(
         bundle["baseline_head"] = delta.get("baseline_head")
         bundle["current_head"] = delta.get("current_head")
 
-        classification: Mapping[str, Any] | None = None
         if delta.get("status") == ledger.OK:
             bundle["changed_paths"] = delta["changed_paths"]
             bundle["delta_lines"] = delta["changed_line_count"]
@@ -781,6 +1019,16 @@ def post_tool_use(
                 config=loaded_config,
             )
             if gate.should_run:
+                reviewer_started = True
+                _observe(
+                    "emit",
+                    "REVIEWER1_STARTED",
+                    task_id=pending["task_id"],
+                    state_root=runtime_root,
+                    **_telemetry_envelope(event, repository),
+                    reviewer1_provider="agy",
+                    reviewer1_model_requested=loaded_config["reviewer1_model_requested"],
+                )
                 reviewer_report = reviewer_callable(
                     task_id=pending["task_id"],
                     phase=pending["phase"],
@@ -842,6 +1090,18 @@ def post_tool_use(
             )
         else:
             _remove_pending(runtime_root, event)
+        try:
+            _post_observations(
+                event,
+                runtime_root,
+                pending,
+                bundle,
+                classification=classification,
+                reviewer_report=reviewer_report,
+                reviewer_started=reviewer_started,
+            )
+        except BaseException:
+            _observe("update_task", pending.get("task_id"), state_root=runtime_root)
         return _replacement(bundle, loaded_config)
     except Exception as error:
         return _internal_post_response(
@@ -865,6 +1125,7 @@ def post_tool_use_failure(
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
     runtime_root: Path | None = None
+    pending: Mapping[str, Any] | None = None
     try:
         runtime_root = _state_root(state_root)
         pending = _read_pending(runtime_root, event)
@@ -909,6 +1170,19 @@ def post_tool_use_failure(
             if not routing_enforced
             else ""
         )
+        failure_code = (
+            "CODEX_CALL_INTERRUPTED" if event.get("is_interrupt") is True else "CODEX_CALL_FAILED"
+        )
+        _observe(
+            "emit",
+            "IMPLEMENTER_FAILED",
+            task_id=pending.get("task_id"),
+            state_root=runtime_root,
+            **_telemetry_envelope(event, pending.get("repo_root")),
+            failure_code=failure_code,
+            duration_ms=_numeric_duration_ms(event.get("duration_ms")),
+        )
+        _observe("update_task", pending.get("task_id"), state_root=runtime_root)
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUseFailure",
@@ -920,6 +1194,21 @@ def post_tool_use_failure(
             }
         }
     except Exception as error:
+        if runtime_root is not None and isinstance(pending, Mapping):
+            _observe(
+                "emit",
+                "IMPLEMENTER_FAILED",
+                task_id=pending.get("task_id"),
+                state_root=runtime_root,
+                **_telemetry_envelope(event, pending.get("repo_root")),
+                failure_code=(
+                    "CODEX_CALL_INTERRUPTED"
+                    if event.get("is_interrupt") is True
+                    else "CODEX_CALL_FAILED"
+                ),
+                duration_ms=_numeric_duration_ms(event.get("duration_ms")),
+            )
+            _observe("update_task", pending.get("task_id"), state_root=runtime_root)
         _record_diagnostic(runtime_root, event, "PostToolUseFailure", error)
         return {
             "hookSpecificOutput": {

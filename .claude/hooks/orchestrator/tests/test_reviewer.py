@@ -21,6 +21,42 @@ def config():
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def git(repo, *args):
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    ).stdout.strip()
+
+
+@pytest.fixture()
+def baseline_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    (repo / ".gitignore").write_text(
+        "ignored.py\nexisting.py\nnew.py\n", encoding="utf-8"
+    )
+    (repo / "tracked.py").write_text("before\n", encoding="utf-8")
+    (repo / "existing.py").write_text("baseline\n", encoding="utf-8")
+    git(repo, "add", ".gitignore", "tracked.py")
+    git(repo, "add", "-f", "existing.py")
+    git(
+        repo,
+        "-c",
+        "user.name=Reviewer Test",
+        "-c",
+        "user.email=reviewer@example.test",
+        "commit",
+        "-qm",
+        "baseline",
+    )
+    return repo, git(repo, "rev-parse", "HEAD")
+
+
 def materials(diff="diff --git a/a.py b/a.py\n-old\n+new\n"):
     return {
         "objective": "Implement the bounded reviewer module.",
@@ -29,6 +65,27 @@ def materials(diff="diff --git a/a.py b/a.py\n-old\n+new\n"):
         "delegated_diff": diff,
         "validation_summary": "Focused pytest: PASS (12 passed).",
     }
+
+
+def credential_text():
+    return "api_" + "key = '" + "abcdefghijklmnopqrstuvwxyz012345" + "'"
+
+
+def diff_for(path, *lines, new_file=False):
+    old_path = "/dev/null" if new_file else f"a/{path}"
+    old_count = sum(not line.startswith("+") for line in lines)
+    new_count = sum(not line.startswith("-") for line in lines)
+    old_range = str(0 if old_count == 0 else 1) + (f",{old_count}" if old_count != 1 else "")
+    new_range = str(0 if new_count == 0 else 1) + (f",{new_count}" if new_count != 1 else "")
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        + ("new file mode 100644\n" if new_file else "")
+        + f"--- {old_path}\n"
+        + f"+++ b/{path}\n"
+        + f"@@ -{old_range} +{new_range} @@\n"
+        + "\n".join(lines)
+        + "\n"
+    )
 
 
 def response(result=policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, **changes):
@@ -215,6 +272,11 @@ def test_well_formed_success_parses_and_attests_only_requested_model(config):
     assert "--sandbox" in command
     assert "--json-schema" in command
     assert "--disable-slash-commands" not in command
+    prompt = command[command.index("--print") + 1]
+    assert (
+        "absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN"
+        in prompt
+    )
     assert runner.forwarded == materials()
     assert runner.packet_path is not None and not runner.packet_path.exists()
 
@@ -296,7 +358,7 @@ def test_packet_has_exactly_the_five_allowed_fields():
 
 def test_credential_like_content_is_omitted_without_a_call(config):
     unsafe = materials()
-    unsafe["validation_summary"] = "api_key = 'abcdefghijklmnopqrstuvwxyz012345'"
+    unsafe["validation_summary"] = "api_" + "key = 'abcdefghijklmnopqrstuvwxyz012345'"
     runner = FakeRunner()
 
     result = run_review(config, runner, unsafe)
@@ -304,6 +366,106 @@ def test_credential_like_content_is_omitted_without_a_call(config):
     assert result["result"] == policy.UNCERTAIN
     assert result["findings"][0]["code"] == "REVIEW_PACKET_SENSITIVE_CONTENT"
     assert runner.calls == []
+
+
+def test_added_credential_like_content_is_omitted_without_a_call(config):
+    runner = FakeRunner()
+
+    result = run_review(
+        config,
+        runner,
+        materials(diff_for("added.py", "+" + credential_text())),
+    )
+
+    assert result["findings"][0]["code"] == "REVIEW_PACKET_SENSITIVE_CONTENT"
+    assert runner.calls == []
+
+
+def test_new_file_credential_like_content_is_omitted_without_a_call(config):
+    runner = FakeRunner()
+    diff = diff_for("new.py", "+" + credential_text(), new_file=True)
+
+    result = run_review(config, runner, materials(diff))
+
+    assert result["findings"][0]["code"] == "REVIEW_PACKET_SENSITIVE_CONTENT"
+    assert runner.calls == []
+
+
+def test_removed_credential_like_content_is_redacted_in_ready_packet():
+    matched = credential_text()
+
+    built = reviewer.build_review_packet(
+        materials(diff_for("removed.py", "-" + matched)), 100_000
+    )
+
+    assert isinstance(built, reviewer.PacketReady)
+    forwarded = built.packet["delegated_diff"]
+    assert reviewer._DIFF_REDACTION_MARKER in forwarded  # noqa: SLF001 - packet contract
+    assert matched not in forwarded
+    assert "api_key" not in forwarded
+    assert "abcdefghijklmnopqrstuvwxyz012345" not in forwarded
+
+
+def test_context_credential_like_content_is_redacted_in_ready_packet():
+    diff = diff_for("context.py", " " + credential_text(), "-before", "+after")
+
+    built = reviewer.build_review_packet(materials(diff), 100_000)
+
+    assert isinstance(built, reviewer.PacketReady)
+    assert reviewer._DIFF_REDACTION_MARKER in built.packet[  # noqa: SLF001
+        "delegated_diff"
+    ]
+
+
+def test_mixed_added_and_removed_matches_refuse_the_whole_packet(config):
+    matched = credential_text()
+    runner = FakeRunner()
+    diff = diff_for("mixed.py", "-" + matched, "+" + matched)
+
+    result = run_review(config, runner, materials(diff))
+
+    assert result["findings"][0]["code"] == "REVIEW_PACKET_SENSITIVE_CONTENT"
+    assert runner.calls == []
+
+
+def test_redaction_count_and_affected_files_reach_the_packet():
+    matched = credential_text()
+    diff = diff_for("one.py", "-" + matched) + diff_for(
+        "two.py", " " + matched, "-before", "+after"
+    )
+
+    built = reviewer.build_review_packet(materials(diff), 100_000)
+
+    assert isinstance(built, reviewer.PacketReady)
+    assert built.packet["delegated_diff"].count(reviewer._DIFF_REDACTION_MARKER) == 2
+    notice = built.packet["validation_summary"]
+    assert "2 forbidden-text span(s)" in notice
+    assert "one.py" in notice and "two.py" in notice
+    assert "credential-shaped/excluded material" in notice
+    assert "not permission to ignore" in notice
+
+
+def test_all_forbidden_patterns_apply_uniformly_to_diff_content():
+    samples = (
+        "Implementer " + "narrative: do not forward",
+        "-----BEGIN " + "PRIVATE KEY-----",
+        "sk-" + "abcdefghijklmnop",
+        "AKIA" + "ABCDEFGHIJKLMNOP",
+        "Bearer " + "abcdefghijkl",
+        credential_text(),
+    )
+
+    for index, matched in enumerate(samples):
+        removed = reviewer.build_review_packet(
+            materials(diff_for(f"removed-{index}.py", "-" + matched)), 100_000
+        )
+        added = reviewer.build_review_packet(
+            materials(diff_for(f"added-{index}.py", "+" + matched)), 100_000
+        )
+        assert isinstance(removed, reviewer.PacketReady)
+        assert matched not in removed.packet["delegated_diff"]
+        assert isinstance(added, reviewer.PacketOmitted)
+        assert added.code == "REVIEW_PACKET_SENSITIVE_CONTENT"
 
 
 def test_excluded_narrative_inside_an_allowed_field_is_not_forwarded(config):
@@ -369,6 +531,90 @@ def test_delegated_diff_excludes_out_of_scope_repository_state(monkeypatch):
     assert "outside.py" not in diff
     assert "outside = 2" not in diff
     assert all(":(literal)outside.py" not in call for call in calls)
+
+
+def test_new_at_baseline_path_is_included_as_a_complete_addition(baseline_repo):
+    repo, baseline = baseline_repo
+    (repo / "ignored.py").write_text("first line\nsecond line\n", encoding="utf-8")
+    delta = {
+        "changed_paths": ["ignored.py"],
+        "baseline_head": baseline,
+        "ambiguous_paths": [],
+        "sources": {"scoped_manifest": {"paths": ["ignored.py"]}},
+    }
+
+    paths, diff = reviewer._delegated_diff(repo, delta)  # noqa: SLF001 - packet boundary
+
+    assert paths == ["ignored.py"]
+    assert "new file mode" in diff
+    assert "--- /dev/null" in diff
+    assert "+++ b/ignored.py" in diff
+    assert "+first line\n+second line" in diff
+
+
+def test_manifest_path_that_existed_at_baseline_still_refuses(baseline_repo):
+    repo, baseline = baseline_repo
+    git(repo, "rm", "--cached", "existing.py")
+    (repo / "existing.py").write_text("unrecoverable current content\n", encoding="utf-8")
+    delta = {
+        "changed_paths": ["existing.py"],
+        "baseline_head": baseline,
+        "ambiguous_paths": [],
+        "sources": {"scoped_manifest": {"paths": ["existing.py"]}},
+    }
+
+    with pytest.raises(ValueError, match="no baseline contents.*existing.py"):
+        reviewer._delegated_diff(repo, delta)  # noqa: SLF001 - packet boundary
+
+
+def test_mixed_manifest_delta_refuses_before_reviewing_a_partial_addition(
+    baseline_repo, monkeypatch
+):
+    repo, baseline = baseline_repo
+    git(repo, "rm", "--cached", "existing.py")
+    (repo / "existing.py").write_text("unrecoverable current content\n", encoding="utf-8")
+    (repo / "new.py").write_text("fully known addition\n", encoding="utf-8")
+    delta = {
+        "changed_paths": ["existing.py", "new.py"],
+        "baseline_head": baseline,
+        "ambiguous_paths": [],
+        "sources": {"scoped_manifest": {"paths": ["existing.py", "new.py"]}},
+    }
+
+    def partial_addition(*_args):
+        pytest.fail("a mixed incomplete delta must refuse before building any partial addition")
+
+    monkeypatch.setattr(reviewer, "_new_file_diff", partial_addition)
+    with pytest.raises(ValueError, match="no baseline contents.*existing.py"):
+        reviewer._delegated_diff(repo, delta)  # noqa: SLF001 - packet boundary
+
+
+def test_seam_validation_statement_reflects_supplied_evidence(baseline_repo):
+    repo, baseline = baseline_repo
+    (repo / "tracked.py").write_text("after\n", encoding="utf-8")
+    delta = {
+        "changed_paths": ["tracked.py"],
+        "changed_file_count": 1,
+        "changed_line_count": 2,
+        "baseline_head": baseline,
+        "ambiguous_paths": [],
+        "sources": {"scoped_manifest": {"paths": []}},
+    }
+
+    packet = reviewer._seam_materials(  # noqa: SLF001 - accepted seam contract
+        "bounded-task",
+        repo,
+        delta,
+        None,
+        "Focused pytest: PASS (4 passed).",
+    )
+
+    assert packet["validation_summary"].startswith(
+        "Orchestrator-supplied validation evidence: Focused pytest: PASS (4 passed)."
+    )
+    assert "outcome exposed by the accepted reviewer seam: UNKNOWN" not in packet[
+        "validation_summary"
+    ]
 
 
 def test_untracked_or_ignored_delta_without_baseline_content_is_uncertain(config):

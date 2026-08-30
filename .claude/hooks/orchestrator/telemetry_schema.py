@@ -1,0 +1,300 @@
+"""Closed, metadata-only schema for orchestrator telemetry."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from datetime import datetime, timezone
+import hashlib
+import math
+import re
+from typing import Any
+import uuid
+
+
+SCHEMA_VERSION = 1
+EVENT_TYPES = frozenset(
+    {
+        "TASK_ROUTE_SELECTED",
+        "IMPLEMENTER_STARTED",
+        "IMPLEMENTER_FINISHED",
+        "IMPLEMENTER_FAILED",
+        "REVIEWER1_STARTED",
+        "REVIEWER1_FINISHED",
+        "REVIEWER1_SKIPPED",
+        "REVIEWER1_FAILED",
+        "ROUTING_PROTOCOL_VIOLATION",
+        "THREAD_CONTINUITY_VIOLATION",
+        "UNKNOWN_CONCURRENT_WRITER",
+        "WORKFLOW_VERDICT_RECORDED",
+        "TELEMETRY_WARNING",
+    }
+)
+
+TERMINAL_VERDICTS = frozenset({"VERIFIED", "NOT_VERIFIED", "INCONCLUSIVE", "NO_CHANGE"})
+TASK_STATUSES = frozenset({"IN_PROGRESS", *TERMINAL_VERDICTS, "UNKNOWN_OR_IN_PROGRESS"})
+TOKEN_FIELDS = frozenset(
+    {
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "prompt_tokens",
+        "completion_tokens",
+        "cached_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "thinking_tokens",
+    }
+)
+
+_IDENTIFIER = re.compile(r"[^A-Za-z0-9._-]")
+_SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
+_WINDOWS_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
+_ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated"})
+_PHASES = frozenset({"implementation", "operation"})
+_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
+_VALIDATIONS = frozenset({"PASS", "FAIL", "UNKNOWN"})
+_REVIEW_RESULTS = frozenset(
+    {
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE",
+    }
+)
+_SKIP_REASONS = frozenset(
+    {"PHASE_OPERATION", "NO_DELTA", "BELOW_THRESHOLD", "REVIEWER_UNAVAILABLE"}
+)
+_FAILURE_CODES = frozenset(
+    {
+        "CODEX_CALL_FAILED",
+        "CODEX_CALL_INTERRUPTED",
+        "REVIEWER1_UNAVAILABLE",
+        "REVIEWER1_INCOMPLETE",
+    }
+)
+_WARNING_CODES = frozenset({"MALFORMED_VERDICT", "MALFORMED_SPOOL_EVENT"})
+_VIOLATION_CODES = frozenset(
+    {
+        "MALFORMED_TOOL_INPUT",
+        "MISSING_ORCH_LINE",
+        "MALFORMED_ORCH_LINE",
+        "UNKNOWN_KEY",
+        "MISSING_REQUIRED_KEY",
+        "INVALID_ENUM_VALUE",
+        "INVALID_SCOPE",
+        "VAGUE_SOL_BASIS",
+        "UNBOUNDED_SCOPE",
+        "CODEX_REPLY_INPUT_INVALID",
+        "THREAD_ID_MISMATCH",
+        "TASK_ID_MISMATCH",
+        "ROUTE_MISMATCH",
+        "MODEL_MISMATCH",
+        "EFFORT_MISMATCH",
+        "USE_CODEX_REPLY",
+        "NO_LIVE_THREAD",
+        "INVALID_LIVE_THREAD",
+        "INVALID_REQUEST",
+    }
+)
+
+_COMMON_CALL_FIELDS = frozenset(
+    {"phase", "route", "model", "effort", "routing_enforced", "fresh_thread", "reply_call"}
+)
+_PAYLOAD_FIELDS = {
+    "TASK_ROUTE_SELECTED": _COMMON_CALL_FIELDS,
+    "IMPLEMENTER_STARTED": _COMMON_CALL_FIELDS,
+    "IMPLEMENTER_FINISHED": frozenset(
+        {
+            "duration_ms",
+            "changed_paths_count",
+            "validation",
+            "thread_id",
+            "claude_review_mode",
+            "routing_enforced",
+            "codex_usage_known",
+            *(f"codex_{name}" for name in TOKEN_FIELDS),
+        }
+    ),
+    "IMPLEMENTER_FAILED": frozenset({"failure_code", "duration_ms"}),
+    "REVIEWER1_STARTED": frozenset({"reviewer1_provider", "reviewer1_model_requested"}),
+    "REVIEWER1_FINISHED": frozenset(
+        {
+            "reviewer1_provider",
+            "reviewer1_model_requested",
+            "served_model_attestation",
+            "reviewer1_result",
+            "duration_ms",
+            "gemini_usage_known",
+            *(f"gemini_{name}" for name in TOKEN_FIELDS),
+        }
+    ),
+    "REVIEWER1_SKIPPED": frozenset(
+        {"reviewer1_skipped_reason", "reviewer1_model_requested", "served_model_attestation"}
+    ),
+    "REVIEWER1_FAILED": frozenset(
+        {
+            "failure_code",
+            "reviewer1_provider",
+            "reviewer1_model_requested",
+            "served_model_attestation",
+            "reviewer1_result",
+            "duration_ms",
+            "gemini_usage_known",
+            *(f"gemini_{name}" for name in TOKEN_FIELDS),
+        }
+    ),
+    "ROUTING_PROTOCOL_VIOLATION": frozenset({"violation_code"}),
+    "THREAD_CONTINUITY_VIOLATION": frozenset({"violation_code"}),
+    "UNKNOWN_CONCURRENT_WRITER": frozenset({"concurrent_writer"}),
+    "WORKFLOW_VERDICT_RECORDED": frozenset({"verdict"}),
+    "TELEMETRY_WARNING": frozenset({"warning_code"}),
+}
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def normalize_identifier(value: Any, *, fallback: str = "unknown") -> str:
+    """Return a bounded filename-safe identifier, hashing whenever it changed."""
+
+    original = value if isinstance(value, str) else ""
+    normalized = _IDENTIFIER.sub("_", original).strip(". ")
+    normalized = normalized[:96]
+    changed = normalized != original or not normalized
+    if normalized.split(".", 1)[0].upper() in _WINDOWS_RESERVED:
+        changed = True
+        normalized = f"_{normalized}"
+    if not normalized:
+        normalized = fallback
+    if changed:
+        suffix = hashlib.sha256(original.encode("utf-8")).hexdigest()[:8]
+        normalized = f"{normalized[:87]}-{suffix}"
+    return normalized
+
+
+def _number(value: Any, *, integer: bool = False) -> int | float:
+    expected = int if integer else (int, float)
+    if not isinstance(value, expected) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
+        raise ValueError("numeric telemetry field is invalid")
+    return int(value) if integer else value
+
+
+def _identifier(value: Any) -> str:
+    if not isinstance(value, str) or not _SAFE_IDENTIFIER.fullmatch(value):
+        raise ValueError("telemetry identifier is invalid")
+    return value
+
+
+def _payload_value(name: str, value: Any) -> Any:
+    if name in {"routing_enforced", "fresh_thread", "reply_call", "codex_usage_known", "gemini_usage_known", "concurrent_writer"}:
+        if not isinstance(value, bool):
+            raise ValueError("telemetry boolean is invalid")
+        return value
+    if name == "changed_paths_count":
+        return _number(value, integer=True)
+    if name in {
+        *(f"codex_{field}" for field in TOKEN_FIELDS),
+        *(f"gemini_{field}" for field in TOKEN_FIELDS),
+    }:
+        return _number(value)
+    if name == "duration_ms":
+        return _number(value)
+    if name == "phase" and value in _PHASES:
+        return value
+    if name == "route" and value in _ROUTES:
+        return value
+    if name == "effort" and value in _EFFORTS:
+        return value
+    if name == "validation" and value in _VALIDATIONS:
+        return value
+    if name == "claude_review_mode" and value in {"AUDIT", "FULL"}:
+        return value
+    if name == "reviewer1_result" and value in _REVIEW_RESULTS:
+        return value
+    if name == "reviewer1_skipped_reason" and value in _SKIP_REASONS:
+        return value
+    if name == "failure_code" and value in _FAILURE_CODES:
+        return value
+    if name == "warning_code" and value in _WARNING_CODES:
+        return value
+    if name == "violation_code" and value in _VIOLATION_CODES:
+        return value
+    if name == "verdict" and value in TERMINAL_VERDICTS:
+        return value
+    if name == "served_model_attestation" and value == "UNAVAILABLE":
+        return value
+    if name in {"model", "thread_id", "reviewer1_provider", "reviewer1_model_requested"}:
+        return _identifier(value)
+    raise ValueError("telemetry enum is invalid")
+
+
+def build_event(
+    event_type: str,
+    *,
+    task_id: Any = None,
+    session_id: Any = None,
+    repo: Any = None,
+    branch: Any = None,
+    agent_id: Any = None,
+    agent_type: Any = None,
+    payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if event_type not in EVENT_TYPES:
+        raise ValueError("unknown telemetry event type")
+    supplied = dict(payload or {})
+    if not set(supplied).issubset(_PAYLOAD_FIELDS[event_type]):
+        raise ValueError("telemetry payload contains an unregistered field")
+    clean_payload = {name: _payload_value(name, value) for name, value in supplied.items() if value is not None}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "event_id": str(uuid.uuid4()),
+        "ts_utc": utc_now(),
+        "event_type": event_type,
+        "task_id": normalize_identifier(task_id) if task_id is not None else None,
+        "session_id": normalize_identifier(session_id, fallback="session") if session_id is not None else None,
+        "repo": normalize_identifier(repo, fallback="repo") if repo is not None else None,
+        "branch": normalize_identifier(branch, fallback="branch") if branch is not None else None,
+        "agent_id": normalize_identifier(agent_id, fallback="agent") if agent_id is not None else None,
+        "agent_type": normalize_identifier(agent_type, fallback="agent") if agent_type is not None else None,
+        "payload": clean_payload,
+    }
+
+
+def valid_event(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version", "event_id", "ts_utc", "event_type", "task_id", "session_id", "repo", "branch", "agent_id", "agent_type", "payload"
+    }:
+        return False
+    try:
+        uuid.UUID(str(value["event_id"]))
+        timestamp = value["ts_utc"]
+        if not isinstance(timestamp, str) or len(timestamp) > 40:
+            return False
+        parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed_timestamp.utcoffset() != timezone.utc.utcoffset(parsed_timestamp):
+            return False
+        rebuilt = build_event(
+            value["event_type"],
+            task_id=value["task_id"],
+            session_id=value["session_id"],
+            repo=value["repo"],
+            branch=value["branch"],
+            agent_id=value["agent_id"],
+            agent_type=value["agent_type"],
+            payload=value["payload"],
+        )
+    except (TypeError, ValueError):
+        return False
+    envelope_fields = ("task_id", "session_id", "repo", "branch", "agent_id", "agent_type", "payload")
+    return value["schema_version"] == SCHEMA_VERSION and all(
+        rebuilt[field] == value[field] for field in envelope_fields
+    )
+
+
+__all__ = [
+    "EVENT_TYPES", "SCHEMA_VERSION", "TASK_STATUSES", "TERMINAL_VERDICTS", "TOKEN_FIELDS",
+    "build_event", "normalize_identifier", "utc_now", "valid_event",
+]

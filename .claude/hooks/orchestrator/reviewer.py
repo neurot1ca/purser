@@ -68,6 +68,7 @@ _BUILD_SPEC_HEADINGS = (
     "Reviewer-1 gate (mechanical)",
     "Hard constraints",
 )
+_DIFF_REDACTION_MARKER = "[[REDACTED: PRE-EXISTING OR REMOVED SENSITIVE SPAN]]"
 
 
 REVIEW_SCHEMA: dict[str, Any] = {
@@ -137,6 +138,8 @@ class CompletedReview(_ResultMapping):
     findings: tuple[tuple[str, str], ...]
     conversation_id: str
     reviewer1_model_requested: str
+    duration_seconds: float | None = None
+    usage: tuple[tuple[str, int | float], ...] = ()
 
     def __post_init__(self) -> None:
         if self.result not in _COMPLETED_RESULTS:
@@ -165,6 +168,8 @@ class UnavailableReview(_ResultMapping):
     error_code: str
     message: str
     reviewer1_model_requested: str
+    duration_seconds: float | None = None
+    usage: tuple[tuple[str, int | float], ...] = ()
 
     def _values(self) -> dict[str, Any]:
         return {
@@ -221,6 +226,8 @@ def _completed(
     findings: list[dict[str, str]],
     conversation_id: str,
     config: Mapping[str, Any],
+    duration_seconds: float | None = None,
+    usage: Mapping[str, int | float] | None = None,
 ) -> CompletedReview:
     return CompletedReview(
         result=result,
@@ -228,6 +235,8 @@ def _completed(
         findings=tuple((item["code"], item["message"]) for item in findings),
         conversation_id=conversation_id,
         reviewer1_model_requested=_requested_model(config),
+        duration_seconds=duration_seconds,
+        usage=tuple(sorted((usage or {}).items())),
     )
 
 
@@ -252,6 +261,81 @@ def _canonical_json(value: Any) -> bytes:
 
 def _contains_forbidden_text(value: str) -> bool:
     return any(pattern.search(value) for pattern in _FORBIDDEN_TEXT)
+
+
+def _forbidden_spans(value: str) -> tuple[tuple[int, int], ...]:
+    spans = sorted(
+        (match.start(), match.end())
+        for pattern in _FORBIDDEN_TEXT
+        for match in pattern.finditer(value)
+    )
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
+
+def _diff_header_path(value: str) -> str | None:
+    if value == "/dev/null":
+        return None
+    return value[2:] if value.startswith(("a/", "b/")) else value
+
+
+def _redact_delegated_diff(
+    diff: str,
+) -> tuple[str, int, tuple[str, ...]] | None:
+    redacted_lines: list[str] = []
+    affected_files: set[str] = set()
+    redaction_count = 0
+    old_path: str | None = None
+    current_path: str | None = None
+    in_hunk = False
+
+    for raw_line in diff.splitlines(keepends=True):
+        if raw_line.endswith("\r\n"):
+            line, ending = raw_line[:-2], "\r\n"
+        elif raw_line.endswith(("\n", "\r")):
+            line, ending = raw_line[:-1], raw_line[-1]
+        else:
+            line, ending = raw_line, ""
+
+        line_kind: str | None = None
+        content = line
+        if line.startswith("diff --git "):
+            old_path = None
+            current_path = None
+            in_hunk = False
+        elif not in_hunk and line.startswith("--- "):
+            old_path = _diff_header_path(line[4:])
+        elif not in_hunk and line.startswith("+++ "):
+            current_path = _diff_header_path(line[4:]) or old_path
+        elif line.startswith("@@ "):
+            in_hunk = True
+        elif in_hunk and line.startswith(("+", "-", " ")):
+            line_kind = {"+": "added", "-": "removed", " ": "context"}[line[0]]
+            content = line[1:]
+
+        spans = _forbidden_spans(content)
+        if not spans:
+            redacted_lines.append(raw_line)
+            continue
+        if line_kind in {None, "added"} or current_path is None:
+            return None
+
+        pieces: list[str] = []
+        cursor = 0
+        for start, end in spans:
+            pieces.extend((content[cursor:start], _DIFF_REDACTION_MARKER))
+            cursor = end
+        pieces.append(content[cursor:])
+        redacted_lines.append(line[0] + "".join(pieces) + ending)
+        redaction_count += len(spans)
+        affected_files.add(current_path)
+
+    return "".join(redacted_lines), redaction_count, tuple(sorted(affected_files))
 
 
 def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketBuild:
@@ -284,6 +368,8 @@ def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketB
         )
 
     packet: dict[str, str] = {}
+    redaction_count = 0
+    affected_files: tuple[str, ...] = ()
     for field in _PACKET_FIELDS:
         value = materials[field]
         if not isinstance(value, str) or not value.strip():
@@ -292,6 +378,16 @@ def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketB
                 f"The required packet field {field!r} was empty or non-text; no context was sent.",
                 (field,),
             )
+        if field == "delegated_diff":
+            redacted = _redact_delegated_diff(value)
+            if redacted is None:
+                return PacketOmitted(
+                    "REVIEW_PACKET_SENSITIVE_CONTENT",
+                    "Credential-like or excluded narrative material was detected in "
+                    f"{field!r}; it was not sent.",
+                    (field,),
+                )
+            value, redaction_count, affected_files = redacted
         if _contains_forbidden_text(value):
             return PacketOmitted(
                 "REVIEW_PACKET_SENSITIVE_CONTENT",
@@ -299,6 +395,16 @@ def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketB
                 (field,),
             )
         packet[field] = value
+
+    if redaction_count:
+        files = ", ".join(affected_files)
+        packet["validation_summary"] += (
+            f"\n\nREDACTION NOTICE: {redaction_count} forbidden-text span(s) were redacted "
+            f"from pre-existing context or removed credential-shaped/excluded material in: "
+            f"{files}. Each unmistakable {_DIFF_REDACTION_MARKER} marker replaces the complete "
+            "matched span. A redaction is not permission to ignore a possible defect; question "
+            "any unexplained redaction."
+        )
 
     encoded = _canonical_json(packet)
     if len(encoded) > max_bytes:
@@ -464,7 +570,26 @@ def _structured_payload(envelope: Mapping[str, Any]) -> Any:
     return response
 
 
-def parse_envelope(stdout: str) -> tuple[str, dict[str, Any]]:
+_USAGE_TOKEN_FIELDS = frozenset(
+    {
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "prompt_tokens",
+        "completion_tokens",
+        "cached_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "thinking_tokens",
+    }
+)
+
+
+def parse_envelope(
+    stdout: str,
+    *,
+    include_metadata: bool = False,
+) -> tuple[str, dict[str, Any]] | tuple[str, dict[str, Any], float, dict[str, int | float]]:
     envelope = json.loads(stdout)
     # The envelope gains fields with the flags in use -- `structured_output`
     # appears only under --json-schema -- so require the known fields to be
@@ -492,7 +617,19 @@ def parse_envelope(stdout: str) -> tuple[str, dict[str, Any]]:
         or not isinstance(envelope.get("usage"), Mapping)
     ):
         raise ValueError("agy envelope metadata has an unexpected shape")
-    return conversation_id, _validate_response(_structured_payload(envelope))
+    response = _validate_response(_structured_payload(envelope))
+    if not include_metadata:
+        return conversation_id, response
+    usage = {
+        key: value
+        for key, value in envelope["usage"].items()
+        if key in _USAGE_TOKEN_FIELDS
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    }
+    return conversation_id, response, duration, usage
 
 
 def _review_prompt(packet_path: Path) -> str:
@@ -501,7 +638,10 @@ def _review_prompt(packet_path: Path) -> str:
         "Do not inspect unrelated files, "
         "infer hidden reasoning, or accept an implementer narrative. Return only the supplied JSON "
         "schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied "
-        "contract establish no material issue. Use UNCERTAIN for insufficient context or validation.\n\n"
+        "contract establish no material issue. Use UNCERTAIN when the diff or context needed to "
+        "assess the diff is insufficient. The normal absence of orchestrator validation evidence "
+        "is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that "
+        "validation ran.\n\n"
         f"REVIEW_PACKET_PATH={packet_path}"
     )
 
@@ -574,12 +714,16 @@ def invoke_packet(
                 f"Reviewer-1 exited non-zero ({returncode}).",
                 config,
             )
-        conversation_id, response = parse_envelope(stdout)
+        conversation_id, response, duration_seconds, usage = parse_envelope(
+            stdout, include_metadata=True
+        )
         if response["result"] == policy.REVIEWER1_UNAVAILABLE:
-            return _unavailable(
+            return UnavailableReview(
                 "REVIEWER_MODEL_REPORTED_UNAVAILABLE",
                 "Reviewer-1 returned REVIEWER1_UNAVAILABLE.",
-                config,
+                _requested_model(config),
+                duration_seconds,
+                tuple(sorted(usage.items())),
             )
         return _completed(
             response["result"],
@@ -587,6 +731,8 @@ def invoke_packet(
             response["findings"],
             conversation_id,
             config,
+            duration_seconds,
+            usage,
         )
     except subprocess.TimeoutExpired:
         return _unavailable("REVIEWER_TIMEOUT", "Reviewer-1 exceeded its bounded timeout.", config)
@@ -749,6 +895,40 @@ def _run_git(repo_root: Path, args: Sequence[str]) -> str:
     return completed.stdout
 
 
+def _new_file_diff(repo_root: Path, path: str) -> str:
+    current = (repo_root / path).resolve()
+    if not _within(current, repo_root.resolve()) or not current.is_file():
+        raise ValueError("the complete new-file content is unavailable")
+    completed = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--binary",
+            "--no-index",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--",
+            os.devnull,
+            path,
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode not in {0, 1}:
+        raise ValueError("git could not reconstruct the complete new-file addition")
+    if completed.stdout:
+        return completed.stdout
+    if completed.returncode == 0 and current.stat().st_size == 0:
+        return f"NEW FILE {json.dumps(path)}: complete current content is empty (0 bytes).\n"
+    raise ValueError("git produced no complete new-file addition")
+
+
 def _source_paths(delta: Mapping[str, Any], source: str) -> set[str]:
     sources = delta.get("sources")
     entry = sources.get(source) if isinstance(sources, Mapping) else None
@@ -793,14 +973,23 @@ def _delegated_diff(
             "the delegated diff cannot be isolated from pre-existing same-path changes: "
             + ", ".join(overlap)
         )
-    manifest_paths = _source_paths(delta, "scoped_manifest")
-    unresolved = sorted(set(paths).intersection(manifest_paths))
+    manifest_paths = set(paths).intersection(_source_paths(delta, "scoped_manifest"))
+    pathspecs = [f":(literal){path}" for path in paths]
+    baseline_names = {
+        path.replace("\\", "/")
+        for path in _run_git(
+            repo_root,
+            ["ls-tree", "-r", "--name-only", baseline, "--", *pathspecs],
+        ).splitlines()
+        if path
+    }
+    unresolved = sorted(manifest_paths.intersection(baseline_names))
     if unresolved:
         raise ValueError(
             "the accepted seam has hashes but no baseline contents for changed untracked or "
             "ignored paths: " + ", ".join(unresolved)
         )
-    pathspecs = [f":(literal){path}" for path in paths]
+    new_at_baseline = manifest_paths.difference(baseline_names)
     names = {
         path.replace("\\", "/")
         for path in _run_git(
@@ -818,10 +1007,14 @@ def _delegated_diff(
         ).splitlines()
         if path
     }
-    if names != set(paths):
-        omitted = sorted(set(paths).difference(names))
-        raise ValueError("the complete delegated diff is unavailable for: " + ", ".join(omitted))
-    diff = _run_git(
+    omitted = set(paths).difference(names)
+    unavailable = sorted(omitted.difference(new_at_baseline))
+    if unavailable or not names.issubset(paths):
+        raise ValueError(
+            "the complete delegated diff is unavailable for: "
+            + ", ".join(unavailable or sorted(names.difference(paths)))
+        )
+    tracked_diff = _run_git(
         repo_root,
         [
             "diff",
@@ -834,6 +1027,8 @@ def _delegated_diff(
             *pathspecs,
         ],
     )
+    additions = [_new_file_diff(repo_root, path) for path in sorted(omitted)]
+    diff = tracked_diff + "".join(additions)
     if not diff:
         raise ValueError("the computed non-empty delta produced no reviewable diff")
     return paths, diff
@@ -844,9 +1039,21 @@ def _seam_materials(
     repo_root: Path,
     delta: Mapping[str, Any],
     classification: Mapping[str, Any] | None,
+    validation_summary: str | None = None,
 ) -> Mapping[str, str]:
     paths, diff = _delegated_diff(repo_root, delta, classification)
     decision = classification.get("decision") if isinstance(classification, Mapping) else "UNKNOWN"
+    if validation_summary is None:
+        validation_evidence = (
+            "No orchestrator validation evidence was supplied to this review. This is the normal "
+            "review-seam default and is not, by itself, grounds for UNCERTAIN."
+        )
+    elif not isinstance(validation_summary, str) or not validation_summary.strip():
+        raise ValueError("validation evidence must be non-empty text when supplied")
+    else:
+        validation_evidence = (
+            "Orchestrator-supplied validation evidence: " + validation_summary.strip()
+        )
     return {
         "objective": (
             f"Review the complete delegated change for task {task_id!r}, bounded to these actual "
@@ -854,13 +1061,14 @@ def _seam_materials(
         ),
         "acceptance_criteria": (
             "Accept only if the complete delegated diff is correct within the named bounded task, "
-            "preserves current contracts, introduces no material regression or scope expansion, "
-            "and the supplied validation evidence is sufficient."
+            "preserves current contracts, and introduces no material regression or scope expansion. "
+            "Consider supplied validation evidence, but do not treat its normal absence as evidence "
+            "that the diff is incomplete."
         ),
         "authority_contract": _authority_slice(repo_root, paths),
         "delegated_diff": diff,
         "validation_summary": (
-            "Focused validation outcome exposed by the accepted reviewer seam: UNKNOWN. "
+            f"{validation_evidence} "
             f"Ledger delta: {delta.get('changed_file_count')} files, "
             f"{delta.get('changed_line_count')} changed lines; concurrent-writer decision: {decision}. "
             "Raw agent output and full success logs were not forwarded."
@@ -878,6 +1086,7 @@ def review(
     repo_root: str | os.PathLike[str],
     delta: Mapping[str, Any],
     classification: Mapping[str, Any] | None,
+    validation_summary: str | None = None,
 ) -> ReviewOutcome:
     """Reviewer callable matching the accepted ``codex.py`` seam."""
 
@@ -891,7 +1100,13 @@ def review(
             {"reviewer1_model_requested": PINNED_MODEL},
         )
     try:
-        materials = _seam_materials(task_id, Path(repo_root).resolve(), delta, classification)
+        materials = _seam_materials(
+            task_id,
+            Path(repo_root).resolve(),
+            delta,
+            classification,
+            validation_summary,
+        )
         return review_materials(materials, config=config)
     except (OSError, UnicodeDecodeError, ValueError) as error:
         packet = PacketOmitted(
