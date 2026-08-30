@@ -485,13 +485,16 @@ def _add_duration(current: Any, value: Any) -> int | float | None:
 def _claude_reset_crossed(usage: Mapping[str, Any]) -> bool:
     start_captured_at = _claude_timestamp(usage.get("_claude_5h_start_captured_at"))
     end_captured_at = _claude_timestamp(usage.get("_claude_5h_end_captured_at"))
-    reset_at = _claude_timestamp(usage.get("_claude_5h_start_resets_at"))
+    start_reset_at = _claude_timestamp(usage.get("_claude_5h_start_resets_at"))
+    end_reset_at = _claude_timestamp(usage.get("_claude_5h_end_resets_at"))
+    if start_reset_at is not None and end_reset_at is not None and start_reset_at != end_reset_at:
+        return True
     return (
         start_captured_at is not None
         and end_captured_at is not None
         and start_captured_at <= end_captured_at
-        and reset_at is not None
-        and start_captured_at <= reset_at <= end_captured_at
+        and start_reset_at is not None
+        and start_captured_at <= start_reset_at <= end_captured_at
     )
 
 

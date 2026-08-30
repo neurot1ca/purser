@@ -288,6 +288,8 @@ def test_present_claude_snapshot_is_folded_and_rebuilt_identically(tmp_path):
     assert usage["claude_5h_delta_pct"] == 5.0
     assert usage["claude_7d_start_pct"] == 19.0
     assert usage["claude_7d_end_pct"] == 24.0
+    assert usage["_claude_5h_start_resets_at"] == "2099-08-30T15:00:00Z"
+    assert usage["_claude_5h_end_resets_at"] == "2099-08-30T15:00:00Z"
     assert usage["claude_context_used_percentage"] == 47.0
     assert usage["claude_session_estimated_cost_usd"] == 1.8
     assert usage["claude_usage_known"] is True
@@ -310,6 +312,66 @@ def test_different_claude_snapshot_sessions_keep_endpoints_but_not_delta(tmp_pat
     assert usage["claude_5h_end_pct"] == 34.0
     assert usage["claude_5h_delta_pct"] is None
     assert usage["claude_usage_known"] is True
+
+
+def test_different_claude_five_hour_resets_keep_endpoints_but_not_delta(tmp_path):
+    now = datetime.now(timezone.utc)
+    start_captured_at = (now - timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
+    end_captured_at = (now - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
+    start_reset_at = "2099-08-30T16:00:00Z"
+    end_reset_at = "2099-08-30T21:00:00Z"
+
+    _write_claude_snapshot(
+        tmp_path,
+        captured_at=start_captured_at,
+        five_hour={"used_percentage": 80.0, "resets_at": start_reset_at},
+    )
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED", "different-resets")
+    _write_claude_snapshot(
+        tmp_path,
+        captured_at=end_captured_at,
+        five_hour={"used_percentage": 3.0, "resets_at": end_reset_at},
+    )
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_FINISHED", "different-resets")
+    telemetry.update_task("different-resets", state_root=tmp_path)
+
+    events = _events(tmp_path)
+    start = next(event for event in events if event["event_type"] == "IMPLEMENTER_STARTED")
+    end = next(event for event in events if event["event_type"] == "IMPLEMENTER_FINISHED")
+    assert start["payload"]["claude_5h_resets_at"] == start_reset_at
+    assert end["payload"]["claude_5h_resets_at"] == end_reset_at
+
+    incremental = _aggregate(tmp_path, "different-resets")
+    usage = incremental["usage"]
+    assert usage["claude_5h_start_pct"] == 80.0
+    assert usage["claude_5h_end_pct"] == 3.0
+    assert usage["claude_5h_delta_pct"] is None
+    assert usage["_claude_5h_start_resets_at"] == start_reset_at
+    assert usage["_claude_5h_end_resets_at"] == end_reset_at
+
+    telemetry.rebuild(state_root=tmp_path)
+    assert _aggregate(tmp_path, "different-resets") == incremental
+
+
+def test_missing_claude_five_hour_reset_keeps_existing_delta_behavior(tmp_path):
+    _write_claude_snapshot(
+        tmp_path,
+        five_hour={"used_percentage": 34.0, "resets_at": None},
+    )
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED", "missing-reset")
+    _write_claude_snapshot(
+        tmp_path,
+        five_hour={"used_percentage": 39.0, "resets_at": "2099-08-30T15:00:00Z"},
+    )
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_FINISHED", "missing-reset")
+    telemetry.update_task("missing-reset", state_root=tmp_path)
+
+    usage = _aggregate(tmp_path, "missing-reset")["usage"]
+    assert usage["claude_5h_start_pct"] == 34.0
+    assert usage["claude_5h_end_pct"] == 39.0
+    assert usage["claude_5h_delta_pct"] == 5.0
+    assert usage["_claude_5h_start_resets_at"] is None
+    assert usage["_claude_5h_end_resets_at"] == "2099-08-30T15:00:00Z"
 
 
 def test_stale_claude_snapshot_is_not_attributed(tmp_path):
@@ -336,7 +398,7 @@ def test_claude_window_reset_does_not_become_consumption(tmp_path):
     _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED", "reset-session")
     _write_claude_snapshot(
         tmp_path,
-        five_hour={"used_percentage": 5.0, "resets_at": "2099-08-30T15:00:00Z"},
+        five_hour={"used_percentage": 5.0, "resets_at": None},
     )
     _emit_started_or_finished(tmp_path, "IMPLEMENTER_FINISHED", "reset-session")
     telemetry.update_task("reset-session", state_root=tmp_path)
@@ -345,6 +407,8 @@ def test_claude_window_reset_does_not_become_consumption(tmp_path):
     assert usage["claude_5h_start_pct"] == 85.0
     assert usage["claude_5h_end_pct"] == 5.0
     assert usage["claude_5h_delta_pct"] is None
+    assert usage["_claude_5h_start_resets_at"] == reset_at
+    assert usage["_claude_5h_end_resets_at"] is None
 
 
 def test_malformed_and_partially_null_claude_snapshots_are_safe(tmp_path):
