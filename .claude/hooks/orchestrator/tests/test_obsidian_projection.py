@@ -105,10 +105,42 @@ def test_same_aggregate_is_byte_identical_and_uses_atomic_replace(tmp_path, monk
     assert replacements[0][1] == first
     assert not replacements[0][0].exists()
     rendered = first.read_text(encoding="utf-8")
+    assert 'repo: "repo"' in rendered
+    assert 'branch: "main"' in rendered
+    assert 'validation: "PASS"' in rendered
+    assert "Validation: PASS" in rendered
     assert 'started_at: "2026-08-30T11:00:00+03:00"' in rendered
     assert 'started_at_utc: "2026-08-30T08:00:00Z"' in rendered
     for usage_flag in ("codex_usage_known", "gemini_usage_known", "deepseek_usage_known", "claude_usage_known"):
         assert f"  {usage_flag}:" in rendered
+
+
+def test_private_usage_keys_are_not_published_and_public_nulls_remain(tmp_path):
+    aggregate = _aggregate()
+    aggregate["usage"].update({
+        "_claude_5h_start_session_id": "private-session",
+        "_claude_5h_end_session_id": "private-session",
+        "codex_input_tokens": None,
+    })
+
+    rendered = projection.render_run_note(aggregate)
+
+    assert "_claude_" not in rendered
+    assert "  codex_input_tokens: null" in rendered
+
+
+def test_durations_are_human_readable_in_body_and_metrics_but_numeric_in_frontmatter():
+    aggregate = _aggregate(duration_ms=1_150_967)
+
+    note = projection.render_run_note(aggregate)
+    metrics = projection.render_metrics([aggregate])
+
+    assert "duration_ms: 1150967" in note
+    assert "Duration: 19m 11.0s" in note
+    assert "1150967 ms" not in note
+    assert "Duration median: 19m 11.0s (n=1)" in metrics
+    assert "Duration p90: 19m 11.0s (n=1)" in metrics
+    assert "1150967 ms" not in metrics
 
 
 def test_hostile_identifiers_are_normalized_or_rejected_and_stay_under_runs(tmp_path):

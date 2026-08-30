@@ -75,15 +75,17 @@ _USAGE_KEYS = (
     "claude_session_total_duration_ms",
     "claude_usage_known",
     "claude_rate_limit_delta_scope",
+    *(f"{provider}_{field}" for provider in ("codex", "gemini", "deepseek") for field in sorted(schema.TOKEN_FIELDS)),
+)
+_INTERNAL_USAGE_KEYS = (
     "_claude_5h_start_session_id",
     "_claude_5h_start_captured_at",
     "_claude_5h_start_resets_at",
     "_claude_5h_end_session_id",
     "_claude_5h_end_captured_at",
     "_claude_5h_end_resets_at",
-    *(f"{provider}_{field}" for provider in ("codex", "gemini", "deepseek") for field in sorted(schema.TOKEN_FIELDS)),
 )
-_USAGE_KEY_SET = frozenset(_USAGE_KEYS)
+_USAGE_KEY_SET = frozenset((*_USAGE_KEYS, *_INTERNAL_USAGE_KEYS))
 _TOKEN_TOTAL_KEYS = {
     provider: f"{provider}_total_tokens" for provider in ("codex", "gemini", "deepseek")
 }
@@ -361,6 +363,16 @@ def _display(value: Any) -> str:
     return "unknown" if value is None else str(value)
 
 
+def _format_duration_ms(value: int | float | None) -> str:
+    if value is None:
+        return "unknown"
+    seconds = value / 1000
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, remaining_seconds = divmod(seconds, 60)
+    return f"{int(minutes)}m {remaining_seconds:.1f}s"
+
+
 def render_run_note(aggregate: Mapping[str, Any]) -> str:
     """Render one run note without reading raw events or invoking external code."""
 
@@ -490,6 +502,7 @@ def _run_body(prepared: Mapping[str, Any]) -> str:
     return (
         f"# Run: {task_id}\n\n"
         f"Flow: {flow}\n"
+        f"Duration: {_format_duration_ms(prepared['duration_ms'])}\n"
         f"Validation: {_display(prepared['validation'])}\n"
         f"Review: {_display(review)}\n\n"
         "## Notes\n\n"
@@ -615,8 +628,8 @@ def _metric_block(label: str, sample: list[Mapping[str, Any]]) -> str:
         middle = len(durations) // 2
         median = durations[middle] if len(durations) % 2 else (durations[middle - 1] + durations[middle]) / 2
         p90 = durations[max(0, math.ceil(len(durations) * 0.9) - 1)]
-        lines.append(f"Duration median: {_fmt_number(median)} ms (n={len(durations)})")
-        lines.append(f"Duration p90: {_fmt_number(p90)} ms (n={len(durations)})")
+        lines.append(f"Duration median: {_format_duration_ms(median)} (n={len(durations)})")
+        lines.append(f"Duration p90: {_format_duration_ms(p90)} (n={len(durations)})")
     return "\n".join(lines) + "\n"
 
 

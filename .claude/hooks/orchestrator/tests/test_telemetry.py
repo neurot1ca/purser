@@ -54,6 +54,7 @@ def _emit_task(state_root, task_id="task-1"):
         "state_root": state_root,
         "session_id": "session-1",
         "repo": "repo",
+        "branch": "main",
         "agent_id": "call-1",
         "agent_type": "codex-main",
     }
@@ -108,6 +109,7 @@ common = {
     "state_root": root,
     "session_id": action,
     "repo": "repo",
+    "branch": "main",
     "agent_id": action,
     "agent_type": "codex-main",
 }
@@ -215,6 +217,7 @@ def _emit_started_or_finished(state_root, event_type, task_id="claude-task"):
         "state_root": state_root,
         "session_id": "orchestrator-session",
         "repo": "repo",
+        "branch": "main",
         "agent_id": "call-1",
         "agent_type": "codex-main",
     }
@@ -493,9 +496,94 @@ def test_incremental_aggregate_equals_rebuild_field_for_field(tmp_path):
         _run_task_process(tmp_path, action, "same-as-rebuild")
     _run_task_process(tmp_path, "update", "same-as-rebuild")
     incremental = _aggregate(tmp_path, "same-as-rebuild")
+    assert {field: incremental[field] for field in ("repo", "branch", "validation")} == {
+        "repo": "repo",
+        "branch": "main",
+        "validation": "PASS",
+    }
 
     telemetry.rebuild(state_root=tmp_path)
-    assert incremental == _aggregate(tmp_path, "same-as-rebuild")
+    rebuilt = _aggregate(tmp_path, "same-as-rebuild")
+    assert incremental == rebuilt
+    assert {field: incremental[field] for field in ("repo", "branch", "validation")} == {
+        field: rebuilt[field] for field in ("repo", "branch", "validation")
+    }
+
+
+def test_first_known_repository_branch_and_validation_values_are_stable(tmp_path):
+    common = {
+        "task_id": "stable-values",
+        "state_root": tmp_path,
+        "session_id": "session",
+        "agent_id": "call",
+        "agent_type": "codex-main",
+    }
+    telemetry.emit(
+        "TASK_ROUTE_SELECTED",
+        **common,
+        repo="repo-start",
+        branch="main",
+        phase="implementation",
+        route="normal",
+        model="gpt-5.6-sol",
+        effort="medium",
+        routing_enforced=True,
+    )
+    telemetry.emit(
+        "IMPLEMENTER_STARTED",
+        **common,
+        repo="repo-later",
+        branch="feature",
+        phase="implementation",
+        route="normal",
+        model="gpt-5.6-sol",
+        effort="medium",
+        routing_enforced=True,
+    )
+    for validation in ("FAIL", "PASS"):
+        telemetry.emit(
+            "IMPLEMENTER_FINISHED",
+            **common,
+            repo="repo-later",
+            branch="feature",
+            duration_ms=1,
+            changed_paths_count=0,
+            validation=validation,
+            thread_id="thread",
+            claude_review_mode="AUDIT",
+            routing_enforced=True,
+            codex_usage_known=False,
+        )
+    telemetry.update_task("stable-values", state_root=tmp_path)
+
+    aggregate = _aggregate(tmp_path, "stable-values")
+    assert aggregate["repo"] == "repo-start"
+    assert aggregate["branch"] == "main"
+    assert aggregate["validation"] == "FAIL"
+
+
+def test_event_without_branch_does_not_erase_known_branch(tmp_path):
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED", "known-branch")
+    telemetry.emit(
+        "IMPLEMENTER_FINISHED",
+        task_id="known-branch",
+        state_root=tmp_path,
+        session_id="orchestrator-session",
+        repo="repo",
+        branch=None,
+        agent_id="call-1",
+        agent_type="codex-main",
+        duration_ms=12.5,
+        changed_paths_count=1,
+        validation="PASS",
+        thread_id="thread-1",
+        claude_review_mode="AUDIT",
+        routing_enforced=True,
+        codex_usage_known=False,
+    )
+    telemetry.update_task("known-branch", state_root=tmp_path)
+
+    assert _aggregate(tmp_path, "known-branch")["branch"] == "main"
 
 
 def test_concurrent_process_append_never_corrupts_jsonl(tmp_path):

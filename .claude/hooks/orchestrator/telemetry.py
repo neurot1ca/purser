@@ -505,6 +505,8 @@ def _new_aggregate(
         hashes, fingerprint = _policy_hashes()
     return {
         "task_id": task_id,
+        "repo": None,
+        "branch": None,
         "status": "UNKNOWN_OR_IN_PROGRESS",
         "started_at": None,
         "ended_at": None,
@@ -513,6 +515,7 @@ def _new_aggregate(
         "route": None,
         "model": None,
         "effort": None,
+        "validation": None,
         "thread_id": None,
         "fresh_threads": 0,
         "reply_calls": 0,
@@ -621,6 +624,9 @@ def _fold_claude_usage(aggregate: dict[str, Any], payload: Mapping[str, Any], en
 def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
     event_type = event["event_type"]
     payload = event["payload"]
+    for field in ("repo", "branch"):
+        if aggregate[field] is None and event.get(field) is not None:
+            aggregate[field] = event[field]
     if event_type == "TASK_ROUTE_SELECTED":
         for field in ("phase", "route", "model", "effort", "routing_enforced"):
             if field in payload:
@@ -641,6 +647,8 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
         for field in ("changed_paths_count", "thread_id", "claude_review_mode", "routing_enforced"):
             if field in payload:
                 aggregate[field] = payload[field]
+        if aggregate["validation"] is None and payload.get("validation") is not None:
+            aggregate["validation"] = payload["validation"]
         if payload.get("codex_usage_known") is True:
             aggregate["usage"]["codex_usage_known"] = True
         for field in schema.TOKEN_FIELDS:
