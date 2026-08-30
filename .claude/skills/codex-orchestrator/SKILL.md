@@ -63,6 +63,17 @@ pipeline: a deploy, a runner start, a status fetch, a read-only investigation.
 It never triggers Reviewer-1. It does require that any changed artifact it acts
 on was already accepted.
 
+A run whose result is not the bundle never reached the hook at all. The fail-open
+path below covers an internal ERROR; it cannot cover a hook that never runs,
+which produces no bundle, no marker, no pending record and no diagnostic. That
+has happened here: on 2026-08-30 a delegation executed with no hook, with the
+registration untouched and the hook answering a synthetic event correctly, and
+nothing announced it. So check the SHAPE of what comes back. A raw Codex object
+instead of the compact bundle means routing, baseline, delta, Reviewer-1 and
+telemetry did not run. Treat that run as UNROUTED: review it fully, and
+reconcile the worktree against a baseline you captured yourself before doing
+anything else with it.
+
 When the hook fails internally it ALLOWS the call through unmodified rather than
 denying it, because a denial on internal error leaves no way to proceed at all.
 It then marks the call, and the bundle says `routing_enforced: false` with the
