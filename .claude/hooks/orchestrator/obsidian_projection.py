@@ -11,8 +11,9 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from datetime import timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import telemetry_schema as schema
 
@@ -22,7 +23,29 @@ LOCAL_TIMEZONE = "Europe/Istanbul"
 PROJECTION_SCHEMA_VERSION = 1
 SAMPLE_SIZE = 30
 MIN_RATE_DENOMINATOR = 2
-_ZONE = ZoneInfo(LOCAL_TIMEZONE)
+LOCAL_TIMEZONE_FALLBACK_OFFSET_HOURS = 3
+
+
+def _resolve_zone() -> tuple[Any, str]:
+    """Resolve the projection's display zone without ever failing at import.
+
+    A host whose interpreter carries no tz database - Windows Python without the
+    `tzdata` package - raised ZoneInfoNotFoundError here at module import time.
+    Because `codex` imports `telemetry`, which imports this module, that single
+    missing optional dependency killed the whole enforcement layer before
+    `hook.py` reached its own error handling. Observability must degrade, never
+    take enforcement down with it, so an unavailable zone falls back to the fixed
+    offset and the projection records which one it used.
+    """
+
+    try:
+        return ZoneInfo(LOCAL_TIMEZONE), LOCAL_TIMEZONE
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        offset = timezone(timedelta(hours=LOCAL_TIMEZONE_FALLBACK_OFFSET_HOURS))
+        return offset, f"UTC+{LOCAL_TIMEZONE_FALLBACK_OFFSET_HOURS:02d}:00_FIXED_OFFSET_FALLBACK"
+
+
+_ZONE, LOCAL_TIMEZONE_RESOLVED = _resolve_zone()
 _CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 _MARKER_PREFIX = "<!-- orchestrator projection v1 sha256="
 _YAML_MARKER_PREFIX = "# orchestrator projection v1 sha256="

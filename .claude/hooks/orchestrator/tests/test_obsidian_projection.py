@@ -302,3 +302,45 @@ def test_human_note_is_never_overwritten(tmp_path):
     with pytest.raises(projection.ProjectionConflict):
         projection.project_task(aggregate, vault_root=tmp_path / "vault")
     assert path.read_text(encoding="utf-8") == "# Human note\n"
+
+
+def test_missing_tz_database_degrades_instead_of_killing_the_hook():
+    """A host without `tzdata` must not take the enforcement layer down with it.
+
+    `_ZONE` used to be resolved at module import. Because `codex` imports
+    `telemetry`, which imports this module, a Windows interpreter without the
+    optional `tzdata` package raised ZoneInfoNotFoundError before `hook.py`
+    reached its own error handling, so every Codex delegation ran unenforced.
+    Observability is allowed to lose precision here; it is not allowed to block.
+    """
+
+    import importlib
+    from importlib.abc import MetaPathFinder
+
+    class BlockTzdata(MetaPathFinder):
+        def find_spec(self, name, path=None, target=None):
+            if name == "tzdata" or name.startswith("tzdata."):
+                raise ImportError("tzdata blocked for test")
+            return None
+
+    from zoneinfo import ZoneInfo
+
+    blocker = BlockTzdata()
+    sys.meta_path.insert(0, blocker)
+    cached = {name: module for name, module in sys.modules.items() if name.startswith("tzdata")}
+    for name in cached:
+        del sys.modules[name]
+    ZoneInfo.clear_cache()
+    try:
+        reloaded = importlib.reload(projection)
+        assert reloaded.LOCAL_TIMEZONE_RESOLVED.endswith("_FIXED_OFFSET_FALLBACK")
+        # The import that actually matters: enforcement must still load.
+        importlib.reload(importlib.import_module("codex"))
+    finally:
+        sys.meta_path.remove(blocker)
+        sys.modules.update(cached)
+        ZoneInfo.clear_cache()
+        importlib.reload(projection)
+        importlib.reload(importlib.import_module("codex"))
+
+    assert projection.LOCAL_TIMEZONE_RESOLVED == projection.LOCAL_TIMEZONE
