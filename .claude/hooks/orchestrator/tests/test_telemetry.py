@@ -1,5 +1,6 @@
 import json
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 from pathlib import Path
@@ -181,6 +182,195 @@ def _aggregate(state_root, task_id):
     return json.loads(
         (state_root / "telemetry" / "tasks" / f"{task_id}.json").read_text(encoding="utf-8")
     )
+
+
+def _write_claude_snapshot(state_root, **changes):
+    captured_at = datetime.now(timezone.utc)
+    snapshot = {
+        "schema_version": 1,
+        "captured_at": captured_at.isoformat().replace("+00:00", "Z"),
+        "session_id": "claude-session-1",
+        "context_used_percentage": 41.2,
+        "context_window_size": 200000,
+        "context_total_tokens": 7300,
+        "context_input_tokens": 1200,
+        "context_output_tokens": 800,
+        "cache_creation_input_tokens": 300,
+        "cache_read_input_tokens": 5000,
+        "session_estimated_cost_usd": 1.23,
+        "session_total_duration_ms": 456789,
+        "five_hour": {"used_percentage": 34.0, "resets_at": "2099-08-30T15:00:00Z"},
+        "seven_day": {"used_percentage": 19.0, "resets_at": "2099-09-06T15:00:00Z"},
+        "rate_limit_delta_scope": "account_window_observation",
+    }
+    snapshot.update(changes)
+    path = state_root / "telemetry" / "latest" / "claude_usage.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+
+def _emit_started_or_finished(state_root, event_type, task_id="claude-task"):
+    common = {
+        "task_id": task_id,
+        "state_root": state_root,
+        "session_id": "orchestrator-session",
+        "repo": "repo",
+        "agent_id": "call-1",
+        "agent_type": "codex-main",
+    }
+    if event_type == "IMPLEMENTER_STARTED":
+        telemetry.emit(
+            event_type,
+            **common,
+            phase="implementation",
+            route="normal",
+            model="gpt-5.6-sol",
+            effort="medium",
+            routing_enforced=True,
+            fresh_thread=True,
+            reply_call=False,
+        )
+    else:
+        telemetry.emit(
+            event_type,
+            **common,
+            duration_ms=12.5,
+            changed_paths_count=1,
+            validation="PASS",
+            thread_id="thread-1",
+            claude_review_mode="AUDIT",
+            routing_enforced=True,
+            codex_usage_known=False,
+        )
+
+
+def test_absent_claude_snapshot_stays_unknown_and_never_zero(tmp_path):
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED")
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_FINISHED")
+    telemetry.update_task("claude-task", state_root=tmp_path)
+
+    usage = _aggregate(tmp_path, "claude-task")["usage"]
+    for field in (
+        "claude_5h_start_pct",
+        "claude_5h_end_pct",
+        "claude_5h_delta_pct",
+        "claude_7d_start_pct",
+        "claude_7d_end_pct",
+        "claude_context_used_percentage",
+        "claude_session_estimated_cost_usd",
+    ):
+        assert usage[field] is None
+    assert usage["claude_usage_known"] is False
+    assert usage["claude_rate_limit_delta_scope"] == "account_window_observation"
+
+
+def test_present_claude_snapshot_is_folded_and_rebuilt_identically(tmp_path):
+    _write_claude_snapshot(tmp_path)
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED")
+    _write_claude_snapshot(
+        tmp_path,
+        context_used_percentage=47.0,
+        session_estimated_cost_usd=1.8,
+        five_hour={"used_percentage": 39.0, "resets_at": "2099-08-30T15:00:00Z"},
+        seven_day={"used_percentage": 24.0, "resets_at": "2099-09-06T15:00:00Z"},
+    )
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_FINISHED")
+    telemetry.update_task("claude-task", state_root=tmp_path)
+
+    events = _events(tmp_path)
+    start = next(event for event in events if event["event_type"] == "IMPLEMENTER_STARTED")
+    end = next(event for event in events if event["event_type"] == "IMPLEMENTER_FINISHED")
+    assert start["payload"]["claude_5h_start_pct"] == 34.0
+    assert end["payload"]["claude_5h_end_pct"] == 39.0
+    usage = _aggregate(tmp_path, "claude-task")["usage"]
+    assert usage["claude_5h_start_pct"] == 34.0
+    assert usage["claude_5h_end_pct"] == 39.0
+    assert usage["claude_5h_delta_pct"] == 5.0
+    assert usage["claude_7d_start_pct"] == 19.0
+    assert usage["claude_7d_end_pct"] == 24.0
+    assert usage["claude_context_used_percentage"] == 47.0
+    assert usage["claude_session_estimated_cost_usd"] == 1.8
+    assert usage["claude_usage_known"] is True
+    assert usage["claude_rate_limit_delta_scope"] == "account_window_observation"
+
+    incremental = _aggregate(tmp_path, "claude-task")
+    telemetry.rebuild(state_root=tmp_path)
+    assert _aggregate(tmp_path, "claude-task") == incremental
+
+
+def test_different_claude_snapshot_sessions_keep_endpoints_but_not_delta(tmp_path):
+    _write_claude_snapshot(tmp_path)
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED", "different-session")
+    _write_claude_snapshot(tmp_path, session_id="claude-session-2")
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_FINISHED", "different-session")
+    telemetry.update_task("different-session", state_root=tmp_path)
+
+    usage = _aggregate(tmp_path, "different-session")["usage"]
+    assert usage["claude_5h_start_pct"] == 34.0
+    assert usage["claude_5h_end_pct"] == 34.0
+    assert usage["claude_5h_delta_pct"] is None
+    assert usage["claude_usage_known"] is True
+
+
+def test_stale_claude_snapshot_is_not_attributed(tmp_path):
+    stale = (datetime.now(timezone.utc) - timedelta(seconds=telemetry.CLAUDE_USAGE_MAX_STALENESS_SECONDS + 1))
+    _write_claude_snapshot(tmp_path, captured_at=stale.isoformat().replace("+00:00", "Z"))
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED", "stale-session")
+    telemetry.update_task("stale-session", state_root=tmp_path)
+
+    usage = _aggregate(tmp_path, "stale-session")["usage"]
+    assert usage["claude_5h_start_pct"] is None
+    assert usage["claude_context_used_percentage"] is None
+    assert usage["claude_usage_known"] is False
+
+
+def test_claude_window_reset_does_not_become_consumption(tmp_path):
+    now = datetime.now(timezone.utc)
+    before_reset = (now - timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
+    reset_at = (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    _write_claude_snapshot(
+        tmp_path,
+        captured_at=before_reset,
+        five_hour={"used_percentage": 85.0, "resets_at": reset_at},
+    )
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED", "reset-session")
+    _write_claude_snapshot(
+        tmp_path,
+        five_hour={"used_percentage": 5.0, "resets_at": "2099-08-30T15:00:00Z"},
+    )
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_FINISHED", "reset-session")
+    telemetry.update_task("reset-session", state_root=tmp_path)
+
+    usage = _aggregate(tmp_path, "reset-session")["usage"]
+    assert usage["claude_5h_start_pct"] == 85.0
+    assert usage["claude_5h_end_pct"] == 5.0
+    assert usage["claude_5h_delta_pct"] is None
+
+
+def test_malformed_and_partially_null_claude_snapshots_are_safe(tmp_path):
+    path = tmp_path / "telemetry" / "latest" / "claude_usage.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not-json", encoding="utf-8")
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_STARTED", "malformed-session")
+
+    _write_claude_snapshot(
+        tmp_path,
+        context_used_percentage=None,
+        context_window_size=None,
+        context_total_tokens=None,
+        context_input_tokens=12,
+        context_output_tokens=None,
+        five_hour={"used_percentage": None, "resets_at": None},
+        seven_day=None,
+    )
+    _emit_started_or_finished(tmp_path, "IMPLEMENTER_FINISHED", "malformed-session")
+    telemetry.update_task("malformed-session", state_root=tmp_path)
+
+    usage = _aggregate(tmp_path, "malformed-session")["usage"]
+    assert usage["claude_usage_known"] is True
+    assert usage["claude_context_used_percentage"] is None
+    assert usage["claude_5h_start_pct"] is None
+    assert usage["claude_5h_end_pct"] is None
 
 
 def test_jsonl_lines_are_valid_unique_and_unknown_usage_is_null(tmp_path):

@@ -45,6 +45,29 @@ TOKEN_FIELDS = frozenset(
         "thinking_tokens",
     }
 )
+CLAUDE_USAGE_PAYLOAD_FIELDS = frozenset(
+    {
+        "claude_usage_session_id",
+        "claude_usage_captured_at",
+        "claude_5h_start_pct",
+        "claude_5h_end_pct",
+        "claude_5h_resets_at",
+        "claude_7d_start_pct",
+        "claude_7d_end_pct",
+        "claude_7d_resets_at",
+        "claude_context_used_percentage",
+        "claude_context_window_size",
+        "claude_context_total_tokens",
+        "claude_context_input_tokens",
+        "claude_context_output_tokens",
+        "claude_cache_creation_input_tokens",
+        "claude_cache_read_input_tokens",
+        "claude_session_estimated_cost_usd",
+        "claude_session_total_duration_ms",
+        "claude_usage_known",
+        "claude_rate_limit_delta_scope",
+    }
+)
 
 _IDENTIFIER = re.compile(r"[^A-Za-z0-9._-]")
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
@@ -102,9 +125,12 @@ _VIOLATION_CODES = frozenset(
 _COMMON_CALL_FIELDS = frozenset(
     {"phase", "route", "model", "effort", "routing_enforced", "fresh_thread", "reply_call"}
 )
+_CLAUDE_TIMESTAMP_FIELDS = frozenset(
+    {"claude_usage_captured_at", "claude_5h_resets_at", "claude_7d_resets_at"}
+)
 _PAYLOAD_FIELDS = {
     "TASK_ROUTE_SELECTED": _COMMON_CALL_FIELDS,
-    "IMPLEMENTER_STARTED": _COMMON_CALL_FIELDS,
+    "IMPLEMENTER_STARTED": _COMMON_CALL_FIELDS | CLAUDE_USAGE_PAYLOAD_FIELDS,
     "IMPLEMENTER_FINISHED": frozenset(
         {
             "duration_ms",
@@ -115,9 +141,10 @@ _PAYLOAD_FIELDS = {
             "routing_enforced",
             "codex_usage_known",
             *(f"codex_{name}" for name in TOKEN_FIELDS),
+            *CLAUDE_USAGE_PAYLOAD_FIELDS,
         }
     ),
-    "IMPLEMENTER_FAILED": frozenset({"failure_code", "duration_ms"}),
+    "IMPLEMENTER_FAILED": frozenset({"failure_code", "duration_ms"}) | CLAUDE_USAGE_PAYLOAD_FIELDS,
     "REVIEWER1_STARTED": frozenset({"reviewer1_provider", "reviewer1_model_requested"}),
     "REVIEWER1_FINISHED": frozenset(
         {
@@ -189,7 +216,15 @@ def _identifier(value: Any) -> str:
 
 
 def _payload_value(name: str, value: Any) -> Any:
-    if name in {"routing_enforced", "fresh_thread", "reply_call", "codex_usage_known", "gemini_usage_known", "concurrent_writer"}:
+    if name in {
+        "routing_enforced",
+        "fresh_thread",
+        "reply_call",
+        "codex_usage_known",
+        "gemini_usage_known",
+        "claude_usage_known",
+        "concurrent_writer",
+    }:
         if not isinstance(value, bool):
             raise ValueError("telemetry boolean is invalid")
         return value
@@ -198,8 +233,23 @@ def _payload_value(name: str, value: Any) -> Any:
     if name in {
         *(f"codex_{field}" for field in TOKEN_FIELDS),
         *(f"gemini_{field}" for field in TOKEN_FIELDS),
+        *(CLAUDE_USAGE_PAYLOAD_FIELDS - _CLAUDE_TIMESTAMP_FIELDS - {"claude_usage_session_id", "claude_rate_limit_delta_scope", "claude_usage_known"}),
     }:
         return _number(value)
+    if name in _CLAUDE_TIMESTAMP_FIELDS:
+        if not isinstance(value, str) or len(value) > 40:
+            raise ValueError("telemetry timestamp is invalid")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("telemetry timestamp is invalid") from exc
+        if parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+            raise ValueError("telemetry timestamp is not UTC")
+        return value
+    if name == "claude_usage_session_id":
+        return _identifier(value)
+    if name == "claude_rate_limit_delta_scope" and value == "account_window_observation":
+        return value
     if name == "duration_ms":
         return _number(value)
     if name == "phase" and value in _PHASES:
@@ -295,6 +345,6 @@ def valid_event(value: Any) -> bool:
 
 
 __all__ = [
-    "EVENT_TYPES", "SCHEMA_VERSION", "TASK_STATUSES", "TERMINAL_VERDICTS", "TOKEN_FIELDS",
+    "CLAUDE_USAGE_PAYLOAD_FIELDS", "EVENT_TYPES", "SCHEMA_VERSION", "TASK_STATUSES", "TERMINAL_VERDICTS", "TOKEN_FIELDS",
     "build_event", "normalize_identifier", "utc_now", "valid_event",
 ]

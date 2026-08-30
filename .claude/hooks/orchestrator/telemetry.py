@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -18,6 +19,10 @@ import telemetry_schema as schema
 
 LOCK_TIMEOUT_SECONDS = 0.05
 SPOOL_MERGE_LIMIT = 16
+CLAUDE_USAGE_MAX_STALENESS_SECONDS = 5 * 60
+CLAUDE_USAGE_MAX_BYTES = 16 * 1024
+CLAUDE_RATE_LIMIT_DELTA_SCOPE = "account_window_observation"
+_CLAUDE_USAGE_EVENTS = frozenset({"IMPLEMENTER_STARTED", "IMPLEMENTER_FINISHED", "IMPLEMENTER_FAILED"})
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _SKILL_PATH = _PACKAGE_ROOT.parents[1] / "skills" / "codex-orchestrator" / "SKILL.md"
 _stderr_reported = False
@@ -254,6 +259,10 @@ def emit(event_type: str, *, task_id: Any = None, **payload: Any) -> None:
     envelope = {name: payload.pop(name, None) for name in ("session_id", "repo", "branch", "agent_id", "agent_type")}
     try:
         root = _root(state_root)
+        if event_type in _CLAUDE_USAGE_EVENTS:
+            for field in schema.CLAUDE_USAGE_PAYLOAD_FIELDS:
+                payload.pop(field, None)
+            payload.update(_claude_usage_payload(root, event_type))
         event = schema.build_event(event_type, task_id=task_id, payload=payload, **envelope)
         with _try_lock(root) as acquired:
             if acquired:
@@ -278,11 +287,123 @@ def _usage_defaults() -> dict[str, Any]:
         "gemini_duration_ms": None,
         "gemini_usage_known": False,
         "deepseek_usage_known": False,
+        "claude_5h_start_pct": None,
+        "claude_5h_end_pct": None,
+        "claude_5h_delta_pct": None,
+        "claude_7d_start_pct": None,
+        "claude_7d_end_pct": None,
+        "claude_context_used_percentage": None,
+        "claude_session_estimated_cost_usd": None,
+        "claude_usage_known": False,
+        "claude_rate_limit_delta_scope": CLAUDE_RATE_LIMIT_DELTA_SCOPE,
+        "_claude_5h_start_session_id": None,
+        "_claude_5h_start_captured_at": None,
+        "_claude_5h_start_resets_at": None,
+        "_claude_5h_end_session_id": None,
+        "_claude_5h_end_captured_at": None,
+        "_claude_5h_end_resets_at": None,
     }
     for provider in ("codex", "gemini", "deepseek"):
         for field in schema.TOKEN_FIELDS:
             values[f"{provider}_{field}"] = None
     return values
+
+
+def _claude_number(value: Any) -> int | float | None:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        return None
+    return value
+
+
+def _claude_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        return None
+    return parsed
+
+
+def _claude_session_id(value: Any) -> str | None:
+    if not isinstance(value, str) or not value or len(value) > 128 or not value.isascii():
+        return None
+    if not all(character.isalnum() or character in ".-_" for character in value):
+        return None
+    return value
+
+
+def _claude_usage_payload(root: Path, event_type: str) -> dict[str, Any]:
+    """Read one bounded, point-in-time account observation for a task endpoint."""
+
+    payload: dict[str, Any] = {
+        "claude_usage_known": False,
+        "claude_rate_limit_delta_scope": CLAUDE_RATE_LIMIT_DELTA_SCOPE,
+    }
+    endpoint = "start" if event_type == "IMPLEMENTER_STARTED" else "end"
+    try:
+        path = root / "latest" / "claude_usage.json"
+        with path.open("rb") as handle:
+            raw = handle.read(CLAUDE_USAGE_MAX_BYTES + 1)
+        if len(raw) > CLAUDE_USAGE_MAX_BYTES:
+            return payload
+        snapshot = json.loads(raw)
+        if not isinstance(snapshot, Mapping) or snapshot.get("schema_version") != 1:
+            return payload
+        captured_at = _claude_timestamp(snapshot.get("captured_at"))
+        observed_at = datetime.now(timezone.utc)
+        if (
+            captured_at is None
+            or captured_at > observed_at
+            or (observed_at - captured_at).total_seconds() > CLAUDE_USAGE_MAX_STALENESS_SECONDS
+        ):
+            return payload
+
+        payload["claude_usage_captured_at"] = snapshot["captured_at"]
+        session_id = _claude_session_id(snapshot.get("session_id"))
+        if session_id is not None:
+            payload["claude_usage_session_id"] = session_id
+
+        for source, target in (
+            ("context_used_percentage", "claude_context_used_percentage"),
+            ("context_window_size", "claude_context_window_size"),
+            ("context_total_tokens", "claude_context_total_tokens"),
+            ("context_input_tokens", "claude_context_input_tokens"),
+            ("context_output_tokens", "claude_context_output_tokens"),
+            ("cache_creation_input_tokens", "claude_cache_creation_input_tokens"),
+            ("cache_read_input_tokens", "claude_cache_read_input_tokens"),
+            ("session_estimated_cost_usd", "claude_session_estimated_cost_usd"),
+            ("session_total_duration_ms", "claude_session_total_duration_ms"),
+        ):
+            number = _claude_number(snapshot.get(source))
+            if number is not None:
+                payload[target] = number
+                payload["claude_usage_known"] = True
+
+        for window_name, prefix in (("five_hour", "claude_5h"), ("seven_day", "claude_7d")):
+            window = snapshot.get(window_name)
+            if not isinstance(window, Mapping):
+                continue
+            number = _claude_number(window.get("used_percentage"))
+            if number is not None:
+                payload[f"{prefix}_{endpoint}_pct"] = number
+                payload["claude_usage_known"] = True
+            resets_at = window.get("resets_at")
+            if _claude_timestamp(resets_at) is not None:
+                payload[f"{prefix}_resets_at"] = resets_at
+    except BaseException:
+        return {
+            "claude_usage_known": False,
+            "claude_rate_limit_delta_scope": CLAUDE_RATE_LIMIT_DELTA_SCOPE,
+        }
+    return payload
 
 
 def _hash_file(path: Path) -> str | None:
@@ -361,6 +482,82 @@ def _add_duration(current: Any, value: Any) -> int | float | None:
     return value if current is None else current + value
 
 
+def _claude_reset_crossed(usage: Mapping[str, Any]) -> bool:
+    start_captured_at = _claude_timestamp(usage.get("_claude_5h_start_captured_at"))
+    end_captured_at = _claude_timestamp(usage.get("_claude_5h_end_captured_at"))
+    reset_at = _claude_timestamp(usage.get("_claude_5h_start_resets_at"))
+    return (
+        start_captured_at is not None
+        and end_captured_at is not None
+        and start_captured_at <= end_captured_at
+        and reset_at is not None
+        and start_captured_at <= reset_at <= end_captured_at
+    )
+
+
+def _recompute_claude_delta(usage: dict[str, Any]) -> None:
+    start = _claude_number(usage.get("claude_5h_start_pct"))
+    end = _claude_number(usage.get("claude_5h_end_pct"))
+    start_session = usage.get("_claude_5h_start_session_id")
+    end_session = usage.get("_claude_5h_end_session_id")
+    if (
+        start is None
+        or end is None
+        or not isinstance(start_session, str)
+        or not isinstance(end_session, str)
+        or start_session != end_session
+        or _claude_reset_crossed(usage)
+    ):
+        usage["claude_5h_delta_pct"] = None
+        return
+    start_captured_at = _claude_timestamp(usage.get("_claude_5h_start_captured_at"))
+    end_captured_at = _claude_timestamp(usage.get("_claude_5h_end_captured_at"))
+    if start_captured_at is not None and end_captured_at is not None and end_captured_at < start_captured_at:
+        usage["claude_5h_delta_pct"] = None
+        return
+    usage["claude_5h_delta_pct"] = end - start
+
+
+def _fold_claude_usage(aggregate: dict[str, Any], payload: Mapping[str, Any], endpoint: str) -> None:
+    usage = aggregate["usage"]
+    if payload.get("claude_usage_known") is True:
+        usage["claude_usage_known"] = True
+    if payload.get("claude_rate_limit_delta_scope") == CLAUDE_RATE_LIMIT_DELTA_SCOPE:
+        usage["claude_rate_limit_delta_scope"] = CLAUDE_RATE_LIMIT_DELTA_SCOPE
+    for field in ("claude_context_used_percentage", "claude_session_estimated_cost_usd"):
+        number = _claude_number(payload.get(field))
+        if number is not None:
+            usage[field] = number
+
+    endpoint_field = f"claude_5h_{endpoint}_pct"
+    endpoint_value = _claude_number(payload.get(endpoint_field))
+    if endpoint == "start":
+        if endpoint_value is not None and usage.get("claude_5h_start_pct") is None:
+            usage["claude_5h_start_pct"] = endpoint_value
+            for metadata in ("session_id", "captured_at", "resets_at"):
+                usage[f"_claude_5h_start_{metadata}"] = payload.get(
+                    "claude_usage_session_id"
+                    if metadata == "session_id"
+                    else "claude_usage_captured_at"
+                    if metadata == "captured_at"
+                    else "claude_5h_resets_at"
+                )
+    elif endpoint_value is not None:
+        usage["claude_5h_end_pct"] = endpoint_value
+        for metadata in ("session_id", "captured_at", "resets_at"):
+            usage[f"_claude_5h_end_{metadata}"] = payload.get(
+                "claude_usage_session_id"
+                if metadata == "session_id"
+                else "claude_usage_captured_at"
+                if metadata == "captured_at"
+                else "claude_5h_resets_at"
+            )
+    seven_day_value = _claude_number(payload.get(f"claude_7d_{endpoint}_pct"))
+    if seven_day_value is not None:
+        usage[f"claude_7d_{endpoint}_pct"] = seven_day_value
+    _recompute_claude_delta(usage)
+
+
 def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
     event_type = event["event_type"]
     payload = event["payload"]
@@ -374,6 +571,7 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
         aggregate["fresh_threads"] += int(payload.get("fresh_thread") is True)
         aggregate["reply_calls"] += int(payload.get("reply_call") is True)
         aggregate["usage"]["codex_call_count"] += 1
+        _fold_claude_usage(aggregate, payload, "start")
     elif event_type in {"IMPLEMENTER_FINISHED", "IMPLEMENTER_FAILED"}:
         aggregate["ended_at"] = event["ts_utc"]
         aggregate["duration_ms"] = _add_duration(aggregate["duration_ms"], payload.get("duration_ms"))
@@ -391,6 +589,7 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
                 aggregate["usage"][key] = _add_duration(
                     aggregate["usage"][key], payload[key]
                 )
+        _fold_claude_usage(aggregate, payload, "end")
     elif event_type in {"REVIEWER1_STARTED", "REVIEWER1_FINISHED", "REVIEWER1_FAILED"}:
         if event_type == "REVIEWER1_STARTED":
             aggregate["reviewer1_result"] = None
@@ -576,6 +775,13 @@ def _build_task(
         for key in aggregate:
             if key in existing:
                 aggregate[key] = existing[key]
+        existing_usage = aggregate.get("usage")
+        if isinstance(existing_usage, Mapping):
+            usage = _usage_defaults()
+            usage.update(existing_usage)
+            aggregate["usage"] = usage
+        else:
+            aggregate["usage"] = _usage_defaults()
     for event in sorted(events, key=lambda item: (str(item["ts_utc"]), str(item["event_id"]))):
         _fold_event(aggregate, event)
     verdict = _verdict(root, task_id)
