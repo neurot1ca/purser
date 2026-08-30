@@ -24,6 +24,9 @@ CODEX_TOOL = "mcp__codex-main__codex"
 CODEX_REPLY_TOOL = "mcp__codex-main__codex-reply"
 CODEX_TOOLS = frozenset({CODEX_TOOL, CODEX_REPLY_TOOL})
 IMPLEMENTER_REPORT_LIMIT = 1200
+GIT_HEAD_READ_LIMIT = 4096
+PENDING_MAX_AGE_SECONDS = 24 * 60 * 60
+PENDING_CLEANUP_LIMIT = 32
 INDEPENDENCE_INSTRUCTIONS = (
     "Codex must not blindly accept Claude's proposed solution. It should "
     "independently verify the relevant repository state and project rules, "
@@ -73,12 +76,27 @@ def _telemetry_envelope(
     repository: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     repo_name = Path(repository).name if repository is not None else None
+    branch = None
+    if repository is not None:
+        try:
+            with (Path(repository) / ".git" / "HEAD").open("rb") as handle:
+                raw_head = handle.read(GIT_HEAD_READ_LIMIT + 1)
+            if len(raw_head) > GIT_HEAD_READ_LIMIT:
+                raw_head = b""
+            head = raw_head.decode("utf-8").strip()
+            prefix = "ref: refs/heads/"
+            if head.startswith(prefix) and len(head) > len(prefix):
+                branch = head[len(prefix) :]
+        except (OSError, UnicodeDecodeError):
+            pass
+    agent_id = event.get("agent_id")
+    agent_type = event.get("agent_type")
     return {
         "session_id": event.get("session_id"),
         "repo": repo_name,
-        "branch": None,
-        "agent_id": event.get("tool_use_id"),
-        "agent_type": "codex-main",
+        "branch": branch,
+        "agent_id": agent_id if isinstance(agent_id, str) and agent_id else None,
+        "agent_type": agent_type if isinstance(agent_type, str) and agent_type else None,
     }
 
 
@@ -276,6 +294,31 @@ def _remove_pending(root: Path, event: Mapping[str, Any]) -> None:
             path.unlink()
         except FileNotFoundError:
             pass
+
+
+def _cleanup_stale_pending(root: Path, event: Mapping[str, Any]) -> None:
+    """Best-effort bounded cleanup, biased toward preserving reconciliation state."""
+
+    try:
+        current = set(_pending_candidates(root, event))
+        now = datetime.now(timezone.utc).timestamp()
+        for index, path in enumerate((root / "pending").glob("*.json")):
+            if index >= PENDING_CLEANUP_LIMIT:
+                break
+            if path in current:
+                continue
+            try:
+                age_seconds = now - path.stat().st_mtime
+            except OSError:
+                continue
+            if age_seconds <= PENDING_MAX_AGE_SECONDS:
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    except BaseException:
+        pass
 
 
 def _safe_error(error: BaseException) -> str:
@@ -489,6 +532,10 @@ def pre_tool_use(
         )
 
         runtime_root = _state_root(state_root)
+        try:
+            _cleanup_stale_pending(runtime_root, event)
+        except BaseException:
+            pass
         _call_key(event)
         session_ledger = ledger.SessionLedger(runtime_root)
         loaded = session_ledger.load(parsed.task_id)
@@ -895,6 +942,10 @@ def post_tool_use(
     try:
         loaded_config = _load_config(config)
         runtime_root = _state_root(state_root)
+        try:
+            _cleanup_stale_pending(runtime_root, event)
+        except BaseException:
+            pass
         pending = _read_pending(runtime_root, event)
         raw_path = _persist_raw_output(runtime_root, event, event.get("tool_response"))
 
@@ -1128,6 +1179,10 @@ def post_tool_use_failure(
     pending: Mapping[str, Any] | None = None
     try:
         runtime_root = _state_root(state_root)
+        try:
+            _cleanup_stale_pending(runtime_root, event)
+        except BaseException:
+            pass
         pending = _read_pending(runtime_root, event)
         evidence = {
             "ambiguous_outcome": True,

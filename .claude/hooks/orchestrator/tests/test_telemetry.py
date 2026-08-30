@@ -7,6 +7,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import uuid
 
 import pytest
@@ -385,6 +386,103 @@ def test_rebuild_reproduces_aggregate_and_folds_verdict(tmp_path):
     aggregate = json.loads(task_path.read_text(encoding="utf-8"))
     assert aggregate["status"] == "VERIFIED"
     assert aggregate["ended_at"] == "2026-08-30T08:00:00Z"
+
+
+def test_rebuild_preserves_aggregate_without_raw_events(tmp_path):
+    task_path = tmp_path / "telemetry" / "tasks" / "remote-only.json"
+    task_path.parent.mkdir(parents=True)
+    aggregate = {
+        "task_id": "remote-only",
+        "status": "VERIFIED",
+        "policy_fingerprint": "frozen-fingerprint",
+        "policy_hashes": {"hook_sha256": "frozen-hook-hash"},
+    }
+    task_path.write_text(json.dumps(aggregate), encoding="utf-8")
+
+    telemetry.rebuild(state_root=tmp_path)
+
+    assert json.loads(task_path.read_text(encoding="utf-8")) == aggregate
+
+
+def test_hook_event_identity_and_repository_branch_are_observed(tmp_path):
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/feature/telemetry\n", encoding="utf-8")
+    envelope = codex._telemetry_envelope(
+        {
+            "session_id": "session",
+            "tool_use_id": "tool-call-id",
+            "agent_id": "agent-7",
+            "agent_type": "reviewer",
+        },
+        tmp_path,
+    )
+    assert envelope == {
+        "session_id": "session",
+        "repo": tmp_path.name,
+        "branch": "feature/telemetry",
+        "agent_id": "agent-7",
+        "agent_type": "reviewer",
+    }
+
+    absent = codex._telemetry_envelope(
+        {"session_id": "session", "tool_use_id": "tool-call-id"}, tmp_path
+    )
+    assert absent["agent_id"] is None
+    assert absent["agent_type"] is None
+    assert "tool-call-id" not in absent.values()
+
+
+def test_repository_branch_is_null_for_detached_or_unreadable_head(tmp_path, monkeypatch):
+    head_path = tmp_path / ".git" / "HEAD"
+    head_path.parent.mkdir()
+    head_path.write_text("1e85bd1f4fa2d73c1ae011388c3504663a892db5\n", encoding="utf-8")
+    assert codex._telemetry_envelope({}, tmp_path)["branch"] is None
+
+    original_open = Path.open
+
+    def unreadable_head(path, *args, **kwargs):
+        if path == head_path:
+            raise PermissionError("unreadable")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unreadable_head)
+    assert codex._telemetry_envelope({}, tmp_path)["branch"] is None
+
+
+def test_pending_cleanup_is_conservative_and_preserves_current_call(tmp_path, monkeypatch):
+    event = {
+        "session_id": "session",
+        "tool_name": codex.CODEX_TOOL,
+        "tool_use_id": "current-call",
+        "tool_input": {"prompt": "current"},
+    }
+    pending_root = tmp_path / "pending"
+    pending_root.mkdir()
+    young = pending_root / "young.json"
+    old = pending_root / "old.json"
+    unknown = pending_root / "unknown.json"
+    current = codex._pending_path(tmp_path, event)
+    for path in (young, old, unknown, current):
+        path.write_text("{}", encoding="utf-8")
+    old_time = time.time() - codex.PENDING_MAX_AGE_SECONDS - 60
+    os.utime(old, (old_time, old_time))
+    os.utime(current, (old_time, old_time))
+
+    original_stat = Path.stat
+
+    def unknown_age(path, *args, **kwargs):
+        if path == unknown:
+            raise OSError("age unavailable")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", unknown_age)
+    codex._cleanup_stale_pending(tmp_path, event)
+
+    assert young.exists()
+    assert not old.exists()
+    assert current.exists()
+    assert unknown.read_text(encoding="utf-8") == "{}"
 
 
 def test_malformed_verdict_is_ignored_and_warned(tmp_path):

@@ -633,10 +633,6 @@ def rebuild(*, state_root: str | os.PathLike[str] | None = None) -> None:
                 grouped.setdefault(schema.normalize_identifier(path.stem), [])
         tasks_root = root / "tasks"
         tasks_root.mkdir(parents=True, exist_ok=True)
-        expected = {f"{task_id}.json" for task_id in grouped}
-        for path in tasks_root.glob("*.json"):
-            if path.name not in expected:
-                path.unlink()
         for task_id, events in grouped.items():
             _atomic_json(
                 tasks_root / f"{task_id}.json",

@@ -104,6 +104,25 @@ def response_bundle(response, config):
     return json.loads(output[0]["text"])
 
 
+def test_pending_cleanup_failure_does_not_change_pretool_output(
+    workspace, config, monkeypatch
+):
+    repo, state = workspace
+    call = event(tool_use_id="cleanup-failure")
+    expected = codex.pre_tool_use(
+        call, config=config, state_root=state / "control", repo_root=repo
+    )
+
+    def fail_cleanup(*_args, **_kwargs):
+        raise OSError("cleanup unavailable")
+
+    monkeypatch.setattr(codex, "_cleanup_stale_pending", fail_cleanup)
+    actual = codex.pre_tool_use(
+        call, config=config, state_root=state / "failure", repo_root=repo
+    )
+    assert actual == expected
+
+
 def save_live_thread(state, *, route="normal", model="gpt-5.6-sol", effort="medium"):
     result = ledger.SessionLedger(state).save(
         ledger.build_session_record(
