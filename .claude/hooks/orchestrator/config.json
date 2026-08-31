@@ -75,5 +75,8 @@
   ],
   "micro_repair_timeout_seconds": 60,
   "max_total_hook_budget_seconds": 240.0,
+  "obsidian_projection": {
+    "enabled": true
+  },
   "micro_repair_enabled": false
 }

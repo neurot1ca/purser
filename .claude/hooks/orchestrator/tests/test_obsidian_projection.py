@@ -227,19 +227,34 @@ def test_disabled_projection_does_not_change_telemetry_or_create_vault(tmp_path)
     assert not (tmp_path / "vault").exists()
 
 
-def test_projection_root_and_enablement_are_configurable(tmp_path, monkeypatch):
+def test_config_projection_setting_is_read_at_runtime_and_writes_health(tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
+    configured_vault = tmp_path / "configured-vault"
     config_path.write_text(
         json.dumps({
-            "obsidian_projection": {"enabled": True, "vault_root": str(tmp_path / "configured-vault")}
+            "obsidian_projection": {"enabled": True, "vault_root": str(configured_vault)}
         }),
         encoding="utf-8",
     )
     monkeypatch.setattr(projection, "_CONFIG_PATH", config_path)
     monkeypatch.setattr(telemetry, "_CONFIG_PATH", config_path)
 
-    assert projection._vault_root(None) == tmp_path / "configured-vault"
-    assert telemetry._projection_settings() == (True, tmp_path / "configured-vault")
+    assert projection._vault_root(None) == configured_vault
+    assert telemetry._projection_settings() == (True, configured_vault)
+
+    telemetry.emit(
+        "IMPLEMENTER_FAILED",
+        task_id="configured-at-runtime",
+        state_root=tmp_path,
+        session_id="session",
+        failure_code="CODEX_CALL_FAILED",
+    )
+    telemetry.update_task("configured-at-runtime", state_root=tmp_path)
+
+    assert list(configured_vault.rglob("configured-at-runtime.md"))
+    health = (configured_vault / "System" / "Telemetry Health.md").read_text(encoding="utf-8")
+    assert "Last successful projection write (UTC): unknown" not in health
+    assert "Last successful projection write (UTC): " in health
 
 
 def test_projection_failure_is_fail_open_and_marks_health_degraded(tmp_path, monkeypatch):
@@ -266,6 +281,9 @@ def test_projection_failure_is_fail_open_and_marks_health_degraded(tmp_path, mon
     )
     assert health["status"] == "DEGRADED"
     assert health["last_error_code"] == "TELEMETRY_PROJECTION_FAILED"
+    health_note = (tmp_path / "vault" / "System" / "Telemetry Health.md").read_text(encoding="utf-8")
+    assert "- Status: DEGRADED" in health_note
+    assert "- Last error code: TELEMETRY_PROJECTION_FAILED" in health_note
 
 
 def test_rebuild_writes_all_projection_files_only_to_vault(tmp_path):

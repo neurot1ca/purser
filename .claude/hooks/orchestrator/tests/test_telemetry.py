@@ -41,6 +41,17 @@ def tmp_path():
             pass
 
 
+@pytest.fixture(autouse=True)
+def disable_configured_projection_for_telemetry_tests(monkeypatch, tmp_path):
+    config_path = tmp_path / "telemetry" / "config.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps({"obsidian_projection": {"enabled": False}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(telemetry, "_CONFIG_PATH", config_path)
+
+
 def _events(state_root):
     values = []
     for path in (state_root / "telemetry" / "events").glob("????-??/session_*.jsonl"):
@@ -172,7 +183,7 @@ elif action == "continuity":
         violation_code="THREAD_ID_MISMATCH",
     )
 elif action == "update":
-    telemetry.update_task(task_id, state_root=root)
+    telemetry.update_task(task_id, state_root=root, projection_enabled=False)
 """
     subprocess.run(
         [sys.executable, "-c", script, str(PACKAGE_ROOT), str(state_root), action, task_id],

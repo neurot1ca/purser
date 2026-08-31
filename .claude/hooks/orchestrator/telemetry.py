@@ -230,6 +230,12 @@ def _record_failure(root: Path, code: str) -> None:
     _short_stderr(code)
 
 
+def _record_projection_success(root: Path, written_at: str) -> None:
+    health = _read_health(root)
+    health.update(schema_version=1, last_projection_write_at=written_at)
+    _atomic_json(root / "telemetry_health.json", health)
+
+
 def record_health(
     status: str = "OK",
     *,
@@ -445,6 +451,7 @@ def _project_task(
     projection_enabled: bool | None,
     vault_root: str | os.PathLike[str] | None,
 ) -> None:
+    target_vault: str | os.PathLike[str] | None = None
     try:
         if projection_enabled is None and vault_root is not None:
             enabled, configured_root = True, Path(vault_root)
@@ -454,13 +461,29 @@ def _project_task(
             enabled, configured_root = projection_enabled, obsidian_projection.DEFAULT_VAULT_ROOT
         if not enabled:
             return
+        target_vault = vault_root if vault_root is not None else configured_root
         obsidian_projection.project_task(
             task_id,
             state_root=state_root.parent,
-            vault_root=vault_root if vault_root is not None else configured_root,
+            vault_root=target_vault,
+        )
+        projection_written_at = schema.utc_now()
+        _record_projection_success(state_root, projection_written_at)
+        obsidian_projection.project_health(
+            state_root=state_root.parent,
+            vault_root=target_vault,
+            last_projection_write_at=projection_written_at,
         )
     except BaseException:
         _record_failure(state_root, "TELEMETRY_PROJECTION_FAILED")
+        if target_vault is not None:
+            try:
+                obsidian_projection.project_health(
+                    state_root=state_root.parent,
+                    vault_root=target_vault,
+                )
+            except BaseException:
+                pass
 
 
 def _hash_file(path: Path) -> str | None:

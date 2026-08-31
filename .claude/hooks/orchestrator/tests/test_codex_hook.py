@@ -15,6 +15,7 @@ import codex
 import hook
 import ledger
 import policy
+import telemetry
 
 
 CONFIG_PATH = Path(__file__).parents[1] / "config.json"
@@ -31,6 +32,15 @@ def remove_test_tree(path):
 @pytest.fixture()
 def config():
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(autouse=True)
+def disable_configured_projection_for_codex_tests(monkeypatch):
+    monkeypatch.setattr(
+        telemetry,
+        "_projection_settings",
+        lambda: (False, telemetry.obsidian_projection.DEFAULT_VAULT_ROOT),
+    )
 
 
 @pytest.fixture()

@@ -10,9 +10,9 @@ import math
 import os
 from pathlib import Path
 import re
-import tempfile
 from datetime import timedelta
 from typing import Any
+import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import telemetry_schema as schema
@@ -432,10 +432,18 @@ def _atomic_write(path: Path, content: str) -> None:
             raise ProjectionConflict(f"refusing to overwrite non-projection note: {path}")
     temporary: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", newline="\n", prefix=path.name + ".", suffix=".tmp", dir=path.parent, delete=False
-        ) as handle:
-            temporary = Path(handle.name)
+        temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+        descriptor = os.open(
+            os.fspath(temporary),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        try:
+            handle = os.fdopen(descriptor, mode="w", encoding="utf-8", newline="\n")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
@@ -507,6 +515,29 @@ def project_task(
     prepared = _prepare_aggregate(aggregate)
     path = _safe_run_path(_vault_root(vault_root), prepared)
     _atomic_write(path, _with_marker(_frontmatter(prepared), _run_body(prepared)))
+    return path
+
+
+def project_health(
+    *,
+    state_root: str | os.PathLike[str] | None = None,
+    vault_root: str | os.PathLike[str] | None = None,
+    last_projection_write_at: str | None = None,
+) -> Path:
+    """Write the reader-facing health note from the current telemetry state."""
+
+    vault = _vault_root(vault_root)
+    aggregates = _read_aggregates(state_root)
+    path = _safe_vault_path(vault, "System", "Telemetry Health.md")
+    content = _with_marker(
+        "",
+        render_health(
+            aggregates,
+            state_root=state_root,
+            last_projection_write_at=last_projection_write_at,
+        ),
+    )
+    _atomic_write(path, content)
     return path
 
 
@@ -718,7 +749,13 @@ def render_provider_capacity(aggregates: Iterable[Mapping[str, Any]]) -> str:
 def _health_value(state_root: str | os.PathLike[str] | None) -> dict[str, Any]:
     path = _state_root(state_root) / "telemetry" / "telemetry_health.json"
     if not path.exists():
-        return {"status": None, "failure_count": None, "last_error_code": None, "updated_at": None}
+        return {
+            "status": None,
+            "failure_count": None,
+            "last_error_code": None,
+            "updated_at": None,
+            "last_projection_write_at": None,
+        }
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -731,14 +768,32 @@ def _health_value(state_root: str | os.PathLike[str] | None) -> dict[str, Any]:
     failure_count = _number("failure_count", value.get("failure_count"), integer=True)
     error_code = _identifier("last_error_code", value.get("last_error_code"))
     updated_at = _utc_timestamp("updated_at", value.get("updated_at"))[0]
-    return {"status": status, "failure_count": failure_count, "last_error_code": error_code, "updated_at": updated_at}
+    last_projection_write_at = _utc_timestamp(
+        "last_projection_write_at", value.get("last_projection_write_at")
+    )[0]
+    return {
+        "status": status,
+        "failure_count": failure_count,
+        "last_error_code": error_code,
+        "updated_at": updated_at,
+        "last_projection_write_at": last_projection_write_at,
+    }
 
 
 def render_health(
-    aggregates: Iterable[Mapping[str, Any]], *, state_root: str | os.PathLike[str] | None = None
+    aggregates: Iterable[Mapping[str, Any]],
+    *,
+    state_root: str | os.PathLike[str] | None = None,
+    last_projection_write_at: str | None = None,
 ) -> str:
     health = _health_value(state_root)
     prepared = [_prepare_aggregate(aggregate) for aggregate in aggregates]
+    if last_projection_write_at is not None:
+        last_projection_write_at = _utc_timestamp(
+            "last_projection_write_at", last_projection_write_at, nullable=False
+        )[0]
+    else:
+        last_projection_write_at = health["last_projection_write_at"]
     return (
         "# Telemetry Health\n\n"
         "This is observational health for local telemetry and projection; it is not an authority for routing or acceptance.\n\n"
@@ -746,6 +801,7 @@ def render_health(
         f"- Failure count: {_display(health['failure_count'])}\n"
         f"- Last error code: {_display(health['last_error_code'])}\n"
         f"- Health updated at (UTC): {_display(health['updated_at'])}\n"
+        f"- Last successful projection write (UTC): {_display(last_projection_write_at)}\n"
         f"- Aggregate count: n={len(prepared)}\n"
         "- Projection mode: local-only, deterministic, no model/network/process access.\n"
     )
@@ -923,6 +979,7 @@ __all__ = [
     "MIN_RATE_DENOMINATOR",
     "ProjectionConflict",
     "ProjectionError",
+    "project_health",
     "rebuild",
     "render_health",
     "render_metrics",
