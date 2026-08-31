@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 import codex
+import json_transport
 
 
 def dispatch(event: Mapping[str, Any]) -> dict[str, Any]:
@@ -53,8 +54,7 @@ def main() -> int:
             )
         except Exception:
             pass
-    json.dump(response, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-    sys.stdout.write("\n")
+    sys.stdout.write(json_transport.dumps(response, separators=(",", ":")) + "\n")
     sys.stdout.flush()
     return 0
 

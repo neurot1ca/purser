@@ -21,6 +21,8 @@ import tempfile
 import time
 from typing import Any
 
+import json_transport
+
 
 OK = "OK"
 UNKNOWN = "UNKNOWN"
@@ -811,9 +813,9 @@ def build_session_record(
 
 
 def _canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    return json_transport.dumps(value, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
 
 
 def _contains_secret(value: Any, key: str = "") -> bool:

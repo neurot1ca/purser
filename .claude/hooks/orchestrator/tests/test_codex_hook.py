@@ -447,6 +447,40 @@ def test_thread_id_survives_mcp_output_replacement(workspace, config):
     assert loaded["record"]["live_thread"]["thread_id"] == "thread-9"
 
 
+def test_posttool_lone_surrogate_is_preserved_without_crashing(workspace, config):
+    repo, state = workspace
+    call = event(tool_use_id="lone-surrogate")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    report = "before\udc9dafter"
+    tool_response = [
+        {
+            "type": "text",
+            "text": '{"threadId":"thread-surrogate","content":"' + report + '"}',
+        }
+    ]
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": tool_response,
+    }
+
+    result = codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo
+    )
+    output_text = result["hookSpecificOutput"][config["post_tool_output_field"]][0]["text"]
+    bundle = json.loads(output_text)
+
+    assert bundle["implementer_report"] == report
+    assert "\\udc9d" in output_text
+    raw_path = Path(bundle["raw_output_path"])
+    assert "\\udc9d" in raw_path.read_text(encoding="utf-8")
+    assert json.loads(raw_path.read_text(encoding="utf-8")) == tool_response
+    loaded = ledger.SessionLedger(state).load("task-1")
+    assert loaded["status"] == ledger.OK
+    assert loaded["record"]["last_outcome"]["implementer_report"] == report
+    assert not (state / "diagnostics.jsonl").exists()
+
+
 def test_missing_thread_id_is_explicit_and_forces_full(workspace, config):
     repo, state = workspace
     call = event()

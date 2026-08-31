@@ -13,6 +13,7 @@ import sys
 import tempfile
 from typing import Any
 
+import json_transport
 import ledger
 import policy
 import reviewer as reviewer1
@@ -220,9 +221,8 @@ def _pending_path(root: Path, event: Mapping[str, Any]) -> Path:
 
 def _bypass_path(root: Path, event: Mapping[str, Any]) -> Path:
     tool_input = event.get("tool_input")
-    encoded_input = json.dumps(
+    encoded_input = json_transport.dumps(
         tool_input,
-        ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         default=str,
@@ -261,7 +261,7 @@ def _atomic_json_write(path: Path, value: Any) -> None:
             delete=False,
         ) as handle:
             temporary = Path(handle.name)
-            json.dump(value, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            handle.write(json_transport.dumps(value, sort_keys=True, separators=(",", ":")))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -345,12 +345,12 @@ def _record_diagnostic(
             path = root / "diagnostics.jsonl"
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+                handle.write(json_transport.dumps(record, sort_keys=True) + "\n")
             return
         except OSError:
             pass
     try:
-        sys.stderr.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        sys.stderr.write(json_transport.dumps(record, sort_keys=True) + "\n")
     except Exception:
         pass
 
@@ -829,7 +829,7 @@ def _base_bundle(error: str | None = None) -> dict[str, Any]:
 
 def _replacement(bundle: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
     field = config["post_tool_output_field"]
-    text = json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    text = json_transport.dumps(bundle, sort_keys=True, separators=(",", ":"))
     return {
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
