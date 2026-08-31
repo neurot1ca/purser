@@ -838,3 +838,480 @@ def test_entry_point_pretool_crash_uses_visible_internal_bypass(monkeypatch):
     assert hook.main() == 0
     result = json.loads(stdout.getvalue())
     assert "NOT enforced" in result["hookSpecificOutput"]["additionalContext"]
+
+
+def test_post_tool_use_emits_audit_receipt_on_audit_mode(workspace, config):
+    repo, state = workspace
+    call = event()
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    def reviewer(**_kwargs):
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    raw = codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo, reviewer=reviewer
+    )
+    bundle = response_bundle(raw, config)
+
+    assert bundle["claude_review_mode"] == policy.AUDIT
+    assert bundle["audit_receipt"] is not None
+    assert bundle["audit_receipt"]["verdict"] == "READY_FOR_ONE_TURN_ACCEPT"
+    assert "git add" in bundle["audit_receipt"]["commit_command"]
+    assert "feat(task-1)" in bundle["audit_receipt"]["commit_command"]
+
+
+def test_post_tool_use_micro_repair_triggers_on_changes_required(workspace, config):
+    repo, state = workspace
+    call = event()
+    repair_config = dict(config, micro_repair_enabled=True)
+    codex.pre_tool_use(call, config=repair_config, state_root=state, repo_root=repo)
+    for index in range(3):
+        (repo / f"file{index}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    reviewer_invocations = []
+    repair_invocations = []
+
+    def reviewer(**kwargs):
+        reviewer_invocations.append(kwargs)
+        if len(reviewer_invocations) == 1:
+            return {
+                "result": policy.CHANGES_REQUIRED,
+                "validation": "FAIL",
+                "findings": [{"code": "TYPO_FOUND", "message": "fix typo"}],
+            }
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    def mock_micro_repair(thread_id, findings, repo_root, scope=None, timeout_seconds=60, **_kwargs):
+        repair_invocations.append({"thread_id": thread_id, "findings": findings, "scope": scope, "timeout": timeout_seconds})
+        return {"repaired": True, "output": "repaired in place"}
+
+    raw = codex.post_tool_use(
+        post,
+        config=repair_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+        micro_repair=mock_micro_repair,
+    )
+    bundle = response_bundle(raw, repair_config)
+
+    assert len(repair_invocations) == 1
+    assert repair_invocations[0]["thread_id"] == "thread-1"
+    assert repair_invocations[0]["scope"] == ["file0.py", "file1.py", "file2.py"]
+    assert len(reviewer_invocations) == 2
+    assert bundle["micro_repair_cleared_review"] is True
+    assert bundle["micro_repair"]["status"] == "SUCCEEDED"
+    assert bundle["claude_review_mode"] == policy.AUDIT
+    assert bundle["audit_receipt"]["verdict"] == "READY_FOR_ONE_TURN_ACCEPT"
+
+
+def test_post_tool_use_micro_repair_stale_delta_forces_full_review(workspace, config, monkeypatch):
+    repo, state = workspace
+    call = event()
+    repair_config = dict(config, micro_repair_enabled=True)
+    codex.pre_tool_use(call, config=repair_config, state_root=state, repo_root=repo)
+    for index in range(3):
+        (repo / f"file{index}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    reviewer_invocations = []
+
+    def reviewer(**kwargs):
+        reviewer_invocations.append(kwargs)
+        return {
+            "result": policy.CHANGES_REQUIRED,
+            "validation": "FAIL",
+            "findings": [{"code": "TYPO", "message": "fix"}],
+        }
+
+    def mock_micro_repair(thread_id, findings, repo_root, **kwargs):
+        return {"repaired": True, "output": "repaired"}
+
+    # Mock compute_delta on the second call (post-repair recompute) to fail
+    call_count = [0]
+    original_compute_delta = ledger.compute_delta
+
+    def mock_compute_delta(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 2:
+            return {"status": ledger.CORRUPT, "code": "CORRUPT_DELTA", "message": "failed"}
+        return original_compute_delta(*args, **kwargs)
+
+    monkeypatch.setattr(ledger, "compute_delta", mock_compute_delta)
+
+    raw = codex.post_tool_use(
+        post,
+        config=repair_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+        micro_repair=mock_micro_repair,
+    )
+    bundle = response_bundle(raw, repair_config)
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["audit_receipt"] is None
+    assert any(f["code"] == "CORRUPT_DELTA" for f in bundle["findings"])
+
+
+def test_post_tool_use_micro_repair_failure_reports_failed_status(workspace, config):
+    repo, state = workspace
+    call = event()
+    repair_config = dict(config, micro_repair_enabled=True)
+    codex.pre_tool_use(call, config=repair_config, state_root=state, repo_root=repo)
+    for index in range(3):
+        (repo / f"file{index}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    def reviewer(**kwargs):
+        return {
+            "result": policy.CHANGES_REQUIRED,
+            "validation": "FAIL",
+            "findings": [{"code": "FAIL", "message": "bug"}],
+        }
+
+    def mock_micro_repair_fail(thread_id, findings, repo_root, **kwargs):
+        return {"repaired": False, "error": "TimeoutExpired: 60s"}
+
+    raw = codex.post_tool_use(
+        post,
+        config=repair_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+        micro_repair=mock_micro_repair_fail,
+    )
+    bundle = response_bundle(raw, repair_config)
+
+    assert bundle["micro_repair_cleared_review"] is False
+    assert bundle["micro_repair"]["status"] == "TIMED_OUT"
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
+def test_post_tool_use_micro_repair_timeout_recomputes_partial_delta(workspace, config):
+    repo, state = workspace
+    call = event()
+    repair_config = dict(config, micro_repair_enabled=True)
+    codex.pre_tool_use(call, config=repair_config, state_root=state, repo_root=repo)
+    for index in range(3):
+        (repo / f"file{index}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    def reviewer(**kwargs):
+        return {
+            "result": policy.CHANGES_REQUIRED,
+            "validation": "FAIL",
+            "findings": [{"code": "FAIL", "message": "bug"}],
+        }
+
+    def mock_micro_repair_timeout(thread_id, findings, repo_root, **kwargs):
+        # Simulate partial edit before timeout
+        (repo / "file0.py").write_text("value = 999\n" * 25, encoding="utf-8")
+        return {"repaired": False, "error": "TimeoutExpired: 60s"}
+
+    raw = codex.post_tool_use(
+        post,
+        config=repair_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+        micro_repair=mock_micro_repair_timeout,
+    )
+    bundle = response_bundle(raw, repair_config)
+
+    assert bundle["micro_repair_cleared_review"] is False
+    assert bundle["micro_repair"]["status"] == "TIMED_OUT"
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert "file0.py" in bundle["changed_paths"]
+    assert bundle["delta_lines"] is not None
+
+
+def test_post_tool_use_micro_repair_out_of_scope_escapes_forces_full_review(workspace, config):
+    repo, state = workspace
+    call = event()
+    repair_config = dict(config, micro_repair_enabled=True)
+    codex.pre_tool_use(call, config=repair_config, state_root=state, repo_root=repo)
+    for index in range(3):
+        (repo / f"file{index}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    def reviewer(**kwargs):
+        return {
+            "result": policy.CHANGES_REQUIRED,
+            "validation": "FAIL",
+            "findings": [{"code": "FAIL", "message": "bug"}],
+        }
+
+    def mock_micro_repair_out_of_scope(thread_id, findings, repo_root, **kwargs):
+        # Micro repair modifies a file outside declared scope ["file0.py", "file1.py", "file2.py"]
+        (repo / "unscoped_escape.py").write_text("evil = 1\n", encoding="utf-8")
+        return {"repaired": True, "output": "repaired"}
+
+    raw = codex.post_tool_use(
+        post,
+        config=repair_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+        micro_repair=mock_micro_repair_out_of_scope,
+    )
+    bundle = response_bundle(raw, repair_config)
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["audit_receipt"] is None
+    assert any(f["code"] == "OUT_OF_SCOPE_MODIFICATION" for f in bundle["findings"])
+
+
+def test_post_tool_use_micro_repair_out_of_scope_inspection_failure_forces_full_review(workspace, config, monkeypatch):
+    repo, state = workspace
+    call = event()
+    repair_config = dict(config, micro_repair_enabled=True)
+    codex.pre_tool_use(call, config=repair_config, state_root=state, repo_root=repo)
+    for index in range(3):
+        (repo / f"file{index}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    def reviewer(**kwargs):
+        return {
+            "result": policy.CHANGES_REQUIRED,
+            "validation": "FAIL",
+            "findings": [{"code": "FAIL", "message": "bug"}],
+        }
+
+    def mock_micro_repair(thread_id, findings, repo_root, **kwargs):
+        return {"repaired": True, "output": "repaired"}
+
+    # Mock detect_out_of_scope_modifications to fail (e.g. git error)
+    def mock_detect_failure(*args, **kwargs):
+        return {"status": ledger.UNKNOWN, "code": "OUT_OF_SCOPE_INSPECTION_FAILED", "message": "inspection failed"}
+
+    monkeypatch.setattr(ledger, "detect_out_of_scope_modifications", mock_detect_failure)
+
+    raw = codex.post_tool_use(
+        post,
+        config=repair_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+        micro_repair=mock_micro_repair,
+    )
+    bundle = response_bundle(raw, repair_config)
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["audit_receipt"] is None
+    assert any(f["code"] == "OUT_OF_SCOPE_INSPECTION_FAILED" for f in bundle["findings"])
+
+
+
+def test_post_tool_use_micro_repair_honors_configured_total_budget(workspace, config):
+    repo, state = workspace
+    call = event()
+    tight_config = dict(config, micro_repair_enabled=True, max_total_hook_budget_seconds=10.0)
+    codex.pre_tool_use(call, config=tight_config, state_root=state, repo_root=repo)
+    for index in range(3):
+        (repo / f"file{index}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    def reviewer(**kwargs):
+        return {
+            "result": policy.CHANGES_REQUIRED,
+            "validation": "FAIL",
+            "findings": [{"code": "FAIL", "message": "bug"}],
+        }
+
+    raw = codex.post_tool_use(
+        post,
+        config=tight_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+    )
+    bundle = response_bundle(raw, tight_config)
+
+    assert bundle["micro_repair"] is not None
+    assert bundle["micro_repair"]["attempted"] is False
+    assert bundle["micro_repair"]["status"] == "SKIPPED_BUDGET"
+
+
+def test_post_tool_use_ledger_write_failure_clears_audit_receipt(workspace, config, monkeypatch):
+    repo, state = workspace
+    call = event()
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    def reviewer(**kwargs):
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    def mock_save_failure(self, record):
+        return {"status": ledger.CORRUPT, "code": "LEDGER_WRITE_FAILED", "message": "disk full"}
+
+    monkeypatch.setattr(ledger.SessionLedger, "save", mock_save_failure)
+
+    raw = codex.post_tool_use(
+        post,
+        config=config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+    )
+    bundle = response_bundle(raw, config)
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["audit_receipt"] is None
+    assert any(f["code"] == "LEDGER_WRITE_FAILED" for f in bundle["findings"])
+
+
+def test_post_tool_use_micro_repair_disabled_in_config_skips_repair(workspace, config):
+    repo, state = workspace
+    call = event()
+    disabled_config = dict(config, micro_repair_enabled=False)
+    codex.pre_tool_use(call, config=disabled_config, state_root=state, repo_root=repo)
+    for index in range(3):
+        (repo / f"file{index}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+            }
+        ],
+    }
+
+    repair_called = []
+
+    def reviewer(**kwargs):
+        return {
+            "result": policy.CHANGES_REQUIRED,
+            "validation": "FAIL",
+            "findings": [{"code": "FAIL", "message": "bug"}],
+        }
+
+    def mock_micro_repair(thread_id, findings, repo_root, **kwargs):
+        repair_called.append(True)
+        return {"repaired": True, "output": "repaired"}
+
+    raw = codex.post_tool_use(
+        post,
+        config=disabled_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=reviewer,
+        micro_repair=mock_micro_repair,
+    )
+    bundle = response_bundle(raw, disabled_config)
+
+    assert len(repair_called) == 0
+    assert bundle["micro_repair"] is None
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
+

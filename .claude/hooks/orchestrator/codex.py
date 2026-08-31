@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 import json_transport
@@ -50,6 +52,70 @@ def _default_reviewer(**_: Any) -> dict[str, Any]:
 
 _default_reviewer.available = False  # type: ignore[attr-defined]
 REVIEWER: Callable[..., Mapping[str, Any]] = reviewer1.review
+
+
+def _attempt_in_hook_micro_repair(
+    thread_id: str,
+    findings: Sequence[Mapping[str, str]],
+    repo_root: Path,
+    scope: Sequence[str] | None = None,
+    timeout_seconds: int = 60,
+) -> dict[str, Any]:
+    """Attempt 1 bounded micro-repair via codex exec resume with workspace sandbox."""
+    if not thread_id or not findings:
+        return {"repaired": False, "reason": "NO_THREAD_OR_FINDINGS"}
+    bullet_points = "\n".join(
+        f"- {f.get('code')}: {f.get('message')}"
+        for f in findings
+        if isinstance(f, Mapping) and f.get("code")
+    )[:500]
+    scope_text = f"\nYou are strictly restricted to modifying files within scope: {', '.join(scope)}." if scope else ""
+    repair_prompt = (
+        "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n"
+        f"{bullet_points}{scope_text}\n"
+        "Please fix these issues directly in the worktree and ensure tests pass."
+    )
+    cmd = [
+        "codex",
+        "exec",
+        "resume",
+        thread_id,
+        "-",
+        "--sandbox",
+        "workspace-write",
+    ]
+    try:
+        sys.stderr.write(
+            f"[orchestrator] Reviewer-1 requested changes; entering in-hook micro-repair with Codex (timeout={timeout_seconds}s)...\n"
+        )
+        sys.stderr.flush()
+        proc = subprocess.run(
+            cmd,
+            input=repair_prompt,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            shell=False,
+        )
+        if proc.returncode == 0:
+            sys.stderr.write("[orchestrator] In-hook micro-repair succeeded; re-evaluating with Reviewer-1...\n")
+            sys.stderr.flush()
+            return {"repaired": True, "output": proc.stdout}
+        sys.stderr.write(f"[orchestrator] In-hook micro-repair failed (exit {proc.returncode}).\n")
+        sys.stderr.flush()
+        return {"repaired": False, "error": proc.stderr or proc.stdout}
+    except subprocess.TimeoutExpired:
+        sys.stderr.write(f"[orchestrator] In-hook micro-repair timed out after {timeout_seconds}s.\n")
+        sys.stderr.flush()
+        return {"repaired": False, "error": f"TimeoutExpired: {timeout_seconds}s"}
+    except Exception as exc:
+        sys.stderr.write(f"[orchestrator] In-hook micro-repair error: {_safe_error(exc)}\n")
+        sys.stderr.flush()
+        return {"repaired": False, "error": _safe_error(exc)}
+
+
+MICRO_REPAIR: Callable[..., Mapping[str, Any]] = _attempt_in_hook_micro_repair
 
 
 class WiringError(RuntimeError):
@@ -824,6 +890,25 @@ def _base_bundle(error: str | None = None) -> dict[str, Any]:
         "protected_paths_touched": [],
         "concurrent_writer": None,
         "implementer_report": "",
+        "audit_receipt": None,
+        "micro_repair": None,
+        "micro_repair_cleared_review": False,
+    }
+
+
+def _build_audit_receipt(bundle: Mapping[str, Any], task_id: str | None) -> dict[str, Any] | None:
+    if bundle.get("claude_review_mode") != policy.AUDIT:
+        return None
+    changed_paths = bundle.get("changed_paths")
+    if not isinstance(changed_paths, list) or not changed_paths:
+        return None
+    files_str = " ".join(f'"{p}"' for p in changed_paths[:10])
+    task_label = task_id or "task"
+    return {
+        "verdict": "READY_FOR_ONE_TURN_ACCEPT",
+        "reviewer1_verdict": bundle.get("reviewer1_result") or bundle.get("reviewer1_skipped_reason"),
+        "validation_summary": f"validation={bundle.get('validation')}, delta={bundle.get('delta_lines', 0)}L/{bundle.get('delta_files', 0)}F",
+        "commit_command": f'git add {files_str} && git commit -m "feat({task_label}): implement changes"',
     }
 
 
@@ -1010,13 +1095,16 @@ def post_tool_use(
     state_root: str | os.PathLike[str] | None = None,
     repo_root: str | os.PathLike[str] | None = None,
     reviewer: Callable[..., Mapping[str, Any]] | None = None,
+    micro_repair: Callable[..., Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Replace a raw Codex result with the compact reviewed bundle."""
 
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
+    start_time = time.monotonic()
     try:
         loaded_config = _load_config(config)
+        max_total_hook_budget = float(loaded_config.get("max_total_hook_budget_seconds", 240.0))
         runtime_root = _state_root(state_root)
         try:
             _cleanup_stale_pending(runtime_root, event)
@@ -1135,8 +1223,9 @@ def post_tool_use(
                 _finding(delta.get("code", "UNKNOWN_DELTA"), delta.get("message", "Delta is UNKNOWN."))
             )
 
+        force_full_review = False
         if delta.get("status") != ledger.OK:
-            bundle["claude_review_mode"] = policy.FULL
+            force_full_review = True
         else:
             reviewer_callable = reviewer if reviewer is not None else REVIEWER
             gate = policy.reviewer1_gate(
@@ -1177,6 +1266,135 @@ def post_tool_use(
                 provider = reviewer_report.get("provider", "agy") if isinstance(reviewer_report, Mapping) else "agy"
                 findings = reviewer_report.get("findings", []) if isinstance(reviewer_report, Mapping) else []
                 validation = reviewer_report.get("validation", "UNKNOWN") if isinstance(reviewer_report, Mapping) else "UNKNOWN"
+
+                # Priority 5: In-Hook Micro-Repair loop (1 bounded attempt with deadline & sandbox)
+                if loaded_config.get("micro_repair_enabled", True) and result == policy.CHANGES_REQUIRED and thread_id:
+                    configured_repair_timeout = int(loaded_config.get("micro_repair_timeout_seconds", 60))
+                    elapsed = time.monotonic() - start_time
+                    available_budget = max_total_hook_budget - elapsed - float(loaded_config.get("reviewer1_timeout_seconds", 90))
+                    initial_findings = findings[:5] if isinstance(findings, list) else []
+
+                    if available_budget < 15.0:
+                        bundle["micro_repair"] = {
+                            "attempted": False,
+                            "status": "SKIPPED_BUDGET",
+                            "initial_findings": initial_findings,
+                        }
+                    else:
+                        actual_timeout = int(min(configured_repair_timeout, available_budget))
+                        bundle["micro_repair"] = {
+                            "attempted": True,
+                            "status": "RUNNING",
+                            "initial_findings": initial_findings,
+                        }
+                        repair_callable = micro_repair if micro_repair is not None else MICRO_REPAIR
+                        repair_res = repair_callable(
+                            thread_id=thread_id,
+                            findings=findings if isinstance(findings, list) else [],
+                            repo_root=repository,
+                            scope=scope,
+                            timeout_seconds=actual_timeout,
+                        )
+                        # Universal delta recomputation (C19-1): always recompute after attempt
+                        re_delta = ledger.compute_delta(
+                            repository,
+                            baseline,
+                            scope if scope else None,
+                            manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
+                        )
+                        if re_delta.get("status") == ledger.OK:
+                            delta = re_delta
+                            bundle["changed_paths"] = delta["changed_paths"]
+                            bundle["delta_lines"] = delta["changed_line_count"]
+                            bundle["delta_files"] = delta["changed_file_count"]
+                            bundle["current_head"] = delta.get("current_head")
+                            re_classification = (
+                                ledger.classify_concurrent_writers(delta, scope)
+                                if scope
+                                else None
+                            )
+                            bundle["protected_paths_touched"] = (
+                                re_classification.get("protected_paths", [])
+                                if re_classification
+                                else ledger.detect_protected_paths(delta)
+                            )
+                            bundle["concurrent_writer"] = (
+                                re_classification.get("concurrent_writer")
+                                if re_classification
+                                else None
+                            )
+                            classification = re_classification
+                        else:
+                            delta = re_delta
+                            force_full_review = True
+                            bundle["findings"].append(
+                                _finding(
+                                    re_delta.get("code", "POST_REPAIR_DELTA_FAILED"),
+                                    "Post-repair delta could not be computed; forcing FULL Claude review.",
+                                )
+                            )
+
+                        if repair_res.get("repaired") is True:
+                            # C22-1 & C23-1: Working-tree wide fail-closed out-of-scope check
+                            out_of_scope_res = ledger.detect_out_of_scope_modifications(
+                                repository,
+                                baseline,
+                                scope,
+                            )
+                            if out_of_scope_res.get("status") != ledger.OK:
+                                force_full_review = True
+                                bundle["findings"].append(
+                                    _finding(
+                                        out_of_scope_res.get("code", "OUT_OF_SCOPE_CHECK_FAILED"),
+                                        out_of_scope_res.get(
+                                            "message",
+                                            "Out-of-scope modification check failed; forcing FULL Claude review.",
+                                        ),
+                                    )
+                                )
+                            else:
+                                out_of_scope = out_of_scope_res.get("paths", [])
+                                if out_of_scope:
+                                    force_full_review = True
+                                    bundle["findings"].append(
+                                        _finding(
+                                            "OUT_OF_SCOPE_MODIFICATION",
+                                            f"Files modified outside declared scope: {', '.join(out_of_scope)}",
+                                        )
+                                    )
+
+                            if re_delta.get("status") == ledger.OK and not force_full_review:
+                                re_report = reviewer_callable(
+                                    task_id=pending["task_id"],
+                                    phase=pending["phase"],
+                                    route=pending["route"],
+                                    model=pending["model"],
+                                    effort=pending["effort"],
+                                    repo_root=repository,
+                                    delta=delta,
+                                    classification=classification,
+                                )
+                                result = re_report.get("result") if isinstance(re_report, Mapping) else policy.UNCERTAIN
+                                findings = re_report.get("findings", []) if isinstance(re_report, Mapping) else []
+                                validation = re_report.get("validation", "UNKNOWN") if isinstance(re_report, Mapping) else "UNKNOWN"
+                                reviewer_report = re_report
+                                if result == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE:
+                                    bundle["micro_repair_cleared_review"] = True
+                                    bundle["micro_repair"]["status"] = "SUCCEEDED"
+                                else:
+                                    bundle["micro_repair"]["status"] = "CHANGES_STILL_REQUIRED"
+                            else:
+                                bundle["micro_repair"]["status"] = "FAILED"
+                        else:
+                            force_full_review = True
+                            error_text = str(repair_res.get("error", ""))
+                            status = (
+                                "TIMED_OUT"
+                                if "timeout" in error_text.lower()
+                                else "FAILED"
+                            )
+                            bundle["micro_repair"]["status"] = status
+
                 bundle["reviewer1_provider"] = provider if isinstance(provider, str) else "agy"
                 bundle["reviewer1_result"] = result
                 if isinstance(findings, list):
@@ -1186,17 +1404,23 @@ def post_tool_use(
             else:
                 bundle["reviewer1_skipped_reason"] = gate.skip_reason
                 outcome = gate
-            mode = policy.claude_review_mode(pending["route"], outcome, loaded_config)
-            bundle["claude_review_mode"] = mode.mode
 
-            if classification is not None and classification.get("decision") != ledger.PROCEED:
+            mode = policy.claude_review_mode(pending["route"], outcome, loaded_config)
+            if (
+                force_full_review
+                or (classification is not None and classification.get("decision") != ledger.PROCEED)
+                or (thread_id is None)
+            ):
                 bundle["claude_review_mode"] = policy.FULL
-                bundle["findings"].append(
-                    _finding(
-                        classification.get("code", ledger.UNKNOWN_CONCURRENT_WRITER),
-                        "Concurrent-writer classification requires FULL Claude review.",
+                if classification is not None and classification.get("decision") != ledger.PROCEED:
+                    bundle["findings"].append(
+                        _finding(
+                            classification.get("code", ledger.UNKNOWN_CONCURRENT_WRITER),
+                            "Concurrent-writer classification requires FULL Claude review.",
+                        )
                     )
-                )
+            else:
+                bundle["claude_review_mode"] = mode.mode
 
         if thread_id is None:
             bundle["claude_review_mode"] = policy.FULL
@@ -1233,6 +1457,10 @@ def post_tool_use(
             )
         except BaseException:
             _observe("update_task", pending.get("task_id"), state_root=runtime_root)
+        if bundle.get("claude_review_mode") == policy.AUDIT:
+            bundle["audit_receipt"] = _build_audit_receipt(bundle, pending.get("task_id"))
+        else:
+            bundle["audit_receipt"] = None
         return _replacement(bundle, loaded_config)
     except Exception as error:
         return _internal_post_response(
@@ -1364,6 +1592,7 @@ __all__ = [
     "CODEX_TOOLS",
     "IMPLEMENTER_REPORT_LIMIT",
     "INDEPENDENCE_INSTRUCTIONS",
+    "MICRO_REPAIR",
     "REVIEWER",
     "internal_pre_error_response",
     "internal_post_error_response",

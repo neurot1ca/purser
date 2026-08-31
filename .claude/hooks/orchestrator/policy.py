@@ -184,6 +184,39 @@ def validate_config(config: Mapping[str, Any]) -> None:
             "reviewer_results must contain the four specified result codes",
         )
 
+    if "micro_repair_timeout_seconds" in config:
+        repair_timeout = config["micro_repair_timeout_seconds"]
+        if (
+            not isinstance(repair_timeout, (int, float))
+            or isinstance(repair_timeout, bool)
+            or not math.isfinite(repair_timeout)
+            or repair_timeout <= 0
+        ):
+            raise ConfigError(
+                "INVALID_CONFIG_FIELD",
+                "micro_repair_timeout_seconds must be a positive finite number",
+            )
+
+    if "max_total_hook_budget_seconds" in config:
+        hook_budget = config["max_total_hook_budget_seconds"]
+        if (
+            not isinstance(hook_budget, (int, float))
+            or isinstance(hook_budget, bool)
+            or not math.isfinite(hook_budget)
+            or hook_budget <= 0
+        ):
+            raise ConfigError(
+                "INVALID_CONFIG_FIELD",
+                "max_total_hook_budget_seconds must be a positive finite number",
+            )
+
+    if "micro_repair_enabled" in config:
+        if not isinstance(config["micro_repair_enabled"], bool):
+            raise ConfigError(
+                "INVALID_CONFIG_FIELD",
+                "micro_repair_enabled must be a boolean",
+            )
+
 
 def load_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     """Validate and return a caller-owned config mapping without mutating it."""

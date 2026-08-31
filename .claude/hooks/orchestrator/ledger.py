@@ -778,6 +778,103 @@ def detect_protected_paths(delta_or_paths: Mapping[str, Any] | Iterable[str]) ->
     return sorted(set(protected))
 
 
+def detect_out_of_scope_modifications(
+    repo_root: str | os.PathLike[str],
+    baseline: Mapping[str, Any],
+    scope: Iterable[str | os.PathLike[str]] | None,
+    *,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Detect working-tree or committed modifications occurring outside declared scope."""
+
+    if not scope:
+        return {"status": OK, "code": "NO_SCOPE_DECLARED", "paths": []}
+    if not isinstance(baseline, Mapping) or not _baseline_valid(baseline):
+        return {
+            "status": UNKNOWN,
+            "code": "BASELINE_INVALID",
+            "message": "A valid baseline was not provided for out-of-scope inspection.",
+            "paths": [],
+        }
+    root = Path(repo_root).resolve()
+    try:
+        normalized_scope = _normalize_optional_scope(scope)
+    except _InspectionError as error:
+        return {
+            "status": UNKNOWN,
+            "code": error.code,
+            "message": error.message,
+            "paths": [],
+        }
+    except Exception as error:
+        return {
+            "status": UNKNOWN,
+            "code": "SCOPE_NORMALIZATION_FAILED",
+            "message": str(error),
+            "paths": [],
+        }
+
+    if not normalized_scope:
+        return {"status": OK, "code": "NO_SCOPE_DECLARED", "paths": []}
+
+    out_of_scope: set[str] = set()
+    try:
+        # 1. Check whole working tree including untracked and staged/unstaged files
+        raw_status = _run_git(
+            root,
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            timeout,
+            "checking whole-tree status for out-of-scope modifications",
+        )
+        current_status = _parse_status(raw_status)
+        baseline_status_map = {
+            (entry["path"], entry.get("state")): entry
+            for entry in baseline.get("status_entries", [])
+        }
+
+        for entry in current_status:
+            path = entry["path"]
+            state = entry.get("state")
+            if (path, state) in baseline_status_map:
+                continue
+            if not any(_inside(path, s) for s in normalized_scope):
+                out_of_scope.add(path)
+
+        # 2. Check committed changes if HEAD moved
+        baseline_head = baseline.get("head")
+        if baseline_head:
+            current_head = _decode_path(
+                _run_git(root, ["rev-parse", "--verify", "HEAD"], timeout, "reading current HEAD")
+            ).strip()
+            if current_head != baseline_head:
+                committed_paths, _ = _diff_stats(
+                    root, [baseline_head, current_head], timeout, "committed out-of-scope check"
+                )
+                for path in committed_paths:
+                    if not any(_inside(path, s) for s in normalized_scope):
+                        out_of_scope.add(path)
+        return {
+            "status": OK,
+            "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+            "paths": sorted(out_of_scope),
+        }
+    except _InspectionError as error:
+        return {
+            "status": UNKNOWN,
+            "code": error.code,
+            "message": error.message,
+            "paths": [],
+        }
+    except Exception as error:
+        return {
+            "status": UNKNOWN,
+            "code": "OUT_OF_SCOPE_INSPECTION_FAILED",
+            "message": str(error),
+            "paths": [],
+        }
+
+
+
 def build_session_record(
     task_id: str,
     thread_id: str | None,

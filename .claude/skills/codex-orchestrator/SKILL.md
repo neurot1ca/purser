@@ -14,14 +14,29 @@ authority.
 This file is the only copy. After any edit, reload it in-session; a loaded skill
 does not update automatically.
 
-## Role
+## Role & Tripartite Architecture (Sol / Sentinel / Luna)
 
-Claude is the default reviewer, task framer, orchestrator, and final technical
-adjudicator. Unless the user explicitly asks Claude itself to edit code,
-delegate repository code changes to `codex-main` or `codex-b`. A Claude-specific
-coding request overrides this default only for that task.
+- **Sol (Claude)**: The reasoning master, task framer, orchestrator, and final adjudicator. Sol receives compact 1-3K task packets, never executes direct code edits, and adjudicates verification receipts.
+- **Sentinel (Antigravity / Gemini 3.7 Flash High)**: The scout and quality gatekeeper. Performs pre-task AST/context reconnaissance and post-task adversarial review.
+- **Luna (Codex / GPT-5.6 Sol/Luna)**: The execution worker. Writes code, executes test suites, and resolves mechanical errors.
 
-Worker identity and model choice are independent decisions.
+Unless the user explicitly asks Claude itself to edit code, delegate all repository code changes to `codex-main`.
+
+## Token Economy & Tool Batching Mandate (Priority 0 & 2)
+
+Because context re-read cost is approximately linear in assistant turns (~300K tokens per request):
+
+1. **Tool Batching (Priority 0 - Master Lever):**
+   - Whenever planning independent inspections, reads, or status checks, Claude **MUST batch 2+ tool calls in a single turn** (e.g. `[Read(fileA), Read(fileB)]` or `[Grep(pattern), Bash(git status)]`).
+   - Never issue single, sequential read/status calls when they can be dispatched concurrently.
+
+2. **Targeted Read Discipline (Priority 2):**
+   - Never `cat` or read whole multi-hundred-line files through Bash or Read.
+   - Prefer single-turn `grep -n -C <N>` (or `rg -n -C 5`) which returns surrounding lines and context in the **same call** without needing a second turn.
+   - Reserve serial `Grep` -> `Read(offset, limit)` strictly for wide multi-page windows, and batch the locate step with other independent work.
+
+3. **Post-Task Compaction:**
+   - Once a task is accepted and committed, issue `/compact` before starting the next objective to clear expired execution context.
 
 ## The hook layer
 
@@ -853,12 +868,19 @@ Human decision, 2026-08-29: the commit comes AFTER acceptance.
 implementation -> focused validation -> Reviewer-1 -> Claude ACCEPT -> commit -> push
 ```
 
-Rejected work does not enter the history. This overrides the earlier allowance
-for committing before review. Push, deploy, runner start, and any remote
-mutation based on changed code all wait for ACCEPT as well — but only the
-SEQUENCING is enforced here. When the current named task already authorizes the
-operation, acceptance does not create a new approval requirement, and when no
-code changed this cycle there is no review gate to invent.
+Rejected work does not enter the history. Push, deploy, runner start, and any remote
+mutation based on changed code all wait for ACCEPT as well.
+
+### One-Turn Consolidated Audit Protocol (Priority 4)
+
+When Reviewer-1 (Sentinel) passes and the bundle emits `claude_review_mode: AUDIT`:
+- The bundle delivers a **1-turn Consolidated Audit Receipt** containing:
+  1. Reviewer-1 verdict (`NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE`)
+  2. A $\le 10$-line diffstat
+  3. Focused validation summary (e.g. `focused pytest = PASS, 20 passed`)
+  4. Prepared atomic commit command
+- Claude **MUST review evidence and execute commit in ONE SINGLE TURN** without reading raw diffs or issuing exploratory Bash commands.
+- If Reviewer-1 returns `CHANGES_REQUIRED`, the bundle sets `claude_review_mode: AUDIT_REPLY`. Claude forwards the exact findings to Codex via `codex-reply` in a single turn without manual code editing.
 
 ### One typed verdict
 

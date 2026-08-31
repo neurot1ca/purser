@@ -383,3 +383,49 @@ def test_truncated_or_checksum_corrupt_record_is_not_a_valid_thread(sandbox_dir)
     checksum_corrupt = store.load("task-1")
     assert checksum_corrupt["status"] == ledger.CORRUPT
     assert checksum_corrupt["record"] is None
+
+
+def test_detect_out_of_scope_modifications_catches_untracked_and_modified_files(repo):
+    scope = ["src/target.py"]
+    baseline = ledger.capture_baseline(repo, scope)
+    assert baseline["status"] == ledger.OK
+
+    # 1. Modifying in-scope file produces no out-of-scope escapes
+    (repo / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    res = ledger.detect_out_of_scope_modifications(repo, baseline, scope)
+    assert res["status"] == ledger.OK
+    assert res["paths"] == []
+
+    # 2. Creating untracked file outside scope is detected
+    (repo / "untracked_escape.py").write_text("escape = True\n", encoding="utf-8")
+    res = ledger.detect_out_of_scope_modifications(repo, baseline, scope)
+    assert res["status"] == ledger.OK
+    assert res["paths"] == ["untracked_escape.py"]
+
+    # 3. Modifying existing tracked file outside scope is detected
+    (repo / "src" / "helper.py").write_text("helper = 99\n", encoding="utf-8")
+    res = ledger.detect_out_of_scope_modifications(repo, baseline, scope)
+    assert res["status"] == ledger.OK
+    assert res["paths"] == ["src/helper.py", "untracked_escape.py"]
+
+
+def test_detect_out_of_scope_modifications_fails_closed_on_error(repo, monkeypatch):
+    scope = ["src/target.py"]
+    baseline = ledger.capture_baseline(repo, scope)
+    assert baseline["status"] == ledger.OK
+
+    # Invalid baseline fails closed with UNKNOWN
+    bad_res = ledger.detect_out_of_scope_modifications(repo, {"status": "INVALID"}, scope)
+    assert bad_res["status"] == ledger.UNKNOWN
+    assert bad_res["code"] == "BASELINE_INVALID"
+
+    # Git error fails closed with UNKNOWN
+    def fail_git(*args, **kwargs):
+        raise ledger._InspectionError("GIT_TIMEOUT", "git timed out")
+
+    monkeypatch.setattr(ledger, "_run_git", fail_git)
+    error_res = ledger.detect_out_of_scope_modifications(repo, baseline, scope)
+    assert error_res["status"] == ledger.UNKNOWN
+    assert error_res["code"] == "GIT_TIMEOUT"
+
+

@@ -59,7 +59,7 @@
   "post_tool_output_field": "updatedToolOutput",
   "reviewer1_executable": "C:\\Users\\ugur\\scripts\\agy.exe",
   "reviewer1_model_requested": "gemini-3.7-flash-high",
-  "reviewer1_timeout_seconds": 120,
+  "reviewer1_timeout_seconds": 90,
   "reviewer1_packet_max_bytes": 200000,
   "reviewer_skip_reasons": [
     "PHASE_OPERATION",
@@ -72,5 +72,8 @@
     "CHANGES_REQUIRED",
     "UNCERTAIN",
     "REVIEWER1_UNAVAILABLE"
-  ]
+  ],
+  "micro_repair_timeout_seconds": 60,
+  "max_total_hook_budget_seconds": 240.0,
+  "micro_repair_enabled": false
 }
