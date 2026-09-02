@@ -261,12 +261,12 @@ def test_well_formed_success_parses_and_attests_only_requested_model(config):
         "validation": "FAIL",
         "findings": [finding],
         "conversation_id": "conversation-1",
-        "reviewer1_model_requested": "gemini-3.7-flash-high",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
         "served_model_attestation": "UNAVAILABLE",
     }
     command = runner.calls[0][0]
     assert command[0] == r"C:\Users\ugur\scripts\agy.exe"
-    assert command[command.index("--model") + 1] == "gemini-3.7-flash-high"
+    assert command[command.index("--model") + 1] == "gemini-3.8-flash-high"
     assert command[command.index("--output-format") + 1] == "json"
     assert command[command.index("--mode") + 1] == "plan"
     assert "--sandbox" in command

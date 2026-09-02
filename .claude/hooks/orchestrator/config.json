@@ -58,7 +58,7 @@
   "manifest_budget_seconds": 3.0,
   "post_tool_output_field": "updatedToolOutput",
   "reviewer1_executable": "C:\\Users\\ugur\\scripts\\agy.exe",
-  "reviewer1_model_requested": "gemini-3.7-flash-high",
+  "reviewer1_model_requested": "gemini-3.8-flash-high",
   "reviewer1_timeout_seconds": 90,
   "reviewer1_packet_max_bytes": 200000,
   "reviewer_skip_reasons": [

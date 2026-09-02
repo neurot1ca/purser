@@ -19,7 +19,7 @@ import policy
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _CONFIG_PATH = _PACKAGE_ROOT / "config.json"
-PINNED_MODEL = "gemini-3.7-flash-high"
+PINNED_MODEL = "gemini-3.8-flash-high"
 _PACKET_FIELDS = (
     "objective",
     "acceptance_criteria",

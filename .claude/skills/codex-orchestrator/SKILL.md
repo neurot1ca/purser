@@ -406,7 +406,7 @@ invalidate an invariant outside the changed lines. Consequential and escalated
 routes always get your full review regardless of what it said.
 
 Transport is Antigravity, at the absolute path `C:\Users\ugur\scripts\agy.exe`,
-model `gemini-3.7-flash-high` — model and thinking level are fused in that id.
+model `gemini-3.8-flash-high` — model and thinking level are fused in that id.
 Never a bare `gemini`: on this machine that name resolves to a different program
 depending on which shell runs it, and Google's own Gemini CLI is dead for this
 account (`IneligibleTierError`, individual Code Assist withdrawn).
