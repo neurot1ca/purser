@@ -429,3 +429,87 @@ def test_detect_out_of_scope_modifications_fails_closed_on_error(repo, monkeypat
     assert error_res["code"] == "GIT_TIMEOUT"
 
 
+def test_scoped_manifest_and_ambiguity_ignore_transient_bytecode_cache(repo):
+    scope = ["tests"]
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / "test_sample.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+    git(repo, "add", "tests/test_sample.py")
+    git(repo, "commit", "-qm", "add test")
+
+    pycache = repo / "tests" / "__pycache__"
+    pycache.mkdir(exist_ok=True)
+    (pycache / "test_sample.cpython-312.pyc").write_bytes(b"\x9d\x00\x00\x00bytecode")
+
+    baseline = ledger.capture_baseline(repo, scope)
+    assert baseline["status"] == ledger.OK
+    manifest_paths = [entry["path"] for entry in baseline["scoped_manifest"]]
+    assert not any("test_sample.cpython-312.pyc" in p for p in manifest_paths)
+
+    (pycache / "test_sample.cpython-312.pyc").write_bytes(b"\x9d\x00\x00\x01mutated_bytecode")
+    (repo / "tests" / "test_sample.py").write_text("def test_ok(): assert True\n", encoding="utf-8")
+
+    delta = ledger.compute_delta(repo, baseline, scope)
+    assert delta["status"] == ledger.OK
+    assert delta["ambiguous_paths"] == []
+    assert "tests/test_sample.py" in delta["changed_paths"]
+    assert not any("__pycache__" in p for p in delta["changed_paths"])
+
+
+def test_tracked_bytecode_modification_retains_unknown_concurrent_writer(repo):
+    scope = ["src"]
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "main.py").write_text("v = 0\n", encoding="utf-8")
+    (repo / "src" / "runtime.pyc").write_bytes(b"\x9d\x00\x00\x00committed")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "add tracked bytecode")
+
+    (repo / "src" / "runtime.pyc").write_bytes(b"\x9d\x00\x00\x01preexisting_edit")
+
+    baseline = ledger.capture_baseline(repo, scope)
+    assert baseline["status"] == ledger.OK
+
+    (repo / "src" / "main.py").write_text("v = 1\n", encoding="utf-8")
+    (repo / "src" / "runtime.pyc").write_bytes(b"\x9d\x00\x00\x02later_edit")
+
+    delta = ledger.compute_delta(repo, baseline, scope)
+    assert delta["status"] == ledger.OK
+    assert "src/runtime.pyc" in delta["ambiguous_paths"]
+
+    classification = ledger.classify_concurrent_writers(delta, scope)
+    assert classification["decision"] == ledger.UNKNOWN_CONCURRENT_WRITER
+
+
+def test_session_record_rejects_grounded_contract_with_missing_objective_or_criteria(tmp_path):
+    ledger_instance = ledger.SessionLedger(tmp_path)
+
+    # Invalid: grounded=True but objective is empty
+    bad_rec1 = ledger.build_session_record(
+        "t-inv1", "th-1", "normal", "gpt-5.6-sol", "medium",
+        phase="implementation", scope=["a.py"],
+        task_objective="", acceptance_criteria="valid criteria", task_contract_grounded=True
+    )
+    res1 = ledger_instance.save(bad_rec1)
+    assert res1["status"] == ledger.UNKNOWN
+    assert res1["code"] == "LEDGER_RECORD_INVALID"
+
+    # Invalid: grounded=True but criteria is None
+    bad_rec2 = ledger.build_session_record(
+        "t-inv2", "th-2", "normal", "gpt-5.6-sol", "medium",
+        phase="implementation", scope=["a.py"],
+        task_objective="valid objective", acceptance_criteria=None, task_contract_grounded=True
+    )
+    res2 = ledger_instance.save(bad_rec2)
+    assert res2["status"] == ledger.UNKNOWN
+    assert res2["code"] == "LEDGER_RECORD_INVALID"
+
+    # Valid: grounded=True with non-empty objective and criteria
+    good_rec = ledger.build_session_record(
+        "t-inv3", "th-3", "normal", "gpt-5.6-sol", "medium",
+        phase="implementation", scope=["a.py"],
+        task_objective="valid objective", acceptance_criteria="valid criteria", task_contract_grounded=True
+    )
+    res3 = ledger_instance.save(good_rec)
+    assert res3["status"] == ledger.OK
+    assert res3["code"] == "LEDGER_WRITTEN"
+
+

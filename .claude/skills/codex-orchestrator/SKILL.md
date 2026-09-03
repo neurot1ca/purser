@@ -78,6 +78,37 @@ thread record is denied. What the hook enforces you no longer have to remember;
 what it cannot judge — which route a task belongs to, whether a finding is real
 — is still entirely yours.
 
+### Task Contract & Validation Evidence Protocol
+
+To ensure causal verification by Reviewer-1 and enable AUDIT mode, delegations should supply an explicit grounded task contract:
+
+```
+TASK_CONTRACT: {"objective": "<precise objective>", "criteria": ["<criterion 1>", "<criterion 2>"]}
+```
+Alternatively, multiline headers may be used:
+```
+Task Objective:
+<precise objective>
+Acceptance Criteria:
+- <criterion 1>
+- <criterion 2>
+```
+If neither is supplied, the hook uses bounded fallback values and reports `task_contract_grounded: false`. Continuations (`codex-reply`) automatically inherit the grounded contract established on the initial call.
+
+Workers report execution validation strictly through a single structured JSON record:
+```
+VALIDATION: {"source": "WORKER_REPORTED", "status": "PASS"|"FAIL"|"UNKNOWN", "summary": "...", "commands": ["<test command>"], "exit_codes": [0], "artifacts": ["..."]}
+```
+- Free text never produces `PASS` or `FAIL` status; it is preserved purely as narrative `summary` with `status: "UNKNOWN"`.
+- Strict invariants: `commands: list[str]`, `exit_codes: list[int]` (no bools), `len(commands) == len(exit_codes)`.
+  - `status: "PASS"` requires `len(commands) > 0` and all `exit_codes == 0`.
+  - `status: "FAIL"` requires `len(commands) > 0` and at least one non-zero `exit_code`.
+  - Multiple `VALIDATION:` records, forged sources, or malformed types fall back to `status: "UNKNOWN"`.
+- `claude_review_mode: AUDIT` requires all of: `task_contract_grounded is True`, `worker_validation.status == "PASS"`, Reviewer-1 result `NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE` (or AUDIT-eligible skip), clean delta, `PROCEED` concurrent-writer status, and `force_full_review is False`.
+- Any worker validation failure (`status: FAIL`) mechanically forces `FULL` review with finding `WORKER_VALIDATION_FAILED`.
+- Any unverified worker validation (`status: UNKNOWN`) forces `FULL` review with finding `WORKER_VALIDATION_UNVERIFIED`.
+- Any ungrounded task contract forces `FULL` review with finding `TASK_CONTRACT_NOT_GROUNDED`.
+
 `phase=operation` is what keeps ordinary operational work out of the review
 pipeline: a deploy, a runner start, a status fetch, a read-only investigation.
 It never triggers Reviewer-1. It does require that any changed artifact it acts

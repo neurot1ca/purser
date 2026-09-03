@@ -680,3 +680,46 @@ def test_add_dir_may_not_grant_access_to_the_repository(config):
             config,
             add_dirs=[reviewer._REPOSITORY_ROOT],
         )
+
+
+def test_reviewer_delegated_diff_with_valid_delta(baseline_repo):
+    repo, baseline = baseline_repo
+    paths = ["existing.py"]
+    delta = {
+        "changed_paths": paths,
+        "baseline_head": baseline,
+        "ambiguous_paths": [],
+        "sources": {
+            "unstaged": {"paths": paths},
+            "scoped_manifest": {"paths": []},
+        },
+    }
+    (repo / "existing.py").write_text("modified = True\n", encoding="utf-8")
+
+    rev_paths, diff = reviewer._delegated_diff(repo, delta)  # noqa: SLF001
+    assert rev_paths == ["existing.py"]
+    assert "modified = True" in diff
+
+
+def test_seam_materials_incorporates_objective_and_criteria(baseline_repo):
+    repo, baseline = baseline_repo
+    delta = {
+        "changed_paths": ["existing.py"],
+        "baseline_head": baseline,
+        "ambiguous_paths": [],
+        "sources": {
+            "unstaged": {"paths": ["existing.py"]},
+            "scoped_manifest": {"paths": []},
+        },
+    }
+    (repo / "existing.py").write_text("modified = 2\n", encoding="utf-8")
+    materials = reviewer._seam_materials(  # noqa: SLF001
+        "task-123",
+        repo,
+        delta,
+        classification=None,
+        task_objective="Fix the edge margin calculation",
+        acceptance_criteria="Verify zero drift on negative payoff",
+    )
+    assert "Task Objective: Fix the edge margin calculation" in materials["objective"]
+    assert "Specific Task Criteria: Verify zero drift on negative payoff" in materials["acceptance_criteria"]

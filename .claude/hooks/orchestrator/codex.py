@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 import hashlib
+import inspect
 import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -52,6 +54,268 @@ def _default_reviewer(**_: Any) -> dict[str, Any]:
 
 _default_reviewer.available = False  # type: ignore[attr-defined]
 REVIEWER: Callable[..., Mapping[str, Any]] = reviewer1.review
+
+
+def _parse_task_contract(
+    prompt_text: str, task_id: str, phase: str, scope: Sequence[str]
+) -> tuple[str, str, bool]:
+    """Parse task contract from prompt text.
+
+    Returns (objective, criteria, grounded).
+    grounded is True ONLY IF both objective and criteria are explicitly provided and validated.
+    """
+    default_obj = f"Task {task_id} ({phase} phase) bounded to declared scope."
+    default_crit = (
+        f"Verify correct implementation within declared scope ({', '.join(scope)}) "
+        "with no material regression or scope expansion."
+    )
+
+    # 1. Check for explicit JSON TASK_CONTRACT block
+    for line in prompt_text.splitlines():
+        line_str = line.strip()
+        if line_str.upper().startswith("TASK_CONTRACT:"):
+            payload = line_str[len("TASK_CONTRACT:"):].strip()
+            try:
+                data = json.loads(payload)
+                if isinstance(data, dict):
+                    raw_obj = data.get("objective")
+                    raw_crit = data.get("criteria")
+                    if isinstance(raw_crit, list) and all(isinstance(x, str) for x in raw_crit):
+                        crit = "; ".join(x.strip() for x in raw_crit if x.strip())
+                    elif isinstance(raw_crit, str):
+                        crit = raw_crit.strip()
+                    else:
+                        crit = ""
+
+                    if isinstance(raw_obj, str):
+                        obj = raw_obj.strip()
+                    else:
+                        obj = ""
+
+                    if obj and crit:
+                        return obj, crit, True
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+    # 2. Check for explicit multiline or key-value headers
+    lines = prompt_text.splitlines()
+    found_obj: str | None = None
+    criteria_lines: list[str] = []
+    collecting_criteria = False
+
+    for i, line in enumerate(lines):
+        line_str = line.strip()
+        lower = line_str.lower()
+        if lower.startswith("task objective:"):
+            collecting_criteria = False
+            val = line_str[len("task objective:"):].strip()
+            if not val and i + 1 < len(lines) and not lines[i + 1].strip().lower().startswith("acceptance criteria:"):
+                val = lines[i + 1].strip()
+            if "acceptance criteria:" in val.lower():
+                c_idx = val.lower().find("acceptance criteria:")
+                crit_part = val[c_idx + len("acceptance criteria:"):].strip(". ")
+                if crit_part:
+                    criteria_lines.append(crit_part)
+                val = val[:c_idx].strip(". ")
+            if val:
+                found_obj = val
+        elif lower.startswith("acceptance criteria:"):
+            collecting_criteria = True
+            val = line_str[len("acceptance criteria:"):].strip()
+            if val:
+                criteria_lines.append(val)
+        elif collecting_criteria:
+            if line_str.startswith(("ORCH|", "TASK_CONTRACT:", "```")) or (not line_str and criteria_lines):
+                collecting_criteria = False
+            elif line_str.startswith(("- ", "* ", "1. ", "2. ", "3. ")):
+                criteria_lines.append(line_str.lstrip("-*0123456789. ").strip())
+            elif line_str:
+                criteria_lines.append(line_str)
+
+    found_crit = "; ".join(criteria_lines).strip() if criteria_lines else None
+
+    # CRITICAL: grounded is True ONLY IF BOTH are found!
+    if found_obj and found_crit:
+        return found_obj, found_crit, True
+    return (found_obj or default_obj), (found_crit or default_crit), False
+
+
+_ALLOWED_VALIDATION_KEYS = frozenset({
+    "source",
+    "status",
+    "summary",
+    "commands",
+    "exit_codes",
+    "artifacts",
+})
+
+
+def _canonical_unknown_validation(summary: str | None = None) -> dict[str, Any]:
+    """Return the canonical, fixed-shape UNKNOWN validation record within IMPLEMENTER_REPORT_LIMIT bytes."""
+    default_summary = "No verifiable validation evidence was provided."
+    target_summary = summary.strip() if isinstance(summary, str) and summary.strip() else default_summary
+
+    record: dict[str, Any] = {
+        "source": "WORKER_REPORTED",
+        "status": "UNKNOWN",
+        "summary": target_summary,
+        "commands": [],
+        "exit_codes": [],
+        "artifacts": [],
+    }
+
+    try:
+        encoded = json_transport.dumps(record).encode("utf-8")
+        if len(encoded) <= IMPLEMENTER_REPORT_LIMIT:
+            return record
+    except (TypeError, ValueError):
+        pass
+
+    low = 0
+    high = len(target_summary)
+    best_summary = ""
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = target_summary[:mid]
+        record["summary"] = candidate
+        try:
+            enc = json_transport.dumps(record).encode("utf-8")
+            if len(enc) <= IMPLEMENTER_REPORT_LIMIT:
+                best_summary = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+        except (TypeError, ValueError):
+            high = mid - 1
+
+    record["summary"] = best_summary
+    return record
+
+
+def _parse_worker_validation(report: str | None) -> dict[str, Any]:
+    """Parse and structure worker validation evidence.
+
+    Fails closed: Mechanical PASS or FAIL status is extracted strictly and
+    exclusively from a single valid structured JSON record:
+        VALIDATION: {"source":"WORKER_REPORTED","status":"PASS|FAIL|UNKNOWN", ...}
+
+    Free-form text without a valid structured JSON record is preserved as
+    narrative summary with status="UNKNOWN" to eliminate natural language
+    heuristic classification errors.
+    """
+    if not isinstance(report, str) or not report.strip():
+        return _canonical_unknown_validation("No implementer report was provided.")
+
+    validation_lines: list[str] = []
+    for line in report.splitlines():
+        line_str = line.strip()
+        if line_str.upper().startswith("VALIDATION:"):
+            validation_lines.append(line_str)
+
+    if len(validation_lines) == 0:
+        val_idx = report.lower().find("validation:")
+        summary = report[val_idx:].strip() if val_idx != -1 else report.strip()
+        return _canonical_unknown_validation(summary)
+
+    if len(validation_lines) > 1:
+        return _canonical_unknown_validation("Multiple conflicting VALIDATION records were reported.")
+
+    line_str = validation_lines[0]
+    payload = line_str[len("VALIDATION:"):].strip()
+    try:
+        data = json.loads(payload)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return _canonical_unknown_validation(line_str)
+
+    if not isinstance(data, dict):
+        return _canonical_unknown_validation(line_str)
+
+    if set(data.keys()) - _ALLOWED_VALIDATION_KEYS:
+        return _canonical_unknown_validation(line_str)
+
+    if data.get("source") != "WORKER_REPORTED":
+        return _canonical_unknown_validation(line_str)
+
+    raw_status = data.get("status")
+    if raw_status not in ("PASS", "FAIL", "UNKNOWN"):
+        return _canonical_unknown_validation(line_str)
+
+    if "summary" in data:
+        summary_val = data.get("summary")
+        if not isinstance(summary_val, str) or not summary_val.strip():
+            return _canonical_unknown_validation(line_str)
+        clean_summary = summary_val.strip()
+    else:
+        if raw_status == "PASS":
+            clean_summary = "Structured worker validation reported PASS."
+        elif raw_status == "FAIL":
+            clean_summary = "Structured worker validation reported FAIL."
+        else:
+            clean_summary = "Structured worker validation reported UNKNOWN."
+
+    if "commands" in data:
+        commands_val = data.get("commands")
+        if not isinstance(commands_val, list):
+            return _canonical_unknown_validation(line_str)
+        clean_commands = []
+        for cmd in commands_val:
+            if not isinstance(cmd, str) or not cmd.strip():
+                return _canonical_unknown_validation(line_str)
+            clean_commands.append(cmd.strip())
+    else:
+        clean_commands = []
+
+    if "artifacts" in data:
+        artifacts_val = data.get("artifacts")
+        if not isinstance(artifacts_val, list):
+            return _canonical_unknown_validation(line_str)
+        clean_artifacts = []
+        for art in artifacts_val:
+            if not isinstance(art, str) or not art.strip():
+                return _canonical_unknown_validation(line_str)
+            clean_artifacts.append(art.strip())
+    else:
+        clean_artifacts = []
+
+    if "exit_codes" in data:
+        exit_codes_val = data.get("exit_codes")
+        if not isinstance(exit_codes_val, list):
+            return _canonical_unknown_validation(line_str)
+        clean_exit_codes = []
+        for code in exit_codes_val:
+            if isinstance(code, bool) or not isinstance(code, int):
+                return _canonical_unknown_validation(line_str)
+            clean_exit_codes.append(code)
+    else:
+        clean_exit_codes = []
+
+    if len(clean_commands) != len(clean_exit_codes):
+        return _canonical_unknown_validation(line_str)
+
+    if raw_status == "PASS":
+        if not clean_commands or any(code != 0 for code in clean_exit_codes):
+            return _canonical_unknown_validation(line_str)
+    elif raw_status == "FAIL":
+        if not clean_commands or not any(code != 0 for code in clean_exit_codes):
+            return _canonical_unknown_validation(line_str)
+
+    candidate = {
+        "source": "WORKER_REPORTED",
+        "status": raw_status,
+        "summary": clean_summary,
+        "commands": clean_commands,
+        "exit_codes": clean_exit_codes,
+        "artifacts": clean_artifacts,
+    }
+
+    try:
+        encoded = json_transport.dumps(candidate).encode("utf-8")
+        if len(encoded) > IMPLEMENTER_REPORT_LIMIT:
+            return _canonical_unknown_validation("Validation record exceeds size limit.")
+    except (TypeError, ValueError):
+        return _canonical_unknown_validation(line_str)
+
+    return candidate
 
 
 def _attempt_in_hook_micro_repair(
@@ -753,6 +1017,18 @@ def pre_tool_use(
             declared_scope if declared_scope else None,
             manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
         )
+        prompt_text = str(tool_input.get("prompt", ""))
+        task_objective, acceptance_criteria, task_contract_grounded = _parse_task_contract(
+            prompt_text, parsed.task_id, parsed.phase, declared_scope
+        )
+        if not task_contract_grounded and live_thread and isinstance(live_thread, Mapping):
+            prior_obj = live_thread.get("task_objective")
+            prior_crit = live_thread.get("acceptance_criteria")
+            if prior_obj and prior_crit:
+                task_objective = prior_obj
+                acceptance_criteria = prior_crit
+                task_contract_grounded = bool(live_thread.get("task_contract_grounded", True))
+
         pending = {
             "kind": "call",
             "task_id": parsed.task_id,
@@ -764,6 +1040,9 @@ def pre_tool_use(
             "repo_root": str(repository),
             "baseline": baseline,
             "prior_thread_id": continuation_thread_id,
+            "task_objective": task_objective,
+            "acceptance_criteria": acceptance_criteria,
+            "task_contract_grounded": task_contract_grounded,
         }
         _atomic_json_write(_pending_path(runtime_root, event), pending)
         pending_written = True
@@ -778,6 +1057,9 @@ def pre_tool_use(
             scope=declared_scope,
             pending_call_baseline=baseline,
             last_outcome=record.get("last_outcome") if isinstance(record, Mapping) else None,
+            task_objective=task_objective,
+            acceptance_criteria=acceptance_criteria,
+            task_contract_grounded=task_contract_grounded,
         )
         saved = session_ledger.save(session_record)
         if saved["status"] != ledger.OK:
@@ -893,6 +1175,8 @@ def _base_bundle(error: str | None = None) -> dict[str, Any]:
         "audit_receipt": None,
         "micro_repair": None,
         "micro_repair_cleared_review": False,
+        "task_contract_grounded": False,
+        "worker_validation": None,
     }
 
 
@@ -1124,16 +1408,24 @@ def post_tool_use(
                 "reviewer1_model_requested": loaded_config["reviewer1_model_requested"],
                 "raw_output_path": str(raw_path),
                 "routing_enforced": pending.get("kind") != "pretool_bypass",
+                "task_contract_grounded": pending.get("task_contract_grounded", False),
             }
         )
         classification: Mapping[str, Any] | None = None
         reviewer_report: Mapping[str, Any] | None = None
         reviewer_started = False
+        worker_validation: dict[str, Any] = {
+            "source": "WORKER_REPORTED",
+            "status": "UNKNOWN",
+            "summary": "No report",
+        }
 
         try:
             thread_id, report = _extract_codex_result(event.get("tool_response"))
             bundle["thread_id"] = thread_id
             bundle["implementer_report"] = report[:IMPLEMENTER_REPORT_LIMIT]
+            worker_validation = _parse_worker_validation(report)
+            bundle["worker_validation"] = worker_validation
         except WiringError as error:
             thread_id = None
             bundle["findings"].append(_finding("THREAD_ID_UNRECOVERABLE", str(error)))
@@ -1247,16 +1539,40 @@ def post_tool_use(
                     reviewer1_provider="agy",
                     reviewer1_model_requested=loaded_config["reviewer1_model_requested"],
                 )
-                reviewer_report = reviewer_callable(
-                    task_id=pending["task_id"],
-                    phase=pending["phase"],
-                    route=pending["route"],
-                    model=pending["model"],
-                    effort=pending["effort"],
-                    repo_root=repository,
-                    delta=delta,
-                    classification=classification,
+                validation_text = (
+                    f"Worker-reported validation summary (status={worker_validation['status']}): "
+                    f"{worker_validation['summary'][:IMPLEMENTER_REPORT_LIMIT]}"
                 )
+
+                try:
+                    sig = inspect.signature(reviewer_callable)
+                    accepts_kwargs = any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD
+                        for p in sig.parameters.values()
+                    )
+                    params = sig.parameters
+                except (ValueError, TypeError):
+                    accepts_kwargs = True
+                    params = {}
+
+                reviewer_kwargs: dict[str, Any] = {
+                    "task_id": pending["task_id"],
+                    "phase": pending["phase"],
+                    "route": pending["route"],
+                    "model": pending["model"],
+                    "effort": pending["effort"],
+                    "repo_root": repository,
+                    "delta": delta,
+                    "classification": classification,
+                }
+                if (accepts_kwargs or "task_objective" in params) and pending.get("task_objective"):
+                    reviewer_kwargs["task_objective"] = pending["task_objective"]
+                if (accepts_kwargs or "acceptance_criteria" in params) and pending.get("acceptance_criteria"):
+                    reviewer_kwargs["acceptance_criteria"] = pending["acceptance_criteria"]
+                if (accepts_kwargs or "validation_summary" in params) and validation_text:
+                    reviewer_kwargs["validation_summary"] = validation_text
+
+                reviewer_report = reviewer_callable(**reviewer_kwargs)
                 result = reviewer_report.get("result") if isinstance(reviewer_report, Mapping) else None
                 if result not in loaded_config["reviewer_results"]:
                     result = policy.UNCERTAIN
@@ -1364,16 +1680,10 @@ def post_tool_use(
                                     )
 
                             if re_delta.get("status") == ledger.OK and not force_full_review:
-                                re_report = reviewer_callable(
-                                    task_id=pending["task_id"],
-                                    phase=pending["phase"],
-                                    route=pending["route"],
-                                    model=pending["model"],
-                                    effort=pending["effort"],
-                                    repo_root=repository,
-                                    delta=delta,
-                                    classification=classification,
-                                )
+                                re_kwargs = dict(reviewer_kwargs)
+                                re_kwargs["delta"] = re_delta
+                                re_kwargs["classification"] = re_classification
+                                re_report = reviewer_callable(**re_kwargs)
                                 result = re_report.get("result") if isinstance(re_report, Mapping) else policy.UNCERTAIN
                                 findings = re_report.get("findings", []) if isinstance(re_report, Mapping) else []
                                 validation = re_report.get("validation", "UNKNOWN") if isinstance(re_report, Mapping) else "UNKNOWN"
@@ -1404,13 +1714,34 @@ def post_tool_use(
             else:
                 bundle["reviewer1_skipped_reason"] = gate.skip_reason
                 outcome = gate
+                result = None
 
             mode = policy.claude_review_mode(pending["route"], outcome, loaded_config)
-            if (
-                force_full_review
-                or (classification is not None and classification.get("decision") != ledger.PROCEED)
-                or (thread_id is None)
-            ):
+            is_grounded = bool(pending.get("task_contract_grounded"))
+            val_status = worker_validation.get("status")
+
+            reviewer_audit_eligible = (
+                (result is not None and result == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE)
+                or (
+                    isinstance(gate, (policy.ReviewerSkipped, policy.SkipReviewerDecision))
+                    and gate.skip_reason in policy._AUDIT_SKIP_REASONS
+                )
+            )
+
+            is_audit_eligible = (
+                is_grounded
+                and val_status == "PASS"
+                and reviewer_audit_eligible
+                and delta.get("status") == ledger.OK
+                and (classification is None or classification.get("decision") == ledger.PROCEED)
+                and not force_full_review
+                and (thread_id is not None)
+                and mode.mode == policy.AUDIT
+            )
+
+            if is_audit_eligible:
+                bundle["claude_review_mode"] = policy.AUDIT
+            else:
                 bundle["claude_review_mode"] = policy.FULL
                 if classification is not None and classification.get("decision") != ledger.PROCEED:
                     bundle["findings"].append(
@@ -1419,8 +1750,28 @@ def post_tool_use(
                             "Concurrent-writer classification requires FULL Claude review.",
                         )
                     )
-            else:
-                bundle["claude_review_mode"] = mode.mode
+                if val_status == "FAIL":
+                    bundle["findings"].append(
+                        _finding(
+                            "WORKER_VALIDATION_FAILED",
+                            f"Implementer reported validation failure: {worker_validation['summary'][:300]}",
+                        )
+                    )
+                elif val_status == "UNKNOWN":
+                    bundle["findings"].append(
+                        _finding(
+                            "WORKER_VALIDATION_UNVERIFIED",
+                            f"Implementer validation was unverified: {worker_validation['summary'][:300]}",
+                        )
+                    )
+
+                if not is_grounded:
+                    bundle["findings"].append(
+                        _finding(
+                            "TASK_CONTRACT_NOT_GROUNDED",
+                            "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review.",
+                        )
+                    )
 
         if thread_id is None:
             bundle["claude_review_mode"] = policy.FULL
@@ -1436,6 +1787,9 @@ def post_tool_use(
             scope=pending.get("scope", []),
             pending_call_baseline=None,
             last_outcome=bundle,
+            task_objective=pending.get("task_objective"),
+            acceptance_criteria=pending.get("acceptance_criteria"),
+            task_contract_grounded=pending.get("task_contract_grounded", False),
         )
         saved = session_ledger.save(session_record)
         if saved["status"] != ledger.OK:

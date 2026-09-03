@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import codex
 import hook
+import json_transport
 import ledger
 import policy
 import telemetry
@@ -852,7 +853,12 @@ def test_entry_point_pretool_crash_uses_visible_internal_bypass(monkeypatch):
 
 def test_post_tool_use_emits_audit_receipt_on_audit_mode(workspace, config):
     repo, state = workspace
-    call = event()
+    prompt = (
+        "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py\n"
+        "Task Objective: Update file0 with new value\n"
+        "Acceptance Criteria: file0 contains value = 2\n"
+    )
+    call = event(prompt=prompt)
     codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
 
@@ -862,7 +868,10 @@ def test_post_tool_use_emits_audit_receipt_on_audit_mode(workspace, config):
         "tool_response": [
             {
                 "type": "text",
-                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+                "text": json.dumps({
+                    "threadId": "thread-1",
+                    "content": "updated\nVALIDATION: {\"source\": \"WORKER_REPORTED\", \"status\": \"PASS\", \"commands\": [\"pytest -q\"], \"exit_codes\": [0]}",
+                }),
             }
         ],
     }
@@ -886,9 +895,54 @@ def test_post_tool_use_emits_audit_receipt_on_audit_mode(workspace, config):
     assert "feat(task-1)" in bundle["audit_receipt"]["commit_command"]
 
 
+def test_post_tool_use_ungrounded_contract_forces_full_review_even_on_audit(workspace, config):
+    repo, state = workspace
+    # Default event() prompt has no Task Objective / Acceptance Criteria
+    call = event()
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({
+                    "threadId": "thread-1",
+                    "content": "updated\nVALIDATION: {\"source\": \"WORKER_REPORTED\", \"status\": \"PASS\", \"commands\": [\"pytest\"], \"exit_codes\": [0]}",
+                }),
+            }
+        ],
+    }
+
+    def reviewer(**_kwargs):
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    raw = codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo, reviewer=reviewer
+    )
+    bundle = response_bundle(raw, config)
+
+    # Must be forced to FULL because task contract is not grounded!
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["audit_receipt"] is None
+    assert any(f["code"] == "TASK_CONTRACT_NOT_GROUNDED" for f in bundle["findings"])
+    assert not any(f["code"] == "WORKER_VALIDATION_UNVERIFIED" for f in bundle["findings"])
+
+
 def test_post_tool_use_micro_repair_triggers_on_changes_required(workspace, config):
     repo, state = workspace
-    call = event()
+    prompt = (
+        "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py,file1.py,file2.py\n"
+        "Task Objective: Apply changes to files 0 to 2\n"
+        "Acceptance Criteria: All files updated and clean\n"
+    )
+    call = event(prompt=prompt)
     repair_config = dict(config, micro_repair_enabled=True)
     codex.pre_tool_use(call, config=repair_config, state_root=state, repo_root=repo)
     for index in range(3):
@@ -900,7 +954,10 @@ def test_post_tool_use_micro_repair_triggers_on_changes_required(workspace, conf
         "tool_response": [
             {
                 "type": "text",
-                "text": json.dumps({"threadId": "thread-1", "content": "updated"}),
+                "text": json.dumps({
+                    "threadId": "thread-1",
+                    "content": "updated\nVALIDATION: {\"source\": \"WORKER_REPORTED\", \"status\": \"PASS\", \"commands\": [\"pytest -q\"], \"exit_codes\": [0]}",
+                }),
             }
         ],
     }
@@ -940,6 +997,9 @@ def test_post_tool_use_micro_repair_triggers_on_changes_required(workspace, conf
     assert repair_invocations[0]["thread_id"] == "thread-1"
     assert repair_invocations[0]["scope"] == ["file0.py", "file1.py", "file2.py"]
     assert len(reviewer_invocations) == 2
+    assert reviewer_invocations[1]["task_objective"] == reviewer_invocations[0]["task_objective"]
+    assert reviewer_invocations[1]["acceptance_criteria"] == reviewer_invocations[0]["acceptance_criteria"]
+    assert reviewer_invocations[1]["validation_summary"] == reviewer_invocations[0]["validation_summary"]
     assert bundle["micro_repair_cleared_review"] is True
     assert bundle["micro_repair"]["status"] == "SUCCEEDED"
     assert bundle["claude_review_mode"] == policy.AUDIT
@@ -1324,4 +1384,472 @@ def test_post_tool_use_micro_repair_disabled_in_config_skips_repair(workspace, c
     assert bundle["claude_review_mode"] == policy.FULL
 
 
+def test_task_contract_parsing_and_grounding_flag(workspace, config):
+    repo, state = workspace
 
+    # Case A: Explicit JSON TASK_CONTRACT
+    prompt_json = (
+        "ORCH|task=task-a|phase=implementation|route=normal|scope=file.py\n"
+        'TASK_CONTRACT: {"objective": "Fix deadline logic", "criteria": "Zero latency drift"}'
+    )
+    obj, crit, grounded = codex._parse_task_contract(prompt_json, "task-a", "implementation", ["file.py"])
+    assert grounded is True
+    assert obj == "Fix deadline logic"
+    assert crit == "Zero latency drift"
+
+    # Case B: Multiline headers
+    prompt_multiline = (
+        "ORCH|task=task-b|phase=implementation|route=normal|scope=file.py\n"
+        "Task Objective:\nRefactor connection pool\n"
+        "Acceptance Criteria:\nPreserve retry backoff"
+    )
+    obj, crit, grounded = codex._parse_task_contract(prompt_multiline, "task-b", "implementation", ["file.py"])
+    assert grounded is True
+    assert obj == "Refactor connection pool"
+    assert crit == "Preserve retry backoff"
+
+    # Case C: Generic prompt without explicit contract
+    prompt_generic = "ORCH|task=task-c|phase=implementation|route=normal|scope=file.py\nJust do the work"
+    obj, crit, grounded = codex._parse_task_contract(prompt_generic, "task-c", "implementation", ["file.py"])
+    assert grounded is False
+    assert "Task task-c" in obj
+    assert "file.py" in crit
+
+
+def test_worker_validation_failure_mechanically_forces_full_claude_review(workspace, config):
+    repo, state = workspace
+    for i in range(3):
+        (repo / f"f{i}.py").write_text("v = 0\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    prompt = (
+        "ORCH|task=task-val|phase=implementation|route=normal|scope=f0.py,f1.py,f2.py\n"
+        "Task Objective: Implement f0-f2 updates\n"
+        "Acceptance Criteria: All f0-f2 files changed\n"
+    )
+    call = event(prompt=prompt)
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+
+    for i in range(3):
+        (repo / f"f{i}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    report = (
+        "Execution completed with failure.\n"
+        'VALIDATION: {"source": "WORKER_REPORTED", "status": "FAIL", "summary": "Integration test failed", "commands": ["pytest -q tests/test_integration.py"], "exit_codes": [1], "artifacts": []}'
+    )
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": report}),
+            }
+        ],
+    }
+
+    def reviewer(**kwargs):
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "UNKNOWN",
+            "findings": [],
+        }
+
+    raw = codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo, reviewer=reviewer
+    )
+    bundle = response_bundle(raw, config)
+
+    # Mechanical invariant: worker validation failure MUST force FULL mode even if reviewer accepted!
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert any(f["code"] == "WORKER_VALIDATION_FAILED" for f in bundle["findings"])
+    assert bundle["worker_validation"]["status"] == "FAIL"
+
+
+def test_reviewer_internal_typeerror_never_retried(workspace, config):
+    repo, state = workspace
+    for i in range(3):
+        (repo / f"g{i}.py").write_text("v = 0\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    call = event(
+        prompt="ORCH|task=task-err|phase=implementation|route=normal|scope=g0.py,g1.py,g2.py"
+    )
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+
+    for i in range(3):
+        (repo / f"g{i}.py").write_text("changed = True\n" * 25, encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-1", "content": "Validation: PASS"}),
+            }
+        ],
+    }
+    calls = []
+
+    def failing_reviewer(**kwargs):
+        calls.append(kwargs)
+        raise TypeError("simulated internal adapter error")
+
+    raw = codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo, reviewer=failing_reviewer
+    )
+    bundle = response_bundle(raw, config)
+
+    assert len(calls) == 1
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
+def test_worker_validation_parser_avoids_substring_false_positives():
+    expected_keys = {"source", "status", "summary", "commands", "exit_codes", "artifacts"}
+
+    # 1. Serbest metin "tests never passed" => UNKNOWN
+    res1 = codex._parse_worker_validation("Validation: tests never passed")
+    assert res1["status"] == "UNKNOWN"
+    assert set(res1.keys()) == expected_keys
+
+    # 2. Geçerli structured PASS => PASS
+    good_pass = 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}'
+    res2 = codex._parse_worker_validation(good_pass)
+    assert res2["status"] == "PASS"
+    assert res2["commands"] == ["pytest"]
+    assert res2["exit_codes"] == [0]
+    assert set(res2.keys()) == expected_keys
+
+    # 3. Geçerli structured FAIL => FAIL
+    good_fail = 'VALIDATION: {"source":"WORKER_REPORTED","status":"FAIL","commands":["pytest"],"exit_codes":[1]}'
+    res3 = codex._parse_worker_validation(good_fail)
+    assert res3["status"] == "FAIL"
+    assert res3["commands"] == ["pytest"]
+    assert res3["exit_codes"] == [1]
+    assert set(res3.keys()) == expected_keys
+
+    # 4. source="INDEPENDENT_VERIFIED" => UNKNOWN (forged provenance rejected)
+    bad_source = 'VALIDATION: {"source":"INDEPENDENT_VERIFIED","status":"PASS","commands":["pytest"],"exit_codes":[0]}'
+    res4 = codex._parse_worker_validation(bad_source)
+    assert res4["status"] == "UNKNOWN"
+    assert set(res4.keys()) == expected_keys
+
+    # 5. commands=["   "] => UNKNOWN (empty string after trim)
+    blank_cmd = 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["   "],"exit_codes":[0]}'
+    res5 = codex._parse_worker_validation(blank_cmd)
+    assert res5["status"] == "UNKNOWN"
+    assert set(res5.keys()) == expected_keys
+
+    # 6. commands string => UNKNOWN (wrong type)
+    str_cmd = 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":"pytest","exit_codes":[0]}'
+    res6 = codex._parse_worker_validation(str_cmd)
+    assert res6["status"] == "UNKNOWN"
+    assert set(res6.keys()) == expected_keys
+
+    # 7. exit_codes içinde bool => UNKNOWN (bool is not accepted as int)
+    bool_code = 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[true]}'
+    res7 = codex._parse_worker_validation(bool_code)
+    assert res7["status"] == "UNKNOWN"
+    assert set(res7.keys()) == expected_keys
+
+    # 8. PASS ve nonzero exit code => UNKNOWN
+    pass_nonzero = 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[1]}'
+    res8 = codex._parse_worker_validation(pass_nonzero)
+    assert res8["status"] == "UNKNOWN"
+    assert set(res8.keys()) == expected_keys
+
+    # 9. FAIL ve bütün exit code değerleri 0 => UNKNOWN
+    fail_zero = 'VALIDATION: {"source":"WORKER_REPORTED","status":"FAIL","commands":["pytest"],"exit_codes":[0]}'
+    res9 = codex._parse_worker_validation(fail_zero)
+    assert res9["status"] == "UNKNOWN"
+    assert set(res9.keys()) == expected_keys
+
+    # 10. Valid PASS + ikinci malformed FAIL kaydı => UNKNOWN (multiple records)
+    multi_malformed = (
+        'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}\n'
+        'VALIDATION: malformed json'
+    )
+    res10 = codex._parse_worker_validation(multi_malformed)
+    assert res10["status"] == "UNKNOWN"
+    assert set(res10.keys()) == expected_keys
+
+    # 11. İki valid PASS kaydı => UNKNOWN (multiple records)
+    multi_valid = (
+        'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}\n'
+        'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}'
+    )
+    res11 = codex._parse_worker_validation(multi_valid)
+    assert res11["status"] == "UNKNOWN"
+    assert set(res11.keys()) == expected_keys
+
+    # 12. Boyut sınırını aşan summary => UNKNOWN
+    big_summary = 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","summary":"' + ('x' * 1300) + '","commands":["pytest"],"exit_codes":[0]}'
+    res12 = codex._parse_worker_validation(big_summary)
+    assert res12["status"] == "UNKNOWN"
+    assert set(res12.keys()) == expected_keys
+    assert len(json_transport.dumps(res12).encode("utf-8")) <= codex.IMPLEMENTER_REPORT_LIMIT
+
+
+def test_worker_validation_normalized_byte_limit_invariants():
+    expected_keys = {"source", "status", "summary", "commands", "exit_codes", "artifacts"}
+
+    # 1. 1200 emoji içeren free-text validation
+    emojis = "🚀" * 1200
+    res1 = codex._parse_worker_validation(f"Validation: {emojis}")
+    assert res1["status"] == "UNKNOWN"
+    assert set(res1.keys()) == expected_keys
+    enc1 = json_transport.dumps(res1).encode("utf-8")
+    assert len(enc1) <= codex.IMPLEMENTER_REPORT_LIMIT
+    res1["summary"].encode("utf-8")
+
+    # 2. Summary içermeyen, limite yakın geçerli PASS:
+    # Summary tüm JSON satırının kopyası olmamalı, kısa ve sabit özet olmalı.
+    cmds = [f"pytest tests/test_{i:02d}.py" for i in range(25)]
+    pass_payload = json.dumps({
+        "source": "WORKER_REPORTED",
+        "status": "PASS",
+        "commands": cmds,
+        "exit_codes": [0] * len(cmds),
+    })
+    res2 = codex._parse_worker_validation(f"VALIDATION: {pass_payload}")
+    assert res2["status"] == "PASS"
+    assert set(res2.keys()) == expected_keys
+    assert res2["summary"] == "Structured worker validation reported PASS."
+    assert "VALIDATION:" not in res2["summary"]
+    enc2 = json_transport.dumps(res2).encode("utf-8")
+    assert len(enc2) <= codex.IMPLEMENTER_REPORT_LIMIT
+
+    # 3. Normalize edilmiş PASS/FAIL nesnesi sınırı aşıyorsa:
+    huge_cmds = [f"pytest tests/test_long_path_module_{i:04d}_spec.py" for i in range(50)]
+    huge_payload = json.dumps({
+        "source": "WORKER_REPORTED",
+        "status": "PASS",
+        "commands": huge_cmds,
+        "exit_codes": [0] * len(huge_cmds),
+    })
+    res3 = codex._parse_worker_validation(f"VALIDATION: {huge_payload}")
+    assert res3["status"] == "UNKNOWN"
+    assert set(res3.keys()) == expected_keys
+    enc3 = json_transport.dumps(res3).encode("utf-8")
+    assert len(enc3) <= codex.IMPLEMENTER_REPORT_LIMIT
+
+    # 4. ASCII ve çok baytlı Unicode summary için byte invariantı:
+    res4_ascii = codex._parse_worker_validation("Validation: " + ("a" * 2000))
+    assert res4_ascii["status"] == "UNKNOWN"
+    enc4_ascii = json_transport.dumps(res4_ascii).encode("utf-8")
+    assert len(enc4_ascii) <= codex.IMPLEMENTER_REPORT_LIMIT
+
+    cjk_and_emoji = "测试验证🌟" * 400
+    res4_uni = codex._parse_worker_validation(f"Validation: {cjk_and_emoji}")
+    assert res4_uni["status"] == "UNKNOWN"
+    enc4_uni = json_transport.dumps(res4_uni).encode("utf-8")
+    assert len(enc4_uni) <= codex.IMPLEMENTER_REPORT_LIMIT
+    res4_uni["summary"].encode("utf-8")
+
+
+def test_task_contract_partial_is_not_grounded_and_handles_lists():
+    # Case 1: Only objective provided -> grounded MUST be False
+    prompt_obj_only = "ORCH|task=t1|phase=implementation|route=normal|scope=f.py\nTask Objective: Only objective"
+    obj, crit, grounded = codex._parse_task_contract(prompt_obj_only, "t1", "implementation", ["f.py"])
+    assert grounded is False
+    assert obj == "Only objective"
+
+    # Case 2: Only criteria provided -> grounded MUST be False
+    prompt_crit_only = "ORCH|task=t2|phase=implementation|route=normal|scope=f.py\nAcceptance Criteria: Only criteria"
+    obj, crit, grounded = codex._parse_task_contract(prompt_crit_only, "t2", "implementation", ["f.py"])
+    assert grounded is False
+    assert crit == "Only criteria"
+
+    # Case 3: Multiline bullet list criteria
+    prompt_bullets = (
+        "ORCH|task=t3|phase=implementation|route=normal|scope=f.py\n"
+        "Task Objective: Full feature\n"
+        "Acceptance Criteria:\n"
+        "- First criterion\n"
+        "- Second criterion\n"
+        "- Third criterion"
+    )
+    obj, crit, grounded = codex._parse_task_contract(prompt_bullets, "t3", "implementation", ["f.py"])
+    assert grounded is True
+    assert obj == "Full feature"
+    assert crit == "First criterion; Second criterion; Third criterion"
+
+    # Case 4: JSON list criteria
+    prompt_json_list = (
+        "ORCH|task=t4|phase=implementation|route=normal|scope=f.py\n"
+        'TASK_CONTRACT: {"objective": "Feature", "criteria": ["Crit 1", "Crit 2"]}'
+    )
+    obj, crit, grounded = codex._parse_task_contract(prompt_json_list, "t4", "implementation", ["f.py"])
+    assert grounded is True
+    assert obj == "Feature"
+    assert crit == "Crit 1; Crit 2"
+
+
+def test_base_bundle_contains_contract_and_validation_fields():
+    bundle = codex._base_bundle()
+    assert "task_contract_grounded" in bundle
+    assert bundle["task_contract_grounded"] is False
+    assert "worker_validation" in bundle
+    assert bundle["worker_validation"] is None
+
+
+def test_codex_reply_continuation_inherits_prior_grounded_contract(workspace, config):
+    repo, state = workspace
+    (repo / "f.py").write_text("v = 0\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    # Initial call with explicit grounded contract
+    initial_prompt = (
+        "ORCH|task=task-cont|phase=implementation|route=normal|scope=f.py\n"
+        'TASK_CONTRACT: {"objective": "Persistent objective", "criteria": "Persistent criteria"}'
+    )
+    initial_call = event(prompt=initial_prompt, tool_use_id="call-init")
+    codex.pre_tool_use(initial_call, config=config, state_root=state, repo_root=repo)
+
+    post = {
+        **initial_call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-persistent", "content": "Initial work done"}),
+            }
+        ],
+    }
+
+    def stub_reviewer(**kwargs):
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=stub_reviewer)
+
+    # Continuation reply with generic prompt without explicit contract
+    reply_prompt = "ORCH|task=task-cont|phase=implementation|route=normal|scope=f.py\nContinue work"
+    reply_call = event(
+        tool_name=codex.CODEX_REPLY_TOOL,
+        prompt=reply_prompt,
+        tool_use_id="call-reply",
+        threadId="thread-persistent",
+    )
+    codex.pre_tool_use(reply_call, config=config, state_root=state, repo_root=repo)
+
+    # Read pending and verify inherited contract
+    pending = codex._read_pending(state, reply_call)
+    assert pending["task_contract_grounded"] is True
+    assert pending["task_objective"] == "Persistent objective"
+    assert pending["acceptance_criteria"] == "Persistent criteria"
+
+
+@pytest.mark.parametrize(
+    "is_grounded,report_content,expected_mode,expected_findings,expected_receipt",
+    [
+        # grounded + valid worker PASS + reviewer accept => AUDIT ve audit_receipt
+        (
+            True,
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}',
+            policy.AUDIT,
+            [],
+            True,
+        ),
+        # ungrounded + valid PASS + reviewer accept => FULL + TASK_CONTRACT_NOT_GROUNDED
+        (
+            False,
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}',
+            policy.FULL,
+            ["TASK_CONTRACT_NOT_GROUNDED"],
+            False,
+        ),
+        # grounded + missing validation + reviewer accept => FULL + WORKER_VALIDATION_UNVERIFIED
+        (
+            True,
+            "Tests ran and everything looked fine in stdout.",
+            policy.FULL,
+            ["WORKER_VALIDATION_UNVERIFIED"],
+            False,
+        ),
+        # grounded + malformed validation + reviewer accept => FULL + WORKER_VALIDATION_UNVERIFIED
+        (
+            True,
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":"pytest","exit_codes":[0]}',
+            policy.FULL,
+            ["WORKER_VALIDATION_UNVERIFIED"],
+            False,
+        ),
+        # grounded + valid FAIL + reviewer accept => FULL + WORKER_VALIDATION_FAILED
+        (
+            True,
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"FAIL","commands":["pytest"],"exit_codes":[1]}',
+            policy.FULL,
+            ["WORKER_VALIDATION_FAILED"],
+            False,
+        ),
+        # Grounding ve validation ayni anda hataliysa iki finding de korunmali
+        (
+            False,
+            "Just done without contract and without validation block.",
+            policy.FULL,
+            ["TASK_CONTRACT_NOT_GROUNDED", "WORKER_VALIDATION_UNVERIFIED"],
+            False,
+        ),
+    ],
+)
+def test_end_to_end_review_mode_matrix(
+    workspace, config, is_grounded, report_content, expected_mode, expected_findings, expected_receipt
+):
+    repo, state = workspace
+    (repo / "test_matrix.py").write_text("v = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "matrix-init"], cwd=repo, check=True)
+
+    if is_grounded:
+        prompt = (
+            "ORCH|task=t-mat|phase=implementation|route=normal|scope=test_matrix.py\n"
+            "Task Objective: Update test matrix file\n"
+            "Acceptance Criteria: test_matrix.py has value 2"
+        )
+    else:
+        prompt = "ORCH|task=t-mat|phase=implementation|route=normal|scope=test_matrix.py\nGeneric prompt"
+
+    call = event(prompt=prompt)
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "test_matrix.py").write_text("v = 2\n", encoding="utf-8")
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-matrix", "content": report_content}),
+            }
+        ],
+    }
+
+    def stub_reviewer(**kwargs):
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    raw = codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo, reviewer=stub_reviewer
+    )
+    bundle = response_bundle(raw, config)
+
+    assert bundle["claude_review_mode"] == expected_mode
+    if expected_receipt:
+        assert bundle["audit_receipt"] is not None
+        assert bundle["audit_receipt"]["verdict"] == "READY_FOR_ONE_TURN_ACCEPT"
+    else:
+        assert bundle["audit_receipt"] is None
+
+    for finding_code in expected_findings:
+        assert any(f["code"] == finding_code for f in bundle["findings"]), f"Expected finding {finding_code}"

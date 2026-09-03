@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 from typing import Any
 
+import ledger
 import policy
 
 
@@ -1040,6 +1041,8 @@ def _seam_materials(
     delta: Mapping[str, Any],
     classification: Mapping[str, Any] | None,
     validation_summary: str | None = None,
+    task_objective: str | None = None,
+    acceptance_criteria: str | None = None,
 ) -> Mapping[str, str]:
     paths, diff = _delegated_diff(repo_root, delta, classification)
     decision = classification.get("decision") if isinstance(classification, Mapping) else "UNKNOWN"
@@ -1050,21 +1053,35 @@ def _seam_materials(
         )
     elif not isinstance(validation_summary, str) or not validation_summary.strip():
         raise ValueError("validation evidence must be non-empty text when supplied")
+    elif validation_summary.strip().startswith(("Worker-reported", "Orchestrator-")):
+        validation_evidence = validation_summary.strip()
     else:
         validation_evidence = (
             "Orchestrator-supplied validation evidence: " + validation_summary.strip()
         )
+    base_objective = (
+        f"Review the complete delegated change for task {task_id!r}, bounded to these actual "
+        f"changed paths: {', '.join(paths)}."
+    )
+    if task_objective and task_objective.strip():
+        objective_content = f"{base_objective} Task Objective: {task_objective.strip()}"
+    else:
+        objective_content = base_objective
+
+    base_criteria = (
+        "Accept only if the complete delegated diff is correct within the named bounded task, "
+        "preserves current contracts, and introduces no material regression or scope expansion. "
+        "Consider supplied validation evidence, but do not treat its normal absence as evidence "
+        "that the diff is incomplete."
+    )
+    if acceptance_criteria and acceptance_criteria.strip():
+        criteria_content = f"{base_criteria} Specific Task Criteria: {acceptance_criteria.strip()}"
+    else:
+        criteria_content = base_criteria
+
     return {
-        "objective": (
-            f"Review the complete delegated change for task {task_id!r}, bounded to these actual "
-            f"changed paths: {', '.join(paths)}."
-        ),
-        "acceptance_criteria": (
-            "Accept only if the complete delegated diff is correct within the named bounded task, "
-            "preserves current contracts, and introduces no material regression or scope expansion. "
-            "Consider supplied validation evidence, but do not treat its normal absence as evidence "
-            "that the diff is incomplete."
-        ),
+        "objective": objective_content,
+        "acceptance_criteria": criteria_content,
         "authority_contract": _authority_slice(repo_root, paths),
         "delegated_diff": diff,
         "validation_summary": (
@@ -1087,6 +1104,8 @@ def review(
     delta: Mapping[str, Any],
     classification: Mapping[str, Any] | None,
     validation_summary: str | None = None,
+    task_objective: str | None = None,
+    acceptance_criteria: str | None = None,
 ) -> ReviewOutcome:
     """Reviewer callable matching the accepted ``codex.py`` seam."""
 
@@ -1106,6 +1125,8 @@ def review(
             delta,
             classification,
             validation_summary,
+            task_objective=task_objective,
+            acceptance_criteria=acceptance_criteria,
         )
         return review_materials(materials, config=config)
     except (OSError, UnicodeDecodeError, ValueError) as error:

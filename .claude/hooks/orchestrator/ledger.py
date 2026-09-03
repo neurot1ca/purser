@@ -61,6 +61,13 @@ _SECRET_VALUE_PATTERNS = (
 )
 
 
+def is_transient_bytecode_cache(path: str | os.PathLike[str]) -> bool:
+    """Return True if path points to transient Python bytecode or interpreter cache."""
+    norm = os.fspath(path).replace("\\", "/")
+    parts = norm.split("/")
+    return "__pycache__" in parts or norm.endswith((".pyc", ".pyo"))
+
+
 class _InspectionError(Exception):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
@@ -362,7 +369,11 @@ def _scoped_manifest(
         "listing scoped ignored files",
         deadline,
     )
-    paths = sorted(_manifest_paths(untracked, deadline) | _manifest_paths(ignored, deadline))
+    paths = [
+        path
+        for path in sorted(_manifest_paths(untracked, deadline) | _manifest_paths(ignored, deadline))
+        if not is_transient_bytecode_cache(path)
+    ]
     manifest: list[dict[str, Any]] = []
     try:
         for relative in paths:
@@ -886,6 +897,9 @@ def build_session_record(
     scope: Iterable[str | os.PathLike[str]] = (),
     pending_call_baseline: Mapping[str, Any] | None = None,
     last_outcome: Any = None,
+    task_objective: str | None = None,
+    acceptance_criteria: str | None = None,
+    task_contract_grounded: bool = False,
 ) -> dict[str, Any]:
     """Build the strict record shape; ``live_thread`` feeds policy directly."""
 
@@ -901,6 +915,11 @@ def build_session_record(
         if phase is not None:
             live_thread["phase"] = phase
             live_thread["scope"] = [os.fspath(path) for path in scope]
+        if task_objective is not None:
+            live_thread["task_objective"] = task_objective
+        if acceptance_criteria is not None:
+            live_thread["acceptance_criteria"] = acceptance_criteria
+        live_thread["task_contract_grounded"] = task_contract_grounded
     return {
         "task_id": task_id,
         "live_thread": live_thread,
@@ -951,24 +970,16 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         except (TypeError, ValueError):
             return False
         return not _contains_secret(record)
-    if not isinstance(thread, Mapping) or set(thread) not in (
-        {
-            "task_id",
-            "thread_id",
-            "route",
-            "model",
-            "effort",
-        },
-        {
-            "task_id",
-            "thread_id",
-            "route",
-            "model",
-            "effort",
-            "phase",
-            "scope",
-        },
-    ):
+    thread_keys = set(thread)
+    required_keys = {"task_id", "thread_id", "route", "model", "effort"}
+    allowed_keys = required_keys | {
+        "phase",
+        "scope",
+        "task_objective",
+        "acceptance_criteria",
+        "task_contract_grounded",
+    }
+    if not required_keys.issubset(thread_keys) or not thread_keys.issubset(allowed_keys):
         return False
     if thread.get("task_id") != task_id or any(
         not isinstance(thread.get(field), str) or not thread.get(field)
@@ -984,6 +995,17 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         ):
             return False
         if thread["phase"] == "implementation" and not thread_scope:
+            return False
+    if "task_objective" in thread and not isinstance(thread.get("task_objective"), str):
+        return False
+    if "acceptance_criteria" in thread and not isinstance(thread.get("acceptance_criteria"), str):
+        return False
+    if "task_contract_grounded" in thread and not isinstance(thread.get("task_contract_grounded"), bool):
+        return False
+    if thread.get("task_contract_grounded") is True:
+        if not isinstance(thread.get("task_objective"), str) or not thread.get("task_objective", "").strip():
+            return False
+        if not isinstance(thread.get("acceptance_criteria"), str) or not thread.get("acceptance_criteria", "").strip():
             return False
     pending = record.get("pending_call_baseline")
     if pending is not None and not isinstance(pending, Mapping):
@@ -1143,4 +1165,5 @@ __all__ = [
     "classify_concurrent_writers",
     "compute_delta",
     "detect_protected_paths",
+    "is_transient_bytecode_cache",
 ]
