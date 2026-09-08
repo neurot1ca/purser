@@ -98,6 +98,19 @@ _USAGE_KEYS = (
     "claude_session_total_duration_ms",
     "claude_usage_known",
     "claude_rate_limit_delta_scope",
+    "claude_task_usage_source",
+    "claude_task_usage_known",
+    "claude_task_usage_complete",
+    "claude_task_input_tokens",
+    "claude_task_output_tokens",
+    "claude_task_cache_creation_input_tokens",
+    "claude_task_cache_read_input_tokens",
+    "claude_task_total_observed_tokens",
+    "claude_task_request_count",
+    "claude_task_usage_boundary",
+    "claude_task_usage_dedup",
+    "claude_task_usage_unknown_reason",
+    "claude_task_subagent_usage_included",
     *(f"{provider}_{field}" for provider in ("codex", "gemini", "deepseek") for field in sorted(schema.TOKEN_FIELDS)),
 )
 _INTERNAL_USAGE_KEYS = (
@@ -216,17 +229,35 @@ def _utc_timestamp(name: str, value: Any, *, nullable: bool = True) -> tuple[str
 def _usage_value(name: str, value: Any) -> Any:
     if value is None:
         return None
-    if name.endswith("_usage_known"):
+    if name.endswith("_usage_known") or name in {
+        "claude_task_usage_complete",
+        "claude_task_subagent_usage_included",
+    }:
         return _boolean(name, value, nullable=False)
     if name == "claude_rate_limit_delta_scope":
         if value != "account_window_observation":
             raise ProjectionError(f"{name} is outside its controlled enum")
         return value
+    if name == "claude_task_usage_source":
+        if value != "desktop_jsonl_observed":
+            raise ProjectionError(f"{name} is outside its controlled enum")
+        return value
+    if name == "claude_task_usage_boundary":
+        if value != "anchored_pre_tool_to_stop":
+            raise ProjectionError(f"{name} is outside its controlled enum")
+        return value
+    if name == "claude_task_usage_dedup":
+        if value != "message_id_request_id":
+            raise ProjectionError(f"{name} is outside its controlled enum")
+        return value
+    if name == "claude_task_usage_unknown_reason":
+        return _identifier(name, value, nullable=False)
     if "session_id" in name:
         return _identifier(name, value, nullable=False)
     if "captured_at" in name or "resets_at" in name:
         return _utc_timestamp(name, value, nullable=False)[0]
-    return _number(name, value, nullable=False)
+    is_int = name.startswith("claude_task_") and (name.endswith("_tokens") or name.endswith("_count"))
+    return _number(name, value, integer=is_int, nullable=False)
 
 
 def _prepare_aggregate(aggregate: Mapping[str, Any]) -> dict[str, Any]:

@@ -39,6 +39,28 @@ _HEALTH_ERROR_CODES = frozenset(
         "TELEMETRY_SPOOL_MERGE_FAILED",
         "TELEMETRY_PROJECTION_FAILED",
         "MALFORMED_SPOOL_EVENT",
+        "CLAUDE_TRANSCRIPT_PARSER_UNAVAILABLE",
+        "CLAUDE_TRANSCRIPT_PARSER_FAILED",
+        "CLAUDE_TRANSCRIPT_FINALIZATION_FAILED",
+    }
+)
+TERMINAL_TASK_USAGE_FAILURES = frozenset(
+    {
+        "OVERLAPPING_TASK_BOUNDARY",
+        "CONTRADICTORY_USAGE_RECORD",
+        "TRANSCRIPT_IDENTITY_MISMATCH",
+        "TRANSCRIPT_ROTATED_OR_TRUNCATED",
+        "TRANSCRIPT_UNRESOLVED_TAIL",
+        "BOUNDS_EXCEEDED",
+        "INVALID_USAGE_RECORD",
+        "STALE_ACTIVE_TASK",
+        "ANCHOR_NOT_FOUND",
+        "TRANSCRIPT_UNAVAILABLE",
+        "SESSION_MISMATCH",
+        "WRONG_EXTENSION",
+        "TRANSCRIPT_PATH_ESCAPE",
+        "NO_USAGE_RECORDS",
+        "ACTIVE_TASK_STATE_CONTENTION",
     }
 )
 
@@ -305,6 +327,19 @@ def _usage_defaults() -> dict[str, Any]:
         "claude_session_estimated_cost_usd": None,
         "claude_usage_known": False,
         "claude_rate_limit_delta_scope": CLAUDE_RATE_LIMIT_DELTA_SCOPE,
+        "claude_task_usage_source": None,
+        "claude_task_usage_known": False,
+        "claude_task_usage_complete": False,
+        "claude_task_input_tokens": None,
+        "claude_task_output_tokens": None,
+        "claude_task_cache_creation_input_tokens": None,
+        "claude_task_cache_read_input_tokens": None,
+        "claude_task_total_observed_tokens": None,
+        "claude_task_request_count": None,
+        "claude_task_usage_boundary": None,
+        "claude_task_usage_dedup": None,
+        "claude_task_usage_unknown_reason": None,
+        "claude_task_subagent_usage_included": False,
         "_claude_5h_start_session_id": None,
         "_claude_5h_start_captured_at": None,
         "_claude_5h_start_resets_at": None,
@@ -713,6 +748,55 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
         aggregate["thread_continuity_violations"] += 1
     elif event_type == "UNKNOWN_CONCURRENT_WRITER":
         aggregate["concurrent_writer"] = True
+    elif event_type == "CLAUDE_TASK_USAGE_RECORDED":
+        usage = aggregate["usage"]
+        current_reason = usage.get("claude_task_usage_unknown_reason")
+
+        # If already in a terminal failure state, NEVER overwrite with known=True or complete=True
+        if current_reason in TERMINAL_TASK_USAGE_FAILURES:
+            return
+
+        new_reason = payload.get("claude_task_usage_unknown_reason")
+        known = payload.get("claude_task_usage_known") is True and new_reason not in TERMINAL_TASK_USAGE_FAILURES
+
+        if new_reason in TERMINAL_TASK_USAGE_FAILURES or not known:
+            usage["claude_task_usage_known"] = False
+            usage["claude_task_usage_complete"] = False
+            usage["claude_task_usage_unknown_reason"] = new_reason
+            usage["claude_task_usage_source"] = None
+            usage["claude_task_usage_boundary"] = None
+            usage["claude_task_usage_dedup"] = None
+            for token_field in (
+                "claude_task_input_tokens",
+                "claude_task_output_tokens",
+                "claude_task_cache_creation_input_tokens",
+                "claude_task_cache_read_input_tokens",
+                "claude_task_total_observed_tokens",
+                "claude_task_request_count",
+            ):
+                usage[token_field] = None
+            usage["claude_task_subagent_usage_included"] = False
+        else:
+            usage["claude_task_usage_known"] = True
+            usage["claude_task_usage_complete"] = payload.get("claude_task_usage_complete") is True
+            usage["claude_task_usage_unknown_reason"] = None
+            usage["claude_task_usage_source"] = payload.get("claude_task_usage_source")
+            usage["claude_task_usage_boundary"] = payload.get("claude_task_usage_boundary")
+            usage["claude_task_usage_dedup"] = payload.get("claude_task_usage_dedup")
+            usage["claude_task_subagent_usage_included"] = (
+                payload.get("claude_task_subagent_usage_included") is True
+            )
+            for token_field in (
+                "claude_task_input_tokens",
+                "claude_task_output_tokens",
+                "claude_task_cache_creation_input_tokens",
+                "claude_task_cache_read_input_tokens",
+                "claude_task_total_observed_tokens",
+                "claude_task_request_count",
+            ):
+                val = payload.get(token_field)
+                if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+                    usage[token_field] = val
 
 
 def _raw_events(root: Path) -> Iterable[dict[str, Any]]:

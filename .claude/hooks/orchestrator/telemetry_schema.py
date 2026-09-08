@@ -27,6 +27,7 @@ EVENT_TYPES = frozenset(
         "UNKNOWN_CONCURRENT_WRITER",
         "WORKFLOW_VERDICT_RECORDED",
         "TELEMETRY_WARNING",
+        "CLAUDE_TASK_USAGE_RECORDED",
     }
 )
 
@@ -66,6 +67,23 @@ CLAUDE_USAGE_PAYLOAD_FIELDS = frozenset(
         "claude_session_total_duration_ms",
         "claude_usage_known",
         "claude_rate_limit_delta_scope",
+    }
+)
+CLAUDE_TASK_USAGE_PAYLOAD_FIELDS = frozenset(
+    {
+        "claude_task_usage_source",
+        "claude_task_usage_known",
+        "claude_task_usage_complete",
+        "claude_task_input_tokens",
+        "claude_task_output_tokens",
+        "claude_task_cache_creation_input_tokens",
+        "claude_task_cache_read_input_tokens",
+        "claude_task_total_observed_tokens",
+        "claude_task_request_count",
+        "claude_task_usage_boundary",
+        "claude_task_usage_dedup",
+        "claude_task_usage_unknown_reason",
+        "claude_task_subagent_usage_included",
     }
 )
 
@@ -177,6 +195,7 @@ _PAYLOAD_FIELDS = {
     "UNKNOWN_CONCURRENT_WRITER": frozenset({"concurrent_writer"}),
     "WORKFLOW_VERDICT_RECORDED": frozenset({"verdict"}),
     "TELEMETRY_WARNING": frozenset({"warning_code"}),
+    "CLAUDE_TASK_USAGE_RECORDED": CLAUDE_TASK_USAGE_PAYLOAD_FIELDS,
 }
 
 
@@ -224,11 +243,22 @@ def _payload_value(name: str, value: Any) -> Any:
         "gemini_usage_known",
         "claude_usage_known",
         "concurrent_writer",
+        "claude_task_usage_known",
+        "claude_task_usage_complete",
+        "claude_task_subagent_usage_included",
     }:
         if not isinstance(value, bool):
             raise ValueError("telemetry boolean is invalid")
         return value
-    if name == "changed_paths_count":
+    if name in {
+        "changed_paths_count",
+        "claude_task_input_tokens",
+        "claude_task_output_tokens",
+        "claude_task_cache_creation_input_tokens",
+        "claude_task_cache_read_input_tokens",
+        "claude_task_total_observed_tokens",
+        "claude_task_request_count",
+    }:
         return _number(value, integer=True)
     if name in {
         *(f"codex_{field}" for field in TOKEN_FIELDS),
@@ -250,6 +280,14 @@ def _payload_value(name: str, value: Any) -> Any:
         return _identifier(value)
     if name == "claude_rate_limit_delta_scope" and value == "account_window_observation":
         return value
+    if name == "claude_task_usage_source" and value == "desktop_jsonl_observed":
+        return value
+    if name == "claude_task_usage_boundary" and value == "anchored_pre_tool_to_stop":
+        return value
+    if name == "claude_task_usage_dedup" and value == "message_id_request_id":
+        return value
+    if name == "claude_task_usage_unknown_reason":
+        return _identifier(value)
     if name == "duration_ms":
         return _number(value)
     if name == "phase" and value in _PHASES:

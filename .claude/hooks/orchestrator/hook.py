@@ -12,13 +12,16 @@ import json_transport
 
 
 def dispatch(event: Mapping[str, Any]) -> dict[str, Any]:
+    hook_name = event.get("hook_event_name")
+    if hook_name == "Stop":
+        return codex.stop(event)
     if event.get("tool_name") not in codex.CODEX_TOOLS:
         return {}
     handler = {
         "PreToolUse": codex.pre_tool_use,
         "PostToolUse": codex.post_tool_use,
         "PostToolUseFailure": codex.post_tool_use_failure,
-    }.get(event.get("hook_event_name"))
+    }.get(hook_name)
     return handler(event) if handler is not None else {}
 
 

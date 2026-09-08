@@ -1080,6 +1080,20 @@ def pre_tool_use(
         _observe("emit", "TASK_ROUTE_SELECTED", **observation)
         _observe("emit", "IMPLEMENTER_STARTED", **observation)
 
+        try:
+            import claude_transcript_usage
+            claude_transcript_usage.start_active_task(
+                runtime_root,
+                session_id=event.get("session_id"),
+                task_id=parsed.task_id,
+                tool_use_id=event.get("tool_use_id"),
+                transcript_path=event.get("transcript_path"),
+            )
+        except ImportError:
+            _observe("record_health", "DEGRADED", error_code="CLAUDE_TRANSCRIPT_PARSER_UNAVAILABLE", state_root=runtime_root)
+        except Exception:
+            _observe("record_health", "DEGRADED", error_code="CLAUDE_TRANSCRIPT_PARSER_FAILED", state_root=runtime_root)
+
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -1940,6 +1954,37 @@ def post_tool_use_failure(
         }
 
 
+def stop(
+    event: Mapping[str, Any],
+    *,
+    state_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Finalize Claude Desktop task token telemetry at Stop boundary."""
+    try:
+        if event.get("stop_hook_active") is True:
+            return {}
+        session_id = event.get("session_id")
+        if not session_id:
+            return {}
+        runtime_root = _state_root(state_root)
+        try:
+            import claude_transcript_usage
+        except ImportError:
+            _observe("record_health", "DEGRADED", error_code="CLAUDE_TRANSCRIPT_PARSER_UNAVAILABLE", state_root=runtime_root)
+            return {}
+        try:
+            claude_transcript_usage.finalize_stop_task(
+                runtime_root,
+                session_id=session_id,
+                transcript_path=event.get("transcript_path"),
+            )
+        except Exception:
+            _observe("record_health", "DEGRADED", error_code="CLAUDE_TRANSCRIPT_FINALIZATION_FAILED", state_root=runtime_root)
+    except Exception:
+        pass
+    return {}
+
+
 __all__ = [
     "CODEX_REPLY_TOOL",
     "CODEX_TOOL",
@@ -1953,4 +1998,5 @@ __all__ = [
     "post_tool_use",
     "post_tool_use_failure",
     "pre_tool_use",
+    "stop",
 ]
