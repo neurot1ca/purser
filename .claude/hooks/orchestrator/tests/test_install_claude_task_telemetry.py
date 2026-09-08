@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 import uuid
@@ -115,6 +116,31 @@ def test_check_only_does_not_write(tmp_path):
         apply=False,
     ) == "INSTALL_REQUIRED"
     assert not settings_path.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows hook-shell regression")
+def test_windows_hook_command_executes_under_git_bash(tmp_path):
+    root = tmp_path / "repo with spaces"
+    hook = root / ".claude" / "hooks" / "orchestrator" / "hook.py"
+    hook.parent.mkdir(parents=True)
+    hook.write_text("# synthetic hook\n", encoding="utf-8")
+    command, _ = installer._hook_command(root, Path(sys.executable), "hook.py")
+
+    assert "\\" not in command
+    assert command == f'"{Path(sys.executable).resolve().as_posix()}" "{hook.resolve().as_posix()}"'
+
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        pytest.skip("Git Bash is unavailable")
+    completed = subprocess.run(
+        [str(bash), "-lc", command],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_existing_managed_entries_are_replaced_without_duplicates(tmp_path):

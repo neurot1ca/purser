@@ -10,7 +10,7 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
+import shlex
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -53,7 +53,15 @@ def _hook_command(
     python_path = python_executable.resolve()
     if not python_path.is_file():
         raise InstallError("Python executable is unavailable")
-    return subprocess.list2cmdline([str(python_path), str(hook_path)]), hook_path
+    if os.name == "nt":
+        # Claude Code executes command hooks through a POSIX-style shell even on
+        # Windows. Unquoted backslashes are consumed as escapes by that shell.
+        # Forward slashes are accepted by Windows executables and keep the same
+        # command valid under Git Bash, cmd.exe, and PowerShell.
+        command = " ".join(f'"{path.as_posix()}"' for path in (python_path, hook_path))
+    else:
+        command = shlex.join(str(path) for path in (python_path, hook_path))
+    return command, hook_path
 
 
 def _managed_entry(entry: Any, hook_paths: tuple[Path, ...]) -> bool:
@@ -64,7 +72,8 @@ def _managed_entry(entry: Any, hook_paths: tuple[Path, ...]) -> bool:
         return False
     command = hooks[0].get("command")
     return isinstance(command, str) and any(
-        str(hook_path).casefold() in command.casefold() for hook_path in hook_paths
+        hook_path.as_posix().casefold() in command.replace("\\", "/").casefold()
+        for hook_path in hook_paths
     )
 
 
