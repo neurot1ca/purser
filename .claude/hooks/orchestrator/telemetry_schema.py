@@ -28,6 +28,7 @@ EVENT_TYPES = frozenset(
         "WORKFLOW_VERDICT_RECORDED",
         "TELEMETRY_WARNING",
         "CLAUDE_TASK_USAGE_RECORDED",
+        "CONTEXT_IO_TURN_RECORDED",
     }
 )
 
@@ -84,6 +85,55 @@ CLAUDE_TASK_USAGE_PAYLOAD_FIELDS = frozenset(
         "claude_task_usage_dedup",
         "claude_task_usage_unknown_reason",
         "claude_task_subagent_usage_included",
+    }
+)
+CONTEXT_IO_THRESHOLDS = (200, 350, 500)
+CONTEXT_IO_BOOLEAN_FIELDS = frozenset({"repeat_known", "task_association_known"})
+CONTEXT_IO_INTEGER_FIELDS = frozenset(
+    {
+        "read_count",
+        "full_read_count",
+        "targeted_read_count",
+        "unknown_read_count",
+        "observed_bytes_total",
+        "exact_line_read_count",
+        "exact_line_count_total",
+        "lower_bound_line_read_count",
+        "lower_bound_line_count_total",
+        "oversized_read_count",
+        "binary_suspected_read_count",
+        "repeat_count",
+        "pre_codex_read_count",
+        "post_codex_read_count",
+        "hook_sample_count",
+        "internal_processing_us_total",
+        "internal_processing_us_max",
+        "hook_wall_time_us_total",
+        "hook_wall_time_us_max",
+        *(f"threshold_{threshold}_{suffix}" for threshold in CONTEXT_IO_THRESHOLDS for suffix in ("known_count", "candidate_count")),
+    }
+)
+CONTEXT_IO_PAYLOAD_FIELDS = frozenset(
+    {*CONTEXT_IO_BOOLEAN_FIELDS, *CONTEXT_IO_INTEGER_FIELDS, "unknown_reason"}
+)
+CONTEXT_IO_UNKNOWN_REASONS = frozenset(
+    {
+        "BINARY_SUSPECTED",
+        "BOUNDED_SCAN",
+        "CORRUPT_STATE",
+        "DIRECTORY",
+        "INVALID_INPUT",
+        "JOURNAL_LIMIT",
+        "MISSING_FILE",
+        "MISSING_USER_PROMPT",
+        "OBSERVATION_LIMIT",
+        "OUTSIDE_ROOT",
+        "PRIOR_TURN_MISSING_STOP",
+        "PROTECTED_PATH",
+        "RESOURCE_LIMIT",
+        "STALE_STATE",
+        "STATE_CONTENTION",
+        "STAT_UNAVAILABLE",
     }
 )
 
@@ -196,6 +246,7 @@ _PAYLOAD_FIELDS = {
     "WORKFLOW_VERDICT_RECORDED": frozenset({"verdict"}),
     "TELEMETRY_WARNING": frozenset({"warning_code"}),
     "CLAUDE_TASK_USAGE_RECORDED": CLAUDE_TASK_USAGE_PAYLOAD_FIELDS,
+    "CONTEXT_IO_TURN_RECORDED": CONTEXT_IO_PAYLOAD_FIELDS,
 }
 
 
@@ -246,6 +297,7 @@ def _payload_value(name: str, value: Any) -> Any:
         "claude_task_usage_known",
         "claude_task_usage_complete",
         "claude_task_subagent_usage_included",
+        *CONTEXT_IO_BOOLEAN_FIELDS,
     }:
         if not isinstance(value, bool):
             raise ValueError("telemetry boolean is invalid")
@@ -258,6 +310,7 @@ def _payload_value(name: str, value: Any) -> Any:
         "claude_task_cache_read_input_tokens",
         "claude_task_total_observed_tokens",
         "claude_task_request_count",
+        *CONTEXT_IO_INTEGER_FIELDS,
     }:
         return _number(value, integer=True)
     if name in {
@@ -288,6 +341,8 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name == "claude_task_usage_unknown_reason":
         return _identifier(value)
+    if name == "unknown_reason" and value in CONTEXT_IO_UNKNOWN_REASONS:
+        return value
     if name == "duration_ms":
         return _number(value)
     if name == "phase" and value in _PHASES:
@@ -383,6 +438,6 @@ def valid_event(value: Any) -> bool:
 
 
 __all__ = [
-    "CLAUDE_USAGE_PAYLOAD_FIELDS", "EVENT_TYPES", "SCHEMA_VERSION", "TASK_STATUSES", "TERMINAL_VERDICTS", "TOKEN_FIELDS",
+    "CLAUDE_USAGE_PAYLOAD_FIELDS", "CONTEXT_IO_PAYLOAD_FIELDS", "CONTEXT_IO_UNKNOWN_REASONS", "EVENT_TYPES", "SCHEMA_VERSION", "TASK_STATUSES", "TERMINAL_VERDICTS", "TOKEN_FIELDS",
     "build_event", "normalize_identifier", "utc_now", "valid_event",
 ]

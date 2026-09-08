@@ -1,6 +1,10 @@
 import json
+import os
+import shutil
+import stat
 import sys
 from pathlib import Path
+import uuid
 
 import pytest
 
@@ -12,11 +16,32 @@ if str(ORCHESTRATOR_ROOT) not in sys.path:
 import install_claude_task_telemetry as installer
 
 
+@pytest.fixture()
+def tmp_path():
+    root = Path(__file__).parent / ".installer-test-tmp" / uuid.uuid4().hex
+    root.mkdir(parents=True)
+    try:
+        yield root
+    finally:
+        def make_writable(function, target, _error):
+            os.chmod(target, stat.S_IWRITE)
+            function(target)
+
+        shutil.rmtree(root, onerror=make_writable)
+        try:
+            root.parent.rmdir()
+        except OSError:
+            pass
+
+
 def _repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     hook = root / ".claude" / "hooks" / "orchestrator" / "hook.py"
     hook.parent.mkdir(parents=True)
     hook.write_text("# synthetic hook\n", encoding="utf-8")
+    hook.with_name("context_io_hook.py").write_text(
+        "# synthetic context hook\n", encoding="utf-8"
+    )
     return root
 
 
@@ -37,14 +62,37 @@ def test_install_preserves_unrelated_settings_and_is_idempotent(tmp_path):
     installed = json.loads(settings_path.read_text(encoding="utf-8"))
     assert installed["permissions"] == original["permissions"]
     assert installed["hooks"]["PreToolUse"][0] == unrelated
-    for event_name, matcher, timeout in installer.HOOK_SPECS:
-        managed = [entry for entry in installed["hooks"][event_name] if event_name != "PreToolUse" or entry != unrelated]
-        assert len(managed) == 1
-        if matcher is None:
-            assert "matcher" not in managed[0]
-        else:
-            assert managed[0]["matcher"] == matcher
-        assert managed[0]["hooks"][0]["timeout"] == timeout
+    codex_command = installer._hook_command(root, Path(sys.executable), "hook.py")[0]
+    context_command = installer._hook_command(
+        root, Path(sys.executable), "context_io_hook.py"
+    )[0]
+    expected = [
+        (*spec, codex_command) for spec in installer.HOOK_SPECS
+    ] + [
+        (*spec, context_command) for spec in installer.CONTEXT_IO_HOOK_SPECS
+    ]
+    for event_name, matcher, timeout, command in expected:
+        matching = [
+            entry
+            for entry in installed["hooks"][event_name]
+            if (
+                event_name,
+                entry.get("matcher"),
+                entry["hooks"][0].get("command"),
+            )
+            == (event_name, matcher, command)
+        ]
+        assert len(matching) == 1
+        assert matching[0]["hooks"][0]["timeout"] == timeout
+
+    pretool_matchers = [
+        entry.get("matcher")
+        for entry in installed["hooks"]["PreToolUse"]
+        if entry["hooks"][0].get("command") != "other"
+    ]
+    assert pretool_matchers.count(r"^mcp__codex-main__(codex|codex-reply)$") == 1
+    assert pretool_matchers.count(r"^Read$") == 1
+    assert len(installed["hooks"]["Stop"]) == 2
 
     before = settings_path.read_bytes()
     assert installer.install(
@@ -86,8 +134,11 @@ def test_existing_managed_entries_are_replaced_without_duplicates(tmp_path):
         apply=True,
     )
     installed = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert len(installed["hooks"]["PreToolUse"]) == 1
-    assert "old-python" not in installed["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert len(installed["hooks"]["PreToolUse"]) == 2
+    assert all(
+        "old-python" not in entry["hooks"][0]["command"]
+        for entry in installed["hooks"]["PreToolUse"]
+    )
 
 
 def test_invalid_json_and_outside_path_fail_without_writing(tmp_path):

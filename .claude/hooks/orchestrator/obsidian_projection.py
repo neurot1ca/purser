@@ -122,6 +122,36 @@ _INTERNAL_USAGE_KEYS = (
     "_claude_5h_end_resets_at",
 )
 _USAGE_KEY_SET = frozenset((*_USAGE_KEYS, *_INTERNAL_USAGE_KEYS))
+_CONTEXT_IO_KEYS = (
+    "read_count",
+    "full_read_count",
+    "targeted_read_count",
+    "unknown_read_count",
+    "observed_bytes_total",
+    "exact_line_read_count",
+    "exact_line_count_total",
+    "lower_bound_line_read_count",
+    "lower_bound_line_count_total",
+    "oversized_read_count",
+    "binary_suspected_read_count",
+    "threshold_200_known_count",
+    "threshold_200_candidate_count",
+    "threshold_350_known_count",
+    "threshold_350_candidate_count",
+    "threshold_500_known_count",
+    "threshold_500_candidate_count",
+    "repeat_count",
+    "repeat_known",
+    "pre_codex_read_count",
+    "post_codex_read_count",
+    "task_association_known",
+    "hook_sample_count",
+    "internal_processing_us_total",
+    "internal_processing_us_max",
+    "hook_wall_time_us_total",
+    "hook_wall_time_us_max",
+    "unknown_reason",
+)
 _TOKEN_TOTAL_KEYS = {
     provider: f"{provider}_total_tokens" for provider in ("codex", "gemini", "deepseek")
 }
@@ -290,6 +320,22 @@ def _prepare_aggregate(aggregate: Mapping[str, Any]) -> dict[str, Any]:
     if unknown_usage_keys:
         raise ProjectionError("usage contains an unregistered field")
     prepared_usage = {key: _usage_value(key, usage.get(key)) for key in _USAGE_KEYS}
+    context_value = aggregate.get("context_io")
+    prepared_context: dict[str, Any] | None = None
+    if context_value is not None:
+        if not isinstance(context_value, Mapping) or not set(context_value).issubset(_CONTEXT_IO_KEYS):
+            raise ProjectionError("context_io contains an unregistered field")
+        prepared_context = {}
+        for key in _CONTEXT_IO_KEYS:
+            value = context_value.get(key)
+            if key in {"repeat_known", "task_association_known"}:
+                prepared_context[key] = _boolean(key, value) if value is not None else None
+            elif key == "unknown_reason":
+                if value is not None and value not in schema.CONTEXT_IO_UNKNOWN_REASONS:
+                    raise ProjectionError("context_io unknown_reason is outside its controlled enum")
+                prepared_context[key] = value
+            else:
+                prepared_context[key] = _number(key, value, integer=True) if value is not None else None
 
     prepared: dict[str, Any] = {
         "type": "orch-run",
@@ -334,6 +380,7 @@ def _prepare_aggregate(aggregate: Mapping[str, Any]) -> dict[str, Any]:
         "concurrent_writer": _boolean("concurrent_writer", aggregate.get("concurrent_writer")),
         "policy_fingerprint": _identifier("policy_fingerprint", aggregate.get("policy_fingerprint")),
         "usage": prepared_usage,
+        "context_io": prepared_context,
         "_started_dt": started_dt,
         "_ended_dt": ended_dt,
     }
@@ -409,6 +456,10 @@ def _frontmatter(prepared: Mapping[str, Any]) -> str:
     usage = prepared["usage"]
     for key in _USAGE_KEYS:
         lines.append(f"  {key}: {_yaml_scalar(usage[key])}")
+    if prepared["context_io"] is not None:
+        lines.append("context_io:")
+        for key in _CONTEXT_IO_KEYS:
+            lines.append(f"  {key}: {_yaml_scalar(prepared['context_io'][key])}")
     lines.extend(("---", ""))
     return "\n".join(lines)
 

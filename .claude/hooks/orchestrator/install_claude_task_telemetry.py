@@ -24,6 +24,11 @@ HOOK_SPECS: tuple[tuple[str, str | None, int], ...] = (
     ("PostToolUseFailure", r"^mcp__codex-main__(codex|codex-reply)$", 60),
     ("Stop", None, 60),
 )
+CONTEXT_IO_HOOK_SPECS: tuple[tuple[str, str | None, int], ...] = (
+    ("UserPromptSubmit", None, 60),
+    ("PreToolUse", r"^Read$", 60),
+    ("Stop", None, 60),
+)
 
 
 class InstallError(ValueError):
@@ -39,24 +44,28 @@ def _within(path: Path, root: Path) -> Path:
     return resolved
 
 
-def _hook_command(repo_root: Path, python_executable: Path) -> tuple[str, Path]:
-    hook_path = (repo_root / ".claude" / "hooks" / "orchestrator" / "hook.py").resolve()
+def _hook_command(
+    repo_root: Path, python_executable: Path, entrypoint: str
+) -> tuple[str, Path]:
+    hook_path = (repo_root / ".claude" / "hooks" / "orchestrator" / entrypoint).resolve()
     if not hook_path.is_file():
-        raise InstallError("orchestrator hook.py is unavailable")
+        raise InstallError(f"orchestrator {entrypoint} is unavailable")
     python_path = python_executable.resolve()
     if not python_path.is_file():
         raise InstallError("Python executable is unavailable")
     return subprocess.list2cmdline([str(python_path), str(hook_path)]), hook_path
 
 
-def _managed_entry(entry: Any, hook_path: Path) -> bool:
+def _managed_entry(entry: Any, hook_paths: tuple[Path, ...]) -> bool:
     if not isinstance(entry, Mapping):
         return False
     hooks = entry.get("hooks")
     if not isinstance(hooks, list) or len(hooks) != 1 or not isinstance(hooks[0], Mapping):
         return False
     command = hooks[0].get("command")
-    return isinstance(command, str) and str(hook_path).casefold() in command.casefold()
+    return isinstance(command, str) and any(
+        str(hook_path).casefold() in command.casefold() for hook_path in hook_paths
+    )
 
 
 def _expected_entry(matcher: str | None, timeout: int, command: str) -> dict[str, Any]:
@@ -82,14 +91,27 @@ def merge_settings(
     if not isinstance(hooks_value, Mapping):
         raise InstallError("settings hooks must be a JSON object")
     hooks = dict(hooks_value)
-    command, hook_path = _hook_command(repo_root, python_executable)
-
+    codex_command, codex_path = _hook_command(repo_root, python_executable, "hook.py")
+    context_command, context_path = _hook_command(
+        repo_root, python_executable, "context_io_hook.py"
+    )
+    hook_paths = (codex_path, context_path)
+    expected_by_event: dict[str, list[dict[str, Any]]] = {}
     for event_name, matcher, timeout in HOOK_SPECS:
+        expected_by_event.setdefault(event_name, []).append(
+            _expected_entry(matcher, timeout, codex_command)
+        )
+    for event_name, matcher, timeout in CONTEXT_IO_HOOK_SPECS:
+        expected_by_event.setdefault(event_name, []).append(
+            _expected_entry(matcher, timeout, context_command)
+        )
+
+    for event_name, expected in expected_by_event.items():
         entries_value = hooks.get(event_name, [])
         if not isinstance(entries_value, list):
             raise InstallError(f"settings hook {event_name} must be a JSON array")
-        unrelated = [entry for entry in entries_value if not _managed_entry(entry, hook_path)]
-        hooks[event_name] = unrelated + [_expected_entry(matcher, timeout, command)]
+        unrelated = [entry for entry in entries_value if not _managed_entry(entry, hook_paths)]
+        hooks[event_name] = unrelated + expected
 
     result["hooks"] = hooks
     return result, result != dict(settings)

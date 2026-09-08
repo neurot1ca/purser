@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import codex
+import context_io_telemetry
 import hook
 import json_transport
 import ledger
@@ -141,6 +142,26 @@ def test_pending_cleanup_failure_does_not_change_pretool_output(
         raise OSError("cleanup unavailable")
 
     monkeypatch.setattr(codex, "_cleanup_stale_pending", fail_cleanup)
+    actual = codex.pre_tool_use(
+        call, config=config, state_root=state / "failure", repo_root=repo
+    )
+    assert actual == expected
+
+
+def test_context_association_failure_does_not_change_phase_1a_pretool_output(
+    workspace, config, monkeypatch
+):
+    repo, state = workspace
+    call = event(tool_use_id="context-association-failure")
+    expected = codex.pre_tool_use(
+        call, config=config, state_root=state / "control", repo_root=repo
+    )
+
+    monkeypatch.setattr(
+        context_io_telemetry,
+        "associate_turn",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("telemetry unavailable")),
+    )
     actual = codex.pre_tool_use(
         call, config=config, state_root=state / "failure", repo_root=repo
     )

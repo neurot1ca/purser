@@ -1094,6 +1094,16 @@ def pre_tool_use(
         except Exception:
             _observe("record_health", "DEGRADED", error_code="CLAUDE_TRANSCRIPT_PARSER_FAILED", state_root=runtime_root)
 
+        try:
+            import context_io_telemetry
+            context_io_telemetry.associate_turn(
+                runtime_root,
+                session_id=event.get("session_id"),
+                task_id=parsed.task_id,
+            )
+        except BaseException:
+            pass
+
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

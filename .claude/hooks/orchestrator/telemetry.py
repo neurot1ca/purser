@@ -12,7 +12,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 from typing import Any, Iterator
+import uuid
 
 import telemetry_schema as schema
 import obsidian_projection
@@ -20,6 +22,11 @@ import obsidian_projection
 
 LOCK_TIMEOUT_SECONDS = 0.05
 SPOOL_MERGE_LIMIT = 16
+ATOMIC_REPLACE_MAX_ATTEMPTS = 4
+ATOMIC_REPLACE_MAX_WAIT_SECONDS = 0.03
+CONTEXT_IO_EVENT_MAX_BYTES = 64 * 1024
+CONTEXT_IO_FALLBACK_SCAN_MAX_BYTES = 256 * 1024
+CONTEXT_IO_METADATA_MAX_BYTES = 4 * 1024
 CLAUDE_USAGE_MAX_STALENESS_SECONDS = 5 * 60
 CLAUDE_USAGE_MAX_BYTES = 16 * 1024
 CLAUDE_RATE_LIMIT_DELTA_SCOPE = "account_window_observation"
@@ -42,6 +49,7 @@ _HEALTH_ERROR_CODES = frozenset(
         "CLAUDE_TRANSCRIPT_PARSER_UNAVAILABLE",
         "CLAUDE_TRANSCRIPT_PARSER_FAILED",
         "CLAUDE_TRANSCRIPT_FINALIZATION_FAILED",
+        "CONTEXT_IO_EMIT_FAILED",
     }
 )
 TERMINAL_TASK_USAGE_FAILURES = frozenset(
@@ -89,7 +97,7 @@ def _atomic_json(path: Path, value: Any) -> None:
             json.dump(value, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
         temporary = None
     finally:
         if temporary is not None:
@@ -97,6 +105,21 @@ def _atomic_json(path: Path, value: Any) -> None:
                 temporary.unlink()
             except OSError:
                 pass
+
+
+def _replace_with_retry(source: Path, destination: Path) -> None:
+    deadline = time.monotonic() + ATOMIC_REPLACE_MAX_WAIT_SECONDS
+    for attempt in range(ATOMIC_REPLACE_MAX_ATTEMPTS):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if attempt + 1 >= ATOMIC_REPLACE_MAX_ATTEMPTS:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(0.005 * (2**attempt), remaining))
 
 
 @contextmanager
@@ -148,33 +171,346 @@ def _event_path(root: Path, event: Mapping[str, Any]) -> Path:
     return root / "events" / month / f"session_{session_id}.jsonl"
 
 
-def _append_event(root: Path, event: Mapping[str, Any]) -> None:
-    path = _event_path(root, event)
+def _encoded_event(event: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+
+
+def _append_record(path: Path, event: Mapping[str, Any]) -> tuple[int, int]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(encoded + "\n")
+    encoded = _encoded_event(event)
+    with path.open("ab") as handle:
+        handle.seek(0, os.SEEK_END)
+        offset = handle.tell()
+        handle.write(encoded)
         handle.flush()
         os.fsync(handle.fileno())
+    return offset, len(encoded)
+
+
+def _append_event(root: Path, event: Mapping[str, Any]) -> tuple[int, int]:
+    return _append_record(_event_path(root, event), event)
 
 
 def _task_index_path(root: Path, task_id: str) -> Path:
     return root / "events" / "by_task" / f"{task_id}.jsonl"
 
 
-def _append_task_index(root: Path, event: Mapping[str, Any]) -> None:
+def _append_task_index(root: Path, event: Mapping[str, Any]) -> tuple[int, int] | None:
     """Persist a bounded-read feed without changing the raw event schema."""
 
     task_id = event.get("task_id")
     if not isinstance(task_id, str):
         return
-    path = _task_index_path(root, task_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(encoded + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+    return _append_record(_task_index_path(root, task_id), event)
+
+
+def _context_io_metadata_paths(root: Path, event_id: str) -> tuple[Path, Path]:
+    spool = root / "events" / "spool"
+    return (
+        spool / ".context_io_intents" / f"{event_id}.json",
+        spool / ".context_io_receipts" / f"{event_id}.json",
+    )
+
+
+def _read_context_io_metadata(path: Path) -> tuple[dict[str, Any] | None, str]:
+    try:
+        with path.open("rb") as handle:
+            encoded = handle.read(CONTEXT_IO_METADATA_MAX_BYTES + 1)
+        if len(encoded) > CONTEXT_IO_METADATA_MAX_BYTES:
+            return None, "UNREADABLE"
+        value = json.loads(encoded.decode("utf-8"))
+    except FileNotFoundError:
+        return None, "MISSING"
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None, "UNREADABLE"
+    return (dict(value), "VALID") if isinstance(value, Mapping) else (None, "UNREADABLE")
+
+
+def _context_io_metadata(event: Mapping[str, Any], encoded: bytes, root: Path) -> dict[str, Any]:
+    task_id = event.get("task_id")
+    event_path = _event_path(root, event)
+    index_path = _task_index_path(root, task_id) if isinstance(task_id, str) else None
+    return {
+        "schema_version": 1,
+        "event_id": event["event_id"],
+        "event_sha256": hashlib.sha256(encoded).hexdigest(),
+        "canonical_month": str(event["ts_utc"])[:7],
+        "canonical_offset": event_path.stat().st_size if event_path.exists() else 0,
+        "canonical_length": len(encoded),
+        "task_indexed": index_path is not None,
+        "task_index_offset": (
+            index_path.stat().st_size if index_path is not None and index_path.exists()
+            else 0 if index_path is not None
+            else None
+        ),
+        "task_index_length": len(encoded) if index_path is not None else None,
+    }
+
+
+def _valid_context_io_metadata(
+    value: Mapping[str, Any], event: Mapping[str, Any], encoded: bytes
+) -> bool:
+    task_indexed = isinstance(event.get("task_id"), str)
+    expected_keys = {
+        "schema_version", "event_id", "event_sha256", "canonical_month",
+        "canonical_offset", "canonical_length", "task_indexed",
+        "task_index_offset", "task_index_length",
+    }
+    integer_fields = ("canonical_offset", "canonical_length")
+    if set(value) != expected_keys or any(
+        not isinstance(value.get(name), int)
+        or isinstance(value.get(name), bool)
+        or value[name] < 0
+        for name in integer_fields
+    ):
+        return False
+    if task_indexed and (
+        not isinstance(value.get("task_index_offset"), int)
+        or isinstance(value.get("task_index_offset"), bool)
+        or value["task_index_offset"] < 0
+        or value.get("task_index_length") != len(encoded)
+    ):
+        return False
+    return (
+        value.get("schema_version") == 1
+        and value.get("event_id") == event.get("event_id")
+        and value.get("event_sha256") == hashlib.sha256(encoded).hexdigest()
+        and value.get("canonical_month") == str(event.get("ts_utc"))[:7]
+        and value.get("canonical_length") == len(encoded)
+        and value.get("task_indexed") is task_indexed
+        and (task_indexed or value.get("task_index_offset") is None)
+        and (task_indexed or value.get("task_index_length") is None)
+    )
+
+
+def _record_matches(path: Path, *, offset: int, encoded: bytes) -> bool:
+    if len(encoded) > CONTEXT_IO_EVENT_MAX_BYTES:
+        raise ValueError("context-I/O event exceeds verification bound")
+    try:
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            return handle.read(len(encoded)) == encoded
+    except FileNotFoundError:
+        return False
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+def _complete_valid_record_at(path: Path, offset: int, event_id: str) -> bool:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            candidate = handle.read(CONTEXT_IO_EVENT_MAX_BYTES + 1)
+    except FileNotFoundError:
+        return False
+    newline = candidate.find(b"\n")
+    if newline < 0 or newline >= CONTEXT_IO_EVENT_MAX_BYTES:
+        return False
+    record = candidate[: newline + 1]
+    try:
+        value = json.loads(record)
+    except (UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(value, Mapping)
+        and schema.valid_event(value)
+        and value.get("event_id") != event_id
+        and _encoded_event(value) == record
+    )
+
+
+def _eof_is_record_boundary(path: Path, size: int) -> bool:
+    if size == 0:
+        return True
+    try:
+        with path.open("rb") as handle:
+            handle.seek(size - 1)
+            return handle.read(1) == b"\n"
+    except FileNotFoundError:
+        return False
+
+
+def _bounded_event_by_id(
+    path: Path, event_id: str, encoded: bytes
+) -> tuple[tuple[int, int] | None, bool]:
+    try:
+        size = path.stat().st_size
+        start = max(0, size - CONTEXT_IO_FALLBACK_SCAN_MAX_BYTES)
+        with path.open("rb") as handle:
+            handle.seek(start)
+            data = handle.read(CONTEXT_IO_FALLBACK_SCAN_MAX_BYTES)
+    except FileNotFoundError:
+        return None, True
+    if start:
+        boundary = data.find(b"\n")
+        if boundary < 0:
+            return None, False
+        start += boundary + 1
+        data = data[boundary + 1 :]
+    offset = start
+    for line in data.splitlines(keepends=True):
+        try:
+            value = json.loads(line)
+        except (UnicodeError, json.JSONDecodeError):
+            offset += len(line)
+            continue
+        if isinstance(value, Mapping) and value.get("event_id") == event_id:
+            if line != encoded:
+                raise ValueError("context-I/O event identity collision")
+            return (offset, len(line)), start == 0
+        offset += len(line)
+    return None, start == 0
+
+
+def _fallback_context_io_metadata(
+    root: Path, event: Mapping[str, Any], encoded: bytes
+) -> dict[str, Any]:
+    task_id = event.get("task_id")
+    event_path = _event_path(root, event)
+    index_path = _task_index_path(root, task_id) if isinstance(task_id, str) else None
+    canonical, canonical_complete = _bounded_event_by_id(
+        event_path, str(event["event_id"]), encoded
+    )
+    indexed, index_complete = (
+        _bounded_event_by_id(index_path, str(event["event_id"]), encoded)
+        if index_path is not None
+        else (None, True)
+    )
+    if (canonical is None and not canonical_complete) or (
+        indexed is None and not index_complete
+    ):
+        raise OSError("context-I/O fallback verification bound exceeded")
+    value = _context_io_metadata(event, encoded, root)
+    if canonical is not None:
+        value["canonical_offset"] = canonical[0]
+    if indexed is not None:
+        value["task_index_offset"] = indexed[0]
+    return value
+
+
+def _verify_context_io_metadata(
+    root: Path, event: Mapping[str, Any], encoded: bytes, value: Mapping[str, Any]
+) -> bool:
+    if not _record_matches(
+        _event_path(root, event), offset=value["canonical_offset"], encoded=encoded
+    ):
+        return False
+    task_id = event.get("task_id")
+    return not isinstance(task_id, str) or _record_matches(
+        _task_index_path(root, task_id), offset=value["task_index_offset"], encoded=encoded
+    )
+
+
+def _relocate_occupied_context_io_offsets(
+    root: Path,
+    event: Mapping[str, Any],
+    encoded: bytes,
+    intent_path: Path,
+    intent: Mapping[str, Any],
+) -> dict[str, Any]:
+    task_id = event.get("task_id")
+    locations: list[tuple[str, Path]] = [
+        ("canonical_offset", _event_path(root, event))
+    ]
+    if isinstance(task_id, str):
+        locations.append(("task_index_offset", _task_index_path(root, task_id)))
+    relocated = dict(intent)
+    changed = False
+    for offset_field, path in locations:
+        offset = intent[offset_field]
+        if _record_matches(path, offset=offset, encoded=encoded):
+            continue
+        size = _file_size(path)
+        if size == offset:
+            continue
+        if (
+            size < offset
+            or not _complete_valid_record_at(path, offset, str(event["event_id"]))
+            or not _eof_is_record_boundary(path, size)
+        ):
+            raise OSError("context-I/O intent offset is inconclusive")
+        relocated[offset_field] = size
+        changed = True
+    if not changed:
+        return relocated
+    _atomic_json(intent_path, relocated)
+    persisted, state = _read_context_io_metadata(intent_path)
+    if (
+        state != "VALID"
+        or persisted != relocated
+        or not _valid_context_io_metadata(persisted, event, encoded)
+    ):
+        raise OSError("context-I/O relocated intent was not persisted")
+    return persisted
+
+
+def _persist_context_io_event(root: Path, event: Mapping[str, Any]) -> None:
+    encoded = _encoded_event(event)
+    if len(encoded) > CONTEXT_IO_EVENT_MAX_BYTES:
+        raise ValueError("context-I/O event exceeds verification bound")
+    intent_path, receipt_path = _context_io_metadata_paths(root, str(event["event_id"]))
+    receipt, receipt_state = _read_context_io_metadata(receipt_path)
+    if receipt_state == "VALID":
+        if not _valid_context_io_metadata(receipt, event, encoded):
+            raise ValueError("context-I/O receipt disagrees with event")
+        if not _verify_context_io_metadata(root, event, encoded, receipt):
+            raise OSError("context-I/O receipt disagrees with durable log")
+        intent_path.unlink(missing_ok=True)
+        return
+
+    intent, intent_state = _read_context_io_metadata(intent_path)
+    if intent_state == "VALID":
+        if not _valid_context_io_metadata(intent, event, encoded):
+            raise ValueError("context-I/O intent disagrees with event")
+    elif intent_state == "MISSING":
+        intent = _context_io_metadata(event, encoded, root)
+        _atomic_json(intent_path, intent)
+    else:
+        intent = _fallback_context_io_metadata(root, event, encoded)
+        _atomic_json(intent_path, intent)
+
+    intent = _relocate_occupied_context_io_offsets(
+        root, event, encoded, intent_path, intent
+    )
+
+    event_path = _event_path(root, event)
+    if not _record_matches(
+        event_path, offset=intent["canonical_offset"], encoded=encoded
+    ):
+        if _file_size(event_path) != intent["canonical_offset"]:
+            raise OSError("context-I/O canonical append position is occupied")
+        offset, length = _append_event(root, event)
+        if (offset, length) != (intent["canonical_offset"], intent["canonical_length"]):
+            raise OSError("context-I/O canonical append offset changed")
+    task_id = event.get("task_id")
+    index_path = _task_index_path(root, task_id) if isinstance(task_id, str) else None
+    if index_path is not None and not _record_matches(
+        index_path, offset=intent["task_index_offset"], encoded=encoded
+    ):
+        if _file_size(index_path) != intent["task_index_offset"]:
+            raise OSError("context-I/O task-index append position is occupied")
+        appended = _append_task_index(root, event)
+        if appended != (intent["task_index_offset"], intent["task_index_length"]):
+            raise OSError("context-I/O task-index append offset changed")
+    if not _verify_context_io_metadata(root, event, encoded, intent):
+        raise OSError("context-I/O durable verification failed")
+    _atomic_json(receipt_path, intent)
+    committed, committed_state = _read_context_io_metadata(receipt_path)
+    if (
+        committed_state != "VALID"
+        or not _valid_context_io_metadata(committed, event, encoded)
+        or not _verify_context_io_metadata(root, event, encoded, committed)
+    ):
+        raise OSError("context-I/O receipt verification failed")
+    intent_path.unlink(missing_ok=True)
 
 
 def _spool_event(root: Path, event: Mapping[str, Any]) -> None:
@@ -308,6 +644,55 @@ def emit(event_type: str, *, task_id: Any = None, **payload: Any) -> None:
         except BaseException:
             _short_stderr("TELEMETRY_EMIT_FAILED")
     return None
+
+
+def build_context_io_turn_event(
+    payload: Mapping[str, Any],
+    *,
+    task_id: Any,
+    event_id: str,
+) -> dict[str, Any]:
+    uuid.UUID(event_id)
+    event = schema.build_event(
+        "CONTEXT_IO_TURN_RECORDED", task_id=task_id, payload=payload
+    )
+    event["event_id"] = event_id
+    if not schema.valid_event(event):
+        raise ValueError("context-I/O event is invalid")
+    return event
+
+
+def emit_context_io_turn(
+    event: Mapping[str, Any],
+    *,
+    state_root: str | os.PathLike[str] | None = None,
+) -> bool:
+    """Durably accept one frozen context-I/O event with at-most-once identity."""
+
+    try:
+        root = _root(state_root)
+        if (
+            not schema.valid_event(event)
+            or event.get("event_type") != "CONTEXT_IO_TURN_RECORDED"
+        ):
+            raise ValueError("context-I/O event is invalid")
+        with _try_lock(root) as acquired:
+            if acquired:
+                _merge_spool(root)
+                _persist_context_io_event(root, event)
+                durable = True
+            else:
+                durable = False
+        task_id = event.get("task_id")
+        if task_id is not None:
+            update_task(task_id, state_root=state_root)
+        return durable
+    except BaseException:
+        try:
+            _record_failure(_root(state_root), "CONTEXT_IO_EMIT_FAILED")
+        except BaseException:
+            _short_stderr("CONTEXT_IO_EMIT_FAILED")
+        return False
 
 
 def _usage_defaults() -> dict[str, Any]:
@@ -591,6 +976,7 @@ def _new_aggregate(
         "policy_fingerprint": fingerprint,
         "policy_hashes": hashes,
         "usage": _usage_defaults(),
+        "context_io": None,
     }
 
 
@@ -797,6 +1183,8 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
                 val = payload.get(token_field)
                 if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
                     usage[token_field] = val
+    elif event_type == "CONTEXT_IO_TURN_RECORDED":
+        aggregate["context_io"] = dict(payload)
 
 
 def _raw_events(root: Path) -> Iterable[dict[str, Any]]:
