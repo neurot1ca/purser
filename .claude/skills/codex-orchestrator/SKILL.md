@@ -500,10 +500,21 @@ a second Codex does less to fix that than this lane does.
 ## Model routing
 
 - mechanical, narrow, low risk → `gpt-5.6-luna` + `high`
+- operations with an established procedure (status, fetch, count, bind, deploy,
+  start, arm under an existing runbook) → `gpt-5.6-luna` + `high`
 - narrow but semantically subtle, where a miss would cost a repair cycle →
   `gpt-5.6-luna` + `xhigh`
-- normal implementation, debugging, multi-file work → `gpt-5.6-sol` + `medium`
-- consequential or semantically difficult → `gpt-5.6-sol` + `high`
+- RESOLVED implementation: the what and where are already decided — an accepted
+  diagnosis or change map names the files, symbols and invariants, the human
+  decisions are recorded, and the acceptance criteria leave no design choice →
+  `gpt-5.6-luna` + `xhigh`, or `high` when the edit itself is mechanical. This
+  holds even inside consequential domains (see below).
+- normal implementation, debugging, multi-file work that still requires design
+  → `gpt-5.6-sol` + `medium`
+- consequential AND unresolved — the worker must still decide semantics,
+  invariants, a state machine or an economic rule, or no accepted change map
+  exists; diagnosis, design and read-only audits whose job is to find the answer
+  → `gpt-5.6-sol` + `high`
 - `gpt-5.6-sol` + `xhigh` → only on concrete escalation grounds: demonstrated
   complexity, material disagreement, or a specific lower-effort failure
 - DeepSeek `deepseek-v4-pro[1m]` + `CLAUDE_CODE_EFFORT_LEVEL=high` →
@@ -529,10 +540,31 @@ classification time, before dispatch — adequate capability is never earned by
 failing first. Within the class, pick the lowest tier expected to finish in ONE
 pass.
 
+Human decision, 2026-09-15 (Ugur): mechanical work and work whose design is
+already settled go to luna, to keep sol quota for the work that needs it. The
+deciding question is RESIDUAL DESIGN, not domain: "does the worker still have to
+decide anything?" Touching the money path, timing or evidence does not by itself
+make a task sol work once an accepted change map has decided it. The usual
+shape is therefore split: sol diagnoses or designs once, Claude accepts the map,
+luna implements each bounded piece against it.
+
+Guardrails for luna on consequential domains, all mandatory:
+
+- The prompt cites the accepted map (thread or commit) and states every invariant
+  and the fail-closed direction explicitly; if writing that down reveals an open
+  choice, the task is not resolved — send it to sol or back to the human.
+- Use route `subtle` (luna + xhigh) for such pieces, never `mechanical`, and
+  keep each piece one-pass small.
+- Claude still reviews the result FULLY as consequential work, regardless of
+  route or Reviewer-1 outcome, and applies the attribution check.
+- A concrete luna miss on a piece (failed acceptance criterion, wrong invariant)
+  escalates that piece to sol + high on a fresh thread; do not loop luna repairs.
+
 Optimize total task cost, not per-call tokens: a configuration that predictably
 triggers a review-repair loop is not cheap. Equally, do not escalate merely
-because a stronger model exists, and never downgrade consequential work to
-conserve quota. If a model or effort is unavailable on the selected worker,
+because a stronger model exists, and never downgrade UNRESOLVED consequential
+work to conserve quota (resolved work routed to luna under the guardrails above
+is placement by class, not a downgrade). If a model or effort is unavailable on the selected worker,
 prefer the other worker over silently reducing capability.
 
 This rules out a deliberate cheap-first cascade. A weak first pass does not just
