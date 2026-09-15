@@ -499,16 +499,21 @@ a second Codex does less to fix that than this lane does.
 
 ## Model routing
 
-- mechanical, narrow, low risk → `gpt-5.6-luna` + `high`
-- operations with an established procedure (status, fetch, count, bind, deploy,
-  start, arm under an existing runbook) → `gpt-5.6-luna` + `high`
+- mechanical, narrow, low risk; read-only status and counting → `gpt-5.6-luna` + `high`
+- runner operations with an established runbook that can hit traps needing
+  judgement (deploy, go, start, arm, post-run fetch and packaging) →
+  `gpt-5.6-terra` + `high` (route `operation`); until that route exists in the
+  hook table use route `normal` (`gpt-5.6-sol` + `medium`)
 - narrow but semantically subtle, where a miss would cost a repair cycle →
-  `gpt-5.6-luna` + `xhigh`
+  `gpt-5.6-luna` + `high` with a tighter prompt, not a higher effort
 - RESOLVED implementation: the what and where are already decided — an accepted
   diagnosis or change map names the files, symbols and invariants, the human
   decisions are recorded, and the acceptance criteria leave no design choice →
-  `gpt-5.6-luna` + `xhigh`, or `high` when the edit itself is mechanical. This
-  holds even inside consequential domains (see below).
+  `gpt-5.6-luna` + `high`. This holds even inside consequential domains (see
+  below).
+- `gpt-5.6-luna` + `xhigh` is NOT used (Ugur, 2026-09-15): it overthinks, runs
+  past the ~40-minute stall window and so starves Reviewer-1. If luna + high is
+  not enough, the task is not resolved: move it to sol, do not raise luna's effort.
 - normal implementation, debugging, multi-file work that still requires design
   → `gpt-5.6-sol` + `medium`
 - consequential AND unresolved — the worker must still decide semantics,
@@ -553,8 +558,8 @@ Guardrails for luna on consequential domains, all mandatory:
 - The prompt cites the accepted map (thread or commit) and states every invariant
   and the fail-closed direction explicitly; if writing that down reveals an open
   choice, the task is not resolved — send it to sol or back to the human.
-- Use route `subtle` (luna + xhigh) for such pieces, never `mechanical`, and
-  keep each piece one-pass small.
+- Use luna + high and keep each piece one-pass small; a piece that would need
+  more reasoning than that is split further or goes to sol.
 - Claude still reviews the result FULLY as consequential work, regardless of
   route or Reviewer-1 outcome, and applies the attribution check.
 - A concrete luna miss on a piece (failed acceptance criterion, wrong invariant)
