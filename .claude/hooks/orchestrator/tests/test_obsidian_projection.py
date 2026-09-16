@@ -47,7 +47,7 @@ def _aggregate(task_id="task-1", **changes):
         "phase": "implementation",
         "route": "subtle",
         "model": "gpt-5.6-luna",
-        "effort": "xhigh",
+        "effort": "high",
         "fresh_threads": 1,
         "reply_calls": 0,
         "routing_enforced": True,

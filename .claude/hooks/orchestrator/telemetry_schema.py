@@ -142,7 +142,7 @@ _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 _WINDOWS_RESERVED = frozenset(
     {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 )
-_ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated"})
+_ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated", "operation"})
 _PHASES = frozenset({"implementation", "operation"})
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 _VALIDATIONS = frozenset({"PASS", "FAIL", "UNKNOWN"})

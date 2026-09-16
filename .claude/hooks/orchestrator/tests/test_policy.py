@@ -128,10 +128,11 @@ def test_operation_scope_is_optional_and_ignored(config):
 def test_route_table_is_exact_and_has_no_fallback(config):
     expected = {
         "mechanical": ("gpt-5.6-luna", "high"),
-        "subtle": ("gpt-5.6-luna", "xhigh"),
+        "subtle": ("gpt-5.6-luna", "high"),
         "normal": ("gpt-5.6-sol", "medium"),
         "consequential": ("gpt-5.6-sol", "high"),
         "escalated": ("gpt-5.6-sol", "xhigh"),
+        "operation": ("gpt-5.6-terra", "high"),
     }
     for route, pair in expected.items():
         result = policy.resolve_route(route, config)

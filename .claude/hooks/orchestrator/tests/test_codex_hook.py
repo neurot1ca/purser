@@ -219,10 +219,11 @@ def test_protocol_errors_deny_with_policy_reason(workspace, config, prompt, code
     ("route", "model", "effort"),
     [
         ("mechanical", "gpt-5.6-luna", "high"),
-        ("subtle", "gpt-5.6-luna", "xhigh"),
+        ("subtle", "gpt-5.6-luna", "high"),
         ("normal", "gpt-5.6-sol", "medium"),
         ("consequential", "gpt-5.6-sol", "high"),
         ("escalated", "gpt-5.6-sol", "xhigh"),
+        ("operation", "gpt-5.6-terra", "high"),
     ],
 )
 def test_each_route_sets_exact_model_and_effort(workspace, config, route, model, effort):

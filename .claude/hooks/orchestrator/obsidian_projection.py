@@ -54,7 +54,7 @@ _MARKER_RE = re.compile(
 )
 _SAFE_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
-_ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated"})
+_ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated", "operation"})
 _PHASES = frozenset({"implementation", "operation"})
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 _VALIDATIONS = frozenset({"PASS", "FAIL", "UNKNOWN"})

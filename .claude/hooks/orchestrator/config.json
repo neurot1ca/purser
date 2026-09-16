@@ -22,7 +22,8 @@
     "subtle",
     "normal",
     "consequential",
-    "escalated"
+    "escalated",
+    "operation"
   ],
   "routes": {
     "mechanical": {
@@ -31,7 +32,7 @@
     },
     "subtle": {
       "model": "gpt-5.6-luna",
-      "effort": "xhigh"
+      "effort": "high"
     },
     "normal": {
       "model": "gpt-5.6-sol",
@@ -44,6 +45,10 @@
     "escalated": {
       "model": "gpt-5.6-sol",
       "effort": "xhigh"
+    },
+    "operation": {
+      "model": "gpt-5.6-terra",
+      "effort": "high"
     }
   },
   "sol_model": "gpt-5.6-sol",
