@@ -29,6 +29,9 @@ CODEX_TOOL = "mcp__codex-main__codex"
 CODEX_REPLY_TOOL = "mcp__codex-main__codex-reply"
 CODEX_TOOLS = frozenset({CODEX_TOOL, CODEX_REPLY_TOOL})
 IMPLEMENTER_REPORT_LIMIT = 1200
+OPERATION_REPORT_LIMIT = 24000
+BUNDLE_NON_REPORT_MAX_BYTES = 8192
+CHANGED_PATH_PREVIEW_LIMIT = 10
 GIT_HEAD_READ_LIMIT = 4096
 PENDING_MAX_AGE_SECONDS = 24 * 60 * 60
 PENDING_CLEANUP_LIMIT = 32
@@ -1181,6 +1184,8 @@ def _base_bundle(error: str | None = None) -> dict[str, Any]:
         "baseline_head": None,
         "current_head": None,
         "changed_paths": None,
+        "changed_path_count": None,
+        "changed_paths_sha256": None,
         "delta_lines": None,
         "delta_files": None,
         "validation": "UNKNOWN",
@@ -1193,6 +1198,7 @@ def _base_bundle(error: str | None = None) -> dict[str, Any]:
         "findings": findings,
         "claude_review_mode": policy.FULL,
         "raw_output_path": None,
+        "full_bundle_path": None,
         "protected_paths_touched": [],
         "concurrent_writer": None,
         "implementer_report": "",
@@ -1229,6 +1235,170 @@ def _replacement(bundle: Mapping[str, Any], config: Mapping[str, Any]) -> dict[s
             field: [{"type": "text", "text": text}],
         }
     }
+
+
+def _report_limit(config: Mapping[str, Any], phase: Any) -> int:
+    key = (
+        "operation_report_max_chars"
+        if phase == "operation"
+        else "implementation_report_max_chars"
+    )
+    default = OPERATION_REPORT_LIMIT if phase == "operation" else IMPLEMENTER_REPORT_LIMIT
+    return int(config.get(key, default))
+
+
+def _non_report_bytes(bundle: Mapping[str, Any]) -> int:
+    non_report = {key: value for key, value in bundle.items() if key != "implementer_report"}
+    return len(
+        json_transport.dumps(non_report, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def _changed_paths_summary(paths: Sequence[Any]) -> tuple[list[Any], int, str]:
+    encoded = json_transport.dumps(list(paths), sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return list(paths[:CHANGED_PATH_PREVIEW_LIMIT]), len(paths), hashlib.sha256(encoded).hexdigest()
+
+
+def _copy_findings(findings: Any, message_limit: int | None = None) -> list[dict[str, Any]]:
+    if not isinstance(findings, list):
+        return []
+    copied: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
+        code = finding.get("code")
+        message = finding.get("message")
+        item: dict[str, Any] = {"code": code}
+        if isinstance(message, str):
+            preview = message if message_limit is None else message[:message_limit]
+            item["message"] = preview
+            if preview != message:
+                item["message_char_count"] = len(message)
+                item["message_sha256"] = hashlib.sha256(
+                    message.encode("utf-8", "backslashreplace")
+                ).hexdigest()
+        else:
+            item["message"] = ""
+        copied.append(item)
+    return copied
+
+
+def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any], bool]:
+    """Return the Claude-facing bundle and whether mandatory fields exceeded the cap."""
+
+    compact = dict(bundle)
+    paths = bundle.get("changed_paths")
+    if isinstance(paths, list):
+        preview, count, digest = _changed_paths_summary(paths)
+        compact["changed_paths"] = preview
+        compact["changed_path_count"] = count
+        compact["changed_paths_sha256"] = digest
+    compact["findings"] = _copy_findings(bundle.get("findings"))
+
+    repair = bundle.get("micro_repair")
+    if isinstance(repair, Mapping) and isinstance(repair.get("initial_findings"), list):
+        repair_copy = dict(repair)
+        repair_copy["initial_findings"] = _copy_findings(repair["initial_findings"])
+        compact["micro_repair"] = repair_copy
+
+    if _non_report_bytes(compact) <= cap:
+        return compact, False
+
+    # Finding messages are the only free text allowed to consume the remainder.
+    all_messages = [
+        finding.get("message", "")
+        for finding in compact["findings"]
+        if isinstance(finding, Mapping)
+    ]
+    if isinstance(compact.get("micro_repair"), Mapping):
+        all_messages.extend(
+            finding.get("message", "")
+            for finding in compact["micro_repair"].get("initial_findings", [])
+            if isinstance(finding, Mapping)
+        )
+    high = max((len(message) for message in all_messages if isinstance(message, str)), default=0)
+    low = 0
+    best: dict[str, Any] | None = None
+    while low <= high:
+        limit = (low + high) // 2
+        candidate = dict(compact)
+        candidate["findings"] = _copy_findings(bundle.get("findings"), limit)
+        if isinstance(repair, Mapping) and isinstance(repair.get("initial_findings"), list):
+            repair_copy = dict(repair)
+            repair_copy["initial_findings"] = _copy_findings(repair["initial_findings"], limit)
+            candidate["micro_repair"] = repair_copy
+        if _non_report_bytes(candidate) <= cap:
+            best = candidate
+            low = limit + 1
+        else:
+            high = limit - 1
+    if best is not None:
+        return best, False
+
+    compact["findings"] = _copy_findings(bundle.get("findings"), 0)
+    if isinstance(repair, Mapping) and isinstance(repair.get("initial_findings"), list):
+        repair_copy = dict(repair)
+        repair_copy["initial_findings"] = _copy_findings(repair["initial_findings"], 0)
+        compact["micro_repair"] = repair_copy
+    while isinstance(compact.get("changed_paths"), list) and compact["changed_paths"]:
+        compact["changed_paths"] = compact["changed_paths"][:-1]
+        if _non_report_bytes(compact) <= cap:
+            return compact, False
+
+    # For unusually small configured caps, discard non-contract metadata before
+    # sacrificing any verdict, identity, safety field, finding code, or artifact pointer.
+    audit = bundle.get("audit_receipt")
+    micro_repair = bundle.get("micro_repair")
+    mandatory = {
+        "task_id": bundle.get("task_id"),
+        "thread_id": bundle.get("thread_id"),
+        "routing_enforced": bundle.get("routing_enforced"),
+        "claude_review_mode": bundle.get("claude_review_mode"),
+        "reviewer1_result": bundle.get("reviewer1_result"),
+        "reviewer1_skipped_reason": bundle.get("reviewer1_skipped_reason"),
+        "protected_paths_touched": bundle.get("protected_paths_touched"),
+        "concurrent_writer": bundle.get("concurrent_writer"),
+        "micro_repair": (
+            {"status": micro_repair.get("status")}
+            if isinstance(micro_repair, Mapping)
+            else micro_repair
+        ),
+        "micro_repair_cleared_review": bundle.get("micro_repair_cleared_review"),
+        "validation": bundle.get("validation"),
+        "audit_receipt": (
+            {"verdict": audit.get("verdict")} if isinstance(audit, Mapping) else audit
+        ),
+        "changed_paths": [],
+        "changed_path_count": compact.get("changed_path_count"),
+        "changed_paths_sha256": compact.get("changed_paths_sha256"),
+        "findings": _copy_findings(bundle.get("findings"), 0),
+        "full_bundle_path": bundle.get("full_bundle_path"),
+        "implementer_report": bundle.get("implementer_report", ""),
+    }
+    return mandatory, _non_report_bytes(mandatory) > cap
+
+
+def _finalize_replacement(
+    bundle: dict[str, Any],
+    config: Mapping[str, Any],
+    runtime_root: Path,
+    event: Mapping[str, Any],
+) -> dict[str, Any]:
+    artifact_path = (runtime_root / "bundle_artifacts" / f"{_call_key(event)}.json").resolve()
+    bundle["full_bundle_path"] = str(artifact_path)
+    cap = int(config.get("bundle_non_report_max_bytes", BUNDLE_NON_REPORT_MAX_BYTES))
+    compact, mandatory_overflow = _compact_bundle(bundle, cap)
+    if mandatory_overflow and bundle.get("claude_review_mode") != policy.FULL:
+        bundle["claude_review_mode"] = policy.FULL
+        bundle["audit_receipt"] = None
+        compact, _ = _compact_bundle(bundle, cap)
+    compact["implementer_report"] = str(bundle.get("implementer_report", ""))[
+        : _report_limit(config, bundle.get("phase"))
+    ]
+    _atomic_json_write(artifact_path, bundle)
+    return _replacement(compact, config)
 
 
 def _internal_post_response(
@@ -1279,7 +1449,7 @@ def _internal_post_response(
             try:
                 thread_id, report = _extract_codex_result(event.get("tool_response"))
                 bundle["thread_id"] = thread_id
-                bundle["implementer_report"] = report[:IMPLEMENTER_REPORT_LIMIT]
+                bundle["implementer_report"] = report
             except WiringError as thread_error:
                 bundle["findings"].append(
                     _finding("THREAD_ID_UNRECOVERABLE", str(thread_error))
@@ -1288,6 +1458,8 @@ def _internal_post_response(
     except Exception:
         pass
     _record_diagnostic(runtime_root, event, "PostToolUse", error)
+    if runtime_root is not None:
+        return _finalize_replacement(bundle, loaded_config, runtime_root, event)
     return _replacement(bundle, loaded_config)
 
 
@@ -1447,7 +1619,7 @@ def post_tool_use(
         try:
             thread_id, report = _extract_codex_result(event.get("tool_response"))
             bundle["thread_id"] = thread_id
-            bundle["implementer_report"] = report[:IMPLEMENTER_REPORT_LIMIT]
+            bundle["implementer_report"] = report
             worker_validation = _parse_worker_validation(report)
             bundle["worker_validation"] = worker_validation
         except WiringError as error:
@@ -1496,7 +1668,7 @@ def post_tool_use(
                 _post_observations(event, runtime_root, pending, bundle)
             except BaseException:
                 _observe("update_task", pending.get("task_id"), state_root=runtime_root)
-            return _replacement(bundle, loaded_config)
+            return _finalize_replacement(bundle, loaded_config, runtime_root, event)
 
         repository = _repo_root(event, repo_root or pending.get("repo_root"))
         scope = pending.get("scope")
@@ -1839,7 +2011,7 @@ def post_tool_use(
             bundle["audit_receipt"] = _build_audit_receipt(bundle, pending.get("task_id"))
         else:
             bundle["audit_receipt"] = None
-        return _replacement(bundle, loaded_config)
+        return _finalize_replacement(bundle, loaded_config, runtime_root, event)
     except Exception as error:
         return _internal_post_response(
             event,

@@ -165,6 +165,19 @@ def validate_config(config: Mapping[str, Any]) -> None:
             "manifest_budget_seconds must be a positive finite number",
         )
 
+    for key in (
+        "bundle_non_report_max_bytes",
+        "implementation_report_max_chars",
+        "operation_report_max_chars",
+    ):
+        if key in config:
+            value = config[key]
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ConfigError(
+                    "INVALID_CONFIG_FIELD",
+                    f"{key} must be a positive integer",
+                )
+
     configured_skip_reasons = set(_string_list(config, "reviewer_skip_reasons"))
     if configured_skip_reasons != set(_REVIEWER_SKIP_PRECEDENCE):
         raise ConfigError(

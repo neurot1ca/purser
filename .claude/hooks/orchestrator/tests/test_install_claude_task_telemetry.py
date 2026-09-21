@@ -19,7 +19,7 @@ import install_claude_task_telemetry as installer
 
 @pytest.fixture()
 def tmp_path():
-    root = Path(__file__).parent / ".installer-test-tmp" / uuid.uuid4().hex
+    root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "installer" / uuid.uuid4().hex
     root.mkdir(parents=True)
     try:
         yield root

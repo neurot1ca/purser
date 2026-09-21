@@ -47,7 +47,7 @@ def disable_configured_projection_for_codex_tests(monkeypatch):
 
 @pytest.fixture()
 def workspace():
-    root = Path(__file__).parent / ".hook-test-tmp" / uuid.uuid4().hex
+    root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "codex" / uuid.uuid4().hex
     repo = root / "repo"
     state = root / "state"
     repo.mkdir(parents=True)
@@ -127,6 +127,106 @@ def response_bundle(response, config):
     output = response["hookSpecificOutput"][config["post_tool_output_field"]]
     assert output[0]["type"] == "text"
     return json.loads(output[0]["text"])
+
+
+def non_report_size(bundle):
+    return len(
+        json_transport.dumps(
+            {key: value for key, value in bundle.items() if key != "implementer_report"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+def test_bundle_cap_summarizes_large_deltas_and_preserves_safety_fields(workspace, config):
+    _, state = workspace
+    protected = "state/current.yaml"
+    changed_paths = [f"generated/path-{index:04d}.txt" for index in range(4999)] + [protected]
+    bundle = codex._base_bundle()
+    bundle.update(
+        task_id="stress-task",
+        thread_id="thread-stress",
+        phase="implementation",
+        routing_enforced=True,
+        claude_review_mode=policy.FULL,
+        reviewer1_result=policy.CHANGES_REQUIRED,
+        protected_paths_touched=[protected],
+        concurrent_writer=True,
+        micro_repair={"attempted": False, "status": "SKIPPED_BUDGET"},
+        validation="FAIL",
+        changed_paths=changed_paths,
+        findings=[
+            {"code": f"FINDING_{index:02d}", "message": "x" * 2000}
+            for index in range(20)
+        ],
+        implementer_report="r" * 5000,
+    )
+
+    raw = codex._finalize_replacement(bundle, config, state, event(tool_use_id="stress"))
+    compact = response_bundle(raw, config)
+
+    assert non_report_size(compact) <= config["bundle_non_report_max_bytes"]
+    assert compact["changed_path_count"] == 5000
+    assert len(compact["changed_paths"]) <= codex.CHANGED_PATH_PREVIEW_LIMIT
+    assert len(compact["changed_paths_sha256"]) == 64
+    assert compact["protected_paths_touched"] == [protected]
+    assert compact["claude_review_mode"] == policy.FULL
+    assert [finding["code"] for finding in compact["findings"]] == [
+        f"FINDING_{index:02d}" for index in range(20)
+    ]
+    assert all(finding["message_char_count"] == 2000 for finding in compact["findings"])
+    assert all(len(finding["message_sha256"]) == 64 for finding in compact["findings"])
+    assert len(compact["implementer_report"]) == config["implementation_report_max_chars"]
+
+    artifact = Path(compact["full_bundle_path"])
+    stored = json.loads(artifact.read_text(encoding="utf-8"))
+    assert stored["changed_paths"] == changed_paths
+    assert stored["findings"][19]["message"] == "x" * 2000
+    assert stored["implementer_report"] == "r" * 5000
+
+
+def test_runtime_caps_change_bundle_and_phase_report_behavior(workspace, config):
+    _, state = workspace
+    base = codex._base_bundle()
+    base.update(
+        task_id="runtime-caps",
+        thread_id="thread-caps",
+        phase="operation",
+        routing_enforced=True,
+        claude_review_mode=policy.FULL,
+        reviewer1_skipped_reason="PHASE_OPERATION",
+        protected_paths_touched=[],
+        validation="UNKNOWN",
+        changed_paths=[f"path-{index}.txt" for index in range(100)],
+        findings=[{"code": "LONG_MESSAGE", "message": "m" * 6000}],
+        implementer_report="operation deliverable " * 100,
+    )
+    roomy_config = dict(
+        config,
+        bundle_non_report_max_bytes=8192,
+        operation_report_max_chars=24000,
+    )
+    tight_config = dict(
+        config,
+        bundle_non_report_max_bytes=4096,
+        operation_report_max_chars=37,
+    )
+
+    roomy = response_bundle(
+        codex._finalize_replacement(dict(base), roomy_config, state, event(tool_use_id="roomy")),
+        roomy_config,
+    )
+    tight = response_bundle(
+        codex._finalize_replacement(dict(base), tight_config, state, event(tool_use_id="tight")),
+        tight_config,
+    )
+
+    assert non_report_size(roomy) <= 8192
+    assert non_report_size(tight) <= 4096
+    assert len(tight["findings"][0]["message"]) < len(roomy["findings"][0]["message"])
+    assert len(roomy["implementer_report"]) == len(base["implementer_report"])
+    assert len(tight["implementer_report"]) == 37
 
 
 def test_pending_cleanup_failure_does_not_change_pretool_output(

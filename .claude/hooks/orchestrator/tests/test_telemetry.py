@@ -25,7 +25,7 @@ import telemetry_schema as schema
 
 @pytest.fixture()
 def tmp_path():
-    root = Path(__file__).parent / ".telemetry-test-tmp" / uuid.uuid4().hex
+    root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "telemetry" / uuid.uuid4().hex
     root.mkdir(parents=True)
     try:
         yield root

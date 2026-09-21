@@ -11,6 +11,22 @@ import ledger
 import policy
 
 
+@pytest.fixture()
+def tmp_path():
+    root = (
+        Path(__file__).parents[4]
+        / ".tmp"
+        / "orchestrator-tests"
+        / "ledger-pytest"
+        / uuid.uuid4().hex
+    )
+    root.mkdir(parents=True)
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def git(repo, *arguments):
     return subprocess.run(
         ["git", *arguments],
@@ -24,7 +40,7 @@ def git(repo, *arguments):
 
 @pytest.fixture()
 def sandbox_dir():
-    root = Path(__file__).parent / ".ledger-test-tmp" / uuid.uuid4().hex
+    root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "ledger" / uuid.uuid4().hex
     root.mkdir(parents=True)
     try:
         yield root

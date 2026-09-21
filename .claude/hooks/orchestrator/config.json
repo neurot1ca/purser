@@ -61,6 +61,9 @@
     "small_delta_max_files": 2
   },
   "manifest_budget_seconds": 3.0,
+  "bundle_non_report_max_bytes": 8192,
+  "implementation_report_max_chars": 1200,
+  "operation_report_max_chars": 24000,
   "post_tool_output_field": "updatedToolOutput",
   "reviewer1_executable": "C:\\Users\\ugur\\scripts\\agy.exe",
   "reviewer1_model_requested": "gemini-3.8-flash-high",

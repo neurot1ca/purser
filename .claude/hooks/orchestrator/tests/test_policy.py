@@ -162,6 +162,16 @@ def test_invalid_config_is_rejected_on_load_and_resolution(config):
     with pytest.raises(policy.ConfigError):
         policy.validate_config(invalid_budget)
 
+    for key in (
+        "bundle_non_report_max_bytes",
+        "implementation_report_max_chars",
+        "operation_report_max_chars",
+    ):
+        invalid_cap = json.loads(json.dumps(config))
+        invalid_cap[key] = 0
+        with pytest.raises(policy.ConfigError):
+            policy.validate_config(invalid_cap)
+
 
 def test_vague_sol_basis_configuration_is_no_longer_required(config):
     assert "vague_sol_bases" not in config
