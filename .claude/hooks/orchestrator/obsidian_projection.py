@@ -24,6 +24,11 @@ PROJECTION_SCHEMA_VERSION = 1
 SAMPLE_SIZE = 30
 MIN_RATE_DENOMINATOR = 2
 LOCAL_TIMEZONE_FALLBACK_OFFSET_HOURS = 3
+BATCHING_BASELINE = 1.08
+BATCHING_TARGET = 1.5
+BATCHING_SNAPSHOT_MAX_AGE = timedelta(hours=6)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_BATCHING_SNAPSHOT_PATH = _REPO_ROOT / ".tmp" / "orchestration-tool-batching.json"
 
 
 def _resolve_zone() -> tuple[Any, str]:
@@ -780,9 +785,100 @@ def _eligible_aggregates(aggregates: Iterable[Mapping[str, Any]]) -> list[dict[s
     return eligible[-SAMPLE_SIZE:]
 
 
-def render_metrics(aggregates: Iterable[Mapping[str, Any]]) -> str:
+def read_batching_snapshot(
+    path: str | os.PathLike[str] | None = None,
+) -> Mapping[str, Any] | None:
+    """Read the audit-produced snapshot, treating missing/invalid data as unknown."""
+
+    target = Path(path) if path is not None else DEFAULT_BATCHING_SNAPSHOT_PATH
+    try:
+        value = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(value, Mapping):
+            return None
+        measured_at, measured_dt = _utc_timestamp(
+            "measured_at_utc", value.get("measured_at_utc"), nullable=False
+        )
+        sessions = _number("sessions", value.get("sessions"), integer=True, nullable=False)
+        requests = _number("requests", value.get("requests"), integer=True, nullable=False)
+        tool_bearing = _number(
+            "tool_bearing_requests",
+            value.get("tool_bearing_requests"),
+            integer=True,
+            nullable=False,
+        )
+        ratio = _number(
+            "tools_per_request_avg",
+            value.get("tools_per_request_avg"),
+            nullable=False,
+        )
+        baseline = _number(
+            "batching_baseline", value.get("batching_baseline"), nullable=False
+        )
+        target_ratio = _number(
+            "batching_target", value.get("batching_target"), nullable=False
+        )
+        return {
+            "measured_at_utc": measured_at,
+            "_measured_dt": measured_dt,
+            "sessions": sessions,
+            "requests": requests,
+            "tool_bearing_requests": tool_bearing,
+            "tools_per_request_avg": ratio,
+            "batching_baseline": baseline,
+            "batching_target": target_ratio,
+        }
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ProjectionError):
+        return None
+
+
+def _batching_metric_block(
+    snapshot: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    lines = ["## Claude tool batching", ""]
+    if snapshot is None:
+        lines.extend(
+            (
+                "Average tool calls per tool-bearing request: unknown (no snapshot)",
+                f"Baseline: {BATCHING_BASELINE:.2f}",
+                f"Target: {BATCHING_TARGET:.2f}",
+                "Coverage: unknown (no snapshot)",
+                "Measured at (UTC): unknown (no snapshot)",
+                "Freshness: unknown (no snapshot)",
+            )
+        )
+        return "\n".join(lines) + "\n"
+
+    measured_dt = snapshot.get("_measured_dt")
+    current = now or datetime.now(timezone.utc)
+    stale = not isinstance(measured_dt, datetime) or current - measured_dt > BATCHING_SNAPSHOT_MAX_AGE
+    lines.extend(
+        (
+            f"Average tool calls per tool-bearing request: {snapshot['tools_per_request_avg']:.2f}",
+            f"Baseline: {snapshot['batching_baseline']:.2f}",
+            f"Target: {snapshot['batching_target']:.2f}",
+            "Coverage: "
+            f"{snapshot['sessions']} sessions, {snapshot['requests']} assistant requests, "
+            f"{snapshot['tool_bearing_requests']} tool-bearing requests",
+            f"Measured at (UTC): {snapshot['measured_at_utc']}",
+            f"Freshness: {'STALE' if stale else 'current'} "
+            f"(stale after {int(BATCHING_SNAPSHOT_MAX_AGE.total_seconds() // 3600)}h)",
+        )
+    )
+    return "\n".join(lines) + "\n"
+
+
+def render_metrics(
+    aggregates: Iterable[Mapping[str, Any]],
+    *,
+    batching_snapshot: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> str:
     sample = _eligible_aggregates(aggregates)
     lines = ["# Current Metrics", "", "Deterministic projection of the last 30 eligible terminal aggregates.", ""]
+    lines.append(_batching_metric_block(batching_snapshot, now=now).rstrip())
+    lines.append("")
     lines.append(_metric_block("Overall", sample).rstrip())
     groups: dict[str, list[Mapping[str, Any]]] = {}
     for run in sample:
@@ -797,6 +893,27 @@ def render_metrics(aggregates: Iterable[Mapping[str, Any]]) -> str:
     else:
         lines.extend(("", "Same-policy-fingerprint groups: unknown (no policy fingerprint recorded).", ""))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def project_metrics(
+    *,
+    state_root: str | os.PathLike[str] | None = None,
+    vault_root: str | os.PathLike[str] | None = None,
+    batching_snapshot_path: str | os.PathLike[str] | None = None,
+) -> Path:
+    """Write Current Metrics from aggregates and the last valid audit snapshot."""
+
+    vault = _vault_root(vault_root)
+    path = _safe_vault_path(vault, "Calibration", "Current Metrics.md")
+    content = _with_marker(
+        "",
+        render_metrics(
+            _read_aggregates(state_root),
+            batching_snapshot=read_batching_snapshot(batching_snapshot_path),
+        ),
+    )
+    _atomic_write(path, content)
+    return path
 
 
 def render_provider_capacity(aggregates: Iterable[Mapping[str, Any]]) -> str:
@@ -1034,7 +1151,16 @@ def rebuild(
     outputs.extend(
         (
             (_safe_vault_path(vault, "Dashboard.md"), _with_marker("", _dashboard(aggregates, vault))),
-            (_safe_vault_path(vault, "Calibration", "Current Metrics.md"), _with_marker("", render_metrics(aggregates))),
+            (
+                _safe_vault_path(vault, "Calibration", "Current Metrics.md"),
+                _with_marker(
+                    "",
+                    render_metrics(
+                        aggregates,
+                        batching_snapshot=read_batching_snapshot(),
+                    ),
+                ),
+            ),
             (_safe_vault_path(vault, "Providers", "Current Capacity.md"), _with_marker("", render_provider_capacity(aggregates))),
             (_safe_vault_path(vault, "System", "Telemetry Health.md"), _with_marker("", render_health(aggregates, state_root=state_root))),
             (_safe_vault_path(vault, "System", "README.md"), _with_marker("", _readme())),
@@ -1062,6 +1188,8 @@ __all__ = [
     "ProjectionConflict",
     "ProjectionError",
     "project_health",
+    "project_metrics",
+    "read_batching_snapshot",
     "rebuild",
     "render_health",
     "render_metrics",

@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
@@ -34,6 +35,12 @@ _CLAUDE_USAGE_EVENTS = frozenset({"IMPLEMENTER_STARTED", "IMPLEMENTER_FINISHED",
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _SKILL_PATH = _PACKAGE_ROOT.parents[1] / "skills" / "codex-orchestrator" / "SKILL.md"
 _CONFIG_PATH = _PACKAGE_ROOT / "config.json"
+_REPO_ROOT = _PACKAGE_ROOT.parents[2]
+_BATCHING_AUDIT_PATH = _REPO_ROOT / "scripts" / "orchestration_token_audit_0.py"
+_BATCHING_SNAPSHOT_PATH = obsidian_projection.DEFAULT_BATCHING_SNAPSHOT_PATH
+_BATCHING_REFRESH_ATTEMPT_PATH = _REPO_ROOT / ".tmp" / "orchestration-tool-batching-refresh.json"
+BATCHING_REFRESH_INTERVAL_SECONDS = 6 * 60 * 60
+BATCHING_REFRESH_TIMEOUT_SECONDS = 2.0
 _stderr_reported = False
 _CURSOR_SCHEMA_VERSION = 1
 _HEALTH_ERROR_CODES = frozenset(
@@ -894,6 +901,15 @@ def _project_task(
             vault_root=target_vault,
             last_projection_write_at=projection_written_at,
         )
+        try:
+            _refresh_batching_snapshot()
+            obsidian_projection.project_metrics(
+                state_root=state_root.parent,
+                vault_root=target_vault,
+                batching_snapshot_path=_BATCHING_SNAPSHOT_PATH,
+            )
+        except BaseException:
+            pass
     except BaseException:
         _record_failure(state_root, "TELEMETRY_PROJECTION_FAILED")
         if target_vault is not None:
@@ -904,6 +920,67 @@ def _project_task(
                 )
             except BaseException:
                 pass
+
+
+def _refresh_batching_snapshot(*, now: float | None = None) -> None:
+    """Best-effort bounded refresh; every failure leaves the prior snapshot intact."""
+
+    try:
+        current = time.time() if now is None else now
+        try:
+            attempted_at = _BATCHING_REFRESH_ATTEMPT_PATH.stat().st_mtime
+        except OSError:
+            attempted_at = 0.0
+        if current - attempted_at < BATCHING_REFRESH_INTERVAL_SECONDS:
+            return
+
+        _atomic_json(_BATCHING_REFRESH_ATTEMPT_PATH, {"attempted_at_utc": schema.utc_now()})
+        _BATCHING_REFRESH_ATTEMPT_PATH.touch()
+        temporary = _BATCHING_SNAPSHOT_PATH.with_name(
+            f"{_BATCHING_SNAPSHOT_PATH.name}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(_BATCHING_AUDIT_PATH),
+                    "--sessions",
+                    "15",
+                    "--json",
+                    str(temporary),
+                ],
+                cwd=str(_REPO_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=BATCHING_REFRESH_TIMEOUT_SECONDS,
+                shell=False,
+            )
+            if completed.returncode != 0:
+                return
+            try:
+                snapshot = json.loads(temporary.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                return
+            buckets = snapshot.get("tools_per_request") if isinstance(snapshot, Mapping) else None
+            if not isinstance(buckets, Mapping) or not all(
+                isinstance(count, int) and not isinstance(count, bool) and count >= 0
+                for count in buckets.values()
+            ):
+                return
+            snapshot["measured_at_utc"] = schema.utc_now()
+            snapshot["tool_bearing_requests"] = sum(buckets.values())
+            _atomic_json(temporary, snapshot)
+            if obsidian_projection.read_batching_snapshot(temporary) is None:
+                return
+            _BATCHING_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(temporary, _BATCHING_SNAPSHOT_PATH)
+        finally:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+    except BaseException:
+        return
 
 
 def _hash_file(path: Path) -> str | None:

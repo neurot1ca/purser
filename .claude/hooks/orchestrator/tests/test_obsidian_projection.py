@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import stat
 import uuid
@@ -197,6 +198,102 @@ def test_every_rate_has_n_and_small_denominators_are_unknown():
     assert rate_lines
     assert all("n=" in line for line in rate_lines)
     assert "minimum n=2" in metrics
+
+
+def _batching_snapshot(measured_at="2026-09-21T12:00:00Z"):
+    return {
+        "measured_at_utc": measured_at,
+        "_measured_dt": projection.datetime.fromisoformat(measured_at.replace("Z", "+00:00")),
+        "sessions": 15,
+        "requests": 843,
+        "tool_bearing_requests": 383,
+        "tools_per_request_avg": 1.1279,
+        "batching_baseline": 1.08,
+        "batching_target": 1.5,
+    }
+
+
+def test_metrics_render_present_batching_snapshot():
+    metrics = projection.render_metrics(
+        [_aggregate()],
+        batching_snapshot=_batching_snapshot(),
+        now=projection.datetime.fromisoformat("2026-09-21T13:00:00+00:00"),
+    )
+
+    assert "Average tool calls per tool-bearing request: 1.13" in metrics
+    assert "Baseline: 1.08" in metrics
+    assert "Target: 1.50" in metrics
+    assert "15 sessions, 843 assistant requests, 383 tool-bearing requests" in metrics
+    assert "Measured at (UTC): 2026-09-21T12:00:00Z" in metrics
+    assert "Freshness: current" in metrics
+
+
+def test_metrics_render_absent_batching_snapshot_as_unknown():
+    metrics = projection.render_metrics([_aggregate()], batching_snapshot=None)
+
+    assert "Average tool calls per tool-bearing request: unknown (no snapshot)" in metrics
+    assert "Measured at (UTC): unknown (no snapshot)" in metrics
+    assert "Baseline: 1.08" in metrics
+    assert "Target: 1.50" in metrics
+
+
+def test_metrics_render_stale_batching_snapshot_visibly_stale():
+    metrics = projection.render_metrics(
+        [_aggregate()],
+        batching_snapshot=_batching_snapshot(),
+        now=projection.datetime.fromisoformat("2026-09-21T18:00:01+00:00"),
+    )
+
+    assert "Freshness: STALE (stale after 6h)" in metrics
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("audit failed"), subprocess.TimeoutExpired(["audit"], 2.0)],
+)
+def test_failing_or_slow_batching_refresh_does_not_raise_into_hook(
+    tmp_path, monkeypatch, failure
+):
+    snapshot = tmp_path / "batching.json"
+    attempt = tmp_path / "attempt.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                key: value
+                for key, value in _batching_snapshot("2026-09-20T12:00:00Z").items()
+                if key != "_measured_dt"
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(telemetry, "_BATCHING_SNAPSHOT_PATH", snapshot)
+    monkeypatch.setattr(telemetry, "_BATCHING_REFRESH_ATTEMPT_PATH", attempt)
+    monkeypatch.setattr(
+        telemetry.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    telemetry.emit(
+        "IMPLEMENTER_FAILED",
+        task_id="batching-refresh-failure",
+        state_root=tmp_path / "state",
+        session_id="session",
+        failure_code="CODEX_CALL_FAILED",
+    )
+    assert telemetry.update_task(
+        "batching-refresh-failure",
+        state_root=tmp_path / "state",
+        projection_enabled=True,
+        vault_root=tmp_path / "vault",
+    ) is None
+
+    assert projection.read_batching_snapshot(snapshot)["measured_at_utc"] == "2026-09-20T12:00:00Z"
+    rendered = (tmp_path / "vault" / "Calibration" / "Current Metrics.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Average tool calls per tool-bearing request: 1.13" in rendered
+    assert "Measured at (UTC): 2026-09-20T12:00:00Z" in rendered
 
 
 def test_disabled_projection_does_not_change_telemetry_or_create_vault(tmp_path):
