@@ -263,6 +263,36 @@ def test_declared_scope_reaches_baseline_and_operation_skips_manifest(workspace,
     assert operation_record["pending_call_baseline"]["manifest_enabled"] is False
 
 
+def test_pretool_succeeds_with_dirty_secret_named_repository_path(workspace, config):
+    repo, state = workspace
+    target = repo / "scripts" / "orchestration_token_audit_0.py"
+    target.parent.mkdir()
+    target.write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, timeout=10)
+    subprocess.run(
+        ["git", "commit", "-qm", "add token-named script"],
+        cwd=repo,
+        check=True,
+        timeout=10,
+    )
+    target.write_text("value = 2\n", encoding="utf-8")
+    call = event(prompt=orch(scope="scripts") + "\nImplement.")
+
+    result = codex.pre_tool_use(
+        call, config=config, state_root=state, repo_root=repo
+    )
+
+    output = result["hookSpecificOutput"]
+    assert "updatedInput" in output
+    assert "additionalContext" not in output
+    loaded = ledger.SessionLedger(state).load("task-1")
+    assert loaded["status"] == ledger.OK
+    assert (
+        "scripts/orchestration_token_audit_0.py"
+        in loaded["record"]["pending_call_baseline"]["tracked_snapshots"]
+    )
+
+
 def test_fresh_rewrite_preserves_safety_and_unrelated_fields(workspace, config):
     repo, state = workspace
     original = event(

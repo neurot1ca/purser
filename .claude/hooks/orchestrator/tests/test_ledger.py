@@ -361,6 +361,68 @@ def test_pending_baseline_can_be_saved_before_a_fresh_thread_exists(sandbox_dir)
     assert policy.thread_compatibility(requested, None).code == "NO_LIVE_THREAD"
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["scripts/orchestration_token_audit_0.py", "src/wallet_sync.py"],
+)
+def test_session_record_accepts_repository_paths_with_secret_key_terms(sandbox_dir, path):
+    store = ledger.SessionLedger(sandbox_dir / "ledger")
+    record = ledger.build_session_record(
+        "task-1",
+        None,
+        "normal",
+        "gpt-5.6-sol",
+        "medium",
+        phase="implementation",
+        scope=[path],
+        pending_call_baseline={
+            "tracked_snapshots": {
+                path: {"status": [" M"], "index": [], "worktree": {"kind": "file"}}
+            }
+        },
+    )
+
+    assert store.save(record) == {"status": ledger.OK, "code": "LEDGER_WRITTEN"}
+
+
+@pytest.mark.parametrize(
+    "secret_value",
+    ["-----BEGIN PRIVATE KEY-----", "sk-" + "a" * 20],
+)
+def test_session_record_rejects_secret_values_inside_path_keyed_map(
+    sandbox_dir, secret_value
+):
+    store = ledger.SessionLedger(sandbox_dir / "ledger")
+    record = ledger.build_session_record(
+        "task-1",
+        None,
+        "normal",
+        "gpt-5.6-sol",
+        "medium",
+        pending_call_baseline={
+            "tracked_snapshots": {
+                "src/wallet_sync.py": {"worktree": secret_value}
+            }
+        },
+    )
+
+    assert store.save(record)["code"] == "LEDGER_RECORD_INVALID"
+
+
+def test_session_record_rejects_secret_named_field(sandbox_dir):
+    store = ledger.SessionLedger(sandbox_dir / "ledger")
+    record = ledger.build_session_record(
+        "task-1",
+        None,
+        "normal",
+        "gpt-5.6-sol",
+        "medium",
+        last_outcome={"api_key": "not-a-pattern-matched-value"},
+    )
+
+    assert store.save(record)["code"] == "LEDGER_RECORD_INVALID"
+
+
 def test_truncated_or_checksum_corrupt_record_is_not_a_valid_thread(sandbox_dir):
     store = ledger.SessionLedger(sandbox_dir / "ledger")
     record = ledger.build_session_record(

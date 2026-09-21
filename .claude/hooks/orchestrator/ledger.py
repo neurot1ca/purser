@@ -59,6 +59,12 @@ _SECRET_VALUE_PATTERNS = (
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]{12,}", re.IGNORECASE),
 )
+# Git snapshots use repository paths as identifiers; nested snapshot keys remain fields.
+_PATH_KEYED_RECORD_LOCATIONS = frozenset(
+    {
+        ("pending_call_baseline", "tracked_snapshots"),
+    }
+)
 
 
 def is_transient_bytecode_cache(path: str | os.PathLike[str]) -> bool:
@@ -934,14 +940,21 @@ def _canonical_json(value: Any) -> bytes:
     )
 
 
-def _contains_secret(value: Any, key: str = "") -> bool:
-    normalized_key = key.casefold().replace("-", "_")
-    if key and any(part in normalized_key for part in _SECRET_KEY_PARTS):
-        return True
+def _contains_secret(value: Any, *, _location: tuple[str, ...] = ()) -> bool:
     if isinstance(value, Mapping):
-        return any(_contains_secret(item, str(item_key)) for item_key, item in value.items())
+        path_keyed = _location in _PATH_KEYED_RECORD_LOCATIONS
+        for item_key, item in value.items():
+            key = str(item_key)
+            if any(pattern.search(key) for pattern in _SECRET_VALUE_PATTERNS):
+                return True
+            normalized_key = key.casefold().replace("-", "_")
+            if not path_keyed and any(part in normalized_key for part in _SECRET_KEY_PARTS):
+                return True
+            if _contains_secret(item, _location=(*_location, key)):
+                return True
+        return False
     if isinstance(value, (list, tuple)):
-        return any(_contains_secret(item) for item in value)
+        return any(_contains_secret(item, _location=_location) for item in value)
     if isinstance(value, str):
         return any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS)
     return False
