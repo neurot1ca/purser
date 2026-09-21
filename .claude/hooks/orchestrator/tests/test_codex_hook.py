@@ -1840,6 +1840,60 @@ def test_task_contract_partial_is_not_grounded_and_handles_lists():
     assert crit == "Crit 1; Crit 2"
 
 
+def test_task_contract_markdown_sections_are_grounded_and_fence_aware():
+    prompt = (
+        "# Objective\n"
+        "Refactor the task contract parser.\n\n"
+        "# Acceptance criteria\n"
+        "1. Collect the first criterion.\n\n"
+        "2. Collect the second criterion.\n"
+        "\n"
+        "- Collect the third criterion.\n"
+    )
+    obj, crit, grounded = codex._parse_task_contract(prompt, "markdown", "implementation", [])
+    assert grounded is True
+    assert obj == "Refactor the task contract parser."
+    assert crit == "Collect the first criterion.; Collect the second criterion.; Collect the third criterion."
+
+    inline_prompt = "## Task: Fix the parser\n\n### Requirements\n- Preserve JSON parsing"
+    obj, crit, grounded = codex._parse_task_contract(inline_prompt, "inline", "implementation", [])
+    assert grounded is True
+    assert obj == "Fix the parser"
+    assert crit == "Preserve JSON parsing"
+
+    objective_only = "# Goal\nDo the work\n\n# Acceptance criteria:\n"
+    _, _, grounded = codex._parse_task_contract(objective_only, "objective-only", "implementation", [])
+    assert grounded is False
+
+    empty_criteria = "# Objective\nDo the work\n\n# Criteria:\n"
+    _, _, grounded = codex._parse_task_contract(empty_criteria, "empty-criteria", "implementation", [])
+    assert grounded is False
+
+    fenced_headings = "```markdown\n# Objective\nDo the work\n# Criteria\n- Looks valid\n```"
+    _, _, grounded = codex._parse_task_contract(fenced_headings, "fenced", "implementation", [])
+    assert grounded is False
+
+    exact_task_prompt = """Task objective: make `_parse_task_contract` in `.claude/hooks/orchestrator/codex.py` recognise task contracts written as Markdown sections, so correctly specified delegations stop being flagged `TASK_CONTRACT_NOT_GROUNDED`.
+
+Context (verified at HEAD 3fab168): every delegation today (5 of 5) was flagged `TASK_CONTRACT_NOT_GROUNDED` and forced to FULL review, although each prompt had an objective section and an acceptance-criteria section. The parser only accepts a one-line `TASK_CONTRACT: {json}` or key-value lines starting with `task objective:` / `acceptance criteria:`. Prompts written as Markdown headings (`# Objective` with the text on following lines) are never matched. Separately, criteria collection stops at the first blank line, so a Markdown list with blank lines between items would be cut short even in the key-value form. Consequence: the one-turn AUDIT path never fires, costing Claude an extra review turn on every delegation.
+
+Acceptance criteria:
+
+1. Recognise the CLASS "a Markdown heading (any level, `#` to `###`) naming the objective or the criteria, followed by its section body". Objective heading names: `Objective`, `Task objective`, `Task`, `Goal`. Criteria heading names: `Acceptance criteria`, `Criteria`, `Requirements`. Case-insensitive; an optional trailing colon is allowed; text on the heading line after a colon (e.g. `# Task: fix the parser`) counts as body.
+2. A section body runs until the next heading of the same or a higher level, NOT until the first blank line. Numbered and bulleted items separated by blank lines are all collected.
+3. Headings inside fenced code blocks (```) are ignored.
+4. Existing forms keep working unchanged: `TASK_CONTRACT:` JSON, and the `task objective:` / `acceptance criteria:` key-value lines.
+5. Unchanged rule: grounded only when BOTH a non-empty objective and non-empty criteria are found. A present-but-empty section does not count.
+
+Tests — examples, non-exhaustive: `# Objective` + `# Acceptance criteria` with a numbered list separated by blank lines -> grounded, every item collected; `## Task: X` + `### Requirements` -> grounded; objective only -> not grounded; empty criteria section -> not grounded; headings only inside a code fence -> not grounded; both existing forms -> still grounded. Also run the exact prompt of this task through the parser: it must be grounded.
+
+Validation (explicit user instruction): do NOT run the full suite. Run only `tests/test_codex_hook.py` plus any new test file, once green at the end. Claude runs the full suite once before acceptance.
+
+Report: the change, the tests added, the exact test command and counts."""
+    _, _, grounded = codex._parse_task_contract(exact_task_prompt, "exact", "implementation", [])
+    assert grounded is True
+
+
 def test_base_bundle_contains_contract_and_validation_fields():
     bundle = codex._base_bundle()
     assert "task_contract_grounded" in bundle

@@ -128,14 +128,81 @@ def _parse_task_contract(
             if val:
                 criteria_lines.append(val)
         elif collecting_criteria:
-            if line_str.startswith(("ORCH|", "TASK_CONTRACT:", "```")) or (not line_str and criteria_lines):
+            if line_str.startswith(("ORCH|", "TASK_CONTRACT:", "```")):
                 collecting_criteria = False
-            elif line_str.startswith(("- ", "* ", "1. ", "2. ", "3. ")):
-                criteria_lines.append(line_str.lstrip("-*0123456789. ").strip())
+            elif re.match(r"^(?:[-*+]|\d+[.)])\s+", line_str):
+                criteria_lines.append(re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line_str))
             elif line_str:
                 criteria_lines.append(line_str)
 
     found_crit = "; ".join(criteria_lines).strip() if criteria_lines else None
+
+    # 3. Check for Markdown contract sections. Fenced code is opaque so a
+    # heading in an example cannot create or terminate a contract section.
+    markdown_values: dict[str, str | None] = {"objective": None, "criteria": None}
+    active_sections: list[dict[str, Any]] = []
+    in_fence = False
+
+    def finish_section(section: dict[str, Any]) -> None:
+        body_lines = [line.strip() for line in section["lines"] if line.strip()]
+        values: list[str] = []
+        for body_line in body_lines:
+            body_line = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", body_line)
+            if body_line:
+                values.append(body_line)
+        value = "; ".join(values).strip()
+        if value:
+            markdown_values[section["kind"]] = value
+
+    for line in lines:
+        line_str = line.strip()
+        if line_str.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+
+        heading_match = re.match(r"^(#{1,3})[ \t]+(.+?)\s*$", line_str)
+        if heading_match:
+            level = len(heading_match.group(1))
+            heading_text = heading_match.group(2).strip()
+            title, separator, inline_body = heading_text.partition(":")
+            title = title.strip().lower()
+            kind = (
+                "objective"
+                if title in {"objective", "task objective", "task", "goal"}
+                else "criteria"
+                if title in {"acceptance criteria", "criteria", "requirements"}
+                else None
+            )
+
+            remaining: list[dict[str, Any]] = []
+            for section in active_sections:
+                if section["level"] >= level:
+                    finish_section(section)
+                else:
+                    remaining.append(section)
+            active_sections = remaining
+
+            if kind:
+                active_sections.append(
+                    {
+                        "kind": kind,
+                        "level": level,
+                        "lines": [inline_body.strip()] if separator and inline_body.strip() else [],
+                    }
+                )
+            continue
+
+        for section in active_sections:
+            if not any(child["level"] > section["level"] for child in active_sections):
+                section["lines"].append(line)
+
+    for section in active_sections:
+        finish_section(section)
+
+    found_obj = markdown_values["objective"] or found_obj
+    found_crit = markdown_values["criteria"] or found_crit
 
     # CRITICAL: grounded is True ONLY IF BOTH are found!
     if found_obj and found_crit:
