@@ -30,6 +30,8 @@ passes standalone.
 
 ## Documents
 
+- [Roadmap](docs/ROADMAP.md) — every phase of both tracks with its status; current task in [NEXT.md](NEXT.md)
+- [Token reform spec](docs/ORCHESTRATION_REFORM_SPEC.md) — the original saving plan and its review rounds
 - [Profile plan v2](docs/ORCHESTRATOR_PROFILE_PLAN.md) — design decisions and sequence
 - [Operations reference](docs/ORCHESTRATOR_OPERATIONS.md) — transport, recovery, and what moved out of the skill
 - [Research](docs/research/) — surveys of open-source orchestrators and a Codex review of the plan
