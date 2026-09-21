@@ -219,6 +219,23 @@ _ALLOWED_VALIDATION_KEYS = frozenset({
     "artifacts",
 })
 
+_WORKER_VALIDATION_INSTRUCTION = (
+    "Worker validation: End your final report with exactly one `VALIDATION:` JSON line. "
+    f"Use only these keys: {', '.join(f'`{key}`' for key in sorted(_ALLOWED_VALIDATION_KEYS))}. "
+    'Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; '
+    "list the commands actually run in `commands` and matching integer `exit_codes`. "
+    "Do not emit another validation line."
+)
+
+
+def _append_worker_validation_instruction(prompt: str) -> str:
+    """Append the worker-report contract once, preserving the caller's prompt text."""
+
+    if _WORKER_VALIDATION_INSTRUCTION in prompt:
+        return prompt
+    separator = "" if not prompt or prompt.endswith("\n") else "\n"
+    return f"{prompt}{separator}{_WORKER_VALIDATION_INSTRUCTION}"
+
 
 def _canonical_unknown_validation(summary: str | None = None) -> dict[str, Any]:
     """Return the canonical, fixed-shape UNKNOWN validation record within IMPLEMENTER_REPORT_LIMIT bytes."""
@@ -1068,6 +1085,8 @@ def pre_tool_use(
 
         updated = dict(tool_input)
         updated["prompt"] = parsed.prompt
+        if parsed.phase == "implementation":
+            updated["prompt"] = _append_worker_validation_instruction(updated["prompt"])
         if tool_name == CODEX_TOOL:
             updated["model"] = route.model
             original_codex_config = tool_input.get("config", {})

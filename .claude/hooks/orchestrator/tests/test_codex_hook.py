@@ -339,7 +339,73 @@ def test_each_route_sets_exact_model_and_effort(workspace, config, route, model,
 
     assert updated["model"] == model
     assert updated["config"]["model_reasoning_effort"] == effort
-    assert updated["prompt"] == "Implement."
+    assert updated["prompt"] == (
+        "Implement.\n" + codex._WORKER_VALIDATION_INSTRUCTION
+    )
+
+
+@pytest.mark.parametrize("tool_name", [codex.CODEX_TOOL, codex.CODEX_REPLY_TOOL])
+def test_implementation_prompt_reports_worker_validation_once(workspace, config, tool_name):
+    repo, state = workspace
+    if tool_name == codex.CODEX_REPLY_TOOL:
+        save_live_thread(state)
+        fields = {"threadId": "thread-1"}
+        tool_use_id = "implementation-reply-validation"
+    else:
+        fields = {}
+        tool_use_id = "implementation-validation"
+
+    result = codex.pre_tool_use(
+        event(
+            tool_name,
+            prompt=orch() + "\nImplement.\n" + codex._WORKER_VALIDATION_INSTRUCTION,
+            tool_use_id=tool_use_id,
+            **fields,
+        ),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+    prompt = result["hookSpecificOutput"]["updatedInput"]["prompt"]
+
+    assert prompt.count(codex._WORKER_VALIDATION_INSTRUCTION) == 1
+    listed_keys = {
+        token.strip("`")
+        for token in codex._WORKER_VALIDATION_INSTRUCTION.split(
+            "Use only these keys: ", 1
+        )[1].split(". ", 1)[0].split(", ")
+    }
+    assert listed_keys <= codex._ALLOWED_VALIDATION_KEYS
+
+
+@pytest.mark.parametrize("tool_name", [codex.CODEX_TOOL, codex.CODEX_REPLY_TOOL])
+def test_operation_prompt_does_not_include_worker_validation_instruction(
+    workspace, config, tool_name
+):
+    repo, state = workspace
+    if tool_name == codex.CODEX_REPLY_TOOL:
+        save_live_thread(state, phase="operation", scope=())
+        fields = {"threadId": "thread-1"}
+        tool_use_id = "operation-reply-validation"
+    else:
+        fields = {}
+        tool_use_id = "operation-validation"
+
+    result = codex.pre_tool_use(
+        event(
+            tool_name,
+            prompt=orch(phase="operation", scope=None) + "\nInspect.",
+            tool_use_id=tool_use_id,
+            **fields,
+        ),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert codex._WORKER_VALIDATION_INSTRUCTION not in result["hookSpecificOutput"][
+        "updatedInput"
+    ]["prompt"]
 
 
 def test_declared_scope_reaches_baseline_and_operation_skips_manifest(workspace, config):
@@ -492,7 +558,10 @@ def test_compatible_reply_only_strips_orch(workspace, config):
     )
     updated = result["hookSpecificOutput"]["updatedInput"]
 
-    assert updated == {"threadId": "thread-1", "prompt": "Continue."}
+    assert updated == {
+        "threadId": "thread-1",
+        "prompt": "Continue.\n" + codex._WORKER_VALIDATION_INSTRUCTION,
+    }
 
 
 def test_reply_without_orch_inherits_recorded_thread_context(workspace, config):
@@ -512,7 +581,10 @@ def test_reply_without_orch_inherits_recorded_thread_context(workspace, config):
     assert "permissionDecision" not in output
     assert output["updatedInput"] == {
         "threadId": "thread-1",
-        "prompt": "Continue without repeating routing.",
+        "prompt": (
+            "Continue without repeating routing.\n"
+            + codex._WORKER_VALIDATION_INSTRUCTION
+        ),
     }
     pending = next((state / "pending").glob("*.json"))
     assert json.loads(pending.read_text(encoding="utf-8"))["scope"] == [
@@ -555,7 +627,9 @@ def test_pretool_strips_minimal_orch_and_pins_consequential_route(workspace, con
     output = result["hookSpecificOutput"]
 
     assert "permissionDecision" not in output
-    assert output["updatedInput"]["prompt"] == "\nbody text"
+    assert output["updatedInput"]["prompt"] == (
+        "\nbody text\n" + codex._WORKER_VALIDATION_INSTRUCTION
+    )
     assert output["updatedInput"]["model"] == "gpt-5.6-sol"
     assert output["updatedInput"]["config"]["model_reasoning_effort"] == "high"
 
@@ -1045,6 +1119,51 @@ def test_post_tool_use_emits_audit_receipt_on_audit_mode(workspace, config):
     assert bundle["audit_receipt"]["verdict"] == "READY_FOR_ONE_TURN_ACCEPT"
     assert "git add" in bundle["audit_receipt"]["commit_command"]
     assert "feat(task-1)" in bundle["audit_receipt"]["commit_command"]
+
+
+def test_worker_validation_parses_full_report_before_phase_cap(workspace, config):
+    repo, state = workspace
+    prompt = (
+        "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py\n"
+        "Task Objective: Update file0 with new value\n"
+        "Acceptance Criteria: file0 contains value = 2\n"
+    )
+    call = event(prompt=prompt, tool_use_id="full-report-validation")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+
+    validation_line = (
+        'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+        '"commands":["pytest -q"],"exit_codes":[0]}'
+    )
+    report = ("worker output\n" * 150) + validation_line
+    assert len(report) > codex.IMPLEMENTER_REPORT_LIMIT
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-full-report", "content": report}),
+            }
+        ],
+    }
+
+    def reviewer(**_kwargs):
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    raw = codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo, reviewer=reviewer
+    )
+    bundle = response_bundle(raw, config)
+
+    assert bundle["worker_validation"]["status"] == "PASS"
+    assert len(bundle["implementer_report"]) == codex.IMPLEMENTER_REPORT_LIMIT
+    assert validation_line not in bundle["implementer_report"]
 
 
 def test_post_tool_use_ungrounded_contract_forces_full_review_even_on_audit(workspace, config):
