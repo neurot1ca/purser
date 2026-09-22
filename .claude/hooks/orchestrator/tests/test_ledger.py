@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
@@ -282,6 +283,80 @@ def test_manifest_budget_is_not_applied_to_tracked_git_commands(repo, monkeypatc
         for operation, timeout in observed
         if operation in manifest_operations
     )
+
+
+def test_index_entries_batches_and_matches_single_call_result(repo, monkeypatch):
+    paths = [f"src/generated/{index:04d}-{'x' * 40}.py" for index in range(240)]
+    records = {
+        path: [
+            "100644 2222222222222222222222222222222222222222 0",
+            "100644 1111111111111111111111111111111111111111 0",
+        ]
+        for path in paths
+    }
+
+    def recording_run_git(calls):
+        def run_git(repo_root, arguments, timeout, operation):
+            calls.append(list(arguments))
+            pathspecs = set(arguments[arguments.index("--") + 1 :])
+            output = bytearray()
+            for path, entries in records.items():
+                if f":(literal){path}" in pathspecs:
+                    for entry in entries:
+                        output.extend(f"{entry}\t{path}\0".encode("ascii"))
+            return bytes(output)
+
+        return run_git
+
+    single_calls = []
+    monkeypatch.setattr(ledger, "_run_git", recording_run_git(single_calls))
+    monkeypatch.setattr(ledger, "_INDEX_PATHSPEC_BYTE_BUDGET", 1_000_000)
+    single_call_result = ledger._index_entries(repo, paths, 10.0)
+
+    batched_calls = []
+    monkeypatch.setattr(ledger, "_run_git", recording_run_git(batched_calls))
+    monkeypatch.setattr(
+        ledger,
+        "_INDEX_PATHSPEC_BYTE_BUDGET",
+        8000,
+    )
+    batched_result = ledger._index_entries(repo, paths, 10.0)
+
+    assert len(single_calls) == 1
+    assert len(batched_calls) > 1
+    assert batched_result == single_call_result
+
+
+def test_index_entries_limits_each_invocation_by_encoded_argument_bytes(repo, monkeypatch):
+    paths = [f"generated/{index:03d}-{'x' * (index % 17)}.py" for index in range(500)]
+    calls = []
+
+    def recording_run_git(repo_root, arguments, timeout, operation):
+        calls.append(list(arguments))
+        return b""
+
+    monkeypatch.setattr(ledger, "_run_git", recording_run_git)
+
+    assert ledger._index_entries(repo, paths, 10.0) == {path: [] for path in paths}
+    assert len(calls) > 1
+    for arguments in calls:
+        pathspecs = arguments[arguments.index("--") + 1 :]
+        assert sum(len(os.fsencode(pathspec)) + 1 for pathspec in pathspecs) <= 8000
+
+
+def test_index_entries_queries_a_path_longer_than_the_budget(repo, monkeypatch):
+    path = "generated/" + "x" * (ledger._INDEX_PATHSPEC_BYTE_BUDGET + 100)
+    calls = []
+
+    def recording_run_git(repo_root, arguments, timeout, operation):
+        calls.append(list(arguments))
+        return b""
+
+    monkeypatch.setattr(ledger, "_run_git", recording_run_git)
+
+    assert ledger._index_entries(repo, [path], 10.0) == {path: []}
+    assert len(calls) == 1
+    assert f":(literal){path}" in calls[0][calls[0].index("--") + 1 :]
 
 
 def test_manifest_budget_exhaustion_is_typed_unknown_for_baseline_and_delta(repo):

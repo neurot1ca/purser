@@ -33,6 +33,7 @@ MISSING = "MISSING"
 CORRUPT = "CORRUPT"
 MANIFEST_BUDGET_EXCEEDED = "MANIFEST_BUDGET_EXCEEDED"
 DEFAULT_MANIFEST_BUDGET_SECONDS = 3.0
+_INDEX_PATHSPEC_BYTE_BUDGET = 8000
 
 _LEDGER_SCHEMA_VERSION = 1
 _SECRET_KEY_PARTS = (
@@ -252,21 +253,36 @@ def _index_entries(repo_root: Path, paths: Sequence[str], timeout: float) -> dic
     result = {path: [] for path in paths}
     if not paths:
         return result
-    raw = _run_git(
-        repo_root,
-        ["ls-files", "--stage", "-z", "--", *_literal_pathspecs(paths)],
-        timeout,
-        "fingerprinting index entries",
-    )
-    for record in raw.split(b"\0"):
-        if not record:
-            continue
-        metadata, separator, raw_path = record.partition(b"\t")
-        fields = metadata.split(b" ")
-        if not separator or len(fields) != 3:
-            raise _InspectionError("GIT_OUTPUT_INVALID", "Git index output was malformed.")
-        path = _decode_path(raw_path)
-        result.setdefault(path, []).append(metadata.decode("ascii", "strict"))
+    pathspecs = _literal_pathspecs(paths)
+    batches: list[list[str]] = []
+    batch: list[str] = []
+    batch_bytes = 0
+    for pathspec in pathspecs:
+        argument_bytes = len(os.fsencode(pathspec)) + 1
+        if batch and batch_bytes + argument_bytes > _INDEX_PATHSPEC_BYTE_BUDGET:
+            batches.append(batch)
+            batch = []
+            batch_bytes = 0
+        batch.append(pathspec)
+        batch_bytes += argument_bytes
+    batches.append(batch)
+
+    for batch in batches:
+        raw = _run_git(
+            repo_root,
+            ["ls-files", "--stage", "-z", "--", *batch],
+            timeout,
+            "fingerprinting index entries",
+        )
+        for record in raw.split(b"\0"):
+            if not record:
+                continue
+            metadata, separator, raw_path = record.partition(b"\t")
+            fields = metadata.split(b" ")
+            if not separator or len(fields) != 3:
+                raise _InspectionError("GIT_OUTPUT_INVALID", "Git index output was malformed.")
+            path = _decode_path(raw_path)
+            result.setdefault(path, []).append(metadata.decode("ascii", "strict"))
     for entries in result.values():
         entries.sort()
     return result
