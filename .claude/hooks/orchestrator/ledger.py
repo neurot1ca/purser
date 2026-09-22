@@ -905,6 +905,9 @@ def build_session_record(
     task_objective: str | None = None,
     acceptance_criteria: str | None = None,
     task_contract_grounded: bool = False,
+    origin_baseline: Mapping[str, Any] | None = None,
+    origin_scope: Iterable[str | os.PathLike[str]] = (),
+    post_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the strict record shape; ``live_thread`` feeds policy directly."""
 
@@ -925,6 +928,10 @@ def build_session_record(
         if acceptance_criteria is not None:
             live_thread["acceptance_criteria"] = acceptance_criteria
         live_thread["task_contract_grounded"] = task_contract_grounded
+        if origin_baseline is not None and post_state is not None:
+            live_thread["origin_baseline"] = dict(origin_baseline)
+            live_thread["origin_scope"] = [os.fspath(path) for path in origin_scope]
+            live_thread["post_state"] = dict(post_state)
     return {
         "task_id": task_id,
         "live_thread": live_thread,
@@ -990,6 +997,9 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         "task_objective",
         "acceptance_criteria",
         "task_contract_grounded",
+        "origin_baseline",
+        "origin_scope",
+        "post_state",
     }
     if not required_keys.issubset(thread_keys) or not thread_keys.issubset(allowed_keys):
         return False
@@ -1018,6 +1028,27 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         if not isinstance(thread.get("task_objective"), str) or not thread.get("task_objective", "").strip():
             return False
         if not isinstance(thread.get("acceptance_criteria"), str) or not thread.get("acceptance_criteria", "").strip():
+            return False
+    handoff_fields = {"origin_baseline", "origin_scope", "post_state"}
+    present_handoff = handoff_fields.intersection(thread)
+    if present_handoff and present_handoff != handoff_fields:
+        return False
+    if present_handoff:
+        origin_baseline = thread.get("origin_baseline")
+        post_state = thread.get("post_state")
+        origin_scope = thread.get("origin_scope")
+        if (
+            not isinstance(origin_baseline, Mapping)
+            or not _baseline_valid(origin_baseline)
+            or not isinstance(post_state, Mapping)
+            or not _baseline_valid(post_state)
+            or origin_baseline.get("status") != OK
+            or post_state.get("status") != OK
+            or not isinstance(origin_scope, list)
+            or any(not isinstance(path, str) or not path for path in origin_scope)
+            or origin_scope != origin_baseline.get("scope")
+            or origin_scope != post_state.get("scope")
+        ):
             return False
     pending = record.get("pending_call_baseline")
     if pending is not None and not isinstance(pending, Mapping):

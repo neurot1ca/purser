@@ -17,6 +17,7 @@ import hook
 import json_transport
 import ledger
 import policy
+import reviewer as reviewer_module
 import telemetry
 
 
@@ -2627,6 +2628,250 @@ def test_codex_reply_continuation_inherits_prior_grounded_contract(workspace, co
     assert pending["task_contract_grounded"] is True
     assert pending["task_objective"] == "Persistent objective"
     assert pending["acceptance_criteria"] == "Persistent criteria"
+
+
+def test_codex_reply_inherits_handoff_and_reviews_cumulative_same_path_diff(workspace, config):
+    repo, state = workspace
+    prompt = (
+        "ORCH|task=reply-repair|phase=implementation|route=normal|scope=file0.py\n"
+        'TASK_CONTRACT: {"objective": "Complete the repair", "criteria": "Both turns are reviewed"}'
+    )
+    review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
+    first = event(prompt=prompt, tool_use_id="reply-repair-first")
+    codex.pre_tool_use(first, config=review_config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text(
+        "value = 1\n" + "".join(f"turn_one_{index} = True\n" for index in range(30)),
+        encoding="utf-8",
+    )
+    response = {
+        **first,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{
+            "type": "text",
+            "text": json.dumps({
+                "threadId": "thread-reply-repair",
+                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+            }),
+        }],
+    }
+    diffs = []
+
+    def stub_reviewer(**kwargs):
+        _, diff = reviewer_module._delegated_diff(
+            Path(kwargs["repo_root"]), kwargs["delta"], kwargs["classification"]
+        )
+        diffs.append(diff)
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    codex.post_tool_use(
+        response,
+        config=review_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=stub_reviewer,
+    )
+
+    reply = event(
+        tool_name=codex.CODEX_REPLY_TOOL,
+        prompt="Continue the repair.",
+        tool_use_id="reply-repair-second",
+        threadId="thread-reply-repair",
+    )
+    codex.pre_tool_use(reply, config=review_config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text(
+        (repo / "file0.py").read_text(encoding="utf-8")
+        + "".join(f"turn_two_{index} = True\n" for index in range(30)),
+        encoding="utf-8",
+    )
+    second_response = {
+        **reply,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{
+            "type": "text",
+            "text": json.dumps({
+                "threadId": "thread-reply-repair",
+                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+            }),
+        }],
+    }
+    raw = codex.post_tool_use(
+        second_response,
+        config=review_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=stub_reviewer,
+    )
+    bundle = response_bundle(raw, review_config)
+
+    assert len(diffs) == 2
+    assert "+turn_one_0 = True" in diffs[1]
+    assert "+turn_two_0 = True" in diffs[1]
+    assert bundle["concurrent_writer"] is False
+    assert "UNKNOWN_CONCURRENT_WRITER" not in [finding["code"] for finding in bundle["findings"]]
+    assert "REVIEW_PACKET_INCOMPLETE" not in [finding["code"] for finding in bundle["findings"]]
+
+
+def test_codex_reply_does_not_inherit_handoff_after_intervening_edit(workspace, config):
+    repo, state = workspace
+    prompt = (
+        "ORCH|task=reply-writer|phase=implementation|route=normal|scope=file0.py\n"
+        'TASK_CONTRACT: {"objective": "Complete the repair", "criteria": "Reject concurrent edits"}'
+    )
+    review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
+    first = event(prompt=prompt, tool_use_id="reply-writer-first")
+    codex.pre_tool_use(first, config=review_config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 1\nturn_one = True\n", encoding="utf-8")
+    response = {
+        **first,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{
+            "type": "text",
+            "text": json.dumps({
+                "threadId": "thread-reply-writer",
+                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+            }),
+        }],
+    }
+
+    seen_deltas = []
+
+    def stub_reviewer(**kwargs):
+        seen_deltas.append(kwargs["delta"])
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    codex.post_tool_use(
+        response,
+        config=review_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=stub_reviewer,
+    )
+    (repo / "file0.py").write_text(
+        "value = 1\nturn_one = True\nother_writer = True\n", encoding="utf-8"
+    )
+    reply = event(
+        tool_name=codex.CODEX_REPLY_TOOL,
+        prompt="Continue the repair.",
+        tool_use_id="reply-writer-second",
+        threadId="thread-reply-writer",
+    )
+    codex.pre_tool_use(reply, config=review_config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text(
+        "value = 1\nturn_one = True\nother_writer = True\nturn_two = True\n",
+        encoding="utf-8",
+    )
+    second_response = {
+        **reply,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{
+            "type": "text",
+            "text": json.dumps({
+                "threadId": "thread-reply-writer",
+                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+            }),
+        }],
+    }
+    raw = codex.post_tool_use(
+        second_response,
+        config=review_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=stub_reviewer,
+    )
+    bundle = response_bundle(raw, review_config)
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert "UNKNOWN_CONCURRENT_WRITER" in [finding["code"] for finding in bundle["findings"]]
+
+
+def test_codex_reply_keeps_pre_turn_dirty_path_ambiguous(workspace, config):
+    repo, state = workspace
+    (repo / "file0.py").write_text("value = 1\nuser_before = True\n", encoding="utf-8")
+    prompt = (
+        "ORCH|task=reply-dirty|phase=implementation|route=normal|scope=file0.py\n"
+        'TASK_CONTRACT: {"objective": "Complete the repair", "criteria": "Keep user edits attributable"}'
+    )
+    review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
+    first = event(prompt=prompt, tool_use_id="reply-dirty-first")
+    codex.pre_tool_use(first, config=review_config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text(
+        "value = 1\nuser_before = True\n" + "".join(
+            f"turn_one_{index} = True\n" for index in range(30)
+        ),
+        encoding="utf-8",
+    )
+    response = {
+        **first,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{
+            "type": "text",
+            "text": json.dumps({
+                "threadId": "thread-reply-dirty",
+                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+            }),
+        }],
+    }
+
+    seen_deltas = []
+
+    def stub_reviewer(**kwargs):
+        seen_deltas.append(kwargs["delta"])
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    codex.post_tool_use(
+        response,
+        config=review_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=stub_reviewer,
+    )
+    reply = event(
+        tool_name=codex.CODEX_REPLY_TOOL,
+        prompt="Continue the repair.",
+        tool_use_id="reply-dirty-second",
+        threadId="thread-reply-dirty",
+    )
+    codex.pre_tool_use(reply, config=review_config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text(
+        (repo / "file0.py").read_text(encoding="utf-8")
+        + "".join(f"turn_two_{index} = True\n" for index in range(30)),
+        encoding="utf-8",
+    )
+    second_response = {
+        **reply,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{
+            "type": "text",
+            "text": json.dumps({
+                "threadId": "thread-reply-dirty",
+                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+            }),
+        }],
+    }
+    raw = codex.post_tool_use(
+        second_response,
+        config=review_config,
+        state_root=state,
+        repo_root=repo,
+        reviewer=stub_reviewer,
+    )
+    bundle = response_bundle(raw, review_config)
+
+    assert bundle["concurrent_writer"] is False
+    assert "file0.py" in seen_deltas[-1]["ambiguous_paths"]
+    assert "UNKNOWN_CONCURRENT_WRITER" in [finding["code"] for finding in bundle["findings"]]
 
 
 @pytest.mark.parametrize(

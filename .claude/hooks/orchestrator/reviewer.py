@@ -1153,9 +1153,10 @@ def review(
         )
         return review_materials(materials, config=config, repo_root=repo_root)
     except (OSError, UnicodeDecodeError, ValueError) as error:
+        error_text = str(error)[:200]
         packet = PacketOmitted(
             "REVIEW_PACKET_INCOMPLETE",
-            f"The complete delegated review packet could not be built ({type(error).__name__}); no model call was made.",
+            f"The complete delegated review packet could not be built ({type(error).__name__}: {error_text}); no model call was made.",
             ("delegated_diff",),
         )
         return _incomplete_packet(packet, config)

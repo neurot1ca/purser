@@ -47,6 +47,39 @@ INDEPENDENCE_INSTRUCTIONS = (
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _CONFIG_PATH = _PACKAGE_ROOT / "config.json"
+_BASELINE_VOLATILE_MARKERS = ("timestamp", "duration", "elapsed", "budget")
+
+
+def _baseline_state_fields(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return capture state excluding timestamp, duration, and budget measurements."""
+
+    return {
+        str(key): item
+        for key, item in value.items()
+        if not any(marker in str(key).casefold() for marker in _BASELINE_VOLATILE_MARKERS)
+    }
+
+
+def _handoff_matches(
+    captured: Mapping[str, Any],
+    live_thread: Mapping[str, Any] | None,
+    declared_scope: Sequence[str],
+) -> bool:
+    if not isinstance(live_thread, Mapping):
+        return False
+    origin_baseline = live_thread.get("origin_baseline")
+    origin_scope = live_thread.get("origin_scope")
+    post_state = live_thread.get("post_state")
+    return (
+        captured.get("status") == ledger.OK
+        and isinstance(origin_baseline, Mapping)
+        and origin_baseline.get("status") == ledger.OK
+        and isinstance(origin_scope, list)
+        and origin_scope == list(declared_scope)
+        and isinstance(post_state, Mapping)
+        and post_state.get("status") == ledger.OK
+        and _baseline_state_fields(captured) == _baseline_state_fields(post_state)
+    )
 
 
 def _default_reviewer(**_: Any) -> dict[str, Any]:
@@ -1119,6 +1152,12 @@ def pre_tool_use(
                 declared_scope if declared_scope else None,
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
             )
+        if (
+            tool_name == CODEX_REPLY_TOOL
+            and baseline.get("status") == ledger.OK
+            and _handoff_matches(baseline, live_thread, declared_scope)
+        ):
+            baseline = live_thread["origin_baseline"]
         prompt_text = str(tool_input.get("prompt", ""))
         task_objective, acceptance_criteria, task_contract_grounded = _parse_task_contract(
             prompt_text, parsed.task_id, parsed.phase, declared_scope
@@ -2237,6 +2276,28 @@ def post_tool_use(
         if thread_id is None:
             bundle["claude_review_mode"] = policy.FULL
 
+        handoff_kwargs: dict[str, Any] = {}
+        if (
+            thread_id
+            and repository is not None
+            and pending.get("phase") == "implementation"
+            and isinstance(scope, list)
+            and bool(scope)
+            and isinstance(baseline, Mapping)
+            and baseline.get("status") == ledger.OK
+        ):
+            post_state = ledger.capture_baseline(
+                repository,
+                scope if scope else None,
+                manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
+            )
+            if post_state.get("status") == ledger.OK:
+                handoff_kwargs = {
+                    "origin_baseline": baseline,
+                    "origin_scope": scope,
+                    "post_state": post_state,
+                }
+
         session_ledger = ledger.SessionLedger(runtime_root)
         session_record = ledger.build_session_record(
             pending["task_id"],
@@ -2251,6 +2312,7 @@ def post_tool_use(
             task_objective=pending.get("task_objective"),
             acceptance_criteria=pending.get("acceptance_criteria"),
             task_contract_grounded=pending.get("task_contract_grounded", False),
+            **handoff_kwargs,
         )
         saved = session_ledger.save(session_record)
         if saved["status"] != ledger.OK:
