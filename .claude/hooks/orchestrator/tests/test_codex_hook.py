@@ -38,11 +38,24 @@ def config():
 
 @pytest.fixture(autouse=True)
 def disable_configured_projection_for_codex_tests(monkeypatch):
+    isolated_home = (
+        Path(__file__).parents[4]
+        / ".tmp"
+        / "orchestrator-tests"
+        / "codex-profile-home"
+        / uuid.uuid4().hex
+    )
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setattr(Path, "home", lambda: isolated_home)
     monkeypatch.setattr(
         telemetry,
         "_projection_settings",
         lambda: (False, telemetry.obsidian_projection.DEFAULT_VAULT_ROOT),
     )
+    yield
+    if isolated_home.exists():
+        remove_test_tree(isolated_home)
 
 
 @pytest.fixture()
@@ -127,6 +140,25 @@ def response_bundle(response, config):
     output = response["hookSpecificOutput"][config["post_tool_output_field"]]
     assert output[0]["type"] == "text"
     return json.loads(output[0]["text"])
+
+
+@pytest.fixture()
+def isolated_profile_home(monkeypatch):
+    isolated_home = (
+        Path(__file__).parents[4]
+        / ".tmp"
+        / "orchestrator-tests"
+        / "codex-profile-home"
+        / uuid.uuid4().hex
+    )
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setattr(Path, "home", lambda: isolated_home)
+    try:
+        yield isolated_home
+    finally:
+        if isolated_home.exists():
+            remove_test_tree(isolated_home)
 
 
 def non_report_size(bundle):
@@ -848,6 +880,326 @@ protected = ["project-only-secret.txt"]
     )
 
     assert bundle["protected_paths_touched"] == ["project-only-secret.txt"]
+
+
+def test_project_profile_force_full_reaches_real_hook_bundle(
+    workspace, config, isolated_profile_home
+):
+    repo, state = workspace
+    del isolated_profile_home
+    (repo / ".orchestrator").mkdir()
+    profile_path = repo / ".orchestrator" / "profile.toml"
+    profile_path.write_text(
+        """schema_version = 1
+
+[review]
+force_full = false
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, timeout=10)
+    subprocess.run(["git", "commit", "-qm", "baseline profile"], cwd=repo, check=True, timeout=10)
+
+    prompt = (
+        orch(scope="file0.py")
+        + "\n## Objective\nChange file0 within the declared scope."
+        + "\n## Acceptance criteria\n- Keep the change bounded to file0."
+    )
+    call = event(
+        tool_use_id="project-profile-force-audit-baseline",
+        prompt=prompt,
+        scope="file0.py",
+    )
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n" * 100, encoding="utf-8")
+    reviewer_calls = []
+
+    def reviewer(**_kwargs):
+        reviewer_calls.append(_kwargs)
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "threadId": "thread-force-audit-baseline",
+                        "content": (
+                            'VALIDATION: {"artifacts":[],"commands":["focused-test"],'
+                            '"exit_codes":[0],"source":"WORKER_REPORTED","status":"PASS",'
+                            '"summary":"focused validation passed"}'
+                        ),
+                    }
+                ),
+            }
+        ],
+    }
+
+    audit_bundle = response_bundle(
+        codex.post_tool_use(
+            post,
+            config=config,
+            state_root=state,
+            repo_root=repo,
+            reviewer=reviewer,
+        ),
+        config,
+    )
+
+    assert reviewer_calls
+    assert audit_bundle["claude_review_mode"] == policy.AUDIT
+
+    subprocess.run(["git", "add", "file0.py"], cwd=repo, check=True, timeout=10)
+    subprocess.run(["git", "commit", "-qm", "audit baseline"], cwd=repo, check=True, timeout=10)
+    profile_path.write_text(
+        """schema_version = 1
+
+[review]
+force_full = true
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", ".orchestrator/profile.toml"], cwd=repo, check=True, timeout=10)
+    subprocess.run(["git", "commit", "-qm", "force full profile"], cwd=repo, check=True, timeout=10)
+
+    force_call = event(
+        tool_use_id="project-profile-force-full",
+        prompt=prompt,
+        scope="file0.py",
+    )
+    codex.pre_tool_use(
+        force_call,
+        config=config,
+        state_root=state / "force-full",
+        repo_root=repo,
+    )
+    force_post = {
+        **force_call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "threadId": "thread-force-full",
+                        "content": (
+                            'VALIDATION: {"artifacts":[],"commands":["focused-test"],'
+                            '"exit_codes":[0],"source":"WORKER_REPORTED","status":"PASS",'
+                            '"summary":"focused validation passed"}'
+                        ),
+                    }
+                ),
+            }
+        ],
+    }
+    bundle = response_bundle(
+        codex.post_tool_use(
+            force_post,
+            config=config,
+            state_root=state / "force-full",
+            repo_root=repo,
+            reviewer=reviewer,
+        ),
+        config,
+    )
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert any(item["code"] == "PROFILE_FORCES_FULL" for item in bundle["findings"])
+
+
+def test_project_profile_snapshot_wins_if_profile_changes_between_hooks(
+    workspace, config, isolated_profile_home, monkeypatch
+):
+    repo, state = workspace
+    del isolated_profile_home
+    (repo / ".orchestrator").mkdir()
+    profile_path = repo / ".orchestrator" / "profile.toml"
+    profile_path.write_text(
+        """schema_version = 1
+
+[paths]
+protected = ["captured-secret.txt"]
+
+[review]
+force_full = true
+""",
+        encoding="utf-8",
+    )
+    (repo / "captured-secret.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, timeout=10)
+    subprocess.run(["git", "commit", "-qm", "capture profile"], cwd=repo, check=True, timeout=10)
+
+    call = event(
+        tool_use_id="project-profile-snapshot",
+        scope="captured-secret.txt",
+    )
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    profile_path.write_text(
+        """schema_version = 1
+
+[paths]
+protected = ["different-secret.txt"]
+
+[review]
+force_full = false
+""",
+        encoding="utf-8",
+    )
+    (repo / "captured-secret.txt").write_text("after\n", encoding="utf-8")
+    monkeypatch.setattr(
+        codex.project_profile,
+        "load_profile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("profile reloaded")),
+    )
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {"type": "text", "text": json.dumps({"threadId": "thread-snapshot", "content": "done"})}
+        ],
+    }
+
+    bundle = response_bundle(
+        codex.post_tool_use(post, config=config, state_root=state, repo_root=repo),
+        config,
+    )
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert any(item["code"] == "PROFILE_FORCES_FULL" for item in bundle["findings"])
+    assert "captured-secret.txt" in bundle["protected_paths_touched"]
+
+
+def test_project_profile_skip_thresholds_are_capped_by_config(
+    workspace, config, isolated_profile_home, monkeypatch
+):
+    repo, state = workspace
+    user_config = isolated_profile_home / ".orchestrator" / "config.toml"
+    user_config.parent.mkdir(parents=True)
+    reviewer_executable = isolated_profile_home / "reviewer.exe"
+    user_config.write_text(
+        f'''schema_version = 1
+
+[reviewer]
+executable = "{reviewer_executable.as_posix()}"
+
+[review]
+skip_max_lines = 500
+skip_max_files = 50
+''',
+        encoding="utf-8",
+    )
+    (repo / ".orchestrator").mkdir()
+    (repo / ".orchestrator" / "profile.toml").write_text(
+        "schema_version = 1\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, timeout=10)
+    subprocess.run(["git", "commit", "-qm", "threshold profile"], cwd=repo, check=True, timeout=10)
+
+    call = event(tool_use_id="project-profile-thresholds", scope="file0.py")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("changed = True\n" * 100, encoding="utf-8")
+    captured = {}
+
+    original_gate = codex.policy.reviewer1_gate
+
+    def capture_gate(*args, **kwargs):
+        gate_config = kwargs["config"]
+        captured["gate"] = dict(gate_config["reviewer_gate"])
+        return original_gate(*args, **kwargs)
+
+    monkeypatch.setattr(codex.policy, "reviewer1_gate", capture_gate)
+
+    reviewer_calls = []
+
+    def capture_reviewer(**kwargs):
+        reviewer_calls.append(kwargs)
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {"type": "text", "text": json.dumps({"threadId": "thread-thresholds", "content": "done"})}
+        ],
+    }
+    response_bundle(
+        codex.post_tool_use(
+            post,
+            config=config,
+            state_root=state,
+            repo_root=repo,
+            reviewer=capture_reviewer,
+        ),
+        config,
+    )
+
+    assert captured["gate"]["small_delta_max_lines"] == config["reviewer_gate"]["small_delta_max_lines"]
+    assert captured["gate"]["small_delta_max_files"] == config["reviewer_gate"]["small_delta_max_files"]
+    assert captured["gate"]["small_delta_max_lines"] <= config["reviewer_gate"]["small_delta_max_lines"]
+    assert captured["gate"]["small_delta_max_files"] <= config["reviewer_gate"]["small_delta_max_files"]
+    assert reviewer_calls
+    assert reviewer_calls[0]["reviewer_executable"] == reviewer_executable.as_posix()
+
+
+def test_unconfigured_project_is_marked_without_forcing_full(
+    workspace, config, isolated_profile_home
+):
+    repo, state = workspace
+    del isolated_profile_home
+    prompt = (
+        orch(scope="file0.py")
+        + '\nTASK_CONTRACT: {"objective":"Change file0","criteria":["Keep the change bounded."]}'
+        + "\nDo the work."
+    )
+    call = event(tool_use_id="project-profile-unconfigured", prompt=prompt, scope="file0.py")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    validation = (
+        'VALIDATION: {"artifacts":[],"commands":["focused-test"],"exit_codes":[0],'
+        '"source":"WORKER_REPORTED","status":"PASS","summary":"focused validation passed"}'
+    )
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {"threadId": "thread-unconfigured", "content": validation}
+                ),
+            }
+        ],
+    }
+
+    bundle = response_bundle(
+        codex.post_tool_use(
+            post,
+            config=config,
+            state_root=state,
+            repo_root=repo,
+            reviewer=lambda **_kwargs: {
+                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "validation": "PASS",
+                "findings": [],
+            },
+        ),
+        config,
+    )
+
+    assert bundle["profile"] == "not_configured"
+    assert bundle["claude_review_mode"] != policy.FULL
 
 
 def test_post_tool_use_detects_initial_out_of_scope_and_engine_protected_files(workspace, config):

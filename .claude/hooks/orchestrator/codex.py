@@ -1095,9 +1095,12 @@ def pre_tool_use(
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
 
         repository, project_root_reason = _repo_root(event, repo_root)
+        resolved_profile = (
+            project_profile.load_profile(repository) if repository is not None else None
+        )
         protected_paths = (
-            project_profile.load_profile(repository).protected_paths
-            if repository is not None
+            resolved_profile.protected_paths
+            if resolved_profile is not None
             else project_profile._ENGINE_PROTECTED
         )
         bypass_metadata["repo_root"] = str(repository) if repository is not None else None
@@ -1144,6 +1147,25 @@ def pre_tool_use(
             "acceptance_criteria": acceptance_criteria,
             "task_contract_grounded": task_contract_grounded,
         }
+        if resolved_profile is not None:
+            pending.update(
+                {
+                    "protected_paths": list(resolved_profile.protected_paths),
+                    "force_full_review": resolved_profile.force_full_review,
+                    "skip_max_lines": resolved_profile.skip_max_lines,
+                    "skip_max_files": resolved_profile.skip_max_files,
+                    "reviewer_executable": resolved_profile.reviewer_executable,
+                    "vault_root": resolved_profile.vault_root,
+                    "configured": resolved_profile.configured,
+                    "user_status": resolved_profile.user_status,
+                    "project_status": resolved_profile.project_status,
+                    "first_warning": (
+                        resolved_profile.warnings[0]
+                        if resolved_profile.warnings
+                        else None
+                    ),
+                }
+            )
         _atomic_json_write(_pending_path(runtime_root, event), pending)
         pending_written = True
 
@@ -1705,11 +1727,17 @@ def _post_observations(
             concurrent_writer=True,
         )
     repository = pending.get("repo_root")
+    update_kwargs: dict[str, Any] = {
+        "state_root": runtime_root,
+        "project_root": repository if isinstance(repository, str) else None,
+    }
+    vault_root = pending.get("vault_root")
+    if isinstance(vault_root, str) and vault_root:
+        update_kwargs["vault_root"] = vault_root
     _observe(
         "update_task",
         task_id,
-        state_root=runtime_root,
-        project_root=repository if isinstance(repository, str) else None,
+        **update_kwargs,
     )
 
 
@@ -1816,15 +1844,61 @@ def post_tool_use(
                 _observe("update_task", pending.get("task_id"), state_root=runtime_root)
             return _finalize_replacement(bundle, loaded_config, runtime_root, event)
 
+        stored_profile = (
+            isinstance(pending.get("protected_paths"), list)
+            and all(isinstance(path, str) for path in pending["protected_paths"])
+            and isinstance(pending.get("force_full_review"), bool)
+            and isinstance(pending.get("skip_max_lines"), int)
+            and not isinstance(pending.get("skip_max_lines"), bool)
+            and isinstance(pending.get("skip_max_files"), int)
+            and not isinstance(pending.get("skip_max_files"), bool)
+            and isinstance(pending.get("configured"), bool)
+            and isinstance(pending.get("user_status"), str)
+            and isinstance(pending.get("project_status"), str)
+        )
+        if stored_profile:
+            protected_paths = pending["protected_paths"]
+            profile_force_full = pending["force_full_review"]
+            profile_skip_max_lines = pending["skip_max_lines"]
+            profile_skip_max_files = pending["skip_max_files"]
+            profile_reviewer_executable = pending.get("reviewer_executable")
+            profile_configured = pending["configured"]
+            profile_user_status = pending["user_status"]
+            profile_project_status = pending["project_status"]
+            profile_first_warning = pending.get("first_warning")
+        else:
+            protected_paths = project_profile._ENGINE_PROTECTED
+            profile_force_full = True
+            profile_skip_max_lines = None
+            profile_skip_max_files = None
+            profile_reviewer_executable = None
+            profile_configured = None
+            profile_user_status = None
+            profile_project_status = None
+            profile_first_warning = None
+
+        profile_forces_full = bool(profile_force_full)
+        if profile_forces_full:
+            if profile_user_status == "rejected" or profile_project_status == "rejected":
+                profile_finding = _finding(
+                    "PROFILE_REJECTED",
+                    profile_first_warning
+                    if isinstance(profile_first_warning, str) and profile_first_warning
+                    else "a profile tier was rejected",
+                )
+            else:
+                profile_finding = _finding(
+                    "PROFILE_FORCES_FULL",
+                    "The resolved profile forces FULL Claude review.",
+                )
+            bundle["findings"].append(profile_finding)
+        if stored_profile and profile_configured is False:
+            bundle["profile"] = "not_configured"
+
         pending_repository = pending.get("repo_root")
         repository, resolved_reason = _repo_root(
             event,
             repo_root or (pending_repository if isinstance(pending_repository, str) else None),
-        )
-        protected_paths = (
-            project_profile.load_profile(repository).protected_paths
-            if repository is not None
-            else project_profile._ENGINE_PROTECTED
         )
         project_root_reason = pending.get("project_root_reason") or resolved_reason
         bundle["project_root_reason"] = project_root_reason or None
@@ -1896,6 +1970,17 @@ def post_tool_use(
         if delta.get("status") != ledger.OK:
             force_full_review = True
         else:
+            reviewer_config = dict(loaded_config)
+            reviewer_gate_config = dict(loaded_config["reviewer_gate"])
+            if isinstance(profile_skip_max_lines, int) and not isinstance(profile_skip_max_lines, bool):
+                reviewer_gate_config["small_delta_max_lines"] = min(
+                    reviewer_gate_config["small_delta_max_lines"], profile_skip_max_lines
+                )
+            if isinstance(profile_skip_max_files, int) and not isinstance(profile_skip_max_files, bool):
+                reviewer_gate_config["small_delta_max_files"] = min(
+                    reviewer_gate_config["small_delta_max_files"], profile_skip_max_files
+                )
+            reviewer_config["reviewer_gate"] = reviewer_gate_config
             reviewer_callable = reviewer if reviewer is not None else REVIEWER
             gate = policy.reviewer1_gate(
                 phase=pending["phase"],
@@ -1903,7 +1988,7 @@ def post_tool_use(
                 delta_lines=delta["changed_line_count"],
                 route=pending["route"],
                 reviewer_available=_reviewer_available(reviewer_callable),
-                config=loaded_config,
+                config=reviewer_config,
             )
             if gate.should_run:
                 reviewer_started = True
@@ -1948,6 +2033,12 @@ def post_tool_use(
                     reviewer_kwargs["acceptance_criteria"] = pending["acceptance_criteria"]
                 if (accepts_kwargs or "validation_summary" in params) and validation_text:
                     reviewer_kwargs["validation_summary"] = validation_text
+                if (
+                    isinstance(profile_reviewer_executable, str)
+                    and profile_reviewer_executable
+                    and (accepts_kwargs or "reviewer_executable" in params)
+                ):
+                    reviewer_kwargs["reviewer_executable"] = profile_reviewer_executable
 
                 reviewer_report = reviewer_callable(**reviewer_kwargs)
                 result = reviewer_report.get("result") if isinstance(reviewer_report, Mapping) else None
@@ -2141,6 +2232,8 @@ def post_tool_use(
                         )
                     )
 
+        if profile_forces_full:
+            bundle["claude_review_mode"] = policy.FULL
         if thread_id is None:
             bundle["claude_review_mode"] = policy.FULL
 

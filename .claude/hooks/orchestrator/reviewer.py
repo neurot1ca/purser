@@ -1124,12 +1124,17 @@ def review(
     validation_summary: str | None = None,
     task_objective: str | None = None,
     acceptance_criteria: str | None = None,
+    reviewer_executable: str | None = None,
 ) -> ReviewOutcome:
     """Reviewer callable matching the accepted ``codex.py`` seam."""
 
     del phase, route, model, effort
     try:
         config = _load_config(None)
+        if reviewer_executable is not None:
+            reviewer_config = dict(config)
+            reviewer_config["reviewer1_executable"] = reviewer_executable
+            config = _load_config(reviewer_config)
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
         return _unavailable(
             "REVIEWER_CONFIG_INVALID",
