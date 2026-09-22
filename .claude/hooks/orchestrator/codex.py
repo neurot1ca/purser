@@ -144,9 +144,10 @@ def _parse_task_contract(
     for i, line in enumerate(lines):
         line_str = line.strip()
         lower = line_str.lower()
-        if lower.startswith("task objective:"):
+        if lower.startswith(("task objective:", "objective:")):
             collecting_criteria = False
-            val = line_str[len("task objective:"):].strip()
+            label = "task objective:" if lower.startswith("task objective:") else "objective:"
+            val = line_str[len(label):].strip()
             if not val and i + 1 < len(lines) and not lines[i + 1].strip().lower().startswith("acceptance criteria:"):
                 val = lines[i + 1].strip()
             if "acceptance criteria:" in val.lower():
@@ -155,7 +156,7 @@ def _parse_task_contract(
                 if crit_part:
                     criteria_lines.append(crit_part)
                 val = val[:c_idx].strip(". ")
-            if val:
+            if val and found_obj is None:
                 found_obj = val
         elif lower.startswith("acceptance criteria:"):
             collecting_criteria = True
@@ -259,6 +260,7 @@ _WORKER_VALIDATION_INSTRUCTION = (
     f"Use only these keys: {', '.join(f'`{key}`' for key in sorted(_ALLOWED_VALIDATION_KEYS))}. "
     'Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; '
     "list the commands actually run in `commands` and matching integer `exit_codes`. "
+    "List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. "
     "Do not emit another validation line."
 )
 

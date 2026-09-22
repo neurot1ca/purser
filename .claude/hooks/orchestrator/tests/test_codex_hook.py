@@ -469,6 +469,13 @@ def test_implementation_prompt_reports_worker_validation_once(workspace, config,
     assert listed_keys <= codex._ALLOWED_VALIDATION_KEYS
 
 
+def test_worker_validation_instruction_separates_final_runs_from_deliberate_red_checks():
+    assert (
+        "List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line."
+        in codex._WORKER_VALIDATION_INSTRUCTION
+    )
+
+
 @pytest.mark.parametrize("tool_name", [codex.CODEX_TOOL, codex.CODEX_REPLY_TOOL])
 def test_operation_prompt_does_not_include_worker_validation_instruction(
     workspace, config, tool_name
@@ -2710,6 +2717,47 @@ def test_task_contract_partial_is_not_grounded_and_handles_lists():
     assert grounded is True
     assert obj == "Feature"
     assert crit == "Crit 1; Crit 2"
+
+
+def test_plain_objective_label_grounds_with_next_line_and_inline_criteria():
+    prompt = (
+        "ORCH|task=plain|phase=implementation|route=normal|scope=f.py\n"
+        "oBjEcTiVe:\n"
+        "Recognize plain objective labels. Acceptance criteria: preserve grounding"
+    )
+    obj, crit, grounded = codex._parse_task_contract(prompt, "plain", "implementation", ["f.py"])
+
+    assert grounded is True
+    assert obj == "Recognize plain objective labels"
+    assert crit == "preserve grounding"
+
+
+def test_mid_sentence_objective_is_not_a_plain_objective_label():
+    prompt = (
+        "ORCH|task=mid|phase=implementation|route=normal|scope=f.py\n"
+        "This sentence mentions objective: but is not a label.\n"
+        "Acceptance Criteria: preserve grounding"
+    )
+    obj, _, grounded = codex._parse_task_contract(prompt, "mid", "implementation", ["f.py"])
+
+    assert grounded is False
+    assert "Task mid" in obj
+
+
+def test_first_task_or_plain_objective_label_wins():
+    prompt = (
+        "ORCH|task=precedence|phase=implementation|route=normal|scope=f.py\n"
+        "Task objective: first objective\n"
+        "Objective: second objective\n"
+        "Acceptance Criteria: preserve grounding"
+    )
+    obj, _, grounded = codex._parse_task_contract(
+        prompt, "precedence", "implementation", ["f.py"]
+    )
+
+    # If both labels appear, the first one in the prompt wins.
+    assert grounded is True
+    assert obj == "first objective"
 
 
 def test_task_contract_markdown_sections_are_grounded_and_fence_aware():
