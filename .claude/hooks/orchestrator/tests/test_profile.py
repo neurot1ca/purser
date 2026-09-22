@@ -9,11 +9,11 @@ import pytest
 
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-import profile
+import project_profile
 
 
 @pytest.fixture()
-def tmp_path():
+def tmp_path(monkeypatch):
     root = (
         Path(__file__).parents[4]
         / ".tmp"
@@ -22,6 +22,10 @@ def tmp_path():
         / uuid.uuid4().hex
     )
     root.mkdir(parents=True)
+    isolated_home = root / "home"
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setattr(Path, "home", lambda: isolated_home)
     try:
         yield root
     finally:
@@ -36,6 +40,49 @@ def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_is_protected_normalizes_paths_and_applies_pattern_scopes():
+    patterns = ("tree/**", "docs/*.md", "AGENTS.md", "*.pem")
+
+    assert project_profile.is_protected("./tree", patterns)
+    assert project_profile.is_protected("tree/nested/file.txt", patterns)
+    assert project_profile.is_protected("docs/README.md", patterns)
+    assert project_profile.is_protected("nested/agents.md", patterns)
+    assert project_profile.is_protected("keys/server.PEM", patterns)
+    assert project_profile.is_protected("docs/nested/README.md", patterns)
+    assert not project_profile.is_protected("other/nested/README.md", patterns)
+    assert not project_profile.is_protected("src/agent.txt", patterns)
+
+
+def test_engine_protected_paths_survive_without_a_project_profile(tmp_path):
+    resolved = project_profile.load_profile(tmp_path / "project")
+
+    assert all(
+        project_profile.is_protected(path, resolved.protected_paths)
+        for path in ("AGENTS.md", ".git/config", "nested/.git/HEAD", "keys/server.pem")
+    )
+
+
+def test_polymarket_profile_retains_predecessor_protected_paths(tmp_path):
+    source = Path(__file__).parents[4] / "profiles" / "polymarket-btc5m-lab.toml"
+    project_root = tmp_path / "project"
+    _write(project_root / ".orchestrator" / "profile.toml", source.read_text(encoding="utf-8"))
+
+    resolved = project_profile.load_profile(
+        project_root, user_config_path=tmp_path / "missing-user-config.toml"
+    )
+
+    assert all(
+        project_profile.is_protected(path, resolved.protected_paths)
+        for path in (
+            "state/current.yaml",
+            "docs/EVIDENCE_RULES.md",
+            ".gitattributes",
+            "inputs/a.csv",
+            "review_artifacts/x/y.json",
+        )
+    )
 
 
 def test_project_can_only_tighten_review_and_protected_paths(tmp_path):
@@ -65,7 +112,7 @@ skip_max_files = 5
 ''',
     )
 
-    resolved = profile.load_profile(project_root, user_config_path=user_config)
+    resolved = project_profile.load_profile(project_root, user_config_path=user_config)
 
     assert resolved.skip_max_lines == 40
     assert resolved.skip_max_files == 1
@@ -99,7 +146,7 @@ unknown = true
 ''',
     )
 
-    resolved = profile.load_profile(project_root, user_config_path=user_config)
+    resolved = project_profile.load_profile(project_root, user_config_path=user_config)
 
     assert resolved.project_status == "rejected"
     assert resolved.project_id is None
@@ -122,7 +169,7 @@ vault_root = 123
 ''',
     )
 
-    resolved = profile.load_profile(tmp_path / "project", user_config_path=user_config)
+    resolved = project_profile.load_profile(tmp_path / "project", user_config_path=user_config)
 
     assert resolved.user_status == "ok"
     assert resolved.reviewer_executable is not None
@@ -143,11 +190,11 @@ paths = ["{trusted_root.as_posix()}"]
 ''',
     )
 
-    assert profile.load_profile(child, user_config_path=user_config).trusted is False
+    assert project_profile.load_profile(child, user_config_path=user_config).trusted is False
 
     if os.name == "nt":
         case_variant = Path(str(trusted_root).swapcase())
-        assert profile.load_profile(
+        assert project_profile.load_profile(
             case_variant, user_config_path=user_config
         ).trusted is True
 
@@ -159,6 +206,6 @@ paths = ["{trusted_root.as_posix()}"]
 paths = ["."]
 ''',
     )
-    relative = profile.load_profile(Path.cwd(), user_config_path=relative_config)
+    relative = project_profile.load_profile(Path.cwd(), user_config_path=relative_config)
     assert relative.user_status == "rejected"
     assert relative.trusted is False

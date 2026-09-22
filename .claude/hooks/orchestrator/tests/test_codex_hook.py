@@ -785,6 +785,71 @@ def test_hook_cwd_resolves_external_repository_top_level(workspace, config):
     assert bundle["project_root_reason"] is None
 
 
+def test_project_profile_protected_path_reaches_real_hook_bundle(
+    workspace, config, monkeypatch
+):
+    repo, state = workspace
+    isolated_home = repo.parent / "isolated-home"
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setattr(Path, "home", lambda: isolated_home)
+
+    (repo / ".orchestrator").mkdir()
+    (repo / ".orchestrator" / "profile.toml").write_text(
+        '''schema_version = 1
+
+[project]
+id = "external-test"
+
+[paths]
+protected = ["project-only-secret.txt"]
+''',
+        encoding="utf-8",
+    )
+    protected = repo / "project-only-secret.txt"
+    protected.write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, timeout=10)
+    subprocess.run(
+        ["git", "commit", "-qm", "add project profile"], cwd=repo, check=True, timeout=10
+    )
+
+    call = event(
+        tool_use_id="project-profile-protected",
+        scope="file0.py,project-only-secret.txt",
+    )
+    pre = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in pre["hookSpecificOutput"]
+    protected.write_text("after\n", encoding="utf-8")
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-project-profile", "content": "done"}),
+            }
+        ],
+    }
+
+    bundle = response_bundle(
+        codex.post_tool_use(
+            post,
+            config=config,
+            state_root=state,
+            repo_root=repo,
+            reviewer=lambda **_kwargs: {
+                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "provider": "stub",
+                "validation": "UNKNOWN",
+                "findings": [],
+            },
+        ),
+        config,
+    )
+
+    assert bundle["protected_paths_touched"] == ["project-only-secret.txt"]
+
+
 @pytest.mark.parametrize("cwd_kind", ["missing", "non_git"])
 def test_unresolved_hook_root_returns_full_bundle(
     workspace, config, cwd_kind, monkeypatch

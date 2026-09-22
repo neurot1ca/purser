@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 import context_io_telemetry
+import project_profile
 import project_root
 
 
@@ -18,8 +19,16 @@ def main() -> int:
         value: Any = json.load(sys.stdin)
         if isinstance(value, Mapping):
             repository, _reason = project_root.resolve_project_root(value)
+            protected_paths = (
+                project_profile.load_profile(repository).protected_paths
+                if repository is not None
+                else project_profile._ENGINE_PROTECTED
+            )
             context_io_telemetry.handle(
-                value, repo_root=repository, hook_started_ns=started
+                value,
+                repo_root=repository,
+                protected_paths=protected_paths,
+                hook_started_ns=started,
             )
     except BaseException:
         pass

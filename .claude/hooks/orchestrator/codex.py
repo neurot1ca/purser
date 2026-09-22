@@ -20,6 +20,7 @@ from typing import Any
 import json_transport
 import ledger
 import policy
+import project_profile
 import project_root
 import reviewer as reviewer1
 import telemetry
@@ -1094,6 +1095,11 @@ def pre_tool_use(
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
 
         repository, project_root_reason = _repo_root(event, repo_root)
+        protected_paths = (
+            project_profile.load_profile(repository).protected_paths
+            if repository is not None
+            else project_profile._ENGINE_PROTECTED
+        )
         bypass_metadata["repo_root"] = str(repository) if repository is not None else None
         bypass_metadata["project_root_reason"] = project_root_reason or None
         declared_scope = list(parsed.scope)
@@ -1775,6 +1781,11 @@ def post_tool_use(
             event,
             repo_root or (pending_repository if isinstance(pending_repository, str) else None),
         )
+        protected_paths = (
+            project_profile.load_profile(repository).protected_paths
+            if repository is not None
+            else project_profile._ENGINE_PROTECTED
+        )
         project_root_reason = pending.get("project_root_reason") or resolved_reason
         bundle["project_root_reason"] = project_root_reason or None
         scope = pending.get("scope")
@@ -1807,11 +1818,15 @@ def post_tool_use(
             bundle["delta_lines"] = delta["changed_line_count"]
             bundle["delta_files"] = delta["changed_file_count"]
             if scope:
-                classification = ledger.classify_concurrent_writers(delta, scope)
+                classification = ledger.classify_concurrent_writers(
+                    delta, scope, protected_paths=protected_paths
+                )
                 bundle["protected_paths_touched"] = classification.get("protected_paths", [])
                 bundle["concurrent_writer"] = classification.get("concurrent_writer")
             else:
-                bundle["protected_paths_touched"] = ledger.detect_protected_paths(delta)
+                bundle["protected_paths_touched"] = ledger.detect_protected_paths(
+                    delta, protected_paths=protected_paths
+                )
         else:
             bundle["findings"].append(
                 _finding(delta.get("code", "UNKNOWN_DELTA"), delta.get("message", "Delta is UNKNOWN."))
@@ -1927,14 +1942,18 @@ def post_tool_use(
                             bundle["delta_files"] = delta["changed_file_count"]
                             bundle["current_head"] = delta.get("current_head")
                             re_classification = (
-                                ledger.classify_concurrent_writers(delta, scope)
+                                ledger.classify_concurrent_writers(
+                                    delta, scope, protected_paths=protected_paths
+                                )
                                 if scope
                                 else None
                             )
                             bundle["protected_paths_touched"] = (
                                 re_classification.get("protected_paths", [])
                                 if re_classification
-                                else ledger.detect_protected_paths(delta)
+                                else ledger.detect_protected_paths(
+                                    delta, protected_paths=protected_paths
+                                )
                             )
                             bundle["concurrent_writer"] = (
                                 re_classification.get("concurrent_writer")

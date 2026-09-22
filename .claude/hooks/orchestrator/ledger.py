@@ -22,6 +22,7 @@ import time
 from typing import Any
 
 import json_transport
+import project_profile
 
 
 OK = "OK"
@@ -34,14 +35,6 @@ MANIFEST_BUDGET_EXCEEDED = "MANIFEST_BUDGET_EXCEEDED"
 DEFAULT_MANIFEST_BUDGET_SECONDS = 3.0
 
 _LEDGER_SCHEMA_VERSION = 1
-_PROTECTED_EXACT = frozenset(
-    {
-        "state/current.yaml",
-        "AGENTS.md",
-        "docs/EVIDENCE_RULES.md",
-        ".gitattributes",
-    }
-)
 _SECRET_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -698,6 +691,7 @@ def classify_concurrent_writers(
     *,
     material_paths: Iterable[str | os.PathLike[str]] = (),
     verification_paths: Iterable[str | os.PathLike[str]] = (),
+    protected_paths: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Classify paths without assigning any path to a particular author."""
 
@@ -746,7 +740,7 @@ def classify_concurrent_writers(
         for path in outside
         if any(_inside(path, item) or _inside(item, path) for item in verification)
     )
-    protected_touches = detect_protected_paths(changed)
+    protected_touches = detect_protected_paths(changed, protected_paths=protected_paths)
     halt_paths = sorted(
         set(overlap + material_touches + verification_touches + protected_touches + ambiguous)
     )
@@ -770,7 +764,11 @@ def classify_concurrent_writers(
     }
 
 
-def detect_protected_paths(delta_or_paths: Mapping[str, Any] | Iterable[str]) -> list[str]:
+def detect_protected_paths(
+    delta_or_paths: Mapping[str, Any] | Iterable[str],
+    *,
+    protected_paths: Iterable[str] | None = None,
+) -> list[str]:
     """Return protected repository paths present in a known delta."""
 
     if isinstance(delta_or_paths, Mapping):
@@ -779,6 +777,11 @@ def detect_protected_paths(delta_or_paths: Mapping[str, Any] | Iterable[str]) ->
             return []
     else:
         paths = list(delta_or_paths)
+    patterns = (
+        project_profile._ENGINE_PROTECTED
+        if protected_paths is None
+        else protected_paths
+    )
     protected = []
     for raw in paths:
         if not isinstance(raw, str):
@@ -786,11 +789,7 @@ def detect_protected_paths(delta_or_paths: Mapping[str, Any] | Iterable[str]) ->
         path = raw.replace("\\", "/")
         while path.startswith("./"):
             path = path[2:]
-        if (
-            path in _PROTECTED_EXACT
-            or path.startswith("inputs/")
-            or path.startswith("review_artifacts/")
-        ):
+        if project_profile.is_protected(path, patterns):
             protected.append(path)
     return sorted(set(protected))
 

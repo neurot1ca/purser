@@ -192,7 +192,11 @@ def test_protected_path_halts(repo):
     (repo / "state" / "current.yaml").write_text("status: changed\n", encoding="utf-8")
     delta = ledger.compute_delta(repo, baseline)
 
-    classification = ledger.classify_concurrent_writers(delta, ["src/target.py"])
+    classification = ledger.classify_concurrent_writers(
+        delta,
+        ["src/target.py"],
+        protected_paths=("state/current.yaml",),
+    )
 
     assert classification["decision"] == ledger.UNKNOWN_CONCURRENT_WRITER
     assert classification["protected_paths"] == ["state/current.yaml"]
@@ -324,7 +328,17 @@ def test_protected_paths_are_detected_only(repo):
         "src/target.py",
     ]
 
-    assert ledger.detect_protected_paths(paths) == sorted(paths[:-1])
+    assert ledger.detect_protected_paths(
+        paths,
+        protected_paths=(
+            "state/current.yaml",
+            "AGENTS.md",
+            "docs/EVIDENCE_RULES.md",
+            "inputs/**",
+            "review_artifacts/**",
+            ".gitattributes",
+        ),
+    ) == sorted(paths[:-1])
 
 
 def test_session_record_is_checksummed_and_feeds_thread_policy(sandbox_dir):

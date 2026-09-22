@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import fnmatch
 import os
 from pathlib import Path
 import tomllib
+from collections.abc import Iterable
 from typing import Any
 
 
@@ -21,6 +23,7 @@ _ENGINE_PROTECTED = (
     "CLAUDE.md",
     ".claude/settings.json",
     ".claude/settings.local.json",
+    ".git",
     ".git/**",
     ".env",
     ".env.*",
@@ -29,6 +32,27 @@ _ENGINE_PROTECTED = (
     "credentials.*",
     "secrets.*",
 )
+
+
+def is_protected(path: str, patterns: Iterable[str]) -> bool:
+    """Return whether a repository-relative path matches a protected pattern."""
+
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    components = tuple(part for part in normalized.split("/") if part)
+    for raw_pattern in patterns:
+        pattern = raw_pattern.replace("\\", "/")
+        if pattern.endswith("/**"):
+            prefix = pattern[:-3].rstrip("/")
+            if normalized == prefix or normalized.startswith(prefix + "/"):
+                return True
+        elif "/" in pattern:
+            if fnmatch.fnmatchcase(normalized, pattern):
+                return True
+        elif any(fnmatch.fnmatchcase(component.casefold(), pattern.casefold()) for component in components):
+            return True
+    return False
 
 _USER_SECURITY = {
     "reviewer": {"executable"},
@@ -294,4 +318,4 @@ def _exception_text(exc: Exception) -> str:
     return text or exc.__class__.__name__
 
 
-__all__ = ["ResolvedProfile", "load_profile"]
+__all__ = ["ResolvedProfile", "is_protected", "load_profile"]

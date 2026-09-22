@@ -8,9 +8,8 @@ within the current turn and is stripped before canonical telemetry emission.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
-import fnmatch
 import hashlib
 import json
 import os
@@ -20,6 +19,8 @@ import tempfile
 import time
 from typing import Any, Iterator
 import uuid
+
+import project_profile
 
 
 SCHEMA_VERSION = 1
@@ -37,12 +38,6 @@ ATOMIC_REPLACE_MAX_ATTEMPTS = 4
 ATOMIC_REPLACE_MAX_WAIT_SECONDS = 0.03
 THRESHOLDS = (200, 350, 500)
 
-_PROTECTED_EXACT = frozenset(
-    {"state/current.yaml", "AGENTS.md", "docs/EVIDENCE_RULES.md", ".gitattributes"}
-)
-_PROTECTED_TOP_LEVEL = frozenset({"inputs", "review_artifacts"})
-_PROTECTED_COMPONENTS = frozenset({".git"})
-_PROTECTED_GLOBS = (".env", ".env.*", "*.pem", "*.key", "credentials.*", "secrets.*")
 _UNKNOWN_REASONS = frozenset(
     {
         "BINARY_SUSPECTED",
@@ -309,14 +304,13 @@ def _mode(tool_input: Any) -> str:
     return "TARGETED" if "offset" in tool_input or "limit" in tool_input else "FULL"
 
 
-def _is_protected(relative: Path) -> bool:
-    posix = relative.as_posix()
-    parts = relative.parts
-    if posix in _PROTECTED_EXACT or not parts:
-        return posix in _PROTECTED_EXACT
-    if parts[0] in _PROTECTED_TOP_LEVEL or any(part in _PROTECTED_COMPONENTS for part in parts):
-        return True
-    return any(fnmatch.fnmatchcase(part.casefold(), pattern) for part in parts for pattern in _PROTECTED_GLOBS)
+def _is_protected(relative: Path, protected_paths: Iterable[str] | None = None) -> bool:
+    patterns = (
+        project_profile._ENGINE_PROTECTED
+        if protected_paths is None
+        else protected_paths
+    )
+    return project_profile.is_protected(relative.as_posix(), patterns)
 
 
 def _identity(file_stat: os.stat_result) -> list[int] | None:
@@ -482,6 +476,7 @@ def _observe_read(
     event: Mapping[str, Any],
     *,
     repo_root: str | os.PathLike[str] | None,
+    protected_paths: Iterable[str] | None,
 ) -> dict[str, Any]:
     tool_input = event.get("tool_input")
     mode = _mode(tool_input)
@@ -499,7 +494,7 @@ def _observe_read(
         relative = candidate.relative_to(root)
     except (OSError, RuntimeError, ValueError):
         return _unknown_observation(mode, "OUTSIDE_ROOT")
-    if _is_protected(relative):
+    if _is_protected(relative, protected_paths):
         return _unknown_observation(mode, "PROTECTED_PATH")
     if turn["stat_operations"] >= MAX_STAT_OPERATIONS_PER_TURN:
         return _unknown_observation(mode, "RESOURCE_LIMIT")
@@ -625,6 +620,7 @@ def read_pre_tool_use(
     *,
     state_root: str | os.PathLike[str] | None = None,
     repo_root: str | os.PathLike[str] | None = None,
+    protected_paths: Iterable[str] | None = None,
     hook_started_ns: int | None = None,
 ) -> None:
     started = time.perf_counter_ns()
@@ -641,7 +637,9 @@ def read_pre_tool_use(
         if turn is None:
             turn = _new_turn(error or "MISSING_USER_PROMPT")
         _consume_contention(turn, contention)
-        observation = _observe_read(turn, event, repo_root=repo_root)
+        observation = _observe_read(
+            turn, event, repo_root=repo_root, protected_paths=protected_paths
+        )
         _add_observation(turn, observation)
         internal_us = (time.perf_counter_ns() - started) // 1000
         wall_us = (time.perf_counter_ns() - (hook_started_ns or started)) // 1000
@@ -800,6 +798,7 @@ def handle(
     *,
     state_root: str | os.PathLike[str] | None = None,
     repo_root: str | os.PathLike[str] | None = None,
+    protected_paths: Iterable[str] | None = None,
     hook_started_ns: int | None = None,
 ) -> None:
     hook_name = event.get("hook_event_name")
@@ -807,7 +806,11 @@ def handle(
         user_prompt_submit(event, state_root=state_root, hook_started_ns=hook_started_ns)
     elif hook_name == "PreToolUse" and event.get("tool_name") == "Read":
         read_pre_tool_use(
-            event, state_root=state_root, repo_root=repo_root, hook_started_ns=hook_started_ns
+            event,
+            state_root=state_root,
+            repo_root=repo_root,
+            protected_paths=protected_paths,
+            hook_started_ns=hook_started_ns,
         )
     elif hook_name == "Stop":
         stop(event, state_root=state_root, hook_started_ns=hook_started_ns)
