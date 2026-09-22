@@ -1194,6 +1194,14 @@ def pre_tool_use(
                     "skip_max_lines": resolved_profile.skip_max_lines,
                     "skip_max_files": resolved_profile.skip_max_files,
                     "reviewer_executable": resolved_profile.reviewer_executable,
+                    "authority_sources": [
+                        {
+                            "path": source.path,
+                            "headings": list(source.headings),
+                            "when_changed": source.when_changed,
+                        }
+                        for source in resolved_profile.authority_sources
+                    ],
                     "vault_root": resolved_profile.vault_root,
                     "configured": resolved_profile.configured,
                     "user_status": resolved_profile.user_status,
@@ -1901,6 +1909,7 @@ def post_tool_use(
             profile_skip_max_lines = pending["skip_max_lines"]
             profile_skip_max_files = pending["skip_max_files"]
             profile_reviewer_executable = pending.get("reviewer_executable")
+            profile_authority_sources = pending.get("authority_sources")
             profile_configured = pending["configured"]
             profile_user_status = pending["user_status"]
             profile_project_status = pending["project_status"]
@@ -1911,6 +1920,7 @@ def post_tool_use(
             profile_skip_max_lines = None
             profile_skip_max_files = None
             profile_reviewer_executable = None
+            profile_authority_sources = None
             profile_configured = None
             profile_user_status = None
             profile_project_status = None
@@ -2078,6 +2088,11 @@ def post_tool_use(
                     and (accepts_kwargs or "reviewer_executable" in params)
                 ):
                     reviewer_kwargs["reviewer_executable"] = profile_reviewer_executable
+                if (
+                    profile_authority_sources is not None
+                    and (accepts_kwargs or "authority_sources" in params)
+                ):
+                    reviewer_kwargs["authority_sources"] = profile_authority_sources
 
                 reviewer_report = reviewer_callable(**reviewer_kwargs)
                 result = reviewer_report.get("result") if isinstance(reviewer_report, Mapping) else None

@@ -1152,6 +1152,18 @@ skip_max_files = 50
     assert captured["gate"]["small_delta_max_files"] <= config["reviewer_gate"]["small_delta_max_files"]
     assert reviewer_calls
     assert reviewer_calls[0]["reviewer_executable"] == reviewer_executable.as_posix()
+    assert reviewer_calls[0]["authority_sources"] == [
+        {
+            "path": "AGENTS.md",
+            "headings": [
+                "Authority",
+                "Working scope",
+                "Proportional validation",
+                "Test and comment quality",
+            ],
+            "when_changed": None,
+        }
+    ]
 
 
 def test_unconfigured_project_is_marked_without_forcing_full(

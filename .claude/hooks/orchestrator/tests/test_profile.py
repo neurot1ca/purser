@@ -177,6 +177,32 @@ vault_root = 123
     assert any("vault_root must be a string" in warning for warning in resolved.warnings)
 
 
+def test_invalid_project_authority_sources_warn_and_fall_back(tmp_path):
+    project_root = tmp_path / "project"
+    _write(
+        project_root / ".orchestrator" / "profile.toml",
+        '''schema_version = 1
+
+[[authority.sources]]
+path = "../outside.md"
+headings = ["Secret"]
+''',
+    )
+
+    resolved = project_profile.load_profile(
+        project_root, user_config_path=tmp_path / "missing-user-config.toml"
+    )
+
+    assert resolved.project_status == "ok"
+    assert resolved.authority_sources == (
+        project_profile.AuthoritySource(
+            "AGENTS.md",
+            ("Authority", "Working scope", "Proportional validation", "Test and comment quality"),
+        ),
+    )
+    assert any("sources[0].path" in warning for warning in resolved.warnings)
+
+
 def test_trust_requires_exact_canonical_path(tmp_path):
     trusted_root = tmp_path / "Trusted"
     child = trusted_root / "child"

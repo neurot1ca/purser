@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import fnmatch
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import tomllib
 from collections.abc import Iterable
 from typing import Any
@@ -65,7 +65,25 @@ _PROJECT_SECURITY = {
     "paths": {"protected"},
     "review": {"force_full", "skip_max_lines", "skip_max_files"},
 }
-_PROJECT_NON_SECURITY = {"project": {"id"}}
+_DEFAULT_AUTHORITY_HEADINGS = (
+    "Authority",
+    "Working scope",
+    "Proportional validation",
+    "Test and comment quality",
+)
+
+
+@dataclass(frozen=True)
+class AuthoritySource:
+    path: str
+    headings: tuple[str, ...]
+    when_changed: str | None = None
+
+
+_PROJECT_NON_SECURITY = {"project": {"id"}, "authority": {"sources"}}
+_DEFAULT_AUTHORITY_SOURCES = (
+    AuthoritySource("AGENTS.md", _DEFAULT_AUTHORITY_HEADINGS),
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +96,7 @@ class ResolvedProfile:
     skip_max_files: int
     trusted: bool
     reviewer_executable: str | None
+    authority_sources: tuple[AuthoritySource, ...]
     vault_root: str | None
     loosenings_ignored: int
     user_status: str
@@ -120,6 +139,7 @@ def load_profile(
             skip_max_files=_ENGINE_DEFAULTS["skip_max_files"],
             trusted=False,
             reviewer_executable=None,
+            authority_sources=_DEFAULT_AUTHORITY_SOURCES,
             vault_root=None,
             loosenings_ignored=0,
             user_status="rejected",
@@ -191,6 +211,13 @@ def _load_tier(
                     f"{tier_name}: [{section_name}] unknown key {key!r} ignored"
                 )
                 continue
+            if section_name == "authority" and key == "sources":
+                authority_sources, authority_warnings = _parse_authority_sources(
+                    tier_name, value
+                )
+                warnings.extend(authority_warnings)
+                values["authority.sources"] = authority_sources
+                continue
             if not isinstance(value, str):
                 warnings.append(
                     f"{tier_name}: [{section_name}] {key} must be a string; ignored"
@@ -199,6 +226,75 @@ def _load_tier(
             values[f"{section_name}.{key}"] = value
 
     return _Tier("ok", values, tuple(warnings))
+
+
+def _parse_authority_sources(
+    tier_name: str, raw_sources: Any
+) -> tuple[tuple[AuthoritySource, ...], tuple[str, ...]]:
+    warnings: list[str] = []
+    if not isinstance(raw_sources, list):
+        return (), (f"{tier_name}: [authority] sources must be a list; ignored",)
+
+    sources: list[AuthoritySource] = []
+    for index, raw_source in enumerate(raw_sources):
+        prefix = f"{tier_name}: [authority] sources[{index}]"
+        if not isinstance(raw_source, dict):
+            warnings.append(f"{prefix} must be a table; entry ignored")
+            continue
+        unknown = set(raw_source).difference({"path", "headings", "when_changed"})
+        if unknown:
+            warnings.append(
+                f"{prefix} has unknown key(s) {sorted(unknown)!r}; entry ignored"
+            )
+            continue
+
+        path = raw_source.get("path")
+        headings = raw_source.get("headings")
+        when_changed = raw_source.get("when_changed")
+        normalized_path = _authority_path(path)
+        if normalized_path is None:
+            warnings.append(
+                f"{prefix}.path must be a relative repository path without '..'; entry ignored"
+            )
+            continue
+        if not isinstance(headings, list) or not headings or not all(
+            isinstance(heading, str) and heading for heading in headings
+        ):
+            warnings.append(
+                f"{prefix}.headings must be a non-empty list of strings; entry ignored"
+            )
+            continue
+        if "when_changed" in raw_source and not isinstance(when_changed, str):
+            warnings.append(
+                f"{prefix}.when_changed must be a string; entry ignored"
+            )
+            continue
+        sources.append(
+            AuthoritySource(
+                normalized_path,
+                tuple(headings),
+                when_changed,
+            )
+        )
+    return tuple(sources), tuple(warnings)
+
+
+def _authority_path(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or ".." in normalized.split("/")
+        or Path(value).is_absolute()
+        or PureWindowsPath(value).is_absolute()
+        or PureWindowsPath(value).drive
+    ):
+        return None
+    return normalized
 
 
 def _valid_security_value(section: str, key: str, value: Any) -> tuple[bool, str]:
@@ -272,6 +368,7 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
         )
 
     trusted = _is_trusted(project_root, user)
+    authority_sources = project_values.get("authority.sources") or _DEFAULT_AUTHORITY_SOURCES
     return ResolvedProfile(
         configured=project.status != "missing",
         project_id=project_values.get("project.id"),
@@ -281,6 +378,7 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
         skip_max_files=skip_files,
         trusted=trusted,
         reviewer_executable=user_values.get("reviewer.executable"),
+        authority_sources=authority_sources,
         vault_root=user_values.get("telemetry.vault_root"),
         loosenings_ignored=loosenings_ignored,
         user_status=user.status,
@@ -318,4 +416,4 @@ def _exception_text(exc: Exception) -> str:
     return text or exc.__class__.__name__
 
 
-__all__ = ["ResolvedProfile", "is_protected", "load_profile"]
+__all__ = ["AuthoritySource", "ResolvedProfile", "is_protected", "load_profile"]

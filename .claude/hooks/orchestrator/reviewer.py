@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import shutil
 import subprocess
@@ -874,10 +874,63 @@ def _markdown_sections(path: Path, headings: Sequence[str]) -> str:
     return "\n".join(selected).strip()
 
 
-def _authority_slice(repo_root: Path, changed_paths: Sequence[str]) -> str:
-    slices = [_markdown_sections(repo_root / "AGENTS.md", _AUTHORITY_HEADINGS)]
-    if any(path.replace("\\", "/").startswith(".claude/hooks/orchestrator/") for path in changed_paths):
-        slices.append(_markdown_sections(_PACKAGE_ROOT / "BUILD_SPEC.md", _BUILD_SPEC_HEADINGS))
+_DEFAULT_AUTHORITY_SOURCES = (
+    {
+        "path": "AGENTS.md",
+        "headings": _AUTHORITY_HEADINGS,
+    },
+)
+
+
+def _authority_slice(
+    repo_root: Path,
+    changed_paths: Sequence[str],
+    sources: Sequence[Any] | None = None,
+) -> str:
+    slices: list[str] = []
+    root = repo_root.resolve()
+    for source in _DEFAULT_AUTHORITY_SOURCES if sources is None else sources:
+        if isinstance(source, Mapping):
+            path = source.get("path")
+            headings = source.get("headings")
+            when_changed = source.get("when_changed")
+        else:
+            path = getattr(source, "path", None)
+            headings = getattr(source, "headings", None)
+            when_changed = getattr(source, "when_changed", None)
+        if (
+            not isinstance(path, str)
+            or not isinstance(headings, Sequence)
+            or isinstance(headings, (str, bytes))
+            or not all(isinstance(heading, str) and heading for heading in headings)
+            or (when_changed is not None and not isinstance(when_changed, str))
+        ):
+            continue
+        normalized_path = path.replace("\\", "/")
+        while normalized_path.startswith("./"):
+            normalized_path = normalized_path[2:]
+        if (
+            not normalized_path
+            or normalized_path.startswith("/")
+            or ".." in normalized_path.split("/")
+            or Path(path).is_absolute()
+            or PureWindowsPath(path).is_absolute()
+            or PureWindowsPath(path).drive
+        ):
+            continue
+        normalized_changed = [changed.replace("\\", "/") for changed in changed_paths]
+        if when_changed is not None and not any(
+            changed.startswith(when_changed.replace("\\", "/"))
+            for changed in normalized_changed
+        ):
+            continue
+        try:
+            resolved_path = (repo_root / normalized_path).resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if not _within(resolved_path, root):
+            continue
+        slices.append(_markdown_sections(resolved_path, headings))
     result = "\n\n".join(item for item in slices if item)
     return result or "No readable repository authority slice was available; treat authority as UNKNOWN."
 
@@ -1061,6 +1114,7 @@ def _seam_materials(
     validation_summary: str | None = None,
     task_objective: str | None = None,
     acceptance_criteria: str | None = None,
+    authority_sources: Sequence[Any] | None = None,
 ) -> Mapping[str, str]:
     paths, diff = _delegated_diff(repo_root, delta, classification)
     decision = classification.get("decision") if isinstance(classification, Mapping) else "UNKNOWN"
@@ -1100,7 +1154,7 @@ def _seam_materials(
     return {
         "objective": objective_content,
         "acceptance_criteria": criteria_content,
-        "authority_contract": _authority_slice(repo_root, paths),
+        "authority_contract": _authority_slice(repo_root, paths, authority_sources),
         "delegated_diff": diff,
         "validation_summary": (
             f"{validation_evidence} "
@@ -1125,6 +1179,7 @@ def review(
     task_objective: str | None = None,
     acceptance_criteria: str | None = None,
     reviewer_executable: str | None = None,
+    authority_sources: Sequence[Any] | None = None,
 ) -> ReviewOutcome:
     """Reviewer callable matching the accepted ``codex.py`` seam."""
 
@@ -1150,6 +1205,7 @@ def review(
             validation_summary,
             task_objective=task_objective,
             acceptance_criteria=acceptance_criteria,
+            authority_sources=authority_sources,
         )
         return review_materials(materials, config=config, repo_root=repo_root)
     except (OSError, UnicodeDecodeError, ValueError) as error:

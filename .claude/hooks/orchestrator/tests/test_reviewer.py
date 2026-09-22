@@ -4,12 +4,14 @@ import shutil
 import subprocess
 import tempfile
 import sys
+import uuid
 
 import pytest
 
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import policy
+import project_profile
 import reviewer
 
 
@@ -179,6 +181,44 @@ def assert_unavailable(result):
     assert result["validation"] == "UNKNOWN"
     assert "error_code" in result
     assert "conversation_id" not in result
+
+
+def test_real_purser_profile_authority_slice_includes_agents_and_build_spec():
+    repo_root = Path(__file__).parents[4]
+    resolved = project_profile.load_profile(
+        repo_root, user_config_path=repo_root / ".tmp" / "missing-user-config.toml"
+    )
+
+    authority = reviewer._authority_slice(  # noqa: SLF001 - authority seam contract
+        repo_root,
+        [".claude/hooks/orchestrator/reviewer.py"],
+        resolved.authority_sources,
+    )
+
+    assert "Observability never takes enforcement down." in authority
+    assert "Reviewer-1 gate (mechanical)" in authority
+
+
+def test_authority_slice_skips_sources_outside_repository():
+    scratch = Path(__file__).parents[4] / ".tmp" / f"authority-{uuid.uuid4().hex}"
+    repo_root = scratch / "repo"
+    repo_root.mkdir(parents=True)
+    outside = scratch / "outside.md"
+    outside.write_text("## Secret\nshould not be read\n", encoding="utf-8")
+    try:
+        authority = reviewer._authority_slice(  # noqa: SLF001 - authority seam contract
+            repo_root,
+            [".claude/hooks/orchestrator/reviewer.py"],
+            (
+                {"path": "../outside.md", "headings": ("Secret",)},
+                {"path": str(outside), "headings": ("Secret",)},
+            ),
+        )
+
+        assert authority == "No readable repository authority slice was available; treat authority as UNKNOWN."
+        assert "should not be read" not in authority
+    finally:
+        shutil.rmtree(scratch)
 
 
 def run_review(config, runner, supplied=None):
