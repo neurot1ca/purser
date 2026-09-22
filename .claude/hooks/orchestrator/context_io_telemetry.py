@@ -490,11 +490,10 @@ def _observe_read(
     raw_path = tool_input.get("file_path")
     if not isinstance(raw_path, str) or not raw_path or len(raw_path) > 4096 or "\0" in raw_path:
         return _unknown_observation(mode, "INVALID_INPUT")
-    raw_cwd = repo_root if repo_root is not None else event.get("cwd")
-    if not isinstance(raw_cwd, (str, os.PathLike)):
+    if not isinstance(repo_root, (str, os.PathLike)):
         return _unknown_observation(mode, "INVALID_INPUT")
     try:
-        root = Path(raw_cwd).resolve(strict=True)
+        root = Path(repo_root).resolve(strict=True)
         requested = Path(raw_path)
         candidate = (requested if requested.is_absolute() else root / requested).resolve(strict=False)
         relative = candidate.relative_to(root)

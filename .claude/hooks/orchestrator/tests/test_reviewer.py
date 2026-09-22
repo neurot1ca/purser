@@ -191,6 +191,7 @@ def run_review(config, runner, supplied=None):
             config=config,
             runner=runner,
             cwd=scratch,
+            repo_root=Path(__file__).parents[4],
         )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -669,7 +670,9 @@ def test_reviewer_never_runs_inside_the_repository():
     """The reviewer can create files, so its cwd must be outside the worktree."""
 
     with pytest.raises(reviewer.CommandRefused, match="outside the repository"):
-        reviewer._refuse_repository_working_directory(reviewer._PACKAGE_ROOT)
+        reviewer._refuse_repository_working_directory(
+            reviewer._PACKAGE_ROOT, Path(__file__).parents[4]
+        )
 
 
 def test_add_dir_may_not_grant_access_to_the_repository(config):
@@ -678,7 +681,8 @@ def test_add_dir_may_not_grant_access_to_the_repository(config):
             "review",
             reviewer.REVIEW_SCHEMA,
             config,
-            add_dirs=[reviewer._REPOSITORY_ROOT],
+            add_dirs=[Path(__file__).parents[4]],
+            repository_root=Path(__file__).parents[4],
         )
 
 

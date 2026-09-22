@@ -254,8 +254,9 @@ def test_metrics_render_stale_batching_snapshot_visibly_stale():
 def test_failing_or_slow_batching_refresh_does_not_raise_into_hook(
     tmp_path, monkeypatch, failure
 ):
-    snapshot = tmp_path / "batching.json"
-    attempt = tmp_path / "attempt.json"
+    project = tmp_path / "project"
+    snapshot = project / ".tmp" / "orchestration-tool-batching.json"
+    snapshot.parent.mkdir(parents=True)
     snapshot.write_text(
         json.dumps(
             {
@@ -266,8 +267,6 @@ def test_failing_or_slow_batching_refresh_does_not_raise_into_hook(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(telemetry, "_BATCHING_SNAPSHOT_PATH", snapshot)
-    monkeypatch.setattr(telemetry, "_BATCHING_REFRESH_ATTEMPT_PATH", attempt)
     monkeypatch.setattr(
         telemetry.subprocess,
         "run",
@@ -286,6 +285,7 @@ def test_failing_or_slow_batching_refresh_does_not_raise_into_hook(
         state_root=tmp_path / "state",
         projection_enabled=True,
         vault_root=tmp_path / "vault",
+        project_root=project,
     ) is None
 
     assert projection.read_batching_snapshot(snapshot)["measured_at_utc"] == "2026-09-20T12:00:00Z"

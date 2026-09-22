@@ -746,6 +746,79 @@ def test_non_codex_tool_passes_through_untouched(workspace):
     assert hook.dispatch(other) == {}
 
 
+def test_hook_cwd_resolves_external_repository_top_level(workspace, config):
+    repo, state = workspace
+    nested = repo / "nested" / "work"
+    nested.mkdir(parents=True)
+    call = event(cwd=str(nested))
+
+    pre = codex.pre_tool_use(call, config=config, state_root=state)
+    assert "updatedInput" in pre["hookSpecificOutput"]
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-external", "content": "done"}),
+            }
+        ],
+    }
+
+    bundle = response_bundle(
+        codex.post_tool_use(
+            post,
+            config=config,
+            state_root=state,
+            reviewer=lambda **_kwargs: {
+                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "provider": "stub",
+                "validation": "UNKNOWN",
+                "findings": [],
+            },
+        ),
+        config,
+    )
+
+    assert bundle["changed_paths"] == ["file0.py"]
+    assert bundle["project_root_reason"] is None
+
+
+@pytest.mark.parametrize("cwd_kind", ["missing", "non_git"])
+def test_unresolved_hook_root_returns_full_bundle(
+    workspace, config, cwd_kind, monkeypatch
+):
+    repo, state = workspace
+    call = event(tool_use_id=f"unresolved-{cwd_kind}")
+    if cwd_kind == "non_git":
+        non_git = repo.parent / "not-a-repository"
+        non_git.mkdir()
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(non_git.parent))
+        call["tool_input"]["cwd"] = str(non_git)
+
+    pre = codex.pre_tool_use(call, config=config, state_root=state)
+    assert "updatedInput" in pre["hookSpecificOutput"]
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps({"threadId": "thread-unresolved", "content": "done"}),
+            }
+        ],
+    }
+
+    bundle = response_bundle(
+        codex.post_tool_use(post, config=config, state_root=state), config
+    )
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["project_root_reason"].startswith("project root unresolved:")
+    assert any(item["code"] == "PROJECT_ROOT_UNRESOLVED" for item in bundle["findings"])
+
+
 def test_internal_pretool_error_allows_unmodified(workspace, config, monkeypatch):
     repo, state = workspace
     call = event()

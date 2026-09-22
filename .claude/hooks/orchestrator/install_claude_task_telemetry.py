@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+import project_root
+
 
 HOOK_SPECS: tuple[tuple[str, str | None, int], ...] = (
     ("PreToolUse", r"^mcp__codex-main__(codex|codex-reply)$", 60),
@@ -187,9 +189,8 @@ def install(
 
 
 def _parser() -> argparse.ArgumentParser:
-    default_root = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=default_root)
+    parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--settings-path", type=Path)
     parser.add_argument("--python-executable", type=Path, default=Path(sys.executable))
     parser.add_argument("--apply", action="store_true", help="write settings; default is check-only")
@@ -198,10 +199,17 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    settings_path = args.settings_path or args.repo_root / ".claude" / "settings.local.json"
+    if args.repo_root is None:
+        root, reason = project_root.resolve_candidate(Path.cwd())
+        if root is None:
+            print(f"ERROR: {reason}", file=sys.stderr)
+            return 2
+    else:
+        root = args.repo_root.resolve()
+    settings_path = args.settings_path or root / ".claude" / "settings.local.json"
     try:
         status = install(
-            repo_root=args.repo_root,
+            repo_root=root,
             settings_path=settings_path,
             python_executable=args.python_executable,
             apply=args.apply,

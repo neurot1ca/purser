@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
-from pathlib import Path
 import sys
 import time
 from typing import Any
 
 import context_io_telemetry
-
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
+import project_root
 
 
 def main() -> int:
@@ -20,8 +17,9 @@ def main() -> int:
     try:
         value: Any = json.load(sys.stdin)
         if isinstance(value, Mapping):
+            repository, _reason = project_root.resolve_project_root(value)
             context_io_telemetry.handle(
-                value, repo_root=REPO_ROOT, hook_started_ns=started
+                value, repo_root=repository, hook_started_ns=started
             )
     except BaseException:
         pass

@@ -20,6 +20,7 @@ from typing import Any
 import json_transport
 import ledger
 import policy
+import project_root
 import reviewer as reviewer1
 import telemetry
 import telemetry_schema
@@ -613,14 +614,8 @@ def _state_root(root: str | os.PathLike[str] | None) -> Path:
 def _repo_root(
     event: Mapping[str, Any],
     root: str | os.PathLike[str] | None,
-) -> Path:
-    if root is not None:
-        return Path(root).resolve()
-    tool_input = event.get("tool_input")
-    candidate = tool_input.get("cwd") if isinstance(tool_input, Mapping) else None
-    if not isinstance(candidate, str) or not candidate:
-        candidate = event.get("cwd")
-    return Path(candidate if isinstance(candidate, str) and candidate else Path.cwd()).resolve()
+) -> tuple[Path | None, str]:
+    return project_root.resolve_project_root(event, root)
 
 
 def _call_key(event: Mapping[str, Any]) -> str:
@@ -1098,14 +1093,23 @@ def pre_tool_use(
             if "developer-instructions" not in tool_input:
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
 
-        repository = _repo_root(event, repo_root)
-        bypass_metadata["repo_root"] = str(repository)
+        repository, project_root_reason = _repo_root(event, repo_root)
+        bypass_metadata["repo_root"] = str(repository) if repository is not None else None
+        bypass_metadata["project_root_reason"] = project_root_reason or None
         declared_scope = list(parsed.scope)
-        baseline = ledger.capture_baseline(
-            repository,
-            declared_scope if declared_scope else None,
-            manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
-        )
+        if repository is None:
+            baseline = {
+                "status": ledger.UNKNOWN,
+                "code": "PROJECT_ROOT_UNRESOLVED",
+                "message": project_root_reason,
+                "baseline_head": None,
+            }
+        else:
+            baseline = ledger.capture_baseline(
+                repository,
+                declared_scope if declared_scope else None,
+                manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
+            )
         prompt_text = str(tool_input.get("prompt", ""))
         task_objective, acceptance_criteria, task_contract_grounded = _parse_task_contract(
             prompt_text, parsed.task_id, parsed.phase, declared_scope
@@ -1126,7 +1130,8 @@ def pre_tool_use(
             "model": route.model,
             "effort": route.effort,
             "scope": declared_scope,
-            "repo_root": str(repository),
+            "repo_root": str(repository) if repository is not None else None,
+            "project_root_reason": project_root_reason or None,
             "baseline": baseline,
             "prior_thread_id": continuation_thread_id,
             "task_objective": task_objective,
@@ -1293,6 +1298,7 @@ def _base_bundle(error: str | None = None) -> dict[str, Any]:
         "micro_repair_cleared_review": False,
         "task_contract_grounded": False,
         "worker_validation": None,
+        "project_root_reason": None,
     }
 
 
@@ -1444,6 +1450,7 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
         "claude_review_mode": bundle.get("claude_review_mode"),
         "reviewer1_result": bundle.get("reviewer1_result"),
         "reviewer1_skipped_reason": bundle.get("reviewer1_skipped_reason"),
+        "project_root_reason": bundle.get("project_root_reason"),
         "protected_paths_touched": bundle.get("protected_paths_touched"),
         "concurrent_writer": bundle.get("concurrent_writer"),
         "micro_repair": (
@@ -1651,7 +1658,13 @@ def _post_observations(
             **envelope,
             concurrent_writer=True,
         )
-    _observe("update_task", task_id, state_root=runtime_root)
+    repository = pending.get("repo_root")
+    _observe(
+        "update_task",
+        task_id,
+        state_root=runtime_root,
+        project_root=repository if isinstance(repository, str) else None,
+    )
 
 
 def post_tool_use(
@@ -1691,6 +1704,7 @@ def post_tool_use(
                 "raw_output_path": str(raw_path),
                 "routing_enforced": pending.get("kind") != "pretool_bypass",
                 "task_contract_grounded": pending.get("task_contract_grounded", False),
+                "project_root_reason": pending.get("project_root_reason"),
             }
         )
         classification: Mapping[str, Any] | None = None
@@ -1756,14 +1770,20 @@ def post_tool_use(
                 _observe("update_task", pending.get("task_id"), state_root=runtime_root)
             return _finalize_replacement(bundle, loaded_config, runtime_root, event)
 
-        repository = _repo_root(event, repo_root or pending.get("repo_root"))
+        pending_repository = pending.get("repo_root")
+        repository, resolved_reason = _repo_root(
+            event,
+            repo_root or (pending_repository if isinstance(pending_repository, str) else None),
+        )
+        project_root_reason = pending.get("project_root_reason") or resolved_reason
+        bundle["project_root_reason"] = project_root_reason or None
         scope = pending.get("scope")
         if not isinstance(scope, list) or (pending.get("phase") == "implementation" and not scope):
             raise WiringError("pending call scope is missing")
         baseline = pending.get("baseline")
         if not isinstance(baseline, Mapping):
             raise WiringError("pending call baseline is missing")
-        if baseline.get("status") != ledger.OK:
+        if repository is None or baseline.get("status") != ledger.OK:
             delta = {
                 "status": ledger.UNKNOWN,
                 "code": baseline.get("code", "BASELINE_UNAVAILABLE"),

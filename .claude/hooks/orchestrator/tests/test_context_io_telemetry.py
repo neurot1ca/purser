@@ -600,7 +600,11 @@ def test_entrypoint_uses_its_repo_root_not_event_cwd(tmp_path, monkeypatch):
     runtime_parent = tmp_path / "runtime"
     state = runtime_parent / "claude-agent-orchestrator"
     session = "entrypoint-root"
-    monkeypatch.setattr(context_io_hook, "REPO_ROOT", root)
+    monkeypatch.setattr(
+        context_io_hook.project_root,
+        "resolve_project_root",
+        lambda _event: (root, ""),
+    )
     monkeypatch.setenv("LOCALAPPDATA", str(runtime_parent))
 
     calls = (
@@ -656,7 +660,11 @@ def test_exhausted_replace_is_fail_open_and_records_degradation(
     runtime_parent = tmp_path / "runtime"
     state = runtime_parent / "claude-agent-orchestrator"
     session = "permanent-replace-holder"
-    monkeypatch.setattr(context_io_hook, "REPO_ROOT", root)
+    monkeypatch.setattr(
+        context_io_hook.project_root,
+        "resolve_project_root",
+        lambda _event: (root, ""),
+    )
     monkeypatch.setenv("LOCALAPPDATA", str(runtime_parent))
 
     monkeypatch.setattr(
@@ -700,4 +708,4 @@ def test_dedicated_entrypoint_has_no_heavy_hook_dependency():
     source = (PACKAGE_ROOT / "context_io_hook.py").read_text(encoding="utf-8")
     assert "import hook" not in source
     assert "import codex" not in source
-    assert context_io_hook.REPO_ROOT == PACKAGE_ROOT.parents[2]
+    assert "parents[" not in source

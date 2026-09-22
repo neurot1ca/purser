@@ -27,8 +27,6 @@ LOCAL_TIMEZONE_FALLBACK_OFFSET_HOURS = 3
 BATCHING_BASELINE = 1.08
 BATCHING_TARGET = 1.5
 BATCHING_SNAPSHOT_MAX_AGE = timedelta(hours=6)
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_BATCHING_SNAPSHOT_PATH = _REPO_ROOT / ".tmp" / "orchestration-tool-batching.json"
 
 
 def _resolve_zone() -> tuple[Any, str]:
@@ -790,7 +788,9 @@ def read_batching_snapshot(
 ) -> Mapping[str, Any] | None:
     """Read the audit-produced snapshot, treating missing/invalid data as unknown."""
 
-    target = Path(path) if path is not None else DEFAULT_BATCHING_SNAPSHOT_PATH
+    if path is None:
+        return None
+    target = Path(path)
     try:
         value = json.loads(target.read_text(encoding="utf-8"))
         if not isinstance(value, Mapping):

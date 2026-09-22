@@ -434,9 +434,6 @@ def _has_flag(command: Sequence[str], name: str, value: str | None = None) -> bo
     return False
 
 
-_REPOSITORY_ROOT = _PACKAGE_ROOT.parents[2]
-
-
 def _within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -445,20 +442,24 @@ def _within(path: Path, root: Path) -> bool:
     return True
 
 
-def _refuse_repository_working_directory(working_directory: Path) -> None:
+def _refuse_repository_working_directory(
+    working_directory: Path, repository_root: Path
+) -> None:
     """The reviewer must never run inside the tree it is reviewing.
 
     It can create files, so a working directory inside the repository is a
     write vector into the very worktree under review.
     """
 
-    if _within(working_directory.resolve(), _REPOSITORY_ROOT):
+    if _within(working_directory.resolve(), repository_root.resolve()):
         raise CommandRefused(
             "the Reviewer-1 working directory must be outside the repository under review"
         )
 
 
-def refuse_unsafe_flag_combination(command: Sequence[str]) -> None:
+def refuse_unsafe_flag_combination(
+    command: Sequence[str], *, repository_root: Path | None = None
+) -> None:
     if _has_flag(command, "--mode", "plan") and _has_flag(
         command, "--disable-slash-commands"
     ):
@@ -472,11 +473,15 @@ def refuse_unsafe_flag_combination(command: Sequence[str]) -> None:
     for index, argument in enumerate(command):
         if argument != "--add-dir" or index + 1 >= len(command):
             continue
+        if repository_root is None:
+            raise CommandRefused(
+                "the repository root is required before granting Reviewer-1 an added directory"
+            )
         try:
             candidate = Path(command[index + 1]).resolve()
         except (OSError, ValueError):
             raise CommandRefused("--add-dir names an unresolvable path") from None
-        if _within(candidate, _REPOSITORY_ROOT):
+        if _within(candidate, repository_root.resolve()):
             raise CommandRefused(
                 "--add-dir must never grant Reviewer-1 access to the repository under review"
             )
@@ -489,6 +494,7 @@ def build_command(
     *,
     add_dirs: Sequence[str | os.PathLike[str]] = (),
     extra_flags: Sequence[str] = (),
+    repository_root: Path | None = None,
 ) -> list[str]:
     executable = config.get("reviewer1_executable")
     model = config.get("reviewer1_model_requested")
@@ -513,7 +519,7 @@ def build_command(
     for directory in add_dirs:
         command.extend(("--add-dir", str(Path(directory).resolve())))
     command.extend(extra_flags)
-    refuse_unsafe_flag_combination(command)
+    refuse_unsafe_flag_combination(command, repository_root=repository_root)
     return command
 
 
@@ -653,6 +659,7 @@ def invoke_packet(
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     cwd: str | os.PathLike[str] | None = None,
+    repo_root: str | os.PathLike[str] | None = None,
 ) -> ReviewOutcome:
     if isinstance(packet, PacketOmitted):
         return _incomplete_packet(packet, config)
@@ -680,7 +687,10 @@ def invoke_packet(
         else:
             scratch_root = Path(tempfile.mkdtemp(prefix="reviewer1-scratch-")).resolve()
             working_directory = scratch_root
-        _refuse_repository_working_directory(working_directory)
+        if repo_root is None:
+            raise ValueError("the repository root is required for reviewer confinement")
+        repository = Path(repo_root).resolve()
+        _refuse_repository_working_directory(working_directory, repository)
         with tempfile.NamedTemporaryFile(
             mode="wb",
             prefix=".reviewer1-packet-",
@@ -692,7 +702,12 @@ def invoke_packet(
             handle.write(packet.encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        command = build_command(_review_prompt(packet_path), REVIEW_SCHEMA, config)
+        command = build_command(
+            _review_prompt(packet_path),
+            REVIEW_SCHEMA,
+            config,
+            repository_root=repository,
+        )
         completed = runner(
             command,
             cwd=working_directory,
@@ -769,6 +784,7 @@ def review_materials(
     config: Mapping[str, Any] | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     cwd: str | os.PathLike[str] | None = None,
+    repo_root: str | os.PathLike[str] | None = None,
 ) -> ReviewOutcome:
     try:
         loaded = _load_config(config)
@@ -790,14 +806,16 @@ def review_materials(
     if isinstance(packet, PacketOmitted):
         return _incomplete_packet(packet, loaded)
     if cwd is not None:
-        return invoke_packet(packet, loaded, runner=runner, cwd=cwd)
+        return invoke_packet(packet, loaded, runner=runner, cwd=cwd, repo_root=repo_root)
     try:
         # Deliberately the system temp root, NOT the package directory: a live
         # check showed the reviewer can create files even under
         # `--mode plan --sandbox`, so its working directory must sit outside the
         # worktree it is reviewing.
         with tempfile.TemporaryDirectory(prefix="reviewer1-") as scratch:
-            return invoke_packet(packet, loaded, runner=runner, cwd=scratch)
+            return invoke_packet(
+                packet, loaded, runner=runner, cwd=scratch, repo_root=repo_root
+            )
     except OSError as error:
         return _unavailable(
             "REVIEWER_WORKDIR_UNAVAILABLE",
@@ -1128,7 +1146,7 @@ def review(
             task_objective=task_objective,
             acceptance_criteria=acceptance_criteria,
         )
-        return review_materials(materials, config=config)
+        return review_materials(materials, config=config, repo_root=repo_root)
     except (OSError, UnicodeDecodeError, ValueError) as error:
         packet = PacketOmitted(
             "REVIEW_PACKET_INCOMPLETE",

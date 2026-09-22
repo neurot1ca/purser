@@ -38,17 +38,30 @@ import glob
 import json
 import os
 from pathlib import Path
+import re
 import statistics
 import sys
 from typing import Any
 
-DEFAULT_TRANSCRIPT_GLOB = str(
-    Path.home()
-    / ".claude"
-    / "projects"
-    / "C--Projects-polymarket-btc5m-lab"
-    / "*.jsonl"
+_ORCHESTRATOR_PACKAGE = (
+    Path(__file__).resolve().parent.parent / ".claude" / "hooks" / "orchestrator"
 )
+if str(_ORCHESTRATOR_PACKAGE) not in sys.path:
+    sys.path.insert(0, str(_ORCHESTRATOR_PACKAGE))
+
+import project_root
+
+
+def _project_slug(root: str | os.PathLike[str]) -> str:
+    """Return Claude Code's transcript-directory slug for an absolute path."""
+
+    return re.sub(r"[^A-Za-z0-9-]", "-", str(root))
+
+
+def _transcript_glob(root: str | os.PathLike[str]) -> str:
+    return str(
+        Path.home() / ".claude" / "projects" / _project_slug(root) / "*.jsonl"
+    )
 
 # Billing weights relative to an uncached input token.
 WEIGHT_INPUT = 1.0
@@ -337,8 +350,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--transcripts",
-        default=DEFAULT_TRANSCRIPT_GLOB,
+        default=None,
         help="Glob for session .jsonl transcripts.",
+    )
+    parser.add_argument(
+        "--project-root",
+        type=Path,
+        help="Governed project root (default: git top-level of the current directory).",
     )
     parser.add_argument(
         "--json",
@@ -350,7 +368,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.sessions < 1:
         raise SystemExit("--sessions must be >= 1")
 
-    sessions = _collect(args.transcripts, args.sessions)
+    if args.project_root is None:
+        resolved_root, reason = project_root.resolve_candidate(Path.cwd())
+        if resolved_root is None:
+            raise SystemExit(reason)
+    else:
+        resolved_root = args.project_root.resolve()
+    transcripts = args.transcripts or _transcript_glob(resolved_root)
+
+    sessions = _collect(transcripts, args.sessions)
     summary = _aggregate(sessions)
     _report(summary, sessions)
 

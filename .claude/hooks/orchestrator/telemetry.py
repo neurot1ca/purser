@@ -35,10 +35,8 @@ _CLAUDE_USAGE_EVENTS = frozenset({"IMPLEMENTER_STARTED", "IMPLEMENTER_FINISHED",
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _SKILL_PATH = _PACKAGE_ROOT.parents[1] / "skills" / "codex-orchestrator" / "SKILL.md"
 _CONFIG_PATH = _PACKAGE_ROOT / "config.json"
-_REPO_ROOT = _PACKAGE_ROOT.parents[2]
-_BATCHING_AUDIT_PATH = _REPO_ROOT / "scripts" / "orchestration_token_audit_0.py"
-_BATCHING_SNAPSHOT_PATH = obsidian_projection.DEFAULT_BATCHING_SNAPSHOT_PATH
-_BATCHING_REFRESH_ATTEMPT_PATH = _REPO_ROOT / ".tmp" / "orchestration-tool-batching-refresh.json"
+_ENGINE_ROOT = _PACKAGE_ROOT.parent.parent.parent
+_BATCHING_AUDIT_PATH = _ENGINE_ROOT / "scripts" / "orchestration_token_audit_0.py"
 BATCHING_REFRESH_INTERVAL_SECONDS = 6 * 60 * 60
 BATCHING_REFRESH_TIMEOUT_SECONDS = 2.0
 _stderr_reported = False
@@ -877,6 +875,7 @@ def _project_task(
     state_root: Path,
     projection_enabled: bool | None,
     vault_root: str | os.PathLike[str] | None,
+    project_root: Path | None,
 ) -> None:
     target_vault: str | os.PathLike[str] | None = None
     try:
@@ -902,12 +901,13 @@ def _project_task(
             last_projection_write_at=projection_written_at,
         )
         try:
-            _refresh_batching_snapshot()
-            obsidian_projection.project_metrics(
-                state_root=state_root.parent,
-                vault_root=target_vault,
-                batching_snapshot_path=_BATCHING_SNAPSHOT_PATH,
-            )
+            if project_root is not None:
+                snapshot_path = _refresh_batching_snapshot(project_root=project_root)
+                obsidian_projection.project_metrics(
+                    state_root=state_root.parent,
+                    vault_root=target_vault,
+                    batching_snapshot_path=snapshot_path,
+                )
         except BaseException:
             pass
     except BaseException:
@@ -922,22 +922,28 @@ def _project_task(
                 pass
 
 
-def _refresh_batching_snapshot(*, now: float | None = None) -> None:
+def _refresh_batching_snapshot(
+    *, project_root: Path | None, now: float | None = None
+) -> Path | None:
     """Best-effort bounded refresh; every failure leaves the prior snapshot intact."""
 
+    if project_root is None:
+        return None
+    snapshot_path = project_root / ".tmp" / "orchestration-tool-batching.json"
+    attempt_path = project_root / ".tmp" / "orchestration-tool-batching-refresh.json"
     try:
         current = time.time() if now is None else now
         try:
-            attempted_at = _BATCHING_REFRESH_ATTEMPT_PATH.stat().st_mtime
+            attempted_at = attempt_path.stat().st_mtime
         except OSError:
             attempted_at = 0.0
         if current - attempted_at < BATCHING_REFRESH_INTERVAL_SECONDS:
-            return
+            return snapshot_path
 
-        _atomic_json(_BATCHING_REFRESH_ATTEMPT_PATH, {"attempted_at_utc": schema.utc_now()})
-        _BATCHING_REFRESH_ATTEMPT_PATH.touch()
-        temporary = _BATCHING_SNAPSHOT_PATH.with_name(
-            f"{_BATCHING_SNAPSHOT_PATH.name}.{uuid.uuid4().hex}.tmp"
+        _atomic_json(attempt_path, {"attempted_at_utc": schema.utc_now()})
+        attempt_path.touch()
+        temporary = snapshot_path.with_name(
+            f"{snapshot_path.name}.{uuid.uuid4().hex}.tmp"
         )
         try:
             completed = subprocess.run(
@@ -946,41 +952,44 @@ def _refresh_batching_snapshot(*, now: float | None = None) -> None:
                     str(_BATCHING_AUDIT_PATH),
                     "--sessions",
                     "15",
+                    "--project-root",
+                    str(project_root),
                     "--json",
                     str(temporary),
                 ],
-                cwd=str(_REPO_ROOT),
+                cwd=str(project_root),
                 capture_output=True,
                 text=True,
                 timeout=BATCHING_REFRESH_TIMEOUT_SECONDS,
                 shell=False,
             )
             if completed.returncode != 0:
-                return
+                return snapshot_path
             try:
                 snapshot = json.loads(temporary.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                return
+                return snapshot_path
             buckets = snapshot.get("tools_per_request") if isinstance(snapshot, Mapping) else None
             if not isinstance(buckets, Mapping) or not all(
                 isinstance(count, int) and not isinstance(count, bool) and count >= 0
                 for count in buckets.values()
             ):
-                return
+                return snapshot_path
             snapshot["measured_at_utc"] = schema.utc_now()
             snapshot["tool_bearing_requests"] = sum(buckets.values())
             _atomic_json(temporary, snapshot)
             if obsidian_projection.read_batching_snapshot(temporary) is None:
-                return
-            _BATCHING_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(temporary, _BATCHING_SNAPSHOT_PATH)
+                return snapshot_path
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(temporary, snapshot_path)
         finally:
             try:
                 temporary.unlink()
             except OSError:
                 pass
     except BaseException:
-        return
+        return snapshot_path
+    return snapshot_path
 
 
 def _hash_file(path: Path) -> str | None:
@@ -1436,6 +1445,7 @@ def update_task(
     state_root: str | os.PathLike[str] | None = None,
     projection_enabled: bool | None = None,
     vault_root: str | os.PathLike[str] | None = None,
+    project_root: str | os.PathLike[str] | None = None,
 ) -> None:
     try:
         root = _root(state_root)
@@ -1468,6 +1478,7 @@ def update_task(
             state_root=root,
             projection_enabled=projection_enabled,
             vault_root=vault_root,
+            project_root=Path(project_root).resolve() if project_root is not None else None,
         )
     except BaseException:
         try:

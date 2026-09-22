@@ -191,3 +191,34 @@ def test_invalid_json_and_outside_path_fail_without_writing(tmp_path):
             apply=True,
         )
     assert not outside.exists()
+
+
+def test_default_root_is_git_top_level_of_process_cwd(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, timeout=10)
+    nested = root / "nested" / "work"
+    nested.mkdir(parents=True)
+    captured = {}
+
+    def fake_install(**kwargs):
+        captured.update(kwargs)
+        return "ALREADY_INSTALLED"
+
+    monkeypatch.setattr(installer, "install", fake_install)
+    monkeypatch.chdir(nested)
+
+    assert installer.main([]) == 0
+    assert captured["repo_root"] == root.resolve()
+    assert captured["settings_path"] == root.resolve() / ".claude" / "settings.local.json"
+
+
+def test_default_root_failure_is_clear(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        installer.project_root,
+        "resolve_candidate",
+        lambda _cwd: (None, "project root unresolved: cwd is not inside a git work tree"),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert installer.main([]) == 2
+    assert "ERROR: project root unresolved" in capsys.readouterr().err
