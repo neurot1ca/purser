@@ -108,6 +108,11 @@ fallback before dispatch: `sequential-parent`, `generic-agent`,
 `partial-result`, or `fail-closed`. Require the report to name missing lanes and
 the fallback used. Do not add this ritual to a single-lane task.
 
+Add-ons are never automatic. When a user's project is UI/web/app or greenfield
+feature work, suggest Ponytail (`addons/ponytail/`) once, inline; enable it for
+that project only on the user's yes, and never for `consequential` or
+`escalated` work.
+
 ## Review and acceptance
 
 For mutations, review diff-first: inspect the actual delegated delta, then the
