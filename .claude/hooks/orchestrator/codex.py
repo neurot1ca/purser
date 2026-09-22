@@ -343,29 +343,34 @@ def _parse_worker_validation(report: str | None) -> dict[str, Any]:
         return _canonical_unknown_validation("Multiple conflicting VALIDATION records were reported.")
 
     line_str = validation_lines[0]
+
+    def reject(reason: str) -> dict[str, Any]:
+        return _canonical_unknown_validation(f"{reason}: {line_str}")
+
     payload = line_str[len("VALIDATION:"):].strip()
     try:
         data = json.loads(payload)
     except (json.JSONDecodeError, TypeError, ValueError):
-        return _canonical_unknown_validation(line_str)
+        return reject("invalid_json")
 
     if not isinstance(data, dict):
-        return _canonical_unknown_validation(line_str)
+        return reject("not_object")
 
-    if set(data.keys()) - _ALLOWED_VALIDATION_KEYS:
-        return _canonical_unknown_validation(line_str)
+    unknown_keys = set(data.keys()) - _ALLOWED_VALIDATION_KEYS
+    if unknown_keys:
+        return reject(f"unknown_keys={','.join(sorted(unknown_keys))}")
 
     if data.get("source") != "WORKER_REPORTED":
-        return _canonical_unknown_validation(line_str)
+        return reject("bad_source")
 
     raw_status = data.get("status")
     if raw_status not in ("PASS", "FAIL", "UNKNOWN"):
-        return _canonical_unknown_validation(line_str)
+        return reject("bad_status")
 
     if "summary" in data:
         summary_val = data.get("summary")
         if not isinstance(summary_val, str) or not summary_val.strip():
-            return _canonical_unknown_validation(line_str)
+            return reject("bad_summary")
         clean_summary = summary_val.strip()
     else:
         if raw_status == "PASS":
@@ -378,11 +383,11 @@ def _parse_worker_validation(report: str | None) -> dict[str, Any]:
     if "commands" in data:
         commands_val = data.get("commands")
         if not isinstance(commands_val, list):
-            return _canonical_unknown_validation(line_str)
+            return reject("bad_commands")
         clean_commands = []
         for cmd in commands_val:
             if not isinstance(cmd, str) or not cmd.strip():
-                return _canonical_unknown_validation(line_str)
+                return reject("bad_commands")
             clean_commands.append(cmd.strip())
     else:
         clean_commands = []
@@ -390,11 +395,11 @@ def _parse_worker_validation(report: str | None) -> dict[str, Any]:
     if "artifacts" in data:
         artifacts_val = data.get("artifacts")
         if not isinstance(artifacts_val, list):
-            return _canonical_unknown_validation(line_str)
+            return reject("bad_artifacts")
         clean_artifacts = []
         for art in artifacts_val:
             if not isinstance(art, str) or not art.strip():
-                return _canonical_unknown_validation(line_str)
+                return reject("bad_artifacts")
             clean_artifacts.append(art.strip())
     else:
         clean_artifacts = []
@@ -402,24 +407,28 @@ def _parse_worker_validation(report: str | None) -> dict[str, Any]:
     if "exit_codes" in data:
         exit_codes_val = data.get("exit_codes")
         if not isinstance(exit_codes_val, list):
-            return _canonical_unknown_validation(line_str)
+            return reject("bad_exit_codes")
         clean_exit_codes = []
         for code in exit_codes_val:
             if isinstance(code, bool) or not isinstance(code, int):
-                return _canonical_unknown_validation(line_str)
+                return reject("bad_exit_codes")
             clean_exit_codes.append(code)
     else:
         clean_exit_codes = []
 
     if len(clean_commands) != len(clean_exit_codes):
-        return _canonical_unknown_validation(line_str)
+        return reject("commands_exit_codes_mismatch")
 
     if raw_status == "PASS":
-        if not clean_commands or any(code != 0 for code in clean_exit_codes):
-            return _canonical_unknown_validation(line_str)
+        if not clean_commands:
+            return reject("pass_without_commands")
+        if any(code != 0 for code in clean_exit_codes):
+            return reject("pass_with_nonzero_exit")
     elif raw_status == "FAIL":
-        if not clean_commands or not any(code != 0 for code in clean_exit_codes):
-            return _canonical_unknown_validation(line_str)
+        if not clean_commands:
+            return reject("fail_without_commands")
+        if not any(code != 0 for code in clean_exit_codes):
+            return reject("fail_without_nonzero_exit")
 
     candidate = {
         "source": "WORKER_REPORTED",
@@ -433,9 +442,9 @@ def _parse_worker_validation(report: str | None) -> dict[str, Any]:
     try:
         encoded = json_transport.dumps(candidate).encode("utf-8")
         if len(encoded) > IMPLEMENTER_REPORT_LIMIT:
-            return _canonical_unknown_validation("Validation record exceeds size limit.")
+            return reject("record_too_large")
     except (TypeError, ValueError):
-        return _canonical_unknown_validation(line_str)
+        return reject("serialization_error")
 
     return candidate
 

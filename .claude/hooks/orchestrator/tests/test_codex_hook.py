@@ -2426,6 +2426,7 @@ def test_worker_validation_parser_avoids_substring_false_positives():
     # 1. Serbest metin "tests never passed" => UNKNOWN
     res1 = codex._parse_worker_validation("Validation: tests never passed")
     assert res1["status"] == "UNKNOWN"
+    assert res1["summary"] == "invalid_json: Validation: tests never passed"
     assert set(res1.keys()) == expected_keys
 
     # 2. Geçerli structured PASS => PASS
@@ -2487,6 +2488,7 @@ def test_worker_validation_parser_avoids_substring_false_positives():
     )
     res10 = codex._parse_worker_validation(multi_malformed)
     assert res10["status"] == "UNKNOWN"
+    assert res10["summary"] == "Multiple conflicting VALIDATION records were reported."
     assert set(res10.keys()) == expected_keys
 
     # 11. İki valid PASS kaydı => UNKNOWN (multiple records)
@@ -2496,6 +2498,7 @@ def test_worker_validation_parser_avoids_substring_false_positives():
     )
     res11 = codex._parse_worker_validation(multi_valid)
     assert res11["status"] == "UNKNOWN"
+    assert res11["summary"] == "Multiple conflicting VALIDATION records were reported."
     assert set(res11.keys()) == expected_keys
 
     # 12. Boyut sınırını aşan summary => UNKNOWN
@@ -2504,6 +2507,114 @@ def test_worker_validation_parser_avoids_substring_false_positives():
     assert res12["status"] == "UNKNOWN"
     assert set(res12.keys()) == expected_keys
     assert len(json_transport.dumps(res12).encode("utf-8")) <= codex.IMPLEMENTER_REPORT_LIMIT
+
+
+@pytest.mark.parametrize(
+    ("line", "reason"),
+    [
+        ("VALIDATION: {not json", "invalid_json"),
+        ("VALIDATION: []", "not_object"),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"commands":["pytest"],"exit_codes":[0],"zeta":2,"alpha":1}',
+            "unknown_keys=alpha,zeta",
+        ),
+        (
+            'VALIDATION: {"source":"OTHER","status":"PASS",'
+            '"commands":["pytest"],"exit_codes":[0]}',
+            "bad_source",
+        ),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"MAYBE",'
+            '"commands":["pytest"],"exit_codes":[0]}',
+            "bad_status",
+        ),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"summary":"   ","commands":["pytest"],"exit_codes":[0]}',
+            "bad_summary",
+        ),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"commands":"pytest","exit_codes":[0]}',
+            "bad_commands",
+        ),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"commands":["pytest"],"exit_codes":[0],"artifacts":"report.txt"}',
+            "bad_artifacts",
+        ),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"commands":["pytest"],"exit_codes":[true]}',
+            "bad_exit_codes",
+        ),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"commands":["pytest"],"exit_codes":[]}',
+            "commands_exit_codes_mismatch",
+        ),
+        ('VALIDATION: {"source":"WORKER_REPORTED","status":"PASS"}', "pass_without_commands"),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"commands":["pytest"],"exit_codes":[1]}',
+            "pass_with_nonzero_exit",
+        ),
+        ('VALIDATION: {"source":"WORKER_REPORTED","status":"FAIL"}', "fail_without_commands"),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"FAIL",'
+            '"commands":["pytest"],"exit_codes":[0]}',
+            "fail_without_nonzero_exit",
+        ),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","summary":"'
+            + ("x" * 1300)
+            + '","commands":["pytest"],"exit_codes":[0]}',
+            "record_too_large",
+        ),
+        (
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"commands":["pytest"],"exit_codes":[0]}',
+            "serialization_error",
+        ),
+    ],
+)
+def test_worker_validation_rejection_reason_is_first_and_preserves_line(line, reason, monkeypatch):
+    if reason == "serialization_error":
+        original_dumps = codex.json_transport.dumps
+
+        def fail_pass_serialization(value, *args, **kwargs):
+            if isinstance(value, dict) and value.get("status") == "PASS":
+                raise ValueError("simulated serialization failure")
+            return original_dumps(value, *args, **kwargs)
+
+        monkeypatch.setattr(codex.json_transport, "dumps", fail_pass_serialization)
+
+    result = codex._parse_worker_validation(line)
+
+    assert result["status"] == "UNKNOWN"
+    assert result["summary"].startswith(f"{reason}: ")
+    if reason == "record_too_large":
+        assert result["summary"].startswith(f"{reason}: {line[:40]}")
+    else:
+        assert result["summary"] == f"{reason}: {line}"
+
+
+def test_worker_validation_accepted_record_is_unchanged():
+    line = (
+        'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+        '"summary":"focused validation passed","commands":["pytest -q"],'
+        '"exit_codes":[0],"artifacts":["report.txt"]}'
+    )
+
+    assert codex._parse_worker_validation(line) == {
+        "source": "WORKER_REPORTED",
+        "status": "PASS",
+        "summary": "focused validation passed",
+        "commands": ["pytest -q"],
+        "exit_codes": [0],
+        "artifacts": ["report.txt"],
+    }
 
 
 def test_worker_validation_normalized_byte_limit_invariants():
