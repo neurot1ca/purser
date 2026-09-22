@@ -595,6 +595,7 @@ def start_active_task(
     *,
     session_id: str | None,
     task_id: str | None,
+    project_key: str | None = None,
     tool_use_id: str | None,
     transcript_path: str | os.PathLike[str] | None,
     allowed_projects_root: str | os.PathLike[str] | None = None,
@@ -613,6 +614,7 @@ def start_active_task(
             telemetry.emit(
                 "CLAUDE_TASK_USAGE_RECORDED",
                 task_id=task_id,
+                project_key=project_key,
                 session_id=session_id,
                 claude_task_usage_source=TASK_USAGE_SOURCE,
                 claude_task_usage_known=False,
@@ -621,7 +623,7 @@ def start_active_task(
                 claude_task_subagent_usage_included=False,
                 state_root=root,
             )
-            telemetry.update_task(task_id, state_root=root)
+            telemetry.update_task(task_id, project_key=project_key, state_root=root)
             return {"status": "DENIED", "reason": "ACTIVE_TASK_STATE_CONTENTION"}
 
         now_utc = datetime.now(timezone.utc)
@@ -661,6 +663,7 @@ def start_active_task(
                 telemetry.emit(
                     "CLAUDE_TASK_USAGE_RECORDED",
                     task_id=cur_tid,
+                    project_key=existing.get("project_key", project_key),
                     session_id=session_id,
                     claude_task_usage_source=TASK_USAGE_SOURCE,
                     claude_task_usage_known=False,
@@ -669,7 +672,9 @@ def start_active_task(
                     claude_task_subagent_usage_included=False,
                     state_root=root,
                 )
-                telemetry.update_task(cur_tid, state_root=root)
+                telemetry.update_task(
+                    cur_tid, project_key=existing.get("project_key", project_key), state_root=root
+                )
             existing = existing_copy
 
         # Remove marker after durable invalidation and terminal telemetry
@@ -681,6 +686,7 @@ def start_active_task(
             telemetry.emit(
                 "CLAUDE_TASK_USAGE_RECORDED",
                 task_id=task_id,
+                project_key=project_key,
                 session_id=session_id,
                 claude_task_usage_source=TASK_USAGE_SOURCE,
                 claude_task_usage_known=False,
@@ -689,7 +695,7 @@ def start_active_task(
                 claude_task_subagent_usage_included=False,
                 state_root=root,
             )
-            telemetry.update_task(task_id, state_root=root)
+            telemetry.update_task(task_id, project_key=project_key, state_root=root)
             return {"status": "DENIED", "reason": "ACTIVE_TASK_STATE_CONTENTION"}
 
         terminal_task_ids: list[str] = []
@@ -715,6 +721,7 @@ def start_active_task(
                     telemetry.emit(
                         "CLAUDE_TASK_USAGE_RECORDED",
                         task_id=stale_task_id,
+                        project_key=existing.get("project_key", project_key),
                         session_id=session_id,
                         claude_task_usage_source=TASK_USAGE_SOURCE,
                         claude_task_usage_known=False,
@@ -723,7 +730,11 @@ def start_active_task(
                         claude_task_subagent_usage_included=False,
                         state_root=root,
                     )
-                    telemetry.update_task(stale_task_id, state_root=root)
+                    telemetry.update_task(
+                        stale_task_id,
+                        project_key=existing.get("project_key", project_key),
+                        state_root=root,
+                    )
                 try:
                     active_path.unlink()
                 except OSError:
@@ -771,6 +782,7 @@ def start_active_task(
                             telemetry.emit(
                                 "CLAUDE_TASK_USAGE_RECORDED",
                                 task_id=tid,
+                                project_key=existing.get("project_key", project_key),
                                 session_id=session_id,
                                 claude_task_usage_source=TASK_USAGE_SOURCE,
                                 claude_task_usage_known=False,
@@ -779,7 +791,11 @@ def start_active_task(
                                 claude_task_subagent_usage_included=False,
                                 state_root=root,
                             )
-                            telemetry.update_task(tid, state_root=root)
+                            telemetry.update_task(
+                                tid,
+                                project_key=existing.get("project_key", project_key),
+                                state_root=root,
+                            )
                     return {"status": "DENIED", "reason": "OVERLAPPING_TASK_BOUNDARY"}
 
         if task_id in terminal_task_ids:
@@ -804,6 +820,7 @@ def start_active_task(
                 telemetry.emit(
                     "CLAUDE_TASK_USAGE_RECORDED",
                     task_id=task_id,
+                    project_key=project_key,
                     session_id=session_id,
                     claude_task_usage_source=TASK_USAGE_SOURCE,
                     claude_task_usage_known=False,
@@ -812,7 +829,7 @@ def start_active_task(
                     claude_task_subagent_usage_included=False,
                     state_root=root,
                 )
-                telemetry.update_task(task_id, state_root=root)
+                telemetry.update_task(task_id, project_key=project_key, state_root=root)
                 return {"status": "DENIED", "reason": scan_err}
 
             anchor_byte_offset = anchor_offset
@@ -822,6 +839,7 @@ def start_active_task(
         active_record = {
             "session_id": session_id,
             "task_id": task_id,
+            "project_key": project_key,
             "tool_use_id": tool_use_id,
             "canonical_transcript_path": identity["canonical_path"] if identity else (str(transcript_path) if transcript_path else None),
             "transcript_dev": identity["st_dev"] if identity else None,
@@ -884,6 +902,8 @@ def finalize_stop_task(
                 _remove_contention_marker(root, session_id)
             return None
 
+        project_key = active_task.get("project_key")
+
         # 1. Idempotency check: already finalized
         if active_task.get("completed") is True:
             if marker_present:
@@ -918,6 +938,7 @@ def finalize_stop_task(
                 telemetry.emit(
                     "CLAUDE_TASK_USAGE_RECORDED",
                     task_id=task_id,
+                    project_key=project_key,
                     session_id=session_id,
                     claude_task_usage_source=TASK_USAGE_SOURCE,
                     claude_task_usage_known=False,
@@ -926,7 +947,7 @@ def finalize_stop_task(
                     claude_task_subagent_usage_included=False,
                     state_root=root,
                 )
-                telemetry.update_task(task_id, state_root=root)
+                telemetry.update_task(task_id, project_key=project_key, state_root=root)
 
             _remove_contention_marker(root, session_id)
             return {"status": "FAILED", "reason": "ACTIVE_TASK_STATE_CONTENTION"}
@@ -988,6 +1009,7 @@ def finalize_stop_task(
             telemetry.emit(
                 "CLAUDE_TASK_USAGE_RECORDED",
                 task_id=task_id,
+                project_key=project_key,
                 session_id=session_id,
                 claude_task_usage_source=TASK_USAGE_SOURCE,
                 claude_task_usage_known=False,
@@ -996,7 +1018,7 @@ def finalize_stop_task(
                 claude_task_subagent_usage_included=False,
                 state_root=root,
             )
-            telemetry.update_task(task_id, state_root=root)
+            telemetry.update_task(task_id, project_key=project_key, state_root=root)
             return {"status": "FAILED", "reason": reason}
 
         # Determine incremental seek offset
@@ -1019,6 +1041,7 @@ def finalize_stop_task(
             telemetry.emit(
                 "CLAUDE_TASK_USAGE_RECORDED",
                 task_id=task_id,
+                project_key=project_key,
                 session_id=session_id,
                 claude_task_usage_source=TASK_USAGE_SOURCE,
                 claude_task_usage_known=False,
@@ -1027,7 +1050,7 @@ def finalize_stop_task(
                 claude_task_subagent_usage_included=False,
                 state_root=root,
             )
-            telemetry.update_task(task_id, state_root=root)
+            telemetry.update_task(task_id, project_key=project_key, state_root=root)
             return {"status": "FAILED", "reason": read_err}
 
         usage_data, agg_err = aggregate_usage_from_records(records, tool_use_id)
@@ -1042,6 +1065,7 @@ def finalize_stop_task(
             telemetry.emit(
                 "CLAUDE_TASK_USAGE_RECORDED",
                 task_id=task_id,
+                project_key=project_key,
                 session_id=session_id,
                 claude_task_usage_source=TASK_USAGE_SOURCE,
                 claude_task_usage_known=False,
@@ -1050,18 +1074,19 @@ def finalize_stop_task(
                 claude_task_subagent_usage_included=False,
                 state_root=root,
             )
-            telemetry.update_task(task_id, state_root=root)
+            telemetry.update_task(task_id, project_key=project_key, state_root=root)
             return {"status": "FAILED", "reason": reason}
 
         # Success: emit event with full totals
         telemetry.emit(
             "CLAUDE_TASK_USAGE_RECORDED",
             task_id=task_id,
+            project_key=project_key,
             session_id=session_id,
             state_root=root,
             **usage_data,
         )
-        telemetry.update_task(task_id, state_root=root)
+        telemetry.update_task(task_id, project_key=project_key, state_root=root)
         active_task_copy = dict(active_task)
         active_task_copy["completed"] = True
         _atomic_json_write(active_path, active_task_copy)

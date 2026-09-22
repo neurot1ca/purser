@@ -3,10 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
 import os
 from pathlib import Path
 import subprocess
 from typing import Any
+
+
+PROJECT_KEY_UNRESOLVED = "unresolved"
+
+
+def project_key(resolved_root: str | os.PathLike[str] | Path | None) -> str:
+    """Return the short stable namespace for a resolved project root."""
+
+    if resolved_root is None:
+        return PROJECT_KEY_UNRESOLVED
+    normalized = os.path.normcase(str(resolved_root))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 def resolve_candidate(
@@ -65,4 +78,9 @@ def resolve_project_root(
     return resolve_candidate(candidate)
 
 
-__all__ = ["resolve_candidate", "resolve_project_root"]
+__all__ = [
+    "PROJECT_KEY_UNRESOLVED",
+    "project_key",
+    "resolve_candidate",
+    "resolve_project_root",
+]

@@ -139,6 +139,7 @@ CONTEXT_IO_UNKNOWN_REASONS = frozenset(
 
 _IDENTIFIER = re.compile(r"[^A-Za-z0-9._-]")
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
+_PROJECT_KEY = re.compile(r"(?:[0-9a-f]{16}|unresolved)\Z")
 _WINDOWS_RESERVED = frozenset(
     {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 )
@@ -285,6 +286,14 @@ def _identifier(value: Any) -> str:
     return value
 
 
+def _project_key(value: Any, *, required: bool) -> str | None:
+    if value is None and not required:
+        return None
+    if not isinstance(value, str) or not _PROJECT_KEY.fullmatch(value):
+        raise ValueError("telemetry project key is invalid")
+    return value
+
+
 def _payload_value(name: str, value: Any) -> Any:
     if name in {
         "routing_enforced",
@@ -378,6 +387,7 @@ def build_event(
     event_type: str,
     *,
     task_id: Any = None,
+    project_key: Any = None,
     session_id: Any = None,
     repo: Any = None,
     branch: Any = None,
@@ -397,6 +407,11 @@ def build_event(
         "ts_utc": utc_now(),
         "event_type": event_type,
         "task_id": normalize_identifier(task_id) if task_id is not None else None,
+        "project_key": (
+            _project_key(project_key, required=True)
+            if project_key is not None
+            else "unresolved" if task_id is not None else None
+        ),
         "session_id": normalize_identifier(session_id, fallback="session") if session_id is not None else None,
         "repo": normalize_identifier(repo, fallback="repo") if repo is not None else None,
         "branch": normalize_identifier(branch, fallback="branch") if branch is not None else None,
@@ -408,7 +423,8 @@ def build_event(
 
 def valid_event(value: Any) -> bool:
     if not isinstance(value, Mapping) or set(value) != {
-        "schema_version", "event_id", "ts_utc", "event_type", "task_id", "session_id", "repo", "branch", "agent_id", "agent_type", "payload"
+        "schema_version", "event_id", "ts_utc", "event_type", "task_id", "project_key",
+        "session_id", "repo", "branch", "agent_id", "agent_type", "payload"
     }:
         return False
     try:
@@ -422,6 +438,7 @@ def valid_event(value: Any) -> bool:
         rebuilt = build_event(
             value["event_type"],
             task_id=value["task_id"],
+            project_key=value["project_key"],
             session_id=value["session_id"],
             repo=value["repo"],
             branch=value["branch"],
@@ -431,7 +448,7 @@ def valid_event(value: Any) -> bool:
         )
     except (TypeError, ValueError):
         return False
-    envelope_fields = ("task_id", "session_id", "repo", "branch", "agent_id", "agent_type", "payload")
+    envelope_fields = ("task_id", "project_key", "session_id", "repo", "branch", "agent_id", "agent_type", "payload")
     return value["schema_version"] == SCHEMA_VERSION and all(
         rebuilt[field] == value[field] for field in envelope_fields
     )

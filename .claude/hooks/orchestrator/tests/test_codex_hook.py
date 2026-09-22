@@ -17,6 +17,7 @@ import hook
 import json_transport
 import ledger
 import policy
+import project_root
 import reviewer as reviewer_module
 import telemetry
 
@@ -310,7 +311,9 @@ def save_live_thread(
     phase="implementation",
     scope=("file0.py", "file1.py", "file2.py"),
 ):
-    result = ledger.SessionLedger(state).save(
+    result = ledger.SessionLedger(
+        state / "projects" / project_root.project_key((state.parent / "repo").resolve())
+    ).save(
         ledger.build_session_record(
             "task-1",
             "thread-1",
@@ -322,6 +325,61 @@ def save_live_thread(
         )
     )
     assert result["status"] == ledger.OK
+
+
+def test_same_task_live_threads_are_isolated_by_project(config):
+    tmp_path = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "project-isolation" / uuid.uuid4().hex
+    tmp_path.mkdir(parents=True)
+
+    def make_repo(name):
+        repo = tmp_path / name
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True, timeout=10)
+        (repo / "file0.py").write_text("value = 1\n", encoding="utf-8")
+        (repo / "file1.py").write_text("value = 1\n", encoding="utf-8")
+        (repo / "file2.py").write_text("value = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, timeout=10)
+        subprocess.run(
+            ["git", "-c", "user.email=tests@example.invalid", "-c", "user.name=Hook Tests", "commit", "-qm", "initial"],
+            cwd=repo,
+            check=True,
+            timeout=10,
+        )
+        return repo
+
+    try:
+        state = tmp_path / "state"
+        repo_a = make_repo("project-a")
+        repo_b = make_repo("project-b")
+        call_a = event(prompt=orch(task="shared-task") + "\nImplement.", tool_use_id="call-a")
+
+        codex.pre_tool_use(call_a, config=config, state_root=state, repo_root=repo_a)
+        post_a = {
+            **call_a,
+            "hook_event_name": "PostToolUse",
+            "tool_response": [
+                {"type": "text", "text": json.dumps({"threadId": "thread-a", "content": "done"})}
+            ],
+        }
+        codex.post_tool_use(post_a, config=config, state_root=state, repo_root=repo_a)
+
+        reply_b = event(
+            codex.CODEX_REPLY_TOOL,
+            prompt="Continue without routing.",
+            tool_use_id="call-b",
+            threadId="thread-a",
+        )
+        result = codex.pre_tool_use(reply_b, config=config, state_root=state, repo_root=repo_b)
+
+        assert result["hookSpecificOutput"]["permissionDecisionReason"].startswith("NO_LIVE_THREAD:")
+        key_a = project_root.project_key(repo_a.resolve())
+        key_b = project_root.project_key(repo_b.resolve())
+        record_a = ledger.SessionLedger(state / "projects" / key_a).load("shared-task")
+        record_b = ledger.SessionLedger(state / "projects" / key_b).load("shared-task")
+        assert record_a["record"]["live_thread"]["thread_id"] == "thread-a"
+        assert record_b["status"] == ledger.MISSING
+    finally:
+        remove_test_tree(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -448,7 +506,9 @@ def test_declared_scope_reaches_baseline_and_operation_skips_manifest(workspace,
     codex.pre_tool_use(
         implementation, config=config, state_root=state, repo_root=repo
     )
-    record = ledger.SessionLedger(state).load("task-1")["record"]
+    record = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")["record"]
     assert record["pending_call_baseline"]["scope"] == ["file0.py", "file2.py"]
     assert record["pending_call_baseline"]["manifest_enabled"] is True
 
@@ -457,7 +517,9 @@ def test_declared_scope_reaches_baseline_and_operation_skips_manifest(workspace,
         tool_use_id="operation-call",
     )
     codex.pre_tool_use(operation, config=config, state_root=state, repo_root=repo)
-    operation_record = ledger.SessionLedger(state).load("operation-1")["record"]
+    operation_record = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("operation-1")["record"]
     assert operation_record["pending_call_baseline"]["scope"] == []
     assert operation_record["pending_call_baseline"]["manifest_enabled"] is False
 
@@ -484,7 +546,9 @@ def test_pretool_succeeds_with_dirty_secret_named_repository_path(workspace, con
     output = result["hookSpecificOutput"]
     assert "updatedInput" in output
     assert "additionalContext" not in output
-    loaded = ledger.SessionLedger(state).load("task-1")
+    loaded = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")
     assert loaded["status"] == ledger.OK
     assert (
         "scripts/orchestration_token_audit_0.py"
@@ -572,7 +636,9 @@ def test_fresh_route_change_does_not_relabel_old_thread(workspace, config):
     )
 
     assert "updatedInput" in result["hookSpecificOutput"]
-    loaded = ledger.SessionLedger(state).load("task-1")
+    loaded = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")
     assert loaded["record"]["live_thread"] is None
     assert loaded["record"]["pending_call_baseline"] is not None
 
@@ -713,7 +779,9 @@ def test_thread_id_survives_mcp_output_replacement(workspace, config):
     assert len(bundle["implementer_report"]) == codex.IMPLEMENTER_REPORT_LIMIT
     assert Path(bundle["raw_output_path"]).is_file()
     assert "tool_response" not in bundle
-    loaded = ledger.SessionLedger(state).load("task-1")
+    loaded = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")
     assert loaded["record"]["live_thread"]["thread_id"] == "thread-9"
 
 
@@ -745,7 +813,9 @@ def test_posttool_lone_surrogate_is_preserved_without_crashing(workspace, config
     raw_path = Path(bundle["raw_output_path"])
     assert "\\udc9d" in raw_path.read_text(encoding="utf-8")
     assert json.loads(raw_path.read_text(encoding="utf-8")) == tool_response
-    loaded = ledger.SessionLedger(state).load("task-1")
+    loaded = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")
     assert loaded["status"] == ledger.OK
     assert loaded["record"]["last_outcome"]["implementer_report"] == report
     assert not (state / "diagnostics.jsonl").exists()
@@ -1596,7 +1666,9 @@ def test_posttool_failure_never_calls_reviewer_and_preserves_ambiguity(workspace
     assert calls == []
     assert "work_performed is UNKNOWN" in result["hookSpecificOutput"]["additionalContext"]
     assert list((state / "pending").glob("*.json")) == []
-    loaded = ledger.SessionLedger(state).load("task-1")
+    loaded = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")
     outcome = loaded["record"]["last_outcome"]
     assert outcome["ambiguous_outcome"] is True
     assert outcome["work_performed"] == "UNKNOWN"
@@ -2992,3 +3064,28 @@ def test_end_to_end_review_mode_matrix(
 
     for finding_code in expected_findings:
         assert any(f["code"] == finding_code for f in bundle["findings"]), f"Expected finding {finding_code}"
+
+
+def test_post_accepts_pending_written_before_project_namespacing(workspace, config):
+    repo, state = workspace
+    call = event(prompt=orch(task="legacy-pending") + "\nImplement.", tool_use_id="call-legacy")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    pending_path = codex._pending_path(Path(state), call)
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending.pop("project_key")
+    pending_path.write_text(json.dumps(pending), encoding="utf-8")
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {"type": "text", "text": json.dumps({"threadId": "thread-legacy", "content": "done"})}
+        ],
+    }
+
+    bundle = response_bundle(
+        codex.post_tool_use(post, config=config, state_root=state, repo_root=repo), config
+    )
+
+    assert not any(item["code"] == "INTERNAL_POST_ERROR" for item in bundle["findings"])
+    assert bundle["thread_id"] == "thread-legacy"

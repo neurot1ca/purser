@@ -206,6 +206,7 @@ def _new_turn(reason: str | None = None) -> dict[str, Any]:
         "lines_scanned": 0,
         "task_association_known": False,
         "task_id": None,
+        "project_key": None,
         "codex_boundary_index": None,
         "unknown_reason": reason,
         "latency": [],
@@ -657,6 +658,7 @@ def associate_turn(
     *,
     session_id: Any,
     task_id: Any,
+    project_key: Any = None,
 ) -> bool:
     key = _session_key(session_id)
     if key is None or not isinstance(task_id, str) or not task_id or len(task_id) > 128:
@@ -672,9 +674,13 @@ def associate_turn(
             return False
         _consume_contention(turn, contention)
         if error is not None or turn.get("task_association_known") is True:
-            return turn.get("task_id") == task_id
+            return (
+                turn.get("task_id") == task_id
+                and turn.get("project_key") == project_key
+            )
         turn["task_association_known"] = True
         turn["task_id"] = task_id
+        turn["project_key"] = project_key
         turn["codex_boundary_index"] = turn["read_count"]
         return _write_turn(journal, turn, contention)
 
@@ -775,6 +781,11 @@ def stop(
                         else None
                     ),
                     event_id=event_id,
+                    project_key=(
+                        turn.get("project_key")
+                        if turn.get("task_association_known") is True
+                        else None
+                    ),
                 )
                 turn["final_event"] = frozen_event
                 if not _write_turn(journal, turn, contention):

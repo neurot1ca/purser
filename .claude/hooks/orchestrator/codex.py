@@ -527,7 +527,14 @@ def _observe(entrypoint: str, *args: Any, **kwargs: Any) -> None:
 def _telemetry_envelope(
     event: Mapping[str, Any],
     repository: str | os.PathLike[str] | None = None,
+    project_key: str | None = None,
 ) -> dict[str, Any]:
+    if project_key is None:
+        if repository is not None:
+            project_key = project_root.project_key(Path(repository))
+        else:
+            resolved, _ = project_root.resolve_project_root(event)
+            project_key = project_root.project_key(resolved)
     repo_name = Path(repository).name if repository is not None else None
     branch = None
     if repository is not None:
@@ -546,6 +553,7 @@ def _telemetry_envelope(
     agent_type = event.get("agent_type")
     return {
         "session_id": event.get("session_id"),
+        "project_key": project_key,
         "repo": repo_name,
         "branch": branch,
         "agent_id": agent_id if isinstance(agent_id, str) and agent_id else None,
@@ -650,6 +658,24 @@ def _repo_root(
     root: str | os.PathLike[str] | None,
 ) -> tuple[Path | None, str]:
     return project_root.resolve_project_root(event, root)
+
+
+def _pending_project_key(pending: Mapping[str, Any]) -> str:
+    """Return the call's namespace; derive it from the stored root for older pending records."""
+
+    stored = pending.get("project_key")
+    if isinstance(stored, str) and stored:
+        return stored
+    repository = pending.get("repo_root")
+    return project_root.project_key(
+        Path(repository).resolve() if isinstance(repository, str) and repository else None
+    )
+
+
+def _project_state_root(runtime_root: Path, project_key: str) -> Path:
+    if not isinstance(project_key, str) or not project_key:
+        raise WiringError("project_key is missing")
+    return runtime_root / "projects" / project_key
 
 
 def _call_key(event: Mapping[str, Any]) -> str:
@@ -875,6 +901,7 @@ def _write_pre_bypass(
         "baseline_captured": False,
         "reason": reason,
         "task_id": metadata.get("task_id"),
+        "project_key": metadata.get("project_key", project_root.PROJECT_KEY_UNRESOLVED),
         "phase": metadata.get("phase"),
         "route": metadata.get("route"),
         "model": metadata.get("model"),
@@ -1004,7 +1031,11 @@ def pre_tool_use(
         except BaseException:
             pass
         _call_key(event)
-        session_ledger = ledger.SessionLedger(runtime_root)
+        repository, project_root_reason = _repo_root(event, repo_root)
+        project_namespace = project_root.project_key(repository)
+        session_ledger = ledger.SessionLedger(
+            _project_state_root(runtime_root, project_namespace)
+        )
         record: Mapping[str, Any] | None
         live_thread: Mapping[str, Any] | None
         if tool_name == CODEX_REPLY_TOOL:
@@ -1127,7 +1158,6 @@ def pre_tool_use(
             if "developer-instructions" not in tool_input:
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
 
-        repository, project_root_reason = _repo_root(event, repo_root)
         resolved_profile = (
             project_profile.load_profile(repository) if repository is not None else None
         )
@@ -1137,6 +1167,7 @@ def pre_tool_use(
             else project_profile._ENGINE_PROTECTED
         )
         bypass_metadata["repo_root"] = str(repository) if repository is not None else None
+        bypass_metadata["project_key"] = project_namespace
         bypass_metadata["project_root_reason"] = project_root_reason or None
         declared_scope = list(parsed.scope)
         if repository is None:
@@ -1173,6 +1204,7 @@ def pre_tool_use(
         pending = {
             "kind": "call",
             "task_id": parsed.task_id,
+            "project_key": project_namespace,
             "phase": parsed.phase,
             "route": parsed.route,
             "model": route.model,
@@ -1237,6 +1269,7 @@ def pre_tool_use(
         observation = {
             "task_id": parsed.task_id,
             "state_root": runtime_root,
+            "project_key": project_namespace,
             "phase": parsed.phase,
             "route": parsed.route,
             "model": route.model,
@@ -1244,7 +1277,7 @@ def pre_tool_use(
             "routing_enforced": True,
             "fresh_thread": tool_name == CODEX_TOOL,
             "reply_call": tool_name == CODEX_REPLY_TOOL,
-            **_telemetry_envelope(event, repository),
+            **_telemetry_envelope(event, repository, project_namespace),
         }
         _observe("emit", "TASK_ROUTE_SELECTED", **observation)
         _observe("emit", "IMPLEMENTER_STARTED", **observation)
@@ -1255,6 +1288,7 @@ def pre_tool_use(
                 runtime_root,
                 session_id=event.get("session_id"),
                 task_id=parsed.task_id,
+                project_key=project_namespace,
                 tool_use_id=event.get("tool_use_id"),
                 transcript_path=event.get("transcript_path"),
             )
@@ -1269,6 +1303,7 @@ def pre_tool_use(
                 runtime_root,
                 session_id=event.get("session_id"),
                 task_id=parsed.task_id,
+                project_key=project_namespace,
             )
         except BaseException:
             pass
@@ -1699,7 +1734,12 @@ def _post_observations(
     reviewer_started: bool = False,
 ) -> None:
     task_id = pending.get("task_id")
-    envelope = _telemetry_envelope(event, pending.get("repo_root"))
+    project_namespace = _pending_project_key(pending)
+    envelope = _telemetry_envelope(
+        event,
+        pending.get("repo_root"),
+        project_namespace if isinstance(project_namespace, str) else None,
+    )
     codex_tokens = _codex_usage(event.get("tool_response"))
     finished_payload: dict[str, Any] = {
         "state_root": runtime_root,
@@ -1777,6 +1817,7 @@ def _post_observations(
     update_kwargs: dict[str, Any] = {
         "state_root": runtime_root,
         "project_root": repository if isinstance(repository, str) else None,
+        "project_key": project_namespace,
     }
     vault_root = pending.get("vault_root")
     if isinstance(vault_root, str) and vault_root:
@@ -1811,6 +1852,8 @@ def post_tool_use(
         except BaseException:
             pass
         pending = _read_pending(runtime_root, event)
+        project_namespace = _pending_project_key(pending)
+        project_runtime_root = _project_state_root(runtime_root, project_namespace)
         raw_path = _persist_raw_output(runtime_root, event, event.get("tool_response"))
 
         bundle = _base_bundle()
@@ -1864,7 +1907,7 @@ def post_tool_use(
             bundle["claude_review_mode"] = policy.FULL
             identity_fields = ("task_id", "route", "model", "effort")
             if all(isinstance(pending.get(field), str) and pending.get(field) for field in identity_fields):
-                saved = ledger.SessionLedger(runtime_root).save(
+                saved = ledger.SessionLedger(project_runtime_root).save(
                     ledger.build_session_record(
                         pending["task_id"],
                         thread_id,
@@ -1888,7 +1931,12 @@ def post_tool_use(
             try:
                 _post_observations(event, runtime_root, pending, bundle)
             except BaseException:
-                _observe("update_task", pending.get("task_id"), state_root=runtime_root)
+                _observe(
+                    "update_task",
+                    pending.get("task_id"),
+                    state_root=runtime_root,
+                    project_key=project_namespace,
+                )
             return _finalize_replacement(bundle, loaded_config, runtime_root, event)
 
         stored_profile = (
@@ -1945,10 +1993,12 @@ def post_tool_use(
             bundle["profile"] = "not_configured"
 
         pending_repository = pending.get("repo_root")
-        repository, resolved_reason = _repo_root(
-            event,
-            repo_root or (pending_repository if isinstance(pending_repository, str) else None),
-        )
+        if isinstance(pending_repository, str) and pending_repository:
+            repository = Path(pending_repository).resolve()
+            resolved_reason = ""
+        else:
+            repository = None
+            resolved_reason = "project root unresolved: pre-tool root was unavailable"
         project_root_reason = pending.get("project_root_reason") or resolved_reason
         bundle["project_root_reason"] = project_root_reason or None
         scope = pending.get("scope")
@@ -2046,7 +2096,7 @@ def post_tool_use(
                     "REVIEWER1_STARTED",
                     task_id=pending["task_id"],
                     state_root=runtime_root,
-                    **_telemetry_envelope(event, repository),
+                    **_telemetry_envelope(event, repository, project_namespace),
                     reviewer1_provider="agy",
                     reviewer1_model_requested=loaded_config["reviewer1_model_requested"],
                 )
@@ -2313,7 +2363,7 @@ def post_tool_use(
                     "post_state": post_state,
                 }
 
-        session_ledger = ledger.SessionLedger(runtime_root)
+        session_ledger = ledger.SessionLedger(project_runtime_root)
         session_record = ledger.build_session_record(
             pending["task_id"],
             thread_id,
@@ -2348,7 +2398,12 @@ def post_tool_use(
                 reviewer_started=reviewer_started,
             )
         except BaseException:
-            _observe("update_task", pending.get("task_id"), state_root=runtime_root)
+            _observe(
+                "update_task",
+                pending.get("task_id"),
+                state_root=runtime_root,
+                project_key=project_namespace,
+            )
         if bundle.get("claude_review_mode") == policy.AUDIT:
             bundle["audit_receipt"] = _build_audit_receipt(bundle, pending.get("task_id"))
         else:
@@ -2384,6 +2439,8 @@ def post_tool_use_failure(
         except BaseException:
             pass
         pending = _read_pending(runtime_root, event)
+        project_namespace = _pending_project_key(pending)
+        project_runtime_root = _project_state_root(runtime_root, project_namespace)
         evidence = {
             "ambiguous_outcome": True,
             "work_performed": "UNKNOWN",
@@ -2404,7 +2461,7 @@ def post_tool_use_failure(
         }
         identity_fields = ("task_id", "route", "model", "effort")
         if all(isinstance(pending.get(field), str) and pending.get(field) for field in identity_fields):
-            saved = ledger.SessionLedger(runtime_root).save(
+            saved = ledger.SessionLedger(project_runtime_root).save(
                 ledger.build_session_record(
                     pending["task_id"],
                     pending.get("prior_thread_id"),
@@ -2435,11 +2492,18 @@ def post_tool_use_failure(
             "IMPLEMENTER_FAILED",
             task_id=pending.get("task_id"),
             state_root=runtime_root,
-            **_telemetry_envelope(event, pending.get("repo_root")),
+            **_telemetry_envelope(
+                event, pending.get("repo_root"), project_namespace
+            ),
             failure_code=failure_code,
             duration_ms=_numeric_duration_ms(event.get("duration_ms")),
         )
-        _observe("update_task", pending.get("task_id"), state_root=runtime_root)
+        _observe(
+            "update_task",
+            pending.get("task_id"),
+            state_root=runtime_root,
+            project_key=project_namespace,
+        )
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUseFailure",
@@ -2457,7 +2521,11 @@ def post_tool_use_failure(
                 "IMPLEMENTER_FAILED",
                 task_id=pending.get("task_id"),
                 state_root=runtime_root,
-                **_telemetry_envelope(event, pending.get("repo_root")),
+                **_telemetry_envelope(
+                    event,
+                    pending.get("repo_root"),
+                    _pending_project_key(pending),
+                ),
                 failure_code=(
                     "CODEX_CALL_INTERRUPTED"
                     if event.get("is_interrupt") is True
@@ -2465,7 +2533,12 @@ def post_tool_use_failure(
                 ),
                 duration_ms=_numeric_duration_ms(event.get("duration_ms")),
             )
-            _observe("update_task", pending.get("task_id"), state_root=runtime_root)
+            _observe(
+                "update_task",
+                pending.get("task_id"),
+                state_root=runtime_root,
+                project_key=_pending_project_key(pending),
+            )
         _record_diagnostic(runtime_root, event, "PostToolUseFailure", error)
         return {
             "hookSpecificOutput": {

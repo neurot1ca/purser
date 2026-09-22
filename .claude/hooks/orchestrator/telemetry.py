@@ -91,6 +91,12 @@ def _root(state_root: str | os.PathLike[str] | None) -> Path:
     return _state_root(state_root) / "telemetry"
 
 
+def _project_root(root: Path, project_key: str | None) -> Path:
+    """Return the project-scoped telemetry store beneath the shared state root."""
+
+    return root.parent / "projects" / (project_key or "unresolved") / "telemetry"
+
+
 def _atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
@@ -628,7 +634,7 @@ def emit(event_type: str, *, task_id: Any = None, **payload: Any) -> None:
     """Append one schema-checked event; arbitrary caller text is never serialised."""
 
     state_root = payload.pop("state_root", None)
-    envelope = {name: payload.pop(name, None) for name in ("session_id", "repo", "branch", "agent_id", "agent_type")}
+    envelope = {name: payload.pop(name, None) for name in ("session_id", "project_key", "repo", "branch", "agent_id", "agent_type")}
     try:
         root = _root(state_root)
         if event_type in _CLAUDE_USAGE_EVENTS:
@@ -656,10 +662,11 @@ def build_context_io_turn_event(
     *,
     task_id: Any,
     event_id: str,
+    project_key: Any = None,
 ) -> dict[str, Any]:
     uuid.UUID(event_id)
     event = schema.build_event(
-        "CONTEXT_IO_TURN_RECORDED", task_id=task_id, payload=payload
+        "CONTEXT_IO_TURN_RECORDED", task_id=task_id, project_key=project_key, payload=payload
     )
     event["event_id"] = event_id
     if not schema.valid_event(event):
@@ -690,7 +697,11 @@ def emit_context_io_turn(
                 durable = False
         task_id = event.get("task_id")
         if task_id is not None:
-            update_task(task_id, state_root=state_root)
+            update_task(
+                task_id,
+                project_key=event.get("project_key"),
+                state_root=state_root,
+            )
         return durable
     except BaseException:
         try:
@@ -873,6 +884,7 @@ def _project_task(
     task_id: str,
     *,
     state_root: Path,
+    project_key: str,
     projection_enabled: bool | None,
     vault_root: str | os.PathLike[str] | None,
     project_root: Path | None,
@@ -888,9 +900,10 @@ def _project_task(
         if not enabled:
             return
         target_vault = vault_root if vault_root is not None else configured_root
+        project_state_root = _project_root(state_root, project_key).parent
         obsidian_projection.project_task(
             task_id,
-            state_root=state_root.parent,
+            state_root=project_state_root,
             vault_root=target_vault,
         )
         projection_written_at = schema.utc_now()
@@ -1021,6 +1034,7 @@ def _policy_hashes() -> tuple[dict[str, str | None], str | None]:
 
 def _new_aggregate(
     task_id: str,
+    project_key: str,
     existing: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if (
@@ -1034,6 +1048,7 @@ def _new_aggregate(
         hashes, fingerprint = _policy_hashes()
     return {
         "task_id": task_id,
+        "project_key": project_key,
         "repo": None,
         "branch": None,
         "status": "UNKNOWN_OR_IN_PROGRESS",
@@ -1300,13 +1315,13 @@ def _raw_events(root: Path) -> Iterable[dict[str, Any]]:
             continue
 
 
-def _cursor_path(root: Path, task_id: str) -> Path:
-    return root / "tasks" / ".cursors" / f"{task_id}.json"
+def _cursor_path(root: Path, task_id: str, project_key: str) -> Path:
+    return _project_root(root, project_key) / "tasks" / ".cursors" / f"{task_id}.json"
 
 
-def _read_cursor(root: Path, task_id: str) -> tuple[int, set[str]]:
+def _read_cursor(root: Path, task_id: str, project_key: str) -> tuple[int, set[str]]:
     try:
-        value = json.loads(_cursor_path(root, task_id).read_text(encoding="utf-8"))
+        value = json.loads(_cursor_path(root, task_id, project_key).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return 0, set()
     if (
@@ -1323,9 +1338,11 @@ def _read_cursor(root: Path, task_id: str) -> tuple[int, set[str]]:
     return value["index_offset"], set(value["spool_event_ids"])
 
 
-def _write_cursor(root: Path, task_id: str, index_offset: int, spool_event_ids: set[str]) -> None:
+def _write_cursor(
+    root: Path, task_id: str, project_key: str, index_offset: int, spool_event_ids: set[str]
+) -> None:
     _atomic_json(
-        _cursor_path(root, task_id),
+        _cursor_path(root, task_id, project_key),
         {
             "schema_version": _CURSOR_SCHEMA_VERSION,
             "index_offset": index_offset,
@@ -1337,6 +1354,7 @@ def _write_cursor(root: Path, task_id: str, index_offset: int, spool_event_ids: 
 def _task_index_events(
     root: Path,
     task_id: str,
+    project_key: str,
     index_offset: int,
 ) -> tuple[list[dict[str, Any]], int]:
     path = _task_index_path(root, task_id)
@@ -1359,12 +1377,18 @@ def _task_index_events(
                 value = json.loads(raw_line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            if schema.valid_event(value) and value.get("task_id") == task_id:
+            if (
+                schema.valid_event(value)
+                and value.get("task_id") == task_id
+                and value.get("project_key") == project_key
+            ):
                 events.append(dict(value))
     return events, consumed
 
 
-def _unmerged_spool_events(root: Path, task_id: str) -> list[dict[str, Any]]:
+def _unmerged_spool_events(
+    root: Path, task_id: str, project_key: str
+) -> list[dict[str, Any]]:
     spool = root / "events" / "spool"
     if not spool.exists():
         return []
@@ -1377,13 +1401,17 @@ def _unmerged_spool_events(root: Path, task_id: str) -> list[dict[str, Any]]:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
-        if schema.valid_event(value) and value.get("task_id") == task_id:
+        if (
+            schema.valid_event(value)
+            and value.get("task_id") == task_id
+            and value.get("project_key") == project_key
+        ):
             events.append(dict(value))
     return events
 
 
-def _verdict(root: Path, task_id: str) -> tuple[str, str] | None:
-    path = root / "verdicts" / f"{task_id}.json"
+def _verdict(root: Path, task_id: str, project_key: str) -> tuple[str, str] | None:
+    path = _project_root(root, project_key) / "verdicts" / f"{task_id}.json"
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         if (
@@ -1403,23 +1431,32 @@ def _verdict(root: Path, task_id: str) -> tuple[str, str] | None:
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-        emit("TELEMETRY_WARNING", task_id=task_id, state_root=root.parent, warning_code="MALFORMED_VERDICT")
+        emit(
+            "TELEMETRY_WARNING",
+            task_id=task_id,
+            project_key=project_key,
+            state_root=root.parent,
+            warning_code="MALFORMED_VERDICT",
+        )
         return None
 
 
 def _build_task(
     root: Path,
     task_id: str,
+    project_key: str,
     events: Iterable[Mapping[str, Any]],
     *,
     incremental: bool = True,
 ) -> dict[str, Any]:
-    path = root / "tasks" / f"{task_id}.json"
+    path = _project_root(root, project_key) / "tasks" / f"{task_id}.json"
     try:
         existing = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         existing = None
-    aggregate = _new_aggregate(task_id, existing if isinstance(existing, Mapping) else None)
+    aggregate = _new_aggregate(
+        task_id, project_key, existing if isinstance(existing, Mapping) else None
+    )
     if incremental and isinstance(existing, Mapping):
         for key in aggregate:
             if key in existing:
@@ -1433,7 +1470,7 @@ def _build_task(
             aggregate["usage"] = _usage_defaults()
     for event in sorted(events, key=lambda item: (str(item["ts_utc"]), str(item["event_id"]))):
         _fold_event(aggregate, event)
-    verdict = _verdict(root, task_id)
+    verdict = _verdict(root, task_id, project_key)
     if verdict is not None:
         aggregate["status"], aggregate["ended_at"] = verdict
     return aggregate
@@ -1442,6 +1479,7 @@ def _build_task(
 def update_task(
     task_id: Any,
     *,
+    project_key: str | None = None,
     state_root: str | os.PathLike[str] | None = None,
     projection_enabled: bool | None = None,
     vault_root: str | os.PathLike[str] | None = None,
@@ -1450,8 +1488,9 @@ def update_task(
     try:
         root = _root(state_root)
         normalized = schema.normalize_identifier(task_id)
-        index_offset, consumed_spool_ids = _read_cursor(root, normalized)
-        indexed_events, index_offset = _task_index_events(root, normalized, index_offset)
+        namespace = project_key or "unresolved"
+        index_offset, consumed_spool_ids = _read_cursor(root, normalized, namespace)
+        indexed_events, index_offset = _task_index_events(root, normalized, namespace, index_offset)
         consumed_from_index: set[str] = set()
         events: list[dict[str, Any]] = []
         for event in indexed_events:
@@ -1464,18 +1503,20 @@ def update_task(
                 consumed_from_index.add(event_id)
             else:
                 events.append(event)
-        for event in _unmerged_spool_events(root, normalized):
+        for event in _unmerged_spool_events(root, normalized, namespace):
             event_id = str(event["event_id"])
             if event_id in consumed_from_index or event_id in consumed_spool_ids:
                 continue
             events.append(event)
             consumed_spool_ids.add(event_id)
-        aggregate = _build_task(root, normalized, events)
-        _atomic_json(root / "tasks" / f"{normalized}.json", aggregate)
-        _write_cursor(root, normalized, index_offset, consumed_spool_ids)
+        aggregate = _build_task(root, normalized, namespace, events)
+        project_telemetry_root = _project_root(root, namespace)
+        _atomic_json(project_telemetry_root / "tasks" / f"{normalized}.json", aggregate)
+        _write_cursor(root, normalized, namespace, index_offset, consumed_spool_ids)
         _project_task(
             normalized,
             state_root=root,
+            project_key=namespace,
             projection_enabled=projection_enabled,
             vault_root=vault_root,
             project_root=Path(project_root).resolve() if project_root is not None else None,
@@ -1491,36 +1532,42 @@ def update_task(
 def rebuild(*, state_root: str | os.PathLike[str] | None = None) -> None:
     try:
         root = _root(state_root)
-        grouped: dict[str, list[dict[str, Any]]] = {}
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for event in _raw_events(root):
             task_id = event.get("task_id")
-            if isinstance(task_id, str):
-                grouped.setdefault(task_id, []).append(event)
-        verdict_root = root / "verdicts"
-        if verdict_root.exists():
+            project_key = event.get("project_key")
+            if isinstance(task_id, str) and isinstance(project_key, str):
+                grouped.setdefault((project_key, task_id), []).append(event)
+        for verdict_root in (root.parent / "projects").glob("*/telemetry/verdicts"):
+            project_key = verdict_root.parent.name
             for path in verdict_root.glob("*.json"):
-                grouped.setdefault(schema.normalize_identifier(path.stem), [])
-        tasks_root = root / "tasks"
-        tasks_root.mkdir(parents=True, exist_ok=True)
-        for task_id, events in grouped.items():
+                grouped.setdefault((project_key, schema.normalize_identifier(path.stem)), [])
+        for (project_key, task_id), events in grouped.items():
+            tasks_root = _project_root(root, project_key) / "tasks"
+            tasks_root.mkdir(parents=True, exist_ok=True)
             _atomic_json(
                 tasks_root / f"{task_id}.json",
-                _build_task(root, task_id, events, incremental=False),
+                _build_task(root, task_id, project_key, events, incremental=False),
             )
             _write_cursor(
                 root,
                 task_id,
+                project_key,
                 _task_index_path(root, task_id).stat().st_size
                 if _task_index_path(root, task_id).exists()
                 else 0,
                 {
                     str(event["event_id"])
-                    for event in _unmerged_spool_events(root, task_id)
+                    for event in _unmerged_spool_events(root, task_id, project_key)
                 },
             )
-        cursor_root = tasks_root / ".cursors"
-        if cursor_root.exists():
-            expected_cursors = {f"{task_id}.json" for task_id in grouped}
+        for cursor_root in (root.parent / "projects").glob("*/telemetry/tasks/.cursors"):
+            project_key = cursor_root.parent.parent.parent.name
+            expected_cursors = {
+                f"{task_id}.json"
+                for namespace, task_id in grouped
+                if namespace == project_key
+            }
             for path in cursor_root.glob("*.json"):
                 if path.name not in expected_cursors:
                     path.unlink()

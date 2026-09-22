@@ -22,6 +22,8 @@ import reviewer
 import telemetry
 import telemetry_schema as schema
 
+UNRESOLVED_PROJECT_KEY = "unresolved"
+
 
 @pytest.fixture()
 def tmp_path():
@@ -193,7 +195,14 @@ elif action == "update":
 
 def _aggregate(state_root, task_id):
     return json.loads(
-        (state_root / "telemetry" / "tasks" / f"{task_id}.json").read_text(encoding="utf-8")
+        (
+            state_root
+            / "projects"
+            / UNRESOLVED_PROJECT_KEY
+            / "telemetry"
+            / "tasks"
+            / f"{task_id}.json"
+        ).read_text(encoding="utf-8")
     )
 
 
@@ -460,7 +469,14 @@ def test_jsonl_lines_are_valid_unique_and_unknown_usage_is_null(tmp_path):
     assert len({event["event_id"] for event in events}) == len(events)
 
     aggregate = json.loads(
-        (tmp_path / "telemetry" / "tasks" / "task-1.json").read_text(encoding="utf-8")
+        (
+            tmp_path
+            / "projects"
+            / UNRESOLVED_PROJECT_KEY
+            / "telemetry"
+            / "tasks"
+            / "task-1.json"
+        ).read_text(encoding="utf-8")
     )
     assert aggregate["usage"]["codex_usage_known"] is False
     assert aggregate["usage"]["codex_input_tokens"] is None
@@ -709,20 +725,38 @@ def test_task_id_normalization_cannot_escape_telemetry(tmp_path, task_id):
     )
     telemetry.update_task(task_id, state_root=tmp_path)
 
-    task_path = (tmp_path / "telemetry" / "tasks" / f"{normalized}.json").resolve()
+    task_path = (
+        tmp_path
+        / "projects"
+        / UNRESOLVED_PROJECT_KEY
+        / "telemetry"
+        / "tasks"
+        / f"{normalized}.json"
+    ).resolve()
     assert task_path.is_file()
-    task_path.relative_to((tmp_path / "telemetry").resolve())
-    assert all(path.resolve().is_relative_to((tmp_path / "telemetry").resolve()) for path in tmp_path.rglob("*"))
+    task_path.relative_to((tmp_path / "projects" / UNRESOLVED_PROJECT_KEY / "telemetry").resolve())
+    telemetry_files = [path for path in tmp_path.rglob("*") if path.is_file()]
+    assert all(
+        path.resolve().is_relative_to(
+            (tmp_path / "projects" / UNRESOLVED_PROJECT_KEY / "telemetry").resolve()
+        )
+        or path.resolve().is_relative_to((tmp_path / "telemetry").resolve())
+        for path in telemetry_files
+    )
 
 
 def test_rebuild_reproduces_aggregate_and_folds_verdict(tmp_path):
     _emit_task(tmp_path)
-    task_path = tmp_path / "telemetry" / "tasks" / "task-1.json"
+    task_path = (
+        tmp_path / "projects" / UNRESOLVED_PROJECT_KEY / "telemetry" / "tasks" / "task-1.json"
+    )
     before = json.loads(task_path.read_text(encoding="utf-8"))
     telemetry.rebuild(state_root=tmp_path)
     assert json.loads(task_path.read_text(encoding="utf-8")) == before
 
-    verdict_path = tmp_path / "telemetry" / "verdicts" / "task-1.json"
+    verdict_path = (
+        tmp_path / "projects" / UNRESOLVED_PROJECT_KEY / "telemetry" / "verdicts" / "task-1.json"
+    )
     verdict_path.parent.mkdir(parents=True)
     verdict_path.write_text(
         json.dumps(
@@ -742,7 +776,9 @@ def test_rebuild_reproduces_aggregate_and_folds_verdict(tmp_path):
 
 
 def test_rebuild_preserves_aggregate_without_raw_events(tmp_path):
-    task_path = tmp_path / "telemetry" / "tasks" / "remote-only.json"
+    task_path = (
+        tmp_path / "projects" / UNRESOLVED_PROJECT_KEY / "telemetry" / "tasks" / "remote-only.json"
+    )
     task_path.parent.mkdir(parents=True)
     aggregate = {
         "task_id": "remote-only",
@@ -772,6 +808,7 @@ def test_hook_event_identity_and_repository_branch_are_observed(tmp_path):
     )
     assert envelope == {
         "session_id": "session",
+        "project_key": codex.project_root.project_key(tmp_path),
         "repo": tmp_path.name,
         "branch": "feature/telemetry",
         "agent_id": "agent-7",
@@ -840,13 +877,27 @@ def test_pending_cleanup_is_conservative_and_preserves_current_call(tmp_path, mo
 
 def test_malformed_verdict_is_ignored_and_warned(tmp_path):
     _emit_task(tmp_path, "bad-verdict")
-    verdict_path = tmp_path / "telemetry" / "verdicts" / "bad-verdict.json"
+    verdict_path = (
+        tmp_path
+        / "projects"
+        / UNRESOLVED_PROJECT_KEY
+        / "telemetry"
+        / "verdicts"
+        / "bad-verdict.json"
+    )
     verdict_path.parent.mkdir(parents=True)
     verdict_path.write_text('{"verdict":"PASS"}', encoding="utf-8")
     telemetry.update_task("bad-verdict", state_root=tmp_path)
 
     aggregate = json.loads(
-        (tmp_path / "telemetry" / "tasks" / "bad-verdict.json").read_text(encoding="utf-8")
+        (
+            tmp_path
+            / "projects"
+            / UNRESOLVED_PROJECT_KEY
+            / "telemetry"
+            / "tasks"
+            / "bad-verdict.json"
+        ).read_text(encoding="utf-8")
     )
     assert aggregate["status"] == "IN_PROGRESS"
     assert any(

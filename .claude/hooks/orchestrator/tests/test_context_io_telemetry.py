@@ -20,6 +20,8 @@ import context_io_telemetry as context_io
 import telemetry
 import telemetry_schema as schema
 
+UNRESOLVED_PROJECT_KEY = "unresolved"
+
 
 @pytest.fixture()
 def tmp_path():
@@ -120,7 +122,14 @@ def test_full_turn_association_thresholds_and_projection(tmp_path):
     assert payload["threshold_350_candidate_count"] == 1
     assert payload["threshold_500_candidate_count"] == 1
     aggregate = json.loads(
-        (state / "telemetry" / "tasks" / "task-context-1.json").read_text(encoding="utf-8")
+        (
+            state
+            / "projects"
+            / UNRESOLVED_PROJECT_KEY
+            / "telemetry"
+            / "tasks"
+            / "task-context-1.json"
+        ).read_text(encoding="utf-8")
     )
     assert aggregate["context_io"] == payload
 
@@ -555,7 +564,14 @@ def test_stale_missing_prompt_and_rebuild(tmp_path):
     context_io.user_prompt_submit(_event(associated, "UserPromptSubmit"), state_root=state)
     assert context_io.associate_turn(state, session_id=associated, task_id="rebuild-task")
     context_io.stop(_event(associated, "Stop"), state_root=state)
-    aggregate = state / "telemetry" / "tasks" / "rebuild-task.json"
+    aggregate = (
+        state
+        / "projects"
+        / UNRESOLVED_PROJECT_KEY
+        / "telemetry"
+        / "tasks"
+        / "rebuild-task.json"
+    )
     aggregate.unlink()
     telemetry.rebuild(state_root=state)
     rebuilt = json.loads(aggregate.read_text(encoding="utf-8"))

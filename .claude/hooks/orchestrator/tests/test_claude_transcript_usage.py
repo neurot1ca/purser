@@ -78,12 +78,26 @@ def _write_jsonl(path: Path, records: list[dict[str, Any]], trailing_incomplete:
 
 
 def _read_aggregate(state_root: Path, task_id: str) -> dict[str, Any]:
-    task_path = state_root / "telemetry" / "tasks" / f"{task_id}.json"
-    if not task_path.exists():
-        task_path = state_root / "tasks" / f"{task_id}.json"
+    task_path = _task_path(state_root, task_id)
     if not task_path.exists():
         return {}
     return json.loads(task_path.read_text(encoding="utf-8"))
+
+
+def _task_path(state_root: Path, task_id: str) -> Path:
+    unresolved = (
+        state_root / "projects" / "unresolved" / "telemetry" / "tasks" / f"{task_id}.json"
+    )
+    if unresolved.exists():
+        return unresolved
+    candidates = sorted(
+        (state_root / "projects").glob(f"*/telemetry/tasks/{task_id}.json")
+    )
+    return candidates[0] if candidates else unresolved
+
+
+def _task_files(state_root: Path) -> list[Path]:
+    return sorted((state_root / "projects").glob("*/telemetry/tasks/*.json"))
 
 
 # --- 1. Single Desktop-style assistant usage record ---
@@ -191,7 +205,7 @@ def test_contradictory_duplicate_is_terminal_across_later_stop_and_rebuild(tmp_p
     assert agg["usage"]["claude_task_usage_unknown_reason"] == "CONTRADICTORY_USAGE_RECORD"
     assert agg["usage"]["claude_task_input_tokens"] is None
     # Verify rebuild preserves terminal failure
-    (state_root / "telemetry" / "tasks" / "task-conflict.json").unlink()
+    _task_path(state_root, "task-conflict").unlink()
     telemetry.rebuild(state_root=state_root)
     agg_rebuilt = _read_aggregate(state_root, "task-conflict")
     assert agg_rebuilt["usage"]["claude_task_usage_known"] is False
@@ -450,7 +464,7 @@ def test_counterexample_overlap_sequence_stop_and_rebuild_cannot_overwrite(tmp_p
     assert agg2["usage"]["claude_task_total_observed_tokens"] is None
 
     # 6. Verify rebuild preserves terminal invalidation across both tasks
-    for p in (state_root / "telemetry" / "tasks").glob("*.json"):
+    for p in _task_files(state_root):
         p.unlink()
     telemetry.rebuild(state_root=state_root)
 
@@ -818,13 +832,17 @@ def test_canonical_event_rebuild_reproduces_aggregate_and_projection(tmp_path):
     note_before = run_note_paths[0].read_text(encoding="utf-8")
 
     # Delete task aggregates and projections
-    for p in (state_root / "telemetry" / "tasks").glob("*.json"):
+    for p in _task_files(state_root):
         p.unlink()
     run_note_paths[0].unlink()
 
     # Rebuild from canonical raw events
     telemetry.rebuild(state_root=state_root)
-    obsidian_projection.project_task("task-rebuild", state_root=state_root, vault_root=vault_root)
+    obsidian_projection.project_task(
+        "task-rebuild",
+        state_root=state_root / "projects" / "unresolved",
+        vault_root=vault_root,
+    )
 
     agg_after = _read_aggregate(state_root, "task-rebuild")
     assert agg_before == agg_after
@@ -1052,7 +1070,7 @@ def test_session_recovery_after_overlap(tmp_path):
     assert agg3["usage"]["claude_task_output_tokens"] == 100
 
     # 7. Full rebuild preserves all three outcomes
-    for p in (state_root / "telemetry" / "tasks").glob("*.json"):
+    for p in _task_files(state_root):
         p.unlink()
     telemetry.rebuild(state_root=state_root)
 
@@ -1230,7 +1248,7 @@ out_file.write_text(json.dumps(res), encoding="utf-8")
                 assert ev.get("payload", {}).get("claude_task_usage_known") is not True
 
     # Rebuild and confirm the result
-    for p in (state_root / "telemetry" / "tasks").glob("*.json"):
+    for p in _task_files(state_root):
         p.unlink()
     telemetry.rebuild(state_root=state_root)
     agg1_reb = _read_aggregate(state_root, "task-r1")
@@ -1368,7 +1386,7 @@ out_file.write_text(json.dumps(res), encoding="utf-8")
     assert len(success_events) == 1
 
     # Rebuild and confirm the same totals
-    for p in (state_root / "telemetry" / "tasks").glob("*.json"):
+    for p in _task_files(state_root):
         p.unlink()
     telemetry.rebuild(state_root=state_root)
     agg_reb = _read_aggregate(state_root, "task-same")
@@ -1584,7 +1602,7 @@ with ctu.session_lock(state_root, session_id, timeout_seconds=10.0) as acquired:
     assert agg2["usage"]["claude_task_output_tokens"] is None
 
     # 9. Rebuild canonical telemetry and assert identical outcomes
-    for p in (state_root / "telemetry" / "tasks").glob("*.json"):
+    for p in _task_files(state_root):
         p.unlink()
     telemetry.rebuild(state_root=state_root)
 
@@ -1646,7 +1664,7 @@ with ctu.session_lock(state_root, session_id, timeout_seconds=10.0) as acquired:
             assert payload.get("claude_task_usage_complete") is not True
 
     # 10d. Rebuild telemetry and verify both task aggregates remain terminal unknown
-    for p in (state_root / "telemetry" / "tasks").glob("*.json"):
+    for p in _task_files(state_root):
         p.unlink()
     telemetry.rebuild(state_root=state_root)
     for tid in ("task-1", "task-2"):
@@ -1775,7 +1793,7 @@ with ctu.session_lock(state_root, session_id, timeout_seconds=10.0) as acquired:
     assert agg2["usage"]["claude_task_usage_unknown_reason"] == "ACTIVE_TASK_STATE_CONTENTION"
 
     # Rebuild and recheck all three
-    for p in (state_root / "telemetry" / "tasks").glob("*.json"):
+    for p in _task_files(state_root):
         p.unlink()
     telemetry.rebuild(state_root=state_root)
 
