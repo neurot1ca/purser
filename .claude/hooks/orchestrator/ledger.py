@@ -190,9 +190,9 @@ def _parse_status(raw: bytes) -> list[dict[str, str]]:
 def _status_entries(repo_root: Path, timeout: float) -> list[dict[str, str]]:
     raw = _run_git(
         repo_root,
-        ["status", "--porcelain=v1", "-z", "--untracked-files=no"],
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
         timeout,
-        "reading tracked status",
+        "reading repository status",
     )
     return _parse_status(raw)
 

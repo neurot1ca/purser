@@ -850,6 +850,73 @@ protected = ["project-only-secret.txt"]
     assert bundle["protected_paths_touched"] == ["project-only-secret.txt"]
 
 
+def test_post_tool_use_detects_initial_out_of_scope_and_engine_protected_files(workspace, config):
+    repo, state = workspace
+    call = event(tool_use_id="initial-out-of-scope", scope="file0.py")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+
+    (repo / "outside.txt").write_text("outside\n", encoding="utf-8")
+    (repo / ".orchestrator").mkdir()
+    (repo / ".orchestrator" / "profile.toml").write_text(
+        "schema_version = 1\n", encoding="utf-8"
+    )
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {"threadId": "thread-initial-out-of-scope", "content": "done"}
+                ),
+            }
+        ],
+    }
+
+    bundle = response_bundle(
+        codex.post_tool_use(post, config=config, state_root=state, repo_root=repo),
+        config,
+    )
+
+    assert bundle["claude_review_mode"] == policy.FULL
+    findings = [
+        item for item in bundle["findings"] if item["code"] == "OUT_OF_SCOPE_MODIFICATION"
+    ]
+    assert len(findings) == 1
+    assert "2 file(s)" in findings[0]["message"]
+    assert ".orchestrator/profile.toml" in findings[0]["message"]
+    assert bundle["protected_paths_touched"] == [".orchestrator/profile.toml"]
+
+
+def test_post_tool_use_ignores_out_of_scope_file_present_in_baseline(workspace, config):
+    repo, state = workspace
+    (repo / "preexisting-outside.txt").write_text("already here\n", encoding="utf-8")
+    call = event(tool_use_id="baseline-out-of-scope", scope="file0.py")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {"threadId": "thread-baseline-out-of-scope", "content": "done"}
+                ),
+            }
+        ],
+    }
+
+    bundle = response_bundle(
+        codex.post_tool_use(post, config=config, state_root=state, repo_root=repo),
+        config,
+    )
+
+    assert not any(
+        item["code"] == "OUT_OF_SCOPE_MODIFICATION" for item in bundle["findings"]
+    )
+
+
 @pytest.mark.parametrize("cwd_kind", ["missing", "non_git"])
 def test_unresolved_hook_root_returns_full_bundle(
     workspace, config, cwd_kind, monkeypatch

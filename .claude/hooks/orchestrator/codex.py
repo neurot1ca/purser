@@ -1268,6 +1268,46 @@ def _finding(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
 
 
+def _apply_out_of_scope_result(
+    bundle: dict[str, Any],
+    result: Mapping[str, Any],
+    *,
+    protected_paths: Sequence[str],
+) -> bool:
+    """Apply an out-of-scope inspection result and report whether it forces FULL."""
+
+    if result.get("status") != ledger.OK:
+        bundle["findings"].append(
+            _finding(
+                result.get("code", "OUT_OF_SCOPE_CHECK_FAILED"),
+                result.get(
+                    "message",
+                    "Out-of-scope modification check failed; forcing FULL Claude review.",
+                ),
+            )
+        )
+        return True
+
+    out_of_scope = result.get("paths", [])
+    if not out_of_scope:
+        return False
+
+    bundle["findings"].append(
+        _finding(
+            "OUT_OF_SCOPE_MODIFICATION",
+            f"{len(out_of_scope)} file(s) modified outside declared scope: "
+            f"{', '.join(out_of_scope[:5])}",
+        )
+    )
+    existing = bundle.get("protected_paths_touched", [])
+    existing_paths = existing if isinstance(existing, list) else []
+    bundle["protected_paths_touched"] = sorted(
+        set(existing_paths)
+        | set(ledger.detect_protected_paths(out_of_scope, protected_paths=protected_paths))
+    )
+    return True
+
+
 def _base_bundle(error: str | None = None) -> dict[str, Any]:
     findings = [_finding("INTERNAL_POST_ERROR", error)] if error else []
     return {
@@ -1812,6 +1852,7 @@ def post_tool_use(
             )
         bundle["baseline_head"] = delta.get("baseline_head")
         bundle["current_head"] = delta.get("current_head")
+        force_full_review = delta.get("status") != ledger.OK
 
         if delta.get("status") == ledger.OK:
             bundle["changed_paths"] = delta["changed_paths"]
@@ -1832,7 +1873,26 @@ def post_tool_use(
                 _finding(delta.get("code", "UNKNOWN_DELTA"), delta.get("message", "Delta is UNKNOWN."))
             )
 
-        force_full_review = False
+        if (
+            pending.get("phase") == "implementation"
+            and scope
+            and repository is not None
+            and baseline.get("status") == ledger.OK
+        ):
+            out_of_scope_res = ledger.detect_out_of_scope_modifications(
+                repository,
+                baseline,
+                scope,
+            )
+            force_full_review = (
+                _apply_out_of_scope_result(
+                    bundle,
+                    out_of_scope_res,
+                    protected_paths=protected_paths,
+                )
+                or force_full_review
+            )
+
         if delta.get("status") != ledger.OK:
             force_full_review = True
         else:
@@ -1978,27 +2038,14 @@ def post_tool_use(
                                 baseline,
                                 scope,
                             )
-                            if out_of_scope_res.get("status") != ledger.OK:
-                                force_full_review = True
-                                bundle["findings"].append(
-                                    _finding(
-                                        out_of_scope_res.get("code", "OUT_OF_SCOPE_CHECK_FAILED"),
-                                        out_of_scope_res.get(
-                                            "message",
-                                            "Out-of-scope modification check failed; forcing FULL Claude review.",
-                                        ),
-                                    )
+                            force_full_review = (
+                                _apply_out_of_scope_result(
+                                    bundle,
+                                    out_of_scope_res,
+                                    protected_paths=protected_paths,
                                 )
-                            else:
-                                out_of_scope = out_of_scope_res.get("paths", [])
-                                if out_of_scope:
-                                    force_full_review = True
-                                    bundle["findings"].append(
-                                        _finding(
-                                            "OUT_OF_SCOPE_MODIFICATION",
-                                            f"Files modified outside declared scope: {', '.join(out_of_scope)}",
-                                        )
-                                    )
+                                or force_full_review
+                            )
 
                             if re_delta.get("status") == ledger.OK and not force_full_review:
                                 re_kwargs = dict(reviewer_kwargs)
