@@ -1937,8 +1937,13 @@ def test_entry_point_pretool_crash_uses_visible_internal_bypass(monkeypatch):
     assert "NOT enforced" in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_post_tool_use_emits_audit_receipt_on_audit_mode(workspace, config):
+def test_reviewer_agy_keeps_audit_receipt_behavior(workspace, config):
     repo, state = workspace
+    user_profile = Path.home() / ".orchestrator" / "config.toml"
+    user_profile.parent.mkdir(parents=True, exist_ok=True)
+    user_profile.write_text(
+        'schema_version = 1\n[roles]\nreviewer = "agy"\n', encoding="utf-8"
+    )
     prompt = (
         "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py\n"
         "Task Objective: Update file0 with new value\n"
@@ -1979,6 +1984,66 @@ def test_post_tool_use_emits_audit_receipt_on_audit_mode(workspace, config):
     assert bundle["audit_receipt"]["verdict"] == "READY_FOR_ONE_TURN_ACCEPT"
     assert "git add" in bundle["audit_receipt"]["commit_command"]
     assert "feat(task-1)" in bundle["audit_receipt"]["commit_command"]
+
+
+def test_reviewer_disabled_skips_reviewer_and_forces_full(workspace, config, monkeypatch):
+    repo, state = workspace
+    user_profile = Path.home() / ".orchestrator" / "config.toml"
+    user_profile.parent.mkdir(parents=True, exist_ok=True)
+    user_profile.write_text(
+        'schema_version = 1\n[roles]\nreviewer = "none"\n', encoding="utf-8"
+    )
+    prompt = (
+        "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py\n"
+        "Task Objective: Update file0 with new value\n"
+        "Acceptance Criteria: file0 contains value = 2\n"
+    )
+    call = event(prompt=prompt, tool_use_id="reviewer-disabled")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    pending = codex._read_pending(state, call)
+    assert pending["reviewer"] == "none"
+    hook_check_calls = []
+    monkeypatch.setattr(codex.checks, "select_checks", lambda *_args: ("check",))
+    monkeypatch.setattr(
+        codex.checks,
+        "run_checks",
+        lambda *_args, **_kwargs: hook_check_calls.append("ran")
+        or {"status": "PASS", "results": []},
+    )
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{"type": "text", "text": json.dumps({
+            "threadId": "thread-disabled",
+            "content": 'updated\nVALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}',
+        })}],
+    }
+    reviewer_calls = []
+
+    def reviewer(**kwargs):
+        reviewer_calls.append(kwargs)
+        return {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            "validation": "PASS",
+            "findings": [],
+        }
+
+    raw = codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo, reviewer=reviewer
+    )
+    bundle = response_bundle(raw, config)
+    assert hook_check_calls == ["ran"]
+    assert bundle["hook_checks"]["status"] == "PASS"
+    assert reviewer_calls == []
+    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_DISABLED"
+    assert any(
+        finding["code"] == "REVIEWER_DISABLED"
+        and finding["message"] == "no independent reviewer configured; FULL review required"
+        for finding in bundle["findings"]
+    )
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["audit_receipt"] is None
 
 
 def test_worker_validation_parses_full_report_before_phase_cap(workspace, config):

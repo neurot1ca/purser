@@ -56,6 +56,7 @@ def is_protected(path: str, patterns: Iterable[str]) -> bool:
     return False
 
 _USER_SECURITY = {
+    "roles": {"orchestrator", "coder", "reviewer"},
     "reviewer": {"executable"},
     "trust": {"paths"},
     "paths": {"protected"},
@@ -89,6 +90,13 @@ class Check:
     timeout_seconds: int = 60
 
 
+@dataclass(frozen=True)
+class Roles:
+    orchestrator: str = "claude-code"
+    coder: str = "codex"
+    reviewer: str = "agy"
+
+
 _PROJECT_NON_SECURITY = {"project": {"id"}, "authority": {"sources"}}
 _DEFAULT_AUTHORITY_SOURCES = (
     AuthoritySource("AGENTS.md", _DEFAULT_AUTHORITY_HEADINGS),
@@ -105,6 +113,7 @@ class ResolvedProfile:
     skip_max_files: int
     trusted: bool
     reviewer_executable: str | None
+    roles: Roles
     authority_sources: tuple[AuthoritySource, ...]
     checks: tuple[Check, ...]
     vault_root: str | None
@@ -149,6 +158,7 @@ def load_profile(
             skip_max_files=_ENGINE_DEFAULTS["skip_max_files"],
             trusted=False,
             reviewer_executable=None,
+            roles=Roles(),
             authority_sources=_DEFAULT_AUTHORITY_SOURCES,
             checks=(),
             vault_root=None,
@@ -344,6 +354,16 @@ def _authority_path(value: Any) -> str | None:
 
 
 def _valid_security_value(section: str, key: str, value: Any) -> tuple[bool, str]:
+    if section == "roles":
+        allowed = {
+            "orchestrator": {"claude-code"},
+            "coder": {"codex", "claude"},
+            "reviewer": {"agy", "none"},
+        }
+        if isinstance(value, str) and value in allowed[key]:
+            return True, ""
+        return False, f"[roles] {key} has an invalid type or value"
+
     if section == "review":
         if key == "force_full":
             valid = type(value) is bool
@@ -417,6 +437,11 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
     if "checks" in project_values and not trusted:
         warnings += ("project: [[checks]] ignored because the project is not trusted",)
     authority_sources = project_values.get("authority.sources") or _DEFAULT_AUTHORITY_SOURCES
+    roles = Roles(
+        orchestrator=user_values.get("roles.orchestrator", "claude-code"),
+        coder=user_values.get("roles.coder", "codex"),
+        reviewer=user_values.get("roles.reviewer", "agy"),
+    )
     return ResolvedProfile(
         configured=project.status != "missing",
         project_id=project_values.get("project.id"),
@@ -426,6 +451,7 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
         skip_max_files=skip_files,
         trusted=trusted,
         reviewer_executable=user_values.get("reviewer.executable"),
+        roles=roles,
         authority_sources=authority_sources,
         checks=project_values.get("checks", ()) if trusted else (),
         vault_root=user_values.get("telemetry.vault_root"),

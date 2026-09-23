@@ -131,6 +131,9 @@ def _engine_config() -> dict:
 
 def _check_reviewer(profile=None) -> dict:
     profile = profile if profile is not None else project_profile.load_profile(Path.cwd())
+    roles = getattr(profile, "roles", project_profile.Roles())
+    if roles.reviewer == "none":
+        return _row("Reviewer", "INFO", "No independent reviewer is configured; every call is FULL review.")
     executable = getattr(profile, "reviewer_executable", None)
     source = "user profile override" if executable else "engine config"
     if not executable:
@@ -141,6 +144,19 @@ def _check_reviewer(profile=None) -> dict:
     if not path.exists():
         return _row("Reviewer", "WARN", f"{source} reviewer executable does not exist: {path}; reviewer unavailable; every call will be FULL review.", "Install or restore the configured reviewer executable, or update its configured path.")
     return _row("Reviewer", "OK", f"{source} reviewer executable exists: {path}")
+
+
+def _check_roles(profile=None) -> dict:
+    profile = profile if profile is not None else project_profile.load_profile(Path.cwd())
+    roles = getattr(profile, "roles", project_profile.Roles())
+    detail = (
+        f"orchestrator={roles.orchestrator}; coder={roles.coder}; "
+        f"reviewer={roles.reviewer}"
+    )
+    if roles.reviewer == "none":
+        detail += "; every call is FULL review"
+        return _row("Roles", "INFO", detail)
+    return _row("Roles", "OK", detail)
 
 
 def _check_project(profile=None) -> dict:
@@ -207,6 +223,7 @@ def collect_report() -> dict:
     except Exception:
         pass
     checks.extend([
+        _run_check("Roles", lambda: _check_roles(profile)),
         _run_check("Reviewer", lambda: _check_reviewer(profile)),
         _run_check("Project", lambda: _check_project(profile)),
         _run_check("Quota", _check_quota),

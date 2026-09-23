@@ -1290,6 +1290,7 @@ def pre_tool_use(
                     "skip_max_lines": resolved_profile.skip_max_lines,
                     "skip_max_files": resolved_profile.skip_max_files,
                     "reviewer_executable": resolved_profile.reviewer_executable,
+                    "reviewer": resolved_profile.roles.reviewer,
                     "authority_sources": [
                         {
                             "path": source.path,
@@ -2079,6 +2080,7 @@ def post_tool_use(
             profile_skip_max_lines = pending["skip_max_lines"]
             profile_skip_max_files = pending["skip_max_files"]
             profile_reviewer_executable = pending.get("reviewer_executable")
+            profile_reviewer = pending.get("reviewer", "agy")
             profile_authority_sources = pending.get("authority_sources")
             profile_configured = pending["configured"]
             profile_user_status = pending["user_status"]
@@ -2090,6 +2092,7 @@ def post_tool_use(
             profile_skip_max_lines = None
             profile_skip_max_files = None
             profile_reviewer_executable = None
+            profile_reviewer = "agy"
             profile_authority_sources = None
             profile_configured = None
             profile_user_status = None
@@ -2113,6 +2116,14 @@ def post_tool_use(
             bundle["findings"].append(profile_finding)
         if stored_profile and profile_configured is False:
             bundle["profile"] = "not_configured"
+        if profile_reviewer == "none":
+            bundle["reviewer1_skipped_reason"] = "REVIEWER_DISABLED"
+            bundle["findings"].append(
+                _finding(
+                    "REVIEWER_DISABLED",
+                    "no independent reviewer configured; FULL review required",
+                )
+            )
 
         pending_repository = pending.get("repo_root")
         if isinstance(pending_repository, str) and pending_repository:
@@ -2225,14 +2236,21 @@ def post_tool_use(
                 )
             reviewer_config["reviewer_gate"] = reviewer_gate_config
             reviewer_callable = reviewer if reviewer is not None else REVIEWER
-            gate = policy.reviewer1_gate(
-                phase=pending["phase"],
-                delta_files=delta["changed_file_count"],
-                delta_lines=delta["changed_line_count"],
-                route=pending["route"],
-                reviewer_available=_reviewer_available(reviewer_callable),
-                config=reviewer_config,
-            )
+            if profile_reviewer == "none":
+                gate = policy.SkipReviewerDecision(
+                    "skip reviewer",
+                    "REVIEWER_DISABLED",
+                    "no independent reviewer configured; FULL review required",
+                )
+            else:
+                gate = policy.reviewer1_gate(
+                    phase=pending["phase"],
+                    delta_files=delta["changed_file_count"],
+                    delta_lines=delta["changed_line_count"],
+                    route=pending["route"],
+                    reviewer_available=_reviewer_available(reviewer_callable),
+                    config=reviewer_config,
+                )
             if gate.should_run:
                 reviewer_started = True
                 _observe(

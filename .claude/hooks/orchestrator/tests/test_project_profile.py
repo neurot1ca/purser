@@ -5,6 +5,7 @@ import uuid
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
+import project_profile
 from project_profile import Check, load_profile
 
 
@@ -77,3 +78,39 @@ def test_user_tier_checks_rejected(profile_root):
 def test_unknown_project_top_level_key_warns(profile_root):
     result = _load(profile_root, "schema_version = 1\nunknown_section = true\n")
     assert "project: unknown top-level key or section [unknown_section] ignored" in result.warnings
+
+
+def test_roles_defaults_when_user_section_absent(profile_root):
+    result = _load(profile_root)
+    assert result.roles == project_profile.Roles("claude-code", "codex", "agy")
+
+
+def test_user_roles_load_valid_values(profile_root):
+    result = _load(
+        profile_root,
+        user_text='schema_version = 1\n[roles]\norchestrator = "claude-code"\ncoder = "claude"\nreviewer = "none"\n',
+    )
+    assert result.user_status == "ok"
+    assert result.roles == project_profile.Roles("claude-code", "claude", "none")
+
+
+@pytest.mark.parametrize(
+    "roles",
+    ['reviewer = "codex"', 'extra = "agy"'],
+    ids=["invalid-value", "unknown-key"],
+)
+def test_invalid_user_roles_reject_user_tier(profile_root, roles):
+    result = _load(profile_root, user_text=f"schema_version = 1\n[roles]\n{roles}\n")
+    assert result.user_status == "rejected"
+    assert result.roles == project_profile.Roles("claude-code", "codex", "agy")
+    assert result.force_full_review
+
+
+def test_project_roles_do_not_take_effect(profile_root):
+    result = _load(
+        profile_root,
+        project_text='schema_version = 1\n[roles]\nreviewer = "none"\n',
+    )
+    assert result.project_status == "ok"
+    assert result.roles.reviewer == "agy"
+    assert any("[roles]" in warning for warning in result.warnings)

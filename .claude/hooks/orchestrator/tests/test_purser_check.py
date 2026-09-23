@@ -81,6 +81,25 @@ def test_missing_reviewer_executable_warns(fake_home, monkeypatch):
     assert row["status"] == "WARN" and "FULL review" in row["detail"]
 
 
+def test_roles_row_and_intentionally_disabled_reviewer_are_info(fake_home, monkeypatch):
+    settings(fake_home, plugin=True)
+    no_environment_problems(monkeypatch)
+    user_config = fake_home / ".orchestrator" / "config.toml"
+    user_config.parent.mkdir()
+    user_config.write_text(
+        'schema_version = 1\n[roles]\norchestrator = "claude-code"\n'
+        'coder = "codex"\nreviewer = "none"\n',
+        encoding="utf-8",
+    )
+    report = purser_check.collect_report()
+    roles = next(row for row in report["checks"] if row["check"] == "Roles")
+    reviewer = next(row for row in report["checks"] if row["check"] == "Reviewer")
+    assert roles["status"] == "INFO"
+    assert "every call is FULL review" in roles["detail"]
+    assert "reviewer=none" in roles["detail"]
+    assert reviewer["status"] == "INFO"
+
+
 def test_missing_codex_fails(fake_home, monkeypatch):
     settings(fake_home, plugin=True)
     monkeypatch.setattr(purser_check.shutil, "which", lambda name: None)
