@@ -76,7 +76,7 @@ def _emit_task(state_root, task_id="task-1"):
         **common,
         phase="implementation",
         route="normal",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="medium",
         routing_enforced=True,
         fresh_thread=True,
@@ -87,7 +87,7 @@ def _emit_task(state_root, task_id="task-1"):
         **common,
         phase="implementation",
         route="normal",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="medium",
         routing_enforced=True,
         fresh_thread=True,
@@ -132,7 +132,7 @@ if action in {"pretool", "route"}:
         **common,
         phase="implementation",
         route="consequential",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="high",
         routing_enforced=True,
     )
@@ -142,7 +142,7 @@ if action == "pretool":
         **common,
         phase="implementation",
         route="consequential",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="high",
         routing_enforced=True,
         fresh_thread=True,
@@ -154,7 +154,7 @@ elif action == "started":
         **common,
         phase="implementation",
         route="consequential",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="high",
         routing_enforced=True,
         fresh_thread=True,
@@ -247,7 +247,7 @@ def _emit_started_or_finished(state_root, event_type, task_id="claude-task"):
             **common,
             phase="implementation",
             route="normal",
-            model="gpt-5.6-sol",
+            model="gpt-6-sol",
             effort="medium",
             routing_enforced=True,
             fresh_thread=True,
@@ -495,7 +495,7 @@ def test_events_from_another_process_are_folded(tmp_path):
 
     aggregate = _aggregate(tmp_path, "cross-process")
     assert aggregate["route"] == "consequential"
-    assert aggregate["model"] == "gpt-5.6-sol"
+    assert aggregate["model"] == "gpt-6-sol"
     assert aggregate["started_at"] is not None
     assert aggregate["fresh_threads"] == 1
     assert aggregate["reply_calls"] == 1
@@ -552,7 +552,7 @@ def test_first_known_repository_branch_and_validation_values_are_stable(tmp_path
         branch="main",
         phase="implementation",
         route="normal",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="medium",
         routing_enforced=True,
     )
@@ -563,7 +563,7 @@ def test_first_known_repository_branch_and_validation_values_are_stable(tmp_path
         branch="feature",
         phase="implementation",
         route="normal",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="medium",
         routing_enforced=True,
     )
@@ -690,7 +690,7 @@ def test_spooled_event_folded_before_merge_is_not_folded_again(tmp_path, monkeyp
         session_id="session",
         phase="implementation",
         route="normal",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="medium",
         routing_enforced=True,
         fresh_thread=True,
@@ -1023,7 +1023,7 @@ def test_hook_outputs_are_identical_when_telemetry_raises(tmp_path, monkeypatch)
         "task_id": "task",
         "phase": "implementation",
         "route": "normal",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-sol",
         "effort": "medium",
         "repo_root": str(tmp_path),
     }

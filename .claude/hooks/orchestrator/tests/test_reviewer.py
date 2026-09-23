@@ -672,7 +672,7 @@ def test_untracked_or_ignored_delta_without_baseline_content_is_uncertain(config
         task_id="bounded-task",
         phase="implementation",
         route="normal",
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
         effort="medium",
         repo_root=Path(__file__).parents[4],
         delta=delta,

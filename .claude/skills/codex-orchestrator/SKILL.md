@@ -44,11 +44,11 @@ and behavior without leaving a semantic choice to the worker.
 
 | Task class | Route | Model and effort |
 |---|---|---|
-| Mechanical, narrow, low-risk; status or counting | `mechanical` | `gpt-5.6-luna` + `high` |
-| Narrow but semantically subtle, or fully resolved implementation | `subtle` | `gpt-5.6-luna` + `high` |
-| Ordinary implementation, debugging, or multi-file work with design left | `normal` | `gpt-5.6-sol` + `medium` |
-| Consequential and unresolved; diagnosis, design, or audit must find the rule | `consequential` | `gpt-5.6-sol` + `high` |
-| Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-5.6-sol` + `xhigh` |
+| Mechanical, narrow, low-risk; status or counting | `mechanical` | `gpt-6-luna` + `high` |
+| Narrow but semantically subtle, or fully resolved implementation | `subtle` | `gpt-6-luna` + `high` |
+| Ordinary implementation, debugging, or multi-file work with design left | `normal` | `gpt-6-sol` + `medium` |
+| Consequential and unresolved; diagnosis, design, or audit must find the rule | `consequential` | `gpt-6-sol` + `high` |
+| Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6-sol` + `xhigh` |
 | Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-5.6-terra` + `high` |
 
 Use the lowest row expected to finish correctly in one pass. Do not use a
@@ -56,8 +56,8 @@ cheap-first cascade: an expected repair cycle also spends review. Do not raise
 effort to compensate for a contradictory or unresolved prompt. A resolved
 consequential implementation may use `subtle`, but its prompt must state the
 accepted map and every invariant explicitly, and Claude still reviews it as
-consequential work. `gpt-5.6-luna` + `xhigh` is not a route; move unresolved work
-to `gpt-5.6-sol` instead.
+consequential work. `gpt-6-luna` + `xhigh` is not a route; move unresolved work
+to `gpt-6-sol` instead.
 
 Before each call, give the user one brief dispatch receipt: route, model, effort,
 continuity (`reply`, `fresh`, or `failover-fresh`), one clause explaining the

@@ -306,7 +306,7 @@ def save_live_thread(
     state,
     *,
     route="normal",
-    model="gpt-5.6-sol",
+    model="gpt-6-sol",
     effort="medium",
     phase="implementation",
     scope=("file0.py", "file1.py", "file2.py"),
@@ -409,11 +409,11 @@ def test_protocol_errors_deny_with_policy_reason(workspace, config, prompt, code
 @pytest.mark.parametrize(
     ("route", "model", "effort"),
     [
-        ("mechanical", "gpt-5.6-luna", "high"),
-        ("subtle", "gpt-5.6-luna", "high"),
-        ("normal", "gpt-5.6-sol", "medium"),
-        ("consequential", "gpt-5.6-sol", "high"),
-        ("escalated", "gpt-5.6-sol", "xhigh"),
+        ("mechanical", "gpt-6-luna", "high"),
+        ("subtle", "gpt-6-luna", "high"),
+        ("normal", "gpt-6-sol", "medium"),
+        ("consequential", "gpt-6-sol", "high"),
+        ("escalated", "gpt-6-sol", "xhigh"),
         ("operation", "gpt-5.6-terra", "high"),
     ],
 )
@@ -736,7 +736,7 @@ def test_pretool_strips_minimal_orch_and_pins_consequential_route(workspace, con
     assert output["updatedInput"]["prompt"] == (
         "\nbody text\n" + codex._WORKER_VALIDATION_INSTRUCTION
     )
-    assert output["updatedInput"]["model"] == "gpt-5.6-sol"
+    assert output["updatedInput"]["model"] == "gpt-6-sol"
     assert output["updatedInput"]["config"]["model_reasoning_effort"] == "high"
 
 

@@ -36,7 +36,7 @@ def thread(**overrides):
     values = {
         "task_id": "task-1",
         "route": "normal",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-sol",
         "effort": "medium",
     }
     values.update(overrides)
@@ -127,11 +127,11 @@ def test_operation_scope_is_optional_and_ignored(config):
 
 def test_route_table_is_exact_and_has_no_fallback(config):
     expected = {
-        "mechanical": ("gpt-5.6-luna", "high"),
-        "subtle": ("gpt-5.6-luna", "high"),
-        "normal": ("gpt-5.6-sol", "medium"),
-        "consequential": ("gpt-5.6-sol", "high"),
-        "escalated": ("gpt-5.6-sol", "xhigh"),
+        "mechanical": ("gpt-6-luna", "high"),
+        "subtle": ("gpt-6-luna", "high"),
+        "normal": ("gpt-6-sol", "medium"),
+        "consequential": ("gpt-6-sol", "high"),
+        "escalated": ("gpt-6-sol", "xhigh"),
         "operation": ("gpt-5.6-terra", "high"),
     }
     for route, pair in expected.items():
@@ -259,7 +259,7 @@ def test_corrupt_recorded_thread_allows_fresh_codex_with_anomaly_code():
     corrupt_recorded = {
         "task_id": "task-1",
         "route": "normal",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-sol",
     }
 
     result = policy.fresh_codex_decision(requested, corrupt_recorded)

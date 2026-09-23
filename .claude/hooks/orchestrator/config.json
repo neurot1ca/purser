@@ -27,23 +27,23 @@
   ],
   "routes": {
     "mechanical": {
-      "model": "gpt-5.6-luna",
+      "model": "gpt-6-luna",
       "effort": "high"
     },
     "subtle": {
-      "model": "gpt-5.6-luna",
+      "model": "gpt-6-luna",
       "effort": "high"
     },
     "normal": {
-      "model": "gpt-5.6-sol",
+      "model": "gpt-6-sol",
       "effort": "medium"
     },
     "consequential": {
-      "model": "gpt-5.6-sol",
+      "model": "gpt-6-sol",
       "effort": "high"
     },
     "escalated": {
-      "model": "gpt-5.6-sol",
+      "model": "gpt-6-sol",
       "effort": "xhigh"
     },
     "operation": {
@@ -51,7 +51,7 @@
       "effort": "high"
     }
   },
-  "sol_model": "gpt-5.6-sol",
+  "sol_model": "gpt-6-sol",
   "always_full_routes": [
     "consequential",
     "escalated"

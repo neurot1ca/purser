@@ -422,7 +422,7 @@ def test_session_record_is_checksummed_and_feeds_thread_policy(sandbox_dir):
         "task-1",
         "thread-123",
         "normal",
-        "gpt-5.6-sol",
+        "gpt-6-sol",
         "medium",
         pending_call_baseline={"status": ledger.OK, "head": "abc"},
         last_outcome={"validation": "PASS"},
@@ -436,7 +436,7 @@ def test_session_record_is_checksummed_and_feeds_thread_policy(sandbox_dir):
     requested = {
         "task_id": "task-1",
         "route": "normal",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-sol",
         "effort": "medium",
     }
     assert policy.thread_compatibility(requested, loaded["record"]["live_thread"]).compatible
@@ -448,7 +448,7 @@ def test_pending_baseline_can_be_saved_before_a_fresh_thread_exists(sandbox_dir)
         "task-1",
         None,
         "normal",
-        "gpt-5.6-sol",
+        "gpt-6-sol",
         "medium",
         pending_call_baseline={"status": ledger.OK, "head": "abc"},
     )
@@ -460,7 +460,7 @@ def test_pending_baseline_can_be_saved_before_a_fresh_thread_exists(sandbox_dir)
     requested = {
         "task_id": "task-1",
         "route": "normal",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-sol",
         "effort": "medium",
     }
     assert policy.thread_compatibility(requested, None).code == "NO_LIVE_THREAD"
@@ -476,7 +476,7 @@ def test_session_record_accepts_repository_paths_with_secret_key_terms(sandbox_d
         "task-1",
         None,
         "normal",
-        "gpt-5.6-sol",
+        "gpt-6-sol",
         "medium",
         phase="implementation",
         scope=[path],
@@ -502,7 +502,7 @@ def test_session_record_rejects_secret_values_inside_path_keyed_map(
         "task-1",
         None,
         "normal",
-        "gpt-5.6-sol",
+        "gpt-6-sol",
         "medium",
         pending_call_baseline={
             "tracked_snapshots": {
@@ -520,7 +520,7 @@ def test_session_record_rejects_secret_named_field(sandbox_dir):
         "task-1",
         None,
         "normal",
-        "gpt-5.6-sol",
+        "gpt-6-sol",
         "medium",
         last_outcome={"api_key": "not-a-pattern-matched-value"},
     )
@@ -531,7 +531,7 @@ def test_session_record_rejects_secret_named_field(sandbox_dir):
 def test_truncated_or_checksum_corrupt_record_is_not_a_valid_thread(sandbox_dir):
     store = ledger.SessionLedger(sandbox_dir / "ledger")
     record = ledger.build_session_record(
-        "task-1", "thread-123", "normal", "gpt-5.6-sol", "medium"
+        "task-1", "thread-123", "normal", "gpt-6-sol", "medium"
     )
     assert store.save(record)["status"] == ledger.OK
     path = store.path_for_task("task-1")
@@ -651,7 +651,7 @@ def test_session_record_rejects_grounded_contract_with_missing_objective_or_crit
 
     # Invalid: grounded=True but objective is empty
     bad_rec1 = ledger.build_session_record(
-        "t-inv1", "th-1", "normal", "gpt-5.6-sol", "medium",
+        "t-inv1", "th-1", "normal", "gpt-6-sol", "medium",
         phase="implementation", scope=["a.py"],
         task_objective="", acceptance_criteria="valid criteria", task_contract_grounded=True
     )
@@ -661,7 +661,7 @@ def test_session_record_rejects_grounded_contract_with_missing_objective_or_crit
 
     # Invalid: grounded=True but criteria is None
     bad_rec2 = ledger.build_session_record(
-        "t-inv2", "th-2", "normal", "gpt-5.6-sol", "medium",
+        "t-inv2", "th-2", "normal", "gpt-6-sol", "medium",
         phase="implementation", scope=["a.py"],
         task_objective="valid objective", acceptance_criteria=None, task_contract_grounded=True
     )
@@ -671,7 +671,7 @@ def test_session_record_rejects_grounded_contract_with_missing_objective_or_crit
 
     # Valid: grounded=True with non-empty objective and criteria
     good_rec = ledger.build_session_record(
-        "t-inv3", "th-3", "normal", "gpt-5.6-sol", "medium",
+        "t-inv3", "th-3", "normal", "gpt-6-sol", "medium",
         phase="implementation", scope=["a.py"],
         task_objective="valid objective", acceptance_criteria="valid criteria", task_contract_grounded=True
     )
