@@ -3069,8 +3069,20 @@ def test_codex_reply_does_not_inherit_handoff_after_intervening_edit(workspace, 
     assert "UNKNOWN_CONCURRENT_WRITER" in [finding["code"] for finding in bundle["findings"]]
 
 
-def test_codex_reply_keeps_pre_turn_dirty_path_ambiguous(workspace, config):
+@pytest.mark.parametrize("halt_paths", [["file0.py"], [f"path-{i:02d}.py" for i in range(21)], None])
+def test_codex_reply_keeps_pre_turn_dirty_path_ambiguous(workspace, config, monkeypatch, halt_paths):
     repo, state = workspace
+    original_classify = ledger.classify_concurrent_writers
+    def classify_with_halt_paths(*args, **kwargs):
+        result = original_classify(*args, **kwargs)
+        if "file0.py" in result.get("ambiguous_paths", []):
+            result["halt_paths"] = halt_paths
+            if halt_paths is None:
+                result["code"] = "UNKNOWN_DELTA"
+        return result
+    monkeypatch.setattr(ledger, "classify_concurrent_writers", classify_with_halt_paths)
+    observed = []
+    monkeypatch.setattr(codex, "_observe", lambda entrypoint, *args, **kwargs: observed.append((entrypoint, args, kwargs)))
     (repo / "file0.py").write_text("value = 1\nuser_before = True\n", encoding="utf-8")
     prompt = (
         "ORCH|task=reply-dirty|phase=implementation|route=normal|scope=file0.py\n"
@@ -3148,7 +3160,69 @@ def test_codex_reply_keeps_pre_turn_dirty_path_ambiguous(workspace, config):
 
     assert bundle["concurrent_writer"] is False
     assert "file0.py" in seen_deltas[-1]["ambiguous_paths"]
-    assert "UNKNOWN_CONCURRENT_WRITER" in [finding["code"] for finding in bundle["findings"]]
+    code = "UNKNOWN_DELTA" if halt_paths is None else "UNKNOWN_CONCURRENT_WRITER"
+    halt = next(finding for finding in bundle["findings"] if finding["code"] == code)
+    if halt_paths is None:
+        assert halt["message"] == "Concurrent-writer classification requires FULL Claude review; halt paths unavailable (UNKNOWN_DELTA)"
+    else:
+        preview = ", ".join(halt_paths[:10]) + (" …" if len(halt_paths) > 10 else "")
+        assert halt["message"] == f"Concurrent-writer classification requires FULL Claude review; halt paths ({len(halt_paths)}): {preview}"
+    payload = next(kwargs for entrypoint, args, kwargs in observed if args and args[0] == "UNKNOWN_CONCURRENT_WRITER")
+    assert payload["code"] == code
+    assert payload["halt_paths"] == (halt_paths[:20] if halt_paths is not None else None)
+    assert payload["halt_path_count"] == (len(halt_paths) if halt_paths is not None else None)
+
+
+@pytest.mark.parametrize("case", ["invalid", "save_error", "valid"])
+def test_reviewer_raw_evidence_only_for_invalid_response(workspace, config, monkeypatch, case):
+    repo, state = workspace
+    review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
+    call = event(tool_use_id=f"reviewer-raw-{case}")
+    codex.pre_tool_use(call, config=review_config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{"type": "text", "text": json.dumps({
+            "threadId": f"thread-reviewer-raw-{case}",
+            "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+        })}],
+    }
+    if case == "valid":
+        report = reviewer_module.CompletedReview(
+            policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "PASS", (), "conversation-1", "gemini-3.8-flash-high"
+        )
+    else:
+        report = reviewer_module.UnavailableReview(
+            "REVIEWER_RESPONSE_INVALID", "Reviewer-1 response or configuration was invalid (JSONDecodeError).",
+            "gemini-3.8-flash-high", raw_stdout="{invalid json", decoder_detail="Expecting property name: line 1 column 2 (char 1)",
+        )
+    if case == "save_error":
+        original_persist = codex._persist_raw_output
+        def fail_reviewer_save(root, event, value, suffix=""):
+            if suffix == "-reviewer1":
+                raise OSError("disk full")
+            return original_persist(root, event, value, suffix)
+        monkeypatch.setattr(codex, "_persist_raw_output", fail_reviewer_save)
+    raw = codex.post_tool_use(
+        post, config=review_config, state_root=state, repo_root=repo, reviewer=lambda **kwargs: report
+    )
+    bundle = response_bundle(raw, review_config)
+    evidence = list((state / "raw_tool_outputs").glob("*-reviewer1.json"))
+    if case == "valid":
+        assert evidence == []
+        assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+    else:
+        finding = next(item for item in bundle["findings"] if item["code"] == "REVIEWER_RESPONSE_INVALID")
+        assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
+        if case == "invalid":
+            assert len(evidence) == 1
+            assert json.loads(evidence[0].read_text(encoding="utf-8")) == "{invalid json"
+            assert str(evidence[0]) in finding["message"]
+            assert "Expecting property name: line 1 column 2 (char 1)" in finding["message"]
+        else:
+            assert evidence == []
+            assert "raw output not saved (OSError)" in finding["message"]
 
 
 @pytest.mark.parametrize(

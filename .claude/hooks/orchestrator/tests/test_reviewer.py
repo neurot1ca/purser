@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-import tempfile
 import sys
 import uuid
 
@@ -222,16 +221,20 @@ def test_authority_slice_skips_sources_outside_repository():
 
 
 def run_review(config, runner, supplied=None):
-    # Outside the repository on purpose: the reviewer can create files, so
-    # running it anywhere inside the worktree under review is refused.
-    scratch = Path(tempfile.mkdtemp(prefix="reviewer1-test-"))
+    # Keep test scratch in .tmp, with the reviewer outside the simulated
+    # repository it is reviewing.
+    scratch = Path(__file__).parents[4] / ".tmp" / f"reviewer1-test-{uuid.uuid4().hex}"
+    working_directory = scratch / "reviewer"
+    reviewed_root = scratch / "reviewed"
+    working_directory.mkdir(parents=True)
+    reviewed_root.mkdir()
     try:
         return reviewer.review_materials(
             materials() if supplied is None else supplied,
             config=config,
             runner=runner,
-            cwd=scratch,
-            repo_root=Path(__file__).parents[4],
+            cwd=working_directory,
+            repo_root=reviewed_root,
         )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -276,6 +279,17 @@ def test_schema_violation_can_never_become_a_pass(config):
 
     assert_unavailable(result)
     assert result["error_code"] == "REVIEWER_RESPONSE_INVALID"
+
+
+def test_invalid_json_carries_bounded_raw_stdout_and_decoder_detail(config):
+    stdout = "x" * 262144 + "{invalid json"
+    result = run_review(config, FakeRunner(stdout=stdout))
+    assert_unavailable(result)
+    assert result["error_code"] == "REVIEWER_RESPONSE_INVALID"
+    assert result.raw_stdout == stdout[-262144:]
+    assert result.decoder_detail
+    assert len(result.decoder_detail) <= 200
+    assert "raw_stdout" not in dict(result)
 
 
 def test_well_formed_success_parses_and_attests_only_requested_model(config):

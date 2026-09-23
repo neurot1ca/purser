@@ -171,6 +171,8 @@ class UnavailableReview(_ResultMapping):
     reviewer1_model_requested: str
     duration_seconds: float | None = None
     usage: tuple[tuple[str, int | float], ...] = ()
+    raw_stdout: str | None = None
+    decoder_detail: str | None = None
 
     def _values(self) -> dict[str, Any]:
         return {
@@ -730,9 +732,18 @@ def invoke_packet(
                 f"Reviewer-1 exited non-zero ({returncode}).",
                 config,
             )
-        conversation_id, response, duration_seconds, usage = parse_envelope(
-            stdout, include_metadata=True
-        )
+        try:
+            conversation_id, response, duration_seconds, usage = parse_envelope(
+                stdout, include_metadata=True
+            )
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            return UnavailableReview(
+                "REVIEWER_RESPONSE_INVALID",
+                f"Reviewer-1 response or configuration was invalid ({type(error).__name__}).",
+                _requested_model(config),
+                raw_stdout=stdout[-262144:],
+                decoder_detail=str(error)[:200],
+            )
         if response["result"] == policy.REVIEWER1_UNAVAILABLE:
             return UnavailableReview(
                 "REVIEWER_MODEL_REPORTED_UNAVAILABLE",

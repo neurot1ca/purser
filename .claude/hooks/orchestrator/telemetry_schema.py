@@ -243,7 +243,7 @@ _PAYLOAD_FIELDS = {
     ),
     "ROUTING_PROTOCOL_VIOLATION": frozenset({"violation_code"}),
     "THREAD_CONTINUITY_VIOLATION": frozenset({"violation_code"}),
-    "UNKNOWN_CONCURRENT_WRITER": frozenset({"concurrent_writer"}),
+    "UNKNOWN_CONCURRENT_WRITER": frozenset({"concurrent_writer", "code", "halt_paths", "halt_path_count"}),
     "WORKFLOW_VERDICT_RECORDED": frozenset({"verdict"}),
     "TELEMETRY_WARNING": frozenset({"warning_code"}),
     "CLAUDE_TASK_USAGE_RECORDED": CLAUDE_TASK_USAGE_PAYLOAD_FIELDS,
@@ -313,6 +313,7 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name in {
         "changed_paths_count",
+        "halt_path_count",
         "claude_task_input_tokens",
         "claude_task_output_tokens",
         "claude_task_cache_creation_input_tokens",
@@ -354,6 +355,14 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name == "duration_ms":
         return _number(value)
+    if name == "code":
+        return _identifier(value)
+    if name == "halt_paths":
+        if not isinstance(value, list) or len(value) > 20 or any(
+            not isinstance(path, str) for path in value
+        ):
+            raise ValueError("telemetry halt paths are invalid")
+        return value
     if name == "phase" and value in _PHASES:
         return value
     if name == "route" and value in _ROUTES:

@@ -1383,6 +1383,38 @@ def _finding(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
 
 
+def _reviewer_findings_with_evidence(
+    report: Mapping[str, Any], root: Path, event: Mapping[str, Any]
+) -> Any:
+    findings = report.get("findings", [])
+    raw_stdout = getattr(report, "raw_stdout", None)
+    if report.get("error_code") != "REVIEWER_RESPONSE_INVALID" or raw_stdout is None:
+        return findings
+    message = findings[0]["message"] if findings else "Reviewer-1 response was invalid."
+    try:
+        path = _persist_raw_output(root, event, raw_stdout, "-reviewer1")
+    except Exception as error:
+        message += f" raw output not saved ({type(error).__name__})"
+    else:
+        message += f" raw output: {path}; decoder detail: {getattr(report, 'decoder_detail', '')}"
+    return [_finding("REVIEWER_RESPONSE_INVALID", message)]
+
+
+def _concurrent_writer_message(classification: Mapping[str, Any]) -> str:
+    paths = classification.get("halt_paths")
+    if paths is None:
+        return (
+            "Concurrent-writer classification requires FULL Claude review; "
+            f"halt paths unavailable ({classification.get('code', ledger.UNKNOWN_CONCURRENT_WRITER)})"
+        )
+    preview = ", ".join(paths[:10])
+    more = " …" if len(paths) > 10 else ""
+    return (
+        "Concurrent-writer classification requires FULL Claude review; "
+        f"halt paths ({len(paths)}): {preview}{more}"
+    )
+
+
 def _apply_out_of_scope_result(
     bundle: dict[str, Any],
     result: Mapping[str, Any],
@@ -1816,6 +1848,7 @@ def _post_observations(
             served_model_attestation="UNAVAILABLE",
         )
     if classification is not None and classification.get("decision") == ledger.UNKNOWN_CONCURRENT_WRITER:
+        halt_paths = classification.get("halt_paths")
         _observe(
             "emit",
             "UNKNOWN_CONCURRENT_WRITER",
@@ -1823,6 +1856,9 @@ def _post_observations(
             state_root=runtime_root,
             **envelope,
             concurrent_writer=True,
+            code=classification.get("code", ledger.UNKNOWN_CONCURRENT_WRITER),
+            halt_paths=halt_paths[:20] if halt_paths is not None else None,
+            halt_path_count=len(halt_paths) if halt_paths is not None else None,
         )
     repository = pending.get("repo_root")
     update_kwargs: dict[str, Any] = {
@@ -2163,7 +2199,7 @@ def post_tool_use(
                         _finding("REVIEWER_RESULT_INVALID", "Reviewer-1 returned an invalid result.")
                     )
                 provider = reviewer_report.get("provider", "agy") if isinstance(reviewer_report, Mapping) else "agy"
-                findings = reviewer_report.get("findings", []) if isinstance(reviewer_report, Mapping) else []
+                findings = _reviewer_findings_with_evidence(reviewer_report, runtime_root, event) if isinstance(reviewer_report, Mapping) else []
                 validation = reviewer_report.get("validation", "UNKNOWN") if isinstance(reviewer_report, Mapping) else "UNKNOWN"
 
                 # Priority 5: In-Hook Micro-Repair loop (1 bounded attempt with deadline & sandbox)
@@ -2259,7 +2295,7 @@ def post_tool_use(
                                 re_kwargs["classification"] = re_classification
                                 re_report = reviewer_callable(**re_kwargs)
                                 result = re_report.get("result") if isinstance(re_report, Mapping) else policy.UNCERTAIN
-                                findings = re_report.get("findings", []) if isinstance(re_report, Mapping) else []
+                                findings = _reviewer_findings_with_evidence(re_report, runtime_root, event) if isinstance(re_report, Mapping) else []
                                 validation = re_report.get("validation", "UNKNOWN") if isinstance(re_report, Mapping) else "UNKNOWN"
                                 reviewer_report = re_report
                                 if result == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE:
@@ -2321,7 +2357,7 @@ def post_tool_use(
                     bundle["findings"].append(
                         _finding(
                             classification.get("code", ledger.UNKNOWN_CONCURRENT_WRITER),
-                            "Concurrent-writer classification requires FULL Claude review.",
+                            _concurrent_writer_message(classification),
                         )
                     )
                 if val_status == "FAIL":
