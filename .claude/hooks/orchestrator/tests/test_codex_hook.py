@@ -148,6 +148,44 @@ def response_bundle(response, config):
     return json.loads(output[0]["text"])
 
 
+@pytest.mark.parametrize("quota", [
+    {"5h_used_pct": 24, "5h_resets_at": "2026-09-23T16:49:02Z"}, None,
+])
+def test_quota_reply_bundle_and_review_mode(workspace, config, monkeypatch, quota):
+    repo, state = workspace
+    monkeypatch.setattr(codex.codex_quota, "read_quota", lambda thread_id: quota)
+    prompt = orch(scope="file0.py") + "\n## Objective\nInspect file0.\n## Acceptance criteria\n- Report result."
+    first = event(prompt=prompt, tool_use_id="quota-first")
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    tool_response = [{"type": "text", "text": json.dumps({"threadId": "quota-thread", "content": "Done"})}]
+    first_result = codex.post_tool_use(
+        {**first, "hook_event_name": "PostToolUse", "tool_response": tool_response},
+        config=config, state_root=state, repo_root=repo)
+    assert response_bundle(first_result, config)["codex_quota"] == quota
+    reply = event(tool_name=codex.CODEX_REPLY_TOOL, prompt="Continue.",
+                  tool_use_id="quota-reply", threadId="quota-thread")
+    codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    result = codex.post_tool_use({**reply, "hook_event_name": "PostToolUse", "tool_response": tool_response},
+                                 config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(result, config)
+    assert bundle["codex_quota"] == quota
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
+def test_quota_does_not_change_review_mode_under_cap(workspace, config):
+    _, state = workspace
+    event_data = event(tool_use_id="quota-cap")
+    bundle = codex._base_bundle()
+    bundle["thread_id"] = "quota-thread"
+    bundle["claude_review_mode"] = policy.AUDIT
+    without = response_bundle(codex._finalize_replacement(bundle.copy(), config, state, event_data), config)
+    with_quota = bundle.copy()
+    with_quota["codex_quota"] = {"5h_used_pct": 24, "5h_resets_at": "2026-09-23T16:49:02Z"}
+    included = response_bundle(codex._finalize_replacement(with_quota, config, state, event_data), config)
+    assert included["codex_quota"] == with_quota["codex_quota"]
+    assert included["claude_review_mode"] == without["claude_review_mode"] == policy.AUDIT
+
+
 def hook_check_call(workspace, config, monkeypatch, *, worker_status="UNKNOWN", check_result=None,
                     declared=True, reviewer=None, before_post=None):
     repo, state = workspace

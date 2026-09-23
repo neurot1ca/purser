@@ -65,6 +65,7 @@ choice, and the expected duration with what would count as a stall. Never pass
 `sandbox` or `approval-policy`; runtime configuration owns capability. On a typed
 quota or credit exhaustion response, fail over; do not perform proactive quota
 routing.
+After each Codex call, tell the user the bundle's `codex_quota` 5h and 7d used percentages and reset times when present.
 
 ## Protocol line
 

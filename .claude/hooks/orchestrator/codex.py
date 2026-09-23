@@ -19,6 +19,7 @@ import time
 from typing import Any
 
 import json_transport
+import codex_quota
 import checks
 import ledger
 import policy
@@ -1614,6 +1615,7 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
 
     compact = dict(bundle)
     compact.pop("hook_checks_full", None)
+    compact.pop("codex_quota", None)
     paths = bundle.get("changed_paths")
     if isinstance(paths, list):
         preview, count, digest = _changed_paths_summary(paths)
@@ -1724,6 +1726,19 @@ def _finalize_replacement(
     compact["implementer_report"] = str(bundle.get("implementer_report", ""))[
         : _report_limit(config, bundle.get("phase"))
     ]
+    if "codex_quota" in bundle:
+        compact["codex_quota"] = bundle["codex_quota"]
+        excess = _non_report_bytes(compact) - cap
+        if excess > 0:
+            smaller, overflow = _compact_bundle(bundle, max(0, cap - excess))
+            smaller["codex_quota"] = bundle["codex_quota"]
+            if not overflow and _non_report_bytes(smaller) <= cap:
+                compact = smaller
+                compact["implementer_report"] = str(bundle.get("implementer_report", ""))[
+                    : _report_limit(config, bundle.get("phase"))
+                ]
+            else:
+                compact.pop("codex_quota")
     _atomic_json_write(artifact_path, bundle)
     return _replacement(compact, config)
 
@@ -1972,6 +1987,10 @@ def post_tool_use(
             thread_id, report = _extract_codex_result(event.get("tool_response"))
             bundle["thread_id"] = thread_id
             bundle["implementer_report"] = report
+            try:
+                bundle["codex_quota"] = codex_quota.read_quota(thread_id)
+            except Exception:
+                bundle["codex_quota"] = None
             worker_validation = _parse_worker_validation(report)
             bundle["worker_validation"] = worker_validation
         except WiringError as error:
