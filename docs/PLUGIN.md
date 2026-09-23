@@ -17,18 +17,32 @@ loaded as project configuration before the plugin is enabled.
 | Stop | *(none)* | `context_io_hook.py` | 60s |
 | UserPromptSubmit | *(none)* | `context_io_hook.py` | 60s |
 
-**WARNING:** Before enabling the plugin, remove the manual Purser hook entries
-from `~/.claude/settings.json` and the manual `codex-main` MCP registration from
-`~/.claude.json`. Keeping both registrations risks double hooks. That cutover is
-P6d; this task does not change machine settings or install the plugin.
+## Cutover
+
+Run the standard-library cutover script once to inspect, apply, or roll back the
+move from manual registration:
+
+```powershell
+python .claude/hooks/orchestrator/purser_cutover.py --plan
+python .claude/hooks/orchestrator/purser_cutover.py --apply
+```
+
+Apply saves timestamped backups of `~/.claude/settings.json` and
+`~/.claude.json`. To restore the newest backup pair:
+
+```powershell
+python .claude/hooks/orchestrator/purser_cutover.py --rollback
+```
 
 After cutover, in Claude Code:
 
 ```text
 /plugin marketplace add <absolute path to this repository>
 /plugin install purser@purser-local
-/reload-plugins
 ```
+
+Restart Claude Code, then run `/purser:check`. The check should report
+plugin-only registration.
 
 Run `/purser:check` to read-only check the installation and see actionable next steps.
 Run `/purser:init` for guided role selection, project trust, and optional profile scaffolding.
