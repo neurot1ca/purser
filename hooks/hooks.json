@@ -4,6 +4,10 @@
       {
         "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
         "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 60}]
+      },
+      {
+        "matcher": "^Read$",
+        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py\"", "timeout": 60}]
       }
     ],
     "PostToolUse": [
@@ -16,6 +20,19 @@
       {
         "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
         "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 60}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 60}]
+      },
+      {
+        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py\"", "timeout": 60}]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py\"", "timeout": 60}]
       }
     ]
   }
