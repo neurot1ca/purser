@@ -23,6 +23,8 @@ After cutover, in Claude Code:
 /reload-plugins
 ```
 
+Run `/purser:check` to read-only check the installation and see actionable next steps.
+
 The `python` command used by the hook and MCP launchers must resolve to Python
 3.11 or newer. A cross-platform Python locator is planned for P6b.
 

@@ -24,6 +24,8 @@ def test_plugin_manifest_paths_and_registration():
     assert (ROOT / manifest["skills"] / "codex-orchestrator/SKILL.md").is_file()
     assert (ROOT / manifest["hooks"]).is_file()
     assert (ROOT / manifest["mcpServers"]).is_file()
+    # Plugin commands are auto-discovered from the conventional commands/ directory.
+    assert (ROOT / "commands/check.md").is_file()
     assert set(hooks["hooks"]) == {"PreToolUse", "PostToolUse", "PostToolUseFailure"}
     for name, timeout in (("PreToolUse", 60), ("PostToolUse", 300), ("PostToolUseFailure", 60)):
         entry, = hooks["hooks"][name]
