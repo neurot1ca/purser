@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import fnmatch
 import os
+import re
 from pathlib import Path, PureWindowsPath
 import tomllib
 from collections.abc import Iterable
@@ -80,6 +81,14 @@ class AuthoritySource:
     when_changed: str | None = None
 
 
+@dataclass(frozen=True)
+class Check:
+    name: str
+    argv: tuple[str, ...]
+    when: tuple[str, ...] | None = None
+    timeout_seconds: int = 60
+
+
 _PROJECT_NON_SECURITY = {"project": {"id"}, "authority": {"sources"}}
 _DEFAULT_AUTHORITY_SOURCES = (
     AuthoritySource("AGENTS.md", _DEFAULT_AUTHORITY_HEADINGS),
@@ -97,6 +106,7 @@ class ResolvedProfile:
     trusted: bool
     reviewer_executable: str | None
     authority_sources: tuple[AuthoritySource, ...]
+    checks: tuple[Check, ...]
     vault_root: str | None
     loosenings_ignored: int
     user_status: str
@@ -140,6 +150,7 @@ def load_profile(
             trusted=False,
             reviewer_executable=None,
             authority_sources=_DEFAULT_AUTHORITY_SOURCES,
+            checks=(),
             vault_root=None,
             loosenings_ignored=0,
             user_status="rejected",
@@ -171,11 +182,18 @@ def _load_tier(
         return _rejected(tier_name, "schema_version must be 1")
 
     known_sections = set(security_sections) | set(non_security_sections)
+    if tier_name == "user" and "checks" in data:
+        return _rejected(tier_name, "[[checks]] is project-only")
     for key in data:
         if key != "schema_version" and key not in known_sections:
             warnings.append(f"{tier_name}: unknown top-level key or section [{key}] ignored")
 
     values: dict[str, Any] = {}
+    if tier_name == "project" and "checks" in data:
+        checks, reason = _parse_checks(data["checks"])
+        if reason:
+            return _rejected(tier_name, reason, warnings)
+        values["checks"] = checks
     for section_name, allowed_keys in security_sections.items():
         if section_name not in data:
             continue
@@ -226,6 +244,32 @@ def _load_tier(
             values[f"{section_name}.{key}"] = value
 
     return _Tier("ok", values, tuple(warnings))
+
+
+def _parse_checks(raw: Any) -> tuple[tuple[Check, ...], str]:
+    if not isinstance(raw, list) or len(raw) > 8:
+        return (), "[[checks]] must be an array of at most 8 tables"
+    checks: list[Check] = []
+    names: set[str] = set()
+    for index, entry in enumerate(raw):
+        prefix = f"[[checks]] entry {index}"
+        if not isinstance(entry, dict) or set(entry) - {"name", "argv", "when", "timeout_seconds"}:
+            return (), f"{prefix} has invalid keys or type"
+        name = entry.get("name")
+        if not isinstance(name, str) or re.fullmatch(r"[a-z0-9_-]{1,32}", name) is None or name in names:
+            return (), f"{prefix} name is invalid or duplicate"
+        argv = entry.get("argv")
+        if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and arg for arg in argv):
+            return (), f"{prefix} argv must be a non-empty array of non-empty strings"
+        when = entry.get("when")
+        if when is not None and (not isinstance(when, list) or not all(_authority_path(pattern) is not None for pattern in when)):
+            return (), f"{prefix} when must contain repository-relative globs"
+        timeout = entry.get("timeout_seconds", 60)
+        if type(timeout) is not int or not 1 <= timeout <= 300:
+            return (), f"{prefix} timeout_seconds must be an integer from 1 to 300"
+        names.add(name)
+        checks.append(Check(name, tuple(argv), tuple(when) if when is not None else None, timeout))
+    return tuple(checks), ""
 
 
 def _parse_authority_sources(
@@ -368,6 +412,8 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
         )
 
     trusted = _is_trusted(project_root, user)
+    if "checks" in project_values and not trusted:
+        warnings += ("project: [[checks]] ignored because the project is not trusted",)
     authority_sources = project_values.get("authority.sources") or _DEFAULT_AUTHORITY_SOURCES
     return ResolvedProfile(
         configured=project.status != "missing",
@@ -379,6 +425,7 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
         trusted=trusted,
         reviewer_executable=user_values.get("reviewer.executable"),
         authority_sources=authority_sources,
+        checks=project_values.get("checks", ()) if trusted else (),
         vault_root=user_values.get("telemetry.vault_root"),
         loosenings_ignored=loosenings_ignored,
         user_status=user.status,
@@ -416,4 +463,4 @@ def _exception_text(exc: Exception) -> str:
     return text or exc.__class__.__name__
 
 
-__all__ = ["AuthoritySource", "ResolvedProfile", "is_protected", "load_profile"]
+__all__ = ["AuthoritySource", "Check", "ResolvedProfile", "is_protected", "load_profile"]
