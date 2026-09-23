@@ -132,7 +132,7 @@ def test_route_table_is_exact_and_has_no_fallback(config):
         "normal": ("gpt-6-sol", "medium"),
         "consequential": ("gpt-6-sol", "high"),
         "escalated": ("gpt-6-sol", "xhigh"),
-        "operation": ("gpt-5.6-terra", "high"),
+        "operation": ("gpt-6-luna", "high"),
     }
     for route, pair in expected.items():
         result = policy.resolve_route(route, config)

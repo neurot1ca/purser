@@ -884,7 +884,7 @@ _PROTOCOL_HELP = (
     "  ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>\n"
     "  Add |scope=<path[,path...]> for implementation; omit it for operation.\n"
     "  route  mechanical -> luna/high | subtle -> luna/high | normal -> sol/medium"
-    " | consequential -> sol/high | escalated -> sol/xhigh | operation -> terra/high\n"
+    " | consequential -> sol/high | escalated -> sol/xhigh | operation -> luna/high\n"
     "  reason and basis are optional; reason, when supplied, is one of new_task | continue |"
     " route_change | reanchor | repeated_failure | user_override.\n"
     "  phase  'operation' for deploy, runner control, status, or read-only investigation;"

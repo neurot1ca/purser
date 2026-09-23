@@ -49,7 +49,7 @@ and behavior without leaving a semantic choice to the worker.
 | Ordinary implementation, debugging, or multi-file work with design left | `normal` | `gpt-6-sol` + `medium` |
 | Consequential and unresolved; diagnosis, design, or audit must find the rule | `consequential` | `gpt-6-sol` + `high` |
 | Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6-sol` + `xhigh` |
-| Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-5.6-terra` + `high` |
+| Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-6-luna` + `high` |
 
 Use the lowest row expected to finish correctly in one pass. Do not use a
 cheap-first cascade: an expected repair cycle also spends review. Do not raise

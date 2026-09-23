@@ -47,7 +47,7 @@
       "effort": "xhigh"
     },
     "operation": {
-      "model": "gpt-5.6-terra",
+      "model": "gpt-6-luna",
       "effort": "high"
     }
   },

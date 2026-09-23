@@ -564,7 +564,7 @@ def test_protocol_errors_deny_with_policy_reason(workspace, config, prompt, code
         ("normal", "gpt-6-sol", "medium"),
         ("consequential", "gpt-6-sol", "high"),
         ("escalated", "gpt-6-sol", "xhigh"),
-        ("operation", "gpt-5.6-terra", "high"),
+        ("operation", "gpt-6-luna", "high"),
     ],
 )
 def test_each_route_sets_exact_model_and_effort(workspace, config, route, model, effort):
