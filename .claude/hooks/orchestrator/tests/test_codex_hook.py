@@ -148,6 +148,29 @@ def response_bundle(response, config):
     return json.loads(output[0]["text"])
 
 
+def test_plugin_tool_names_route_new_and_reply(workspace, config):
+    repo, state = workspace
+    prompt = orch(scope="file0.py") + "\n## Objective\nInspect file0.\n## Acceptance criteria\n- Report result."
+    first = event(tool_name="mcp__plugin_purser_codex-main__codex", prompt=prompt,
+                  tool_use_id="plugin-first")
+    routed = codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    assert routed["hookSpecificOutput"]["updatedInput"]["model"] == config["routes"]["normal"]["model"]
+    assert codex._read_pending(state, first)["prior_thread_id"] is None
+    response = [{"type": "text", "text": json.dumps({"threadId": "plugin-thread", "content": "Done"})}]
+    result = codex.post_tool_use({**first, "hook_event_name": "PostToolUse", "tool_response": response},
+                                 config=config, state_root=state, repo_root=repo)
+    assert response_bundle(result, config)["thread_id"] == "plugin-thread"
+
+    reply = event(tool_name="mcp__plugin_purser_codex-main__codex-reply", prompt="Continue.",
+                  tool_use_id="plugin-reply", threadId="plugin-thread")
+    reply_routed = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    assert reply_routed["hookSpecificOutput"]["updatedInput"]["threadId"] == "plugin-thread"
+    assert codex._read_pending(state, reply)["prior_thread_id"] == "plugin-thread"
+    reply_result = codex.post_tool_use({**reply, "hook_event_name": "PostToolUse", "tool_response": response},
+                                       config=config, state_root=state, repo_root=repo)
+    assert response_bundle(reply_result, config)["thread_id"] == "plugin-thread"
+
+
 @pytest.mark.parametrize("quota", [
     {"5h_used_pct": 24, "5h_resets_at": "2026-09-23T16:49:02Z"}, None,
 ])

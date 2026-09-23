@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "codex-main": {
+      "command": "python",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]
+    }
+  }
+}

@@ -32,7 +32,6 @@ import telemetry_schema
 
 CODEX_TOOL = "mcp__codex-main__codex"
 CODEX_REPLY_TOOL = "mcp__codex-main__codex-reply"
-CODEX_TOOLS = frozenset({CODEX_TOOL, CODEX_REPLY_TOOL})
 IMPLEMENTER_REPORT_LIMIT = 1200
 OPERATION_REPORT_LIMIT = 24000
 BUNDLE_NON_REPORT_MAX_BYTES = 8192
@@ -50,6 +49,22 @@ INDEPENDENCE_INSTRUCTIONS = (
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _CONFIG_PATH = _PACKAGE_ROOT / "config.json"
+
+
+def _configured_tool_names(key: str, default: str) -> frozenset[str]:
+    """Read names without making a config read failure an import failure."""
+    try:
+        names = json.loads(_CONFIG_PATH.read_text(encoding="utf-8")).get(key)
+        if isinstance(names, list) and names and all(isinstance(name, str) and name for name in names):
+            return frozenset(names) | {default}
+    except (OSError, ValueError, TypeError):
+        pass
+    return frozenset({default})
+
+
+CODEX_TOOL_NAMES = _configured_tool_names("codex_tool_names", CODEX_TOOL)
+CODEX_REPLY_TOOL_NAMES = _configured_tool_names("codex_reply_tool_names", CODEX_REPLY_TOOL)
+CODEX_TOOLS = CODEX_TOOL_NAMES | CODEX_REPLY_TOOL_NAMES
 _BASELINE_VOLATILE_MARKERS = ("timestamp", "duration", "elapsed", "budget")
 
 
@@ -1054,7 +1069,7 @@ def pre_tool_use(
         tool_name = event["tool_name"]
         parsed = policy.parse_orch_prompt(tool_input.get("prompt"), loaded_config)
         reply_without_orch = (
-            tool_name == CODEX_REPLY_TOOL
+            tool_name in CODEX_REPLY_TOOL_NAMES
             and parsed.code == policy.MISSING_ORCH_LINE
             and isinstance(tool_input.get("prompt"), str)
         )
@@ -1078,7 +1093,7 @@ def pre_tool_use(
         )
         record: Mapping[str, Any] | None
         live_thread: Mapping[str, Any] | None
-        if tool_name == CODEX_REPLY_TOOL:
+        if tool_name in CODEX_REPLY_TOOL_NAMES:
             forbidden = {"model", "config", "developer-instructions"}.intersection(tool_input)
             if forbidden:
                 return _observed_denial(
@@ -1147,7 +1162,7 @@ def pre_tool_use(
             scope=list(parsed.scope),
         )
 
-        if tool_name == CODEX_TOOL:
+        if tool_name in CODEX_TOOL_NAMES:
             decision = policy.fresh_codex_decision(requested, live_thread)
             if not decision.allowed:
                 return _observed_denial(
@@ -1187,7 +1202,7 @@ def pre_tool_use(
         updated["prompt"] = parsed.prompt
         if parsed.phase == "implementation":
             updated["prompt"] = _append_worker_validation_instruction(updated["prompt"])
-        if tool_name == CODEX_TOOL:
+        if tool_name in CODEX_TOOL_NAMES:
             updated["model"] = route.model
             original_codex_config = tool_input.get("config", {})
             if not isinstance(original_codex_config, Mapping):
@@ -1224,7 +1239,7 @@ def pre_tool_use(
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
             )
         if (
-            tool_name == CODEX_REPLY_TOOL
+            tool_name in CODEX_REPLY_TOOL_NAMES
             and baseline.get("status") == ledger.OK
             and _handoff_matches(baseline, live_thread, declared_scope)
         ):
@@ -1261,7 +1276,7 @@ def pre_tool_use(
         if resolved_profile is not None:
             inherited_checks = (
                 live_thread.get("profile_checks")
-                if tool_name == CODEX_REPLY_TOOL and isinstance(live_thread, Mapping)
+                if tool_name in CODEX_REPLY_TOOL_NAMES and isinstance(live_thread, Mapping)
                 else None
             )
             pending.update(
@@ -1325,8 +1340,8 @@ def pre_tool_use(
             "model": route.model,
             "effort": route.effort,
             "routing_enforced": True,
-            "fresh_thread": tool_name == CODEX_TOOL,
-            "reply_call": tool_name == CODEX_REPLY_TOOL,
+            "fresh_thread": tool_name in CODEX_TOOL_NAMES,
+            "reply_call": tool_name in CODEX_REPLY_TOOL_NAMES,
             **_telemetry_envelope(event, repository, project_namespace),
         }
         _observe("emit", "TASK_ROUTE_SELECTED", **observation)

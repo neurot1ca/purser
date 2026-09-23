@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
+        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 60}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
+        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 300}]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
+        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 60}]
+      }
+    ]
+  }
+}

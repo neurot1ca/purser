@@ -1,4 +1,12 @@
 {
+  "codex_tool_names": [
+    "mcp__codex-main__codex",
+    "mcp__plugin_purser_codex-main__codex"
+  ],
+  "codex_reply_tool_names": [
+    "mcp__codex-main__codex-reply",
+    "mcp__plugin_purser_codex-main__codex-reply"
+  ],
   "allowed_phases": [
     "implementation",
     "operation"

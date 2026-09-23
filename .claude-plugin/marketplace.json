@@ -1,0 +1,7 @@
+{
+  "name": "purser-local",
+  "owner": {"name": "Purser"},
+  "plugins": [
+    {"name": "purser", "source": "./"}
+  ]
+}
