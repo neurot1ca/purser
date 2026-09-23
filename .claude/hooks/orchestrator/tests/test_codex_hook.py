@@ -2934,6 +2934,37 @@ def test_worker_validation_accepted_record_is_unchanged():
     }
 
 
+def test_worker_validation_accepts_backticked_record():
+    line = (
+        '`VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+        '"summary":"focused validation passed","commands":["pytest -q"],'
+        '"exit_codes":[0],"artifacts":["report.txt"]}`'
+    )
+
+    assert codex._parse_worker_validation(line)["status"] == "PASS"
+
+
+def test_worker_validation_backticked_and_plain_records_count_as_multiple():
+    record = (
+        'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+        '"commands":["pytest -q"],"exit_codes":[0]}'
+    )
+
+    result = codex._parse_worker_validation(f'`{record}`\n{record}')
+
+    assert result["status"] == "UNKNOWN"
+    assert result["summary"].startswith("Multiple conflicting VALIDATION records")
+
+
+def test_worker_validation_does_not_unwrap_only_leading_backtick():
+    record = (
+        '`VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+        '"commands":["pytest -q"],"exit_codes":[0]}'
+    )
+
+    assert codex._parse_worker_validation(record)["status"] == "UNKNOWN"
+
+
 def test_worker_validation_normalized_byte_limit_invariants():
     expected_keys = {"source", "status", "summary", "commands", "exit_codes", "artifacts"}
 
