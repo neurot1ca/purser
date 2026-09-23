@@ -39,7 +39,7 @@ def test_plugin_hooks_match_manual_installer():
     for event, entries in hooks.items():
         for entry in entries:
             command = entry["hooks"][0]
-            script = command["command"].rsplit("/", 1)[-1].rstrip('"')
+            script = Path(command["args"][-1]).name
             actual.add((event, entry.get("matcher"), script, command["timeout"]))
 
     assert actual == expected
@@ -73,7 +73,7 @@ def test_plugin_manifest_paths_and_registration():
         entry, = [
             item
             for item in hooks["hooks"][name]
-            if item["hooks"][0]["command"].endswith("/hook.py\"")
+            if item["hooks"][0]["args"][-1].endswith("/hook.py")
         ]
         if name != "Stop":
             matched = {
@@ -84,10 +84,11 @@ def test_plugin_manifest_paths_and_registration():
         command, = entry["hooks"]
         assert command["timeout"] == timeout
         assert command["type"] == "command"
-        assert "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py" in command["command"]
+        assert command["command"] == "node"
+        assert command["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "pre-codex" if name == "PreToolUse" else "hook", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"]
     bridge = mcp["mcpServers"]["codex-main"]
-    assert bridge["command"] == "python"
-    assert bridge["args"] == ["${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]
-    for value in [*bridge["args"], *(entry["hooks"][0]["command"] for entries in hooks["hooks"].values() for entry in entries)]:
+    assert bridge["command"] == "node"
+    assert bridge["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "mcp", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]
+    for value in [*bridge["args"], *(arg for entries in hooks["hooks"].values() for entry in entries for arg in entry["hooks"][0]["args"])]:
         for relative in re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\s\"']+)", value):
             assert (ROOT / relative).is_file()

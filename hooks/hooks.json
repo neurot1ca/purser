@@ -3,36 +3,113 @@
     "PreToolUse": [
       {
         "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
-        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 60}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 60,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+              "pre-codex",
+              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"
+            ]
+          }
+        ]
       },
       {
         "matcher": "^Read$",
-        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py\"", "timeout": 60}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 60,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+              "hook",
+              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
+            ]
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
-        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 300}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 300,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+              "hook",
+              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"
+            ]
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
       {
         "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
-        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 60}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 60,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+              "hook",
+              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"
+            ]
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py\"", "timeout": 60}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 60,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+              "hook",
+              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"
+            ]
+          }
+        ]
       },
       {
-        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py\"", "timeout": 60}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 60,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+              "hook",
+              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
+            ]
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
       {
-        "hooks": [{"type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py\"", "timeout": 60}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 60,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+              "hook",
+              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
+            ]
+          }
+        ]
       }
     ]
   }

@@ -26,8 +26,20 @@ def _row(check: str, status: str, detail: str, next_step: str | None = None) -> 
 def _check_python() -> dict:
     version = sys.version_info
     if version < (3, 11):
-        return _row("Python", "FAIL", f"{version.major}.{version.minor}.{version.micro} at {sys.executable}; Python 3.11+ is required.", "Install Python 3.11 or newer and ensure the `python` command used by Claude resolves to it.")
+        return _row("Python", "FAIL", f"{version.major}.{version.minor}.{version.micro} at {sys.executable}; Python 3.11+ is required.", "Install Python 3.11 or newer and run `/purser:init` with it.")
     return _row("Python", "OK", f"{version.major}.{version.minor}.{version.micro}; {sys.executable}")
+
+
+def _check_python_locator() -> dict:
+    locator = ROOT / "bin" / "python-locator.js"
+    try:
+        result = subprocess.run(["node", str(locator), "--resolve-json"], capture_output=True, text=True, timeout=20, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _row("Python locator", "FAIL", f"Locator could not run: {exc}", "Install Node.js and run `/purser:check` again.")
+    selected = json.loads(result.stdout)
+    if result.returncode != 0 or not selected:
+        return _row("Python locator", "FAIL", "No Python 3.11+ interpreter resolved.", "Set PURSER_PYTHON or run `/purser:init` with Python 3.11+.")
+    return _row("Python locator", "OK", f"{selected['path']} ({selected['version']}) from {selected['source']}.")
 
 
 def _contains_manual_hook(value) -> bool:
@@ -213,6 +225,7 @@ def _run_check(label, check) -> dict:
 def collect_report() -> dict:
     checks = [
         _run_check("Python", _check_python),
+        _run_check("Python locator", _check_python_locator),
         _run_check("Hook registration", _check_registration),
         _run_check("Codex MCP", _check_mcp),
         _run_check("Codex CLI", _check_codex),

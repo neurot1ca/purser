@@ -244,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--plan and --apply require --coder and --reviewer, without --json")
     project = Path.cwd().resolve()
     config = Path.home() / ".orchestrator" / "config.toml"
+    python_file = config.with_name("python")
     profile = project / ".orchestrator" / "profile.toml"
     try:
         if args.detect:
@@ -252,12 +253,17 @@ def main(argv: list[str] | None = None) -> int:
         original = config.read_bytes() if config.exists() else None
         changed = _candidate(original, args.coder, args.reviewer, args.trust, project)
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
+        python_original = python_file.read_bytes() if python_file.exists() else None
+        python_changed = (str(Path(sys.executable).resolve()) + "\n").encode("utf-8") if sys.version_info >= (3, 11) else None
+        python_update = python_changed is not None and python_original != python_changed
         if args.plan:
             if changed != original:
                 print("".join(difflib.unified_diff((original or b"").decode("utf-8").splitlines(keepends=True), changed.decode("utf-8").splitlines(keepends=True), fromfile=str(config), tofile=str(config))), end="")
             if scaffold is not None:
                 print(f"Create {profile}:\n{scaffold.decode('utf-8')}", end="")
-            if changed == original and scaffold is None:
+            if python_update:
+                print("".join(difflib.unified_diff((python_original or b"").decode("utf-8").splitlines(keepends=True), python_changed.decode("utf-8").splitlines(keepends=True), fromfile=str(python_file), tofile=str(python_file))), end="")
+            if changed == original and scaffold is None and not python_update:
                 print("No changes.")
             return 0
         if changed != original:
@@ -276,7 +282,11 @@ def main(argv: list[str] | None = None) -> int:
                 _atomic(profile, scaffold, exclusive=True)
             except FileExistsError:
                 pass
-        print("Applied." if changed != original or scaffold is not None else "No changes.")
+        if python_update:
+            if (python_file.read_bytes() if python_file.exists() else None) != python_original:
+                raise ValueError("Python locator path changed during setup; run the plan again")
+            _atomic(python_file, python_changed)
+        print("Applied." if changed != original or scaffold is not None or python_update else "No changes.")
         return 0
     except (OSError, UnicodeError, ValueError, tomllib.TOMLDecodeError) as exc:
         print(f"purser:init: {exc}", file=sys.stderr)

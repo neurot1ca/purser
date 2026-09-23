@@ -60,13 +60,40 @@ def test_second_apply_noop(site):
     before = config.read_bytes()
     assert run(*args) == 0
     assert config.read_bytes() == before
+    assert (home / ".orchestrator" / "python").read_text(encoding="utf-8") == str(Path(sys.executable).resolve()) + "\n"
     assert len(list(config.parent.glob("config.toml.bak-*"))) == 0
+
+
+def test_python_path_is_planned_and_second_apply_is_noop(site, capsys):
+    home, _ = site
+    args = ("--coder", "codex", "--reviewer", "none")
+    assert run("--plan", *args) == 0
+    plan = capsys.readouterr().out
+    assert str(home / ".orchestrator" / "python") in plan
+    assert str(Path(sys.executable).resolve()) in plan
+    assert run("--apply", *args) == 0
+    capsys.readouterr()
+    assert run("--apply", *args) == 0
+    assert capsys.readouterr().out == "No changes.\n"
+
+
+def test_existing_different_python_path_appears_in_plan(site, capsys):
+    home, _ = site
+    locator = home / ".orchestrator" / "python"
+    locator.parent.mkdir()
+    locator.write_bytes(b"C:/old/python.exe\n")
+    assert run("--plan", "--coder", "codex", "--reviewer", "none") == 0
+    plan = capsys.readouterr().out
+    assert "-C:/old/python.exe" in plan
+    assert str(Path(sys.executable).resolve()) in plan
+    assert locator.read_bytes() == b"C:/old/python.exe\n"
 
 
 def test_already_trusted_literal_array_is_untouched(site, capsys):
     home, project = site
     config = home / ".orchestrator" / "config.toml"
     config.parent.mkdir()
+    (config.parent / "python").write_bytes((str(Path(sys.executable).resolve()) + "\n").encode("utf-8"))
     equivalent = project / ".." / project.name
     original = (
         'schema_version = 1\n[roles]\norchestrator = "claude-code"\n'

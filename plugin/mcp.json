@@ -1,8 +1,12 @@
 {
   "mcpServers": {
     "codex-main": {
-      "command": "python",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+        "mcp",
+        "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"
+      ]
     }
   }
 }

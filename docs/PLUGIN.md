@@ -33,8 +33,14 @@ After cutover, in Claude Code:
 Run `/purser:check` to read-only check the installation and see actionable next steps.
 Run `/purser:init` for guided role selection, project trust, and optional profile scaffolding.
 
-The `python` command used by the hook and MCP launchers must resolve to Python
-3.11 or newer. A cross-platform Python locator is planned for P6b.
+## Python locator
+
+Plugin hooks and the MCP server use `bin/python-locator.js` to run a verified
+Python 3.11+ interpreter. It tries `PURSER_PYTHON`, then the path saved by
+`/purser:init` in `~/.orchestrator/python`, then `py -3` on Windows, `python3`,
+and `python`. Set `PURSER_PYTHON` to a specific interpreter to override the
+saved path. Node.js must be available for the launcher; `/purser:check` reports
+what it resolves.
 
 Plugin layout and scoped MCP tool names follow the [Claude Code plugin
 reference](https://code.claude.com/docs/en/plugins-reference). Local marketplace

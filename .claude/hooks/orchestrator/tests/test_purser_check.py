@@ -48,7 +48,14 @@ def test_double_registration_fails_and_exits_1(fake_home, monkeypatch):
     report = purser_check.collect_report()
     assert report["exit_code"] == 1
     assert next(row for row in report["checks"] if row["check"] == "Hook registration")["status"] == "FAIL"
-    assert "double registration" in report["checks"][1]["detail"].lower()
+    assert "double registration" in next(row for row in report["checks"] if row["check"] == "Hook registration")["detail"].lower()
+
+
+def test_locator_row_reports_source(fake_home, monkeypatch):
+    settings(fake_home, plugin=True)
+    monkeypatch.setattr(purser_check, "_check_python_locator", lambda: purser_check._row("Python locator", "OK", "C:/Python312/python.exe (3.12.0) from PURSER_PYTHON."))
+    row = next(row for row in purser_check.collect_report()["checks"] if row["check"] == "Python locator")
+    assert row["status"] == "OK" and "PURSER_PYTHON" in row["detail"]
 
 
 def test_plugin_only_registration_is_ok(fake_home, monkeypatch):
