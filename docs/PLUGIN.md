@@ -24,6 +24,7 @@ After cutover, in Claude Code:
 ```
 
 Run `/purser:check` to read-only check the installation and see actionable next steps.
+Run `/purser:init` for guided role selection, project trust, and optional profile scaffolding.
 
 The `python` command used by the hook and MCP launchers must resolve to Python
 3.11 or newer. A cross-platform Python locator is planned for P6b.

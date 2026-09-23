@@ -1,0 +1,138 @@
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+import tomllib
+import uuid
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parents[1]))
+import purser_init
+
+
+@pytest.fixture
+def site(monkeypatch):
+    root = Path(__file__).parents[4] / ".tmp" / f"purser-init-{uuid.uuid4().hex}"
+    home, project = root / "home", root / "project"
+    home.mkdir(parents=True)
+    project.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.chdir(project)
+    yield home, project
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def run(*args):
+    return purser_init.main(list(args))
+
+
+def test_plan_writes_nothing(site, capsys):
+    home, project = site
+    assert run("--plan", "--coder", "codex", "--reviewer", "none", "--trust", "--scaffold-profile") == 0
+    output = capsys.readouterr().out
+    assert "---" in output and "+++" in output and "schema_version = 1" in output
+    assert not (home / ".orchestrator").exists()
+    assert not (project / ".orchestrator").exists()
+
+
+def test_apply_preserves_unrelated_bytes_and_backs_up(site):
+    home, project = site
+    config = home / ".orchestrator" / "config.toml"
+    config.parent.mkdir()
+    original = b'schema_version = 1\r\n# keep comment\r\n[telemetry]\r\nvault_root = "C:/vault" # keep exact\r\n[roles]\r\ncoder = "claude"\r\n[trust]\r\npaths = []\r\n'
+    config.write_bytes(original)
+    assert run("--apply", "--coder", "codex", "--reviewer", "none", "--trust") == 0
+    changed = config.read_bytes()
+    assert b'# keep comment\r\n[telemetry]\r\nvault_root = "C:/vault" # keep exact\r\n' in changed
+    assert tomllib.loads(changed.decode())["roles"] == {"orchestrator": "claude-code", "coder": "codex", "reviewer": "none"}
+    assert str(project) in tomllib.loads(changed.decode())["trust"]["paths"]
+    backups = list(config.parent.glob("config.toml.bak-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == original
+
+
+def test_second_apply_noop(site):
+    home, _ = site
+    args = ("--apply", "--coder", "claude", "--reviewer", "none", "--trust", "--scaffold-profile")
+    assert run(*args) == 0
+    config = home / ".orchestrator" / "config.toml"
+    before = config.read_bytes()
+    assert run(*args) == 0
+    assert config.read_bytes() == before
+    assert len(list(config.parent.glob("config.toml.bak-*"))) == 0
+
+
+def test_already_trusted_literal_array_is_untouched(site, capsys):
+    home, project = site
+    config = home / ".orchestrator" / "config.toml"
+    config.parent.mkdir()
+    equivalent = project / ".." / project.name
+    original = (
+        'schema_version = 1\n[roles]\norchestrator = "claude-code"\n'
+        'coder = "codex"\nreviewer = "agy"\n[trust]\n'
+        f"paths = ['{equivalent}', 'C:\\Projects\\other'] # keep\n"
+    ).encode()
+    config.write_bytes(original)
+    args = ("--coder", "codex", "--reviewer", "agy", "--trust")
+    assert run("--plan", *args) == 0
+    assert capsys.readouterr().out == "No changes.\n"
+    assert run("--apply", *args) == 0
+    assert config.read_bytes() == original
+    assert not list(config.parent.glob("config.toml.bak-*"))
+
+
+def test_append_preserves_existing_literal_entries(site):
+    home, project = site
+    config = home / ".orchestrator" / "config.toml"
+    config.parent.mkdir()
+    prefix = (
+        'schema_version = 1\n[roles]\norchestrator = "claude-code"\n'
+        'coder = "codex"\nreviewer = "agy"\n[trust]\n'
+    )
+    existing = "paths = ['C:\\Projects\\one', 'C:\\Projects\\two'] # keep\n"
+    config.write_text(prefix + existing, encoding="utf-8")
+    assert run("--apply", "--coder", "codex", "--reviewer", "agy", "--trust") == 0
+    changed = config.read_text(encoding="utf-8")
+    assert "'C:\\Projects\\one', 'C:\\Projects\\two'" in changed
+    assert f"'{project}'" in changed
+    assert tomllib.loads(changed)["trust"]["paths"][-1] == str(project)
+
+
+@pytest.mark.parametrize("field,value", [("--coder", "agy"), ("--reviewer", "claude")])
+def test_invalid_value_no_write(site, field, value):
+    home, _ = site
+    args = ["--apply", "--coder", "codex", "--reviewer", "none", "--trust"]
+    args[args.index(field) + 1] = value
+    with pytest.raises(SystemExit):
+        run(*args)
+    assert not (home / ".orchestrator").exists()
+
+
+def test_invalid_config_left_untouched(site):
+    home, _ = site
+    config = home / ".orchestrator" / "config.toml"
+    config.parent.mkdir()
+    original = b'schema_version = 1\n[bad\n'
+    config.write_bytes(original)
+    assert run("--apply", "--coder", "codex", "--reviewer", "none", "--trust") != 0
+    assert config.read_bytes() == original
+    assert not list(config.parent.glob("*.bak-*"))
+
+
+def test_existing_profile_never_overwritten(site):
+    _, project = site
+    profile = project / ".orchestrator" / "profile.toml"
+    profile.parent.mkdir()
+    profile.write_bytes(b"existing content\n")
+    assert run("--apply", "--coder", "codex", "--reviewer", "none", "--scaffold-profile") == 0
+    assert profile.read_bytes() == b"existing content\n"
+
+
+def test_detect_without_config(site, capsys):
+    assert run("--detect", "--json") == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["roles"] == {}
+    assert report["trusted"] is False
+    assert report["profile_exists"] is False
+    assert "codex" in report["agents"]
