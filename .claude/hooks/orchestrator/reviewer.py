@@ -58,6 +58,7 @@ _FORBIDDEN_TEXT = (
         r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+\-=]{12,}"
     ),
 )
+_NARRATIVE_TEXT = _FORBIDDEN_TEXT[:1]
 _AUTHORITY_HEADINGS = (
     "Authority",
     "Working scope",
@@ -104,6 +105,8 @@ class CommandRefused(ValueError):
 class PacketReady:
     packet: Mapping[str, str]
     encoded: bytes
+    added_redaction_count: int = 0
+    added_affected_files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -266,6 +269,10 @@ def _contains_forbidden_text(value: str) -> bool:
     return any(pattern.search(value) for pattern in _FORBIDDEN_TEXT)
 
 
+def _contains_excluded_narrative(value: str) -> bool:
+    return any(pattern.search(value) for pattern in _NARRATIVE_TEXT)
+
+
 def _forbidden_spans(value: str) -> tuple[tuple[int, int], ...]:
     spans = sorted(
         (match.start(), match.end())
@@ -289,10 +296,12 @@ def _diff_header_path(value: str) -> str | None:
 
 def _redact_delegated_diff(
     diff: str,
-) -> tuple[str, int, tuple[str, ...]] | None:
+) -> tuple[str, int, tuple[str, ...], int, tuple[str, ...]] | None:
     redacted_lines: list[str] = []
     affected_files: set[str] = set()
+    added_affected_files: set[str] = set()
     redaction_count = 0
+    added_redaction_count = 0
     old_path: str | None = None
     current_path: str | None = None
     in_hunk = False
@@ -325,7 +334,9 @@ def _redact_delegated_diff(
         if not spans:
             redacted_lines.append(raw_line)
             continue
-        if line_kind in {None, "added"} or current_path is None:
+        if _contains_excluded_narrative(content):
+            return None
+        if line_kind is None or current_path is None:
             return None
 
         pieces: list[str] = []
@@ -337,8 +348,17 @@ def _redact_delegated_diff(
         redacted_lines.append(line[0] + "".join(pieces) + ending)
         redaction_count += len(spans)
         affected_files.add(current_path)
+        if line_kind == "added":
+            added_redaction_count += len(spans)
+            added_affected_files.add(current_path)
 
-    return "".join(redacted_lines), redaction_count, tuple(sorted(affected_files))
+    return (
+        "".join(redacted_lines),
+        redaction_count,
+        tuple(sorted(affected_files)),
+        added_redaction_count,
+        tuple(sorted(added_affected_files)),
+    )
 
 
 def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketBuild:
@@ -373,6 +393,8 @@ def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketB
     packet: dict[str, str] = {}
     redaction_count = 0
     affected_files: tuple[str, ...] = ()
+    added_redaction_count = 0
+    added_affected_files: tuple[str, ...] = ()
     for field in _PACKET_FIELDS:
         value = materials[field]
         if not isinstance(value, str) or not value.strip():
@@ -390,7 +412,13 @@ def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketB
                     f"{field!r}; it was not sent.",
                     (field,),
                 )
-            value, redaction_count, affected_files = redacted
+            (
+                value,
+                redaction_count,
+                affected_files,
+                added_redaction_count,
+                added_affected_files,
+            ) = redacted
         if _contains_forbidden_text(value):
             return PacketOmitted(
                 "REVIEW_PACKET_SENSITIVE_CONTENT",
@@ -401,9 +429,14 @@ def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketB
 
     if redaction_count:
         files = ", ".join(affected_files)
+        material_description = (
+            "added credential-shaped material"
+            if added_redaction_count
+            else "pre-existing context or removed credential-shaped/excluded material"
+        )
         packet["validation_summary"] += (
             f"\n\nREDACTION NOTICE: {redaction_count} forbidden-text span(s) were redacted "
-            f"from pre-existing context or removed credential-shaped/excluded material in: "
+            f"from {material_description} in: "
             f"{files}. Each unmistakable {_DIFF_REDACTION_MARKER} marker replaces the complete "
             "matched span. A redaction is not permission to ignore a possible defect; question "
             "any unexplained redaction."
@@ -424,7 +457,12 @@ def build_review_packet(materials: Mapping[str, Any], max_bytes: int) -> PacketB
             ),
             omitted,
         )
-    return PacketReady(packet, encoded)
+    return PacketReady(
+        packet,
+        encoded,
+        added_redaction_count,
+        added_affected_files,
+    )
 
 
 def _has_flag(command: Sequence[str], name: str, value: str | None = None) -> bool:
@@ -752,10 +790,28 @@ def invoke_packet(
                 duration_seconds,
                 tuple(sorted(usage.items())),
             )
+        result = response["result"]
+        findings = response["findings"]
+        if packet.added_redaction_count:
+            files = ", ".join(packet.added_affected_files)
+            redaction_label = (
+                "redaction" if packet.added_redaction_count == 1 else "redactions"
+            )
+            findings = [
+                *findings,
+                _finding(
+                    "REVIEW_PACKET_ADDED_SECRET_REDACTED",
+                    "Added credential-like text was redacted from "
+                    f"{files} ({packet.added_redaction_count} added-line "
+                    f"{redaction_label}); forcing FULL Claude review.",
+                ),
+            ]
+            if result == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE:
+                result = policy.UNCERTAIN
         return _completed(
-            response["result"],
+            result,
             response["validation"],
-            response["findings"],
+            findings,
             conversation_id,
             config,
             duration_seconds,

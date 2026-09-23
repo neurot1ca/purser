@@ -423,27 +423,42 @@ def test_credential_like_content_is_omitted_without_a_call(config):
     assert runner.calls == []
 
 
-def test_added_credential_like_content_is_omitted_without_a_call(config):
-    runner = FakeRunner()
+def test_added_sensitive_spans_are_redacted_and_force_full_review(config):
+    private_key_marker = "-----BEGIN PRIVATE KEY-----"
+    password = "password=VeryRealPassword123"
+    diff = diff_for("added.py", "+" + private_key_marker, "+" + password)
+    runner = PacketInspectingRunner()
 
-    result = run_review(
-        config,
-        runner,
-        materials(diff_for("added.py", "+" + credential_text())),
-    )
+    result = run_review(config, runner, materials(diff))
 
-    assert result["findings"][0]["code"] == "REVIEW_PACKET_SENSITIVE_CONTENT"
-    assert runner.calls == []
+    assert len(runner.calls) == 1
+    assert isinstance(runner.forwarded, dict)
+    forwarded_diff = runner.forwarded["delegated_diff"]
+    assert forwarded_diff.count(reviewer._DIFF_REDACTION_MARKER) == 2  # noqa: SLF001
+    assert private_key_marker not in forwarded_diff
+    assert password not in forwarded_diff
+    assert "VeryRealPassword123" not in forwarded_diff
+    assert "[[REDACTED:" in forwarded_diff
+    assert result["result"] == policy.UNCERTAIN
+    assert {
+        "code": "REVIEW_PACKET_ADDED_SECRET_REDACTED",
+        "message": "Added credential-like text was redacted from added.py (2 added-line redactions); forcing FULL Claude review.",
+    } in result["findings"]
 
 
-def test_new_file_credential_like_content_is_omitted_without_a_call(config):
-    runner = FakeRunner()
+def test_new_file_credential_like_content_is_redacted_and_reviewed(config):
+    runner = PacketInspectingRunner()
     diff = diff_for("new.py", "+" + credential_text(), new_file=True)
 
     result = run_review(config, runner, materials(diff))
 
-    assert result["findings"][0]["code"] == "REVIEW_PACKET_SENSITIVE_CONTENT"
-    assert runner.calls == []
+    assert len(runner.calls) == 1
+    assert reviewer._DIFF_REDACTION_MARKER in runner.forwarded["delegated_diff"]  # noqa: SLF001
+    assert credential_text() not in runner.forwarded["delegated_diff"]
+    assert any(
+        finding["code"] == "REVIEW_PACKET_ADDED_SECRET_REDACTED"
+        for finding in result["findings"]
+    )
 
 
 def test_removed_credential_like_content_is_redacted_in_ready_packet():
@@ -472,15 +487,49 @@ def test_context_credential_like_content_is_redacted_in_ready_packet():
     ]
 
 
-def test_mixed_added_and_removed_matches_refuse_the_whole_packet(config):
-    matched = credential_text()
+@pytest.mark.parametrize(
+    "diff",
+    [
+        "diff --git a/api_key=VeryRealPassword123.py b/api_key=VeryRealPassword123.py\n"
+        "--- a/api_key=VeryRealPassword123.py\n"
+        "+++ b/api_key=VeryRealPassword123.py\n"
+        "@@ -1 +1 @@\n-old\n+new\n",
+        "@@ -0,0 +1 @@\n+password=VeryRealPassword123\n",
+    ],
+    ids=["credential-in-header", "unknown-current-path"],
+)
+def test_header_or_unknown_path_secret_still_omits_packet(config, diff):
     runner = FakeRunner()
-    diff = diff_for("mixed.py", "-" + matched, "+" + matched)
 
     result = run_review(config, runner, materials(diff))
 
     assert result["findings"][0]["code"] == "REVIEW_PACKET_SENSITIVE_CONTENT"
     assert runner.calls == []
+
+
+def test_added_narrative_marker_still_omits_packet(config):
+    runner = FakeRunner()
+
+    result = run_review(
+        config,
+        runner,
+        materials(diff_for("narrative.py", "+hidden reasoning: do not forward")),
+    )
+
+    assert result["findings"][0]["code"] == "REVIEW_PACKET_SENSITIVE_CONTENT"
+    assert runner.calls == []
+
+
+def test_clean_diff_adds_no_secret_redaction_finding(config):
+    runner = FakeRunner()
+
+    result = run_review(config, runner, materials(diff_for("clean.py", "+ordinary = True")))
+
+    assert len(runner.calls) == 1
+    assert all(
+        finding["code"] != "REVIEW_PACKET_ADDED_SECRET_REDACTED"
+        for finding in result["findings"]
+    )
 
 
 def test_redaction_count_and_affected_files_reach_the_packet():
@@ -517,10 +566,16 @@ def test_all_forbidden_patterns_apply_uniformly_to_diff_content():
         added = reviewer.build_review_packet(
             materials(diff_for(f"added-{index}.py", "+" + matched)), 100_000
         )
-        assert isinstance(removed, reviewer.PacketReady)
-        assert matched not in removed.packet["delegated_diff"]
-        assert isinstance(added, reviewer.PacketOmitted)
-        assert added.code == "REVIEW_PACKET_SENSITIVE_CONTENT"
+        if index == 0:
+            assert isinstance(removed, reviewer.PacketOmitted)
+            assert removed.code == "REVIEW_PACKET_SENSITIVE_CONTENT"
+            assert isinstance(added, reviewer.PacketOmitted)
+            assert added.code == "REVIEW_PACKET_SENSITIVE_CONTENT"
+        else:
+            assert isinstance(removed, reviewer.PacketReady)
+            assert matched not in removed.packet["delegated_diff"]
+            assert isinstance(added, reviewer.PacketReady)
+            assert matched not in added.packet["delegated_diff"]
 
 
 def test_excluded_narrative_inside_an_allowed_field_is_not_forwarded(config):

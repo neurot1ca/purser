@@ -84,7 +84,10 @@ table, and rejects malformed or inconsistent invocations. A recorded compatible
 
 ## Craft the prompt
 
-State a precise objective and observable acceptance criteria. Include only
+State a precise objective and observable acceptance criteria, labelled
+`Objective:` and `Acceptance criteria:` (or `# Objective` / `# Acceptance
+criteria` headings); without both labels the hook cannot ground the task
+contract and forces FULL review. Include only
 verified problem context, explicit constraints, and the files, symbols,
 contracts, or evidence that materially narrow the task. Prefer behavior and
 invariants over an unverified implementation. Exclude speculative redesign,
