@@ -2433,7 +2433,7 @@ def test_worker_validation_parser_avoids_substring_false_positives():
     # 1. Serbest metin "tests never passed" => UNKNOWN
     res1 = codex._parse_worker_validation("Validation: tests never passed")
     assert res1["status"] == "UNKNOWN"
-    assert res1["summary"] == "invalid_json: Validation: tests never passed"
+    assert res1["summary"] == "Validation: tests never passed"
     assert set(res1.keys()) == expected_keys
 
     # 2. Geçerli structured PASS => PASS
@@ -2514,6 +2514,40 @@ def test_worker_validation_parser_avoids_substring_false_positives():
     assert res12["status"] == "UNKNOWN"
     assert set(res12.keys()) == expected_keys
     assert len(json_transport.dumps(res12).encode("utf-8")) <= codex.IMPLEMENTER_REPORT_LIMIT
+
+
+def test_worker_validation_ignores_prose_heading_before_structured_record():
+    report = (
+        "Validation:\n"
+        "- Ran the focused checks.\n"
+        "- No issues found.\n"
+        'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+        '"commands":["pytest"],"exit_codes":[0]}\n'
+    )
+
+    result = codex._parse_worker_validation(report)
+
+    assert result["status"] == "PASS"
+    assert result["commands"] == ["pytest"]
+    assert result["exit_codes"] == [0]
+
+
+def test_worker_validation_rejects_two_genuine_records_as_multiple():
+    record = (
+        'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+        '"commands":["pytest"],"exit_codes":[0]}'
+    )
+    result = codex._parse_worker_validation(f"{record}\n{record}")
+
+    assert result["status"] == "UNKNOWN"
+    assert result["summary"] == "Multiple conflicting VALIDATION records were reported."
+
+
+def test_worker_validation_ignores_mixed_case_prose_line():
+    result = codex._parse_worker_validation("Validation: npm test passed")
+
+    assert result["status"] == "UNKNOWN"
+    assert result["summary"] == "Validation: npm test passed"
 
 
 @pytest.mark.parametrize(

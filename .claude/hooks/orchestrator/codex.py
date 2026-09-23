@@ -333,7 +333,7 @@ def _parse_worker_validation(report: str | None) -> dict[str, Any]:
     validation_lines: list[str] = []
     for line in report.splitlines():
         line_str = line.strip()
-        if line_str.upper().startswith("VALIDATION:"):
+        if line_str.startswith("VALIDATION:") and line_str[len("VALIDATION:"):].strip():
             validation_lines.append(line_str)
 
     if len(validation_lines) == 0:
