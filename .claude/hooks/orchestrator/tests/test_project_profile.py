@@ -41,6 +41,7 @@ argv = ["python", "-V"]
     assert valid.project_status == "ok"
     assert valid.trusted is True
     assert valid.checks == (Check("lint", ("npm", "run", "lint"), ("**/*.ts", "app/**"), 30), Check("test", ("python", "-V"), None, 60))
+    assert not any("unknown" in warning for warning in valid.warnings)
 
 
 def test_untrusted_project_checks_are_ignored_with_warning(profile_root):
@@ -71,3 +72,8 @@ def test_user_tier_checks_rejected(profile_root):
     result = _load(profile_root, user_text='schema_version = 1\n[[checks]]\nname = "x"\nargv = ["python"]\n')
     assert result.user_status == "rejected"
     assert result.checks == ()
+
+
+def test_unknown_project_top_level_key_warns(profile_root):
+    result = _load(profile_root, "schema_version = 1\nunknown_section = true\n")
+    assert "project: unknown top-level key or section [unknown_section] ignored" in result.warnings

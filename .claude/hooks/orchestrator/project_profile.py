@@ -184,6 +184,8 @@ def _load_tier(
     known_sections = set(security_sections) | set(non_security_sections)
     if tier_name == "user" and "checks" in data:
         return _rejected(tier_name, "[[checks]] is project-only")
+    if tier_name == "project":
+        known_sections.add("checks")
     for key in data:
         if key != "schema_version" and key not in known_sections:
             warnings.append(f"{tier_name}: unknown top-level key or section [{key}] ignored")
