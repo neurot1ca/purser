@@ -14,10 +14,12 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any
 
 import json_transport
+import checks
 import ledger
 import policy
 import project_profile
@@ -652,7 +654,33 @@ def _load_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     reviewer_model = loaded.get("reviewer1_model_requested")
     if not isinstance(reviewer_model, str) or not reviewer_model:
         raise WiringError("reviewer1_model_requested must be a non-empty string")
+    deadline = loaded.get("hook_checks_deadline_seconds", 150)
+    if isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or deadline <= 0:
+        raise WiringError("hook_checks_deadline_seconds must be positive")
     return loaded
+
+
+def _check_snapshot(checks_to_store: Sequence[project_profile.Check]) -> list[dict[str, Any]]:
+    return [{"name": check.name, "argv": list(check.argv),
+             "when": list(check.when) if check.when is not None else None,
+             "timeout_seconds": check.timeout_seconds} for check in checks_to_store]
+
+
+def _restore_checks(snapshot: Any) -> tuple[project_profile.Check, ...]:
+    if not isinstance(snapshot, list):
+        raise ValueError("invalid check snapshot")
+    restored = []
+    for item in snapshot:
+        if not isinstance(item, Mapping) or set(item) != {"name", "argv", "when", "timeout_seconds"}:
+            raise ValueError("invalid check snapshot")
+        name, argv, when, timeout = (item[key] for key in ("name", "argv", "when", "timeout_seconds"))
+        if (not isinstance(name, str) or not isinstance(argv, list) or not argv
+                or not all(isinstance(arg, str) and arg for arg in argv)
+                or (when is not None and (not isinstance(when, list) or not all(isinstance(path, str) for path in when)))
+                or type(timeout) is not int or not 1 <= timeout <= 300):
+            raise ValueError("invalid check snapshot")
+        restored.append(project_profile.Check(name, tuple(argv), tuple(when) if when is not None else None, timeout))
+    return tuple(restored)
 
 
 def _state_root(root: str | os.PathLike[str] | None) -> Path:
@@ -1230,8 +1258,17 @@ def pre_tool_use(
             "task_contract_grounded": task_contract_grounded,
         }
         if resolved_profile is not None:
+            inherited_checks = (
+                live_thread.get("profile_checks")
+                if tool_name == CODEX_REPLY_TOOL and isinstance(live_thread, Mapping)
+                else None
+            )
             pending.update(
                 {
+                    "profile_checks": (
+                        inherited_checks if isinstance(inherited_checks, list)
+                        else _check_snapshot(resolved_profile.checks)
+                    ),
                     "protected_paths": list(resolved_profile.protected_paths),
                     "force_full_review": resolved_profile.force_full_review,
                     "skip_max_lines": resolved_profile.skip_max_lines,
@@ -1272,6 +1309,7 @@ def pre_tool_use(
             task_objective=task_objective,
             acceptance_criteria=acceptance_criteria,
             task_contract_grounded=task_contract_grounded,
+            profile_checks=pending.get("profile_checks"),
         )
         saved = session_ledger.save(session_record)
         if saved["status"] != ledger.OK:
@@ -1491,6 +1529,7 @@ def _base_bundle(error: str | None = None) -> dict[str, Any]:
         "micro_repair_cleared_review": False,
         "task_contract_grounded": False,
         "worker_validation": None,
+        "hook_checks": None,
         "project_root_reason": None,
     }
 
@@ -1574,6 +1613,7 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
     """Return the Claude-facing bundle and whether mandatory fields exceeded the cap."""
 
     compact = dict(bundle)
+    compact.pop("hook_checks_full", None)
     paths = bundle.get("changed_paths")
     if isinstance(paths, list):
         preview, count, digest = _changed_paths_summary(paths)
@@ -1653,6 +1693,7 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
         ),
         "micro_repair_cleared_review": bundle.get("micro_repair_cleared_review"),
         "validation": bundle.get("validation"),
+        "hook_checks": bundle.get("hook_checks"),
         "audit_receipt": (
             {"verdict": audit.get("verdict")} if isinstance(audit, Mapping) else audit
         ),
@@ -2116,6 +2157,28 @@ def post_tool_use(
         if delta.get("status") != ledger.OK:
             force_full_review = True
         else:
+            check_state: dict[str, Any] = {}
+            check_thread: threading.Thread | None = None
+            check_started = time.monotonic()
+            check_deadline = float(loaded_config.get("hook_checks_deadline_seconds", 150))
+            try:
+                selected = checks.select_checks(
+                    _restore_checks(pending.get("profile_checks", [])), delta["changed_paths"]
+                )
+                if selected:
+                    def run_selected_checks() -> None:
+                        try:
+                            check_state["result"] = checks.run_checks(
+                                repository, selected, deadline_seconds=check_deadline
+                            )
+                        except Exception as error:
+                            check_state["error"] = type(error).__name__
+
+                    check_thread = threading.Thread(target=run_selected_checks, daemon=True)
+                    check_thread.start()
+            except Exception as error:
+                check_state["error"] = type(error).__name__
+
             reviewer_config = dict(loaded_config)
             reviewer_gate_config = dict(loaded_config["reviewer_gate"])
             if isinstance(profile_skip_max_lines, int) and not isinstance(profile_skip_max_lines, bool):
@@ -2326,9 +2389,49 @@ def post_tool_use(
                 outcome = gate
                 result = None
 
+            if check_thread is not None:
+                check_thread.join(max(0.0, check_started + check_deadline + 2.0 - time.monotonic()))
+                if check_thread.is_alive():
+                    check_state["error"] = "TimeoutError"
+            hook_status = None
+            check_side_effects = False
+            if "error" in check_state:
+                hook_status = "UNKNOWN"
+                bundle["hook_checks"] = {"status": "UNKNOWN", "results": []}
+                bundle["findings"].append(_finding("HOOK_CHECK_UNKNOWN", check_state["error"]))
+            elif "result" in check_state:
+                try:
+                    full_result = check_state["result"]
+                    hook_status = full_result["status"]
+                    results = full_result["results"]
+                    bundle["hook_checks"] = {
+                        "status": hook_status,
+                        "results": [{key: item.get(key) for key in
+                                     ("name", "status", "exit_code", "duration_ms")}
+                                    for item in results],
+                    }
+                    bundle["hook_checks_full"] = full_result
+                    tail_budget = 3000
+                    for item in results:
+                        if item.get("status") in {"FAIL", "UNKNOWN"}:
+                            tail = str(item.get("tail", ""))[-tail_budget:] if tail_budget else ""
+                            tail_budget -= len(tail)
+                            code = "HOOK_CHECK_FAILED" if item["status"] == "FAIL" else "HOOK_CHECK_UNKNOWN"
+                            bundle["findings"].append(_finding(code, f"{item['name']}: {tail}"))
+                    side_effect_paths = full_result.get("side_effect_paths")
+                    if side_effect_paths:
+                        check_side_effects = True
+                        bundle["findings"].append(_finding(
+                            "HOOK_CHECK_SIDE_EFFECTS", ", ".join(side_effect_paths[:10])
+                        ))
+                except Exception as error:
+                    hook_status = "UNKNOWN"
+                    bundle["hook_checks"] = {"status": "UNKNOWN", "results": []}
+                    bundle["findings"].append(_finding("HOOK_CHECK_UNKNOWN", type(error).__name__))
             mode = policy.claude_review_mode(pending["route"], outcome, loaded_config)
             is_grounded = bool(pending.get("task_contract_grounded"))
             val_status = worker_validation.get("status")
+            effective_val_status = hook_status if hook_status in {"PASS", "FAIL"} else val_status
 
             reviewer_audit_eligible = (
                 (result is not None and result == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE)
@@ -2340,11 +2443,12 @@ def post_tool_use(
 
             is_audit_eligible = (
                 is_grounded
-                and val_status == "PASS"
+                and effective_val_status == "PASS"
                 and reviewer_audit_eligible
                 and delta.get("status") == ledger.OK
                 and (classification is None or classification.get("decision") == ledger.PROCEED)
                 and not force_full_review
+                and not check_side_effects
                 and (thread_id is not None)
                 and mode.mode == policy.AUDIT
             )
@@ -2424,6 +2528,7 @@ def post_tool_use(
             task_objective=pending.get("task_objective"),
             acceptance_criteria=pending.get("acceptance_criteria"),
             task_contract_grounded=pending.get("task_contract_grounded", False),
+            profile_checks=pending.get("profile_checks"),
             **handoff_kwargs,
         )
         saved = session_ledger.save(session_record)

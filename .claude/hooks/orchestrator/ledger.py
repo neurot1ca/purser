@@ -921,6 +921,7 @@ def build_session_record(
     task_objective: str | None = None,
     acceptance_criteria: str | None = None,
     task_contract_grounded: bool = False,
+    profile_checks: list[dict[str, Any]] | None = None,
     origin_baseline: Mapping[str, Any] | None = None,
     origin_scope: Iterable[str | os.PathLike[str]] = (),
     post_state: Mapping[str, Any] | None = None,
@@ -944,6 +945,8 @@ def build_session_record(
         if acceptance_criteria is not None:
             live_thread["acceptance_criteria"] = acceptance_criteria
         live_thread["task_contract_grounded"] = task_contract_grounded
+        if profile_checks is not None:
+            live_thread["profile_checks"] = profile_checks
         if origin_baseline is not None and post_state is not None:
             live_thread["origin_baseline"] = dict(origin_baseline)
             live_thread["origin_scope"] = [os.fspath(path) for path in origin_scope]
@@ -1013,6 +1016,7 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         "task_objective",
         "acceptance_criteria",
         "task_contract_grounded",
+        "profile_checks",
         "origin_baseline",
         "origin_scope",
         "post_state",
@@ -1039,6 +1043,8 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
     if "acceptance_criteria" in thread and not isinstance(thread.get("acceptance_criteria"), str):
         return False
     if "task_contract_grounded" in thread and not isinstance(thread.get("task_contract_grounded"), bool):
+        return False
+    if "profile_checks" in thread and not isinstance(thread.get("profile_checks"), list):
         return False
     if thread.get("task_contract_grounded") is True:
         if not isinstance(thread.get("task_objective"), str) or not thread.get("task_objective", "").strip():

@@ -1,17 +1,21 @@
 import io
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import shutil
 import stat
 import subprocess
 import sys
+import time
 import uuid
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import codex
+import checks
+import project_profile
 import context_io_telemetry
 import hook
 import json_transport
@@ -142,6 +146,152 @@ def response_bundle(response, config):
     output = response["hookSpecificOutput"][config["post_tool_output_field"]]
     assert output[0]["type"] == "text"
     return json.loads(output[0]["text"])
+
+
+def hook_check_call(workspace, config, monkeypatch, *, worker_status="UNKNOWN", check_result=None,
+                    declared=True, reviewer=None, before_post=None):
+    repo, state = workspace
+    original_load = project_profile.load_profile
+    monkeypatch.setattr(project_profile, "load_profile", lambda root: replace(
+        original_load(root), force_full_review=False,
+        checks=(project_profile.Check("focused", ("python", "-V")),) if declared else (),
+    ))
+    monkeypatch.setattr(checks, "run_checks", check_result if callable(check_result)
+                        else lambda *args, **kwargs: check_result)
+    prompt = (orch(scope="file0.py") +
+              "\n## Objective\nUpdate file0.\n## Acceptance criteria\n- file0 changes.")
+    call = event(prompt=prompt, tool_use_id="hook-check-" + uuid.uuid4().hex)
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    if before_post:
+        before_post(repo, state, call)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    content = ("No worker validation" if worker_status == "UNKNOWN" else
+               'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}')
+    post = {**call, "hook_event_name": "PostToolUse", "tool_response": [{"type": "text", "text": json.dumps({"threadId": "thread-check", "content": content})}]}
+    return response_bundle(codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo,
+        reviewer=reviewer or (lambda **kwargs: {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                                                "validation": "PASS", "findings": []}),
+    ), config)
+
+
+def test_hook_pass_supplies_audit_evidence_for_unknown_worker(workspace, config, monkeypatch):
+    result = {"status": "PASS", "results": [{"name": "focused", "status": "PASS", "exit_code": 0,
+                                               "duration_ms": 1, "tail": ""}], "side_effect_paths": []}
+    bundle = hook_check_call(workspace, config, monkeypatch, check_result=result)
+    assert bundle["claude_review_mode"] == policy.AUDIT
+    assert bundle["hook_checks"]["status"] == "PASS"
+    assert not any(f["code"] == "WORKER_VALIDATION_UNVERIFIED" for f in bundle["findings"])
+
+
+def check_result(status, *, tail="", side_effect_paths=None):
+    return {"status": status, "results": [{"name": "focused", "status": status,
+            "exit_code": 1 if status == "FAIL" else 0 if status == "PASS" else None,
+            "duration_ms": 1, "tail": tail}],
+            "side_effect_paths": [] if side_effect_paths is None else side_effect_paths}
+
+
+def test_hook_fail_overrides_worker_pass(workspace, config, monkeypatch):
+    bundle = hook_check_call(workspace, config, monkeypatch, worker_status="PASS",
+                             check_result=check_result("FAIL", tail="failed output"))
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert any(f["code"] == "HOOK_CHECK_FAILED" and "failed output" in f["message"]
+               for f in bundle["findings"])
+    assert "tail" not in bundle["hook_checks"]["results"][0]
+
+
+@pytest.mark.parametrize("worker_status,expected", [("PASS", policy.AUDIT),
+                                                   ("UNKNOWN", policy.FULL)])
+def test_hook_unknown_falls_back_to_worker(workspace, config, monkeypatch, worker_status, expected):
+    bundle = hook_check_call(workspace, config, monkeypatch, worker_status=worker_status,
+                             check_result=check_result("UNKNOWN", tail="unavailable"))
+    assert bundle["claude_review_mode"] == expected
+    assert any(f["code"] == "HOOK_CHECK_UNKNOWN" for f in bundle["findings"])
+
+
+def test_hook_side_effects_force_full(workspace, config, monkeypatch):
+    bundle = hook_check_call(workspace, config, monkeypatch, worker_status="PASS",
+                             check_result=check_result("PASS", side_effect_paths=["file1.py"]))
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert any(f["code"] == "HOOK_CHECK_SIDE_EFFECTS" and "file1.py" in f["message"]
+               for f in bundle["findings"])
+
+
+def test_hook_check_exception_still_returns_bundle(workspace, config, monkeypatch):
+    def raise_check(*args, **kwargs):
+        raise RuntimeError("runner broke")
+    bundle = hook_check_call(workspace, config, monkeypatch, worker_status="PASS",
+                             check_result=raise_check)
+    assert bundle["claude_review_mode"] == policy.AUDIT
+    assert bundle["hook_checks"] == {"status": "UNKNOWN", "results": []}
+    assert [f["code"] for f in bundle["findings"]].count("HOOK_CHECK_UNKNOWN") == 1
+    assert any("RuntimeError" in f["message"] for f in bundle["findings"])
+
+
+def test_hook_uses_pending_check_snapshot(workspace, config, monkeypatch):
+    def change_profile(repo, state, call):
+        pending = json.loads(codex._pending_path(state, call).read_text(encoding="utf-8"))
+        assert pending["profile_checks"][0]["name"] == "focused"
+        profile_path = repo / ".orchestrator" / "profile.toml"
+        profile_path.parent.mkdir()
+        profile_path.write_text('schema_version = 1\n[[checks]]\nname = "changed"\nargv = ["python"]\n', encoding="utf-8")
+        monkeypatch.setattr(project_profile, "load_profile", lambda root: pytest.fail("post reloaded profile"))
+    bundle = hook_check_call(workspace, config, monkeypatch,
+                             check_result=check_result("PASS"), before_post=change_profile)
+    assert bundle["hook_checks"]["status"] == "PASS"
+
+
+def test_reply_inherits_thread_check_snapshot(workspace, config, monkeypatch):
+    repo, state = workspace
+    original_load = project_profile.load_profile
+    monkeypatch.setattr(project_profile, "load_profile", lambda root: replace(
+        original_load(root), force_full_review=False,
+        checks=(project_profile.Check("original", ("python", "-V")),),
+    ))
+    monkeypatch.setattr(checks, "run_checks", lambda *args, **kwargs: {
+        "status": "PASS", "results": [], "side_effect_paths": []})
+    prompt = (orch(scope="file0.py") +
+              "\n## Objective\nUpdate file0.\n## Acceptance criteria\n- file0 changes.")
+    call = event(prompt=prompt, tool_use_id="first-check-turn")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    response = [{"type": "text", "text": json.dumps({"threadId": "thread-reply-checks", "content": "No validation"})}]
+    codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response": response},
+                        config=config, state_root=state, repo_root=repo,
+                        reviewer=lambda **kwargs: {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                                                   "validation": "PASS", "findings": []})
+    monkeypatch.setattr(project_profile, "load_profile", lambda root: replace(
+        original_load(root), force_full_review=False,
+        checks=(project_profile.Check("changed", ("python", "-V")),),
+    ))
+    reply = event(tool_name=codex.CODEX_REPLY_TOOL, prompt="Continue.",
+                  tool_use_id="reply-check-turn", threadId="thread-reply-checks")
+    codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    pending = json.loads(codex._pending_path(state, reply).read_text(encoding="utf-8"))
+    assert [item["name"] for item in pending["profile_checks"]] == ["original"]
+
+
+def test_no_declared_hook_checks_preserves_worker_decision(workspace, config, monkeypatch):
+    bundle = hook_check_call(workspace, config, monkeypatch, declared=False, worker_status="UNKNOWN",
+                             check_result=lambda *args, **kwargs: pytest.fail("checks must not run"))
+    assert bundle["hook_checks"] is None
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert any(f["code"] == "WORKER_VALIDATION_UNVERIFIED" for f in bundle["findings"])
+
+
+def test_hook_checks_overlap_reviewer(workspace, config, monkeypatch):
+    def slow_check(*args, **kwargs):
+        time.sleep(0.5)
+        return check_result("PASS")
+    def slow_reviewer(**kwargs):
+        time.sleep(0.5)
+        return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "validation": "PASS", "findings": []}
+    started = time.monotonic()
+    bundle = hook_check_call(workspace, config, monkeypatch, check_result=slow_check,
+                             reviewer=slow_reviewer)
+    assert bundle["hook_checks"]["status"] == "PASS"
+    assert time.monotonic() - started < 1.5
 
 
 @pytest.fixture()
