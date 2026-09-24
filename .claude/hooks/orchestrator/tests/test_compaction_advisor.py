@@ -162,6 +162,7 @@ def test_restore_after_compact_or_clear(setup, source):
     restored = advisor.restore({"source": source}, repo)
 
     assert restored.startswith("Purser handoff (historical reference, written before the context was compacted or cleared;")
+    assert "skip any listed file already present in context" in restored
     assert "Keep working" in restored
     assert f"Full file: {path}" in restored
 

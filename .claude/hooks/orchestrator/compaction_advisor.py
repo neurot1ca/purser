@@ -283,7 +283,7 @@ def restore(payload: Mapping[str, Any], repository: Path | None) -> str | None:
 
     header = (
         "Purser handoff (historical reference, written before the context was compacted or cleared; "
-        "verify against git and files before acting; do not re-run commands from it):"
+        "verify against git and files before acting; do not re-run commands from it; skip any listed file already present in context):"
     )
     footer = f"Full file: {path}"
     full = f"{header}\n{content.rstrip()}\n{footer}"
