@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.11 — 2026-09-24
+
+- **Change:** the compaction notice adds "Nothing is lost." after the handoff
+  line (`de0533a`).
+
 ## 0.1.10 — 2026-09-24
 
 - **Change:** the compaction suggestion is now a separate closing block after
