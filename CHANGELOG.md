@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.10 — 2026-09-24
+
+- **Change:** the compaction suggestion is now a separate closing block after
+  a `---` line: context size, the estimated saving per later message
+  (`1 - 75K / context`), a `/compact` call to action and the handoff path.
+  A question Claude asks in the same reply is also written under Next in the
+  handoff so it survives compaction (`33e090a`).
+
 ## 0.1.9 — 2026-09-24
 
 - **Change:** the restored handoff tells Claude to skip listed files that are
