@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import tomllib
 from typing import Any
 
@@ -21,6 +22,8 @@ DEFAULT_THRESHOLD_TOKENS = 250_000
 DEFAULT_IDLE_MINUTES = 20
 DEFAULT_REGROW_TOKENS = 60_000
 MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024
+MAX_HANDOFF_CONTEXT_CHARS = 6_000
+HANDOFF_MAX_AGE_SECONDS = 12 * 60 * 60
 STATE_START = "<!-- PURSER:STATE:START -->"
 STATE_END = "<!-- PURSER:STATE:END -->"
 HANDOFF_TEMPLATE = """# Purser handoff
@@ -245,6 +248,56 @@ def _state_directory(repository: Path) -> Path:
     return telemetry._project_root(telemetry._root(None), key)
 
 
+def handoff_path(repository: Path) -> Path:
+    """Return the persistent handoff path for a repository."""
+    return _state_directory(repository) / "purser-handoff.md"
+
+
+def _empty_handoff(content: str) -> bool:
+    template_lines = {line.strip() for line in HANDOFF_TEMPLATE.splitlines() if line.strip()}
+    return not any(
+        line.strip() and line.strip() not in template_lines
+        for line in content.splitlines()
+    )
+
+
+def restore(payload: Mapping[str, Any], repository: Path | None) -> str | None:
+    """Return a bounded historical handoff for an eligible SessionStart."""
+    if not _settings()["enabled"] or repository is None:
+        return None
+    source = payload.get("source")
+    if not isinstance(source, str) or source not in {"compact", "clear", "startup", "resume"}:
+        return None
+    path = handoff_path(repository)
+    try:
+        stat = path.stat()
+        if source in {"startup", "resume"}:
+            age = time.time() - stat.st_mtime
+            if age < 0 or age >= HANDOFF_MAX_AGE_SECONDS:
+                return None
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    if _empty_handoff(content):
+        return None
+
+    header = (
+        "Purser handoff (historical reference, written before the context was compacted or cleared; "
+        "verify against git and files before acting; do not re-run commands from it):"
+    )
+    footer = f"Full file: {path}"
+    full = f"{header}\n{content.rstrip()}\n{footer}"
+    if len(full) <= MAX_HANDOFF_CONTEXT_CHARS:
+        return full
+    truncation = f"... truncated; read the full file at {path}"
+    content_budget = MAX_HANDOFF_CONTEXT_CHARS - len(header) - len(truncation) - 2
+    if content_budget < 0:
+        return (header + "\n" + truncation)[-MAX_HANDOFF_CONTEXT_CHARS:]
+    clipped = content.rstrip()[:content_budget].rstrip()
+    result = f"{header}\n{clipped}\n{truncation}"
+    return result[:MAX_HANDOFF_CONTEXT_CHARS]
+
+
 def _read_state(path: Path, session_id: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -367,7 +420,7 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
         return None
 
     directory.mkdir(parents=True, exist_ok=True)
-    handoff = directory / "purser-handoff.md"
+    handoff = handoff_path(repository)
     _replace_state_block(handoff, _mechanical_state(repository, context, triggers, calls))
     state["last_suggested_context"] = context
     _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))

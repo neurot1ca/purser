@@ -16,6 +16,8 @@ import sys
 import tempfile
 import tomllib
 
+import compaction_advisor
+
 
 HEAD = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
 KEY = re.compile(r"^\s*([A-Za-z0-9_-]+)\s*=")
@@ -250,9 +252,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.detect:
             print(json.dumps(detect(config, project), indent=2))
             return 0
+        handoff = compaction_advisor.handoff_path(project)
         original = config.read_bytes() if config.exists() else None
         changed = _candidate(original, args.coder, args.reviewer, args.trust, project)
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
+        handoff_missing = not handoff.exists()
         python_original = python_file.read_bytes() if python_file.exists() else None
         python_changed = (str(Path(sys.executable).resolve()) + "\n").encode("utf-8") if sys.version_info >= (3, 11) else None
         python_update = python_changed is not None and python_original != python_changed
@@ -263,7 +267,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Create {profile}:\n{scaffold.decode('utf-8')}", end="")
             if python_update:
                 print("".join(difflib.unified_diff((python_original or b"").decode("utf-8").splitlines(keepends=True), python_changed.decode("utf-8").splitlines(keepends=True), fromfile=str(python_file), tofile=str(python_file))), end="")
-            if changed == original and scaffold is None and not python_update:
+            if handoff_missing:
+                print(f"Create {handoff}:\n{compaction_advisor.HANDOFF_TEMPLATE}", end="")
+            if changed == original and scaffold is None and not python_update and not handoff_missing:
                 print("No changes.")
             return 0
         if changed != original:
@@ -282,11 +288,19 @@ def main(argv: list[str] | None = None) -> int:
                 _atomic(profile, scaffold, exclusive=True)
             except FileExistsError:
                 pass
+        handoff_created = False
+        if handoff_missing:
+            try:
+                _atomic(handoff, compaction_advisor.HANDOFF_TEMPLATE.encode("utf-8"), exclusive=True)
+                handoff_created = True
+            except FileExistsError:
+                pass
         if python_update:
             if (python_file.read_bytes() if python_file.exists() else None) != python_original:
                 raise ValueError("Python locator path changed during setup; run the plan again")
             _atomic(python_file, python_changed)
-        print("Applied." if changed != original or scaffold is not None or python_update else "No changes.")
+        print("Applied." if changed != original or scaffold is not None or python_update or handoff_created else "No changes.")
+        print(f"Handoff: {handoff}")
         return 0
     except (OSError, UnicodeError, ValueError, tomllib.TOMLDecodeError) as exc:
         print(f"purser:init: {exc}", file=sys.stderr)

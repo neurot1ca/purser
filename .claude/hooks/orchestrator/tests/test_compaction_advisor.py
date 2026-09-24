@@ -1,6 +1,7 @@
 import io
 import json
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -151,6 +152,73 @@ def test_replaces_state_block_preserving_user_sections_and_caps_it(scratch):
     assert len(body) <= 1500 and body.endswith("... truncated")
 
 
+@pytest.mark.parametrize("source", ["compact", "clear"])
+def test_restore_after_compact_or_clear(setup, source):
+    repo, _local, _scratch = setup
+    path = advisor.handoff_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text("# Purser handoff\n## Goal\nKeep working\n", encoding="utf-8")
+
+    restored = advisor.restore({"source": source}, repo)
+
+    assert restored.startswith("Purser handoff (historical reference, written before the context was compacted or cleared;")
+    assert "Keep working" in restored
+    assert f"Full file: {path}" in restored
+
+
+def test_restore_startup_and_resume_require_recent_mtime(setup):
+    repo, _local, _scratch = setup
+    path = advisor.handoff_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text("## Goal\nRecent\n", encoding="utf-8")
+    now = advisor.time.time()
+    os.utime(path, (now - 11 * 60 * 60, now - 11 * 60 * 60))
+    assert advisor.restore({"source": "startup"}, repo)
+    assert advisor.restore({"source": "resume"}, repo)
+    os.utime(path, (now - 12 * 60 * 60, now - 12 * 60 * 60))
+    assert advisor.restore({"source": "startup"}, repo) is None
+    os.utime(path, (now - 13 * 60 * 60, now - 13 * 60 * 60))
+    assert advisor.restore({"source": "startup"}, repo) is None
+    assert advisor.restore({"source": "resume"}, repo) is None
+
+
+@pytest.mark.parametrize("source", ["compact", "clear", "startup", "resume", "unknown"])
+def test_restore_ignores_empty_template_and_missing_file(setup, source):
+    repo, _local, _scratch = setup
+    path = advisor.handoff_path(repo)
+    assert advisor.restore({"source": source}, repo) is None
+    path.parent.mkdir(parents=True)
+    path.write_text(advisor.HANDOFF_TEMPLATE, encoding="utf-8")
+    assert advisor.restore({"source": source}, repo) is None
+
+
+def test_restore_respects_disabled_setting_and_unknown_source(setup):
+    repo, _local, scratch = setup
+    path = advisor.handoff_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text("## Goal\nKeep working\n", encoding="utf-8")
+    config = scratch / "home" / ".orchestrator" / "config.toml"
+    config.parent.mkdir()
+    config.write_text("[compaction]\nenabled = false\n", encoding="utf-8")
+    assert advisor.restore({"source": "compact"}, repo) is None
+    config.write_text("[compaction]\nenabled = true\n", encoding="utf-8")
+    assert advisor.restore({"source": "other"}, repo) is None
+    assert advisor.restore({"source": "compact"}, None) is None
+
+
+def test_restore_caps_long_handoff_with_full_file_pointer(setup):
+    repo, _local, _scratch = setup
+    path = advisor.handoff_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text("H" * 8000, encoding="utf-8")
+
+    restored = advisor.restore({"source": "clear"}, repo)
+
+    assert len(restored) <= 6000
+    assert restored.startswith("Purser handoff (historical reference, written before the context was compacted or cleared;")
+    assert restored.endswith(f"... truncated; read the full file at {path}")
+
+
 def test_malformed_transcript_line_is_ignored(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit"))
@@ -173,5 +241,27 @@ def test_hook_emits_utf8_json_only_when_advisor_returns_text(monkeypatch):
     monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw2, encoding="cp1254"))
     monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw2, encoding="cp1254"))
     monkeypatch.setattr(context_io_hook.compaction_advisor, "advise", lambda *_args: (_ for _ in ()).throw(RuntimeError("advisor failed")))
+    assert context_io_hook.main() == 0
+    assert output_raw2.getvalue() == b""
+
+
+def test_session_start_hook_emits_utf8_json_only_when_restore_returns_text(monkeypatch):
+    payload = {"hook_event_name": "SessionStart", "source": "compact", "cwd": "."}
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (None, "test"))
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: "özel handoff")
+    input_raw, output_raw = io.BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8")), io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
+
+    assert context_io_hook.main() == 0
+    assert json.loads(output_raw.getvalue().decode("utf-8")) == {
+        "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "özel handoff"}
+    }
+
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: (_ for _ in ()).throw(RuntimeError("restore failed")))
+    input_raw2, output_raw2 = io.BytesIO(json.dumps(payload).encode("utf-8")), io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw2, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw2, encoding="cp1254"))
     assert context_io_hook.main() == 0
     assert output_raw2.getvalue() == b""

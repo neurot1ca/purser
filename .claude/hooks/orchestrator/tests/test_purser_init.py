@@ -19,6 +19,7 @@ def site(monkeypatch):
     home.mkdir(parents=True)
     project.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("LOCALAPPDATA", str(root / "local-app-data"))
     monkeypatch.chdir(project)
     yield home, project
     shutil.rmtree(root, ignore_errors=True)
@@ -33,6 +34,9 @@ def test_plan_writes_nothing(site, capsys):
     assert run("--plan", "--coder", "codex", "--reviewer", "none", "--trust", "--scaffold-profile") == 0
     output = capsys.readouterr().out
     assert "---" in output and "+++" in output and "schema_version = 1" in output
+    handoff = purser_init.compaction_advisor.handoff_path(project)
+    assert f"Create {handoff}:" in output
+    assert not handoff.exists()
     assert not (home / ".orchestrator").exists()
     assert not (project / ".orchestrator").exists()
 
@@ -74,7 +78,7 @@ def test_python_path_is_planned_and_second_apply_is_noop(site, capsys):
     assert run("--apply", *args) == 0
     capsys.readouterr()
     assert run("--apply", *args) == 0
-    assert capsys.readouterr().out == "No changes.\n"
+    assert capsys.readouterr().out.startswith("No changes.\nHandoff: ")
 
 
 def test_existing_different_python_path_appears_in_plan(site, capsys):
@@ -103,7 +107,8 @@ def test_already_trusted_literal_array_is_untouched(site, capsys):
     config.write_bytes(original)
     args = ("--coder", "codex", "--reviewer", "agy", "--trust")
     assert run("--plan", *args) == 0
-    assert capsys.readouterr().out == "No changes.\n"
+    handoff = purser_init.compaction_advisor.handoff_path(project)
+    assert f"Create {handoff}:" in capsys.readouterr().out
     assert run("--apply", *args) == 0
     assert config.read_bytes() == original
     assert not list(config.parent.glob("config.toml.bak-*"))
@@ -163,3 +168,18 @@ def test_detect_without_config(site, capsys):
     assert report["trusted"] is False
     assert report["profile_exists"] is False
     assert "codex" in report["agents"]
+    assert not purser_init.compaction_advisor.handoff_path(Path.cwd()).exists()
+
+
+def test_apply_creates_handoff_and_preserves_existing_file(site, capsys):
+    _, project = site
+    handoff = purser_init.compaction_advisor.handoff_path(project)
+    args = ("--apply", "--coder", "codex", "--reviewer", "none")
+    assert run(*args) == 0
+    output = capsys.readouterr().out
+    assert handoff.read_text(encoding="utf-8") == purser_init.compaction_advisor.HANDOFF_TEMPLATE
+    assert f"Handoff: {handoff}" in output
+
+    handoff.write_text("user handoff; keep it\n", encoding="utf-8")
+    assert run(*args) == 0
+    assert handoff.read_text(encoding="utf-8") == "user handoff; keep it\n"

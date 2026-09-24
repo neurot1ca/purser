@@ -42,7 +42,7 @@ def test_plugin_hooks_match_manual_installer():
             script = Path(command["args"][-1]).name
             actual.add((event, entry.get("matcher"), script, command["timeout"]))
 
-    assert actual == expected
+    assert {entry for entry in actual if entry[0] != "SessionStart"} == expected
 
 
 def test_plugin_manifest_paths_and_registration():
@@ -62,7 +62,19 @@ def test_plugin_manifest_paths_and_registration():
     # Plugin commands are auto-discovered from the conventional commands/ directory.
     assert (ROOT / "commands/check.md").is_file()
     assert set(hooks["hooks"]) == {
-        "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "UserPromptSubmit"
+        "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "UserPromptSubmit", "SessionStart"
+    }
+    session_start, = hooks["hooks"]["SessionStart"]
+    assert "matcher" not in session_start
+    assert session_start["hooks"][0] == {
+        "type": "command",
+        "command": "node",
+        "timeout": 60,
+        "args": [
+            "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+            "hook",
+            "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py",
+        ],
     }
     for name, timeout in (
         ("PreToolUse", 60),

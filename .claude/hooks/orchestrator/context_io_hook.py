@@ -50,6 +50,25 @@ def main() -> int:
                             stdout_buffer.write(
                                 json.dumps(output, ensure_ascii=False).encode("utf-8")
                             )
+                            stdout_buffer.flush()
+                except BaseException:
+                    pass
+            elif value.get("hook_event_name") == "SessionStart":
+                try:
+                    additional_context = compaction_advisor.restore(value, repository)
+                    if additional_context:
+                        output = {
+                            "hookSpecificOutput": {
+                                "hookEventName": "SessionStart",
+                                "additionalContext": additional_context,
+                            }
+                        }
+                        stdout_buffer = getattr(sys.stdout, "buffer", None)
+                        if stdout_buffer is not None:
+                            stdout_buffer.write(
+                                json.dumps(output, ensure_ascii=False).encode("utf-8")
+                            )
+                            stdout_buffer.flush()
                 except BaseException:
                     pass
     except BaseException:
