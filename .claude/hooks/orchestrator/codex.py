@@ -736,6 +736,43 @@ def _project_state_root(runtime_root: Path, project_key: str) -> Path:
     return runtime_root / "projects" / project_key
 
 
+def _thread_index_path(runtime_root: Path, thread_id: Any) -> Path | None:
+    if not isinstance(thread_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", thread_id):
+        return None
+    return runtime_root / "threads" / (hashlib.sha256(thread_id.encode("utf-8")).hexdigest() + ".json")
+
+
+def _indexed_reply_root(runtime_root: Path, thread_id: str) -> tuple[Path | None, str]:
+    path = _thread_index_path(runtime_root, thread_id)
+    if path is None:
+        return None, "INVALID_THREAD_ID"
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, ""
+    except (OSError, UnicodeError, ValueError):
+        return None, "RECORDED_PROJECT_UNRESOLVED"
+    if not isinstance(entry, dict) or entry.get("thread_id") != thread_id:
+        return None, "RECORDED_PROJECT_UNRESOLVED"
+    stored = entry.get("project_root")
+    if not isinstance(stored, str) or not stored or not Path(stored).is_absolute():
+        return None, "RECORDED_PROJECT_UNRESOLVED"
+    resolved, _ = project_root.resolve_candidate(stored)
+    try:
+        same_root = resolved == Path(stored).resolve()
+    except (OSError, RuntimeError, ValueError):
+        same_root = False
+    if resolved is None or not same_root:
+        return None, "RECORDED_PROJECT_UNRESOLVED"
+    return resolved, ""
+
+
+def _record_thread_root(runtime_root: Path, thread_id: str | None, repository: Path | None) -> None:
+    path = _thread_index_path(runtime_root, thread_id)
+    if path is not None and repository is not None:
+        _atomic_json_write(path, {"thread_id": thread_id, "project_root": str(repository)})
+
+
 def _call_key(event: Mapping[str, Any]) -> str:
     tool_use_id = event.get("tool_use_id")
     if not isinstance(tool_use_id, str) or not tool_use_id:
@@ -1112,7 +1149,19 @@ def pre_tool_use(
         except BaseException:
             pass
         _call_key(event)
-        repository, project_root_reason = _repo_root(event, repo_root)
+        indexed_root = None
+        if tool_name in CODEX_REPLY_TOOL_NAMES:
+            indexed_root, index_error = _indexed_reply_root(runtime_root, tool_input.get("threadId"))
+            if index_error:
+                message = (
+                    "codex-reply threadId must be a simple identifier without path separators."
+                    if index_error == "INVALID_THREAD_ID" else
+                    "The recorded project for this codex-reply thread is no longer a git work tree."
+                )
+                return _observed_denial(event, index_error, message, state_root=state_root)
+        repository, project_root_reason = (
+            (indexed_root, "") if indexed_root is not None else _repo_root(event, repo_root)
+        )
         project_namespace = project_root.project_key(repository)
         session_ledger = ledger.SessionLedger(
             _project_state_root(runtime_root, project_namespace)
@@ -1357,6 +1406,8 @@ def pre_tool_use(
         saved = session_ledger.save(session_record)
         if saved["status"] != ledger.OK:
             raise WiringError(saved.get("message", "session ledger could not be updated"))
+        if continuation_thread_id is not None:
+            _record_thread_root(runtime_root, continuation_thread_id, repository)
 
         observation = {
             "task_id": parsed.task_id,
@@ -2633,6 +2684,7 @@ def post_tool_use(
                 _finding(saved.get("code", "LEDGER_WRITE_FAILED"), saved.get("message", "Ledger update failed."))
             )
         else:
+            _record_thread_root(runtime_root, thread_id, repository)
             _remove_pending(runtime_root, event)
         try:
             _post_observations(

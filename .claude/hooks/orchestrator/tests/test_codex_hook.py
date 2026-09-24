@@ -604,13 +604,14 @@ def save_live_thread(
     assert result["status"] == ledger.OK
 
 
-def test_same_task_live_threads_are_isolated_by_project(config):
+@pytest.mark.parametrize("nested", [False, True])
+def test_reply_follows_recorded_project_across_session_cwd(config, nested):
     tmp_path = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "project-isolation" / uuid.uuid4().hex
     tmp_path.mkdir(parents=True)
 
     def make_repo(name):
         repo = tmp_path / name
-        repo.mkdir()
+        repo.mkdir(parents=True)
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True, timeout=10)
         (repo / "file0.py").write_text("value = 1\n", encoding="utf-8")
         (repo / "file1.py").write_text("value = 1\n", encoding="utf-8")
@@ -627,10 +628,11 @@ def test_same_task_live_threads_are_isolated_by_project(config):
     try:
         state = tmp_path / "state"
         repo_a = make_repo("project-a")
-        repo_b = make_repo("project-b")
+        repo_b = make_repo("project-b") if not nested else make_repo("project-a/.tmp/project-b")
         call_a = event(prompt=orch(task="shared-task") + "\nImplement.", tool_use_id="call-a")
+        call_a["cwd"] = str(repo_a)
 
-        codex.pre_tool_use(call_a, config=config, state_root=state, repo_root=repo_a)
+        codex.pre_tool_use(call_a, config=config, state_root=state)
         post_a = {
             **call_a,
             "hook_event_name": "PostToolUse",
@@ -638,7 +640,7 @@ def test_same_task_live_threads_are_isolated_by_project(config):
                 {"type": "text", "text": json.dumps({"threadId": "thread-a", "content": "done"})}
             ],
         }
-        codex.post_tool_use(post_a, config=config, state_root=state, repo_root=repo_a)
+        codex.post_tool_use(post_a, config=config, state_root=state)
 
         reply_b = event(
             codex.CODEX_REPLY_TOOL,
@@ -646,9 +648,20 @@ def test_same_task_live_threads_are_isolated_by_project(config):
             tool_use_id="call-b",
             threadId="thread-a",
         )
-        result = codex.pre_tool_use(reply_b, config=config, state_root=state, repo_root=repo_b)
+        reply_b["cwd"] = str(repo_b)
+        result = codex.pre_tool_use(reply_b, config=config, state_root=state)
 
-        assert result["hookSpecificOutput"]["permissionDecisionReason"].startswith("NO_LIVE_THREAD:")
+        assert "updatedInput" in result["hookSpecificOutput"]
+        assert codex._read_pending(state, reply_b)["repo_root"] == str(repo_a.resolve())
+        reply_post = {
+            **reply_b,
+            "hook_event_name": "PostToolUse",
+            "tool_response": [
+                {"type": "text", "text": json.dumps({"threadId": "thread-a", "content": "continued"})}
+            ],
+        }
+        bundle = response_bundle(codex.post_tool_use(reply_post, config=config, state_root=state), config)
+        assert bundle["project_root_reason"] is None
         key_a = project_root.project_key(repo_a.resolve())
         key_b = project_root.project_key(repo_b.resolve())
         record_a = ledger.SessionLedger(state / "projects" / key_a).load("shared-task")
@@ -657,6 +670,81 @@ def test_same_task_live_threads_are_isolated_by_project(config):
         assert record_b["status"] == ledger.MISSING
     finally:
         remove_test_tree(tmp_path)
+
+
+def test_legacy_thread_without_index_still_uses_session_project(workspace, config):
+    repo, state = workspace
+    save_live_thread(state)
+    reply = event(codex.CODEX_REPLY_TOOL, prompt="Continue.", threadId="thread-1")
+    reply["cwd"] = str(repo)
+
+    result = codex.pre_tool_use(reply, config=config, state_root=state)
+
+    assert "updatedInput" in result["hookSpecificOutput"]
+    assert codex._read_pending(state, reply)["repo_root"] == str(repo.resolve())
+
+
+def test_legacy_thread_without_index_in_other_project_is_denied(workspace, config):
+    repo, state = workspace
+    save_live_thread(state)
+    other = repo / ".tmp" / "other"
+    other.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=other, check=True, timeout=10)
+    reply = event(codex.CODEX_REPLY_TOOL, prompt="Continue.", threadId="thread-1")
+    reply["cwd"] = str(other)
+
+    result = codex.pre_tool_use(reply, config=config, state_root=state)
+
+    assert result["hookSpecificOutput"]["permissionDecisionReason"].startswith("NO_LIVE_THREAD:")
+
+
+def test_indexed_thread_with_lost_git_root_denies_without_fallback(workspace, config):
+    repo, state = workspace
+    save_live_thread(state)
+    codex._record_thread_root(state, "thread-1", repo.resolve())
+    (repo / ".git").rename(repo / ".git-gone")
+    reply = event(codex.CODEX_REPLY_TOOL, prompt="Continue.", threadId="thread-1")
+    reply["cwd"] = str(repo)
+
+    result = codex.pre_tool_use(reply, config=config, state_root=state)
+
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.startswith("RECORDED_PROJECT_UNRESOLVED:")
+    assert "no longer a git work tree" in reason
+
+
+def test_indexed_reply_failure_records_in_thread_project(workspace, config):
+    repo, state = workspace
+    save_live_thread(state)
+    codex._record_thread_root(state, "thread-1", repo.resolve())
+    other = repo / ".tmp" / "other"
+    other.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=other, check=True, timeout=10)
+    reply = event(codex.CODEX_REPLY_TOOL, prompt="Continue.", threadId="thread-1")
+    reply["cwd"] = str(other)
+
+    pre = codex.pre_tool_use(reply, config=config, state_root=state)
+    assert "updatedInput" in pre["hookSpecificOutput"]
+    failure = {**reply, "hook_event_name": "PostToolUseFailure", "error": "timeout"}
+    codex.post_tool_use_failure(failure, config=config, state_root=state)
+
+    record_a = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")
+    record_b = ledger.SessionLedger(state / "projects" / project_root.project_key(other.resolve())).load("task-1")
+    assert record_a["record"]["last_outcome"]["ambiguous_outcome"] is True
+    assert record_b["status"] == ledger.MISSING
+
+
+@pytest.mark.parametrize("thread_id", ["../x", "a/b", "a\\b"])
+def test_path_like_thread_id_is_rejected_without_index_path(workspace, config, thread_id):
+    repo, state = workspace
+    reply = event(codex.CODEX_REPLY_TOOL, prompt="Continue.", threadId=thread_id)
+    reply["cwd"] = str(repo)
+
+    result = codex.pre_tool_use(reply, config=config, state_root=state)
+
+    assert codex._thread_index_path(state, thread_id) is None
+    assert result["hookSpecificOutput"]["permissionDecisionReason"].startswith("INVALID_THREAD_ID:")
+    assert not (state / "threads").exists()
 
 
 @pytest.mark.parametrize(
