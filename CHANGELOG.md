@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.14 — 2026-09-24
+
+- **New:** a routed Codex call shows a one-line systemMessage such as 'Purser: route=mechanical -> gpt-6-luna / high', because the call UI shows Claude's input, not the hook's routed model. Desktop only; mobile does not show systemMessage (`898c421`).
+
 ## 0.1.13 — 2026-09-24
 
 - **Fix:** the handoff's Purser state block and the task-end trigger take a codex-reply's task from its result bundle when the prompt has no ORCH line, instead of recording task=unknown (`f7004a1`).
