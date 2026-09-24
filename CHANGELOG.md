@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.8 — 2026-09-24
+
+- **New:** compaction advisor step 2. After `/compact` or `/clear`, a
+  SessionStart hook injects `purser-handoff.md` (historical reference, capped
+  at 6,000 characters; on startup/resume only if written in the last 12
+  hours). `/purser:init` creates the handoff template and prints its path
+  (`d74e5e8`).
+
 ## 0.1.7 — 2026-09-24
 
 - **New:** compaction advisor (step 1 of 2). On a user prompt, when the
