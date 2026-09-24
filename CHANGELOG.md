@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.15 — 2026-09-24
+
+- **Change:** the compaction notice must be the very last text of the turn, after every tool call, so a later tool call or reply cannot bury it (`1c46872`).
+
 ## 0.1.14 — 2026-09-24
 
 - **New:** a routed Codex call shows a one-line systemMessage such as 'Purser: route=mechanical -> gpt-6-luna / high', because the call UI shows Claude's input, not the hook's routed model. Desktop only; mobile does not show systemMessage (`898c421`).
