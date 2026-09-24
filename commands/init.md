@@ -9,6 +9,7 @@ allowed-tools: Bash(python *)
 4. Ask whether to trust the current project and whether to scaffold `.orchestrator/profile.toml`.
 5. Run `python "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/purser_init.py" --plan --coder X --reviewer Y` with `--trust` and `--scaffold-profile` only if chosen. Show the entire plan. Ask for explicit yes to this exact plan. Only after that yes, run the same options with `--apply` instead of `--plan`.
 6. Run `/purser:check` and show its result.
+7. Offer `/purser:optimize` in one sentence; do not run it automatically.
 
 The plan shows the Python 3.11+ interpreter path that `--apply` stores in `~/.orchestrator/python` for plugin launches.
 
