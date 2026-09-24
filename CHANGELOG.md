@@ -3,6 +3,16 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.4 — 2026-09-24
+
+- **Fix:** hooks now read and write their JSON as UTF-8 on Windows instead of
+  the console code page. Before, a bundle containing a character outside that
+  code page (a failing Vitest tail's `❯`) crashed the PostToolUse hook, and
+  Claude silently received the raw Codex result without the
+  `HOOK_CHECK_FAILED` bundle; non-ASCII prompt text was also garbled, and could
+  crash the Codex bridge with a lone surrogate. The Python locator now sets
+  `PYTHONUTF8=1` for every hook and the bridge (`f1575e6`).
+
 ## 0.1.3 — 2026-09-24
 
 - **Fix:** a `codex-reply` now resolves to the project its thread was created
