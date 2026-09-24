@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 import context_io_telemetry
+import compaction_advisor
 import project_profile
 import project_root
 
@@ -34,6 +35,23 @@ def main() -> int:
                 protected_paths=protected_paths,
                 hook_started_ns=started,
             )
+            if value.get("hook_event_name") == "UserPromptSubmit":
+                try:
+                    additional_context = compaction_advisor.advise(value, repository)
+                    if additional_context:
+                        output = {
+                            "hookSpecificOutput": {
+                                "hookEventName": "UserPromptSubmit",
+                                "additionalContext": additional_context,
+                            }
+                        }
+                        stdout_buffer = getattr(sys.stdout, "buffer", None)
+                        if stdout_buffer is not None:
+                            stdout_buffer.write(
+                                json.dumps(output, ensure_ascii=False).encode("utf-8")
+                            )
+                except BaseException:
+                    pass
     except BaseException:
         pass
     return 0
