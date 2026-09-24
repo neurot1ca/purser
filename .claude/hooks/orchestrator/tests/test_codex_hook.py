@@ -3836,3 +3836,25 @@ def test_post_accepts_pending_written_before_project_namespacing(workspace, conf
 
     assert not any(item["code"] == "INTERNAL_POST_ERROR" for item in bundle["findings"])
     assert bundle["thread_id"] == "thread-legacy"
+
+
+def test_hook_main_reads_utf8_and_emits_utf8_with_cp1254_wrappers(monkeypatch):
+    payload = {"hook_event_name": "unknown", "prompt": "❯ ı"}
+    input_raw = io.BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    output_raw = io.BytesIO()
+    monkeypatch.setattr(hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
+    monkeypatch.setattr(hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
+    monkeypatch.setattr(hook, "dispatch", lambda event_value: event_value)
+
+    assert hook.main() == 0
+    assert json.loads(output_raw.getvalue().decode("utf-8")) == payload
+
+
+def test_hook_main_writes_non_ascii_response_as_utf8_with_cp1254(monkeypatch):
+    output_raw = io.BytesIO()
+    monkeypatch.setattr(hook.sys, "stdin", io.TextIOWrapper(io.BytesIO(b"{}"), encoding="cp1254"))
+    monkeypatch.setattr(hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
+    monkeypatch.setattr(hook, "dispatch", lambda _event_value: {"marker": "❯"})
+
+    assert hook.main() == 0
+    assert json.loads(output_raw.getvalue().decode("utf-8")) == {"marker": "❯"}

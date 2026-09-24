@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from pathlib import Path
@@ -131,3 +132,19 @@ def test_json_output_parses(fake_home, monkeypatch, capsys):
     no_environment_problems(monkeypatch)
     assert purser_check.main(["--json"]) == 0
     assert json.loads(capsys.readouterr().out)["checks"]
+
+
+def test_json_output_is_utf8_with_cp1254_stdout(fake_home, monkeypatch):
+    settings(fake_home, plugin=True)
+    report = {
+        "checks": [purser_check._row("Unicode", "WARN", "Vitest marker ❯ and Turkish ı")],
+        "next_steps": [],
+        "exit_code": 0,
+    }
+    monkeypatch.setattr(purser_check, "collect_report", lambda: report)
+    output_raw = io.BytesIO()
+    monkeypatch.setattr(purser_check.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
+
+    assert purser_check.main(["--json"]) == 0
+    parsed = json.loads(output_raw.getvalue().decode("utf-8"))
+    assert parsed["checks"][0]["detail"] == "Vitest marker ❯ and Turkish ı"

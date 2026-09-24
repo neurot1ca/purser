@@ -16,7 +16,11 @@ import project_root
 def main() -> int:
     started = time.perf_counter_ns()
     try:
-        value: Any = json.load(sys.stdin)
+        stdin_buffer = getattr(sys.stdin, "buffer", None)
+        if stdin_buffer is None:
+            value: Any = json.load(sys.stdin)
+        else:
+            value = json.loads(stdin_buffer.read().decode("utf-8", errors="strict"))
         if isinstance(value, Mapping):
             repository, _reason = project_root.resolve_project_root(value)
             protected_paths = (

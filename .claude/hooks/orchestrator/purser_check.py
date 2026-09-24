@@ -19,6 +19,15 @@ ROOT = Path(__file__).resolve().parents[3]
 STATUSES = {"OK", "WARN", "FAIL", "INFO"}
 
 
+def _write_output(value: str) -> None:
+    stdout_buffer = getattr(sys.stdout, "buffer", None)
+    if stdout_buffer is None:
+        print(value)
+    else:
+        stdout_buffer.write((value + "\n").encode("utf-8"))
+        stdout_buffer.flush()
+
+
 def _row(check: str, status: str, detail: str, next_step: str | None = None) -> dict:
     return {"check": check, "status": status, "detail": detail, "next_step": next_step}
 
@@ -267,9 +276,9 @@ def main(argv=None) -> int:
         args = parser.parse_args(argv)
         report = collect_report()
         if args.json:
-            print(json.dumps(report, ensure_ascii=False))
+            _write_output(json.dumps(report, ensure_ascii=False))
         else:
-            print(render_markdown(report))
+            _write_output(render_markdown(report))
         return report["exit_code"]
     except Exception as exc:
         fallback = {
@@ -278,9 +287,9 @@ def main(argv=None) -> int:
             "exit_code": 0,
         }
         try:
-            print(json.dumps(fallback, ensure_ascii=False) if "--json" in (argv or sys.argv[1:]) else render_markdown(fallback))
+            _write_output(json.dumps(fallback, ensure_ascii=False) if "--json" in (argv or sys.argv[1:]) else render_markdown(fallback))
         except Exception:
-            print("| Check | Status | Detail |\n| --- | --- | --- |\n| Purser check | WARN | check could not run |\n\nNext steps:\n1. Resolve the check error and run `/purser:check` again.")
+            _write_output("| Check | Status | Detail |\n| --- | --- | --- |\n| Purser check | WARN | check could not run |\n\nNext steps:\n1. Resolve the check error and run `/purser:check` again.")
         return 0
 
 

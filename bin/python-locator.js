@@ -55,7 +55,7 @@ function main(args, resolve = resolvePython) {
     return mode === 'pre-codex' ? 2 : mode === 'hook' ? 0 : 1;
   }
   const child = spawnSync(selected.path, args, {
-    stdio: 'inherit', windowsHide: true,
+    stdio: 'inherit', windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' },
   });
   if (child.error) {
     process.stderr.write(`Purser: Python launch failed: ${child.error.message}\n`);

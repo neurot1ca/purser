@@ -102,3 +102,14 @@ def test_stdin_stdout_and_exit_code_pass_through(scratch):
     result = subprocess.run(["node", str(LOCATOR), "hook", str(target)], input=b"hello\x00world", capture_output=True, env=env)
     assert result.returncode == 7
     assert result.stdout == b"hello\x00world"
+
+
+def test_spawned_python_always_receives_utf8_mode(scratch):
+    code = f'''const cp=require('node:child_process');
+cp.spawnSync=(command,args,options)=>{{process.stdout.write(options.env.PYTHONUTF8);return {{status:0}}}};
+const locator=require({json.dumps(str(LOCATOR))});
+process.exit(locator.main(['hook','target.py'],()=>({{path:'stub-python'}})));'''
+    result = node(code, env={**os.environ, "PYTHONUTF8": "0"})
+
+    assert result.returncode == 0
+    assert result.stdout == "1"

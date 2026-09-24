@@ -29,7 +29,11 @@ def main() -> int:
     response: dict[str, Any] = {}
     value: Any = None
     try:
-        value = json.load(sys.stdin)
+        stdin_buffer = getattr(sys.stdin, "buffer", None)
+        if stdin_buffer is None:
+            value = json.load(sys.stdin)
+        else:
+            value = json.loads(stdin_buffer.read().decode("utf-8", errors="strict"))
         if isinstance(value, Mapping):
             response = dispatch(value)
     except Exception as error:
@@ -57,8 +61,14 @@ def main() -> int:
             )
         except Exception:
             pass
-    sys.stdout.write(json_transport.dumps(response, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
+    rendered = json_transport.dumps(response, separators=(",", ":")) + "\n"
+    stdout_buffer = getattr(sys.stdout, "buffer", None)
+    if stdout_buffer is None:
+        sys.stdout.write(rendered)
+        sys.stdout.flush()
+    else:
+        stdout_buffer.write(rendered.encode("utf-8"))
+        stdout_buffer.flush()
     return 0
 
 
