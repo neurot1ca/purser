@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.12 — 2026-09-24
+
+- **Change:** the `codex-orchestrator` skill caps replies to the user at 5
+  plain lines unless they ask for detail (result, one recommendation, at most
+  one question; no tables or retelling), because every reply is re-read on
+  each later request (`0a9f749`).
+
 ## 0.1.11 — 2026-09-24
 
 - **Change:** the compaction notice adds "Nothing is lost." after the handoff
