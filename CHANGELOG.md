@@ -3,6 +3,20 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.7 — 2026-09-24
+
+- **New:** compaction advisor (step 1 of 2). On a user prompt, when the
+  session context is >= 250K tokens and a phase boundary was crossed (>= 20
+  min idle, a successful `git commit`, or a reviewed Codex result with a new
+  `task=`), the UserPromptSubmit hook asks Claude to fill `purser-handoff.md`
+  in Purser's per-project state directory (outside git) and to suggest
+  `/compact` to the user. The hook writes a bounded "Purser state" block
+  (recent Codex calls, commits, uncommitted count) with no model call, and
+  does not repeat until the context grows 60K more. Settings: `[compaction]`
+  in `~/.orchestrator/config.toml` (`enabled`, `threshold_tokens`,
+  `idle_minutes`, `regrow_tokens`) (`03bc330`). A transcript replay of 65 desktop sessions
+  estimated up to ~37% billable-weight saving at 250K.
+
 ## 0.1.6 — 2026-09-24
 
 - **Change:** the `codex-orchestrator` skill sends exploration that would take
