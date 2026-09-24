@@ -14,8 +14,6 @@ before it is published.
   require `basis=` naming the design choice left to the worker; without it the
   call is denied with `SOL_ROUTE_NEEDS_BASIS` and pointed to `route=subtle`
   (`d5c6a21`).
-- **Docs:** source-verified ECC study, `docs/research/ECC_SOURCE_STUDY_20260924.md`
-  (`281d2b7`).
 
 ## 0.1.2 — 2026-09-24
 
