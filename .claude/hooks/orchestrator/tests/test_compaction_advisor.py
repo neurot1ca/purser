@@ -95,6 +95,8 @@ def test_fires_for_each_boundary_above_threshold(setup, trigger):
     assert "Purser prepared. Nothing is lost.*" in result
     assert "Do not claim compaction is lossless" not in result
     assert "write that question under Next" in result
+    assert "after every tool call" in result
+    assert "End your reply, after everything else" not in result
     assert "every later message costs far less" not in result
 
 
