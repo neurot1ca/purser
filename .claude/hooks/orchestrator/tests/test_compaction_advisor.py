@@ -76,9 +76,30 @@ def _event(scratch, repo, local, records, session="session-1"):
 @pytest.mark.parametrize("trigger", ["idle", "commit", "task"])
 def test_fires_for_each_boundary_above_threshold(setup, trigger):
     repo, local, scratch = setup
-    event = _event(scratch, repo, local, _records("commit" if trigger == "commit" else "task" if trigger == "task" else "none", age_minutes=25 if trigger == "idle" else 1))
+    event = _event(scratch, repo, local, _records("commit" if trigger == "commit" else "task" if trigger == "task" else "none", context=263_373, age_minutes=25 if trigger == "idle" else 1))
     result = advisor.advise(event, repo, now=NOW)
     assert result and f"trigger(s): {trigger}" in result
+    assert "---" in result
+    assert "⚓ **Context passed 263K" in result
+    assert "**~72%**" in result
+    assert "`/compact`" in result
+    assert "The ship stays dry" in result
+    assert "Do not claim compaction is lossless" in result
+    assert "write that question under Next" in result
+    assert "every later message costs far less" not in result
+
+
+@pytest.mark.parametrize("context", [75_000, 60_000])
+def test_post_compact_estimate_does_not_go_negative(setup, context):
+    repo, local, scratch = setup
+    config = Path.home() / ".orchestrator" / "config.toml"
+    config.parent.mkdir()
+    config.write_text("[compaction]\nthreshold_tokens = 50000\n", encoding="utf-8")
+    event = _event(scratch, repo, local, _records("commit", context=context))
+
+    result = advisor.advise(event, repo, now=NOW)
+
+    assert result and "**~0%**" in result
 
 
 def test_does_not_fire_below_threshold(setup):

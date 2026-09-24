@@ -21,6 +21,7 @@ import telemetry
 DEFAULT_THRESHOLD_TOKENS = 250_000
 DEFAULT_IDLE_MINUTES = 20
 DEFAULT_REGROW_TOKENS = 60_000
+POST_COMPACT_CONTEXT_TOKENS = 75_000
 MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024
 MAX_HANDOFF_CONTEXT_CHARS = 6_000
 HANDOFF_MAX_AGE_SECONDS = 12 * 60 * 60
@@ -424,9 +425,10 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     _replace_state_block(handoff, _mechanical_state(repository, context, triggers, calls))
     state["last_suggested_context"] = context
     _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    pct = max(0, round(100 * (1 - POST_COMPACT_CONTEXT_TOKENS / context)))
     return (
         f"Purser: {context:,} context tokens; trigger(s): {', '.join(triggers)}. Handoff: {handoff}. "
-        f"After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total); link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. End your reply in the user's language saying the handoff is ready at {handoff} and running /compact now saves tokens. Do not compact or clear context yourself."
+        f"After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total); link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction. End your reply, after everything else including any question, with a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n> ⚓ **Context passed {context // 1000}K. Purser prepared your handoff.**\n> *Type `/compact` now to save **~{pct}%** on every later message!*\n> *The ship stays dry: decisions and the next step will be read from the handoff Purser prepared.*\n> *Handoff: `{handoff}`*\nThe percentage is an estimate; keep the ~. Do not claim compaction is lossless. Do not compact or clear context yourself."
     )
 
 
