@@ -1444,8 +1444,19 @@ def _reviewer_findings_with_evidence(
     report: Mapping[str, Any], root: Path, event: Mapping[str, Any]
 ) -> Any:
     findings = report.get("findings", [])
+    error_code = report.get("error_code")
+    stderr_tail = getattr(report, "stderr_tail", None)
+    if error_code in {"REVIEWER_PROCESS_FAILED", "REVIEWER_TIMEOUT"} and stderr_tail:
+        message = findings[0]["message"] if findings else "Reviewer-1 process failed."
+        try:
+            path = _persist_raw_output(root, event, stderr_tail, "-reviewer1-stderr")
+        except Exception as error:
+            message += f" stderr not saved ({type(error).__name__})"
+        else:
+            message += f" stderr: {path}"
+        return [_finding(error_code, message)]
     raw_stdout = getattr(report, "raw_stdout", None)
-    if report.get("error_code") != "REVIEWER_RESPONSE_INVALID" or raw_stdout is None:
+    if error_code != "REVIEWER_RESPONSE_INVALID" or raw_stdout is None:
         return findings
     message = findings[0]["message"] if findings else "Reviewer-1 response was invalid."
     try:
@@ -1885,6 +1896,9 @@ def _post_observations(
             if isinstance(duration_seconds, (int, float)) and not isinstance(duration_seconds, bool)
             else None
         )
+        elapsed_seconds = getattr(reviewer_report, "elapsed_seconds", None)
+        if duration_ms is None and isinstance(elapsed_seconds, (int, float)) and not isinstance(elapsed_seconds, bool):
+            duration_ms = elapsed_seconds * 1000
         review_payload: dict[str, Any] = {
             "state_root": runtime_root,
             **envelope,
@@ -1904,6 +1918,9 @@ def _post_observations(
             event_type = "REVIEWER1_FINISHED"
         else:
             event_type = "REVIEWER1_FAILED"
+            reviewer_error_code = reviewer_report.get("error_code") if isinstance(reviewer_report, Mapping) else None
+            if reviewer_error_code is not None:
+                review_payload["reviewer1_error_code"] = reviewer_error_code
             review_payload["failure_code"] = (
                 "REVIEWER1_UNAVAILABLE"
                 if bundle.get("reviewer1_result") == policy.REVIEWER1_UNAVAILABLE

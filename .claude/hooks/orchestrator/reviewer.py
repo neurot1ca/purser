@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Any
 
 import ledger
@@ -58,6 +59,8 @@ _FORBIDDEN_TEXT = (
         r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+\-=]{12,}"
     ),
 )
+_FAST_PROCESS_FAILURE_RETRY_SECONDS = 60.0
+_MIN_RETRY_REMAINING_SECONDS = 5.0
 _NARRATIVE_TEXT = _FORBIDDEN_TEXT[:1]
 _AUTHORITY_HEADINGS = (
     "Authority",
@@ -176,6 +179,8 @@ class UnavailableReview(_ResultMapping):
     usage: tuple[tuple[str, int | float], ...] = ()
     raw_stdout: str | None = None
     decoder_detail: str | None = None
+    elapsed_seconds: float | None = None
+    stderr_tail: str | None = None
 
     def _values(self) -> dict[str, Any]:
         return {
@@ -248,6 +253,12 @@ def _completed(
 
 def _unavailable(code: str, message: str, config: Mapping[str, Any]) -> UnavailableReview:
     return UnavailableReview(code, message, _requested_model(config))
+
+
+def _stderr_tail(value: Any) -> str | None:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return value[-2048:] if isinstance(value, str) and value else None
 
 
 def _incomplete_packet(packet: PacketOmitted, config: Mapping[str, Any]) -> IncompleteReview:
@@ -705,6 +716,7 @@ def invoke_packet(
         return _incomplete_packet(packet, config)
     packet_path: Path | None = None
     scratch_root: Path | None = None
+    retried = False
     try:
         timeout = config["reviewer1_timeout_seconds"]
         if (
@@ -748,27 +760,58 @@ def invoke_packet(
             config,
             repository_root=repository,
         )
-        completed = runner(
-            command,
-            cwd=working_directory,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-        )
-        returncode = getattr(completed, "returncode", None)
-        stdout = getattr(completed, "stdout", None)
-        if not isinstance(returncode, int) or isinstance(returncode, bool) or not isinstance(
-            stdout, str
-        ):
-            raise ValueError("reviewer process returned an unexpected shape")
-        if returncode != 0:
-            return _unavailable(
+        elapsed_total = 0.0
+        attempt_timeout = timeout
+        while True:
+            started = time.monotonic()
+            try:
+                completed = runner(
+                    command,
+                    cwd=working_directory,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=attempt_timeout,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                elapsed_total += max(0.0, time.monotonic() - started)
+                suffix = " (after 1 retry)" if retried else ""
+                return UnavailableReview(
+                    "REVIEWER_TIMEOUT",
+                    f"Reviewer-1 exceeded its bounded timeout.{suffix}",
+                    _requested_model(config),
+                    elapsed_seconds=elapsed_total,
+                    stderr_tail=_stderr_tail(error.stderr),
+                )
+            elapsed = max(0.0, time.monotonic() - started)
+            elapsed_total += elapsed
+            returncode = getattr(completed, "returncode", None)
+            stdout = getattr(completed, "stdout", None)
+            stderr_tail = _stderr_tail(getattr(completed, "stderr", None))
+            if not isinstance(returncode, int) or isinstance(returncode, bool) or not isinstance(
+                stdout, str
+            ):
+                raise ValueError("reviewer process returned an unexpected shape")
+            if returncode == 0:
+                break
+            remaining = timeout - elapsed_total
+            if (
+                not retried
+                and elapsed < _FAST_PROCESS_FAILURE_RETRY_SECONDS
+                and remaining > _MIN_RETRY_REMAINING_SECONDS
+            ):
+                retried = True
+                attempt_timeout = remaining
+                continue
+            suffix = " (after 1 retry)" if retried else ""
+            return UnavailableReview(
                 "REVIEWER_PROCESS_FAILED",
-                f"Reviewer-1 exited non-zero ({returncode}).",
-                config,
+                f"Reviewer-1 exited non-zero ({returncode}).{suffix}",
+                _requested_model(config),
+                elapsed_seconds=elapsed_total,
+                stderr_tail=stderr_tail,
             )
         try:
             conversation_id, response, duration_seconds, usage = parse_envelope(
@@ -777,18 +820,22 @@ def invoke_packet(
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             return UnavailableReview(
                 "REVIEWER_RESPONSE_INVALID",
-                f"Reviewer-1 response or configuration was invalid ({type(error).__name__}).",
+                f"Reviewer-1 response or configuration was invalid ({type(error).__name__})."
+                + (" (after 1 retry)" if retried else ""),
                 _requested_model(config),
                 raw_stdout=stdout[-262144:],
                 decoder_detail=str(error)[:200],
+                elapsed_seconds=elapsed_total,
             )
         if response["result"] == policy.REVIEWER1_UNAVAILABLE:
             return UnavailableReview(
                 "REVIEWER_MODEL_REPORTED_UNAVAILABLE",
-                "Reviewer-1 returned REVIEWER1_UNAVAILABLE.",
+                "Reviewer-1 returned REVIEWER1_UNAVAILABLE."
+                + (" (after 1 retry)" if retried else ""),
                 _requested_model(config),
                 duration_seconds,
                 tuple(sorted(usage.items())),
+                elapsed_seconds=elapsed_total,
             )
         result = response["result"]
         findings = response["findings"]
@@ -817,23 +864,26 @@ def invoke_packet(
             duration_seconds,
             usage,
         )
-    except subprocess.TimeoutExpired:
-        return _unavailable("REVIEWER_TIMEOUT", "Reviewer-1 exceeded its bounded timeout.", config)
     except FileNotFoundError:
-        return _unavailable(
-            "REVIEWER_EXECUTABLE_MISSING", "The configured Reviewer-1 executable was not found.", config
+        return UnavailableReview(
+            "REVIEWER_EXECUTABLE_MISSING",
+            "The configured Reviewer-1 executable was not found."
+            + (" (after 1 retry)" if retried else ""),
+            _requested_model(config),
         )
     except (json.JSONDecodeError, TypeError, ValueError, OSError) as error:
-        return _unavailable(
+        return UnavailableReview(
             "REVIEWER_RESPONSE_INVALID",
-            f"Reviewer-1 response or configuration was invalid ({type(error).__name__}).",
-            config,
+            f"Reviewer-1 response or configuration was invalid ({type(error).__name__})."
+            + (" (after 1 retry)" if retried else ""),
+            _requested_model(config),
         )
     except Exception as error:
-        return _unavailable(
+        return UnavailableReview(
             "REVIEWER_UNEXPECTED_FAILURE",
-            f"Reviewer-1 failed unexpectedly ({type(error).__name__}).",
-            config,
+            f"Reviewer-1 failed unexpectedly ({type(error).__name__})."
+            + (" (after 1 retry)" if retried else ""),
+            _requested_model(config),
         )
     finally:
         if packet_path is not None:

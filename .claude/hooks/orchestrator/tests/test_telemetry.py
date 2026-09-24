@@ -107,6 +107,43 @@ def _emit_task(state_root, task_id="task-1"):
     telemetry.update_task(task_id, state_root=state_root)
 
 
+def test_reviewer_failure_error_code_schema_and_stderr_evidence(tmp_path):
+    event = {"session_id": "session-1", "tool_use_id": "review-call-1"}
+    payload = {
+        "failure_code": "REVIEWER1_UNAVAILABLE",
+        "reviewer1_error_code": "REVIEWER_TIMEOUT",
+        "reviewer1_provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+        "served_model_attestation": "UNAVAILABLE",
+        "reviewer1_result": "REVIEWER1_UNAVAILABLE",
+        "duration_ms": 2500.0,
+        "gemini_usage_known": False,
+    }
+
+    valid = schema.build_event("REVIEWER1_FAILED", task_id="task-1", payload=payload)
+    assert schema.valid_event(valid)
+    with pytest.raises(ValueError, match="reviewer error code"):
+        schema.build_event(
+            "REVIEWER1_FAILED",
+            task_id="task-1",
+            payload={**payload, "reviewer1_error_code": "reviewer_timeout"},
+        )
+
+    report = reviewer.UnavailableReview(
+        "REVIEWER_TIMEOUT",
+        "Reviewer-1 exceeded its bounded timeout.",
+        "gemini-3.8-flash-high",
+        elapsed_seconds=2.5,
+        stderr_tail="server stalled",
+    )
+    findings = codex._reviewer_findings_with_evidence(report, tmp_path, event)
+
+    assert "stderr:" in findings[0]["message"]
+    evidence_path = Path(findings[0]["message"].split("stderr: ", 1)[1])
+    assert evidence_path.exists()
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == "server stalled"
+
+
 def _run_task_process(state_root, action, task_id):
     script = """
 import sys

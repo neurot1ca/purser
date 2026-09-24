@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -357,6 +358,87 @@ def test_model_reported_unavailable_uses_the_failure_shape(config):
     assert isinstance(result, reviewer.UnavailableReview)
     assert not hasattr(result, "conversation_id")
     assert result["error_code"] == "REVIEWER_MODEL_REPORTED_UNAVAILABLE"
+
+
+def test_fast_process_failure_retries_once_with_remaining_timeout(config, monkeypatch):
+    class SequenceRunner:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, command, **kwargs):
+            self.calls.append((command, kwargs))
+            if len(self.calls) == 1:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="503")
+            return subprocess.CompletedProcess(command, 0, stdout=envelope(), stderr="")
+
+    times = iter((0.0, 2.0, 2.0, 2.0))
+    monkeypatch.setattr(reviewer, "time", SimpleNamespace(monotonic=lambda: next(times)), raising=False)
+    runner = SequenceRunner()
+
+    result = run_review(config, runner)
+
+    assert isinstance(result, reviewer.CompletedReview)
+    assert len(runner.calls) == 2
+    assert runner.calls[1][1]["timeout"] == config["reviewer1_timeout_seconds"] - 2.0
+
+
+def test_fast_process_failure_twice_reports_retry_and_second_stderr(config, monkeypatch):
+    class SequenceRunner:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, command, **kwargs):
+            self.calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, len(self.calls), "", f"stderr-{len(self.calls)}")
+
+    times = iter((0.0, 2.0, 2.0, 4.0))
+    monkeypatch.setattr(reviewer, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    runner = SequenceRunner()
+
+    result = run_review(config, runner)
+
+    assert result["error_code"] == "REVIEWER_PROCESS_FAILED"
+    assert "retry" in result["findings"][0]["message"]
+    assert result.stderr_tail == "stderr-2"
+    assert result.elapsed_seconds == 4.0
+    assert len(runner.calls) == 2
+
+
+def test_slow_process_failure_does_not_retry(config, monkeypatch):
+    times = iter((0.0, 60.0))
+    monkeypatch.setattr(reviewer, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    runner = FakeRunner(returncode=2)
+
+    result = run_review(config, runner)
+
+    assert result["error_code"] == "REVIEWER_PROCESS_FAILED"
+    assert len(runner.calls) == 1
+    assert result.elapsed_seconds == 60.0
+
+
+def test_fast_process_failure_does_not_retry_with_five_seconds_or_less(config, monkeypatch):
+    bounded = {**config, "reviewer1_timeout_seconds": 60}
+    times = iter((0.0, 56.0))
+    monkeypatch.setattr(reviewer, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    runner = FakeRunner(returncode=2)
+
+    result = run_review(bounded, runner)
+
+    assert result["error_code"] == "REVIEWER_PROCESS_FAILED"
+    assert len(runner.calls) == 1
+
+
+def test_timeout_captures_elapsed_and_stderr_without_retry(config, monkeypatch):
+    times = iter((10.0, 13.5))
+    monkeypatch.setattr(reviewer, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    runner = FakeRunner(error=subprocess.TimeoutExpired(["agy"], 1, stderr=b"stalled stream"))
+
+    result = run_review(config, runner)
+
+    assert result["error_code"] == "REVIEWER_TIMEOUT"
+    assert len(runner.calls) == 1
+    assert result.elapsed_seconds == 3.5
+    assert result.stderr_tail == "stalled stream"
 
 
 def test_plan_and_disable_slash_commands_are_actively_refused(config):

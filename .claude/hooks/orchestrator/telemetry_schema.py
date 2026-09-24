@@ -232,6 +232,7 @@ _PAYLOAD_FIELDS = {
     "REVIEWER1_FAILED": frozenset(
         {
             "failure_code",
+            "reviewer1_error_code",
             "reviewer1_provider",
             "reviewer1_model_requested",
             "served_model_attestation",
@@ -378,6 +379,14 @@ def _payload_value(name: str, value: Any) -> Any:
     if name == "reviewer1_skipped_reason" and value in _SKIP_REASONS:
         return value
     if name == "failure_code" and value in _FAILURE_CODES:
+        return value
+    if name == "reviewer1_error_code":
+        if (
+            not isinstance(value, str)
+            or not 1 <= len(value) <= 80
+            or re.fullmatch(r"[A-Z0-9_]+", value) is None
+        ):
+            raise ValueError("telemetry reviewer error code is invalid")
         return value
     if name == "warning_code" and value in _WARNING_CODES:
         return value
