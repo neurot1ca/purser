@@ -14,6 +14,11 @@ Rare transport, recovery, and hook-diagnostic procedures are in
 [`docs/ORCHESTRATOR_OPERATIONS.md`](../../../docs/ORCHESTRATOR_OPERATIONS.md), a
 non-authoritative reference that is not loaded automatically.
 
+Language: speak the user's language only in replies to the user. Everything
+else is English: worker prompts, the report you require back, commits, state,
+and repository documents. Non-English text costs more tokens and returns in
+every bundle.
+
 ## Delegate deliberately
 
 Delegate work that is bounded, verifiable, and expressible as acceptance

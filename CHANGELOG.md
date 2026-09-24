@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.5 — 2026-09-24
+
+- **Change:** the `codex-orchestrator` skill now sets the language rule: only
+  replies to the user use the user's language; worker prompts, required
+  reports, commits, state and repository documents are English, because
+  non-English text costs more tokens and returns in every bundle.
+
 ## 0.1.4 — 2026-09-24
 
 - **Fix:** hooks now read and write their JSON as UTF-8 on Windows instead of
