@@ -233,13 +233,16 @@ def _transcript_facts_all(records: list[dict[str, Any]]) -> tuple[list[str], str
             if name not in _CODEX_TOOLS:
                 continue
             match = _ORCH_TASK.match(_prompt_from_input(params))
+            result = results.get(tool_id)
+            data = _extract_json(_result_text(result)) if result is not None else {}
+            bundle_task_id = data.get("task_id")
             task_id = match.group(1) if match else None
+            if task_id is None and isinstance(bundle_task_id, str) and bundle_task_id:
+                task_id = bundle_task_id
             if task_id:
                 last_task = task_id
-            result = results.get(tool_id)
             if result is None:
                 continue
-            data = _extract_json(_result_text(result))
             calls.append({"task_id": task_id or "unknown", "tool": _CODEX_TOOLS[name], "threadId": data.get("threadId") or data.get("thread_id"), "claude_review_mode": data.get("claude_review_mode")})
     return [], last_task, calls
 

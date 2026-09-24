@@ -73,6 +73,14 @@ def _event(scratch, repo, local, records, session="session-1"):
     return {"session_id": session, "transcript_path": str(transcript), "cwd": str(repo)}
 
 
+def _codex_call(tool_id, tool_name, prompt, result, *, timestamp=None):
+    return [
+        _assistant(content=[{"type": "tool_use", "id": tool_id, "name": tool_name, "input": {"prompt": prompt}}], timestamp=timestamp),
+        {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": json.dumps(result)}]}},
+        _assistant(content=[{"type": "text", "text": "Codex task complete"}], timestamp=timestamp),
+    ]
+
+
 @pytest.mark.parametrize("trigger", ["idle", "commit", "task"])
 def test_fires_for_each_boundary_above_threshold(setup, trigger):
     repo, local, scratch = setup
@@ -127,6 +135,70 @@ def test_task_end_requires_new_task_id(setup):
     state_dir.mkdir(parents=True)
     (state_dir / "compaction_advisor.json").write_text(json.dumps({"last_suggested_context": 0, "last_task_id": "task-a", "session_id": "session-1"}), encoding="utf-8")
     event = _event(scratch, repo, local, _records("task", task_id="task-a"))
+    assert advisor.advise(event, repo, now=NOW) is None
+
+
+def test_codex_reply_bundle_task_id_appears_in_state_block(setup):
+    repo, local, scratch = setup
+    stamp = NOW - timedelta(minutes=1)
+    records = _records("commit")[:-1]
+    records.extend(_codex_call(
+        "reply-1",
+        "mcp__plugin_purser_codex-main__codex-reply",
+        "Continue.",
+        {"task_id": "t1", "threadId": "thread-1", "claude_review_mode": "FULL"},
+        timestamp=stamp,
+    ))
+    records.append(_assistant({"input_tokens": 260_000}, timestamp=stamp))
+    event = _event(scratch, repo, local, records)
+
+    result = advisor.advise(event, repo, now=NOW)
+
+    assert result
+    state = advisor.handoff_path(repo).read_text(encoding="utf-8")
+    assert "task=t1 tool=codex-reply" in state
+
+
+def test_orch_task_id_wins_over_bundle_task_id(setup):
+    repo, local, scratch = setup
+    stamp = NOW - timedelta(minutes=1)
+    records = _records("commit")[:-1]
+    records.extend(_codex_call(
+        "codex-1",
+        "mcp__plugin_purser_codex-main__codex",
+        "ORCH|task=t1|execute",
+        {"task_id": "other", "threadId": "thread-1"},
+        timestamp=stamp,
+    ))
+    records.append(_assistant({"input_tokens": 260_000}, timestamp=stamp))
+    event = _event(scratch, repo, local, records)
+
+    result = advisor.advise(event, repo, now=NOW)
+
+    assert result
+    state = advisor.handoff_path(repo).read_text(encoding="utf-8")
+    assert "task=t1 tool=codex" in state
+    assert "task=other tool=codex" not in state
+
+
+def test_codex_reply_same_task_does_not_look_like_new_task_for_task_end(setup):
+    repo, local, scratch = setup
+    stamp = NOW - timedelta(minutes=1)
+    records = [{"type": "user", "message": {"role": "user", "content": "continue"}}]
+    records.extend(_codex_call(
+        "reply-1",
+        "mcp__plugin_purser_codex-main__codex-reply",
+        "Continue.",
+        {"task_id": "t1", "threadId": "thread-1"},
+        timestamp=stamp,
+    ))
+    records.append(_assistant({"input_tokens": 260_000}, timestamp=stamp))
+    event = _event(scratch, repo, local, records)
+    state_dir = advisor._state_directory(repo)
+    state_dir.mkdir(parents=True)
+    (state_dir / "compaction_advisor.json").write_text(json.dumps({"last_suggested_context": 0, "last_task_id": "t1", "session_id": "session-1"}), encoding="utf-8")
+
+    assert advisor._transcript_facts_all(records)[1] == "t1"
     assert advisor.advise(event, repo, now=NOW) is None
 
 
