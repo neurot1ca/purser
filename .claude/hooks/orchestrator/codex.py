@@ -1453,12 +1453,37 @@ def pre_tool_use(
         except BaseException:
             pass
 
-        return {
+        result = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "updatedInput": updated,
             }
         }
+        try:
+            route_name = (
+                parsed.route
+                if isinstance(parsed.route, str) and parsed.route
+                else "unknown"
+            )
+            model_value = updated.get("model") if "model" in updated else route.model
+            model_name = model_value if isinstance(model_value, str) and model_value else "unknown"
+            updated_config = updated.get("config")
+            effort_value = (
+                updated_config.get("model_reasoning_effort")
+                if isinstance(updated_config, Mapping) and "model_reasoning_effort" in updated_config
+                else route.effort
+            )
+            effort_name = (
+                effort_value
+                if isinstance(effort_value, str) and effort_value
+                else "unknown"
+            )
+            result["systemMessage"] = (
+                f"Purser: route={route_name} -> {model_name} / {effort_name}"
+            )
+        except Exception:
+            pass
+        return result
     except Exception as error:
         if pending_written and runtime_root is not None:
             try:

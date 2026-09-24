@@ -819,6 +819,54 @@ def test_each_route_sets_exact_model_and_effort(workspace, config, route, model,
     )
 
 
+def test_routed_call_shows_selected_model_and_effort(workspace, config):
+    repo, state = workspace
+    result = codex.pre_tool_use(
+        event(prompt=orch(route="mechanical") + "\nImplement."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert result["systemMessage"] == "Purser: route=mechanical -> gpt-6-luna / high"
+
+
+def test_codex_reply_shows_recorded_model_and_effort(workspace, config):
+    repo, state = workspace
+    save_live_thread(
+        state,
+        route="mechanical",
+        model=config["routes"]["mechanical"]["model"],
+        effort=config["routes"]["mechanical"]["effort"],
+    )
+    result = codex.pre_tool_use(
+        event(
+            codex.CODEX_REPLY_TOOL,
+            prompt="Continue.",
+            tool_use_id="reply-route-message",
+            threadId="thread-1",
+        ),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert result["systemMessage"] == "Purser: route=mechanical -> gpt-6-luna / high"
+
+
+def test_denied_call_has_no_system_message(workspace, config):
+    repo, state = workspace
+    result = codex.pre_tool_use(
+        event(prompt=orch(route="normal", include_basis=False) + "\nDo the work."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "systemMessage" not in result
+
+
 @pytest.mark.parametrize("tool_name", [codex.CODEX_TOOL, codex.CODEX_REPLY_TOOL])
 def test_implementation_prompt_reports_worker_validation_once(workspace, config, tool_name):
     repo, state = workspace
