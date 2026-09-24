@@ -19,6 +19,11 @@ else is English: worker prompts, the report you require back, commits, state,
 and repository documents. Non-English text costs more tokens and returns in
 every bundle.
 
+Replies: keep every reply to the user at most 5 lines unless they ask for
+detail, in plain friendly sentences: the result, one recommendation, at most
+one question; no tables or headings unless asked; do not retell the work.
+Each reply stays in context and is re-read on every later request.
+
 ## Delegate deliberately
 
 Delegate work that is bounded, verifiable, and expressible as acceptance
