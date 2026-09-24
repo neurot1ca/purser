@@ -929,6 +929,7 @@ _PROTOCOL_CODES = frozenset(
         policy.UNKNOWN_KEY,
         policy.MISSING_REQUIRED_KEY,
         policy.INVALID_ENUM_VALUE,
+        policy.SOL_ROUTE_NEEDS_BASIS,
         "UNBOUNDED_SCOPE",
         "NO_LIVE_THREAD",
     }
@@ -941,7 +942,8 @@ _PROTOCOL_HELP = (
     "  Add |scope=<path[,path...]> for implementation; omit it for operation.\n"
     "  route  mechanical -> luna/high | subtle -> luna/high | normal -> sol/medium"
     " | consequential -> sol/high | escalated -> sol/xhigh | operation -> luna/high\n"
-    "  reason and basis are optional; reason, when supplied, is one of new_task | continue |"
+    "  reason is optional; basis is required for normal, consequential, and escalated, and optional otherwise."
+    " Reason, when supplied, is one of new_task | continue |"
     " route_change | reanchor | repeated_failure | user_override.\n"
     "  phase  'operation' for deploy, runner control, status, or read-only investigation;"
     " it skips Reviewer-1. 'implementation' for anything that changes code.\n"

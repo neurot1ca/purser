@@ -21,6 +21,7 @@ MALFORMED_ORCH_LINE = "MALFORMED_ORCH_LINE"
 UNKNOWN_KEY = "UNKNOWN_KEY"
 MISSING_REQUIRED_KEY = "MISSING_REQUIRED_KEY"
 INVALID_ENUM_VALUE = "INVALID_ENUM_VALUE"
+SOL_ROUTE_NEEDS_BASIS = "SOL_ROUTE_NEEDS_BASIS"
 INVALID_SCOPE = "INVALID_SCOPE"
 UNBOUNDED_SCOPE = "UNBOUNDED_SCOPE"
 CONFIG_INVALID = "CONFIG_INVALID"
@@ -424,6 +425,18 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
                 else "Implementation scope must contain repository-relative paths without traversal."
             )
             return _orch_failure(remainder, code, message, values)
+
+    sol_routes = {"normal", "consequential", "escalated"}
+    if values["route"] in sol_routes and not values.get("basis", "").strip():
+        route = values["route"]
+        return _orch_failure(
+            remainder,
+            SOL_ROUTE_NEEDS_BASIS,
+            f"route={route} runs gpt-6-sol. Add basis=<the design choice left to the worker> "
+            "(for escalated: the concrete miss). If the prompt already states the decisions, "
+            "use route=subtle (gpt-6-luna) instead.",
+            values,
+        )
 
     return OrchParseResult(
         valid=True,

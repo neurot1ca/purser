@@ -99,10 +99,35 @@ def test_implementation_scope_is_required_bounded_and_normalized(config):
     assert valid.scope == ("src/module", "tests")
 
 
+@pytest.mark.parametrize("route", ["normal", "consequential", "escalated"])
+@pytest.mark.parametrize("basis", [None, "   "])
+def test_sol_routes_require_nonblank_basis(config, route, basis):
+    result = policy.parse_orch_prompt(orch(route=route, basis=basis), config)
+
+    assert result.valid is False
+    assert result.code == policy.SOL_ROUTE_NEEDS_BASIS
+
+
+@pytest.mark.parametrize("route", ["normal", "consequential", "escalated"])
+def test_sol_routes_accept_basis(config, route):
+    result = policy.parse_orch_prompt(orch(route=route, basis="design boundary"), config)
+
+    assert result.valid is True
+    assert result.basis == "design boundary"
+
+
+@pytest.mark.parametrize("route", ["subtle", "mechanical", "operation"])
+def test_non_sol_routes_do_not_require_basis(config, route):
+    result = policy.parse_orch_prompt(orch(route=route, basis=None), config)
+
+    assert result.valid is True
+    assert result.basis is None
+
+
 def test_reason_and_basis_are_optional_but_recorded_and_validated_when_supplied(config):
-    absent = policy.parse_orch_prompt(orch(reason=None, basis=None), config)
+    absent = policy.parse_orch_prompt(orch(route="subtle", reason=None, basis=None), config)
     supplied = policy.parse_orch_prompt(orch(reason="continue", basis="complex"), config)
-    empty_basis = policy.parse_orch_prompt(orch(basis=""), config)
+    empty_basis = policy.parse_orch_prompt(orch(route="subtle", basis=""), config)
     invalid_reason = policy.parse_orch_prompt(orch(reason="invented"), config)
 
     assert absent.valid is True

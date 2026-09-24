@@ -51,7 +51,10 @@ and behavior without leaving a semantic choice to the worker.
 | Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6-sol` + `xhigh` |
 | Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-6-luna` + `high` |
 
-Use the lowest row expected to finish correctly in one pass. Do not use a
+Use the lowest row expected to finish correctly in one pass. Default to
+`subtle` when the prompt states the decisions; `normal`, `consequential`, and
+`escalated` need `basis=` naming the design choice left to the worker, and the
+hook denies them without it. Do not use a
 cheap-first cascade: an expected repair cycle also spends review. Do not raise
 effort to compensate for a contradictory or unresolved prompt. A resolved
 consequential implementation may use `subtle`, but its prompt must state the
@@ -75,7 +78,8 @@ Claude writes the first prompt line exactly in this shape:
 ORCH|task=<stable-id>|phase=<implementation|operation>|route=<mechanical|subtle|normal|consequential|escalated|operation>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|scope=<repo-relative-path[,repo-relative-path...]>]
 ```
 
-Fields are `task`, `phase`, `route`, optional `reason`, optional `basis`, and
+Fields are `task`, `phase`, `route`, optional `reason`, `basis` required for
+`normal`, `consequential`, and `escalated` and optional otherwise, and
 `scope`. `task`, `phase`, and `route` are always required. `scope` is required
 for `implementation`, must be bounded repository-relative paths, and must not be
 the whole repository; omit it for `operation`. Claude chooses the route and

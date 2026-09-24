@@ -771,6 +771,25 @@ def test_protocol_errors_deny_with_policy_reason(workspace, config, prompt, code
     assert decision["permissionDecisionReason"].startswith(code + ":")
 
 
+def test_sol_route_without_basis_denies_with_protocol_help(workspace, config):
+    repo, state = workspace
+
+    result = codex.pre_tool_use(
+        event(prompt=orch(route="normal", include_basis=False) + "\nDo the work."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    decision = result["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert decision["permissionDecisionReason"].startswith("SOL_ROUTE_NEEDS_BASIS:")
+    assert "route=normal runs gpt-6-sol" in decision["permissionDecisionReason"]
+    assert "basis is required for normal, consequential, and escalated" in decision[
+        "permissionDecisionReason"
+    ]
+
+
 @pytest.mark.parametrize(
     ("route", "model", "effort"),
     [
@@ -1086,7 +1105,7 @@ def test_pretool_strips_minimal_orch_and_pins_consequential_route(workspace, con
     repo, state = workspace
     call = event(
         prompt=(
-            "ORCH|task=t|phase=implementation|route=consequential|scope=some/path.rs\n"
+            "ORCH|task=t|phase=implementation|route=consequential|basis=repository design boundary|scope=some/path.rs\n"
             "\nbody text"
         ),
         tool_use_id="minimal-consequential",
@@ -2099,7 +2118,7 @@ def test_reviewer_agy_keeps_audit_receipt_behavior(workspace, config):
         'schema_version = 1\n[roles]\nreviewer = "agy"\n', encoding="utf-8"
     )
     prompt = (
-        "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py\n"
+        "ORCH|task=task-1|phase=implementation|route=normal|basis=test fixture design boundary|scope=file0.py\n"
         "Task Objective: Update file0 with new value\n"
         "Acceptance Criteria: file0 contains value = 2\n"
     )
@@ -2148,7 +2167,7 @@ def test_reviewer_disabled_skips_reviewer_and_forces_full(workspace, config, mon
         'schema_version = 1\n[roles]\nreviewer = "none"\n', encoding="utf-8"
     )
     prompt = (
-        "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py\n"
+        "ORCH|task=task-1|phase=implementation|route=normal|basis=test fixture design boundary|scope=file0.py\n"
         "Task Objective: Update file0 with new value\n"
         "Acceptance Criteria: file0 contains value = 2\n"
     )
@@ -2203,7 +2222,7 @@ def test_reviewer_disabled_skips_reviewer_and_forces_full(workspace, config, mon
 def test_worker_validation_parses_full_report_before_phase_cap(workspace, config):
     repo, state = workspace
     prompt = (
-        "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py\n"
+        "ORCH|task=task-1|phase=implementation|route=normal|basis=test fixture design boundary|scope=file0.py\n"
         "Task Objective: Update file0 with new value\n"
         "Acceptance Criteria: file0 contains value = 2\n"
     )
@@ -2288,7 +2307,7 @@ def test_post_tool_use_ungrounded_contract_forces_full_review_even_on_audit(work
 def test_post_tool_use_micro_repair_triggers_on_changes_required(workspace, config):
     repo, state = workspace
     prompt = (
-        "ORCH|task=task-1|phase=implementation|route=normal|scope=file0.py,file1.py,file2.py\n"
+        "ORCH|task=task-1|phase=implementation|route=normal|basis=test fixture design boundary|scope=file0.py,file1.py,file2.py\n"
         "Task Objective: Apply changes to files 0 to 2\n"
         "Acceptance Criteria: All files updated and clean\n"
     )
@@ -2739,7 +2758,7 @@ def test_task_contract_parsing_and_grounding_flag(workspace, config):
 
     # Case A: Explicit JSON TASK_CONTRACT
     prompt_json = (
-        "ORCH|task=task-a|phase=implementation|route=normal|scope=file.py\n"
+        "ORCH|task=task-a|phase=implementation|route=normal|basis=test fixture design boundary|scope=file.py\n"
         'TASK_CONTRACT: {"objective": "Fix deadline logic", "criteria": "Zero latency drift"}'
     )
     obj, crit, grounded = codex._parse_task_contract(prompt_json, "task-a", "implementation", ["file.py"])
@@ -2749,7 +2768,7 @@ def test_task_contract_parsing_and_grounding_flag(workspace, config):
 
     # Case B: Multiline headers
     prompt_multiline = (
-        "ORCH|task=task-b|phase=implementation|route=normal|scope=file.py\n"
+        "ORCH|task=task-b|phase=implementation|route=normal|basis=test fixture design boundary|scope=file.py\n"
         "Task Objective:\nRefactor connection pool\n"
         "Acceptance Criteria:\nPreserve retry backoff"
     )
@@ -2759,7 +2778,7 @@ def test_task_contract_parsing_and_grounding_flag(workspace, config):
     assert crit == "Preserve retry backoff"
 
     # Case C: Generic prompt without explicit contract
-    prompt_generic = "ORCH|task=task-c|phase=implementation|route=normal|scope=file.py\nJust do the work"
+    prompt_generic = "ORCH|task=task-c|phase=implementation|route=normal|basis=test fixture design boundary|scope=file.py\nJust do the work"
     obj, crit, grounded = codex._parse_task_contract(prompt_generic, "task-c", "implementation", ["file.py"])
     assert grounded is False
     assert "Task task-c" in obj
@@ -2774,7 +2793,7 @@ def test_worker_validation_failure_mechanically_forces_full_claude_review(worksp
     subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
 
     prompt = (
-        "ORCH|task=task-val|phase=implementation|route=normal|scope=f0.py,f1.py,f2.py\n"
+        "ORCH|task=task-val|phase=implementation|route=normal|basis=test fixture design boundary|scope=f0.py,f1.py,f2.py\n"
         "Task Objective: Implement f0-f2 updates\n"
         "Acceptance Criteria: All f0-f2 files changed\n"
     )
@@ -2825,7 +2844,7 @@ def test_reviewer_internal_typeerror_never_retried(workspace, config):
     subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
 
     call = event(
-        prompt="ORCH|task=task-err|phase=implementation|route=normal|scope=g0.py,g1.py,g2.py"
+        prompt="ORCH|task=task-err|phase=implementation|route=normal|basis=test fixture design boundary|scope=g0.py,g1.py,g2.py"
     )
     codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
 
@@ -3178,20 +3197,20 @@ def test_worker_validation_normalized_byte_limit_invariants():
 
 def test_task_contract_partial_is_not_grounded_and_handles_lists():
     # Case 1: Only objective provided -> grounded MUST be False
-    prompt_obj_only = "ORCH|task=t1|phase=implementation|route=normal|scope=f.py\nTask Objective: Only objective"
+    prompt_obj_only = "ORCH|task=t1|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\nTask Objective: Only objective"
     obj, crit, grounded = codex._parse_task_contract(prompt_obj_only, "t1", "implementation", ["f.py"])
     assert grounded is False
     assert obj == "Only objective"
 
     # Case 2: Only criteria provided -> grounded MUST be False
-    prompt_crit_only = "ORCH|task=t2|phase=implementation|route=normal|scope=f.py\nAcceptance Criteria: Only criteria"
+    prompt_crit_only = "ORCH|task=t2|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\nAcceptance Criteria: Only criteria"
     obj, crit, grounded = codex._parse_task_contract(prompt_crit_only, "t2", "implementation", ["f.py"])
     assert grounded is False
     assert crit == "Only criteria"
 
     # Case 3: Multiline bullet list criteria
     prompt_bullets = (
-        "ORCH|task=t3|phase=implementation|route=normal|scope=f.py\n"
+        "ORCH|task=t3|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\n"
         "Task Objective: Full feature\n"
         "Acceptance Criteria:\n"
         "- First criterion\n"
@@ -3205,7 +3224,7 @@ def test_task_contract_partial_is_not_grounded_and_handles_lists():
 
     # Case 4: JSON list criteria
     prompt_json_list = (
-        "ORCH|task=t4|phase=implementation|route=normal|scope=f.py\n"
+        "ORCH|task=t4|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\n"
         'TASK_CONTRACT: {"objective": "Feature", "criteria": ["Crit 1", "Crit 2"]}'
     )
     obj, crit, grounded = codex._parse_task_contract(prompt_json_list, "t4", "implementation", ["f.py"])
@@ -3216,7 +3235,7 @@ def test_task_contract_partial_is_not_grounded_and_handles_lists():
 
 def test_plain_objective_label_grounds_with_next_line_and_inline_criteria():
     prompt = (
-        "ORCH|task=plain|phase=implementation|route=normal|scope=f.py\n"
+        "ORCH|task=plain|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\n"
         "oBjEcTiVe:\n"
         "Recognize plain objective labels. Acceptance criteria: preserve grounding"
     )
@@ -3229,7 +3248,7 @@ def test_plain_objective_label_grounds_with_next_line_and_inline_criteria():
 
 def test_mid_sentence_objective_is_not_a_plain_objective_label():
     prompt = (
-        "ORCH|task=mid|phase=implementation|route=normal|scope=f.py\n"
+        "ORCH|task=mid|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\n"
         "This sentence mentions objective: but is not a label.\n"
         "Acceptance Criteria: preserve grounding"
     )
@@ -3241,7 +3260,7 @@ def test_mid_sentence_objective_is_not_a_plain_objective_label():
 
 def test_first_task_or_plain_objective_label_wins():
     prompt = (
-        "ORCH|task=precedence|phase=implementation|route=normal|scope=f.py\n"
+        "ORCH|task=precedence|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\n"
         "Task objective: first objective\n"
         "Objective: second objective\n"
         "Acceptance Criteria: preserve grounding"
@@ -3325,7 +3344,7 @@ def test_codex_reply_continuation_inherits_prior_grounded_contract(workspace, co
 
     # Initial call with explicit grounded contract
     initial_prompt = (
-        "ORCH|task=task-cont|phase=implementation|route=normal|scope=f.py\n"
+        "ORCH|task=task-cont|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\n"
         'TASK_CONTRACT: {"objective": "Persistent objective", "criteria": "Persistent criteria"}'
     )
     initial_call = event(prompt=initial_prompt, tool_use_id="call-init")
@@ -3352,7 +3371,7 @@ def test_codex_reply_continuation_inherits_prior_grounded_contract(workspace, co
     codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=stub_reviewer)
 
     # Continuation reply with generic prompt without explicit contract
-    reply_prompt = "ORCH|task=task-cont|phase=implementation|route=normal|scope=f.py\nContinue work"
+    reply_prompt = "ORCH|task=task-cont|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\nContinue work"
     reply_call = event(
         tool_name=codex.CODEX_REPLY_TOOL,
         prompt=reply_prompt,
@@ -3371,7 +3390,7 @@ def test_codex_reply_continuation_inherits_prior_grounded_contract(workspace, co
 def test_codex_reply_inherits_handoff_and_reviews_cumulative_same_path_diff(workspace, config):
     repo, state = workspace
     prompt = (
-        "ORCH|task=reply-repair|phase=implementation|route=normal|scope=file0.py\n"
+        "ORCH|task=reply-repair|phase=implementation|route=normal|basis=test fixture design boundary|scope=file0.py\n"
         'TASK_CONTRACT: {"objective": "Complete the repair", "criteria": "Both turns are reviewed"}'
     )
     review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
@@ -3456,7 +3475,7 @@ def test_codex_reply_inherits_handoff_and_reviews_cumulative_same_path_diff(work
 def test_codex_reply_does_not_inherit_handoff_after_intervening_edit(workspace, config):
     repo, state = workspace
     prompt = (
-        "ORCH|task=reply-writer|phase=implementation|route=normal|scope=file0.py\n"
+        "ORCH|task=reply-writer|phase=implementation|route=normal|basis=test fixture design boundary|scope=file0.py\n"
         'TASK_CONTRACT: {"objective": "Complete the repair", "criteria": "Reject concurrent edits"}'
     )
     review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
@@ -3546,7 +3565,7 @@ def test_codex_reply_keeps_pre_turn_dirty_path_ambiguous(workspace, config, monk
     monkeypatch.setattr(codex, "_observe", lambda entrypoint, *args, **kwargs: observed.append((entrypoint, args, kwargs)))
     (repo / "file0.py").write_text("value = 1\nuser_before = True\n", encoding="utf-8")
     prompt = (
-        "ORCH|task=reply-dirty|phase=implementation|route=normal|scope=file0.py\n"
+        "ORCH|task=reply-dirty|phase=implementation|route=normal|basis=test fixture design boundary|scope=file0.py\n"
         'TASK_CONTRACT: {"objective": "Complete the repair", "criteria": "Keep user edits attributable"}'
     )
     review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
@@ -3749,12 +3768,12 @@ def test_end_to_end_review_mode_matrix(
 
     if is_grounded:
         prompt = (
-            "ORCH|task=t-mat|phase=implementation|route=normal|scope=test_matrix.py\n"
+            "ORCH|task=t-mat|phase=implementation|route=normal|basis=test fixture design boundary|scope=test_matrix.py\n"
             "Task Objective: Update test matrix file\n"
             "Acceptance Criteria: test_matrix.py has value 2"
         )
     else:
-        prompt = "ORCH|task=t-mat|phase=implementation|route=normal|scope=test_matrix.py\nGeneric prompt"
+        prompt = "ORCH|task=t-mat|phase=implementation|route=normal|basis=test fixture design boundary|scope=test_matrix.py\nGeneric prompt"
 
     call = event(prompt=prompt)
     codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
