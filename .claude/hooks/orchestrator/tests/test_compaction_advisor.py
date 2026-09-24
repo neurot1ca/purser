@@ -84,7 +84,8 @@ def test_fires_for_each_boundary_above_threshold(setup, trigger):
     assert "**~72%**" in result
     assert "`/compact`" in result
     assert "The ship stays dry" in result
-    assert "Do not claim compaction is lossless" in result
+    assert "Purser prepared. Nothing is lost.*" in result
+    assert "Do not claim compaction is lossless" not in result
     assert "write that question under Next" in result
     assert "every later message costs far less" not in result
 
