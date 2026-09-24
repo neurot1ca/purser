@@ -209,6 +209,72 @@ def test_quota_does_not_change_review_mode_under_cap(workspace, config):
     assert included["claude_review_mode"] == without["claude_review_mode"] == policy.AUDIT
 
 
+def _quota_snapshot(used_5h=None, used_7d=None):
+    value = {}
+    if used_5h is not None:
+        value.update({"5h_used_pct": used_5h, "5h_resets_at": "2026-09-24T15:00:00Z"})
+    if used_7d is not None:
+        value.update({"7d_used_pct": used_7d, "7d_resets_at": "2026-09-30T12:00:00Z"})
+    return value or None
+
+
+def _permission_reason(result):
+    return result.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+
+
+def test_low_codex_quota_denies_before_pending_record(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: _quota_snapshot(92), raising=False)
+    call = event(prompt=orch(scope="file0.py") + "\nDo the work.", tool_use_id="low-quota")
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    reason = _permission_reason(result)
+    assert "LOW_CODEX_QUOTA" in reason
+    assert "5h" in reason and "92%" in reason and "2026-09-24T15:00:00Z" in reason
+    assert "before this task starts" in reason
+    assert "reason=user_override" in reason
+    assert not (state / "pending").exists() or list((state / "pending").glob("*.json")) == []
+
+
+def test_low_codex_quota_user_override_proceeds(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: _quota_snapshot(92), raising=False)
+    call = event(prompt=orch(scope="file0.py", reason="user_override") + "\nDo the work.",
+                 tool_use_id="low-quota-override")
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert "LOW_CODEX_QUOTA" not in _permission_reason(result)
+    assert codex._read_pending(state, call) is not None
+
+
+def test_low_codex_quota_does_not_check_codex_reply(workspace, config, monkeypatch):
+    _, state = workspace
+    calls = []
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: calls.append(True) or _quota_snapshot(92), raising=False)
+    call = event(tool_name=codex.CODEX_REPLY_TOOL, prompt=orch(scope="file0.py") + "\nContinue.",
+                 tool_use_id="low-quota-reply", threadId="existing-thread")
+    codex.pre_tool_use(call, config=config, state_root=state)
+    assert calls == []
+
+
+@pytest.mark.parametrize("quota", [_quota_snapshot(used_7d=95)])
+def test_low_weekly_quota_denies(workspace, config, monkeypatch, quota):
+    repo, state = workspace
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: quota, raising=False)
+    call = event(prompt=orch(scope="file0.py") + "\nDo the work.", tool_use_id="low-weekly-quota")
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert "LOW_CODEX_QUOTA" in _permission_reason(result)
+    assert "7d" in _permission_reason(result) and "95%" in _permission_reason(result)
+
+
+@pytest.mark.parametrize("quota", [_quota_snapshot(used_5h=89), None])
+def test_low_codex_quota_allows_under_threshold_or_missing(workspace, config, monkeypatch, quota):
+    repo, state = workspace
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: quota, raising=False)
+    call = event(prompt=orch(scope="file0.py") + "\nDo the work.", tool_use_id="normal-quota")
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert "LOW_CODEX_QUOTA" not in _permission_reason(result)
+    assert codex._read_pending(state, call) is not None
+
+
 def hook_check_call(workspace, config, monkeypatch, *, worker_status="UNKNOWN", check_result=None,
                     declared=True, reviewer=None, before_post=None):
     repo, state = workspace

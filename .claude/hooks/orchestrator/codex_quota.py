@@ -43,6 +43,35 @@ def _window(value: object, minutes: int) -> tuple[int | float, str] | None:
     return used, utc
 
 
+def _read_quota_path(path: Path) -> dict | None:
+    """Read the last rate-limit event from at most 256 KiB of a rollout."""
+    with path.open("rb") as stream:
+        size = stream.seek(0, os.SEEK_END)
+        offset = max(0, size - TAIL_BYTES)
+        stream.seek(offset)
+        tail = stream.read(TAIL_BYTES)
+    if offset:
+        tail = tail.partition(b"\n")[2]
+    for line in reversed(tail.splitlines()):
+        try:
+            event = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get("payload"), dict):
+            continue
+        limits = event["payload"].get("rate_limits")
+        if not isinstance(limits, dict):
+            continue
+        result = {}
+        for source, label, minutes in (("primary", "5h", 300), ("secondary", "7d", 10080)):
+            window = _window(limits.get(source), minutes)
+            if window is not None:
+                result[f"{label}_used_pct"] = window[0]
+                result[f"{label}_resets_at"] = window[1]
+        return result or None
+    return None
+
+
 def read_quota(thread_id: str, *, codex_home=None) -> dict | None:
     """Read the last rate-limit event from at most 256 KiB of a rollout."""
     try:
@@ -52,30 +81,39 @@ def read_quota(thread_id: str, *, codex_home=None) -> dict | None:
         path = _rollout(home / "sessions", thread_id)
         if path is None:
             return None
-        with path.open("rb") as stream:
-            size = stream.seek(0, os.SEEK_END)
-            offset = max(0, size - TAIL_BYTES)
-            stream.seek(offset)
-            tail = stream.read(TAIL_BYTES)
-        if offset:
-            tail = tail.partition(b"\n")[2]
-        for line in reversed(tail.splitlines()):
-            try:
-                event = json.loads(line)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            if not isinstance(event, dict) or not isinstance(event.get("payload"), dict):
-                continue
-            limits = event["payload"].get("rate_limits")
-            if not isinstance(limits, dict):
-                continue
-            result = {}
-            for source, label, minutes in (("primary", "5h", 300), ("secondary", "7d", 10080)):
-                window = _window(limits.get(source), minutes)
-                if window is not None:
-                    result[f"{label}_used_pct"] = window[0]
-                    result[f"{label}_resets_at"] = window[1]
-            return result or None
+        return _read_quota_path(path)
     except (OSError, ValueError, TypeError):
         return None
-    return None
+
+
+def read_latest_quota(*, codex_home=None, now=None) -> dict | None:
+    """Read the newest rollout quota from today or yesterday, dropping reset windows."""
+    try:
+        home = Path(codex_home) if codex_home is not None else Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        current = now if now is not None else datetime.now(timezone.utc)
+        if not isinstance(current, datetime):
+            return None
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        current = current.astimezone(timezone.utc)
+        sessions = home / "sessions"
+        folders = [sessions / current.date().strftime("%Y/%m/%d"),
+                   sessions / (current.date() - timedelta(days=1)).strftime("%Y/%m/%d")]
+        candidates = [path for folder in folders for path in folder.glob("rollout-*.jsonl")]
+        if not candidates:
+            return None
+        path = max(candidates, key=lambda candidate: candidate.stat().st_mtime)
+        result = _read_quota_path(path)
+        if not result:
+            return None
+        for label in ("5h", "7d"):
+            reset_key = f"{label}_resets_at"
+            if reset_key not in result:
+                continue
+            reset = datetime.fromisoformat(result[reset_key].replace("Z", "+00:00"))
+            if reset <= current:
+                result.pop(f"{label}_used_pct", None)
+                result.pop(reset_key, None)
+        return result or None
+    except Exception:
+        return None

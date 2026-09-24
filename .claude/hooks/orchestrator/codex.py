@@ -34,6 +34,7 @@ CODEX_TOOL = "mcp__codex-main__codex"
 CODEX_REPLY_TOOL = "mcp__codex-main__codex-reply"
 IMPLEMENTER_REPORT_LIMIT = 1200
 OPERATION_REPORT_LIMIT = 24000
+LOW_QUOTA_USED_PCT = 90
 BUNDLE_NON_REPORT_MAX_BYTES = 8192
 CHANGED_PATH_PREVIEW_LIMIT = 10
 GIT_HEAD_READ_LIMIT = 4096
@@ -1081,6 +1082,29 @@ def pre_tool_use(
             return _observed_denial(
                 event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
             )
+
+        if (parsed.valid and tool_name in CODEX_TOOL_NAMES
+                and parsed.reason != "user_override"):
+            try:
+                quota = codex_quota.read_latest_quota()
+            except Exception:
+                quota = None
+            low_windows = []
+            if isinstance(quota, Mapping):
+                for label in ("5h", "7d"):
+                    used = quota.get(f"{label}_used_pct")
+                    reset = quota.get(f"{label}_resets_at")
+                    if (isinstance(used, (int, float)) and not isinstance(used, bool)
+                            and used >= LOW_QUOTA_USED_PCT and isinstance(reset, str)):
+                        low_windows.append(f"{label}: {used:g}% used, resets at {reset}")
+            if low_windows:
+                return _deny(
+                    "LOW_CODEX_QUOTA",
+                    "Codex quota is nearly exhausted (" + "; ".join(low_windows) + "). "
+                    "Tell the user before this task starts; the user may switch the coding agent "
+                    "or wait. If the user chooses to proceed with Codex, resend the same call "
+                    "with reason=user_override in the ORCH line.",
+                )
 
         runtime_root = _state_root(state_root)
         try:
