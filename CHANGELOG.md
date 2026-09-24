@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.9 — 2026-09-24
+
+- **Change:** the restored handoff tells Claude to skip listed files that are
+  already in context, since Claude Code re-attaches recently read files after
+  `/compact` (`5010083`).
+
 ## 0.1.8 — 2026-09-24
 
 - **New:** compaction advisor step 2. After `/compact` or `/clear`, a
