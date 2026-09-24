@@ -32,6 +32,13 @@ would count as an answer, resolve authority, choose the route, review the result
 and adjudicate disagreement. Also keep bookkeeping whose delegation would cost
 more than doing it directly.
 
+Do not explore by hand. When answering a question about the code, a transcript,
+or logs would take three or more of your own read/search turns, send one
+`Explore` agent with `model: haiku`, a precise question, and a bounded answer
+(file:line citations plus short findings). Then verify only the decisive one or
+two lines yourself. One or two searches: do them directly. Deep analysis goes to
+Codex, not Explore.
+
 Delegation is not handoff. A completion report is a claim, not a result. Review
 every return. Treat review as a negotiation: independently verify a worker's
 objection or refusal; if it stands, repair the instruction instead of restating

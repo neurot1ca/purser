@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.6 — 2026-09-24
+
+- **Change:** the `codex-orchestrator` skill sends exploration that would take
+  Claude three or more read/search turns to one `Explore` agent on Haiku with a
+  bounded answer; Claude verifies only the decisive lines. Each Claude turn
+  re-reads the whole context, so exploration in a small side context is cheaper.
+
 ## 0.1.5 — 2026-09-24
 
 - **Change:** the `codex-orchestrator` skill now sets the language rule: only
