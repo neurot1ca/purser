@@ -15,6 +15,9 @@ import install_claude_task_telemetry as installer
 PLUGIN_TOOLS = {
     "mcp__plugin_purser_codex-main__codex",
     "mcp__plugin_purser_codex-main__codex-reply",
+    "mcp__plugin_purser_codex-main__codex_start",
+    "mcp__plugin_purser_codex-main__codex_result",
+    "mcp__plugin_purser_codex-main__codex_cancel",
 }
 
 

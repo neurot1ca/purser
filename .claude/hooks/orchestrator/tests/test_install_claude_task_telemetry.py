@@ -91,7 +91,7 @@ def test_install_preserves_unrelated_settings_and_is_idempotent(tmp_path):
         for entry in installed["hooks"]["PreToolUse"]
         if entry["hooks"][0].get("command") != "other"
     ]
-    assert pretool_matchers.count(r"^mcp__codex-main__(codex|codex-reply)$") == 1
+    assert pretool_matchers.count(r"^mcp__codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$") == 1
     assert pretool_matchers.count(r"^Read$") == 1
     assert len(installed["hooks"]["Stop"]) == 2
 

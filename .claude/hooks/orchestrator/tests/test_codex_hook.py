@@ -149,6 +149,18 @@ def response_bundle(response, config):
     return json.loads(output[0]["text"])
 
 
+@pytest.mark.parametrize("name", ("codex_start", "codex_result", "codex_cancel"))
+def test_async_tools_fail_closed_until_lifecycle_is_wired(workspace, config, name):
+    repo, state = workspace
+    call = event(tool_name=f"mcp__plugin_purser_codex-main__{name}")
+    call["tool_input"] = {"jobId": "0" * 64} if name != "codex_start" else {
+        "prompt": orch() + "\nDo the work.", "call": "claude-must-not-control-this"
+    }
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert not list((state / "pending").glob("*.json"))
+
+
 def test_plugin_tool_names_route_new_and_reply(workspace, config):
     repo, state = workspace
     prompt = orch(scope="file0.py") + "\n## Objective\nInspect file0.\n## Acceptance criteria\n- Report result."

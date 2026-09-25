@@ -66,7 +66,14 @@ def _configured_tool_names(key: str, default: str) -> frozenset[str]:
 
 CODEX_TOOL_NAMES = _configured_tool_names("codex_tool_names", CODEX_TOOL)
 CODEX_REPLY_TOOL_NAMES = _configured_tool_names("codex_reply_tool_names", CODEX_REPLY_TOOL)
-CODEX_TOOLS = CODEX_TOOL_NAMES | CODEX_REPLY_TOOL_NAMES
+CODEX_ASYNC_TOOL_NAMES = _configured_tool_names(
+    "codex_async_tool_names", "mcp__codex-main__codex_start"
+) | frozenset(
+    f"{prefix}__{name}"
+    for prefix in ("mcp__codex-main", "mcp__plugin_purser_codex-main")
+    for name in ("codex_start", "codex_result", "codex_cancel")
+)
+CODEX_TOOLS = CODEX_TOOL_NAMES | CODEX_REPLY_TOOL_NAMES | CODEX_ASYNC_TOOL_NAMES
 _BASELINE_VOLATILE_MARKERS = ("timestamp", "duration", "elapsed", "budget")
 
 
@@ -1071,6 +1078,9 @@ def internal_pre_error_response(
 ) -> dict[str, Any]:
     """Allow an internally failed PreToolUse call while making the bypass visible."""
 
+    if event.get("tool_name") in CODEX_ASYNC_TOOL_NAMES:
+        return _deny("ASYNC_ENFORCEMENT_FAILED", "Async Codex hook failed; FULL review is required.")
+
     runtime_root: Path | None = None
     reason = _safe_error(error)
     recorded = False
@@ -1095,6 +1105,11 @@ def pre_tool_use(
 
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
+    if event.get("tool_name") in CODEX_ASYNC_TOOL_NAMES:
+        return _deny(
+            "ASYNC_HOOK_UNAVAILABLE",
+            "Async Codex lifecycle enforcement is incomplete; use synchronous codex or codex-reply.",
+        )
     runtime_root: Path | None = None
     pending_written = False
     bypass_metadata: dict[str, Any] = {}

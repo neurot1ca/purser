@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
+        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$",
         "hooks": [
           {
             "type": "command",
@@ -34,7 +34,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
+        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$",
         "hooks": [
           {
             "type": "command",
@@ -51,7 +51,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply)$",
+        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$",
         "hooks": [
           {
             "type": "command",

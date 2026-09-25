@@ -21,9 +21,9 @@ import project_root
 
 
 HOOK_SPECS: tuple[tuple[str, str | None, int], ...] = (
-    ("PreToolUse", r"^mcp__codex-main__(codex|codex-reply)$", 60),
-    ("PostToolUse", r"^mcp__codex-main__(codex|codex-reply)$", 300),
-    ("PostToolUseFailure", r"^mcp__codex-main__(codex|codex-reply)$", 60),
+    ("PreToolUse", r"^mcp__codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$", 60),
+    ("PostToolUse", r"^mcp__codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$", 300),
+    ("PostToolUseFailure", r"^mcp__codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$", 60),
     ("Stop", None, 60),
 )
 CONTEXT_IO_HOOK_SPECS: tuple[tuple[str, str | None, int], ...] = (
