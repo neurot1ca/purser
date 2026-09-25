@@ -688,6 +688,11 @@ def render(report: dict[str, Any]) -> str:
                     f"in {days} days.")
         entries.append((row.get("weighted_tokens", 0), "👀", sentence,
                         source))
+    if report.get("median_reply_chars", 0) > 800 and not report.get("reply_rule_present", False):
+        reply_rule = "# Replies\nLead with the answer.\nKeep replies short, at most 5 lines unless asked for detail.\nNo tables unless asked."
+        entries.append((report["median_reply_chars"], "📝",
+                        f"Your replies average ~{round(report['median_reply_chars'])} characters.",
+                        f"Add a short-reply rule to ~/.claude/CLAUDE.md:\n{reply_rule}"))
     entries.sort(key=lambda entry: -entry[0])
     lines = ["**⚓ Purser optimize**", "", "Biggest token drains"]
     for index, (_, emoji, sentence, action) in enumerate(entries[:7], 1):

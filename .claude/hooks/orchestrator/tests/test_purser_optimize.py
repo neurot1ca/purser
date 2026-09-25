@@ -132,7 +132,9 @@ def test_reply_rule_boundary(tmp_path, monkeypatch, length, expected):
     monkeypatch.setattr(Path, "home", lambda: home)
     report = analyze(projects, home)
     assert (report["median_reply_chars"] > 800) is expected
-    assert "Long replies" not in optimize.render(report)
+    output = optimize.render(report)
+    assert ("Your replies average ~801 characters." in output) is expected
+    assert "# Replies\nLead with the answer.\nKeep replies short, at most 5 lines unless asked for detail.\nNo tables unless asked." in output if expected else "# Replies" not in output
 
 
 def test_reply_heading_already_present(tmp_path, monkeypatch):
@@ -142,7 +144,9 @@ def test_reply_heading_already_present(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: home)
     projects = tmp_path / "projects"
     write_session(projects, "s", [rec_user(), rec_assistant("a", text="x" * 900)])
-    assert "Long replies" not in optimize.render(analyze(projects, home))
+    output = optimize.render(analyze(projects, home))
+    assert "Your replies average" not in output
+    assert "# Replies" not in output
 
 
 def sequence_session(projects, name):

@@ -227,6 +227,42 @@ def _atomic(path: Path, content: bytes, *, exclusive: bool = False) -> None:
             os.unlink(temporary)
 
 
+def _python_to_store() -> tuple[Path, bool]:
+    """Return the usable Python 3.11+ path and whether the active Python is a venv."""
+    active = Path(sys.executable).resolve()
+    in_venv = sys.prefix != sys.base_prefix
+    if not in_venv:
+        return active, False
+
+    candidates = []
+    base = Path(sys.base_prefix)
+    if sys.platform == "win32":
+        candidates.append(base / "python.exe")
+    else:
+        candidates.extend((base / "bin" / "python3", base / "bin" / "python"))
+    base_executable = getattr(sys, "_base_executable", None)
+    if base_executable:
+        candidates.append(Path(base_executable))
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            key = os.path.normcase(str(resolved))
+            if key in seen or not resolved.is_file():
+                continue
+            seen.add(key)
+            result = subprocess.run([str(resolved), "--version"], capture_output=True,
+                                    text=True, timeout=5, check=False)
+            version = (result.stdout or result.stderr).strip()
+            match = re.search(r"Python\s+(\d+)\.(\d+)", version)
+            if result.returncode == 0 and match and (int(match.group(1)), int(match.group(2))) >= (3, 11):
+                return resolved, True
+        except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError):
+            continue
+    return active, True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
@@ -258,9 +294,14 @@ def main(argv: list[str] | None = None) -> int:
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
         handoff_missing = not handoff.exists()
         python_original = python_file.read_bytes() if python_file.exists() else None
-        python_changed = (str(Path(sys.executable).resolve()) + "\n").encode("utf-8") if sys.version_info >= (3, 11) else None
+        python_path, in_venv = _python_to_store()
+        python_changed = (str(python_path) + "\n").encode("utf-8") if sys.version_info >= (3, 11) else None
         python_update = python_changed is not None and python_original != python_changed
         if args.plan:
+            if python_changed is not None:
+                print(f"Python locator: {python_path}")
+            if in_venv and python_path == Path(sys.executable).resolve():
+                print(f"Note: this Python is inside a virtual environment ({sys.executable}); if it is removed, Purser hooks stop working.")
             if changed != original:
                 print("".join(difflib.unified_diff((original or b"").decode("utf-8").splitlines(keepends=True), changed.decode("utf-8").splitlines(keepends=True), fromfile=str(config), tofile=str(config))), end="")
             if scaffold is not None:

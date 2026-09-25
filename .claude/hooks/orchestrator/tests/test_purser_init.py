@@ -19,6 +19,7 @@ def site(monkeypatch):
     home.mkdir(parents=True, exist_ok=True)
     project.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(purser_init.sys, "prefix", purser_init.sys.base_prefix)
     monkeypatch.setenv("LOCALAPPDATA", str(root / "local-app-data"))
     monkeypatch.chdir(project)
     yield home, project
@@ -91,6 +92,40 @@ def test_existing_different_python_path_appears_in_plan(site, capsys):
     assert "-C:/old/python.exe" in plan
     assert str(Path(sys.executable).resolve()) in plan
     assert locator.read_bytes() == b"C:/old/python.exe\n"
+
+
+def test_venv_uses_existing_python311_base_interpreter_in_plan_and_apply(site, monkeypatch, capsys):
+    home, project = site
+    base = project / "base-python"
+    base.mkdir()
+    base_python = base / "bin" / "python3"
+    base_python.parent.mkdir()
+    base_python.write_text("mock interpreter", encoding="utf-8")
+    monkeypatch.setattr(purser_init.sys, "prefix", str(project / "venv"))
+    monkeypatch.setattr(purser_init.sys, "base_prefix", str(base))
+    monkeypatch.setattr(purser_init.sys, "_base_executable", str(base / "missing-python"), raising=False)
+    monkeypatch.setattr(purser_init.sys, "platform", "linux")
+    monkeypatch.setattr(purser_init.subprocess, "run", lambda *a, **k: type("Result", (), {
+        "returncode": 0, "stdout": "Python 3.12.2", "stderr": ""})())
+    args = ("--coder", "codex", "--reviewer", "none")
+    assert run("--plan", *args) == 0
+    plan = capsys.readouterr().out
+    assert f"Python locator: {base_python.resolve()}" in plan
+    assert str(Path(sys.executable).resolve()) not in plan
+    assert run("--apply", *args) == 0
+    assert (home / ".orchestrator" / "python").read_text(encoding="utf-8") == f"{base_python.resolve()}\n"
+
+
+def test_venv_with_unusable_base_keeps_active_python_and_flags_plan(site, monkeypatch, capsys):
+    _, project = site
+    monkeypatch.setattr(purser_init.sys, "prefix", str(project / "venv"))
+    monkeypatch.setattr(purser_init.sys, "base_prefix", str(project / "missing-base"))
+    monkeypatch.setattr(purser_init.sys, "_base_executable", str(project / "missing-python"), raising=False)
+    monkeypatch.setattr(purser_init.sys, "platform", "linux")
+    assert run("--plan", "--coder", "codex", "--reviewer", "none") == 0
+    plan = capsys.readouterr().out
+    assert f"Python locator: {Path(sys.executable).resolve()}" in plan
+    assert f"Note: this Python is inside a virtual environment ({sys.executable}); if it is removed, Purser hooks stop working." in plan
 
 
 def test_already_trusted_literal_array_is_untouched(site, capsys):
