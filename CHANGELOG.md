@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.26 — 2026-09-25
+
+- Skill: every Codex call runs async; dispatch and result receipts are one bold line with model, effort and quota.
+- /purser:optimize: ranked, plain-words report of actionable drains per 500 messages, friendly names, hidden sessions in absolute terms, learning note.
+- Init: stores the base Python instead of a venv one, offers Ponytail for UI projects, mentions what Purser learns.
+- Reply deny messages name the tool, the disallowed fields, and the recorded task/phase/route mismatch (`a91fc7a`).
+
 ## 0.1.25 — 2026-09-25
 
 - **Fix:** codex_start no longer cancels a live job when Claude Code passes the MCP result as plain text (`59da6bc`).
