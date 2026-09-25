@@ -689,6 +689,7 @@ def test_exhausted_replace_is_fail_open_and_records_degradation(
         io.StringIO(json.dumps(_event(session, "UserPromptSubmit"))),
     )
     assert context_io_hook.main() == 0
+    capsys.readouterr()  # the prompt event prints the reply-language reminder
     original_replace = context_io.os.replace
     attempts = 0
 
