@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.19 — 2026-09-25
+
+- **Fix:** protected paths match case-insensitively on Windows and macOS, and hook checks report edits to already-dirty or untracked files (`b4c1e81`); tests pass in a fresh checkout and no longer leave pytest cache dirs (`1e4d622`, `ccef73e`) (`ccef73e`).
+
 ## 0.1.18 — 2026-09-25
 
 - **New:** after each Codex call a systemMessage shows the remaining quota, e.g. '⚓ **Purser:** Codex quota left: 5h 99% (resets 11:57) · 7d 54% (resets Sep 28)' (`310ef85`).
