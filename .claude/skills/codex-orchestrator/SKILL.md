@@ -6,58 +6,44 @@ description: Orchestrate bounded Codex work by deciding what to delegate, select
 # Codex Orchestrator
 
 `AGENTS.md`, `state/current.yaml`, and the active spec define authority. This
-skill supplies orchestration judgment. `.claude/hooks/orchestrator/` supplies
-deterministic mechanics. Delegation can use existing authority; it cannot create
-authority.
+skill supplies judgment; `.claude/hooks/orchestrator/` supplies mechanics.
+Delegation cannot create authority.
 
-Rare transport, recovery, and hook-diagnostic procedures are in
-[`docs/ORCHESTRATOR_OPERATIONS.md`](../../../docs/ORCHESTRATOR_OPERATIONS.md), a
-non-authoritative reference that is not loaded automatically.
+For transport, recovery, or hook diagnosis, see non-authoritative
+[`operations guide`](../../../docs/ORCHESTRATOR_OPERATIONS.md).
 
-Language: speak the user's language only in replies to the user. Everything
-else is English: worker prompts, the report you require back, commits, state,
-and repository documents. Non-English text costs more tokens and returns in
-every bundle.
+Language: user's language only in user replies; English in worker prompts and
+reports, commits, state, and repository documents. Other languages cost more
+tokens in every bundle.
 
-Replies: keep every reply to the user at most 5 lines unless they ask for
-detail, in plain friendly sentences: the result, one recommendation, at most
-one question; no tables or headings unless asked; do not retell the work.
-Each reply stays in context and is re-read on every later request.
+Replies: at most 5 lines unless asked for detail. Plain friendly sentences:
+result, one recommendation, at most one question; no tables or headings unless
+asked, no retelling. Replies remain in context.
 
 ## Delegate deliberately
 
-Delegate work that is bounded, verifiable, and expressible as acceptance
-criteria. The artifact type is not the boundary: implementation, repair,
-analysis, extraction, investigation, schema work, migration, and a scoped API
-probe can all qualify. A repeated check or reusable evidence should become a
-written, tested instrument rather than a chain of ad-hoc commands.
+Delegate bounded, verifiable work with acceptance criteria, regardless of
+artifact type: implementation, repair, analysis, extraction, investigation,
+schema work, migration, or scoped API probe. Turn repeated checks or reusable
+evidence into written, tested instruments, not ad-hoc commands.
 
-Keep the work that only the orchestrator can do: frame the problem, decide what
-would count as an answer, resolve authority, choose the route, review the result,
-and adjudicate disagreement. Also keep bookkeeping whose delegation would cost
-more than doing it directly.
+Keep orchestrator-only work: framing, answer criteria, authority, routing,
+review, and disagreement. Do bookkeeping directly when delegation costs more.
 
-Do not explore by hand. When answering a question about the code, a transcript,
-or logs would take three or more of your own read/search turns, send one
-`Explore` agent with `model: haiku`, a precise question, and a bounded answer
-(file:line citations plus short findings). Then verify only the decisive one or
-two lines yourself. One or two searches: do them directly. Deep analysis goes to
-Codex, not Explore.
+For code, transcript, or log exploration needing 3+ reads, see
+[conditional delegation](references/conditional_delegation.md).
 
-Delegation is not handoff. A completion report is a claim, not a result. Review
-every return. Treat review as a negotiation: independently verify a worker's
-objection or refusal; if it stands, repair the instruction instead of restating
-it more forcefully. Reject fluent answers that do not survive the same check.
+Review every completion claim. Verify objections or refusals independently;
+repair valid ones in the instruction. Reject fluent answers that fail review.
 
 ## Route and dispatch
 
-Classify the task before dispatch. Consequential domains include concurrency,
-timing and clocks, state machines, economics and execution semantics, auth,
-durability and recovery, causal evidence, fail-closed behavior, live/risk gates,
-and subtle cross-module invariants. Residual design, not the domain label alone,
-decides whether an implementation is resolved: a task is resolved only when an
-accepted map already names the files, symbols, invariants, failure direction,
-and behavior without leaving a semantic choice to the worker.
+Classify before dispatch. Consequential domains include concurrency, timing and
+clocks, state machines, economics and execution, auth, durability and recovery,
+causal evidence, fail-closed behavior, live/risk gates, and subtle cross-module
+invariants. A domain label alone does not decide whether design is resolved.
+An accepted map must name files, symbols, invariants, failure direction, and
+behavior, leaving no semantic choice to the worker.
 
 | Task class | Route | Model and effort |
 |---|---|---|
@@ -68,39 +54,26 @@ and behavior without leaving a semantic choice to the worker.
 | Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6-sol` + `xhigh` |
 | Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-6-luna` + `high` |
 
-Use the lowest row expected to finish correctly in one pass. Default to
-`subtle` when the prompt states the decisions; `normal`, `consequential`, and
-`escalated` need `basis=` naming the design choice left to the worker, and the
-hook denies them without it. Do not use a
-cheap-first cascade: an expected repair cycle also spends review. Do not raise
-effort to compensate for a contradictory or unresolved prompt. A resolved
-consequential implementation may use `subtle`, but its prompt must state the
-accepted map and every invariant explicitly, and Claude still reviews it as
-consequential work. `gpt-6-luna` + `xhigh` is not a route; move unresolved work
-to `gpt-6-sol` instead.
+Choose the lowest row likely to succeed in one pass; default to `subtle` when
+decisions are stated. `normal`, `consequential`, and `escalated` require `basis=`
+naming the remaining design choice; the hook denies omission. Avoid cheap-first
+cascades: repair costs review. Effort cannot fix contradictory or unresolved
+prompts. Resolved consequential implementation may use `subtle` only with the
+accepted map and every invariant explicit; Claude still reviews it as
+consequential. `gpt-6-luna` + `xhigh` is invalid; unresolved work uses `gpt-6-sol`.
 
-Before each call, give the user one brief dispatch receipt: route, model, effort,
-continuity (`reply`, `fresh`, or `failover-fresh`), one clause explaining the
-choice, and the expected duration with what would count as a stall. Never pass
-`sandbox` or `approval-policy`; runtime configuration owns capability. On a typed
-quota or credit exhaustion response, fail over; do not perform proactive quota
-routing.
-After each Codex call, tell the user the bundle's model and effort, and its `codex_quota` 5h and 7d used percentages and reset times when present.
+Before each call, give one brief user receipt: route, model, effort, continuity
+(`reply`, `fresh`, or `failover-fresh`), reason, expected duration, and stall
+threshold. Runtime configuration owns capability; never pass `sandbox` or
+`approval-policy`. Fail over on typed quota/credit exhaustion, never route
+proactively by quota. After each call, report bundle model and effort plus
+`codex_quota` 5h/7d used percentages and reset times when present.
 
-Format both lines as one bold line between two `---` rules, in the user's
-language, with any explanation below in plain text, for example:
-
-```text
----
-**⚓ Codex: luna/high · operation · fresh · ~6 min (stall after 15 min)**
----
-```
-
-```text
----
-**⚓ Codex done: luna/high · 2.4 min · quota 5h 59%, 7d 56%**
----
-```
+Format each as one bold line between `---` rules in the user's language, with
+a blank line before and after the bold line (otherwise Markdown turns it into a
+heading); explain below in plain text. Put the dispatch receipt in the reply
+that ends the turn after `codex_start`, not in text before the tool call (the
+desktop app can hide that). If needed, see [examples](references/receipt_examples.md).
 
 ## Protocol line
 
@@ -110,95 +83,72 @@ Claude writes the first prompt line exactly in this shape:
 ORCH|task=<stable-id>|phase=<implementation|operation>|route=<mechanical|subtle|normal|consequential|escalated|operation>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|scope=<repo-relative-path[,repo-relative-path...]>][|eta=<N>m]
 ```
 
-Fields are `task`, `phase`, `route`, optional `reason`, `basis` required for
-`normal`, `consequential`, and `escalated` and optional otherwise, and
-`scope`. `task`, `phase`, and `route` are always required. `scope` is required
-for `implementation`, must be bounded repository-relative paths, and must not be
-the whole repository; omit it for `operation`. Claude chooses the route and
-writes this line. The hook strips it, resolves model and effort from the route
-table, and rejects malformed or inconsistent invocations. A recorded compatible
-`codex-reply` may inherit the line.
+`task`, `phase`, and `route` are required; `reason` optional. `basis` is
+required for `normal`, `consequential`, and `escalated`, optional otherwise.
+`scope` is required for `implementation`: bounded repository-relative paths,
+never the whole repository; omit for `operation`. Claude writes the line and
+route; the hook strips it, resolves model/effort, and rejects malformed or
+inconsistent calls. Compatible recorded `codex-reply` may inherit.
 
-Put your duration estimate in eta; it is recorded next to the actual duration.
+Put estimated duration in `eta` beside the recorded actual duration.
 
 ### Async by default
 
-Use the SessionStart duration hint when present and put your estimate in `eta`.
-Dispatch every call with `codex_start` so the conversation is never blocked;
-use `mode=reply` with `threadId` (same ORCH `task`, no `cwd`) to continue a
-thread. Use `codex` or `codex-reply` only when `codex_start` is unavailable. Run the exact background command from the start
-result with the shell's background option, end your turn, and keep talking with
-the user while it runs. After the waiter finishes, call `codex_result` once with
-its `jobId` and review the result as for a synchronous call. Do not call
-`codex_result` before the waiter finishes. Use `codex_cancel` only when the user
-asks to stop.
+Use the SessionStart duration hint for `eta` when present. Dispatch every call
+with `codex_start`; for continuation use `mode=reply`, `threadId`, the same ORCH
+`task`, and no `cwd`. Use `codex`/`codex-reply` only if `codex_start` is
+unavailable. Run the exact command returned by start with the shell background
+option, end the turn, and keep talking with the user. Once the waiter finishes,
+call `codex_result` once with `jobId` and review as synchronous output. Never
+call it before the waiter finishes; use `codex_cancel` only at user request.
 
 ## Craft the prompt
 
-State a precise objective and observable acceptance criteria, labelled
-`Objective:` and `Acceptance criteria:` (or `# Objective` / `# Acceptance
-criteria` headings); without both labels the hook cannot ground the task
-contract and forces FULL review. Include only
-verified problem context, explicit constraints, and the files, symbols,
-contracts, or evidence that materially narrow the task. Prefer behavior and
-invariants over an unverified implementation. Exclude speculative redesign,
-cleanup, refactors, and polish outside the criteria.
+Label a precise objective and observable criteria `Objective:` and `Acceptance
+criteria:` (or corresponding `#` headings); missing labels force FULL review
+because the hook cannot ground the contract. Include verified context,
+constraints, and only files, symbols, contracts, or evidence that narrow the
+task. Prefer behavior and invariants to unverified implementation. Exclude
+speculative redesign, cleanup, refactors, and polish outside the criteria.
 
-Before dispatch, resolve criteria that pull in opposite directions: state which
-one wins and how the other degrades. Extra worker effort does not resolve an
-unstated priority.
+For conflicting criteria, see [conditional delegation](references/conditional_delegation.md).
 
 State the failure class as the requirement. Concrete failures are
-non-exhaustive tests unless the domain genuinely requires a finite table; in
-that case require the residual gap to be reported.
+non-exhaustive tests unless the domain genuinely requires a finite table;
+then require the residual gap to be reported.
 
-When the task depends on an unverified premise, make refusal the first
-deliverable: test the premise before building; if it fails, stop and cite the
-conflict and the smallest compliant alternative. Never leave only “comply” or
-“invent” as the worker's choices.
+For unverified premises, see [conditional delegation](references/conditional_delegation.md).
 
-When optional capabilities or independent lanes may be unavailable, declare one
-fallback before dispatch: `sequential-parent`, `generic-agent`,
-`partial-result`, or `fail-closed`. Require the report to name missing lanes and
-the fallback used. Do not add this ritual to a single-lane task.
+For possibly missing optional lanes, see [conditional delegation](references/conditional_delegation.md).
 
-Add-ons are never automatic. When a user's project is UI/web/app or greenfield
-feature work, suggest Ponytail (`addons/ponytail/`) once, inline; enable it for
-that project only on the user's yes, and never for `consequential` or
-`escalated` work.
+For UI/web/app or greenfield feature work, see [Ponytail guidance](references/conditional_delegation.md).
 
 ## Review and acceptance
 
-For mutations, review diff-first: inspect the actual delegated delta, then the
-changed behavior and affected invariants, then only material callers, callees,
-and boundaries. For read-only work, inspect the cited sources, method, and
-result first. Expand from the smallest decisive evidence set only for a concrete
-uncertainty, failed check, disagreement, dependency, or risk.
+For mutations, review the delta, then changed behavior and invariants, then
+material callers, callees, and boundaries. For read-only work, start with cited
+sources, method, and result. Expand evidence only for concrete
+uncertainty, failed checks, disagreement, dependency, or risk.
 
-Verify attribution as well as outcome. When a worker claims its change caused an
-effect, establish proportionally that the effect disappears without the new
-code. A passing suite is consistent with redundant coverage; reapplying the
-defect and observing the relevant test fail is the decisive regression check.
+For a worker's causal claim, see [attribution verification](references/conditional_review.md).
 
-Reviewer-1 evidence is independent input, not acceptance. Consequential and
-escalated work always receives Claude's full review. Request repair only for a
-material defect, failed criterion, contract violation, or required validation
-gap. After repair, review the new delta, the blocking finding, and newly affected
-boundaries instead of restarting the whole review.
+Reviewer-1 is independent input, not acceptance. Claude fully reviews all
+consequential and escalated work. Request repair only for a material defect,
+failed criterion, contract violation, or required validation gap. After repair,
+review the new delta, blocking finding, and newly affected boundaries.
 
-When a full suite is relevant, Claude runs it exactly once before acceptance.
-Workers run focused validation and do not repeatedly run the full suite. Do not
-repeat an expensive successful check unless the repair could invalidate it.
+When relevant, Claude runs the full suite once before acceptance. Workers run
+focused validation, never repeated full suites. Repeat an expensive successful
+check only if repair could invalidate it.
 
 ### One-turn AUDIT
 
-When the hook emits `claude_review_mode: AUDIT`, use the consolidated bundle in
-one Claude turn: check the task contract, reviewer result or eligible skip,
-worker validation, delta summary, and safety fields; then accept and commit if
-the evidence is sufficient and commit authority exists, or decline with the
-specific gap. Do not reopen raw diffs or exploratory shell review without a
-concrete inconsistency. If Reviewer-1 requires changes, send its exact findings
-back through the existing thread; do not edit the worker's code yourself.
+On `claude_review_mode: AUDIT`, use one Claude turn to check the bundle's task
+contract, reviewer result or eligible skip, worker validation, delta summary,
+and safety fields. Accept and commit only with sufficient evidence and commit
+authority; otherwise decline with the specific gap. Reopen raw diffs or shell
+review only for concrete inconsistency. Send Reviewer-1's required changes
+through the existing thread; do not edit worker code yourself.
 
 Close every review with exactly one typed verdict and name the evidence that
 decides it:
@@ -211,20 +161,16 @@ Proceeding after `INCONCLUSIVE` is a user decision. Never round it up to success
 
 ## Thread choice and bounded completion
 
-Continue with `codex-reply` for an ordinary follow-up or repair while the worker
-is available and the diagnosis, task identity, route, model, and effort still
-hold. Start a fresh thread for failover, a stale diagnosis, a material P0/P1
-error where anchoring is plausible, repeated repair failure, or a justified
-model or effort change. Do not open a fresh thread merely to simulate
-independence.
+Use `codex-reply` for follow-up or repair while the worker, diagnosis, task
+identity, route, model, and effort still hold. Start fresh for failover, stale
+diagnosis, material P0/P1 error with plausible anchoring, repeated repair
+failure, or justified model/effort change; never merely to simulate independence.
 
-For an autonomously authorized bounded objective: initial implementation, at
-most two ordinary material repairs, then at most one justified escalated repair.
-Stop earlier when the criteria are met, a human decision or material scope
-expansion is required, authority is ambiguous, infrastructure blocks progress,
-or repairs stop making material progress. Do not loop for style, optional
-optimization, speculative cleanup, or confidence without a concrete risk.
+For authorized bounded work: initial implementation, at most two ordinary
+material repairs, then at most one justified escalated repair. Stop earlier
+when criteria are met, human decision or material scope expansion is needed,
+authority is ambiguous, infrastructure blocks progress, or repairs cease
+material progress. Do not loop for style, optional optimization, speculative
+cleanup, or confidence without concrete risk.
 
-If stopping leaves a real residual risk, tell the user what it is, why it fell
-outside the loop, and what addressing it would cost. Silent-failure risks must
-never be deferred without the user's knowledge.
+For real residual risk at stopping, see [conditional review](references/conditional_review.md).
