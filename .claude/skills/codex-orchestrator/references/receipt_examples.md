@@ -11,7 +11,7 @@
 ```text
 ---
 
-**⚓ Codex done: luna/high · 2.4 min · quota 5h 59%, 7d 56%**
+**⚓ Codex done: luna/high · 2.4 min · quota 5h 59% (resets in 1h 20m), 7d 56%**
 
 ---
 ```

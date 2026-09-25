@@ -67,7 +67,8 @@ Before each call, give one brief user receipt: route, model, effort, continuity
 threshold. Runtime configuration owns capability; never pass `sandbox` or
 `approval-policy`. Fail over on typed quota/credit exhaustion, never route
 proactively by quota. After each call, report bundle model and effort plus
-`codex_quota` 5h/7d used percentages and reset times when present.
+`codex_quota` 5h/7d used percentages and reset times when present; show the
+5h reset as time remaining (e.g. "resets in 1h 20m").
 
 Format each as one bold line between `---` rules in the user's language, with
 a blank line before and after the bold line (otherwise Markdown turns it into a
