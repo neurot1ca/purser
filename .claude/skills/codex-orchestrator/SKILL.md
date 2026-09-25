@@ -121,12 +121,12 @@ table, and rejects malformed or inconsistent invocations. A recorded compatible
 
 Put your duration estimate in eta; it is recorded next to the actual duration.
 
-### Sync or async
+### Async by default
 
 Use the SessionStart duration hint when present and put your estimate in `eta`.
-For unknown estimates or `eta < 5m`, use `codex` or `codex-reply` as today. For
-`eta >= 5m`, use `codex_start` on the same ORCH line; use `mode=reply` with
-`threadId` to continue a thread. Run the exact background command from the start
+Dispatch every call with `codex_start` so the conversation is never blocked;
+use `mode=reply` with `threadId` (same ORCH `task`, no `cwd`) to continue a
+thread. Use `codex` or `codex-reply` only when `codex_start` is unavailable. Run the exact background command from the start
 result with the shell's background option, end your turn, and keep talking with
 the user while it runs. After the waiter finishes, call `codex_result` once with
 its `jobId` and review the result as for a synchronous call. Do not call
