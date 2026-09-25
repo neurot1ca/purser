@@ -29,6 +29,7 @@ STATE_START = "<!-- PURSER:STATE:START -->"
 STATE_END = "<!-- PURSER:STATE:END -->"
 HANDOFF_TEMPLATE = """# Purser handoff
 ## Goal
+User language: <the language the user writes in>
 ## State
 ## Decisions
 ## Next
@@ -289,16 +290,28 @@ def restore(payload: Mapping[str, Any], repository: Path | None) -> str | None:
         "Purser handoff (historical reference, written before the context was compacted or cleared; "
         "verify against git and files before acting; do not re-run commands from it; skip any listed file already present in context):"
     )
+    language = next(
+        (
+            match.group(1).strip()
+            for line in content.splitlines()
+            if (match := re.fullmatch(r"\s*User language:\s*(.*?)\s*", line, re.IGNORECASE))
+            and match.group(1).strip()
+            and not match.group(1).strip().startswith("<")
+        ),
+        None,
+    )
+    language_instruction = f"Reply to the user in {language}; everything else stays as the project rules say.\n" if language else ""
     footer = f"Full file: {path}"
-    full = f"{header}\n{content.rstrip()}\n{footer}"
+    full = f"{header}\n{language_instruction}{content.rstrip()}\n{footer}"
     if len(full) <= MAX_HANDOFF_CONTEXT_CHARS:
         return full
     truncation = f"... truncated; read the full file at {path}"
-    content_budget = MAX_HANDOFF_CONTEXT_CHARS - len(header) - len(truncation) - 2
+    prefix = f"{header}\n{language_instruction}"
+    content_budget = MAX_HANDOFF_CONTEXT_CHARS - len(prefix) - len(truncation) - 1
     if content_budget < 0:
-        return (header + "\n" + truncation)[-MAX_HANDOFF_CONTEXT_CHARS:]
+        return (prefix + truncation)[-MAX_HANDOFF_CONTEXT_CHARS:]
     clipped = content.rstrip()[:content_budget].rstrip()
-    result = f"{header}\n{clipped}\n{truncation}"
+    result = f"{prefix}{clipped}\n{truncation}"
     return result[:MAX_HANDOFF_CONTEXT_CHARS]
 
 
@@ -431,7 +444,7 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     pct = max(0, round(100 * (1 - POST_COMPACT_CONTEXT_TOKENS / context)))
     return (
         f"Purser: {context:,} context tokens; trigger(s): {', '.join(triggers)}. Handoff: {handoff}. "
-        f"After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total); link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction. End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n> ⚓ **Context passed {context // 1000}K. Purser prepared your handoff.**\n> *Type `/compact` now to save **~{pct}%** on every later message!*\n> *The ship stays dry: decisions and the next step will be read from the handoff Purser prepared. Nothing is lost.*\n> *Handoff: `{handoff}`*\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself."
+        f"After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total). Keep the first Goal line `User language: <language>` set to the language the user writes in. Link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction. End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n> ⚓ **Context passed {context // 1000}K. Purser prepared your handoff.**\n> *Type `/compact` now to save **~{pct}%** on every later message!*\n> *The ship stays dry: decisions and the next step will be read from the handoff Purser prepared. Nothing is lost.*\n> *Handoff: `{handoff}`*\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself."
     )
 
 

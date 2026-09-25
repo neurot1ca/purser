@@ -125,6 +125,17 @@ def test_does_not_fire_without_trigger(setup):
     assert advisor.advise(event, repo, now=NOW) is None
 
 
+def test_handoff_template_and_advice_preserve_user_language(setup):
+    repo, local, scratch = setup
+    goal_lines = advisor.HANDOFF_TEMPLATE.split("## Goal\n", 1)[1].splitlines()
+    assert goal_lines[0] == "User language: <the language the user writes in>"
+
+    event = _event(scratch, repo, local, _records("commit"))
+    result = advisor.advise(event, repo, now=NOW)
+    assert result
+    assert "Keep the first Goal line `User language: <language>` set to the language the user writes in." in result
+
+
 def test_failed_git_commit_is_not_a_boundary(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit", failed=True))
@@ -261,6 +272,31 @@ def test_restore_after_compact_or_clear(setup, source):
     assert "skip any listed file already present in context" in restored
     assert "Keep working" in restored
     assert f"Full file: {path}" in restored
+
+
+def test_restore_includes_user_language_instruction(setup):
+    repo, _local, _scratch = setup
+    path = advisor.handoff_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text("# Purser handoff\n## Goal\nUser language: Turkish\nKeep working\n", encoding="utf-8")
+
+    restored = advisor.restore({"source": "compact"}, repo)
+
+    assert restored.startswith("Purser handoff (historical reference, written before the context was compacted or cleared;")
+    assert "Reply to the user in Turkish; everything else stays as the project rules say." in restored
+
+
+@pytest.mark.parametrize("language_line", ["User language: <the language the user writes in>", ""])
+def test_restore_omits_user_language_instruction_for_placeholder_or_missing_line(setup, language_line):
+    repo, _local, _scratch = setup
+    path = advisor.handoff_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(f"# Purser handoff\n## Goal\n{language_line}\nKeep working\n", encoding="utf-8")
+
+    restored = advisor.restore({"source": "compact"}, repo)
+
+    assert restored
+    assert "Reply to the user in" not in restored
 
 
 def test_restore_startup_and_resume_require_recent_mtime(setup):
