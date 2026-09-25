@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.21 — 2026-09-25
+
+- **Fix:** the handoff is no longer injected on `resume` (e.g. after an app restart), where the conversation is still in context; `compact`, `clear` and fresh `startup` unchanged (`3e4a274`).
+
 ## 0.1.20 — 2026-09-25
 
 - **Fix:** the handoff records `User language:` and the post-compaction restore tells Claude to reply in it, since the English summary and handoff made Claude switch to English (`01faa15`).
