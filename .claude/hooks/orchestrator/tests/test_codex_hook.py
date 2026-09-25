@@ -1071,6 +1071,66 @@ def test_bare_reply_inherits_recorded_reason_in_call_event(workspace, config):
     assert payload["reason_source"] == "inherited"
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "extra_field", "expected_tool"),
+    [
+        (codex.CODEX_REPLY_TOOL, "model", "codex-reply"),
+        (START_TOOL, "cwd", "codex_start mode=reply"),
+    ],
+)
+def test_reply_input_invalid_names_tool_and_extra_field(
+    workspace, config, tool_name, extra_field, expected_tool
+):
+    repo, state = workspace
+    save_live_thread(state)
+    reply = event(tool_name, prompt="Continue.", threadId="thread-1", mode="reply")
+    reply["tool_input"][extra_field] = str(repo) if extra_field == "cwd" else "gpt-6-astra"
+
+    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.startswith("CODEX_REPLY_INPUT_INVALID:")
+    assert expected_tool in reason
+    assert extra_field in reason
+
+
+@pytest.mark.parametrize("tool_name", [codex.CODEX_REPLY_TOOL, START_TOOL])
+def test_recorded_thread_task_mismatch_names_both_tasks(workspace, config, tool_name):
+    repo, state = workspace
+    save_live_thread(state)
+    reply = event(
+        tool_name,
+        prompt=orch(task="task-2", reason="continue") + "\nContinue.",
+        threadId="thread-1",
+        mode="reply",
+    )
+
+    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.startswith("THREAD_TASK_MISMATCH:")
+    assert "thread-1" in reason
+    assert "task-1" in reason
+    assert "task-2" in reason
+
+
+@pytest.mark.parametrize("tool_name", [codex.CODEX_REPLY_TOOL, START_TOOL])
+def test_unknown_recorded_thread_with_orch_still_reports_no_live_thread(workspace, config, tool_name):
+    repo, state = workspace
+    reply = event(
+        tool_name,
+        prompt=orch(task="task-2", reason="continue") + "\nContinue.",
+        threadId="unknown-thread",
+        mode="reply",
+    )
+
+    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.startswith("NO_LIVE_THREAD:")
+    assert "ORCH|task=" in reason
+
+
 def test_fresh_route_change_records_previous_and_new_route(workspace, config):
     repo, state = workspace
     save_live_thread(state)

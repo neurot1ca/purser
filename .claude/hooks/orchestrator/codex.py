@@ -1221,10 +1221,13 @@ def pre_tool_use(
             if is_start:
                 forbidden |= set(tool_input) - {"prompt", "threadId", "mode", "call", "timeoutSeconds"}
             if forbidden:
+                caller = "codex_start mode=reply" if is_start else "codex-reply"
+                allowed = "threadId, prompt and mode" if is_start else "threadId and prompt"
+                fields = ", ".join(sorted(forbidden))
                 return _observed_denial(
                     event,
                     "CODEX_REPLY_INPUT_INVALID",
-                    "codex-reply accepts only threadId and prompt; use a fresh thread to change routing.",
+                    f"{caller} accepts only {allowed}; remove: {fields}.",
                     state_root=state_root,
                     task_id=parsed.task_id,
                 )
@@ -1264,6 +1267,35 @@ def pre_tool_use(
                 return _observed_denial(
                     event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
                 )
+            if reply_call:
+                recorded = session_ledger.find_by_thread_id(tool_input.get("threadId"))
+                if recorded is not None:
+                    recorded_thread = recorded.get("live_thread")
+                    recorded_task = recorded.get("task_id")
+                    mismatches = []
+                    if recorded_task != parsed.task_id:
+                        mismatches.append(
+                            ("THREAD_TASK_MISMATCH", "task", recorded_task, parsed.task_id)
+                        )
+                    if isinstance(recorded_thread, Mapping):
+                        for field, code in (("phase", "THREAD_PHASE_MISMATCH"),
+                                            ("route", "THREAD_ROUTE_MISMATCH")):
+                            old_value = recorded_thread.get(field)
+                            new_value = getattr(parsed, field)
+                            if old_value != new_value:
+                                mismatches.append((code, field, old_value, new_value))
+                    if mismatches:
+                        code, field, recorded_value, requested_value = mismatches[0]
+                        return _observed_denial(
+                            event,
+                            code,
+                            f"thread {tool_input.get('threadId')} was recorded for {field} "
+                            f"{recorded_value}; this call says {requested_value}. "
+                            f"Reuse that {field} or start a fresh thread.",
+                            state_root=state_root,
+                            task_id=parsed.task_id,
+                            continuity=True,
+                        )
             loaded = session_ledger.load(parsed.task_id)
             if loaded["status"] == ledger.CORRUPT:
                 raise WiringError("session ledger is unreadable")
