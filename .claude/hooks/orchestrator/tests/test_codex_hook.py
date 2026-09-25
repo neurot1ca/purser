@@ -203,7 +203,8 @@ def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace
     assert "additionalContext" in bypass["hookSpecificOutput"]
 
 
-def test_async_result_finalizes_once_from_start_baseline(workspace, config, monkeypatch):
+@pytest.mark.parametrize("response_shape", ("string", "blocks", "mapping"))
+def test_async_result_finalizes_once_from_start_baseline(workspace, config, monkeypatch, response_shape):
     repo, state = workspace
     prompt = orch(scope="file0.py") + "|eta=4m\nTASK_CONTRACT: {\"objective\": \"Update file0\", \"criteria\": \"file0 is updated\"}"
     start, job_id, record = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
@@ -216,9 +217,14 @@ def test_async_result_finalizes_once_from_start_baseline(workspace, config, monk
         return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"}
     result = async_followup(RESULT_TOOL, job_id)
     assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
-    post = {**result, "hook_event_name": "PostToolUse", "duration_ms": 1,
-            "tool_response": {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
-                                                    "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":[],"exit_codes":[]}'}}}
+    value = {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+             "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":[],"exit_codes":[]}'}
+    response = {
+        "string": json.dumps(value),
+        "blocks": [{"type": "text", "text": json.dumps(value)}],
+        "mapping": {"structuredContent": value},
+    }[response_shape]
+    post = {**result, "hook_event_name": "PostToolUse", "duration_ms": 1, "tool_response": response}
     first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=reviewer)
     bundle = response_bundle(first, config)
     assert bundle["thread_id"] == "async-thread" and bundle["concurrent_writer"] is True
@@ -317,12 +323,18 @@ def test_async_start_rewrites_and_retries_same_call(workspace, config):
     assert len([e for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_STARTED"]) == 1
 
 
-def test_async_start_post_stores_only_job_id_without_finalizing(workspace, config):
+@pytest.mark.parametrize("response_shape", ("string", "blocks", "mapping"))
+def test_async_start_post_stores_only_job_id_without_finalizing(workspace, config, response_shape):
     repo, state = workspace
     call = event(START_TOOL)
     updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
     job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
-    response = {"structuredContent": {"jobId": job_id, "state": "RUNNING"}}
+    value = {"jobId": job_id, "state": "RUNNING"}
+    response = {
+        "string": json.dumps(value),
+        "blocks": [{"type": "text", "text": json.dumps(value)}],
+        "mapping": {"structuredContent": value},
+    }[response_shape]
     post = {**call, "hook_event_name": "PostToolUse", "tool_response": response}
     result = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
                                  reviewer=lambda **kwargs: pytest.fail("reviewer ran at start"))
@@ -340,7 +352,8 @@ def test_async_start_post_stores_only_job_id_without_finalizing(workspace, confi
 
 
 @pytest.mark.parametrize("fail_store", (False, True))
-def test_async_start_failure_uses_ambiguous_path_and_cancels_job(workspace, config, monkeypatch, fail_store):
+@pytest.mark.parametrize("error_shape", ("string", "blocks", "mapping"))
+def test_async_start_failure_uses_ambiguous_path_and_cancels_job(workspace, config, monkeypatch, fail_store, error_shape):
     repo, state = workspace
     call = event(START_TOOL)
     updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
@@ -357,10 +370,14 @@ def test_async_start_failure_uses_ambiguous_path_and_cancels_job(workspace, conf
                 raise OSError("job association could not be stored")
             return write(path, value)
         monkeypatch.setattr(codex, "_atomic_json_write", fail_job_write)
-    post = {**call, "hook_event_name": "PostToolUse", "tool_response":
-            {"structuredContent": {"jobId": job_id, "state": "RUNNING" if fail_store else "FAILED",
-                                   **({} if fail_store else {"errorCode": "CODEX_FAILED"})},
-             "isError": not fail_store}}
+    value = {"jobId": job_id, "state": "RUNNING",
+             **({} if fail_store else {"errorCode": "CODEX_FAILED", "isError": True})}
+    response = {
+        "string": json.dumps(value),
+        "blocks": [{"type": "text", "text": json.dumps(value)}],
+        "mapping": {"structuredContent": value, "isError": not fail_store},
+    }[error_shape]
+    post = {**call, "hook_event_name": "PostToolUse", "tool_response": response}
     result = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
     assert "FULL" in result["hookSpecificOutput"]["additionalContext"]
     assert cancelled == [job_id]

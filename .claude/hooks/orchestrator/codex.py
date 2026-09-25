@@ -1591,29 +1591,44 @@ def pre_tool_use(
         return _internal_pre_allow(reason, recorded)
 
 
-def _extract_codex_result(tool_response: Any) -> tuple[str, str]:
-    if isinstance(tool_response, str):
-        texts = [tool_response]
+def _decoded_codex_objects(tool_response: Any) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    if isinstance(tool_response, Mapping):
+        structured = tool_response.get("structuredContent")
+        if isinstance(structured, dict):
+            objects.append(structured)
+        payload = tool_response.get("content")
     else:
-        blocks = tool_response
-        if isinstance(blocks, Mapping) and isinstance(blocks.get("content"), list):
-            blocks = blocks["content"]
-        if not isinstance(blocks, list):
-            raise WiringError("Codex MCP output is not a content-block array")
+        payload = tool_response
+    if isinstance(payload, str):
+        texts = [payload]
+    elif isinstance(payload, list):
         texts = [
             block["text"]
-            for block in blocks
+            for block in payload
             if isinstance(block, Mapping)
             and block.get("type") == "text"
             and isinstance(block.get("text"), str)
         ]
+    else:
+        texts = []
     for text in texts:
         try:
             decoded = json.loads(text)
         except json.JSONDecodeError:
             continue
-        if not isinstance(decoded, Mapping):
-            continue
+        if isinstance(decoded, dict):
+            objects.append(decoded)
+    return objects
+
+
+def _codex_response_is_error(tool_response: Any) -> bool:
+    return ((isinstance(tool_response, Mapping) and bool(tool_response.get("isError")))
+            or any(bool(value.get("isError")) for value in _decoded_codex_objects(tool_response)))
+
+
+def _extract_codex_result(tool_response: Any) -> tuple[str, str]:
+    for decoded in _decoded_codex_objects(tool_response):
         thread_id = decoded.get("threadId")
         content = decoded.get("content")
         if isinstance(thread_id, str) and thread_id:
@@ -1622,20 +1637,9 @@ def _extract_codex_result(tool_response: Any) -> tuple[str, str]:
 
 
 def _start_value(tool_response: Any) -> dict[str, Any]:
-    if isinstance(tool_response, Mapping):
-        value = tool_response.get("structuredContent")
-        if isinstance(value, dict):
-            return value
-        tool_response = tool_response.get("content")
-    if isinstance(tool_response, list):
-        for block in tool_response:
-            if isinstance(block, Mapping) and isinstance(block.get("text"), str):
-                try:
-                    value = json.loads(block["text"])
-                except ValueError:
-                    continue
-                if isinstance(value, dict):
-                    return value
+    values = _decoded_codex_objects(tool_response)
+    if values:
+        return values[0]
     raise WiringError("codex_start result is unreadable")
 
 
@@ -1670,8 +1674,7 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
         expected = hashlib.sha256(call_uuid.encode("utf-8")).hexdigest()
         if (not isinstance(job_id, str) or job_id != expected
                 or value.get("state") not in {"QUEUED", "RUNNING", "SUCCEEDED"}
-                or (isinstance(event.get("tool_response"), Mapping)
-                    and event["tool_response"].get("isError"))):
+                or _codex_response_is_error(event.get("tool_response"))):
             raise WiringError(value.get("errorCode", "codex_start failed or returned a mismatched job"))
         if pending.get("job_id") not in (None, job_id):
             raise WiringError("pending call already belongs to another job")
@@ -1802,8 +1805,7 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                    and isinstance(value.get("threadId"), str) and bool(value["threadId"])
                    and value["threadId"] == job.get("threadId")
                    and isinstance(value.get("content"), str)
-                   and not (isinstance(event.get("tool_response"), Mapping)
-                            and event["tool_response"].get("isError")))
+                   and not _codex_response_is_error(event.get("tool_response")))
         synthetic = dict(original, duration_ms=duration)
         if success:
             synthetic.update(hook_event_name="PostToolUse", tool_response={"content": [
