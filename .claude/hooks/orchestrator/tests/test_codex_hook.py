@@ -326,8 +326,12 @@ def test_async_start_post_stores_only_job_id_without_finalizing(workspace, confi
     post = {**call, "hook_event_name": "PostToolUse", "tool_response": response}
     result = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
                                  reviewer=lambda **kwargs: pytest.fail("reviewer ran at start"))
-    assert response_bundle(result, config) == {"jobId": job_id, "state": "RUNNING",
-                                                "next": "Wait for completion, then call codex_result with this jobId."}
+    next_text = response_bundle(result, config)["next"]
+    assert next_text == (f'Run in the background: "{sys.executable}" '
+                         f'"{Path(codex.__file__).resolve().parent / "purser_wait.py"}" '
+                         f'{job_id} ; when it finishes, call codex_result with this jobId.')
+    assert response_bundle(result, config)["jobId"] == job_id
+    assert response_bundle(result, config)["state"] == "RUNNING"
     assert codex._read_pending(state, call)["job_id"] == job_id
     assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))["call_key"] == codex._call_key(call)
     record = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]

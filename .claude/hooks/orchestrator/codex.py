@@ -1682,8 +1682,10 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
             "jobId": job_id, "call": call_uuid, "call_key": _call_key(event),
             "session_id": pending.get("session_id"), "project_key": pending.get("project_key"),
         })
-        return _replacement({"jobId": job_id, "state": value["state"],
-                             "next": "Wait for completion, then call codex_result with this jobId."},
+        waiter = Path(__file__).resolve().parent / "purser_wait.py"
+        command = (f'Run in the background: "{sys.executable}" "{waiter}" {job_id} '
+                   "; when it finishes, call codex_result with this jobId.")
+        return _replacement({"jobId": job_id, "state": value["state"], "next": command},
                             _load_config(config))
     except Exception as error:
         failure = post_tool_use_failure({**event, "error": _safe_error(error)},
