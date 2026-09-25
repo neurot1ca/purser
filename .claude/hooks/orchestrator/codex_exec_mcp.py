@@ -3,6 +3,11 @@
 For test harnesses, PURSER_CODEX_BIN may be a JSON argv prefix such as
 ``["C:/Python/python.exe", "C:/path/fake_codex.py"]``. A plain value is a
 single executable path. This override is never parsed through a shell.
+
+Async completion uses a loopback TCP listener. A separate waiter can connect
+with the job's stored signal token and block on recv(); the bridge writes the
+terminal record before sending a byte. TCP sockets work on Windows and POSIX
+with the standard library; a dead bridge closes the connection visibly.
 """
 
 from __future__ import annotations
@@ -15,9 +20,11 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
 import uuid
 
@@ -58,6 +65,43 @@ TOOL_SCHEMAS = [
         },
     },
 ]
+
+TOOL_SCHEMAS += [
+    {"name": "codex_start", "description": "Start a durable Codex job.", "inputSchema": {
+        "type": "object", "properties": {**TOOL_SCHEMAS[0]["inputSchema"]["properties"],
+            "call": {"type": "string"}, "mode": {"type": "string", "enum": ["new", "reply"]},
+            "threadId": {"type": "string"}, "timeoutSeconds": {"type": "number"}},
+        "required": ["call", "prompt"]}},
+    {"name": "codex_result", "description": "Read a durable Codex job.", "inputSchema": {
+        "type": "object", "properties": {"jobId": {"type": "string"}}, "required": ["jobId"]}},
+    {"name": "codex_cancel", "description": "Cancel a durable Codex job.", "inputSchema": {
+        "type": "object", "properties": {"jobId": {"type": "string"}, "reason": {"type": "string"}}, "required": ["jobId"]}},
+]
+
+TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS"}
+RETENTION_SECONDS = 7 * 24 * 60 * 60
+
+
+def _job_result(value: dict[str, Any]) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}],
+            "structuredContent": value, "isError": "errorCode" in value}
+
+
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        os.chmod(path.parent, 0o700)
+    temp = path.with_name("." + uuid.uuid4().hex + ".tmp")
+    try:
+        with open(temp, "x", encoding="utf-8") as stream:
+            if os.name != "nt":
+                os.chmod(temp, 0o600)
+            json.dump(value, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _toml(value: Any) -> str:
@@ -201,13 +245,238 @@ class Server:
         self.jobs_lock = threading.Lock()
         self.jobs: dict[Any, subprocess.Popen[bytes] | None] = {}
         self.cancelled: set[Any] = set()
+        self.job_dir = purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs"
+        self.job_processes: dict[str, subprocess.Popen[bytes]] = {}
+        self.job_events: dict[str, threading.Event] = {}
+        self.listener = None
+        try:
+            self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listener.bind(("127.0.0.1", 0))
+            self.listener.listen()
+            threading.Thread(target=self._signal_loop, daemon=True).start()
+        except OSError as exc:
+            print(f"Codex async signal unavailable: {exc}", file=sys.stderr, flush=True)
+            if self.listener is not None:
+                self.listener.close()
+            self.listener = None
+
+    def _signal_loop(self) -> None:
+        while True:
+            try:
+                connection, _ = self.listener.accept()
+                threading.Thread(target=self._signal_client, args=(connection,), daemon=True).start()
+            except OSError:
+                return
+
+    def _signal_client(self, connection: socket.socket) -> None:
+        with connection:
+            try:
+                connection.settimeout(5)
+                identity = connection.recv(256).decode("ascii").strip().split(":", 1)
+                if len(identity) != 2:
+                    return
+                job = self._read_job(identity[0])
+                if job is None or job.get("signalToken") != identity[1]:
+                    return
+                event = self.job_events.get(identity[0])
+                if event is None:
+                    return
+                connection.settimeout(None)
+                event.wait()
+                connection.sendall(b"1")
+            except (OSError, UnicodeError):
+                return
+
+    def _job_path(self, job_id: str) -> Path:
+        return self.job_dir / (job_id + ".json")
+
+    def _read_job(self, job_id: Any) -> dict[str, Any] | None:
+        if not isinstance(job_id, str) or not job_id or any(ch not in "0123456789abcdef" for ch in job_id):
+            return None
+        try:
+            value = json.loads(self._job_path(job_id).read_text(encoding="utf-8"))
+            return value if value.get("jobId") == job_id else None
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def _write_job(self, job: dict[str, Any]) -> None:
+        _atomic_json(self._job_path(job["jobId"]), job)
+
+    def _finish_job(self, job_id: str, state: str, code: str | None = None,
+                    result: dict[str, Any] | None = None) -> None:
+        with self.jobs_lock:
+            job = self._read_job(job_id)
+            if job is None or job["state"] in TERMINAL:
+                return
+            if job_id in self.cancelled and state not in ("CANCELLED", "UNKNOWN_OR_IN_PROGRESS"):
+                return
+            job.update(state=state, finishedAt=time.time())
+            process = self.job_processes.get(job_id)
+            if process is not None and process.poll() is not None:
+                job["exitCode"] = process.returncode
+            if code:
+                job.update(errorCode=code, message={
+                    "CODEX_FAILED": "Codex failed", "DEADLINE_EXCEEDED": "Codex deadline exceeded",
+                    "CANCELLED": "Codex cancelled", "PROCESS_UNCONFIRMED": "Process termination unconfirmed",
+                }[code])
+            if result is not None:
+                output = self.job_dir / (job_id + ".output")
+                data = result["content"].encode("utf-8")
+                if len(data) > 1_000_000:
+                    job.update(state="FAILED", errorCode="CODEX_FAILED", message="Codex output exceeded limit")
+                else:
+                    temporary = output.with_name("." + uuid.uuid4().hex + ".tmp")
+                    with open(temporary, "xb") as stream:
+                        if os.name != "nt":
+                            os.chmod(temporary, 0o600)
+                        stream.write(data)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary, output)
+                    job.update(threadId=result["threadId"], outputFile=output.name)
+            self._write_job(job)
+            self.jobs.pop(job_id, None)
+            self.job_processes.pop(job_id, None)
+            event = self.job_events.get(job_id)
+            if event:
+                event.set()
+
+    def _start_job(self, args: dict[str, Any]) -> dict[str, Any]:
+        call = args.get("call")
+        prompt = args.get("prompt")
+        timeout = args.get("timeoutSeconds", 2700)
+        if not isinstance(call, str) or not call or not isinstance(prompt, str):
+            return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "call and prompt are required"})
+        try:
+            uuid.UUID(call)
+        except (ValueError, TypeError):
+            return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "call must be a UUID"})
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+            return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "timeoutSeconds must be positive"})
+        mode = args.get("mode", "new")
+        if self.listener is None:
+            return _job_result({"state": "FAILED", "errorCode": "SIGNAL_UNAVAILABLE", "message": "Async completion signal unavailable"})
+        if mode not in ("new", "reply"):
+            return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "invalid mode"})
+        name = "codex-reply" if mode == "reply" else "codex"
+        try:
+            _binary_prefix(self.codex_bin)
+            if mode == "new":
+                if not isinstance(args.get("cwd", os.getcwd()), str) or not args.get("cwd", os.getcwd()):
+                    raise ValueError("invalid cwd")
+                if args.get("model") is not None and not isinstance(args["model"], str):
+                    raise ValueError("invalid model")
+                if not isinstance(args.get("config", {}), dict):
+                    raise ValueError("invalid config")
+                _flatten_config(args.get("config", {}))
+                if args.get("sandbox") not in (None, "read-only", "workspace-write", "danger-full-access"):
+                    raise ValueError("invalid sandbox")
+                if args.get("approval-policy") not in (None, "on-request", "never"):
+                    raise ValueError("invalid approval-policy")
+                for field in ("developer-instructions", "base-instructions", "compact-prompt"):
+                    if field in args and not isinstance(args[field], str):
+                        raise ValueError("invalid " + field)
+        except (OSError, ValueError, TypeError):
+            return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "Invalid Codex launch arguments"})
+        job_id = hashlib.sha256(call.encode("utf-8")).hexdigest()
+        with self.jobs_lock:
+            existing = self._read_job(job_id)
+            if existing is not None:
+                return _job_result({key: existing[key] for key in ("jobId", "state", "acceptedAt", "deadlineAt")})
+            if mode == "reply" and (not isinstance(args.get("threadId"), str) or
+                                    _load_record(self.state_dir, args["threadId"]) is None):
+                return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
+            now = time.time()
+            job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
+                   "deadlineAt": now + timeout, "owner": os.getpid(),
+                   "signalPort": self.listener.getsockname()[1], "signalToken": uuid.uuid4().hex}
+            self.job_dir.mkdir(parents=True, exist_ok=True)
+            if os.name != "nt":
+                os.chmod(self.job_dir, 0o700)
+            reservation = self.job_dir / (job_id + ".lock")
+            try:
+                reservation.mkdir()
+            except FileExistsError:
+                existing = self._read_job(job_id)
+                return _job_result({"jobId": job_id, "state": existing["state"] if existing else "UNKNOWN_OR_IN_PROGRESS"})
+            try:
+                self._write_job(job)
+            finally:
+                reservation.rmdir()
+            self.job_events[job_id] = threading.Event()
+            threading.Thread(target=self._job_worker, args=(job_id, name, args), daemon=True).start()
+        return _job_result({"jobId": job_id, "state": "RUNNING", "acceptedAt": now, "deadlineAt": now + timeout})
+
+    def _job_worker(self, job_id: str, name: str, args: dict[str, Any]) -> None:
+        try:
+            with self.jobs_lock:
+                job = self._read_job(job_id)
+                if job is None or job["state"] != "QUEUED":
+                    return
+                job.update(state="RUNNING", startedAt=time.time())
+                self._write_job(job)
+            result = self._run_tool(name, args, job_id, async_job=True)
+            value = result.get("structuredContent")
+            if result.get("isError") or not isinstance(value, dict):
+                self._finish_job(job_id, "FAILED", "CODEX_FAILED")
+            else:
+                self._finish_job(job_id, "SUCCEEDED", result=value)
+        except Exception as exc:
+            print(f"Codex job error: {exc}", file=sys.stderr, flush=True)
+            self._finish_job(job_id, "FAILED", "CODEX_FAILED")
+
+    def _result_job(self, args: dict[str, Any]) -> dict[str, Any]:
+        job = self._read_job(args.get("jobId"))
+        if job is None:
+            return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
+        state = job["state"]
+        if state == "EXPIRED":
+            return _job_result({"jobId": job["jobId"], "state": "FAILED", "errorCode": "JOB_EXPIRED", "message": "Job record expired"})
+        if state in TERMINAL and time.time() - job.get("finishedAt", job["acceptedAt"]) > RETENTION_SECONDS:
+            if state != "EXPIRED":
+                (self.job_dir / job.get("outputFile", "unused")).unlink(missing_ok=True)
+                job.update(state="EXPIRED", errorCode="JOB_EXPIRED", message="Job record expired")
+                self._write_job(job)
+            return _job_result({"jobId": job["jobId"], "state": "FAILED", "errorCode": "JOB_EXPIRED", "message": "Job record expired"})
+        if state not in TERMINAL and job["jobId"] not in self.job_events:
+            state = "UNKNOWN_OR_IN_PROGRESS"
+            job.update(state=state, finishedAt=time.time(), errorCode="PROCESS_UNCONFIRMED", message="Process state cannot be confirmed")
+            self._write_job(job)
+        value = {"jobId": job["jobId"], "state": "RUNNING" if state == "QUEUED" else state}
+        if state == "SUCCEEDED":
+            try:
+                value.update(threadId=job["threadId"], content=(self.job_dir / job["outputFile"]).read_text(encoding="utf-8"))
+            except (OSError, KeyError):
+                value.update(state="FAILED", errorCode="OUTPUT_UNAVAILABLE", message="Job output is unavailable")
+        elif state in TERMINAL:
+            value.update(errorCode=job.get("errorCode", "PROCESS_UNCONFIRMED"), message=job.get("message", "Process state cannot be confirmed"))
+        return _job_result(value)
+
+    def _cancel_job(self, args: dict[str, Any]) -> dict[str, Any]:
+        job = self._read_job(args.get("jobId"))
+        if job is None:
+            return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
+        job_id = job["jobId"]
+        with self.jobs_lock:
+            self.cancelled.add(job_id)
+            process = self.job_processes.get(job_id)
+        if process is not None:
+            _stop_process(process)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED")
+                return self._result_job({"jobId": job_id})
+        self._finish_job(job_id, "CANCELLED", "CANCELLED")
+        return self._result_job({"jobId": job_id})
 
     def send(self, message: dict[str, Any]) -> None:
         with self.write_lock:
             sys.stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
             sys.stdout.flush()
 
-    def _run_tool(self, name: str, arguments: dict[str, Any], request_id: Any) -> dict[str, Any]:
+    def _run_tool(self, name: str, arguments: dict[str, Any], request_id: Any,
+                  async_job: bool = False) -> dict[str, Any]:
         if name not in ("codex", "codex-reply"):
             return _tool_result(None, error=f"unknown tool: {name}")
         prompt = arguments.get("prompt")
@@ -278,11 +547,38 @@ class Server:
                         return _tool_result(None, error="cancelled")
                     process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **creation)
                     self.jobs[request_id] = process
-                stdout_bytes, stderr_bytes = process.communicate(input=prompt.encode("utf-8"))
+                    if async_job:
+                        self.job_processes[request_id] = process
+                        job = self._read_job(request_id)
+                        job["pid"] = process.pid
+                        self._write_job(job)
+                try:
+                    if async_job:
+                        remaining = max(0, job["deadlineAt"] - time.time())
+                        stdout_bytes, stderr_bytes = process.communicate(input=prompt.encode("utf-8"), timeout=remaining)
+                    else:
+                        stdout_bytes, stderr_bytes = process.communicate(input=prompt.encode("utf-8"))
+                except subprocess.TimeoutExpired:
+                    _stop_process(process)
+                    try:
+                        process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self._finish_job(request_id, "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED")
+                        return _tool_result(None, error="process termination unconfirmed")
+                    self._finish_job(request_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
+                    return _tool_result(None, error="deadline exceeded")
                 stdout = stdout_bytes.decode("utf-8", errors="replace")
                 stderr = stderr_bytes.decode("utf-8", errors="replace")
                 with self.jobs_lock:
                     self.jobs[request_id] = None
+                    if async_job:
+                        job = self._read_job(request_id)
+                        if job is not None and job["state"] not in TERMINAL:
+                            job["exitCode"] = process.returncode
+                            self._write_job(job)
+                        self.job_processes.pop(request_id, None)
+                        if request_id in self.cancelled:
+                            return _tool_result(None, error="cancelled")
                 events = []
                 for line in stdout.splitlines():
                     try:
@@ -313,6 +609,12 @@ class Server:
             arguments = params.get("arguments", {})
             if not isinstance(arguments, dict):
                 result = _tool_result(None, error="arguments must be an object")
+            elif name == "codex_start":
+                result = self._start_job(arguments)
+            elif name == "codex_result":
+                result = self._result_job(arguments)
+            elif name == "codex_cancel":
+                result = self._cancel_job(arguments)
             else:
                 result = self._run_tool(name, arguments, request_id)
             with self.jobs_lock:

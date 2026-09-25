@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import queue
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -69,7 +70,7 @@ class Client:
         fake.write_text(FAKE, encoding="utf-8")
         self.record = area / "calls.jsonl"
         env = os.environ.copy()
-        env.update({"PURSER_CODEX_SHIM_STATE": str(area / "state"), "FAKE_RECORD": str(self.record)})
+        env.update({"PURSER_CODEX_SHIM_STATE": str(area / "state"), "PURSER_STATE_DIR": str(area / "root"), "FAKE_RECORD": str(self.record)})
         env.update(extra_env or {})
         override = bin_override if bin_override is not None else json.dumps([sys.executable, str(fake)])
         self.process = subprocess.Popen(
@@ -132,7 +133,7 @@ def test_initialize_and_list(client):
         "capabilities": {"tools": {}},
     }
     client.send(2, "tools/list")
-    assert [tool["name"] for tool in client.receive()["result"]["tools"]] == ["codex", "codex-reply"]
+    assert [tool["name"] for tool in client.receive()["result"]["tools"]] == ["codex", "codex-reply", "codex_start", "codex_result", "codex_cancel"]
 
 
 def test_new_call_preserves_stdin_and_hook_result(client, area):
@@ -236,3 +237,77 @@ def test_unknown_thread_mutation_is_detected(area, monkeypatch):
     with pytest.raises(AssertionError, match="unknown to this server"):
         broken = server._run_tool("codex-reply", {"threadId": "absent", "prompt": "hello"}, 2)
         assert "unknown to this server" in json.loads(broken["content"][0]["text"])["error"]
+
+
+def job_call(client, name, arguments):
+    return call(client, uuid.uuid4().hex, name, arguments)["structuredContent"]
+
+
+def finish(client, job_id, wanted):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        result = job_call(client, "codex_result", {"jobId": job_id})
+        if result["state"] == wanted:
+            return result
+        time.sleep(0.02)
+    pytest.fail(f"expected {wanted}, got {result}")
+
+
+def test_async_start_result_idempotency_and_sync(area):
+    client = Client(area, extra_env={"FAKE_SLOW": "1"})
+    try:
+        key = str(uuid.uuid4())
+        started = job_call(client, "codex_start", {"call": key, "prompt": "slow"})
+        assert started["state"] == "RUNNING" and started["acceptedAt"] < started["deadlineAt"]
+        assert job_call(client, "codex_result", {"jobId": started["jobId"]})["state"] == "RUNNING"
+        assert job_call(client, "codex_start", {"call": key, "prompt": "slow"})["jobId"] == started["jobId"]
+        record = json.loads((area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")).read_text(encoding="utf-8"))
+        with socket.create_connection(("127.0.0.1", record["signalPort"]), timeout=4) as signal_connection:
+            signal_connection.sendall(f"{started['jobId']}:{record['signalToken']}".encode("ascii"))
+            assert signal_connection.recv(1) == b"1"
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        assert (result["threadId"], result["content"]) == ("thread-123", "Reply from fake Codex")
+        assert len(client.calls()) == 1
+        assert codex._extract_codex_result(call(client, 4, "codex", {"prompt": "sync"})) == ("thread-123", "Reply from fake Codex")
+    finally:
+        client.close()
+
+
+def test_async_failure_timeout_cancel(area):
+    failed = Client(area, extra_env={"FAKE_FAIL": "1"})
+    try:
+        job = job_call(failed, "codex_start", {"call": str(uuid.uuid4()), "prompt": "fail"})
+        result = finish(failed, job["jobId"], "FAILED")
+        assert result["errorCode"] == "CODEX_FAILED" and len(result["message"]) <= 200
+    finally:
+        failed.close()
+    slow = Client(area, extra_env={"FAKE_SLOW": "1"})
+    try:
+        job = job_call(slow, "codex_start", {"call": str(uuid.uuid4()), "prompt": "timeout", "timeoutSeconds": 0.1})
+        assert finish(slow, job["jobId"], "TIMED_OUT")["errorCode"] == "DEADLINE_EXCEEDED"
+        job = job_call(slow, "codex_start", {"call": str(uuid.uuid4()), "prompt": "cancel"})
+        assert job_call(slow, "codex_cancel", {"jobId": job["jobId"]})["state"] == "CANCELLED"
+        assert finish(slow, job["jobId"], "CANCELLED")["errorCode"] == "CANCELLED"
+    finally:
+        slow.close()
+
+
+def test_async_reply_and_restart_reconciliation(area):
+    client = Client(area, extra_env={"FAKE_SLOW": "1"})
+    try:
+        job = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "first"})
+        finish(client, job["jobId"], "SUCCEEDED")
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply", "threadId": "thread-123", "prompt": "second"})
+        assert finish(client, reply["jobId"], "SUCCEEDED")["threadId"] == "thread-123"
+        assert client.calls()[1]["argv"][:2] == ["exec", "resume"]
+        pending = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "pending"})
+        client.process.kill()
+        client.process.wait()
+        restarted = Client(area)
+        try:
+            assert job_call(restarted, "codex_result", {"jobId": pending["jobId"]})["state"] == "UNKNOWN_OR_IN_PROGRESS"
+        finally:
+            restarted.close()
+    finally:
+        if client.process.poll() is None:
+            client.close()
