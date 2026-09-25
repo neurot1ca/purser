@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.24 — 2026-09-25
+
+- **New:** long Codex work runs async (codex_start / codex_result / codex_cancel + background waiter), so Claude keeps talking to the user while it runs; same enforcement and review as sync.
+- **New:** optional ORCH eta=<N>m is recorded beside the actual duration; SessionStart shows this project's per-route median/p90 once 10 samples exist.
+- **New:** every prompt carries a one-line reply-language reminder (recorded handoff language; none for English) to stop drift into English (`e38d962`).
+
 ## 0.1.23 — 2026-09-25
 
 - **Telemetry:** Codex call events record why the call was made (reason, explicit or inherited) and route changes on a thread (`2ee5fcd`).
