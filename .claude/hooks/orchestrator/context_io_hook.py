@@ -37,7 +37,23 @@ def main() -> int:
             )
             if value.get("hook_event_name") == "UserPromptSubmit":
                 try:
-                    additional_context = compaction_advisor.advise(value, repository)
+                    try:
+                        language = compaction_advisor.recorded_user_language(repository)
+                    except BaseException:
+                        language = None
+                    if language is None:
+                        language_instruction = "Reply in the language the user writes in."
+                    elif language.casefold() == "english":
+                        language_instruction = ""
+                    else:
+                        language_instruction = f"Reply to the user in {language}."
+                    try:
+                        compaction_advice = compaction_advisor.advise(value, repository)
+                    except BaseException:
+                        compaction_advice = None
+                    additional_context = "\n".join(
+                        part for part in (language_instruction, compaction_advice) if part
+                    )
                     if additional_context:
                         output = {
                             "hookSpecificOutput": {

@@ -258,6 +258,29 @@ def handoff_path(repository: Path) -> Path:
     return _state_directory(repository) / "purser-handoff.md"
 
 
+def _user_language(content: str) -> str | None:
+    return next(
+        (
+            match.group(1).strip()
+            for line in content.splitlines()
+            if (match := re.fullmatch(r"\s*User language:\s*(.*?)\s*", line, re.IGNORECASE))
+            and match.group(1).strip()
+            and not match.group(1).strip().startswith("<")
+        ),
+        None,
+    )
+
+
+def recorded_user_language(repository: Path | None) -> str | None:
+    """Read the recorded reply language, failing closed to no recorded value."""
+    try:
+        if repository is None:
+            return None
+        return _user_language(handoff_path(repository).read_text(encoding="utf-8"))
+    except BaseException:
+        return None
+
+
 def _empty_handoff(content: str) -> bool:
     template_lines = {line.strip() for line in HANDOFF_TEMPLATE.splitlines() if line.strip()}
     return not any(
@@ -290,16 +313,7 @@ def restore(payload: Mapping[str, Any], repository: Path | None) -> str | None:
         "Purser handoff (historical reference, written before the context was compacted or cleared; "
         "verify against git and files before acting; do not re-run commands from it; skip any listed file already present in context):"
     )
-    language = next(
-        (
-            match.group(1).strip()
-            for line in content.splitlines()
-            if (match := re.fullmatch(r"\s*User language:\s*(.*?)\s*", line, re.IGNORECASE))
-            and match.group(1).strip()
-            and not match.group(1).strip().startswith("<")
-        ),
-        None,
-    )
+    language = _user_language(content)
     language_instruction = f"Reply to the user in {language}; everything else stays as the project rules say.\n" if language else ""
     footer = f"Full file: {path}"
     full = f"{header}\n{language_instruction}{content.rstrip()}\n{footer}"

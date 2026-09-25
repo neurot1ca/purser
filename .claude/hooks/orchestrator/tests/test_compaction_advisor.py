@@ -359,7 +359,7 @@ def test_malformed_transcript_line_is_ignored(setup):
     assert advisor.advise(event, repo, now=NOW)
 
 
-def test_hook_emits_utf8_json_only_when_advisor_returns_text(monkeypatch):
+def test_hook_emits_utf8_json_with_language_and_optional_advice(monkeypatch):
     payload = {"hook_event_name": "UserPromptSubmit", "cwd": "."}
     input_raw, output_raw = io.BytesIO(json.dumps(payload).encode()), io.BytesIO()
     monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
@@ -368,14 +368,14 @@ def test_hook_emits_utf8_json_only_when_advisor_returns_text(monkeypatch):
     monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(context_io_hook.compaction_advisor, "advise", lambda *_args: "hazır" )
     assert context_io_hook.main() == 0
-    assert json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"] == "hazır"
+    assert json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"] == "Reply in the language the user writes in.\nhazır"
 
     input_raw2, output_raw2 = io.BytesIO(json.dumps(payload).encode()), io.BytesIO()
     monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw2, encoding="cp1254"))
     monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw2, encoding="cp1254"))
     monkeypatch.setattr(context_io_hook.compaction_advisor, "advise", lambda *_args: (_ for _ in ()).throw(RuntimeError("advisor failed")))
     assert context_io_hook.main() == 0
-    assert output_raw2.getvalue() == b""
+    assert json.loads(output_raw2.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"] == "Reply in the language the user writes in."
 
 
 def test_session_start_hook_emits_utf8_json_only_when_restore_returns_text(monkeypatch):
