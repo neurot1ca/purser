@@ -111,10 +111,22 @@ next one or to new work until the user has answered on the current one.
 
 Label a precise objective and observable criteria `Objective:` and `Acceptance
 criteria:` (or corresponding `#` headings); missing labels force FULL review
-because the hook cannot ground the contract. Include verified context,
-constraints, and only files, symbols, contracts, or evidence that narrow the
-task. Prefer behavior and invariants to unverified implementation. Exclude
-speculative redesign, cleanup, refactors, and polish outside the criteria.
+because the hook cannot ground the contract. Keep the ORCH line and bounded scope.
+
+- Give verified task context, resolved behavior, invariants, failure direction,
+  and only necessary exact examples or schemas.
+- Rely on the injected `AGENTS.md` for stable repo rules; state only
+  task-specific boundaries and uncertain authority.
+- Name the smallest authoritative source set and the affected boundary; let
+  Codex inspect relevant callers, tests, and contracts.
+- Omit procedural implementation or read lists unless order or exact format is
+  contractual; exclude speculative redesign, cleanup, and polish.
+- Give one completion condition covering deliverable, scoped verification, and
+  residual gaps; keep `VALIDATION:` where required.
+- Never shorten exact labels, literal output schemas, required validation, or
+  task-specific safety gates.
+- For execution tasks, do not request an upfront plan, preamble, or status
+  narration; ask for a plan only when the plan is the deliverable.
 
 For conflicting criteria, see [conditional delegation](references/conditional_delegation.md).
 
