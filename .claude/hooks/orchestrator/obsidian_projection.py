@@ -16,6 +16,7 @@ import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import telemetry_schema as schema
+import state_root as purser_state_root
 
 
 DEFAULT_VAULT_ROOT = Path(r"C:\AI-Operations")
@@ -181,10 +182,7 @@ class ProjectionConflict(ProjectionError):
 def _state_root(state_root: str | os.PathLike[str] | None) -> Path:
     if state_root is not None:
         return Path(state_root)
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        raise ProjectionError("telemetry state root unavailable")
-    return Path(local_app_data) / "claude-agent-orchestrator"
+    return purser_state_root.default_state_root()
 
 
 def _vault_root(vault_root: str | os.PathLike[str] | None) -> Path:

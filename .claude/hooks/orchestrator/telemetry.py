@@ -19,6 +19,7 @@ import uuid
 
 import telemetry_schema as schema
 import obsidian_projection
+import state_root as purser_state_root
 
 
 LOCK_TIMEOUT_SECONDS = 0.05
@@ -81,10 +82,7 @@ TERMINAL_TASK_USAGE_FAILURES = frozenset(
 def _state_root(root: str | os.PathLike[str] | None) -> Path:
     if root is not None:
         return Path(root)
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        raise OSError("telemetry state root unavailable")
-    return Path(local_app_data) / "claude-agent-orchestrator"
+    return purser_state_root.default_state_root()
 
 
 def _root(state_root: str | os.PathLike[str] | None) -> Path:

@@ -23,6 +23,7 @@ from typing import Any
 
 import json_transport
 import project_profile
+import state_root as purser_state_root
 
 
 OK = "OK"
@@ -1087,10 +1088,7 @@ class SessionLedger:
 
     def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
         if root is None:
-            local_app_data = os.environ.get("LOCALAPPDATA")
-            if not local_app_data:
-                raise ValueError("LOCALAPPDATA is unavailable; inject a ledger root.")
-            root = Path(local_app_data) / "claude-agent-orchestrator"
+            root = purser_state_root.default_state_root()
         self.root = Path(root)
         self.sessions_root = self.root / "sessions"
 

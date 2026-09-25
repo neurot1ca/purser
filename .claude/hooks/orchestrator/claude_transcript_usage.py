@@ -21,6 +21,7 @@ import time
 from typing import Any
 
 import telemetry
+import state_root as purser_state_root
 
 
 MAX_LINE_LENGTH = 1_000_000
@@ -605,7 +606,7 @@ def start_active_task(
     if not session_id or not task_id or not tool_use_id:
         return {"status": "SKIPPED", "reason": "MISSING_IDENTIFIER"}
 
-    root = Path(state_root) if state_root is not None else Path(os.environ.get("LOCALAPPDATA", "")) / "claude-agent-orchestrator"
+    root = Path(state_root) if state_root is not None else purser_state_root.default_state_root()
     active_path = _active_task_path(root, session_id)
 
     with session_lock(root, session_id, timeout_seconds=lock_timeout_seconds) as acquired:
@@ -872,7 +873,7 @@ def finalize_stop_task(
     if not session_id:
         return None
 
-    root = Path(state_root) if state_root is not None else Path(os.environ.get("LOCALAPPDATA", "")) / "claude-agent-orchestrator"
+    root = Path(state_root) if state_root is not None else purser_state_root.default_state_root()
     active_path = _active_task_path(root, session_id)
     marker = _contention_marker_path(root, session_id)
     if not active_path.exists() and not marker.exists():

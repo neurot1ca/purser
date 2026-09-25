@@ -21,6 +21,7 @@ from typing import Any, Iterator
 import uuid
 
 import project_profile
+import state_root as purser_state_root
 
 
 SCHEMA_VERSION = 1
@@ -74,10 +75,7 @@ _UNCLASSIFIABLE_READ_REASONS = frozenset(
 def _runtime_root(state_root: str | os.PathLike[str] | None) -> Path:
     if state_root is not None:
         return Path(state_root)
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        raise OSError("runtime state root unavailable")
-    return Path(local_app_data) / "claude-agent-orchestrator"
+    return purser_state_root.default_state_root()
 
 
 def _session_key(value: Any) -> str | None:

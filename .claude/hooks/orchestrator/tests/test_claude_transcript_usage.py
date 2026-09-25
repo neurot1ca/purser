@@ -785,7 +785,7 @@ def test_stale_active_task_expires_explicitly(tmp_path):
 # --- 23. Unexpected parser or import failure records safe health ---
 def test_unexpected_parser_or_import_failure_records_safe_health(tmp_path, monkeypatch):
     state_root = tmp_path / "state"
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state_root))
 
     pre_event = {
         "hook_event_name": "PreToolUse",
@@ -860,7 +860,7 @@ def test_full_hook_lifecycle_e2e_synthetic_to_obsidian(tmp_path, monkeypatch):
     vault_root = tmp_path / "vault"
     transcript = projects_root / "sess-hook-e2e.jsonl"
 
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state_root))
     monkeypatch.setattr(ctu, "_default_projects_root", lambda: projects_root)
     monkeypatch.setattr(telemetry, "_projection_settings", lambda: (True, vault_root))
 

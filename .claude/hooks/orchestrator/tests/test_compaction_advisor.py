@@ -60,7 +60,7 @@ def setup(scratch, monkeypatch):
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     local = scratch / "local"
-    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setenv("PURSER_STATE_DIR", str(scratch / "purser-state"))
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: scratch / "home"))
     home = scratch / "home"
     home.mkdir()

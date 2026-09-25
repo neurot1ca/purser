@@ -21,6 +21,8 @@ import threading
 from typing import Any
 import uuid
 
+import state_root as purser_state_root
+
 
 TOOL_SCHEMAS = [
     {
@@ -89,11 +91,7 @@ def _state_dir() -> Path:
     override = os.environ.get("PURSER_CODEX_SHIM_STATE")
     if override:
         return Path(override).expanduser().resolve()
-    if os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
-    else:
-        base = Path.home() / ".local" / "state"
-    return base / "claude-agent-orchestrator" / "codex_exec_mcp" / "threads"
+    return purser_state_root.default_state_root() / "codex_exec_mcp" / "threads"
 
 
 def _record_path(state_dir: Path, thread_id: str) -> Path:

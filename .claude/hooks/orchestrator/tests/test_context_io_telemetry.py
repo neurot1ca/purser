@@ -614,14 +614,14 @@ def test_entrypoint_uses_its_repo_root_not_event_cwd(tmp_path, monkeypatch):
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
     runtime_parent = tmp_path / "runtime"
-    state = runtime_parent / "claude-agent-orchestrator"
+    state = runtime_parent / "purser-state"
     session = "entrypoint-root"
     monkeypatch.setattr(
         context_io_hook.project_root,
         "resolve_project_root",
         lambda _event: (root, ""),
     )
-    monkeypatch.setenv("LOCALAPPDATA", str(runtime_parent))
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
 
     calls = (
         _event(session, "UserPromptSubmit"),
@@ -674,14 +674,14 @@ def test_exhausted_replace_is_fail_open_and_records_degradation(
     target = root / "target.txt"
     target.write_text("one\ntwo\n", encoding="utf-8")
     runtime_parent = tmp_path / "runtime"
-    state = runtime_parent / "claude-agent-orchestrator"
+    state = runtime_parent / "purser-state"
     session = "permanent-replace-holder"
     monkeypatch.setattr(
         context_io_hook.project_root,
         "resolve_project_root",
         lambda _event: (root, ""),
     )
-    monkeypatch.setenv("LOCALAPPDATA", str(runtime_parent))
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
 
     monkeypatch.setattr(
         sys,

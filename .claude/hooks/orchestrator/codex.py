@@ -28,6 +28,7 @@ import project_root
 import reviewer as reviewer1
 import telemetry
 import telemetry_schema
+import state_root as purser_state_root
 
 
 CODEX_TOOL = "mcp__codex-main__codex"
@@ -705,10 +706,7 @@ def _restore_checks(snapshot: Any) -> tuple[project_profile.Check, ...]:
 def _state_root(root: str | os.PathLike[str] | None) -> Path:
     if root is not None:
         return Path(root)
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        raise WiringError("LOCALAPPDATA is unavailable; inject a runtime state root")
-    return Path(local_app_data) / "claude-agent-orchestrator"
+    return purser_state_root.default_state_root()
 
 
 def _repo_root(
