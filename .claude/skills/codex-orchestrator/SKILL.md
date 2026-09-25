@@ -103,6 +103,10 @@ option, end the turn, and keep talking with the user. Once the waiter finishes,
 call `codex_result` once with `jobId` and review as synchronous output. Never
 call it before the waiter finishes; use `codex_cancel` only at user request.
 
+With several jobs, keep a list of finished results the user has not yet
+decided on. Present them one at a time in finish order, and do not move to the
+next one or to new work until the user has answered on the current one.
+
 ## Craft the prompt
 
 Label a precise objective and observable criteria `Objective:` and `Acceptance
