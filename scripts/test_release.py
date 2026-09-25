@@ -4,7 +4,9 @@ import shutil
 import subprocess
 import sys
 import uuid
+import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,7 +78,8 @@ def fake_claude(tmp_path, code=0):
 
 def release(path, env, claude, *args):
     return run(
-        [sys.executable, str(path / "scripts" / "release.py"), "--claude-bin", str(claude), *args],
+        [sys.executable, str(path / "scripts" / "release.py"), "--claude-bin", str(claude),
+         "--marketplace-dir", str(path.parent / "marketplace"), *args],
         path,
         env=env,
         check=False,
@@ -216,3 +219,57 @@ def test_dry_run_changes_nothing(tmp_path):
     assert run(["git", "status", "--porcelain"], path).stdout == "?? change.txt\n"
     assert json.loads((path / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"] == "0.1.12"
     assert "dry-run" in result.stdout
+
+
+def test_export_only_uses_committed_tree_and_local_manifest(tmp_path):
+    path, env = repo(tmp_path)
+    marketplace = tmp_path / "marketplace"
+    ignored = path / "ignored.txt"
+    (path / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    run(["git", "add", "--", ".gitignore"], path, env=env)
+    run(["git", "commit", "-qm", "ignore generated file"], path, env=env)
+    ignored.write_text("must not ship\n", encoding="utf-8")
+    (path / "base.txt").write_text("working copy edit\n", encoding="utf-8")
+    claude = fake_claude(tmp_path)
+    result = run(
+        [sys.executable, str(path / "scripts" / "release.py"), "--export-only",
+         "--marketplace-dir", str(marketplace), "--claude-bin", str(claude)],
+        path, env=env, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    exported = marketplace / "purser"
+    assert (exported / "base.txt").read_text(encoding="utf-8") == "base\n"
+    assert not (exported / "ignored.txt").exists()
+    manifest = json.loads((marketplace / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    assert manifest["name"] == "purser-local"
+    assert manifest["owner"]["name"] == "Purser"
+    assert manifest["plugins"] == [{"name": "purser", "source": "./purser"}]
+    assert "marketplace update ok" in result.stdout
+    assert "plugin update ok" in result.stdout
+
+
+def test_failed_export_keeps_previous_tree_and_skips_updates(tmp_path, monkeypatch):
+    path, env = repo(tmp_path)
+    marketplace = tmp_path / "marketplace"
+    previous = marketplace / "purser"
+    previous.mkdir(parents=True)
+    (previous / "sentinel.txt").write_text("previous\n", encoding="utf-8")
+    claude = fake_claude(tmp_path)
+    module_spec = importlib.util.spec_from_file_location("release_under_test", path / "scripts" / "release.py")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    original_run = module.subprocess.run
+    updates = []
+    monkeypatch.setattr(module, "run_updates", lambda *_: updates.append(True))
+
+    def fail_archive(command, *args, **kwargs):
+        if command[:2] == ["git", "archive"]:
+            return SimpleNamespace(returncode=2, stderr=b"archive failed", stdout=b"")
+        return original_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(module.subprocess, "run", fail_archive)
+    result = module.main(["--export-only", "--marketplace-dir", str(marketplace), "--claude-bin", str(claude)])
+    assert result == 1
+    assert (previous / "sentinel.txt").read_text(encoding="utf-8") == "previous\n"
+    assert not list(marketplace.glob("purser-export-*"))
+    assert updates == []

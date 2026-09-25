@@ -1,7 +1,8 @@
 # Purser Claude Code plugin (P6a)
 
-This repository is the plugin root. The local marketplace is `purser-local` and
-exposes one plugin, `purser`. The plugin registers the existing
+This repository is the plugin source. The local `purser-local` marketplace is
+generated outside the repository from the release commit and exposes one
+plugin, `purser`. Local releases therefore ship only committed files. The plugin registers the existing
 `codex-orchestrator` skill, the `codex-main` MCP bridge, and the same hooks as
 the manual installer.
 The MCP definition lives under `plugin/`, since a root `.mcp.json` would be
@@ -34,15 +35,24 @@ Apply saves timestamped backups of `~/.claude/settings.json` and
 python .claude/hooks/orchestrator/purser_cutover.py --rollback
 ```
 
-After cutover, in Claude Code:
+## Local release marketplace
 
-```text
-/plugin marketplace add <absolute path to this repository>
-/plugin install purser@purser-local
+Switch the existing local marketplace registration once. Replace `<dir>` with
+the generated marketplace path (by default `~/.claude/purser/marketplace/`):
+
+```powershell
+claude plugin marketplace remove purser-local
+claude plugin marketplace add <dir>
+claude plugin install purser@purser-local
 ```
 
-Restart Claude Code, then run `/purser:check`. The check should report
-plugin-only registration.
+`scripts/release.py` refreshes this marketplace from the release commit before
+running the plugin update commands. To refresh it without a version bump, run
+`python scripts/release.py --export-only`; use `--marketplace-dir <dir>` to
+choose another local path.
+
+Restart Claude Code after switching the local marketplace, then run
+`/purser:check`. The check should report plugin-only registration.
 
 Run `/purser:check` to read-only check the installation and see actionable next steps.
 Run `/purser:init` for guided role selection, project trust, and optional profile scaffolding.
