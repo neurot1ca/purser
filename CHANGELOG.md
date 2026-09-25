@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.17 — 2026-09-25
+
+- **Fix:** `/purser:optimize` builds the current setup by replaying the session's attachments, so an MCP server the user disabled (removed in `mcp_instructions_delta` / `deferred_tools_delta`) is no longer reported, and a non-initial skill listing adds skills instead of replacing the list (`1997c36`).
+
 ## 0.1.16 — 2026-09-24
 
 - **New:** `/purser:optimize` reads the last 30 days of local transcripts (read-only, on demand, ~2 s) and reports: skills, plugins and MCP servers loaded on every request but never used; hidden non-interactive sessions by weighted-token share; duplicate skills; median reply length with a short-reply rule suggestion; repeated shell-command sequences worth one script; and the compaction advice status. `/purser:init` offers it at the end (`b355d5f`).
