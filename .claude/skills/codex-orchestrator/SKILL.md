@@ -81,13 +81,14 @@ desktop app can hide that). If needed, see [examples](references/receipt_example
 Claude writes the first prompt line exactly in this shape:
 
 ```text
-ORCH|task=<stable-id>|phase=<implementation|operation>|route=<mechanical|subtle|normal|consequential|escalated|operation>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|scope=<repo-relative-path[,repo-relative-path...]>][|eta=<N>m]
+ORCH|task=<stable-id>|phase=<implementation|operation|plan>|route=<mechanical|subtle|normal|consequential|escalated|operation|plan_standard>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|scope=<repo-relative-path[,repo-relative-path...]>][|eta=<N>m]
 ```
 
 `task`, `phase`, and `route` are required; `reason` optional. `basis` is
 required for `normal`, `consequential`, and `escalated`, optional otherwise.
 `scope` is required for `implementation`: bounded repository-relative paths,
-never the whole repository; omit for `operation`. Claude writes the line and
+never the whole repository; omit for `operation`, optional for `plan`.
+`phase=plan` pairs only with `route=plan_standard` (read-only; see `/purser:plan`). Claude writes the line and
 route; the hook strips it, resolves model/effort, and rejects malformed or
 inconsistent calls. Compatible recorded `codex-reply` may inherit.
 
@@ -102,6 +103,10 @@ unavailable. Run the exact command returned by start with the shell background
 option, end the turn, and keep talking with the user. Once the waiter finishes,
 call `codex_result` once with `jobId` and review as synchronous output. Never
 call it before the waiter finishes; use `codex_cancel` only at user request.
+
+When an accepted part of an approved multi-part task finishes, start the next
+part in the same turn without asking. Stop only for approval-gated actions,
+real decisions, failed review, or residual risk the user must weigh.
 
 With several jobs, keep a list of finished results the user has not yet
 decided on. Present them one at a time in finish order, and do not move to the
