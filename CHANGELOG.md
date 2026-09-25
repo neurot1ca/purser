@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.29 — 2026-09-26
+
+- Codex runs with no console window, so no PowerShell/python windows pop up during async jobs.
+- Async jobs can be cancelled and awaited from a new session after a restart; job records survive transient Windows file locks.
+- Parallel jobs: implementation calls lease their scope; an overlapping start is denied naming the owner; stale leases expire; `purser_leases.py` lists or releases stuck ones.
+
 ## 0.1.28 — 2026-09-25
 
 - Async Codex jobs run in a detached per-job host; a restarted bridge still reports them and returns their result.
