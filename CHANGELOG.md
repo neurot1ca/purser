@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.28 — 2026-09-25
+
+- Async Codex jobs run in a detached per-job host; a restarted bridge still reports them and returns their result.
+- Plan calls: ledger accepts plan records; no contract/validation noise; mutation warning names a possible concurrent writer; /purser:plan hides the waiter command.
+- Local releases ship only committed files: release.py exports the release commit to a marketplace outside the repo.
+
 ## 0.1.27 — 2026-09-25
 
 - /purser:plan: read-only sol/high plan saved to a file with a 4000-char summary; prompts mentioning planning get a hint to offer it.
