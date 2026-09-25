@@ -27,6 +27,20 @@ def _job_record(job_id: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) and value.get("jobId") == job_id else None
 
 
+def _report_record_state(job_id: str) -> int:
+    """Report the latest durable state after a listener cannot confirm completion."""
+    job = _job_record(job_id)
+    if job is None:
+        print(f"purser-wait {job_id} UNKNOWN_JOB")
+        return 3
+    state = job.get("state")
+    if not isinstance(state, str) or not state:
+        print(f"purser-wait {job_id} INVALID_JOB")
+        return 3
+    print(f"purser-wait {job_id} {state}")
+    return 0 if state == "SUCCEEDED" else 1 if state in TERMINAL else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     job_id = args[0] if args else "invalid"
@@ -40,8 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     state = job.get("state")
     if state in TERMINAL:
-        print(f"purser-wait {job_id} {state}")
-        return 0
+        return _report_record_state(job_id)
 
     port, token, deadline = job.get("signalPort"), job.get("signalToken"), job.get("deadlineAt")
     if (isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
@@ -58,17 +71,13 @@ def main(argv: list[str] | None = None) -> int:
             connection.settimeout(remaining)
             signal = connection.recv(1)
     except socket.timeout:
-        print(f"purser-wait {job_id} TIMEOUT")
-        return 4
+        return _report_record_state(job_id)
     except (OSError, UnicodeError):
-        print(f"purser-wait {job_id} BRIDGE_GONE")
-        return 3
+        return _report_record_state(job_id)
 
     if signal == b"1":
-        print(f"purser-wait {job_id} TERMINAL")
-        return 0
-    print(f"purser-wait {job_id} BRIDGE_GONE")
-    return 3
+        return _report_record_state(job_id)
+    return _report_record_state(job_id)
 
 
 if __name__ == "__main__":

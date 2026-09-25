@@ -151,6 +151,14 @@ def test_initialize_and_list(client):
     assert missing["structuredContent"]["errorCode"] == "INVALID_ARGUMENT"
 
 
+def test_windows_codex_child_uses_hidden_process_group_flags():
+    creation = codex_exec_mcp._process_creation_options(windows=True)
+    flags = creation["creationflags"]
+
+    assert flags & codex_exec_mcp.WINDOWS_CREATE_NO_WINDOW
+    assert flags & codex_exec_mcp.WINDOWS_CREATE_NEW_PROCESS_GROUP
+
+
 def test_new_call_preserves_stdin_and_hook_result(client, area):
     cwd = area / "working"
     cwd.mkdir()
@@ -455,6 +463,62 @@ def test_async_host_ack_duplicate_restart_and_payload_removal(area):
             first.close()
 
 
+def test_async_cancel_from_replacement_bridge_confirms_child_exit(area):
+    first = Client(area, extra_env={"FAKE_SLOW": "1", "FAKE_SLEEP_SECONDS": "20"})
+    try:
+        started = job_call(first, "codex_start", {"call": str(uuid.uuid4()), "prompt": "cancel after restart"})
+        path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
+        deadline = time.monotonic() + 3
+        record = json.loads(path.read_text(encoding="utf-8"))
+        while "pid" not in record and time.monotonic() < deadline:
+            time.sleep(0.01)
+            record = json.loads(path.read_text(encoding="utf-8"))
+        assert record["pid"] > 0
+        kill_bridge_tree(first)
+
+        second = Client(area)
+        try:
+            result = job_call(second, "codex_cancel", {"jobId": started["jobId"]})
+            assert result["state"] == "CANCELLED"
+            assert finish(second, started["jobId"], "CANCELLED")["errorCode"] == "CANCELLED"
+            if os.name == "nt":
+                assert windows_process_exited(record["pid"])
+            else:
+                with pytest.raises(ProcessLookupError):
+                    os.kill(record["pid"], 0)
+        finally:
+            second.close()
+    finally:
+        if first.process.poll() is None:
+            first.close()
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if record.get("state") not in codex_exec_mcp.TERMINAL and record.get("hostPid"):
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(record["hostPid"])],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                else:
+                    os.kill(record["hostPid"], 9)
+        except (OSError, ValueError, NameError):
+            pass
+
+
+def test_waiter_started_after_bridge_death_wakes_on_host_completion(area):
+    first = Client(area, extra_env={"FAKE_SLOW": "1", "FAKE_SLEEP_SECONDS": "2"})
+    try:
+        started = job_call(first, "codex_start", {"call": str(uuid.uuid4()), "prompt": "finish after restart"})
+        kill_bridge_tree(first)
+        env = os.environ.copy()
+        env["PURSER_STATE_DIR"] = str(area / "root")
+        waiter = subprocess.run([sys.executable, str(ROOT / "purser_wait.py"), started["jobId"]],
+                                capture_output=True, text=True, encoding="utf-8", env=env, timeout=8)
+        assert waiter.returncode == 0
+        assert waiter.stdout == f"purser-wait {started['jobId']} SUCCEEDED\n"
+    finally:
+        if first.process.poll() is None:
+            first.close()
+
+
 def test_async_dead_host_without_output_is_unconfirmed(area):
     first = Client(area, extra_env={"FAKE_SLOW": "1"})
     try:
@@ -478,6 +542,15 @@ def test_async_dead_host_without_output_is_unconfirmed(area):
             os.killpg(record["pid"], 9)
         second = Client(area)
         try:
+            env = os.environ.copy()
+            env["PURSER_STATE_DIR"] = str(area / "root")
+            waiter = subprocess.run([sys.executable, str(ROOT / "purser_wait.py"), started["jobId"]],
+                                    capture_output=True, text=True, encoding="utf-8", env=env, timeout=8)
+            assert waiter.returncode == 3
+            assert waiter.stdout == f"purser-wait {started['jobId']} RUNNING\n"
+            cancel = job_call(second, "codex_cancel", {"jobId": started["jobId"]})
+            assert cancel["state"] == "UNKNOWN_OR_IN_PROGRESS"
+            assert cancel["errorCode"] == "PROCESS_UNCONFIRMED"
             deadline = time.monotonic() + 3
             while True:
                 result = job_call(second, "codex_result", {"jobId": started["jobId"]})

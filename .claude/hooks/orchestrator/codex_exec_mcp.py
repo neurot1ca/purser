@@ -82,6 +82,16 @@ TOOL_SCHEMAS += [
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS"}
 RETENTION_SECONDS = 7 * 24 * 60 * 60
+WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
+WINDOWS_CREATE_NO_WINDOW = 0x08000000
+
+
+def _process_creation_options(*, windows: bool | None = None) -> dict[str, Any]:
+    if windows is None:
+        windows = os.name == "nt"
+    if windows:
+        return {"creationflags": WINDOWS_CREATE_NEW_PROCESS_GROUP | WINDOWS_CREATE_NO_WINDOW}
+    return {"start_new_session": True}
 
 
 def _launch_host(job_dir: Path, job_id: str) -> None:
@@ -353,16 +363,57 @@ def _event_message(event: dict[str, Any]) -> str:
     return ": ".join(parts) if parts else json.dumps(event, ensure_ascii=False)
 
 
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
+def _stop_process(process: subprocess.Popen[bytes]) -> bool:
     if process.poll() is not None:
-        return
+        return False
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            stopped = subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            if stopped.returncode == 0:
+                return True  # taskkill confirmed the complete Windows process tree.
+            process.kill()
+            return False  # Verify the host job object after terminating the root.
         else:
             os.killpg(process.pid, signal.SIGKILL)
+            return False  # Verify the process group after sending the kill signal.
     except (OSError, ProcessLookupError) as exc:
         print(f"Codex cancellation failed: {exc}", file=sys.stderr, flush=True)
+        return False
+
+
+def _child_tree_stopped(process: subprocess.Popen[bytes], job_handle: Any) -> bool:
+    if os.name == "nt":
+        if not job_handle or process.poll() is None:
+            return False
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class ACCOUNTING(ctypes.Structure):
+            _fields_ = [("TotalUserTime", ctypes.c_int64), ("TotalKernelTime", ctypes.c_int64),
+                        ("ThisPeriodTotalUserTime", ctypes.c_int64),
+                        ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+                        ("TotalPageFaults", wintypes.DWORD), ("TotalProcesses", wintypes.DWORD),
+                        ("ActiveProcesses", wintypes.DWORD), ("TotalTerminatedProcesses", wintypes.DWORD)]
+
+        kernel.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                      wintypes.DWORD, ctypes.c_void_p]
+        info = ACCOUNTING()
+        until = time.monotonic() + 1.0
+        while time.monotonic() < until:
+            if not kernel.QueryInformationJobObject(job_handle, 1, ctypes.byref(info),
+                                                    ctypes.sizeof(info), None):
+                return False
+            if info.ActiveProcesses <= 1:  # Only the detached host remains.
+                return True
+            time.sleep(0.02)
+        return False
+    try:
+        os.killpg(process.pid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
 
 
 class Server:
@@ -377,7 +428,7 @@ class Server:
         self.job_dir = job_dir or purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs"
         self.job_processes: dict[str, subprocess.Popen[bytes]] = {}
         self.job_events: dict[str, threading.Event] = {}
-        self.started_jobs: set[str] = set()
+        self.child_job_handle: Any = None
         self.listener = None
         if not host:
             return
@@ -455,10 +506,8 @@ class Server:
         while time.monotonic() < until:
             job = self._read_job(job_id)
             if job is not None and job.get("state") == "RUNNING" and self._host_alive(job):
-                self.started_jobs.add(job_id)
                 return _job_result({key: job[key] for key in ("jobId", "state", "acceptedAt", "deadlineAt")})
             if job is not None and job.get("state") in TERMINAL - {"UNKNOWN_OR_IN_PROGRESS"}:
-                self.started_jobs.add(job_id)
                 return _job_result({**{key: job[key] for key in ("jobId", "acceptedAt", "deadlineAt")},
                                     "state": "RUNNING"})
             if job is not None and job.get("state") == "UNKNOWN_OR_IN_PROGRESS":
@@ -631,27 +680,34 @@ class Server:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
         if self.listener is None:
-            # Milestone 1 retains cancellation for jobs started by this bridge.
-            # Cancellation through a replacement bridge belongs to milestone 2.
-            if job_id not in self.started_jobs:
-                return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
-                                    "errorCode": "PROCESS_UNCONFIRMED", "message": "Cancellation ownership unavailable"})
+            if job["state"] in TERMINAL:
+                return self._result_job({"jobId": job_id})
             try:
                 with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=5) as connection:
                     connection.settimeout(7)
                     connection.sendall(f'{job_id}:{job["signalToken"]}:CANCEL'.encode("ascii"))
-                    connection.recv(1)
-            except (OSError, KeyError):
-                pass
-            return self._result_job({"jobId": job_id})
+                    confirmed = connection.recv(1) == b"1"
+            except (OSError, KeyError, TypeError, ValueError):
+                confirmed = False
+            if not confirmed:
+                return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
+                                    "errorCode": "PROCESS_UNCONFIRMED", "message": "Process termination unconfirmed"})
+            result = self._result_job({"jobId": job_id})
+            if result.get("structuredContent", {}).get("state") == "CANCELLED":
+                return result
+            return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
+                                "errorCode": "PROCESS_UNCONFIRMED", "message": "Process termination unconfirmed"})
         with self.jobs_lock:
             self.cancelled.add(job_id)
             process = self.job_processes.get(job_id)
         if process is not None:
-            _stop_process(process)
+            tree_kill_confirmed = _stop_process(process)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED")
+                return self._result_job({"jobId": job_id})
+            if not tree_kill_confirmed and not _child_tree_stopped(process, self.child_job_handle):
                 self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED")
                 return self._result_job({"jobId": job_id})
         self._finish_job(job_id, "CANCELLED", "CANCELLED")
@@ -736,7 +792,7 @@ class Server:
                 if name == "codex-reply":
                     command.append(thread_id)
                 command.append("-")
-                creation = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+                creation = _process_creation_options()
                 with self.jobs_lock:
                     if request_id in self.cancelled:
                         return _tool_result(None, error="cancelled")
@@ -879,6 +935,7 @@ def _host_main(job_id: str, job_dir: Path | None) -> None:
         except FileExistsError:
             return
         containment = _contain_host_children()
+        server.child_job_handle = containment
         try:
             launch = json.loads(launch_path.read_text(encoding="utf-8"))
         finally:
