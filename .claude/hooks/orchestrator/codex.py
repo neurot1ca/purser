@@ -1871,7 +1871,60 @@ def _finalize_replacement(
             else:
                 compact.pop("codex_quota")
     _atomic_json_write(artifact_path, bundle)
-    return _replacement(compact, config)
+    response = _replacement(compact, config)
+    try:
+        quota_message = _codex_quota_system_message(bundle.get("codex_quota"))
+        if quota_message:
+            existing_message = response.get("systemMessage")
+            response["systemMessage"] = (
+                f"{existing_message}\n{quota_message}"
+                if isinstance(existing_message, str) and existing_message
+                else quota_message
+            )
+    except Exception:
+        pass
+    return response
+
+
+def _codex_quota_system_message(
+    quota: Any, *, local_tz: Any = None
+) -> str | None:
+    """Render available Codex quota windows for the PostToolUse system message."""
+
+    if not isinstance(quota, Mapping):
+        return None
+    months = (
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    )
+    parts: list[str] = []
+    for window, reset_key, used_key in (
+        ("5h", "5h_resets_at", "5h_used_pct"),
+        ("7d", "7d_resets_at", "7d_used_pct"),
+    ):
+        try:
+            used = quota.get(used_key)
+            reset = quota.get(reset_key)
+            if isinstance(used, bool) or not isinstance(used, (int, float)):
+                continue
+            if not isinstance(reset, str) or not reset:
+                continue
+            parsed = datetime.fromisoformat(reset[:-1] + "+00:00" if reset.endswith("Z") else reset)
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                continue
+            local_reset = parsed.astimezone(local_tz) if local_tz is not None else parsed.astimezone()
+            left = max(0, min(100, round(100 - used)))
+            reset_label = (
+                local_reset.strftime("%H:%M")
+                if window == "5h"
+                else f"{months[local_reset.month - 1]} {local_reset.day}"
+            )
+            parts.append(f"{window} {left}% (resets {reset_label})")
+        except Exception:
+            continue
+    if not parts:
+        return None
+    return "⚓ **Purser:** Codex quota left: " + " · ".join(parts)
 
 
 def _internal_post_response(

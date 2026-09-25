@@ -2,6 +2,7 @@ import io
 import json
 import os
 from dataclasses import replace
+from datetime import timedelta, timezone
 from pathlib import Path
 import shutil
 import stat
@@ -207,6 +208,124 @@ def test_quota_does_not_change_review_mode_under_cap(workspace, config):
     included = response_bundle(codex._finalize_replacement(with_quota, config, state, event_data), config)
     assert included["codex_quota"] == with_quota["codex_quota"]
     assert included["claude_review_mode"] == without["claude_review_mode"] == policy.AUDIT
+
+
+def test_post_tool_quota_system_message_formats_local_windows(workspace, config, monkeypatch):
+    local_tz = timezone(timedelta(hours=-7))
+    message = codex._codex_quota_system_message(
+        {
+            "5h_used_pct": 1.0,
+            "5h_resets_at": "2026-09-25T08:57:11Z",
+            "7d_used_pct": 46.0,
+            "7d_resets_at": "2026-09-28T16:07:43Z",
+        },
+        local_tz=local_tz,
+    )
+    assert message == "⚓ **Purser:** Codex quota left: 5h 99% (resets 01:57) · 7d 54% (resets Sep 28)"
+
+    _, state = workspace
+    format_quota = codex._codex_quota_system_message
+    monkeypatch.setattr(
+        codex,
+        "_codex_quota_system_message",
+        lambda quota: format_quota(quota, local_tz=local_tz),
+    )
+    bundle = codex._base_bundle()
+    bundle["codex_quota"] = {
+        "5h_used_pct": 1.0,
+        "5h_resets_at": "2026-09-25T08:57:11Z",
+        "7d_used_pct": 46.0,
+        "7d_resets_at": "2026-09-28T16:07:43Z",
+    }
+    call = event(tool_use_id="quota-system-message")
+    result = codex._finalize_replacement(bundle, config, state, call)
+    assert result["systemMessage"] == message
+    assert set(result) == {"hookSpecificOutput", "systemMessage"}
+    compact, _ = codex._compact_bundle(bundle, config["bundle_non_report_max_bytes"])
+    compact["codex_quota"] = bundle["codex_quota"]
+    compact["implementer_report"] = ""[: codex._report_limit(config, bundle.get("phase"))]
+    assert result["hookSpecificOutput"] == codex._replacement(compact, config)["hookSpecificOutput"]
+
+
+def test_post_tool_quota_system_message_omits_missing_or_malformed_windows():
+    local_tz = timezone.utc
+    quota = {
+        "7d_used_pct": 46.0,
+        "7d_resets_at": "2026-09-28T16:07:43Z",
+    }
+    assert codex._codex_quota_system_message(quota, local_tz=local_tz) == (
+        "⚓ **Purser:** Codex quota left: 7d 54% (resets Sep 28)"
+    )
+    assert codex._codex_quota_system_message(None, local_tz=local_tz) is None
+    assert codex._codex_quota_system_message({}, local_tz=local_tz) is None
+    assert codex._codex_quota_system_message(
+        {
+            "5h_used_pct": 1,
+            "5h_resets_at": "not-a-timestamp",
+            "7d_used_pct": 46,
+            "7d_resets_at": "2026-09-28T16:07:43Z",
+        },
+        local_tz=local_tz,
+    ) == "⚓ **Purser:** Codex quota left: 7d 54% (resets Sep 28)"
+
+
+@pytest.mark.parametrize(("used", "expected"), [(100.4, 0), (-3, 100)])
+def test_post_tool_quota_system_message_clamps_remaining_percent(used, expected):
+    message = codex._codex_quota_system_message(
+        {"5h_used_pct": used, "5h_resets_at": "2026-09-25T08:57:11Z"},
+        local_tz=timezone.utc,
+    )
+    assert message == f"⚓ **Purser:** Codex quota left: 5h {expected}% (resets 08:57)"
+
+
+def test_post_tool_quota_message_failure_preserves_replacement(workspace, config, monkeypatch):
+    _, state = workspace
+    bundle = codex._base_bundle()
+    bundle["codex_quota"] = {"5h_used_pct": 1, "5h_resets_at": "2026-09-25T08:57:11Z"}
+    call = event(tool_use_id="quota-message-failure")
+    monkeypatch.setattr(codex, "_codex_quota_system_message", lambda _quota: (_ for _ in ()).throw(ValueError()))
+    result = codex._finalize_replacement(bundle, config, state, call)
+    assert "systemMessage" not in result
+    compact, _ = codex._compact_bundle(bundle, config["bundle_non_report_max_bytes"])
+    compact["codex_quota"] = bundle["codex_quota"]
+    compact["implementer_report"] = ""[: codex._report_limit(config, bundle.get("phase"))]
+    assert result["hookSpecificOutput"] == codex._replacement(compact, config)["hookSpecificOutput"]
+
+
+def test_post_tool_quota_message_joins_existing_system_message(workspace, config, monkeypatch):
+    _, state = workspace
+    bundle = codex._base_bundle()
+    bundle["codex_quota"] = {"7d_used_pct": 46, "7d_resets_at": "2026-09-28T16:07:43Z"}
+    original_replacement = codex._replacement
+    monkeypatch.setattr(
+        codex,
+        "_replacement",
+        lambda value, loaded_config: {
+            **original_replacement(value, loaded_config),
+            "systemMessage": "Existing message",
+        },
+    )
+    result = codex._finalize_replacement(bundle, config, state, event(tool_use_id="quota-join"))
+    assert result["systemMessage"] == (
+        "Existing message\n⚓ **Purser:** Codex quota left: 7d 54% (resets Sep 28)"
+    )
+
+
+def test_post_tool_quota_message_survives_utf8_json_round_trip(monkeypatch):
+    response = {
+        "hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": []},
+        "systemMessage": "⚓ **Purser:** Codex quota left: 7d 54% (resets Sep 28)",
+    }
+    stdin_raw = io.BytesIO(b"{}")
+    stdout_raw = io.BytesIO()
+    monkeypatch.setattr(hook.sys, "stdin", type("Input", (), {"buffer": stdin_raw})())
+    monkeypatch.setattr(hook.sys, "stdout", type("Output", (), {"buffer": stdout_raw})())
+    monkeypatch.setattr(hook, "dispatch", lambda _event: response)
+
+    assert hook.main() == 0
+    rendered = stdout_raw.getvalue()
+    assert "⚓".encode("utf-8") in rendered
+    assert json.loads(rendered.decode("utf-8")) == response
 
 
 def _quota_snapshot(used_5h=None, used_7d=None):
