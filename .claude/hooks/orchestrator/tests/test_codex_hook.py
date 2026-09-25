@@ -712,6 +712,7 @@ def save_live_thread(
     effort="medium",
     phase="implementation",
     scope=("file0.py", "file1.py", "file2.py"),
+    reason=None,
 ):
     result = ledger.SessionLedger(
         state / "projects" / project_root.project_key((state.parent / "repo").resolve())
@@ -724,9 +725,52 @@ def save_live_thread(
             effort,
             phase=phase,
             scope=scope,
+            reason=reason,
         )
     )
     assert result["status"] == ledger.OK
+
+
+def _call_events(state):
+    events = []
+    for path in (state / "telemetry" / "events").glob("????-??/session_*.jsonl"):
+        events.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    return [event for event in events if event["event_type"] == "IMPLEMENTER_STARTED"]
+
+
+def test_explicit_orch_reason_is_recorded_in_call_event(workspace, config):
+    repo, state = workspace
+    call = event(prompt=orch(reason="repeated_failure") + "\nFix the failure.")
+
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+
+    payload = _call_events(state)[0]["payload"]
+    assert payload["reason"] == "repeated_failure"
+    assert payload["reason_source"] == "explicit"
+
+
+def test_bare_reply_inherits_recorded_reason_in_call_event(workspace, config):
+    repo, state = workspace
+    save_live_thread(state, reason="route_change")
+    reply = event(codex.CODEX_REPLY_TOOL, prompt="Continue.", threadId="thread-1")
+
+    codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+
+    payload = _call_events(state)[0]["payload"]
+    assert payload["reason"] == "route_change"
+    assert payload["reason_source"] == "inherited"
+
+
+def test_fresh_route_change_records_previous_and_new_route(workspace, config):
+    repo, state = workspace
+    save_live_thread(state)
+    call = event(prompt=orch("subtle", reason="route_change") + "\nStart fresh.")
+
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+
+    payload = _call_events(state)[0]["payload"]
+    assert payload["previous_route"] == "normal"
+    assert payload["new_route"] == "subtle"
 
 
 @pytest.mark.parametrize("nested", [False, True])

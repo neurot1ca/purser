@@ -192,8 +192,12 @@ _VIOLATION_CODES = frozenset(
 )
 
 _COMMON_CALL_FIELDS = frozenset(
-    {"phase", "route", "model", "effort", "routing_enforced", "fresh_thread", "reply_call"}
+    {
+        "phase", "route", "model", "effort", "routing_enforced", "fresh_thread", "reply_call",
+        "reason", "reason_source", "previous_route", "new_route",
+    }
 )
+_CALL_CONTEXT_FIELDS = frozenset({"reason", "reason_source", "previous_route", "new_route"})
 _CLAUDE_TIMESTAMP_FIELDS = frozenset(
     {"claude_usage_captured_at", "claude_5h_resets_at", "claude_7d_resets_at"}
 )
@@ -209,11 +213,16 @@ _PAYLOAD_FIELDS = {
             "claude_review_mode",
             "routing_enforced",
             "codex_usage_known",
+            *_CALL_CONTEXT_FIELDS,
             *(f"codex_{name}" for name in TOKEN_FIELDS),
             *CLAUDE_USAGE_PAYLOAD_FIELDS,
         }
     ),
-    "IMPLEMENTER_FAILED": frozenset({"failure_code", "duration_ms"}) | CLAUDE_USAGE_PAYLOAD_FIELDS,
+    "IMPLEMENTER_FAILED": (
+        frozenset({"failure_code", "duration_ms"})
+        | _CALL_CONTEXT_FIELDS
+        | CLAUDE_USAGE_PAYLOAD_FIELDS
+    ),
     "REVIEWER1_STARTED": frozenset({"reviewer1_provider", "reviewer1_model_requested"}),
     "REVIEWER1_FINISHED": frozenset(
         {
@@ -366,7 +375,13 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name == "phase" and value in _PHASES:
         return value
-    if name == "route" and value in _ROUTES:
+    if name in {"route", "previous_route", "new_route"} and value in _ROUTES:
+        return value
+    if name == "reason" and value in {
+        "new_task", "continue", "route_change", "reanchor", "repeated_failure", "user_override"
+    }:
+        return value
+    if name == "reason_source" and value in {"explicit", "inherited"}:
         return value
     if name == "effort" and value in _EFFORTS:
         return value

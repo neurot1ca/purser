@@ -922,6 +922,7 @@ def build_session_record(
     task_objective: str | None = None,
     acceptance_criteria: str | None = None,
     task_contract_grounded: bool = False,
+    reason: str | None = None,
     profile_checks: list[dict[str, Any]] | None = None,
     origin_baseline: Mapping[str, Any] | None = None,
     origin_scope: Iterable[str | os.PathLike[str]] = (),
@@ -938,6 +939,8 @@ def build_session_record(
             "model": model,
             "effort": effort,
         }
+        if reason is not None:
+            live_thread["reason"] = reason
         if phase is not None:
             live_thread["phase"] = phase
             live_thread["scope"] = [os.fspath(path) for path in scope]
@@ -1017,6 +1020,7 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         "task_objective",
         "acceptance_criteria",
         "task_contract_grounded",
+        "reason",
         "profile_checks",
         "origin_baseline",
         "origin_scope",
@@ -1044,6 +1048,10 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
     if "acceptance_criteria" in thread and not isinstance(thread.get("acceptance_criteria"), str):
         return False
     if "task_contract_grounded" in thread and not isinstance(thread.get("task_contract_grounded"), bool):
+        return False
+    if "reason" in thread and thread.get("reason") not in {
+        "new_task", "continue", "route_change", "reanchor", "repeated_failure", "user_override"
+    }:
         return False
     if "profile_checks" in thread and not isinstance(thread.get("profile_checks"), list):
         return False

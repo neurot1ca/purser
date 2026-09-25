@@ -144,6 +144,25 @@ def test_reviewer_failure_error_code_schema_and_stderr_evidence(tmp_path):
     assert json.loads(evidence_path.read_text(encoding="utf-8")) == "server stalled"
 
 
+def test_legacy_call_event_without_reason_fields_still_parses():
+    legacy = schema.build_event(
+        "IMPLEMENTER_STARTED",
+        task_id="legacy-task",
+        payload={
+            "phase": "implementation",
+            "route": "normal",
+            "model": "gpt-6-sol",
+            "effort": "medium",
+            "routing_enforced": True,
+            "fresh_thread": True,
+            "reply_call": False,
+        },
+    )
+
+    assert schema.valid_event(legacy)
+    assert legacy["payload"].get("reason", "unknown") == "unknown"
+
+
 def _run_task_process(state_root, action, task_id):
     script = """
 import sys

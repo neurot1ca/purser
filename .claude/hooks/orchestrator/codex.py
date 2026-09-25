@@ -1056,6 +1056,7 @@ def _inherited_reply_parse(
         task_id=task_id,
         phase=phase,
         route=route,
+        reason=live_thread.get("reason") if isinstance(live_thread.get("reason"), str) else None,
         scope=tuple(scope),
     )
 
@@ -1228,6 +1229,20 @@ def pre_tool_use(
                 event, route.code, route.message, state_root=state_root, task_id=parsed.task_id
             )
         requested = _requested_thread(parsed, route)
+        effective_reason = parsed.reason
+        reason_source = "explicit" if parsed.reason is not None and not reply_without_orch else None
+        if reply_without_orch and parsed.reason is not None:
+            reason_source = "inherited"
+        if (
+            tool_name in CODEX_REPLY_TOOL_NAMES
+            and effective_reason is None
+            and isinstance(live_thread, Mapping)
+            and isinstance(live_thread.get("reason"), str)
+        ):
+            effective_reason = live_thread["reason"]
+            reason_source = "inherited"
+        previous_route = live_thread.get("route") if isinstance(live_thread, Mapping) else None
+        route_changed = isinstance(previous_route, str) and previous_route != parsed.route
         bypass_metadata.update(
             task_id=parsed.task_id,
             phase=parsed.phase,
@@ -1235,6 +1250,7 @@ def pre_tool_use(
             model=route.model,
             effort=route.effort,
             scope=list(parsed.scope),
+            reason=effective_reason,
         )
 
         if tool_name in CODEX_TOOL_NAMES:
@@ -1347,6 +1363,10 @@ def pre_tool_use(
             "task_objective": task_objective,
             "acceptance_criteria": acceptance_criteria,
             "task_contract_grounded": task_contract_grounded,
+            "reason": effective_reason,
+            "reason_source": reason_source,
+            "previous_route": previous_route if route_changed else None,
+            "new_route": parsed.route if route_changed else None,
         }
         if resolved_profile is not None:
             inherited_checks = (
@@ -1402,6 +1422,7 @@ def pre_tool_use(
             acceptance_criteria=acceptance_criteria,
             task_contract_grounded=task_contract_grounded,
             profile_checks=pending.get("profile_checks"),
+            reason=effective_reason,
         )
         saved = session_ledger.save(session_record)
         if saved["status"] != ledger.OK:
@@ -1420,6 +1441,10 @@ def pre_tool_use(
             "routing_enforced": True,
             "fresh_thread": tool_name in CODEX_TOOL_NAMES,
             "reply_call": tool_name in CODEX_REPLY_TOOL_NAMES,
+            "reason": effective_reason,
+            "reason_source": reason_source,
+            "previous_route": previous_route if route_changed else None,
+            "new_route": parsed.route if route_changed else None,
             **_telemetry_envelope(event, repository, project_namespace),
         }
         _observe("emit", "TASK_ROUTE_SELECTED", **observation)
@@ -2036,6 +2061,10 @@ def _post_observations(
         "claude_review_mode": bundle.get("claude_review_mode"),
         "routing_enforced": bundle.get("routing_enforced"),
         "codex_usage_known": bool(codex_tokens),
+        "reason": pending.get("reason"),
+        "reason_source": pending.get("reason_source"),
+        "previous_route": pending.get("previous_route"),
+        "new_route": pending.get("new_route"),
     }
     finished_payload.update({f"codex_{key}": value for key, value in codex_tokens.items()})
     _observe("emit", "IMPLEMENTER_FINISHED", task_id=task_id, **finished_payload)
@@ -2752,6 +2781,7 @@ def post_tool_use(
             task_objective=pending.get("task_objective"),
             acceptance_criteria=pending.get("acceptance_criteria"),
             task_contract_grounded=pending.get("task_contract_grounded", False),
+            reason=pending.get("reason"),
             profile_checks=pending.get("profile_checks"),
             **handoff_kwargs,
         )
@@ -2847,6 +2877,7 @@ def post_tool_use_failure(
                     pending["effort"],
                     phase=pending.get("phase"),
                     scope=pending.get("scope", []),
+                    reason=pending.get("reason"),
                     pending_call_baseline=None,
                     last_outcome=outcome,
                 )
@@ -2874,6 +2905,10 @@ def post_tool_use_failure(
             ),
             failure_code=failure_code,
             duration_ms=_numeric_duration_ms(event.get("duration_ms")),
+            reason=pending.get("reason"),
+            reason_source=pending.get("reason_source"),
+            previous_route=pending.get("previous_route"),
+            new_route=pending.get("new_route"),
         )
         _observe(
             "update_task",
@@ -2909,6 +2944,10 @@ def post_tool_use_failure(
                     else "CODEX_CALL_FAILED"
                 ),
                 duration_ms=_numeric_duration_ms(event.get("duration_ms")),
+                reason=pending.get("reason"),
+                reason_source=pending.get("reason_source"),
+                previous_route=pending.get("previous_route"),
+                new_route=pending.get("new_route"),
             )
             _observe(
                 "update_task",
