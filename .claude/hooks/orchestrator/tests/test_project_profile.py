@@ -114,3 +114,21 @@ def test_project_roles_do_not_take_effect(profile_root):
     assert result.project_status == "ok"
     assert result.roles.reviewer == "agy"
     assert any("[roles]" in warning for warning in result.warnings)
+
+
+@pytest.mark.parametrize(
+    ("case_insensitive", "path", "expected"),
+    [
+        (True, ".CLAUDE/SETTINGS.JSON", True),
+        (True, ".ORCHESTRATOR/PROFILE.TOML", True),
+        (False, ".CLAUDE/SETTINGS.JSON", False),
+        (False, ".ORCHESTRATOR/PROFILE.TOML", False),
+        (True, ".claude/settings.json", True),
+        (False, ".claude/settings.json", True),
+        (True, ".orchestrator/profile.toml", True),
+        (False, ".orchestrator/profile.toml", True),
+    ],
+)
+def test_protected_paths_follow_filesystem_case_rules(monkeypatch, case_insensitive, path, expected):
+    monkeypatch.setattr(project_profile, "_CASE_INSENSITIVE_FILESYSTEM", case_insensitive)
+    assert project_profile.is_protected(path, project_profile._ENGINE_PROTECTED) is expected

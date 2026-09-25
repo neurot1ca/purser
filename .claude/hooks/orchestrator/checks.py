@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -11,6 +12,10 @@ import time
 from collections.abc import Iterable
 
 from project_profile import Check, is_protected
+
+
+_MAX_FINGERPRINT_FILES = 500
+_MAX_FINGERPRINT_BYTES = 64 * 1024 * 1024
 
 
 def select_checks(checks: Iterable[Check], changed_paths: Iterable[str]) -> tuple[Check, ...]:
@@ -43,6 +48,68 @@ def _status(repo_root: Path) -> dict[str, str] | None:
                 index += 1  # The next NUL field is the original path.
         index += 1
     return statuses
+
+
+def _fingerprints(repo_root: Path, statuses: dict[str, str]) -> dict[str, tuple[int, str]] | None:
+    """Fingerprint dirty files, or disable the whole snapshot if it exceeds bounds."""
+    paths: list[tuple[str, Path, int]] = []
+    total_size = 0
+    try:
+        for relative in statuses:
+            path = repo_root / relative
+            if path.is_dir():
+                continue
+            size = path.stat().st_size
+            paths.append((relative, path, size))
+            total_size += size
+            if len(paths) > _MAX_FINGERPRINT_FILES or total_size > _MAX_FINGERPRINT_BYTES:
+                return None
+    except OSError:
+        return None
+
+    fingerprints: dict[str, tuple[int, str]] = {}
+    bytes_read = 0
+    try:
+        for relative, path, expected_size in paths:
+            digest = hashlib.sha256()
+            size = 0
+            with path.open("rb") as stream:
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    bytes_read += len(chunk)
+                    if bytes_read > _MAX_FINGERPRINT_BYTES:
+                        return None
+                    digest.update(chunk)
+            if size != expected_size:
+                return None
+            fingerprints[relative] = (size, digest.hexdigest())
+    except OSError:
+        return None
+    return fingerprints
+
+
+def _fingerprint_changed(repo_root: Path, path: str, before: tuple[int, str]) -> bool:
+    target = repo_root / path
+    try:
+        if target.is_dir():
+            return True
+        if target.stat().st_size != before[0]:
+            return True
+        digest = hashlib.sha256()
+        size = 0
+        with target.open("rb") as stream:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                digest.update(chunk)
+        return (size, digest.hexdigest()) != before
+    except OSError:
+        return True
 
 
 def _stop_tree(process: subprocess.Popen[bytes]) -> None:
@@ -163,6 +230,7 @@ def run_checks(repo_root: Path, checks: Iterable[Check], *, deadline_seconds: fl
         return {"status": "NOT_RUN", "results": [], "side_effect_paths": []}
     root = Path(repo_root)
     before = _status(root)
+    before_fingerprints = _fingerprints(root, before) if before is not None else None
     deadline = time.monotonic() + max(0, deadline_seconds)
     results: list[dict[str, object]] = []
     for check in selected:
@@ -173,9 +241,19 @@ def run_checks(repo_root: Path, checks: Iterable[Check], *, deadline_seconds: fl
         else:
             results.append(_run_one(root, check, remaining))
     after = _status(root)
-    side_effect_paths = None if before is None or after is None else sorted(
-        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
-    )[:50]
+    if before is None or after is None:
+        side_effect_paths = None
+    else:
+        side_effects = {
+            path for path in before.keys() | after.keys()
+            if before.get(path) != after.get(path)
+        }
+        if before_fingerprints is not None:
+            side_effects.update(
+                path for path, fingerprint in before_fingerprints.items()
+                if _fingerprint_changed(root, path, fingerprint)
+            )
+        side_effect_paths = sorted(side_effects)[:50]
     statuses = {result["status"] for result in results}
     status = "FAIL" if "FAIL" in statuses else "UNKNOWN" if "UNKNOWN" in statuses else "PASS"
     return {"status": status, "results": results, "side_effect_paths": side_effect_paths}

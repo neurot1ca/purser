@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
+import checks
 from project_profile import Check
 from checks import run_checks, select_checks
 
@@ -22,6 +23,13 @@ def repo():
 
 def _python(name, script, timeout=60):
     return Check(name, (sys.executable, "-c", script), None, timeout)
+
+
+def _commit_files(repo, *paths):
+    subprocess.run(["git", "config", "user.email", "purser-tests@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Purser Tests"], cwd=repo, check=True)
+    subprocess.run(["git", "add", *paths], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "test baseline"], cwd=repo, check=True)
 
 
 def test_pass_and_empty_selection(repo):
@@ -60,6 +68,47 @@ def test_untracked_side_effect(repo):
     result = run_checks(repo, (_python("write", "from pathlib import Path; Path('generated.txt').write_text('x')"),), deadline_seconds=5)
     assert result["status"] == "PASS"
     assert result["side_effect_paths"] == ["generated.txt"]
+
+
+def test_dirty_file_content_changes_are_side_effects(repo):
+    edited = repo / "edited.txt"
+    untouched = repo / "untouched.txt"
+    edited.write_text("baseline\n", encoding="utf-8")
+    untouched.write_text("baseline\n", encoding="utf-8")
+    _commit_files(repo, "edited.txt", "untouched.txt")
+    edited.write_text("already dirty\n", encoding="utf-8")
+    untouched.write_text("also dirty\n", encoding="utf-8")
+    script = "from pathlib import Path; Path('edited.txt').write_text('changed again\\n')"
+
+    result = run_checks(repo, (_python("edit", script),), deadline_seconds=5)
+
+    assert result["side_effect_paths"] == ["edited.txt"]
+
+
+def test_untracked_file_content_changes_are_side_effects(repo):
+    target = repo / "untracked.txt"
+    target.write_text("before check\n", encoding="utf-8")
+    script = "from pathlib import Path; Path('untracked.txt').write_text('after check\\n')"
+
+    result = run_checks(repo, (_python("edit", script),), deadline_seconds=5)
+
+    assert result["side_effect_paths"] == ["untracked.txt"]
+
+
+def test_fingerprint_cap_falls_back_to_status_only(repo, monkeypatch):
+    first = repo / "first.txt"
+    second = repo / "second.txt"
+    first.write_text("baseline\n", encoding="utf-8")
+    second.write_text("baseline\n", encoding="utf-8")
+    _commit_files(repo, "first.txt", "second.txt")
+    first.write_text("dirty\n", encoding="utf-8")
+    second.write_text("dirty\n", encoding="utf-8")
+    monkeypatch.setattr(checks, "_MAX_FINGERPRINT_FILES", 1)
+    script = "from pathlib import Path; Path('first.txt').write_text('changed again\\n')"
+
+    result = run_checks(repo, (_python("edit", script),), deadline_seconds=5)
+
+    assert result["side_effect_paths"] == []
 
 
 def test_deadline_exhaustion_still_reports_side_effect(repo):

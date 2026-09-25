@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import fnmatch
 import os
 import re
+import sys
 from pathlib import Path, PureWindowsPath
 import tomllib
 from collections.abc import Iterable
@@ -34,6 +35,9 @@ _ENGINE_PROTECTED = (
     "secrets.*",
 )
 
+# Kept at module scope so platform behavior can be overridden in tests.
+_CASE_INSENSITIVE_FILESYSTEM = os.name == "nt" or sys.platform == "darwin"
+
 
 def is_protected(path: str, patterns: Iterable[str]) -> bool:
     """Return whether a repository-relative path matches a protected pattern."""
@@ -44,12 +48,14 @@ def is_protected(path: str, patterns: Iterable[str]) -> bool:
     components = tuple(part for part in normalized.split("/") if part)
     for raw_pattern in patterns:
         pattern = raw_pattern.replace("\\", "/")
+        match_path = normalized.casefold() if _CASE_INSENSITIVE_FILESYSTEM else normalized
+        match_pattern = pattern.casefold() if _CASE_INSENSITIVE_FILESYSTEM else pattern
         if pattern.endswith("/**"):
-            prefix = pattern[:-3].rstrip("/")
-            if normalized == prefix or normalized.startswith(prefix + "/"):
+            prefix = match_pattern[:-3].rstrip("/")
+            if match_path == prefix or match_path.startswith(prefix + "/"):
                 return True
         elif "/" in pattern:
-            if fnmatch.fnmatchcase(normalized, pattern):
+            if fnmatch.fnmatchcase(match_path, match_pattern):
                 return True
         elif any(fnmatch.fnmatchcase(component.casefold(), pattern.casefold()) for component in components):
             return True
