@@ -192,6 +192,10 @@ _VIOLATION_CODES = frozenset(
         "NO_LIVE_THREAD",
         "INVALID_LIVE_THREAD",
         "INVALID_REQUEST",
+        "SCOPE_LEASE_CONFLICT",
+        "LEASE_ADMISSION_UNCERTAIN",
+        "LEASE_OWNER_CONFLICT",
+        "LEASE_INVALID",
     }
 )
 

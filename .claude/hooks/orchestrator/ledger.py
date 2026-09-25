@@ -8,6 +8,7 @@ caller cannot accidentally interpret a failed inspection as an empty change.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import contextmanager
 import hashlib
 import hmac
 import json
@@ -37,6 +38,236 @@ DEFAULT_MANIFEST_BUDGET_SECONDS = 3.0
 _INDEX_PATHSPEC_BYTE_BUDGET = 8000
 
 _LEDGER_SCHEMA_VERSION = 1
+SYNC_LEASE_FALLBACK_SECONDS = 2 * 60 * 60
+LEASE_TIMEOUT_MARGIN_SECONDS = 60
+ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS = 2700
+JOB_RETENTION_SECONDS = 7 * 24 * 60 * 60
+RELEASED_LEASE_RETENTION_SECONDS = 7 * 24 * 60 * 60
+
+
+@contextmanager
+def _lease_lock(path: Path):
+    """Serialize admissions across hook processes, including on Windows."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    if not handle.read(1):
+                        handle.write(b"0")
+                        handle.flush()
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _scopes_overlap(left_scope: Sequence[str], right_scope: Sequence[str]) -> bool:
+    for left in left_scope:
+        for right in right_scope:
+            a, b = (left.casefold(), right.casefold()) if os.name == "nt" else (left, right)
+            if a == b or a.startswith(b + "/") or b.startswith(a + "/"):
+                return True
+    return False
+
+
+class ScopeLeases:
+    """Durable per-repository ownership; uncertain owners stay active."""
+
+    def __init__(self, project_state_root: str | os.PathLike[str]) -> None:
+        root = Path(project_state_root)
+        self.path = root / "scope_leases.json"
+        self.lock_path = root / "scope_leases.lock"
+        self.jobs_root = root.parent.parent / "codex_exec_mcp" / "jobs"
+
+    def _read(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {"version": 1, "owners": {}}
+        if (not isinstance(value, dict) or value.get("version") != 1
+                or not isinstance(value.get("owners"), dict)):
+            raise ValueError("scope lease record is invalid")
+        for key, owner in value["owners"].items():
+            if (not isinstance(key, str) or not isinstance(owner, dict)
+                    or owner.get("state") not in {"ACTIVE", "RELEASED"}
+                    or not isinstance(owner.get("task_id"), str)
+                    or not isinstance(owner.get("scope"), list)
+                    or not owner["scope"]
+                    or any(not isinstance(path, str) or not path for path in owner["scope"])):
+                raise ValueError("scope lease owner is invalid")
+        return value
+
+    def _write(self, value: dict[str, Any]) -> None:
+        cutoff = time.time() - RELEASED_LEASE_RETENTION_SECONDS
+        value["owners"] = {
+            key: owner for key, owner in value["owners"].items()
+            if owner["state"] != "RELEASED"
+            or not isinstance(owner.get("released_at"), (int, float))
+            or owner["released_at"] >= cutoff
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
+                                             prefix="scope_leases.", suffix=".tmp", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(json_transport.dumps(value, sort_keys=True, separators=(",", ":")))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+            temporary = None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    def _job_state(self, job_id: str) -> str:
+        try:
+            job = json.loads((self.jobs_root / f"{job_id}.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return "MISSING"
+        except (OSError, ValueError, TypeError):
+            return "UNREADABLE"
+        if not isinstance(job, dict) or job.get("jobId") != job_id:
+            return "UNREADABLE"
+        call = job.get("call")
+        if not isinstance(call, str) or hashlib.sha256(call.encode("utf-8")).hexdigest() != job_id:
+            return "UNREADABLE"
+        state = job.get("state")
+        if state == "EXPIRED" or (state == "FAILED" and job.get("errorCode") == "JOB_EXPIRED"):
+            return "JOB_EXPIRED"
+        return state if isinstance(state, str) else "UNREADABLE"
+
+    def _reconcile(self, value: dict[str, Any], now: float) -> bool:
+        changed = False
+        for owner in value["owners"].values():
+            if owner["state"] != "ACTIVE":
+                continue
+            job_id = owner.get("job_id")
+            if job_id is None:
+                acquired = owner.get("acquired_at")
+                deadline = owner.get("deadline_at")
+                if deadline is None and isinstance(acquired, (int, float)):
+                    deadline = acquired + SYNC_LEASE_FALLBACK_SECONDS
+                expired = isinstance(deadline, (int, float)) and now >= deadline
+            elif isinstance(job_id, str):
+                state = self._job_state(job_id)
+                cutoff = owner.get("retention_after")
+                expired = (state == "JOB_EXPIRED" or
+                           (state == "MISSING" and isinstance(cutoff, (int, float))
+                            and now >= cutoff))
+            else:
+                expired = False
+            if expired:
+                owner["state"] = "RELEASED"
+                owner["released_at"] = now
+                changed = True
+        return changed
+
+    def acquire(self, owner_key: str, task_id: str, scope: Sequence[str],
+                *, job_id: str | None = None, timeout_seconds: float | None = None) -> dict[str, Any]:
+        if not owner_key or not task_id or not scope:
+            return {"status": UNKNOWN, "code": "LEASE_INVALID"}
+        try:
+            with _lease_lock(self.lock_path):
+                value = self._read()
+                now = time.time()
+                if self._reconcile(value, now):
+                    self._write(value)
+                prior = value["owners"].get(owner_key)
+                if prior is not None:
+                    return ({"status": OK, "code": "LEASE_ACQUIRED"}
+                            if prior["state"] == "ACTIVE" and prior["task_id"] == task_id
+                            and prior["scope"] == list(scope) else
+                            {"status": UNKNOWN, "code": "LEASE_OWNER_CONFLICT"})
+                for other in value["owners"].values():
+                    if other["state"] != "ACTIVE":
+                        continue
+                    if _scopes_overlap(scope, other["scope"]):
+                        return {"status": UNKNOWN, "code": "SCOPE_LEASE_CONFLICT",
+                                "task_id": other["task_id"]}
+                owner = {
+                    "task_id": task_id, "scope": list(scope), "state": "ACTIVE",
+                    "job_id": job_id, "acquired_at": now,
+                }
+                if job_id is None:
+                    owner["deadline_at"] = now + (
+                        timeout_seconds + LEASE_TIMEOUT_MARGIN_SECONDS
+                        if isinstance(timeout_seconds, (int, float)) and not isinstance(timeout_seconds, bool)
+                        and math.isfinite(timeout_seconds) and timeout_seconds > 0
+                        else SYNC_LEASE_FALLBACK_SECONDS
+                    )
+                else:
+                    job_timeout = (timeout_seconds if isinstance(timeout_seconds, (int, float))
+                                   and not isinstance(timeout_seconds, bool)
+                                   and math.isfinite(timeout_seconds) and timeout_seconds > 0
+                                   else ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS)
+                    owner["retention_after"] = now + job_timeout + JOB_RETENTION_SECONDS
+                value["owners"][owner_key] = owner
+                self._write(value)
+                return {"status": OK, "code": "LEASE_ACQUIRED"}
+        except (OSError, ValueError, TypeError):
+            return {"status": UNKNOWN, "code": "LEASE_ADMISSION_UNCERTAIN"}
+
+    def release(self, owner_key: str) -> dict[str, Any]:
+        try:
+            with _lease_lock(self.lock_path):
+                value = self._read()
+                owner = value["owners"].get(owner_key)
+                if owner is None:
+                    return {"status": UNKNOWN, "code": "LEASE_OWNER_MISSING"}
+                if owner["state"] == "ACTIVE":
+                    owner["state"] = "RELEASED"
+                    owner["released_at"] = time.time()
+                    self._write(value)
+                return {"status": OK, "code": "LEASE_RELEASED"}
+        except (OSError, ValueError, TypeError):
+            return {"status": UNKNOWN, "code": "LEASE_RELEASE_UNCERTAIN"}
+
+    def active(self) -> list[dict[str, Any]]:
+        with _lease_lock(self.lock_path):
+            value = self._read()
+            now = time.time()
+            if self._reconcile(value, now):
+                self._write(value)
+            return [
+                {"task_id": owner["task_id"], "scope": list(owner["scope"]),
+                 "age_seconds": max(0, int(now - owner["acquired_at"])),
+                 "job_state": self._job_state(owner["job_id"]) if owner.get("job_id") else None}
+                for owner in value["owners"].values() if owner["state"] == "ACTIVE"
+            ]
+
+    def release_task(self, task_id: str) -> list[dict[str, Any]]:
+        with _lease_lock(self.lock_path):
+            value = self._read()
+            now = time.time()
+            released = []
+            for owner in value["owners"].values():
+                if owner["state"] == "ACTIVE" and owner["task_id"] == task_id:
+                    released.append({"task_id": task_id, "scope": list(owner["scope"]),
+                                     "job_id": owner.get("job_id")})
+                    owner["state"] = "RELEASED"
+                    owner["released_at"] = now
+            if released:
+                self._write(value)
+            return released
 _SECRET_KEY_PARTS = (
     "api_key",
     "apikey",

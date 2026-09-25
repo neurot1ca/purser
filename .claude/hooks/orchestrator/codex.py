@@ -747,6 +747,45 @@ def _project_state_root(runtime_root: Path, project_key: str) -> Path:
     return runtime_root / "projects" / project_key
 
 
+def _release_scope_lease(runtime_root: Path, pending: Mapping[str, Any]) -> None:
+    owner = pending.get("lease_owner")
+    if not isinstance(owner, str):
+        return
+    result = ledger.ScopeLeases(
+        _project_state_root(runtime_root, _pending_project_key(pending))
+    ).release(owner)
+    if result["status"] != ledger.OK:
+        raise WiringError(result["code"])
+
+
+def _release_async_lease(runtime_root: Path, index: Mapping[str, Any],
+                         pending: Mapping[str, Any] | None) -> None:
+    if isinstance(pending, Mapping):
+        _release_scope_lease(runtime_root, pending)
+        return
+    # A consumed index survives pending cleanup; its call key is the lease owner.
+    result = ledger.ScopeLeases(
+        _project_state_root(runtime_root, index["project_key"])
+    ).release(index["call_key"])
+    if result["status"] != ledger.OK and result["code"] != "LEASE_OWNER_MISSING":
+        raise WiringError(result["code"])
+
+
+def _reconcile_rejected_starts(runtime_root: Path, project_key: str) -> None:
+    """Clear a rejected start only after its durable bridge job is terminal."""
+    for path in (runtime_root / "pending").glob("*.json"):
+        try:
+            pending = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(pending, dict) or pending.get("start_rejected") is not True
+                    or pending.get("project_key") != project_key
+                    or not _start_job_terminal_or_absent(runtime_root, pending)):
+                continue
+            _release_scope_lease(runtime_root, pending)
+            path.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError, WiringError):
+            continue
+
+
 def _thread_index_path(runtime_root: Path, thread_id: Any) -> Path | None:
     if not isinstance(thread_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", thread_id):
         return None
@@ -890,6 +929,12 @@ def _cleanup_stale_pending(root: Path, event: Mapping[str, Any]) -> None:
             except OSError:
                 continue
             if age_seconds <= PENDING_MAX_AGE_SECONDS:
+                continue
+            try:
+                old = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(old, dict) and isinstance(old.get("lease_owner"), str):
+                    continue
+            except (OSError, ValueError, TypeError):
                 continue
             try:
                 path.unlink()
@@ -1116,6 +1161,7 @@ def pre_tool_use(
         return _async_pre_followup(event, state_root, repo_root)
     runtime_root: Path | None = None
     pending_written = False
+    lease_pending: dict[str, Any] | None = None
     bypass_metadata: dict[str, Any] = {}
     try:
         loaded_config = _load_config(config)
@@ -1509,6 +1555,28 @@ def pre_tool_use(
                     ),
                 }
             )
+        # Unresolved roots keep the existing UNKNOWN/FULL path; there is no
+        # repository identity against which to key a scope lease.
+        if parsed.phase == "implementation" and repository is not None:
+            _reconcile_rejected_starts(runtime_root, project_namespace)
+            owner = _call_key(event)
+            job_id = hashlib.sha256(updated["call"].encode("utf-8")).hexdigest() if is_start else None
+            admitted = ledger.ScopeLeases(_project_state_root(runtime_root, project_namespace)).acquire(
+                owner, parsed.task_id, declared_scope, job_id=job_id,
+                timeout_seconds=updated.get("timeoutSeconds") if is_start else None,
+            )
+            if admitted["status"] != ledger.OK:
+                return _observed_denial(
+                    event, admitted["code"],
+                    (f"Scope is leased by task {admitted['task_id']}. "
+                     "To release a stuck lease, run: python "
+                     ".claude/hooks/orchestrator/purser_leases.py --release <task-id>"
+                     if admitted["code"] == "SCOPE_LEASE_CONFLICT" else
+                     "Scope ownership could not be established."),
+                    state_root=runtime_root, task_id=parsed.task_id,
+                )
+            pending["lease_owner"] = owner
+            lease_pending = pending
         _atomic_json_write(_pending_path(runtime_root, event), pending)
         pending_written = True
 
@@ -1615,6 +1683,11 @@ def pre_tool_use(
             pass
         return result
     except Exception as error:
+        if lease_pending is not None and runtime_root is not None:
+            try:
+                _release_scope_lease(runtime_root, lease_pending)
+            except Exception:
+                pass
         if pending_written and runtime_root is not None:
             try:
                 _remove_pending(runtime_root, event)
@@ -1703,6 +1776,23 @@ def _cancel_start_job(root: Path, call_uuid: str, job_id: str) -> bool:
             return connection.recv(1) == b"1"
     except (OSError, ValueError, KeyError, TypeError, UnicodeError):
         return False
+
+
+def _start_job_terminal_or_absent(root: Path, pending: Mapping[str, Any]) -> bool:
+    call_uuid = pending.get("async_call")
+    if not isinstance(call_uuid, str):
+        return False
+    job_id = hashlib.sha256(call_uuid.encode("utf-8")).hexdigest()
+    path = root / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    try:
+        job = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return True  # The durable bridge contract has no accepted job.
+    except (OSError, ValueError, TypeError):
+        return False
+    return (isinstance(job, Mapping) and job.get("jobId") == job_id
+            and job.get("call") == call_uuid
+            and job.get("state") in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"})
 
 
 def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
@@ -1894,6 +1984,7 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
         claimed = True
         path, index, pending, original = _async_owned(root, event, repo_root)
         if index.get("stage") == "CONSUMED":
+            _release_async_lease(root, index, pending)
             (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
             return index.get("response") or interrupted()
         if index.get("stage") == "FINALIZING":
@@ -1909,6 +2000,7 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                                 if rejection else _finalize_replacement(bundle, _load_config(config), root, original))
                     index.update(stage="CONSUMED", bundle_path=str(artifact.resolve()), response=response)
                     _atomic_json_write(path, index)
+                    _release_async_lease(root, index, pending)
                     _remove_pending(root, original)
                     return response
         index["stage"] = "FINALIZING"
@@ -1959,6 +2051,7 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                 response["hookSpecificOutput"]["additionalContext"] = message
         index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
         _atomic_json_write(path, index)
+        _release_async_lease(root, index, pending)
         try:
             _remove_pending(root, original)
         except OSError:
@@ -2415,6 +2508,7 @@ def _internal_post_response(
     bundle = _base_bundle(_safe_error(error))
     bundle["reviewer1_model_requested"] = loaded_config.get("reviewer1_model_requested")
     runtime_root: Path | None = None
+    pending: Mapping[str, Any] | None = None
     try:
         runtime_root = _state_root(state_root)
         raw_path = _persist_raw_output(runtime_root, event, event.get("tool_response"))
@@ -2456,7 +2550,14 @@ def _internal_post_response(
         pass
     _record_diagnostic(runtime_root, event, "PostToolUse", error)
     if runtime_root is not None:
-        return _finalize_replacement(bundle, loaded_config, runtime_root, event)
+        response = _finalize_replacement(bundle, loaded_config, runtime_root, event)
+        if isinstance(pending, Mapping) and not pending.get("async_call"):
+            try:
+                _release_scope_lease(runtime_root, pending)
+                _remove_pending(runtime_root, event)
+            except Exception as release_error:
+                _record_diagnostic(runtime_root, event, "PostToolUse", release_error)
+        return response
     return _replacement(bundle, loaded_config)
 
 
@@ -3269,8 +3370,6 @@ def post_tool_use(
             )
         else:
             _record_thread_root(runtime_root, thread_id, repository)
-            if not pending.get("async_call"):
-                _remove_pending(runtime_root, event)
         try:
             _post_observations(
                 event,
@@ -3292,7 +3391,11 @@ def post_tool_use(
             bundle["audit_receipt"] = _build_audit_receipt(bundle, pending.get("task_id"))
         else:
             bundle["audit_receipt"] = None
-        return _finalize_replacement(bundle, loaded_config, runtime_root, event)
+        response = _finalize_replacement(bundle, loaded_config, runtime_root, event)
+        if not pending.get("async_call"):
+            _release_scope_lease(runtime_root, pending)
+            _remove_pending(runtime_root, event)
+        return response
     except Exception as error:
         return _internal_post_response(
             event,
@@ -3380,8 +3483,16 @@ def post_tool_use_failure(
                 raise WiringError(saved.get("message", "ambiguous failure could not be recorded"))
         elif routing_enforced:
             raise WiringError("normal pending call identity is incomplete")
-        if not pending.get("async_call") or event.get("tool_name") in CODEX_START_TOOL_NAMES:
+        if not pending.get("async_call"):
+            _release_scope_lease(runtime_root, pending)
             _remove_pending(runtime_root, event)
+        elif event.get("tool_name") in CODEX_START_TOOL_NAMES:
+            if _start_job_terminal_or_absent(runtime_root, pending):
+                _release_scope_lease(runtime_root, pending)
+                _remove_pending(runtime_root, event)
+            else:
+                pending = dict(pending, start_rejected=True)
+                _atomic_json_write(_pending_path(runtime_root, event), pending)
         if event.get("tool_name") in CODEX_START_TOOL_NAMES and re.fullmatch(r"[0-9a-f]{64}", str(pending.get("job_id"))):
             (runtime_root / "async_jobs" / f"{pending['job_id']}.json").unlink(missing_ok=True)
         routing_note = (

@@ -1,4 +1,5 @@
 import io
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -436,7 +437,7 @@ def test_two_parallel_async_jobs_finalize_independently(workspace, config):
     repo, state = workspace
     jobs = []
     for number in (1, 2):
-        prompt = orch(task=f"parallel-{number}") + "\nDo the work."
+        prompt = orch(task=f"parallel-{number}", scope=f"file{number - 1}.py") + "\nDo the work."
         _, job_id, _ = async_started(workspace, config, prompt=prompt,
                                      state_name="SUCCEEDED", tool_use_id=f"start-{number}")
         jobs.append(job_id)
@@ -449,6 +450,233 @@ def test_two_parallel_async_jobs_finalize_independently(workspace, config):
         first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
         assert response_bundle(first, config)["task_id"] == f"parallel-{number}"
         assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo) == first
+
+
+def _lease_call(task, scope, tool_use_id, *, tool_name=codex.CODEX_TOOL):
+    return event(tool_name, prompt=orch(task=task, scope=scope) + "\nDo the work.",
+                 tool_use_id=tool_use_id)
+
+
+def _lease_state(workspace):
+    repo, state = workspace
+    return ledger.ScopeLeases(state / "projects" / project_root.project_key(repo.resolve()))
+
+
+def test_scope_lease_disjoint_and_conflicting_starts(workspace, config):
+    repo, state = workspace
+    first = _lease_call("owner-a", "file0.py", "lease-a")
+    second = _lease_call("owner-b", "file1.py", "lease-b", tool_name=START_TOOL)
+    conflict = _lease_call("owner-c", "file0.py", "lease-c")
+    assert "updatedInput" in codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
+    assert "updatedInput" in codex.pre_tool_use(second, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
+    denied = codex.pre_tool_use(conflict, config=config, state_root=state, repo_root=repo)
+    assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "owner-a" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "purser_leases.py --release <task-id>" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    violations = [item for item in _all_telemetry_events(state)
+                  if item["event_type"] == "ROUTING_PROTOCOL_VIOLATION"]
+    assert any(item["payload"]["violation_code"] == "SCOPE_LEASE_CONFLICT"
+               for item in violations)
+    owners = _lease_state(workspace)._read()["owners"]
+    assert len([owner for owner in owners.values() if owner["state"] == "ACTIVE"]) == 2
+
+
+def test_scope_lease_path_prefix_and_stale_owner_block(workspace, config):
+    repo, state = workspace
+    store = _lease_state(workspace)
+    assert store.acquire("lost-owner", "old-task", ["src"])["status"] == ledger.OK
+    # No pending call or host evidence exists after this simulated restart.
+    contender = _lease_call("new-task", "src/module.py", "lease-stale")
+    denied = codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)
+    assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "old-task" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert store.release("lost-owner")["status"] == ledger.OK
+    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
+    broad = _lease_call("broad-task", "src", "lease-broad")
+    assert "SCOPE_LEASE_CONFLICT" in codex.pre_tool_use(
+        broad, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_corrupt_lease_record_denies_admission(workspace, config):
+    repo, state = workspace
+    store = _lease_state(workspace)
+    store.path.parent.mkdir(parents=True)
+    store.path.write_text("{broken", encoding="utf-8")
+    call = _lease_call("new-task", "file0.py", "lease-corrupt")
+    denied = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert "LEASE_ADMISSION_UNCERTAIN" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_sync_lease_deadline_releases_only_after_timeout_and_margin(workspace, monkeypatch):
+    store = _lease_state(workspace)
+    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
+    assert store.acquire("old", "old-task", ["file0.py"], timeout_seconds=10)["status"] == ledger.OK
+    assert store._read()["owners"]["old"]["deadline_at"] == 1070.0
+    monkeypatch.setattr(ledger.time, "time", lambda: 1069.0)
+    assert store.acquire("new", "new-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
+    monkeypatch.setattr(ledger.time, "time", lambda: 1070.0)
+    assert store.acquire("new", "new-task", ["file0.py"])["status"] == ledger.OK
+    assert store._read()["owners"]["old"]["state"] == "RELEASED"
+    assert store._read()["owners"]["new"]["deadline_at"] == 1070 + 7200
+
+
+def test_async_lease_waits_for_finalize_or_expired_job_record(workspace, monkeypatch):
+    _, state = workspace
+    store = _lease_state(workspace)
+    call = "async-call"
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
+    assert store.acquire("async-owner", "async-task", ["file0.py"],
+                         job_id=job_id, timeout_seconds=100)["status"] == ledger.OK
+    path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    path.parent.mkdir(parents=True)
+    job = {"jobId": job_id, "call": call, "state": "RUNNING"}
+    path.write_text(json.dumps(job), encoding="utf-8")
+    monkeypatch.setattr(ledger.time, "time", lambda: 1000 + 100 + ledger.JOB_RETENTION_SECONDS + 1)
+    assert store.acquire("next", "next-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
+    job.update(state="SUCCEEDED")
+    path.write_text(json.dumps(job), encoding="utf-8")
+    assert store.acquire("next", "next-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
+    job.update(state="EXPIRED", errorCode="JOB_EXPIRED")
+    path.write_text(json.dumps(job), encoding="utf-8")
+    assert store.acquire("next", "next-task", ["file0.py"])["status"] == ledger.OK
+
+
+def test_async_missing_job_record_requires_retention_cutoff(workspace, monkeypatch):
+    store = _lease_state(workspace)
+    job_id = hashlib.sha256(b"missing-call").hexdigest()
+    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
+    store.acquire("missing-owner", "missing-task", ["file0.py"], job_id=job_id,
+                  timeout_seconds=100)
+    cutoff = store._read()["owners"]["missing-owner"]["retention_after"]
+    monkeypatch.setattr(ledger.time, "time", lambda: cutoff - 1)
+    assert store.acquire("next", "next-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
+    monkeypatch.setattr(ledger.time, "time", lambda: cutoff)
+    assert store.acquire("next", "next-task", ["file0.py"])["status"] == ledger.OK
+
+
+def test_released_lease_entries_are_pruned_on_write(workspace, monkeypatch):
+    store = _lease_state(workspace)
+    monkeypatch.setattr(ledger.time, "time", lambda: 1_000_000.0)
+    value = {"version": 1, "owners": {
+        "old": {"task_id": "old", "scope": ["file0.py"], "state": "RELEASED",
+                "job_id": None, "acquired_at": 1.0,
+                "released_at": 1_000_000 - ledger.RELEASED_LEASE_RETENTION_SECONDS - 1},
+        "recent": {"task_id": "recent", "scope": ["file1.py"], "state": "RELEASED",
+                   "job_id": None, "acquired_at": 1.0,
+                   "released_at": 1_000_000 - ledger.RELEASED_LEASE_RETENTION_SECONDS + 1},
+    }}
+    store._write(value)
+    assert set(store._read()["owners"]) == {"recent"}
+
+
+def test_lease_cli_lists_and_releases_only_named_task(workspace, monkeypatch):
+    _, state = workspace
+    store = _lease_state(workspace)
+    store.acquire("one", "task-one", ["file0.py"])
+    call = "cli-async"
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    store.acquire("two", "task-two", ["file1.py"], job_id=job_id)
+    path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"jobId": job_id, "call": call, "state": "RUNNING"}), encoding="utf-8")
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    cli = Path(codex.__file__).with_name("purser_leases.py")
+    listed = subprocess.run([sys.executable, str(cli), "--list"], capture_output=True,
+                            text=True, check=True)
+    active = json.loads(listed.stdout)["active"]
+    assert {row["task_id"] for row in active} == {"task-one", "task-two"}
+    assert next(row for row in active if row["task_id"] == "task-two")["job_state"] == "RUNNING"
+    assert all(row["age_seconds"] >= 0 and row["scope"] for row in active)
+    released = subprocess.run([sys.executable, str(cli), "--release", "task-one"],
+                              capture_output=True, text=True, check=True)
+    assert [row["task_id"] for row in json.loads(released.stdout)["released"]] == ["task-one"]
+    assert [row["task_id"] for row in store.active()] == ["task-two"]
+
+
+def test_simultaneous_conflicting_starts_admit_one(workspace, config):
+    repo, state = workspace
+    calls = [_lease_call(f"race-{n}", "file0.py", f"lease-race-{n}", tool_name=START_TOOL)
+             for n in (1, 2)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda call: codex.pre_tool_use(
+            call, config=config, state_root=state, repo_root=repo), calls))
+    allowed = ["updatedInput" in result["hookSpecificOutput"] for result in results]
+    assert sorted(allowed) == [False, True]
+    assert "SCOPE_LEASE_CONFLICT" in next(result for result, ok in zip(results, allowed)
+                                     if not ok)["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_sync_finalize_releases_scope_lease(workspace, config):
+    repo, state = workspace
+    first = _lease_call("owner-a", "file0.py", "lease-finalize")
+    contender = _lease_call("owner-b", "file0.py", "lease-after")
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    assert "SCOPE_LEASE_CONFLICT" in codex.pre_tool_use(
+        contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
+    post = {**first, "hook_event_name": "PostToolUse", "tool_response":
+            {"structuredContent": {"threadId": "lease-thread", "content": "done"}}}
+    codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(first)]["state"] == "RELEASED"
+    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
+
+
+def test_failure_finalize_releases_scope_lease(workspace, config):
+    repo, state = workspace
+    first = _lease_call("failed-owner", "file0.py", "lease-failed")
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    failure = {**first, "hook_event_name": "PostToolUseFailure", "error": "worker failed"}
+    codex.post_tool_use_failure(failure, config=config, state_root=state, repo_root=repo)
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(first)]["state"] == "RELEASED"
+    contender = _lease_call("after-failure", "file0.py", "lease-after-failure")
+    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
+
+
+def test_rejected_start_waits_for_durable_terminal_state(workspace, config):
+    repo, state = workspace
+    first = _lease_call("rejected-owner", "file0.py", "lease-rejected", tool_name=START_TOOL)
+    updated = codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
+    path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    path.parent.mkdir(parents=True)
+    job = {"jobId": job_id, "call": updated["call"], "state": "RUNNING"}
+    path.write_text(json.dumps(job), encoding="utf-8")
+    codex.post_tool_use_failure({**first, "hook_event_name": "PostToolUseFailure",
+                                 "error": "start rejected"}, config=config, state_root=state, repo_root=repo)
+    contender = _lease_call("after-rejection", "file0.py", "lease-after-rejection")
+    denied = codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)
+    assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    job["state"] = "CANCELLED"
+    path.write_text(json.dumps(job), encoding="utf-8")
+    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(first)]["state"] == "RELEASED"
+
+
+def test_async_lease_survives_start_and_releases_after_finalize(workspace, config):
+    repo, state = workspace
+    prompt = orch(task="async-owner", scope="file0.py") + "\nDo the work."
+    start, job_id, _ = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
+    contender = _lease_call("other", "file0.py", "lease-async-conflict")
+    assert "SCOPE_LEASE_CONFLICT" in codex.pre_tool_use(
+        contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
+    followup = async_followup(RESULT_TOOL, job_id)
+    post = {**followup, "hook_event_name": "PostToolUse", "tool_response":
+            {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED",
+                                   "threadId": "async-thread", "content": "done"}}}
+    codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
+    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
+
+
+@pytest.mark.parametrize("phase,route", (("plan", "plan_standard"), ("operation", "normal")))
+def test_nonimplementation_calls_take_no_lease(workspace, config, phase, route):
+    repo, state = workspace
+    first = _lease_call("owner", "file0.py", "lease-active")
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    call = event(prompt=orch(task="read-only", phase=phase, route=route,
+                             scope="file0.py") + "\nInspect.", tool_use_id=f"lease-{phase}")
+    assert "updatedInput" in codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
+    assert len(_lease_state(workspace)._read()["owners"]) == 1
 
 
 def test_async_start_requires_orch_and_denies_internal_pre_error(workspace, config):
@@ -464,7 +692,8 @@ def test_async_start_requires_orch_and_denies_internal_pre_error(workspace, conf
 def test_async_start_rewrites_and_retries_same_call(workspace, config):
     repo, state = workspace
     prompt = orch(scope="file0.py", reason="repeated_failure") + "|eta=8m\nDo the work."
-    call = event(START_TOOL, prompt=prompt, call="claude-value", model="wrong", config={"model_reasoning_effort": "low"})
+    call = event(START_TOOL, prompt=prompt, call="claude-value", model="wrong",
+                 timeoutSeconds=90, config={"model_reasoning_effort": "low"})
     first = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     updated = first["hookSpecificOutput"]["updatedInput"]
     assert updated["call"] != "claude-value"
@@ -476,6 +705,8 @@ def test_async_start_rewrites_and_retries_same_call(workspace, config):
     pending = codex._read_pending(state, call)
     assert pending["async_call"] == updated["call"] and pending["job_id"] is None
     assert pending["baseline"]["status"] == ledger.OK
+    lease = _lease_state(workspace)._read()["owners"][codex._call_key(call)]
+    assert lease["retention_after"] == lease["acquired_at"] + 90 + ledger.JOB_RETENTION_SECONDS
     assert (pending["reason"], pending["eta_minutes"]) == ("repeated_failure", 8)
     assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"] == updated
     assert len([e for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_STARTED"]) == 1
@@ -517,10 +748,15 @@ def test_async_start_failure_uses_ambiguous_path_and_cancels_job(workspace, conf
     updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
     job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
     cancelled = []
-    monkeypatch.setattr(codex, "_cancel_start_job", lambda root, call_uuid, job: cancelled.append(job) or True)
     bridge_job = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
     bridge_job.parent.mkdir(parents=True)
     bridge_job.write_text(json.dumps({"jobId": job_id, "call": updated["call"]}), encoding="utf-8")
+    def confirm_cancel(root, call_uuid, job):
+        cancelled.append(job)
+        bridge_job.write_text(json.dumps({"jobId": job_id, "call": updated["call"],
+                                          "state": "CANCELLED"}), encoding="utf-8")
+        return True
+    monkeypatch.setattr(codex, "_cancel_start_job", confirm_cancel)
     if fail_store:
         write = codex._atomic_json_write
         def fail_job_write(path, value):
@@ -1200,6 +1436,8 @@ def test_missing_eta_is_recorded_as_null_and_bare_reply_does_not_inherit(workspa
     )
     assert "eta_minutes" in first_payload and first_payload["eta_minutes"] is None
 
+    codex.post_tool_use_failure({**first, "hook_event_name": "PostToolUseFailure",
+                                 "error": "fixture completed"}, state_root=state)
     save_live_thread(state)
     reply = event(codex.CODEX_REPLY_TOOL, prompt="Continue.", threadId="thread-1", tool_use_id="bare-reply")
     codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
