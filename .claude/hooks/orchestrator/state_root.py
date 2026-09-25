@@ -4,6 +4,26 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
+from typing import Callable, TypeVar
+
+
+T = TypeVar("T")
+_PERMISSION_RETRY_SECONDS = 1.0
+_PERMISSION_RETRY_INTERVAL = 0.02
+
+
+def retry_permission_error(operation: Callable[[], T]) -> T:
+    """Retry transient Windows sharing violations for at most one second."""
+    deadline = time.monotonic() + _PERMISSION_RETRY_SECONDS
+    while True:
+        try:
+            return operation()
+        except PermissionError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(_PERMISSION_RETRY_INTERVAL, remaining))
 
 
 def default_state_root() -> Path:

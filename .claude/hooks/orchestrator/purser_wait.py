@@ -21,7 +21,8 @@ def _job_record(job_id: str) -> dict[str, Any] | None:
         return None
     path = purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        text = purser_state_root.retry_permission_error(lambda: path.read_text(encoding="utf-8"))
+        value = json.loads(text)
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) and value.get("jobId") == job_id else None

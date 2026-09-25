@@ -3,6 +3,7 @@ import socket
 import sys
 import threading
 import time
+from pathlib import Path
 
 import purser_wait
 
@@ -30,6 +31,25 @@ def test_terminal_failed_job_is_non_success(tmp_path, monkeypatch, capsys):
 
     assert purser_wait.main(["failed"]) == 1
     assert capsys.readouterr().out == "purser-wait failed FAILED\n"
+
+
+def test_job_record_read_retries_transient_permission_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path))
+    write_job(tmp_path, "retry", state="SUCCEEDED")
+    original = Path.read_text
+    attempts = 0
+
+    def flaky_read(path, *args, **kwargs):
+        nonlocal attempts
+        if path.name == "retry.json" and attempts < 2:
+            attempts += 1
+            raise PermissionError(13, "sharing violation", str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read)
+    assert purser_wait.main(["retry"]) == 0
+    assert attempts == 2
+    assert capsys.readouterr().out == "purser-wait retry SUCCEEDED\n"
 
 
 def test_running_job_waits_for_listener_signal(tmp_path, monkeypatch, capsys):

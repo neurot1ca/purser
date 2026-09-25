@@ -237,7 +237,7 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
             json.dump(value, stream, ensure_ascii=False)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp, path)
+        purser_state_root.retry_permission_error(lambda: os.replace(temp, path))
     finally:
         temp.unlink(missing_ok=True)
 
@@ -484,7 +484,9 @@ class Server:
         if not isinstance(job_id, str) or not job_id or any(ch not in "0123456789abcdef" for ch in job_id):
             return None
         try:
-            value = json.loads(self._job_path(job_id).read_text(encoding="utf-8"))
+            path = self._job_path(job_id)
+            text = purser_state_root.retry_permission_error(lambda: path.read_text(encoding="utf-8"))
+            value = json.loads(text)
             return value if value.get("jobId") == job_id else None
         except (OSError, ValueError, AttributeError):
             return None

@@ -25,6 +25,12 @@ import codex
 import codex_exec_mcp
 
 
+def read_job_record(path):
+    text = codex_exec_mcp.purser_state_root.retry_permission_error(
+        lambda: path.read_text(encoding="utf-8"))
+    return json.loads(text)
+
+
 FAKE = r'''
 import json
 import os
@@ -62,6 +68,7 @@ def area():
     try:
         yield path
     finally:
+        _stop_area_hosts(path)
         for attempt in range(20):
             try:
                 shutil.rmtree(path)
@@ -70,6 +77,82 @@ def area():
                 if attempt == 19:
                     raise
                 time.sleep(0.05)
+
+
+def _stop_area_hosts(area):
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    if not jobs.is_dir():
+        return
+    for job_path in jobs.glob("*.json"):
+        stop_at = time.monotonic() + 0.5
+        deadline = stop_at + 1.0
+        pid = None
+        while time.monotonic() < deadline:
+            try:
+                record = json.loads(job_path.read_text(encoding="utf-8"))
+                pid = record.get("hostPid")
+            except PermissionError:
+                time.sleep(0.02)
+                continue
+            except (OSError, ValueError):
+                break
+            if not isinstance(pid, int) or pid <= 0 or (os.name == "nt" and windows_process_exited(pid)):
+                break
+            if os.name != "nt":
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                except PermissionError:
+                    pass
+            if time.monotonic() >= stop_at:
+                try:
+                    os.kill(pid, 9)
+                except (OSError, ProcessLookupError):
+                    pass
+            time.sleep(0.02)
+
+
+def test_job_read_retries_transient_permission_error(area, monkeypatch):
+    job_id = "a" * 64
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    path = jobs / f"{job_id}.json"
+    path.write_text(json.dumps({"jobId": job_id, "state": "RUNNING"}), encoding="utf-8")
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    original = Path.read_text
+    attempts = 0
+
+    def flaky_read(target, *args, **kwargs):
+        nonlocal attempts
+        if target == path and attempts < 2:
+            attempts += 1
+            raise PermissionError(13, "sharing violation", str(path))
+        return original(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read)
+    assert server._read_job(job_id)["state"] == "RUNNING"
+    assert attempts == 2
+
+
+def test_atomic_job_write_retries_transient_replace_permission_error(area, monkeypatch):
+    job_id = "b" * 64
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    path = jobs / f"{job_id}.json"
+    original = codex_exec_mcp.os.replace
+    attempts = 0
+
+    def flaky_replace(source, target):
+        nonlocal attempts
+        if target == path and attempts < 2:
+            attempts += 1
+            raise PermissionError(13, "sharing violation", str(path))
+        return original(source, target)
+
+    monkeypatch.setattr(codex_exec_mcp.os, "replace", flaky_replace)
+    codex_exec_mcp._atomic_json(path, {"jobId": job_id, "state": "RUNNING"})
+    assert attempts == 2
+    assert read_job_record(path)["state"] == "RUNNING"
 
 
 class Client:
@@ -363,7 +446,7 @@ def test_async_start_result_idempotency_and_sync(area):
         assert started["state"] == "RUNNING" and started["acceptedAt"] < started["deadlineAt"]
         assert job_call(client, "codex_result", {"jobId": started["jobId"]})["state"] == "RUNNING"
         assert job_call(client, "codex_start", {"call": key, "prompt": "slow"})["jobId"] == started["jobId"]
-        record = json.loads((area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")).read_text(encoding="utf-8"))
+        record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
         with socket.create_connection(("127.0.0.1", record["signalPort"]), timeout=4) as signal_connection:
             signal_connection.sendall(f"{started['jobId']}:{record['signalToken']}".encode("ascii"))
             assert signal_connection.recv(1) == b"1"
@@ -398,7 +481,7 @@ def test_async_local_cancel_signal(area):
     client = Client(area, extra_env={"FAKE_SLOW": "1"})
     try:
         job = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "cancel"})
-        record = json.loads((area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json")).read_text(encoding="utf-8"))
+        record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json"))
         with socket.create_connection(("127.0.0.1", record["signalPort"]), timeout=4) as connection:
             connection.sendall(f"{job['jobId']}:{record['signalToken']}:CANCEL".encode("ascii"))
             assert connection.recv(1) == b"1"
@@ -434,12 +517,13 @@ def test_async_host_ack_duplicate_restart_and_payload_removal(area):
     try:
         started = job_call(first, "codex_start", {"call": key, "prompt": "private slow prompt"})
         path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
-        record = json.loads(path.read_text(encoding="utf-8"))
+        record = read_job_record(path)
         assert record["state"] == "RUNNING" and record["hostPid"] > 0
         if os.name == "nt":
             assert windows_parent_pid(record["hostPid"]) != first.process.pid
         assert not (path.parent / (started["jobId"] + ".launch")).exists()
-        assert "private slow prompt" not in path.read_text(encoding="utf-8")
+        assert "private slow prompt" not in codex_exec_mcp.purser_state_root.retry_permission_error(
+            lambda: path.read_text(encoding="utf-8"))
         kill_bridge_tree(first)
         second = Client(area)
         try:
@@ -469,10 +553,10 @@ def test_async_cancel_from_replacement_bridge_confirms_child_exit(area):
         started = job_call(first, "codex_start", {"call": str(uuid.uuid4()), "prompt": "cancel after restart"})
         path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
         deadline = time.monotonic() + 3
-        record = json.loads(path.read_text(encoding="utf-8"))
+        record = read_job_record(path)
         while "pid" not in record and time.monotonic() < deadline:
             time.sleep(0.01)
-            record = json.loads(path.read_text(encoding="utf-8"))
+            record = read_job_record(path)
         assert record["pid"] > 0
         kill_bridge_tree(first)
 
@@ -492,7 +576,7 @@ def test_async_cancel_from_replacement_bridge_confirms_child_exit(area):
         if first.process.poll() is None:
             first.close()
         try:
-            record = json.loads(path.read_text(encoding="utf-8"))
+            record = read_job_record(path)
             if record.get("state") not in codex_exec_mcp.TERMINAL and record.get("hostPid"):
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/T", "/F", "/PID", str(record["hostPid"])],
@@ -526,7 +610,7 @@ def test_async_dead_host_without_output_is_unconfirmed(area):
         path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
         deadline = time.monotonic() + 2
         while True:
-            record = json.loads(path.read_text(encoding="utf-8"))
+            record = read_job_record(path)
             if "pid" in record or time.monotonic() >= deadline:
                 break
             time.sleep(0.01)
