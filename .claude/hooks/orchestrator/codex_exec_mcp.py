@@ -4,15 +4,14 @@ For test harnesses, PURSER_CODEX_BIN may be a JSON argv prefix such as
 ``["C:/Python/python.exe", "C:/path/fake_codex.py"]``. A plain value is a
 single executable path. This override is never parsed through a shell.
 
-Async completion uses a loopback TCP listener. A separate waiter can connect
-with the job's stored signal token and block on recv(); the bridge writes the
-terminal record before sending a byte. TCP sockets work on Windows and POSIX
-with the standard library; a dead bridge closes the connection visibly.
+Each async job has a detached host with a token-checked loopback listener. The
+host writes terminal output and state before notifying connected waiters.
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import math
@@ -27,6 +26,9 @@ import threading
 import time
 from typing import Any
 import uuid
+
+if os.name == "nt":
+    from ctypes import wintypes
 
 import state_root as purser_state_root
 
@@ -80,6 +82,132 @@ TOOL_SCHEMAS += [
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS"}
 RETENTION_SECONDS = 7 * 24 * 60 * 60
+
+
+def _launch_host(job_dir: Path, job_id: str) -> None:
+    command = [sys.executable, str(Path(__file__).resolve()), "--host-job", job_id,
+               "--host-job-dir", str(job_dir)]
+    if os.name != "nt":
+        subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        return
+    # A detached process group alone still has the bridge as its recorded
+    # parent, and taskkill /T can follow that ancestry. Give the host the
+    # desktop shell as its recorded parent via STARTUPINFOEX. Fail closed if
+    # there is no accessible shell or job breakaway is denied.
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetShellWindow.restype = wintypes.HWND
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.InitializeProcThreadAttributeList.argtypes = [ctypes.c_void_p, wintypes.DWORD,
+                                                          wintypes.DWORD, ctypes.POINTER(ctypes.c_size_t)]
+    kernel.UpdateProcThreadAttribute.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.c_size_t,
+                                                  ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+                                                  ctypes.c_void_p]
+    kernel.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+    shell_window = user.GetShellWindow()
+    shell_pid = wintypes.DWORD()
+    user.GetWindowThreadProcessId(wintypes.HWND(shell_window), ctypes.byref(shell_pid))
+    if not shell_pid.value and os.environ.get("PURSER_CODEX_TEST_PARENT_PID"):
+        # Headless test harnesses have no Explorer shell. The harness process
+        # is outside the bridge tree and exercises the same parent attribute.
+        shell_pid.value = int(os.environ["PURSER_CODEX_TEST_PARENT_PID"])
+    if not shell_pid.value:
+        raise OSError("desktop shell parent unavailable")
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    parent = kernel.OpenProcess(0x0080, False, shell_pid.value)  # PROCESS_CREATE_PROCESS
+    if not parent:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    class STARTUPINFO(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("lpReserved", wintypes.LPWSTR),
+                    ("lpDesktop", wintypes.LPWSTR), ("lpTitle", wintypes.LPWSTR),
+                    ("dwX", wintypes.DWORD), ("dwY", wintypes.DWORD),
+                    ("dwXSize", wintypes.DWORD), ("dwYSize", wintypes.DWORD),
+                    ("dwXCountChars", wintypes.DWORD), ("dwYCountChars", wintypes.DWORD),
+                    ("dwFillAttribute", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                    ("wShowWindow", wintypes.WORD), ("cbReserved2", wintypes.WORD),
+                    ("lpReserved2", ctypes.c_void_p), ("hStdInput", wintypes.HANDLE),
+                    ("hStdOutput", wintypes.HANDLE), ("hStdError", wintypes.HANDLE)]
+
+    class STARTUPINFOEX(ctypes.Structure):
+        _fields_ = [("StartupInfo", STARTUPINFO), ("lpAttributeList", ctypes.c_void_p)]
+
+    class PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [("hProcess", wintypes.HANDLE), ("hThread", wintypes.HANDLE),
+                    ("dwProcessId", wintypes.DWORD), ("dwThreadId", wintypes.DWORD)]
+
+    size = ctypes.c_size_t()
+    kernel.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+    attributes = ctypes.create_string_buffer(size.value)
+    try:
+        if not kernel.InitializeProcThreadAttributeList(attributes, 1, 0, ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            parent_value = wintypes.HANDLE(parent)
+            if not kernel.UpdateProcThreadAttribute(attributes, 0, 0x00020000,
+                                                    ctypes.byref(parent_value), ctypes.sizeof(parent_value), None, None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            startup = STARTUPINFOEX()
+            startup.StartupInfo.cb = ctypes.sizeof(startup)
+            startup.lpAttributeList = ctypes.cast(attributes, ctypes.c_void_p)
+            info = PROCESS_INFORMATION()
+            line = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
+            flags = 0x00080000 | 0x01000000 | 0x00000200 | 0x00000008  # EXTENDED, BREAKAWAY, GROUP, DETACHED
+            kernel.CreateProcessW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.c_void_p,
+                                               ctypes.c_void_p, wintypes.BOOL, wintypes.DWORD,
+                                               ctypes.c_void_p, wintypes.LPCWSTR, ctypes.c_void_p,
+                                               ctypes.POINTER(PROCESS_INFORMATION)]
+            if not kernel.CreateProcessW(sys.executable, line, None, None, False, flags,
+                                         None, str(Path.cwd()), ctypes.byref(startup), ctypes.byref(info)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            kernel.CloseHandle(info.hThread)
+            kernel.CloseHandle(info.hProcess)
+        finally:
+            kernel.DeleteProcThreadAttributeList(attributes)
+    finally:
+        kernel.CloseHandle(parent)
+
+
+def _contain_host_children() -> Any:
+    if os.name != "nt":
+        return None
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    class BASIC_LIMIT(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class EXTENDED_LIMIT(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", BASIC_LIMIT), ("IoInformation", ctypes.c_uint64 * 6),
+                    ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    kernel.CreateJobObjectW.restype = wintypes.HANDLE
+    handle = kernel.CreateJobObjectW(None, None)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        limits = EXTENDED_LIMIT()
+        limits.BasicLimitInformation.LimitFlags = 0x00002000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel.SetInformationJobObject(handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not kernel.AssignProcessToJobObject(handle, kernel.GetCurrentProcess()):
+            raise ctypes.WinError(ctypes.get_last_error())
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+    return handle  # Keep open until host exits; Codex descendants inherit the job.
 
 
 def _job_result(value: dict[str, Any]) -> dict[str, Any]:
@@ -238,17 +366,21 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
 
 
 class Server:
-    def __init__(self, codex_bin: str | None = None) -> None:
+    def __init__(self, codex_bin: str | None = None, *, host: bool = False,
+                 job_dir: Path | None = None) -> None:
         self.codex_bin = codex_bin
         self.state_dir = _state_dir()
         self.write_lock = threading.Lock()
         self.jobs_lock = threading.Lock()
         self.jobs: dict[Any, subprocess.Popen[bytes] | None] = {}
         self.cancelled: set[Any] = set()
-        self.job_dir = purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs"
+        self.job_dir = job_dir or purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs"
         self.job_processes: dict[str, subprocess.Popen[bytes]] = {}
         self.job_events: dict[str, threading.Event] = {}
+        self.started_jobs: set[str] = set()
         self.listener = None
+        if not host:
+            return
         try:
             self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.listener.bind(("127.0.0.1", 0))
@@ -282,6 +414,8 @@ class Server:
                     if identity[2] == "CANCEL":
                         cancelled = self._cancel_job({"jobId": identity[0]})
                         connection.sendall(b"1" if cancelled.get("structuredContent", {}).get("state") == "CANCELLED" else b"0")
+                    elif identity[2] == "PING":
+                        connection.sendall(b"1")
                     return
                 event = self.job_events.get(identity[0])
                 if event is None:
@@ -306,6 +440,33 @@ class Server:
 
     def _write_job(self, job: dict[str, Any]) -> None:
         _atomic_json(self._job_path(job["jobId"]), job)
+
+    def _host_alive(self, job: dict[str, Any]) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=0.5) as connection:
+                connection.settimeout(0.5)
+                connection.sendall(f'{job["jobId"]}:{job["signalToken"]}:PING'.encode("ascii"))
+                return connection.recv(1) == b"1"
+        except (OSError, KeyError, TypeError, ValueError):
+            return False
+
+    def _await_host(self, job_id: str) -> dict[str, Any]:
+        until = time.monotonic() + 10
+        while time.monotonic() < until:
+            job = self._read_job(job_id)
+            if job is not None and job.get("state") == "RUNNING" and self._host_alive(job):
+                self.started_jobs.add(job_id)
+                return _job_result({key: job[key] for key in ("jobId", "state", "acceptedAt", "deadlineAt")})
+            if job is not None and job.get("state") in TERMINAL - {"UNKNOWN_OR_IN_PROGRESS"}:
+                self.started_jobs.add(job_id)
+                return _job_result({**{key: job[key] for key in ("jobId", "acceptedAt", "deadlineAt")},
+                                    "state": "RUNNING"})
+            if job is not None and job.get("state") == "UNKNOWN_OR_IN_PROGRESS":
+                return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
+                                    "errorCode": "PROCESS_UNCONFIRMED", "message": "Host ownership or child state unconfirmed"})
+            time.sleep(0.02)
+        return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
+                            "errorCode": "PROCESS_UNCONFIRMED", "message": "Host ownership was not acknowledged"})
 
     def _finish_job(self, job_id: str, state: str, code: str | None = None,
                     result: dict[str, Any] | None = None) -> None:
@@ -356,11 +517,12 @@ class Server:
             uuid.UUID(call)
         except (ValueError, TypeError):
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "call must be a UUID"})
+        job_id = hashlib.sha256(call.encode("utf-8")).hexdigest()
+        if self._read_job(job_id) is not None:
+            return self._await_host(job_id)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "timeoutSeconds must be positive"})
         mode = args.get("mode", "new")
-        if self.listener is None:
-            return _job_result({"state": "FAILED", "errorCode": "SIGNAL_UNAVAILABLE", "message": "Async completion signal unavailable"})
         if mode not in ("new", "reply"):
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "invalid mode"})
         name = "codex-reply" if mode == "reply" else "codex"
@@ -383,34 +545,39 @@ class Server:
                         raise ValueError("invalid " + field)
         except (OSError, ValueError, TypeError):
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "Invalid Codex launch arguments"})
-        job_id = hashlib.sha256(call.encode("utf-8")).hexdigest()
         with self.jobs_lock:
             existing = self._read_job(job_id)
             if existing is not None:
-                return _job_result({key: existing[key] for key in ("jobId", "state", "acceptedAt", "deadlineAt")})
-            if mode == "reply" and (not isinstance(args.get("threadId"), str) or
-                                    _load_record(self.state_dir, args["threadId"]) is None):
-                return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
-            now = time.time()
-            job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
-                   "deadlineAt": now + timeout, "owner": os.getpid(),
-                   "signalPort": self.listener.getsockname()[1], "signalToken": uuid.uuid4().hex}
-            self.job_dir.mkdir(parents=True, exist_ok=True)
-            if os.name != "nt":
-                os.chmod(self.job_dir, 0o700)
-            reservation = self.job_dir / (job_id + ".lock")
-            try:
-                reservation.mkdir()
-            except FileExistsError:
-                existing = self._read_job(job_id)
-                return _job_result({"jobId": job_id, "state": existing["state"] if existing else "UNKNOWN_OR_IN_PROGRESS"})
-            try:
-                self._write_job(job)
-            finally:
-                reservation.rmdir()
-            self.job_events[job_id] = threading.Event()
-            threading.Thread(target=self._job_worker, args=(job_id, name, args), daemon=True).start()
-        return _job_result({"jobId": job_id, "state": "RUNNING", "acceptedAt": now, "deadlineAt": now + timeout})
+                pass
+            else:
+                if mode == "reply" and (not isinstance(args.get("threadId"), str) or
+                                        _load_record(self.state_dir, args["threadId"]) is None):
+                    return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
+                now = time.time()
+                job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
+                       "deadlineAt": now + timeout, "signalToken": uuid.uuid4().hex}
+                self.job_dir.mkdir(parents=True, exist_ok=True)
+                if os.name != "nt":
+                    os.chmod(self.job_dir, 0o700)
+                reservation = self.job_dir / (job_id + ".lock")
+                try:
+                    reservation.mkdir()
+                except FileExistsError:
+                    existing = self._read_job(job_id)
+                else:
+                    # Claim persists even if the launching bridge dies. A later
+                    # bridge can observe but never start this call a second time.
+                    _atomic_json(self.job_dir / (job_id + ".launch"),
+                                 {"name": name, "args": args, "codexBin": self.codex_bin})
+                    self._write_job(job)
+                    try:
+                        _launch_host(self.job_dir, job_id)
+                    except OSError as exc:
+                        print(f"Codex host launch failed: {exc}", file=sys.stderr, flush=True)
+                        (self.job_dir / (job_id + ".launch")).unlink(missing_ok=True)
+                        return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
+                                            "errorCode": "PROCESS_UNCONFIRMED", "message": "Host launch unconfirmed"})
+        return self._await_host(job_id)
 
     def _job_worker(self, job_id: str, name: str, args: dict[str, Any]) -> None:
         try:
@@ -443,10 +610,11 @@ class Server:
                 job.update(state="EXPIRED", errorCode="JOB_EXPIRED", message="Job record expired")
                 self._write_job(job)
             return _job_result({"jobId": job["jobId"], "state": "FAILED", "errorCode": "JOB_EXPIRED", "message": "Job record expired"})
-        if state not in TERMINAL and job["jobId"] not in self.job_events:
+        if state not in TERMINAL and not self._host_alive(job):
+            # A dead host can leave a child whose termination is unproved.
+            # Do not finalize this observation or permit a relaunch.
             state = "UNKNOWN_OR_IN_PROGRESS"
-            job.update(state=state, finishedAt=time.time(), errorCode="PROCESS_UNCONFIRMED", message="Process state cannot be confirmed")
-            self._write_job(job)
+            job = {**job, "errorCode": "PROCESS_UNCONFIRMED", "message": "Process state cannot be confirmed"}
         value = {"jobId": job["jobId"], "state": "RUNNING" if state == "QUEUED" else state}
         if state == "SUCCEEDED":
             try:
@@ -462,6 +630,20 @@ class Server:
         if job is None:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
+        if self.listener is None:
+            # Milestone 1 retains cancellation for jobs started by this bridge.
+            # Cancellation through a replacement bridge belongs to milestone 2.
+            if job_id not in self.started_jobs:
+                return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
+                                    "errorCode": "PROCESS_UNCONFIRMED", "message": "Cancellation ownership unavailable"})
+            try:
+                with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=5) as connection:
+                    connection.settimeout(7)
+                    connection.sendall(f'{job_id}:{job["signalToken"]}:CANCEL'.encode("ascii"))
+                    connection.recv(1)
+            except (OSError, KeyError):
+                pass
+            return self._result_job({"jobId": job_id})
         with self.jobs_lock:
             self.cancelled.add(job_id)
             process = self.job_processes.get(job_id)
@@ -683,12 +865,61 @@ class Server:
         self.send({"jsonrpc": "2.0", "id": request_id, "result": result})
 
 
+def _host_main(job_id: str, job_dir: Path | None) -> None:
+    if job_dir is None or len(job_id) != 64 or any(ch not in "0123456789abcdef" for ch in job_id):
+        return
+    server = Server(host=True, job_dir=job_dir)
+    launch_path = job_dir / (job_id + ".launch")
+    try:
+        if server.listener is None:
+            raise OSError("host signal listener unavailable")
+        claim = job_dir / (job_id + ".host-claim")
+        try:
+            claim.mkdir()  # Exclusive and durable: no second host may own this job.
+        except FileExistsError:
+            return
+        containment = _contain_host_children()
+        try:
+            launch = json.loads(launch_path.read_text(encoding="utf-8"))
+        finally:
+            launch_path.unlink(missing_ok=True)
+        job = server._read_job(job_id)
+        if job is None or job.get("state") != "QUEUED":
+            raise ValueError("job record is not queued")
+        server.codex_bin = launch["codexBin"]
+        server.job_events[job_id] = threading.Event()
+        job.update(hostPid=os.getpid(), signalPort=server.listener.getsockname()[1])
+        server._write_job(job)
+        server._job_worker(job_id, launch["name"], launch["args"])
+        # Let connected signal clients receive the terminal notification.
+        time.sleep(0.2)
+        # The host exit closes its job handle after Codex and its descendants
+        # have already exited. A forced host death closes it in the kernel.
+        _ = containment
+    except BaseException as exc:
+        launch_path.unlink(missing_ok=True)
+        try:
+            job = server._read_job(job_id)
+            if job is not None and job.get("state") not in TERMINAL:
+                job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=time.time(),
+                           errorCode="PROCESS_UNCONFIRMED", message="Host ownership or child state unconfirmed")
+                server._write_job(job)
+            (job_dir / (job_id + ".host-error")).write_text(str(exc)[:500], encoding="utf-8")
+        except OSError:
+            pass
+
+
 def main() -> None:
-    sys.stdin.reconfigure(encoding="utf-8")
-    sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codex-bin", help="Codex binary path (or JSON argv prefix for test harnesses)")
+    parser.add_argument("--host-job", help=argparse.SUPPRESS)
+    parser.add_argument("--host-job-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.host_job:
+        _host_main(args.host_job, args.host_job_dir)
+        return
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     server = Server(args.codex_bin)
     for line in sys.stdin:
         try:

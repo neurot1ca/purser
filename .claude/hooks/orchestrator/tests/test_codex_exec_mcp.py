@@ -1,6 +1,7 @@
 """Focused protocol tests; the real Codex executable is never launched."""
 
 import importlib.util
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -38,7 +39,7 @@ with open(os.environ["FAKE_RECORD"], "a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\n")
     stream.flush()
 if os.environ.get("FAKE_SLOW") == "1":
-    time.sleep(2)
+    time.sleep(float(os.environ.get("FAKE_SLEEP_SECONDS", "2")))
 thread = os.environ.get("FAKE_THREAD", "thread-123")
 print(json.dumps({"type": "thread.started", "thread_id": thread}), flush=True)
 print(json.dumps({"type": "turn.started"}), flush=True)
@@ -61,7 +62,14 @@ def area():
     try:
         yield path
     finally:
-        shutil.rmtree(path)
+        for attempt in range(20):
+            try:
+                shutil.rmtree(path)
+                break
+            except OSError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
 
 
 class Client:
@@ -70,13 +78,15 @@ class Client:
         fake.write_text(FAKE, encoding="utf-8")
         self.record = area / "calls.jsonl"
         env = os.environ.copy()
-        env.update({"PURSER_CODEX_SHIM_STATE": str(area / "state"), "PURSER_STATE_DIR": str(area / "root"), "FAKE_RECORD": str(self.record)})
+        env.update({"PURSER_CODEX_SHIM_STATE": str(area / "state"), "PURSER_STATE_DIR": str(area / "root"),
+                    "PURSER_CODEX_TEST_PARENT_PID": str(os.getpid()), "FAKE_RECORD": str(self.record)})
         env.update(extra_env or {})
         override = bin_override if bin_override is not None else json.dumps([sys.executable, str(fake)])
         self.process = subprocess.Popen(
             [sys.executable, "-u", str(SCRIPT), "--codex-bin", override],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", env=env,
+            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}),
         )
         self.messages = queue.Queue()
         self.reader = threading.Thread(target=self._read, daemon=True)
@@ -277,6 +287,66 @@ def finish(client, job_id, wanted):
     pytest.fail(f"expected {wanted}, got {result}")
 
 
+def kill_bridge_tree(client):
+    if os.name == "nt":
+        killed = subprocess.run(["taskkill", "/T", "/F", "/PID", str(client.process.pid)],
+                                capture_output=True, text=True, check=False)
+        if killed.returncode != 0:
+            # The restricted test runner denies taskkill; direct kill still
+            # tests bridge loss. The parent check below proves host ancestry.
+            assert "Access denied" in killed.stderr
+            client.process.kill()
+    else:
+        os.killpg(client.process.pid, 9)
+    client.process.wait(timeout=5)
+
+
+def windows_parent_pid(pid):
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class ENTRY(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_void_p),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ENTRY)]
+    kernel.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ENTRY)]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    snapshot = kernel.CreateToolhelp32Snapshot(2, 0)
+    assert snapshot != wintypes.HANDLE(-1).value
+    try:
+        entry = ENTRY()
+        entry.dwSize = ctypes.sizeof(entry)
+        found = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+        while found:
+            if entry.th32ProcessID == pid:
+                return entry.th32ParentProcessID
+            found = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel.CloseHandle(snapshot)
+    pytest.fail(f"process {pid} not found")
+
+
+def windows_process_exited(pid):
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        return True
+    try:
+        return kernel.WaitForSingleObject(handle, 0) == 0
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def test_async_start_result_idempotency_and_sync(area):
     client = Client(area, extra_env={"FAKE_SLOW": "1"})
     try:
@@ -338,13 +408,85 @@ def test_async_reply_and_restart_reconciliation(area):
         assert finish(client, reply["jobId"], "SUCCEEDED")["threadId"] == "thread-123"
         assert client.calls()[1]["argv"][:2] == ["exec", "resume"]
         pending = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "pending"})
-        client.process.kill()
-        client.process.wait()
+        kill_bridge_tree(client)
         restarted = Client(area)
         try:
-            assert job_call(restarted, "codex_result", {"jobId": pending["jobId"]})["state"] == "UNKNOWN_OR_IN_PROGRESS"
+            assert job_call(restarted, "codex_result", {"jobId": pending["jobId"]})["state"] == "RUNNING"
+            assert finish(restarted, pending["jobId"], "SUCCEEDED")["content"] == "Reply from fake Codex"
         finally:
             restarted.close()
     finally:
         if client.process.poll() is None:
             client.close()
+
+
+def test_async_host_ack_duplicate_restart_and_payload_removal(area):
+    first = Client(area, extra_env={"FAKE_SLOW": "1", "FAKE_SLEEP_SECONDS": "4"})
+    key = str(uuid.uuid4())
+    try:
+        started = job_call(first, "codex_start", {"call": key, "prompt": "private slow prompt"})
+        path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert record["state"] == "RUNNING" and record["hostPid"] > 0
+        if os.name == "nt":
+            assert windows_parent_pid(record["hostPid"]) != first.process.pid
+        assert not (path.parent / (started["jobId"] + ".launch")).exists()
+        assert "private slow prompt" not in path.read_text(encoding="utf-8")
+        kill_bridge_tree(first)
+        second = Client(area)
+        try:
+            assert job_call(second, "codex_result", {"jobId": started["jobId"]})["state"] == "RUNNING"
+            duplicate = job_call(second, "codex_start", {"call": key, "prompt": "private slow prompt"})
+            assert duplicate["jobId"] == started["jobId"]
+            kill_bridge_tree(second)
+            third = Client(area)
+            try:
+                assert job_call(third, "codex_result", {"jobId": started["jobId"]})["state"] == "RUNNING"
+                result = finish(third, started["jobId"], "SUCCEEDED")
+                assert (result["threadId"], result["content"]) == ("thread-123", "Reply from fake Codex")
+                assert len(third.calls()) == 1
+            finally:
+                third.close()
+        finally:
+            if second.process.poll() is None:
+                second.close()
+    finally:
+        if first.process.poll() is None:
+            first.close()
+
+
+def test_async_dead_host_without_output_is_unconfirmed(area):
+    first = Client(area, extra_env={"FAKE_SLOW": "1"})
+    try:
+        started = job_call(first, "codex_start", {"call": str(uuid.uuid4()), "prompt": "slow"})
+        path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
+        deadline = time.monotonic() + 2
+        while True:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if "pid" in record or time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
+        assert record["hostPid"] > 0
+        assert record["pid"] > 0
+        os.kill(record["hostPid"], 9)
+        if os.name == "nt":
+            deadline = time.monotonic() + 2
+            while not windows_process_exited(record["pid"]) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert windows_process_exited(record["pid"])
+        else:
+            os.killpg(record["pid"], 9)
+        second = Client(area)
+        try:
+            deadline = time.monotonic() + 3
+            while True:
+                result = job_call(second, "codex_result", {"jobId": started["jobId"]})
+                if result["state"] == "UNKNOWN_OR_IN_PROGRESS" or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.02)
+            assert result["state"] == "UNKNOWN_OR_IN_PROGRESS"
+            assert result["errorCode"] == "PROCESS_UNCONFIRMED"
+        finally:
+            second.close()
+    finally:
+        first.close()
