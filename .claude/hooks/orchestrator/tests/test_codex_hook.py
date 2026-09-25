@@ -999,6 +999,7 @@ def test_eta_is_recorded_from_orch_through_finished_duration(workspace, config):
         assert payload["eta_minutes"] == 23
     finished = next(item["payload"] for item in events if item["event_type"] == "IMPLEMENTER_FINISHED")
     assert finished["duration_ms"] == 1250
+    assert finished["route"] == "normal"
 
 
 @pytest.mark.parametrize("eta", ["eta", "eta=5", "eta=", "eta=0m", "eta=601m", "eta=1.5m", "eta=2h", "eta= 3m", "eta=+3m"])

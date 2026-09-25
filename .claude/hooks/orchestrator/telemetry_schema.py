@@ -29,6 +29,7 @@ EVENT_TYPES = frozenset(
         "TELEMETRY_WARNING",
         "CLAUDE_TASK_USAGE_RECORDED",
         "CONTEXT_IO_TURN_RECORDED",
+        "CODEX_RESULT_UNFETCHED",
     }
 )
 
@@ -207,6 +208,7 @@ _PAYLOAD_FIELDS = {
     "IMPLEMENTER_FINISHED": frozenset(
         {
             "duration_ms",
+            "route",
             "changed_paths_count",
             "validation",
             "thread_id",
@@ -258,6 +260,7 @@ _PAYLOAD_FIELDS = {
     "TELEMETRY_WARNING": frozenset({"warning_code"}),
     "CLAUDE_TASK_USAGE_RECORDED": CLAUDE_TASK_USAGE_PAYLOAD_FIELDS,
     "CONTEXT_IO_TURN_RECORDED": CONTEXT_IO_PAYLOAD_FIELDS,
+    "CODEX_RESULT_UNFETCHED": frozenset({"route", "code"}),
 }
 
 

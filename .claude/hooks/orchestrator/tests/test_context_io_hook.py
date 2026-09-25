@@ -55,6 +55,30 @@ def test_context_io_hook_reads_utf8_with_cp1254_wrapper(monkeypatch):
     assert output_raw.getvalue() == b""
 
 
+def test_session_start_appends_duration_hint_and_runs_cleanup(monkeypatch, tmp_path):
+    payload = {"hook_event_name": "SessionStart", "cwd": str(tmp_path)}
+    input_raw = io.BytesIO(json.dumps(payload).encode("utf-8"))
+    output_raw = io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(context_io_hook.project_root, "project_key", lambda _root: "project-key")
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: "restored context")
+    monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: tmp_path / "state")
+    cleaned = []
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "cleanup_jobs", lambda root: cleaned.append(root))
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint",
+                        lambda root, key: "Purser: typical Codex durations here (median/p90, n): mechanical 2/6 min (n=41).")
+
+    assert context_io_hook.main() == 0
+    result = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]
+    assert result["additionalContext"] == (
+        "restored context\nPurser: typical Codex durations here (median/p90, n): mechanical 2/6 min (n=41)."
+    )
+    assert cleaned == [tmp_path / "state"]
+
+
 def test_user_prompt_adds_recorded_non_english_reply_language(monkeypatch, tmp_path):
     actual = _run_user_prompt_hook(
         monkeypatch, tmp_path,

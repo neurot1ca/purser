@@ -9,9 +9,11 @@ import time
 from typing import Any
 
 import context_io_telemetry
+import async_session_maintenance
 import compaction_advisor
 import project_profile
 import project_root
+import state_root
 
 
 def main() -> int:
@@ -71,7 +73,22 @@ def main() -> int:
                     pass
             elif value.get("hook_event_name") == "SessionStart":
                 try:
+                    try:
+                        async_session_maintenance.cleanup_jobs(state_root.default_state_root())
+                    except BaseException:
+                        pass
                     additional_context = compaction_advisor.restore(value, repository)
+                    try:
+                        if repository is not None:
+                            hint = async_session_maintenance.duration_hint(
+                                state_root.default_state_root(), project_root.project_key(repository)
+                            )
+                            if hint:
+                                additional_context = "\n".join(
+                                    part for part in (additional_context, hint) if part
+                                )
+                    except BaseException:
+                        pass
                     if additional_context:
                         output = {
                             "hookSpecificOutput": {
