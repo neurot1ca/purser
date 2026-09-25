@@ -4,7 +4,7 @@ allowed-tools: Bash(python *)
 ---
 
 1. Run `python "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/purser_init.py" --detect --json` in the current project. Show which agents are installed and the current roles, trust, and profile state.
-2. Tell the user that Claude Code is the orchestrator. Ask them to choose the coding agent, Codex or Claude, and show which of those are installed.
+2. Tell the user in one sentence, in bold, that Purser learns as it works in this project: it measures how long Codex jobs really take and corrects its estimates. Then tell the user that Claude Code is the orchestrator. Ask them to choose the coding agent, Codex or Claude, and show which of those are installed.
 3. Ask whether another agent is available. If `agy` is detected, ask whether to use it as the independent reviewer. Otherwise choose `reviewer = "none"`. Explain: without an independent reviewer, every delegated call gets FULL review.
 4. Ask whether to trust the current project and whether to scaffold `.orchestrator/profile.toml`.
 5. Run `python "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/purser_init.py" --plan --coder X --reviewer Y` with `--trust` and `--scaffold-profile` only if chosen. Show the entire plan. Ask for explicit yes to this exact plan. Only after that yes, run the same options with `--apply` instead of `--plan`.
