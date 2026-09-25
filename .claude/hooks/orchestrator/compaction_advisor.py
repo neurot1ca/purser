@@ -267,16 +267,16 @@ def _empty_handoff(content: str) -> bool:
 
 
 def restore(payload: Mapping[str, Any], repository: Path | None) -> str | None:
-    """Return a bounded historical handoff for an eligible SessionStart."""
+    """Restore handoff context after compaction/clear or a recent startup."""
     if not _settings()["enabled"] or repository is None:
         return None
     source = payload.get("source")
-    if not isinstance(source, str) or source not in {"compact", "clear", "startup", "resume"}:
+    if not isinstance(source, str) or source not in {"compact", "clear", "startup"}:
         return None
     path = handoff_path(repository)
     try:
         stat = path.stat()
-        if source in {"startup", "resume"}:
+        if source == "startup":
             age = time.time() - stat.st_mtime
             if age < 0 or age >= HANDOFF_MAX_AGE_SECONDS:
                 return None

@@ -299,7 +299,7 @@ def test_restore_omits_user_language_instruction_for_placeholder_or_missing_line
     assert "Reply to the user in" not in restored
 
 
-def test_restore_startup_and_resume_require_recent_mtime(setup):
+def test_restore_startup_requires_recent_mtime_but_resume_is_ignored(setup):
     repo, _local, _scratch = setup
     path = advisor.handoff_path(repo)
     path.parent.mkdir(parents=True)
@@ -307,7 +307,7 @@ def test_restore_startup_and_resume_require_recent_mtime(setup):
     now = advisor.time.time()
     os.utime(path, (now - 11 * 60 * 60, now - 11 * 60 * 60))
     assert advisor.restore({"source": "startup"}, repo)
-    assert advisor.restore({"source": "resume"}, repo)
+    assert advisor.restore({"source": "resume"}, repo) is None
     os.utime(path, (now - 12 * 60 * 60, now - 12 * 60 * 60))
     assert advisor.restore({"source": "startup"}, repo) is None
     os.utime(path, (now - 13 * 60 * 60, now - 13 * 60 * 60))
@@ -392,9 +392,17 @@ def test_session_start_hook_emits_utf8_json_only_when_restore_returns_text(monke
         "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "özel handoff"}
     }
 
-    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: (_ for _ in ()).throw(RuntimeError("restore failed")))
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: None)
+    payload["source"] = "resume"
     input_raw2, output_raw2 = io.BytesIO(json.dumps(payload).encode("utf-8")), io.BytesIO()
     monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw2, encoding="cp1254"))
     monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw2, encoding="cp1254"))
     assert context_io_hook.main() == 0
     assert output_raw2.getvalue() == b""
+
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: (_ for _ in ()).throw(RuntimeError("restore failed")))
+    input_raw3, output_raw3 = io.BytesIO(json.dumps(payload).encode("utf-8")), io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw3, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw3, encoding="cp1254"))
+    assert context_io_hook.main() == 0
+    assert output_raw3.getvalue() == b""
