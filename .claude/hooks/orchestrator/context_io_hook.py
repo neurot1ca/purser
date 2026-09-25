@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+import re
 import sys
 import time
 from typing import Any
@@ -14,6 +15,19 @@ import compaction_advisor
 import project_profile
 import project_root
 import state_root
+
+
+_PLANNING_WORD = re.compile(
+    r"\b(?:plans?|planning|planned|planla\w*|planı\w*|planın\w*|plan[ıiuü]\w*)\b",
+    re.IGNORECASE,
+)
+_PLAN_COMMAND = re.compile(r"^\s*/purser:plan(?:\s|$)", re.IGNORECASE)
+
+
+def _planning_hint(prompt: Any) -> bool:
+    if not isinstance(prompt, str) or _PLAN_COMMAND.search(prompt):
+        return False
+    return _PLANNING_WORD.search(prompt) is not None
 
 
 def main() -> int:
@@ -53,8 +67,16 @@ def main() -> int:
                         compaction_advice = compaction_advisor.advise(value, repository)
                     except BaseException:
                         compaction_advice = None
+                    try:
+                        plan_hint = (
+                            "The user mentioned planning; offer /purser:plan once in this session if you have not already."
+                            if _planning_hint(value.get("prompt"))
+                            else ""
+                        )
+                    except BaseException:
+                        plan_hint = ""
                     additional_context = "\n".join(
-                        part for part in (language_instruction, compaction_advice) if part
+                        part for part in (language_instruction, compaction_advice, plan_hint) if part
                     )
                     if additional_context:
                         output = {

@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 import context_io_hook
 
 
-def _run_user_prompt_hook(monkeypatch, repo, *, language_handoff=None, advice=None, unreadable=False):
-    payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(repo)}
+def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None, advice=None, unreadable=False):
+    payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(repo), "prompt": prompt}
     input_raw = io.BytesIO(json.dumps(payload).encode("utf-8"))
     output_raw = io.BytesIO()
     monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
@@ -118,3 +118,44 @@ def test_user_prompt_unreadable_handoff_falls_back_to_generic(monkeypatch, tmp_p
     actual = _run_user_prompt_hook(monkeypatch, tmp_path, unreadable=True)
 
     assert actual == "Reply in the language the user writes in."
+
+
+@pytest.mark.parametrize("prompt", [
+    "Please help me plan the rollout.",
+    "Let's start planning the change.",
+    "We have several plans to compare.",
+    "Projeyi planla ve riskleri çıkar.",
+    "Bunu planlayalım.",
+    "Planı gözden geçir, planın kapsamı nedir?",
+])
+def test_user_prompt_offers_plan_for_english_and_turkish_planning_words(monkeypatch, tmp_path, prompt):
+    actual = _run_user_prompt_hook(monkeypatch, tmp_path, prompt=prompt)
+
+    assert actual == (
+        "Reply in the language the user writes in.\n"
+        "The user mentioned planning; offer /purser:plan once in this session if you have not already."
+    )
+
+
+@pytest.mark.parametrize("prompt", ["planet", "explanation", "airplane"])
+def test_user_prompt_does_not_offer_plan_for_unrelated_words(monkeypatch, tmp_path, prompt):
+    actual = _run_user_prompt_hook(monkeypatch, tmp_path, prompt=prompt)
+
+    assert actual == "Reply in the language the user writes in."
+
+
+def test_user_prompt_does_not_offer_plan_when_command_is_invoked(monkeypatch, tmp_path):
+    actual = _run_user_prompt_hook(monkeypatch, tmp_path, prompt="/purser:plan design the migration")
+
+    assert actual == "Reply in the language the user writes in."
+
+
+def test_plan_hint_matcher_failure_preserves_existing_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(context_io_hook, "_planning_hint", lambda _prompt: (_ for _ in ()).throw(RuntimeError("matcher failed")))
+
+    actual = _run_user_prompt_hook(
+        monkeypatch, tmp_path, prompt="plan the migration",
+        language_handoff="## Goal\nUser language: Turkish\n", advice="compact notice",
+    )
+
+    assert actual == "Reply to the user in Turkish.\ncompact notice"
