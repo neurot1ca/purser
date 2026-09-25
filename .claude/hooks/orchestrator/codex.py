@@ -941,6 +941,7 @@ _PROTOCOL_HELP = (
     "  route  mechanical -> luna/high | subtle -> luna/high | normal -> sol/medium"
     " | consequential -> sol/high | escalated -> sol/xhigh | operation -> luna/high\n"
     "  reason is optional; basis is required for normal, consequential, and escalated, and optional otherwise."
+    " eta=<N>m is optional; N must be an integer from 1..600."
     " Reason, when supplied, is one of new_task | continue |"
     " route_change | reanchor | repeated_failure | user_override.\n"
     "  phase  'operation' for deploy, runner control, status, or read-only investigation;"
@@ -1058,6 +1059,7 @@ def _inherited_reply_parse(
         route=route,
         reason=live_thread.get("reason") if isinstance(live_thread.get("reason"), str) else None,
         scope=tuple(scope),
+        eta_minutes=None,
     )
 
 
@@ -1251,6 +1253,7 @@ def pre_tool_use(
             effort=route.effort,
             scope=list(parsed.scope),
             reason=effective_reason,
+            eta_minutes=parsed.eta_minutes,
         )
 
         if tool_name in CODEX_TOOL_NAMES:
@@ -1364,6 +1367,7 @@ def pre_tool_use(
             "acceptance_criteria": acceptance_criteria,
             "task_contract_grounded": task_contract_grounded,
             "reason": effective_reason,
+            "eta_minutes": parsed.eta_minutes,
             "reason_source": reason_source,
             "previous_route": previous_route if route_changed else None,
             "new_route": parsed.route if route_changed else None,
@@ -1442,6 +1446,7 @@ def pre_tool_use(
             "fresh_thread": tool_name in CODEX_TOOL_NAMES,
             "reply_call": tool_name in CODEX_REPLY_TOOL_NAMES,
             "reason": effective_reason,
+            "eta_minutes": parsed.eta_minutes,
             "reason_source": reason_source,
             "previous_route": previous_route if route_changed else None,
             "new_route": parsed.route if route_changed else None,
@@ -2061,6 +2066,7 @@ def _post_observations(
         "claude_review_mode": bundle.get("claude_review_mode"),
         "routing_enforced": bundle.get("routing_enforced"),
         "codex_usage_known": bool(codex_tokens),
+        "eta_minutes": pending.get("eta_minutes"),
         "reason": pending.get("reason"),
         "reason_source": pending.get("reason_source"),
         "previous_route": pending.get("previous_route"),
@@ -2905,6 +2911,7 @@ def post_tool_use_failure(
             ),
             failure_code=failure_code,
             duration_ms=_numeric_duration_ms(event.get("duration_ms")),
+            eta_minutes=pending.get("eta_minutes"),
             reason=pending.get("reason"),
             reason_source=pending.get("reason_source"),
             previous_route=pending.get("previous_route"),
@@ -2944,6 +2951,7 @@ def post_tool_use_failure(
                     else "CODEX_CALL_FAILED"
                 ),
                 duration_ms=_numeric_duration_ms(event.get("duration_ms")),
+                eta_minutes=pending.get("eta_minutes"),
                 reason=pending.get("reason"),
                 reason_source=pending.get("reason_source"),
                 previous_route=pending.get("previous_route"),

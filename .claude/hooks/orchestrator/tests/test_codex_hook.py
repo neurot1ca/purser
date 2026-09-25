@@ -738,6 +738,67 @@ def _call_events(state):
     return [event for event in events if event["event_type"] == "IMPLEMENTER_STARTED"]
 
 
+def _all_telemetry_events(state):
+    events = []
+    for path in (state / "telemetry" / "events").glob("????-??/session_*.jsonl"):
+        events.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    return events
+
+
+def test_eta_is_recorded_from_orch_through_finished_duration(workspace, config):
+    repo, state = workspace
+    prompt = orch(scope="file0.py") + "|eta=23m\nImplement the scoped change."
+    call = event(prompt=prompt)
+
+    routed = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    forwarded_prompt = routed["hookSpecificOutput"]["updatedInput"]["prompt"]
+    assert forwarded_prompt.startswith("Implement the scoped change.")
+    assert "ORCH|" not in forwarded_prompt
+    assert codex._read_pending(state, call)["eta_minutes"] == 23
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "duration_ms": 1250,
+        "tool_response": [{"type": "text", "text": json.dumps({"threadId": "thread-1", "content": "done"})}],
+    }
+    codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    events = _all_telemetry_events(state)
+    for event_type in ("TASK_ROUTE_SELECTED", "IMPLEMENTER_STARTED", "IMPLEMENTER_FINISHED"):
+        payload = next(item["payload"] for item in events if item["event_type"] == event_type)
+        assert payload["eta_minutes"] == 23
+    finished = next(item["payload"] for item in events if item["event_type"] == "IMPLEMENTER_FINISHED")
+    assert finished["duration_ms"] == 1250
+
+
+@pytest.mark.parametrize("eta", ["eta", "eta=5", "eta=", "eta=0m", "eta=601m", "eta=1.5m", "eta=2h", "eta= 3m", "eta=+3m"])
+def test_invalid_orch_eta_is_denied_with_accepted_form(workspace, config, eta):
+    repo, state = workspace
+    call = event(prompt=orch(scope="file0.py") + f"|{eta}\nDo work.")
+
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+
+    denied = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "eta=<N>m" in denied
+    assert "1..600" in denied
+
+
+def test_missing_eta_is_recorded_as_null_and_bare_reply_does_not_inherit(workspace, config):
+    repo, state = workspace
+    first = event(prompt=orch(scope="file0.py") + "\nStart.", tool_use_id="eta-missing")
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    assert codex._read_pending(state, first)["eta_minutes"] is None
+    first_payload = next(
+        item["payload"] for item in _all_telemetry_events(state)
+        if item["event_type"] == "IMPLEMENTER_STARTED"
+    )
+    assert "eta_minutes" in first_payload and first_payload["eta_minutes"] is None
+
+    save_live_thread(state)
+    reply = event(codex.CODEX_REPLY_TOOL, prompt="Continue.", threadId="thread-1", tool_use_id="bare-reply")
+    codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    assert codex._read_pending(state, reply)["eta_minutes"] is None
+
+
 def test_explicit_orch_reason_is_recorded_in_call_event(workspace, config):
     repo, state = workspace
     call = event(prompt=orch(reason="repeated_failure") + "\nFix the failure.")

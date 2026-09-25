@@ -39,7 +39,7 @@ REVIEWER1_UNAVAILABLE = "REVIEWER1_UNAVAILABLE"
 AUDIT = "AUDIT"
 FULL = "FULL"
 
-_ORCH_KEYS = ("task", "phase", "route", "reason", "basis", "scope")
+_ORCH_KEYS = ("task", "phase", "route", "reason", "basis", "scope", "eta")
 _REQUIRED_ORCH_KEYS = ("task", "phase", "route")
 _REVIEWER_SKIP_PRECEDENCE = (
     PHASE_OPERATION,
@@ -251,6 +251,7 @@ class OrchParseResult:
     reason: str | None = None
     basis: str | None = None
     scope: tuple[str, ...] = ()
+    eta_minutes: int | None = None
 
     @property
     def clean_prompt(self) -> str:
@@ -336,6 +337,13 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
     values: dict[str, str] = {}
     for field in first_line.split("|")[1:]:
         if "=" not in field:
+            if field == "eta":
+                return _orch_failure(
+                    remainder,
+                    MALFORMED_ORCH_LINE,
+                    "ORCH eta must use eta=<N>m with N an integer from 1..600.",
+                    values,
+                )
             return _orch_failure(
                 remainder,
                 MALFORMED_ORCH_LINE,
@@ -372,6 +380,18 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
                 values,
             )
         values[key] = value
+
+    eta_minutes = None
+    if "eta" in values:
+        eta_match = re.fullmatch(r"([1-9][0-9]{0,2})m", values["eta"])
+        if eta_match is None or int(eta_match.group(1)) > 600:
+            return _orch_failure(
+                remainder,
+                MALFORMED_ORCH_LINE,
+                "ORCH eta must use eta=<N>m with N an integer from 1..600.",
+                values,
+            )
+        eta_minutes = int(eta_match.group(1))
 
     missing = [key for key in _REQUIRED_ORCH_KEYS if key not in values]
     if missing:
@@ -449,6 +469,7 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
         reason=values.get("reason"),
         basis=values.get("basis"),
         scope=scope,
+        eta_minutes=eta_minutes,
     )
 
 

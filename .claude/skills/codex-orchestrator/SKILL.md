@@ -92,7 +92,7 @@ After each Codex call, tell the user the bundle's `codex_quota` 5h and 7d used p
 Claude writes the first prompt line exactly in this shape:
 
 ```text
-ORCH|task=<stable-id>|phase=<implementation|operation>|route=<mechanical|subtle|normal|consequential|escalated|operation>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|scope=<repo-relative-path[,repo-relative-path...]>]
+ORCH|task=<stable-id>|phase=<implementation|operation>|route=<mechanical|subtle|normal|consequential|escalated|operation>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|scope=<repo-relative-path[,repo-relative-path...]>][|eta=<N>m]
 ```
 
 Fields are `task`, `phase`, `route`, optional `reason`, `basis` required for
@@ -103,6 +103,8 @@ the whole repository; omit it for `operation`. Claude chooses the route and
 writes this line. The hook strips it, resolves model and effort from the route
 table, and rejects malformed or inconsistent invocations. A recorded compatible
 `codex-reply` may inherit the line.
+
+Put your duration estimate in eta; it is recorded next to the actual duration.
 
 ## Craft the prompt
 

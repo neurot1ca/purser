@@ -194,10 +194,10 @@ _VIOLATION_CODES = frozenset(
 _COMMON_CALL_FIELDS = frozenset(
     {
         "phase", "route", "model", "effort", "routing_enforced", "fresh_thread", "reply_call",
-        "reason", "reason_source", "previous_route", "new_route",
+        "reason", "reason_source", "previous_route", "new_route", "eta_minutes",
     }
 )
-_CALL_CONTEXT_FIELDS = frozenset({"reason", "reason_source", "previous_route", "new_route"})
+_CALL_CONTEXT_FIELDS = frozenset({"reason", "reason_source", "previous_route", "new_route", "eta_minutes"})
 _CLAUDE_TIMESTAMP_FIELDS = frozenset(
     {"claude_usage_captured_at", "claude_5h_resets_at", "claude_7d_resets_at"}
 )
@@ -305,6 +305,10 @@ def _project_key(value: Any, *, required: bool) -> str | None:
 
 
 def _payload_value(name: str, value: Any) -> Any:
+    if name == "eta_minutes":
+        if value is None or (isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 600):
+            return value
+        raise ValueError("telemetry eta_minutes is invalid")
     if name in {
         "routing_enforced",
         "fresh_thread",
@@ -433,7 +437,11 @@ def build_event(
     supplied = dict(payload or {})
     if not set(supplied).issubset(_PAYLOAD_FIELDS[event_type]):
         raise ValueError("telemetry payload contains an unregistered field")
-    clean_payload = {name: _payload_value(name, value) for name, value in supplied.items() if value is not None}
+    clean_payload = {
+        name: _payload_value(name, value)
+        for name, value in supplied.items()
+        if value is not None or name == "eta_minutes"
+    }
     return {
         "schema_version": SCHEMA_VERSION,
         "event_id": str(uuid.uuid4()),

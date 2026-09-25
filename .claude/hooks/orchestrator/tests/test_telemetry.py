@@ -163,6 +163,25 @@ def test_legacy_call_event_without_reason_fields_still_parses():
     assert legacy["payload"].get("reason", "unknown") == "unknown"
 
 
+def test_legacy_call_event_without_eta_minutes_still_parses():
+    legacy = schema.build_event(
+        "IMPLEMENTER_FINISHED",
+        task_id="legacy-task",
+        payload={
+            "duration_ms": 1000,
+            "changed_paths_count": 1,
+            "validation": "PASS",
+            "thread_id": "thread-1",
+            "claude_review_mode": "FULL",
+            "routing_enforced": True,
+            "codex_usage_known": False,
+        },
+    )
+
+    assert schema.valid_event(legacy)
+    assert "eta_minutes" not in legacy["payload"]
+
+
 def _run_task_process(state_root, action, task_id):
     script = """
 import sys
