@@ -151,16 +151,141 @@ def response_bundle(response, config):
 
 
 @pytest.mark.parametrize("name", ("codex_result", "codex_cancel"))
-def test_async_followup_tools_stay_denied(workspace, config, name):
+def test_async_unknown_and_foreign_jobs_are_denied(workspace, config, name):
     repo, state = workspace
     call = event(tool_name=f"mcp__plugin_purser_codex-main__{name}")
     call["tool_input"] = {"jobId": "0" * 64}
     result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert not list((state / "pending").glob("*.json"))
+    start, job_id, record = async_started(workspace, config)
+    call["tool_input"]["jobId"] = job_id
+    call["session_id"] = "other-session"
+    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    call["session_id"] = start["session_id"]
+    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo.parent)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 START_TOOL = "mcp__plugin_purser_codex-main__codex_start"
+RESULT_TOOL = "mcp__plugin_purser_codex-main__codex_result"
+CANCEL_TOOL = "mcp__plugin_purser_codex-main__codex_cancel"
+
+
+def async_started(workspace, config, *, prompt=None, state_name="RUNNING"):
+    repo, state = workspace
+    start = event(START_TOOL, prompt=prompt, tool_use_id="async-original")
+    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
+    codex.post_tool_use({**start, "hook_event_name": "PostToolUse", "tool_response":
+                         {"structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
+                        config=config, state_root=state, repo_root=repo)
+    record = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({"jobId": job_id, "call": updated["call"], "state": state_name,
+                                  "acceptedAt": 100.0, "finishedAt": 112.5,
+                                  "threadId": "async-thread" if state_name == "SUCCEEDED" else None}), encoding="utf-8")
+    return start, job_id, record
+
+
+def async_followup(name, job_id):
+    call = event(name, tool_use_id=f"followup-{name}")
+    call["tool_input"] = {"jobId": job_id}
+    return call
+
+
+def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace, config):
+    repo, state = workspace
+    _, job_id, _ = async_started(workspace, config)
+    result = async_followup(RESULT_TOOL, job_id)
+    denied = codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo)
+    assert "still running; wait for the completion signal" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    bypass = codex.internal_pre_error_response(result, RuntimeError("internal"), state_root=state)
+    assert "additionalContext" in bypass["hookSpecificOutput"]
+
+
+def test_async_result_finalizes_once_from_start_baseline(workspace, config, monkeypatch):
+    repo, state = workspace
+    prompt = orch(scope="file0.py") + "|eta=4m\nTASK_CONTRACT: {\"objective\": \"Update file0\", \"criteria\": \"file0 is updated\"}"
+    start, job_id, record = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "file1.py").write_text("concurrent = True\n", encoding="utf-8")
+    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
+    reviews = []
+    def reviewer(**kwargs):
+        reviews.append(kwargs)
+        return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"}
+    result = async_followup(RESULT_TOOL, job_id)
+    assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
+    post = {**result, "hook_event_name": "PostToolUse", "duration_ms": 1,
+            "tool_response": {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+                                                    "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":[],"exit_codes":[]}'}}}
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=reviewer)
+    bundle = response_bundle(first, config)
+    assert bundle["thread_id"] == "async-thread" and bundle["concurrent_writer"] is True
+    assert "file0.py" in bundle["changed_paths"] and "file1.py" in bundle["changed_paths"]
+    assert len(reviews) == 1
+    finished = [e["payload"] for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_FINISHED"]
+    assert len(finished) == 1 and finished[0]["duration_ms"] == 12500 and finished[0]["eta_minutes"] == 4
+    index = json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+    assert index["stage"] == "CONSUMED" and Path(index["bundle_path"]).is_file()
+    assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=reviewer) == first
+    assert len(reviews) == 1
+    assert not codex._pending_path(state, start).exists()
+
+
+@pytest.mark.parametrize("state_name", ("FAILED", "TIMED_OUT", "CANCELLED", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED", "UNREADABLE"))
+def test_async_terminal_failure_uses_ambiguous_path(workspace, config, state_name):
+    repo, state = workspace
+    start, job_id, record = async_started(workspace, config, state_name=state_name)
+    if state_name == "UNREADABLE":
+        record.write_text("{bad", encoding="utf-8")
+    result = async_followup(RESULT_TOOL, job_id)
+    assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
+    post = {**result, "hook_event_name": "PostToolUse", "tool_response":
+            {"structuredContent": {"jobId": job_id, "state": state_name, "errorCode": "CODEX_FAILED"}}}
+    output = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    assert "FULL" in output["hookSpecificOutput"]["additionalContext"]
+    assert not codex._pending_path(state, start).exists()
+    assert any(e["event_type"] == "IMPLEMENTER_FAILED" for e in _all_telemetry_events(state))
+
+
+@pytest.mark.parametrize("tool_failed", (False, True))
+def test_async_cancel_uses_failure_path_and_cleanup(workspace, config, tool_failed):
+    repo, state = workspace
+    start, job_id, record = async_started(workspace, config)
+    call = async_followup(CANCEL_TOOL, job_id)
+    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo) == {}
+    if tool_failed:
+        response = codex.post_tool_use_failure({**call, "hook_event_name": "PostToolUseFailure", "error": "cancel failed"},
+                                               config=config, state_root=state, repo_root=repo)
+    else:
+        response = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+                                        {"structuredContent": {"jobId": job_id, "state": "CANCELLED"}}},
+                                       config=config, state_root=state, repo_root=repo)
+    assert "FULL" in response["hookSpecificOutput"]["additionalContext"]
+    assert not codex._pending_path(state, start).exists()
+
+
+def test_async_cleanup_crash_does_not_repeat_finalization(workspace, config, monkeypatch):
+    repo, state = workspace
+    start, job_id, record = async_started(workspace, config, state_name="SUCCEEDED")
+    (repo / "file0.py").write_text("value = 3\n", encoding="utf-8")
+    followup = async_followup(RESULT_TOOL, job_id)
+    post = {**followup, "hook_event_name": "PostToolUse", "tool_response":
+            {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
+    remove = codex._remove_pending
+    calls = []
+    def crash_once(root, event):
+        if not calls:
+            calls.append(True)
+            raise OSError("simulated cleanup crash")
+        return remove(root, event)
+    monkeypatch.setattr(codex, "_remove_pending", crash_once)
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
+                                reviewer=lambda **kwargs: calls.append("review") or {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE})
+    second = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
+                                 reviewer=lambda **kwargs: pytest.fail("second review"))
+    assert second == first and not codex._pending_path(state, start).exists()
 
 
 def test_async_start_requires_orch_and_denies_internal_pre_error(workspace, config):

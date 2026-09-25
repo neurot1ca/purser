@@ -76,6 +76,8 @@ CODEX_ASYNC_TOOL_NAMES = _configured_tool_names(
     for name in ("codex_start", "codex_result", "codex_cancel")
 )
 CODEX_START_TOOL_NAMES = frozenset(name for name in CODEX_ASYNC_TOOL_NAMES if name.endswith("__codex_start"))
+CODEX_RESULT_TOOL_NAMES = frozenset(name for name in CODEX_ASYNC_TOOL_NAMES if name.endswith("__codex_result"))
+CODEX_CANCEL_TOOL_NAMES = frozenset(name for name in CODEX_ASYNC_TOOL_NAMES if name.endswith("__codex_cancel"))
 CODEX_TOOLS = CODEX_TOOL_NAMES | CODEX_REPLY_TOOL_NAMES | CODEX_ASYNC_TOOL_NAMES
 _BASELINE_VOLATILE_MARKERS = ("timestamp", "duration", "elapsed", "budget")
 
@@ -1082,7 +1084,7 @@ def internal_pre_error_response(
     """Allow an internally failed PreToolUse call while making the bypass visible."""
 
     # Async start cannot launch without a baseline for its later result review.
-    if event.get("tool_name") in CODEX_ASYNC_TOOL_NAMES:
+    if event.get("tool_name") in CODEX_START_TOOL_NAMES:
         return _deny("ASYNC_ENFORCEMENT_FAILED", "Async Codex hook failed; FULL review is required.")
 
     runtime_root: Path | None = None
@@ -1109,11 +1111,8 @@ def pre_tool_use(
 
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
-    if event.get("tool_name") in CODEX_ASYNC_TOOL_NAMES - CODEX_START_TOOL_NAMES:
-        return _deny(
-            "ASYNC_HOOK_UNAVAILABLE",
-            "Async Codex lifecycle enforcement is incomplete; use synchronous codex or codex-reply.",
-        )
+    if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES | CODEX_CANCEL_TOOL_NAMES:
+        return _async_pre_followup(event, state_root, repo_root)
     runtime_root: Path | None = None
     pending_written = False
     bypass_metadata: dict[str, Any] = {}
@@ -1695,6 +1694,150 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
                 _load_config(config)["post_tool_output_field"]: [{"type": "text", "text":
                     json_transport.dumps({"state": "FAILED", "ambiguous_outcome": True,
                                           "claude_review_mode": policy.FULL})}]}}
+
+
+def _async_owned(root: Path, event: Mapping[str, Any], repo_root: str | os.PathLike[str] | None
+                 ) -> tuple[Path, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    tool_input = event.get("tool_input")
+    job_id = tool_input.get("jobId") if isinstance(tool_input, Mapping) else None
+    if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{64}", job_id):
+        raise WiringError("unknown async job")
+    path = root / "async_jobs" / f"{job_id}.json"
+    try:
+        index = json.loads(path.read_text(encoding="utf-8"))
+        repository, _ = _repo_root(event, repo_root)
+        if (not isinstance(index, dict) or repository is None
+                or index.get("jobId") != job_id
+                or index.get("session_id") != event.get("session_id")
+                or index.get("project_key") != project_root.project_key(repository)
+                or not re.fullmatch(r"[0-9a-f]{64}", str(index.get("call_key")))):
+            raise WiringError("job is not owned by this session/project")
+        pending = None
+        original = None
+        if index.get("stage") != "CONSUMED":
+            pending = json.loads((root / "pending" / f"{index['call_key']}.json").read_text(encoding="utf-8"))
+            original = dict(event, tool_name=CODEX_TOOL, tool_use_id=pending["tool_use_id"])
+            if (_call_key(original) != index["call_key"] or pending.get("job_id") != job_id
+                    or pending.get("async_call") != index.get("call")
+                    or pending.get("session_id") != index["session_id"]
+                    or pending.get("project_key") != index["project_key"]):
+                raise WiringError("job and pending call do not match")
+        return path, index, pending, original
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise WiringError("unknown async job") from error
+
+
+def _async_job(root: Path, index: Mapping[str, Any]) -> dict[str, Any] | None:
+    try:
+        job = json.loads((root / "codex_exec_mcp" / "jobs" / f"{index['jobId']}.json").read_text(encoding="utf-8"))
+        return job if job.get("jobId") == index["jobId"] and job.get("call") == index["call"] else None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _async_pre_followup(event: Mapping[str, Any], state_root: str | os.PathLike[str] | None,
+                        repo_root: str | os.PathLike[str] | None) -> dict[str, Any]:
+    try:
+        root = _state_root(state_root)
+        _, index, _, _ = _async_owned(root, event, repo_root)
+    except WiringError:
+        return _deny("UNKNOWN_ASYNC_JOB", "No pending job belongs to this session/project.")
+    if index.get("stage") == "CONSUMED":
+        return {} if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES else _deny(
+            "ASYNC_ALREADY_CONSUMED", "This job has already been finalized.")
+    if index.get("stage") == "FINALIZING":
+        return {} if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES else _deny(
+            "ASYNC_FINALIZING", "This job is already being finalized.")
+    if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES:
+        job = _async_job(root, index)
+        if job is not None and job.get("state") in {"QUEUED", "RUNNING"}:
+            return _deny("ASYNC_STILL_RUNNING", "still running; wait for the completion signal")
+    return {}
+
+
+def _async_duration(job: Mapping[str, Any] | None) -> int | None:
+    if job is None:
+        return None
+    start, finish = job.get("acceptedAt"), job.get("finishedAt")
+    if all(isinstance(value, (int, float)) and not isinstance(value, bool)
+           and math.isfinite(value) for value in (start, finish)) and finish >= start:
+        return int((finish - start) * 1000)
+    return None
+
+
+def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] | None,
+                         state_root: str | os.PathLike[str] | None,
+                         repo_root: str | os.PathLike[str] | None,
+                         reviewer: Callable[..., Mapping[str, Any]] | None = None,
+                         micro_repair: Callable[..., Mapping[str, Any]] | None = None,
+                         failed: bool = False) -> dict[str, Any]:
+    root = _state_root(state_root)
+    def interrupted() -> dict[str, Any]:
+        return _replacement({"status": "ALREADY_CONSUMED_OR_INTERRUPTED",
+                             "claude_review_mode": policy.FULL, "ambiguous_outcome": True}, _load_config(config))
+    try:
+        path, index, pending, original = _async_owned(root, event, repo_root)
+        if index.get("stage") == "CONSUMED":
+            (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
+            return index.get("response") or interrupted()
+        if index.get("stage") == "FINALIZING":
+            return interrupted()
+        try:
+            path.with_suffix(".claim").mkdir()
+        except FileExistsError:
+            return interrupted()
+        index["stage"] = "FINALIZING"
+        _atomic_json_write(path, index)
+        job = _async_job(root, index)
+        duration = _async_duration(job)
+        try:
+            value = {} if failed else _start_value(event.get("tool_response"))
+        except WiringError:
+            value = {}
+        success = (event.get("tool_name") in CODEX_RESULT_TOOL_NAMES and not failed
+                   and job is not None and job.get("state") == "SUCCEEDED"
+                   and value.get("jobId") == index["jobId"] and value.get("state") == "SUCCEEDED"
+                   and isinstance(value.get("threadId"), str) and bool(value["threadId"])
+                   and value["threadId"] == job.get("threadId")
+                   and isinstance(value.get("content"), str)
+                   and not (isinstance(event.get("tool_response"), Mapping)
+                            and event["tool_response"].get("isError")))
+        synthetic = dict(original, duration_ms=duration)
+        if success:
+            synthetic.update(hook_event_name="PostToolUse", tool_response={"content": [
+                {"type": "text", "text": json_transport.dumps(value)}]})
+            response = post_tool_use(synthetic, config=config, state_root=state_root,
+                                     repo_root=repo_root, reviewer=reviewer, micro_repair=micro_repair)
+            artifact = (root / "bundle_artifacts" / f"{index['call_key']}.json").resolve()
+            expected = str((root / "raw_tool_outputs" / f"{index['call_key']}.json").resolve())
+            outcome = ledger.SessionLedger(_project_state_root(root, index["project_key"])).load(pending["task_id"])
+            last = outcome.get("record", {}).get("last_outcome") if outcome.get("status") == ledger.OK else None
+            if not artifact.is_file() or not isinstance(last, Mapping) or last.get("raw_output_path") != expected:
+                raise WiringError("successful finalization was not durably recorded")
+        else:
+            synthetic.update(hook_event_name="PostToolUseFailure",
+                             error=event.get("error") or value.get("errorCode") or "ASYNC_TERMINAL_FAILURE")
+            response = post_tool_use_failure(synthetic, state_root=state_root)
+            artifact = (root / "raw_tool_outputs" / f"{index['call_key']}-failure.json").resolve()
+            outcome = ledger.SessionLedger(_project_state_root(root, index["project_key"])).load(pending["task_id"])
+            last = outcome.get("record", {}).get("last_outcome") if outcome.get("status") == ledger.OK else None
+            if not artifact.is_file() or not isinstance(last, Mapping) or last.get("evidence_path") != str(artifact):
+                raise WiringError("failed outcome was not durably recorded")
+            if event.get("hook_event_name") == "PostToolUse":
+                message = response.get("hookSpecificOutput", {}).get("additionalContext", "Async job failed; FULL review required.")
+                response = _replacement({"state": "FAILED", "ambiguous_outcome": True,
+                                         "claude_review_mode": policy.FULL}, _load_config(config))
+                response["hookSpecificOutput"]["additionalContext"] = message
+        index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
+        _atomic_json_write(path, index)
+        try:
+            _remove_pending(root, original)
+        except OSError:
+            pass  # CONSUMED is durable; the next read finishes cleanup.
+        return response
+    except Exception as error:
+        _record_diagnostic(root, event, "PostToolUse", error)
+        return interrupted()
 
 
 def _persist_raw_output(root: Path, event: Mapping[str, Any], value: Any, suffix: str = "") -> Path:
@@ -2307,6 +2450,9 @@ def post_tool_use(
         return {}
     if event.get("tool_name") in CODEX_START_TOOL_NAMES:
         return _post_start(event, config, state_root)
+    if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES | CODEX_CANCEL_TOOL_NAMES:
+        return _async_post_followup(event, config=config, state_root=state_root,
+                                    repo_root=repo_root, reviewer=reviewer, micro_repair=micro_repair)
     start_time = time.monotonic()
     try:
         loaded_config = _load_config(config)
@@ -2938,7 +3084,8 @@ def post_tool_use(
             )
         else:
             _record_thread_root(runtime_root, thread_id, repository)
-            _remove_pending(runtime_root, event)
+            if not pending.get("async_call"):
+                _remove_pending(runtime_root, event)
         try:
             _post_observations(
                 event,
@@ -2975,13 +3122,17 @@ def post_tool_use_failure(
     *,
     config: Mapping[str, Any] | None = None,
     state_root: str | os.PathLike[str] | None = None,
+    repo_root: str | os.PathLike[str] | None = None,
     reviewer: Callable[..., Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Archive ambiguous failure evidence without running Reviewer-1."""
 
-    del config, reviewer
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
+    if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES | CODEX_CANCEL_TOOL_NAMES:
+        return _async_post_followup(event, config=config, state_root=state_root,
+                                    repo_root=repo_root, reviewer=reviewer, failed=True)
+    del config, reviewer
     if event.get("tool_name") in CODEX_START_TOOL_NAMES:
         try:
             root = _state_root(state_root)
@@ -3044,7 +3195,8 @@ def post_tool_use_failure(
                 raise WiringError(saved.get("message", "ambiguous failure could not be recorded"))
         elif routing_enforced:
             raise WiringError("normal pending call identity is incomplete")
-        _remove_pending(runtime_root, event)
+        if not pending.get("async_call") or event.get("tool_name") in CODEX_START_TOOL_NAMES:
+            _remove_pending(runtime_root, event)
         if event.get("tool_name") in CODEX_START_TOOL_NAMES and re.fullmatch(r"[0-9a-f]{64}", str(pending.get("job_id"))):
             (runtime_root / "async_jobs" / f"{pending['job_id']}.json").unlink(missing_ok=True)
         routing_note = (
