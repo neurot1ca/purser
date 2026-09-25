@@ -16,7 +16,7 @@ from checks import run_checks, select_checks
 @pytest.fixture
 def repo():
     root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / uuid.uuid4().hex
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     return root
 

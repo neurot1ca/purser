@@ -16,7 +16,7 @@ import purser_init
 def site(monkeypatch):
     root = Path(__file__).parents[4] / ".tmp" / f"purser-init-{uuid.uuid4().hex}"
     home, project = root / "home", root / "project"
-    home.mkdir(parents=True)
+    home.mkdir(parents=True, exist_ok=True)
     project.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setenv("LOCALAPPDATA", str(root / "local-app-data"))

@@ -21,7 +21,7 @@ def tmp_path(monkeypatch):
         / "profile"
         / uuid.uuid4().hex
     )
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     isolated_home = root / "home"
     monkeypatch.setenv("USERPROFILE", str(isolated_home))
     monkeypatch.setenv("HOME", str(isolated_home))

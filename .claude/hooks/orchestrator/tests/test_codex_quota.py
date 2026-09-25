@@ -17,7 +17,7 @@ THREAD = "01234567-89ab-cdef-0123-456789abcdef"
 @pytest.fixture
 def quota_home():
     root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "quota" / uuid.uuid4().hex
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     try:
         yield root
     finally:

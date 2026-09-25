@@ -47,7 +47,7 @@ def _records(trigger="none", *, task_id="task-a", failed=False, context=260_000,
 @pytest.fixture
 def scratch():
     root = Path.cwd() / ".tmp" / f"compaction-advisor-{uuid.uuid4().hex}"
-    root.mkdir()
+    root.mkdir(parents=True, exist_ok=True)
     try:
         yield root
     finally:

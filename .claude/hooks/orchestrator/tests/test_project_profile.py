@@ -12,7 +12,7 @@ from project_profile import Check, load_profile
 @pytest.fixture
 def profile_root():
     root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / uuid.uuid4().hex
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     return root
 
 

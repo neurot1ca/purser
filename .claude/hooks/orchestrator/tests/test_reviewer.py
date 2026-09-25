@@ -202,7 +202,7 @@ def test_real_purser_profile_authority_slice_includes_agents_and_build_spec():
 def test_authority_slice_skips_sources_outside_repository():
     scratch = Path(__file__).parents[4] / ".tmp" / f"authority-{uuid.uuid4().hex}"
     repo_root = scratch / "repo"
-    repo_root.mkdir(parents=True)
+    repo_root.mkdir(parents=True, exist_ok=True)
     outside = scratch / "outside.md"
     outside.write_text("## Secret\nshould not be read\n", encoding="utf-8")
     try:
@@ -227,8 +227,8 @@ def run_review(config, runner, supplied=None):
     scratch = Path(__file__).parents[4] / ".tmp" / f"reviewer1-test-{uuid.uuid4().hex}"
     working_directory = scratch / "reviewer"
     reviewed_root = scratch / "reviewed"
-    working_directory.mkdir(parents=True)
-    reviewed_root.mkdir()
+    working_directory.mkdir(parents=True, exist_ok=True)
+    reviewed_root.mkdir(parents=True, exist_ok=True)
     try:
         return reviewer.review_materials(
             materials() if supplied is None else supplied,

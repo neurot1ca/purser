@@ -18,7 +18,7 @@ ROOT = Path(__file__).parents[4]
 @pytest.fixture
 def fake_home(monkeypatch):
     scratch = ROOT / ".tmp"
-    scratch.mkdir(exist_ok=True)
+    scratch.mkdir(parents=True, exist_ok=True)
     home = scratch / f"purser-check-{uuid.uuid4().hex}"
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)

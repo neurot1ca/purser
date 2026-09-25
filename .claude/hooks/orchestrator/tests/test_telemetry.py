@@ -28,7 +28,7 @@ UNRESOLVED_PROJECT_KEY = "unresolved"
 @pytest.fixture()
 def tmp_path():
     root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "telemetry" / uuid.uuid4().hex
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     try:
         yield root
     finally:

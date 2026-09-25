@@ -21,7 +21,7 @@ def tmp_path():
         / "ledger-pytest"
         / uuid.uuid4().hex
     )
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     try:
         yield root
     finally:
@@ -42,7 +42,7 @@ def git(repo, *arguments):
 @pytest.fixture()
 def sandbox_dir():
     root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "ledger" / uuid.uuid4().hex
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     try:
         yield root
     finally:

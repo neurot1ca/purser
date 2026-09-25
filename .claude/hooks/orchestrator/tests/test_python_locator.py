@@ -16,7 +16,7 @@ LOCATOR = ROOT / "bin" / "python-locator.js"
 @pytest.fixture
 def scratch():
     root = ROOT / ".tmp" / f"python-locator-{uuid.uuid4().hex}"
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     yield root
     shutil.rmtree(root, ignore_errors=True)
 

@@ -21,7 +21,7 @@ import telemetry_schema as schema
 @pytest.fixture()
 def tmp_path():
     root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "obsidian" / uuid.uuid4().hex
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     try:
         yield root
     finally:

@@ -22,7 +22,7 @@ def tmp_path():
         / "project-root"
         / uuid.uuid4().hex
     )
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     try:
         yield root
     finally:

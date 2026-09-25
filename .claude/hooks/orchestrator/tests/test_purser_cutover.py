@@ -21,7 +21,7 @@ def fake_home():
     scratch = ROOT / ".tmp" / ("purser-cutover-" + uuid.uuid4().hex)
     home = scratch / "home"
     claude_dir = home / ".claude"
-    claude_dir.mkdir(parents=True)
+    claude_dir.mkdir(parents=True, exist_ok=True)
     settings = {
         "theme": "dark",
         "hooks": {

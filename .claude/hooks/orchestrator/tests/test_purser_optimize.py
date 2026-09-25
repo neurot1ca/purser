@@ -19,7 +19,7 @@ def tmp_path():
     """Use a unique .tmp workspace because the host temp ACL is unreadable here."""
     scratch = Path(__file__).resolve().parents[4] / ".tmp"
     path = scratch / f"purser-optimize-{uuid.uuid4().hex}"
-    path.mkdir()
+    path.mkdir(parents=True, exist_ok=True)
     try:
         yield path
     finally:

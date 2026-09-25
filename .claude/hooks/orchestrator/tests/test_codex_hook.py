@@ -70,7 +70,7 @@ def workspace():
     root = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "codex" / uuid.uuid4().hex
     repo = root / "repo"
     state = root / "state"
-    repo.mkdir(parents=True)
+    repo.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, timeout=10)
     subprocess.run(
         ["git", "config", "user.email", "tests@example.invalid"],
@@ -726,21 +726,31 @@ def save_live_thread(
 @pytest.mark.parametrize("nested", [False, True])
 def test_reply_follows_recorded_project_across_session_cwd(config, nested):
     tmp_path = Path(__file__).parents[4] / ".tmp" / "orchestrator-tests" / "project-isolation" / uuid.uuid4().hex
-    tmp_path.mkdir(parents=True)
+    tmp_path.mkdir(parents=True, exist_ok=True)
 
     def make_repo(name):
         repo = tmp_path / name
         repo.mkdir(parents=True)
-        subprocess.run(["git", "init", "-q"], cwd=repo, check=True, timeout=10)
+        git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True, timeout=10, env=git_env)
         (repo / "file0.py").write_text("value = 1\n", encoding="utf-8")
         (repo / "file1.py").write_text("value = 1\n", encoding="utf-8")
         (repo / "file2.py").write_text("value = 1\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=repo, check=True, timeout=10)
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=git_env,
+        )
         subprocess.run(
             ["git", "-c", "user.email=tests@example.invalid", "-c", "user.name=Hook Tests", "commit", "-qm", "initial"],
             cwd=repo,
             check=True,
             timeout=10,
+            env=git_env,
         )
         return repo
 

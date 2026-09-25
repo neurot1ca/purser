@@ -56,7 +56,7 @@ if os.environ.get("FAKE_NO_OUTPUT") != "1":
 def area():
     SCRATCH.mkdir(parents=True, exist_ok=True)
     path = SCRATCH / ("case-" + uuid.uuid4().hex)
-    path.mkdir()
+    path.mkdir(parents=True, exist_ok=True)
     try:
         yield path
     finally:
