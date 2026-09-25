@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.25 — 2026-09-25
+
+- **Fix:** codex_start no longer cancels a live job when Claude Code passes the MCP result as plain text (`59da6bc`).
+
 ## 0.1.24 — 2026-09-25
 
 - **New:** long Codex work runs async (codex_start / codex_result / codex_cancel + background waiter), so Claude keeps talking to the user while it runs; same enforcement and review as sync.
