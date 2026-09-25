@@ -189,6 +189,9 @@ def _session(path: Path) -> dict[str, Any]:
     seen_mcp_deltas: set[str] = set()
     seen_deferred_names: set[str] = set()
     seen_instruction_servers: set[str] = set()
+    active_skill_names: set[str] = set()
+    active_instruction_servers: set[str] = set()
+    active_deferred_names: set[str] = set()
 
     with path.open("r", encoding="utf-8", errors="replace") as stream:
         for line in stream:
@@ -255,12 +258,21 @@ def _session(path: Path) -> dict[str, Any]:
             attachment = record["attachment"]
             kind = attachment.get("type")
             if kind == "skill_listing":
+                rows = _skill_rows(attachment)
+                names = attachment.get("names")
+                listing_names = ({name for name in names if isinstance(name, str)}
+                                 if isinstance(names, list)
+                                 else {name for name, _ in rows})
+                if attachment.get("isInitial", True) is False:
+                    active_skill_names.update(listing_names)
+                else:
+                    active_skill_names = listing_names
+                    duplicate_sources.clear()
                 listing_content = attachment.get("content", "")
                 listing_key = str(listing_content)
                 if listing_key in seen_listings:
                     continue
                 seen_listings.add(listing_key)
-                rows = _skill_rows(attachment)
                 listing_size = max(1, sum(chars for _, chars in rows))
                 for name, chars in rows:
                     loaded_names.add(name)
@@ -272,6 +284,15 @@ def _session(path: Path) -> dict[str, Any]:
             elif kind == "mcp_instructions_delta":
                 added = attachment.get("addedNames", [])
                 blocks = attachment.get("addedBlocks", [])
+                removed = attachment.get("removedNames", [])
+                if isinstance(removed, list):
+                    active_instruction_servers = {
+                        known for known in active_instruction_servers
+                        if not any(isinstance(name, str) and _same_server(known, name)
+                                   for name in removed)
+                    }
+                if isinstance(added, list):
+                    active_instruction_servers.update(name for name in added if isinstance(name, str))
                 mcp_key = json.dumps([added, blocks], sort_keys=True, default=str)
                 if mcp_key in seen_mcp_deltas:
                     continue
@@ -290,6 +311,11 @@ def _session(path: Path) -> dict[str, Any]:
                             servers[server] += (len(block_text) if block_text else len(_rendered(record)) / max(1, len(added))) / 4.0
             elif kind == "deferred_tools_delta":
                 names = attachment.get("addedNames", [])
+                removed = attachment.get("removedNames", [])
+                if isinstance(removed, list):
+                    active_deferred_names.difference_update(name for name in removed if isinstance(name, str))
+                if isinstance(names, list):
+                    active_deferred_names.update(name for name in names if isinstance(name, str))
                 if isinstance(names, list):
                     for name in names:
                         if not isinstance(name, str):
@@ -345,6 +371,12 @@ def _session(path: Path) -> dict[str, Any]:
             turn.append(event["index"])
     if turn:
         requests_by_turn.append(turn)
+    active_servers = {name for name in active_instruction_servers}
+    active_servers.update(server for name in active_deferred_names
+                          if (server := _server_name(name)) is not None)
+    servers = {name: cost for name, cost in servers.items()
+               if any(_same_server(name, active) for active in active_servers)}
+    skills = {name: cost for name, cost in skills.items() if name in active_skill_names}
     return {"path": path, "requests": requests, "request_turns": requests_by_turn,
             "entrypoint": next(iter(entrypoints), "unknown"), "entrypoints": entrypoints,
             "typed": typed, "sidechain": sidechain, "cwd": cwd,

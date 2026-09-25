@@ -210,6 +210,23 @@ def test_mcp_use_and_deferred_names_contribute_startup_cost(tmp_path):
     assert not row["flagged"]
 
 
+def test_latest_mcp_inventory_replays_removals(tmp_path):
+    projects = tmp_path / "projects"
+    deferred = {"type": "attachment", "attachment": {
+        "type": "deferred_tools_delta",
+        "addedNames": ["mcp__x__call", "mcp__still_enabled__query"]}}
+    remove_instructions = {"type": "attachment", "attachment": {
+        "type": "mcp_instructions_delta", "removedNames": ["x"]}}
+    remove_deferred = {"type": "attachment", "attachment": {
+        "type": "deferred_tools_delta", "removedNames": ["mcp__x__call"]}}
+    records = [mcp_listing("x"), mcp_listing("still_enabled"), deferred,
+               remove_instructions, remove_deferred, rec_user(), rec_assistant("a")]
+    report = analyze(write_session(projects, "s", records), tmp_path)
+    names = {item["name"] for item in report["startup"]}
+    assert "mcp:x" not in names
+    assert "mcp:still_enabled" in names
+
+
 def test_compaction_defaults_on_when_not_configured(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: home)
@@ -248,6 +265,17 @@ def test_latest_interactive_startup_is_deduped_but_usage_spans_window(tmp_path):
     assert any(item["name"] == "local" and set(item["sources"]) == {"current", "project"}
                for item in report["duplicate_skills"])
     assert all(item["name"] != "thing" for item in report["duplicate_skills"])
+
+
+def test_noninitial_skill_listing_adds_to_inventory(tmp_path):
+    projects = tmp_path / "projects"
+    initial = skill_listing(("a", "initial skill"), ("plugin:b", "plugin b"))
+    update = skill_listing(("plugin:c", "plugin c"))
+    update["attachment"]["isInitial"] = False
+    report = analyze(write_session(projects, "s", [initial, update, rec_user(),
+                                                      rec_assistant("a")]), tmp_path)
+    names = {item["name"] for item in report["startup"]}
+    assert {"skill:a", "skill:plugin:b", "skill:plugin:c"} <= names
 
 
 def test_builtin_unprefixed_skills_are_not_flagged_or_duplicate_sources(tmp_path):
