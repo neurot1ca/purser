@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+pytest-cache-files-*/
 .tmp/
 .claude/settings.local.json
 .claude/settings.local.json.bak-*
