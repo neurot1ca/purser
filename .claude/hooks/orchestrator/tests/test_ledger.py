@@ -700,3 +700,24 @@ def test_session_record_rejects_grounded_contract_with_missing_objective_or_crit
     assert res3["status"] == ledger.OK
     assert res3["code"] == "LEDGER_WRITTEN"
 
+
+def test_plan_session_record_accepts_empty_scope_without_relaxing_phase_validation(tmp_path):
+    store = ledger.SessionLedger(tmp_path)
+    plan = ledger.build_session_record(
+        "plan-task", "plan-thread", "plan_standard", "gpt-6-sol", "high",
+        phase="plan", scope=[],
+    )
+    assert store.save(plan)["status"] == ledger.OK
+    assert store.load("plan-task")["record"] == plan
+
+    invalid_phase = ledger.build_session_record(
+        "bad-phase", "thread", "normal", "gpt-6-sol", "high",
+        phase="unknown", scope=[],
+    )
+    assert store.save(invalid_phase)["code"] == "LEDGER_RECORD_INVALID"
+
+    invalid_implementation = ledger.build_session_record(
+        "bad-scope", "thread", "normal", "gpt-6-sol", "high",
+        phase="implementation", scope=[],
+    )
+    assert store.save(invalid_implementation)["code"] == "LEDGER_RECORD_INVALID"

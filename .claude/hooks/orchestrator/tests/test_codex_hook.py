@@ -168,7 +168,18 @@ def test_plan_sync_read_only_artifact_and_mutation(workspace, config):
     assert bundle["claude_review_mode"] == policy.FULL
     assert bundle["reviewer1_skipped_reason"] == "PHASE_PLAN"
     assert bundle["reviewer1_result"] is None
-    assert any(f["code"] == "PLAN_MUTATED_REPO" for f in bundle["findings"])
+    mutation = next(f for f in bundle["findings"] if f["code"] == "PLAN_MUTATED_REPO")
+    assert "concurrent writer may be the cause" in mutation["message"]
+    assert "file1.py" in mutation["message"]
+    assert not {"TASK_CONTRACT_NOT_GROUNDED", "WORKER_VALIDATION_UNVERIFIED"} & {
+        f["code"] for f in bundle["findings"]
+    }
+    assert bundle["worker_validation"] is None
+    stored = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")
+    assert stored["status"] == ledger.OK
+    assert stored["record"]["live_thread"]["phase"] == "plan"
     assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == content
     assert state in Path(bundle["plan_path"]).parents
     assert len(bundle["plan_summary"]) <= 4000
@@ -189,6 +200,10 @@ def test_plan_async_result(workspace, config):
     assert bundle["phase"] == "plan" and bundle["plan_summary"] == "Async plan."
     assert bundle["reviewer1_skipped_reason"] == "PHASE_PLAN"
     assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["worker_validation"] is None
+    assert not {"TASK_CONTRACT_NOT_GROUNDED", "WORKER_VALIDATION_UNVERIFIED"} & {
+        f["code"] for f in bundle["findings"]
+    }
     finished = [e["payload"] for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_FINISHED"]
     assert len(finished) == 1 and finished[0]["phase"] == "plan"
 

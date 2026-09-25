@@ -2666,8 +2666,9 @@ def post_tool_use(
                 bundle["codex_quota"] = codex_quota.read_quota(thread_id)
             except Exception:
                 bundle["codex_quota"] = None
-            worker_validation = _parse_worker_validation(report)
-            bundle["worker_validation"] = worker_validation
+            if pending.get("phase") != "plan":
+                worker_validation = _parse_worker_validation(report)
+                bundle["worker_validation"] = worker_validation
         except WiringError as error:
             thread_id = None
             bundle["findings"].append(_finding("THREAD_ID_UNRECOVERABLE", str(error)))
@@ -2826,7 +2827,8 @@ def post_tool_use(
             if pending.get("phase") == "plan" and delta["changed_paths"]:
                 bundle["findings"].append(_finding(
                     "PLAN_MUTATED_REPO",
-                    "Repository source changed during a read-only plan call: "
+                    "Repository source changed during a read-only plan call; "
+                    "a concurrent writer may be the cause: "
                     + ", ".join(delta["changed_paths"][:10]),
                 ))
                 force_full_review = True
@@ -3187,14 +3189,14 @@ def post_tool_use(
                             _concurrent_writer_message(classification),
                         )
                     )
-                if val_status == "FAIL":
+                if pending.get("phase") != "plan" and val_status == "FAIL":
                     bundle["findings"].append(
                         _finding(
                             "WORKER_VALIDATION_FAILED",
                             f"Implementer reported validation failure: {worker_validation['summary'][:300]}",
                         )
                     )
-                elif val_status == "UNKNOWN":
+                elif pending.get("phase") != "plan" and val_status == "UNKNOWN":
                     bundle["findings"].append(
                         _finding(
                             "WORKER_VALIDATION_UNVERIFIED",
@@ -3202,7 +3204,7 @@ def post_tool_use(
                         )
                     )
 
-                if not is_grounded:
+                if pending.get("phase") != "plan" and not is_grounded:
                     bundle["findings"].append(
                         _finding(
                             "TASK_CONTRACT_NOT_GROUNDED",

@@ -1046,7 +1046,7 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
     ):
         return False
     if "phase" in thread:
-        if thread.get("phase") not in {"implementation", "operation"}:
+        if thread.get("phase") not in {"implementation", "operation", "plan"}:
             return False
         thread_scope = thread.get("scope")
         if not isinstance(thread_scope, list) or any(
