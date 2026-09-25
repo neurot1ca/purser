@@ -132,7 +132,7 @@ def test_reply_rule_boundary(tmp_path, monkeypatch, length, expected):
     monkeypatch.setattr(Path, "home", lambda: home)
     report = analyze(projects, home)
     assert (report["median_reply_chars"] > 800) is expected
-    assert ("# Replies" in optimize.render(report)) is expected
+    assert "Long replies" not in optimize.render(report)
 
 
 def test_reply_heading_already_present(tmp_path, monkeypatch):
@@ -142,7 +142,7 @@ def test_reply_heading_already_present(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: home)
     projects = tmp_path / "projects"
     write_session(projects, "s", [rec_user(), rec_assistant("a", text="x" * 900)])
-    assert "# Replies is present" in optimize.render(analyze(projects, home))
+    assert "Long replies" not in optimize.render(analyze(projects, home))
 
 
 def sequence_session(projects, name):
@@ -192,7 +192,7 @@ def test_no_files_written_and_compaction_setting(tmp_path, monkeypatch):
     after = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
     assert before == after
     assert report["compaction"] == {"enabled": False, "threshold_tokens": 123456}
-    assert "Compaction advice is off" in optimize.render(report)
+    assert "Compaction advice" not in optimize.render(report)
 
 
 def test_mcp_use_and_deferred_names_contribute_startup_cost(tmp_path):
@@ -232,7 +232,7 @@ def test_compaction_defaults_on_when_not_configured(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: home)
     report = analyze(tmp_path / "projects", home)
     assert report["compaction"]["enabled"] is True
-    assert "Compaction advice is on (default)" in optimize.render(report)
+    assert "Compaction advice" not in optimize.render(report)
 
 
 def test_plain_output_reconfigures_cp1254_stdout_and_is_ascii(tmp_path, monkeypatch):
@@ -241,8 +241,9 @@ def test_plain_output_reconfigures_cp1254_stdout_and_is_ascii(tmp_path, monkeypa
     monkeypatch.setattr(optimize.sys, "stdout", stream)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     assert optimize.main(["--projects-root", str(tmp_path / "projects")]) == 0
+    stream.flush()
     assert stream.encoding.lower() == "utf-8"
-    assert output.getvalue().decode("utf-8").isascii()
+    assert "**⚓ Purser optimize**" in output.getvalue().decode("utf-8")
 
 
 def test_latest_interactive_startup_is_deduped_but_usage_spans_window(tmp_path):
@@ -359,5 +360,88 @@ def test_contained_sequence_keeps_higher_saving_and_large_values_use_m(tmp_path)
     report["sequences"] = [{"sequence": short, "occurrences": 3, "sessions": 3,
                             "weighted_saving": 18_022_000}]
     rendered = optimize.render(report)
-    assert "18.0M weighted tokens" in rendered
-    assert rendered.isascii()
+    assert "18M tokens over the last 30 days" in rendered
+    assert "**⚓ Purser optimize**" in rendered
+
+
+def _render_report(*, startup=(), hidden=(), sequences=(), days=30):
+    return optimize.render({"startup": list(startup), "hidden": list(hidden),
+                            "sequences": list(sequences), "days": days})
+
+
+def test_render_costs_scale_to_500_messages():
+    output = _render_report(startup=[{"name": "plugin:design-tool", "kind": "plugin",
+                                      "tokens_per_request": 530.6, "requests_loaded": 14,
+                                      "uses": 0, "flagged": True}])
+    assert "~265.3K tokens per 500 messages" in output
+    assert "Disable the plugin." in output
+
+
+def test_render_repeated_sequence_keeps_window_total_unscaled():
+    output = _render_report(sequences=[{"sequence": (("Bash git add",), ("Bash git commit",)),
+                                       "weighted_saving": 480_000, "occurrences": 4,
+                                       "sessions": 3}], days=30)
+    assert "could have saved ~480K tokens over the last 30 days" in output
+    assert "per 500 messages" not in output
+    assert "Turn this sequence into one script." in output
+
+
+def test_hidden_sessions_use_absolute_count_without_weighted_label():
+    output = _render_report(hidden=[{"entrypoint": "sdk-py", "sessions": 174,
+                                    "weighted_tokens": 21_000_000,
+                                    "share": .04,
+                                    "prompts": [{"signature": "Run security-review for sdk-py",
+                                                 "share": .04}]}])
+    assert "**174 hidden sessions used ~21M tokens in 30 days.**" in output
+    assert "They start with “Run security-review for sdk-py”. Look at the plugin that launches them." in output
+    assert "weighted" not in output
+    assert "%" not in output
+    assert output.endswith("\n\n" + _LEARNING_FOOTER)
+
+
+def test_hidden_prompt_is_cut_at_sentence_end_or_60_chars_with_ellipsis():
+    prompt = "Investigate this unusually long security issue involving a vulnerable dependency across several repositories"
+    output = _render_report(hidden=[{"entrypoint": "sdk-py", "sessions": 1,
+                                    "weighted_tokens": 500,
+                                    "prompts": [{"signature": prompt}]}])
+    excerpt = prompt[:60] + "…"
+    assert f"They start with “{excerpt}”. Look at the plugin that launches them." in output
+
+
+def test_raw_mcp_uuid_is_never_rendered():
+    connector_id = "1a59c906-04da-521d-bda7-7f71b9f9e01c"
+    output = _render_report(startup=[{"name": f"mcp:{connector_id}", "kind": "MCP",
+                                      "tokens_per_request": 100, "requests_loaded": 14,
+                                      "uses": 0, "flagged": True}])
+    assert connector_id not in output
+    assert "unnamed claude.ai connector" in output
+
+
+def test_anthropic_document_skills_are_grouped():
+    skills = [{"name": f"skill:anthropic:document-skills:{name}", "kind": "skill",
+               "tokens_per_request": 10, "total_tokens": 100, "flagged": True}
+              for name in ("pptx", "xlsx", "docx", "pdf")]
+    output = _render_report(startup=skills)
+    assert "Unused document skills (pptx, xlsx, docx, pdf)" in output
+    assert output.count("Remove the unused skills.") == 1
+
+
+def test_dropped_report_sections_and_notes_are_absent():
+    output = _render_report(startup=[{"name": "plugin:design", "kind": "plugin",
+                                      "tokens_per_request": 100, "requests_loaded": 2,
+                                      "uses": 0, "flagged": True}])
+    for removed in ("A.", "B.", "C.", "D.", "E.", "F.", "Duplicate skills",
+                    "System prompt and eager tool schemas", "Compaction advice",
+                    "Long replies"):
+        assert removed not in output
+
+
+_LEARNING_FOOTER = ("🧠 Purser learns as it works in this project: it measures how long its work really takes, "
+                    "sharpens its estimates, and points out where tokens and time can be saved.")
+
+
+def test_empty_state_line_and_learning_footer_when_no_actionable_costs():
+    output = _render_report()
+    assert "✨ No clear token waste found in your recent sessions." in output
+    assert "1." not in output
+    assert output.endswith("\n\n" + _LEARNING_FOOTER)

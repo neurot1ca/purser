@@ -399,6 +399,10 @@ def _format_number(value: float) -> str:
     return str(round(value))
 
 
+def _compact_tokens(value: float) -> str:
+    return _format_number(value).replace(".0K", "K").replace(".0M", "M")
+
+
 def analyze(projects_root: Path, days: int, home: Path | None = None,
             project_root: Path | None = None) -> dict[str, Any]:
     now = datetime.now().timestamp()
@@ -517,6 +521,8 @@ def analyze(projects_root: Path, days: int, home: Path | None = None,
     settings = compaction_advisor._settings()
     return {"startup": startup_items, "startup_note": "System prompt and eager tool schemas are not recorded in transcripts and cannot be attributed.",
             "hidden": [{"entrypoint": ep, "share": value / total_weight if total_weight else 0,
+                        "weighted_tokens": value,
+                        "sessions": sum(1 for session in sessions if session["entrypoint"] == ep),
                         "prompts": [{"signature": prompt, "share": cost / total_weight if total_weight else 0}
                                     for prompt, cost in sorted(prompts.items(), key=lambda x: -x[1])[:3]]}
                        for ep, value in sorted(all_entry.items(), key=lambda x: -x[1])
@@ -525,7 +531,8 @@ def analyze(projects_root: Path, days: int, home: Path | None = None,
             "duplicate_skills": duplicates, "median_reply_chars": median_reply,
             "reply_rule_present": has_reply_rule, "reply_count": len(replies), "sequences": shown,
             "compaction": {"enabled": settings["enabled"], "threshold_tokens": settings["threshold_tokens"]},
-            "sessions": len(sessions), "requests": len(requests), "weighted_tokens": total_weight}
+            "sessions": len(sessions), "requests": len(requests), "weighted_tokens": total_weight,
+            "days": days}
 
 
 def _contains_sequence(longer: tuple[Any, ...], shorter: tuple[Any, ...]) -> bool:
@@ -591,44 +598,103 @@ def _sequence_candidates(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]
     return sorted(candidates, key=lambda item: (-item["weighted_saving"], -item["length"], item["sequence"]))
 
 
+def _display_name(value: str) -> str:
+    """Make configured names readable without exposing opaque connector IDs."""
+    if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}", value):
+        return "an unnamed claude.ai connector"
+    return re.sub(r"[-_]+", " ", value).strip()
+
+
+def _hidden_prompt_line(row: dict[str, Any]) -> str:
+    prompt = row.get("prompts", [{}])[0].get("signature") if row.get("prompts") else None
+    excerpt = _prompt_excerpt(prompt) if prompt else "an unrecorded prompt"
+    return f"They start with “{excerpt}”. Look at the plugin that launches them."
+
+
+def _prompt_excerpt(prompt: str, limit: int = 60) -> str:
+    prompt = " ".join(prompt.split())
+    sentence = re.search(r"[.!?](?=\s|$)", prompt)
+    end = min(sentence.end(), limit) if sentence else min(len(prompt), limit)
+    excerpt = prompt[:end].rstrip()
+    if end < len(prompt):
+        excerpt += "…"
+    return excerpt
+
+
+def _startup_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [item for item in report.get("startup", []) if item.get("flagged")]
+    doc_skills = []
+    doc_plugins = set()
+    for item in rows:
+        if item["kind"] != "skill":
+            continue
+        parts = item["name"].removeprefix("skill:").split(":")
+        if (parts[-1].lower() in {"pptx", "xlsx", "docx", "pdf"}
+                and any(part.lower() in {"anthropic", "document-skills", "document-skills-plugin"}
+                        for part in parts)):
+            doc_skills.append(item)
+            doc_plugins.add(parts[0])
+    plugins = {item["name"][7:] for item in rows
+               if item["kind"] == "plugin" and item["name"][7:] not in doc_plugins}
+    candidates = []
+    for item in rows:
+        if item["kind"] == "plugin" and item["name"][7:] in doc_plugins:
+            continue
+        name = item["name"].split(":", 1)[-1]
+        if item["kind"] == "skill":
+            if item in doc_skills:
+                continue
+            if any(name.startswith(plugin + ":") for plugin in plugins):
+                continue
+        candidates.append(item)
+    if doc_skills:
+        candidates.append({"kind": "document_skills", "items": doc_skills,
+                           "total_tokens": sum(i["total_tokens"] for i in doc_skills),
+                           "tokens_per_request": sum(i["tokens_per_request"] for i in doc_skills)})
+    return candidates
+
+
 def render(report: dict[str, Any]) -> str:
-    lines = ["A. Startup cost vs use"]
-    for item in report["startup"][:7]:
-        flag = " - loaded on every request, never used" if item["flagged"] else ""
-        lines.append(f"- {item['name']}: {_format_number(item['tokens_per_request'])} tokens/request; {item['requests_loaded']} requests loaded; {item['uses']} uses{flag}")
-    if not report["startup"]:
-        lines.append("- none found")
-    lines.append("- " + report["startup_note"])
-    lines.append("B. Hidden sessions")
-    for row in report["hidden"][:2]:
-        lines.append(f"- {row['entrypoint']}: {_format_number(row['share'] * 100)}% weighted-token share")
-        for prompt in row["prompts"][:3]:
-            lines.append(f"  - {prompt['signature']!r} - {_format_number(prompt['share'] * 100)}% overall")
-    if not report["hidden"]:
-        lines.append("- none found")
-    lines.append("C. Duplicate skills")
-    for item in report["duplicate_skills"][:5]:
-        lines.append(f"- {item['name']}: {', '.join(item['sources'])}")
-    if not report["duplicate_skills"]:
-        lines.append("- none found")
-    lines.append("D. Long replies")
-    if report["reply_rule_present"]:
-        lines.append(f"- Median final reply: {_format_number(report['median_reply_chars'])} chars ({report['reply_count']} turns); # Replies is present in ~/.claude/CLAUDE.md.")
-    elif report["median_reply_chars"] > 800:
-        lines.append(f"- Median final reply: {_format_number(report['median_reply_chars'])} chars ({report['reply_count']} turns). Suggested ~/.claude/CLAUDE.md rule:")
-        lines.extend(["  # Replies", "  Lead with the answer.", "  Keep replies short, at most 5 lines unless asked for detail.", "  No tables unless asked."])
-    else:
-        lines.append(f"- Median final reply: {_format_number(report['median_reply_chars'])} chars ({report['reply_count']} turns); no rule suggested.")
-    lines.append("E. Repeated sequences")
-    for item in report["sequences"][:5]:
-        seq = " -> ".join("+".join(step) for step in item["sequence"])
-        lines.append(f"- {seq}: {item['occurrences']} occurrences in {item['sessions']} sessions; estimated saving {_format_number(item['weighted_saving'])} weighted tokens. Suggestion: turn this sequence into one script.")
-    if not report["sequences"]:
-        lines.append("- none found")
-    advice = report["compaction"]
-    state = "on" if advice["enabled"] else "off"
-    qualifier = " (default)" if advice["enabled"] else ""
-    lines.append(f"F. Compaction advice is {state}{qualifier}: at >= {_format_number(advice['threshold_tokens'])} context and a phase boundary Purser prepares a handoff and suggests /compact. Settings: [compaction] in ~/.orchestrator/config.toml.")
+    days = report.get("days", 30)
+    entries = []
+    for item in _startup_candidates(report):
+        kind = item["kind"]
+        per_500 = item["tokens_per_request"] * 500
+        cost = f"~{_compact_tokens(per_500)} tokens per 500 messages"
+        if kind == "MCP":
+            name = item["name"].removeprefix("mcp:")
+            if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}", name):
+                sentence = f"An unnamed claude.ai connector costs {cost} and had 0 uses in {item['requests_loaded']} requests."
+            else:
+                sentence = f"{_display_name(name)} connector costs {cost} and had 0 uses in {item['requests_loaded']} requests."
+            entries.append((per_500, "🔌", sentence, "Remove the connector."))
+        elif kind == "plugin":
+            name = item["name"].removeprefix("plugin:")
+            entries.append((per_500, "🧩", f"{_display_name(name)} plugin costs {cost} and had 0 uses in {item['requests_loaded']} requests.", "Disable the plugin."))
+        elif kind == "document_skills":
+            names = ", ".join(i["name"].split(":")[-1] for i in item["items"])
+            entries.append((per_500, "📚", f"Unused document skills ({names}) cost {cost}.", "Remove the unused skills."))
+        else:
+            name = item["name"].removeprefix("skill:").split(":")[-1]
+            entries.append((per_500, "📚", f"Unused {_display_name(name)} skill costs {cost}.", "Remove the unused skills."))
+    for item in report.get("sequences", []):
+        seq = " → ".join(" + ".join(step) for step in item["sequence"])
+        saving = f"~{_compact_tokens(item['weighted_saving'])} tokens over the last {days} days"
+        entries.append((item["weighted_saving"], "🔁", f"Repeated Bash work ({seq}) could have saved {saving}.", "Turn this sequence into one script."))
+    for row in report.get("hidden", []):
+        source = _hidden_prompt_line(row)
+        sentence = (f"{row.get('sessions', 0)} hidden sessions used "
+                    f"~{_compact_tokens(row.get('weighted_tokens', 0))} tokens "
+                    f"in {days} days.")
+        entries.append((row.get("weighted_tokens", 0), "👀", sentence,
+                        source))
+    entries.sort(key=lambda entry: -entry[0])
+    lines = ["**⚓ Purser optimize**", "", "Biggest token drains"]
+    for index, (_, emoji, sentence, action) in enumerate(entries[:7], 1):
+        lines.append(f"{index}. {emoji} **{sentence}** {action}")
+    if not entries:
+        lines.append("✨ No clear token waste found in your recent sessions.")
+    lines.extend(["", "🧠 Purser learns as it works in this project: it measures how long its work really takes, sharpens its estimates, and points out where tokens and time can be saved."])
     return "\n".join(lines)
 
 
