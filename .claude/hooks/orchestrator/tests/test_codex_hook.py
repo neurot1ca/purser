@@ -1,4 +1,5 @@
 import io
+import hashlib
 import json
 import os
 from dataclasses import replace
@@ -149,16 +150,105 @@ def response_bundle(response, config):
     return json.loads(output[0]["text"])
 
 
-@pytest.mark.parametrize("name", ("codex_start", "codex_result", "codex_cancel"))
-def test_async_tools_fail_closed_until_lifecycle_is_wired(workspace, config, name):
+@pytest.mark.parametrize("name", ("codex_result", "codex_cancel"))
+def test_async_followup_tools_stay_denied(workspace, config, name):
     repo, state = workspace
     call = event(tool_name=f"mcp__plugin_purser_codex-main__{name}")
-    call["tool_input"] = {"jobId": "0" * 64} if name != "codex_start" else {
-        "prompt": orch() + "\nDo the work.", "call": "claude-must-not-control-this"
-    }
+    call["tool_input"] = {"jobId": "0" * 64}
     result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert not list((state / "pending").glob("*.json"))
+
+
+START_TOOL = "mcp__plugin_purser_codex-main__codex_start"
+
+
+def test_async_start_requires_orch_and_denies_internal_pre_error(workspace, config):
+    repo, state = workspace
+    call = event(START_TOOL, prompt="Do the work.")
+    denied = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert "MISSING_ORCH_LINE" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    failed = codex.internal_pre_error_response(call, RuntimeError("broken"), state_root=state)
+    assert failed["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert not list((state / "pending").glob("*.json"))
+
+
+def test_async_start_rewrites_and_retries_same_call(workspace, config):
+    repo, state = workspace
+    prompt = orch(scope="file0.py", reason="repeated_failure") + "|eta=8m\nDo the work."
+    call = event(START_TOOL, prompt=prompt, call="claude-value", model="wrong", config={"model_reasoning_effort": "low"})
+    first = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    updated = first["hookSpecificOutput"]["updatedInput"]
+    assert updated["call"] != "claude-value"
+    assert uuid.UUID(updated["call"])
+    assert updated["mode"] == "new"
+    assert updated["model"] == config["routes"]["normal"]["model"]
+    assert updated["config"]["model_reasoning_effort"] == config["routes"]["normal"]["effort"]
+    pending = codex._read_pending(state, call)
+    assert pending["async_call"] == updated["call"] and pending["job_id"] is None
+    assert pending["baseline"]["status"] == ledger.OK
+    assert (pending["reason"], pending["eta_minutes"]) == ("repeated_failure", 8)
+    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"] == updated
+    assert len([e for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_STARTED"]) == 1
+
+
+def test_async_start_post_stores_only_job_id_without_finalizing(workspace, config):
+    repo, state = workspace
+    call = event(START_TOOL)
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
+    response = {"structuredContent": {"jobId": job_id, "state": "RUNNING"}}
+    post = {**call, "hook_event_name": "PostToolUse", "tool_response": response}
+    result = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
+                                 reviewer=lambda **kwargs: pytest.fail("reviewer ran at start"))
+    assert response_bundle(result, config) == {"jobId": job_id, "state": "RUNNING",
+                                                "next": "Wait for completion, then call codex_result with this jobId."}
+    assert codex._read_pending(state, call)["job_id"] == job_id
+    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))["call_key"] == codex._call_key(call)
+    record = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]
+    assert record["last_outcome"] is None and record["pending_call_baseline"] is not None
+    assert not [e for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_FINISHED"]
+
+
+@pytest.mark.parametrize("fail_store", (False, True))
+def test_async_start_failure_uses_ambiguous_path_and_cancels_job(workspace, config, monkeypatch, fail_store):
+    repo, state = workspace
+    call = event(START_TOOL)
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
+    cancelled = []
+    monkeypatch.setattr(codex, "_cancel_start_job", lambda root, call_uuid, job: cancelled.append(job) or True)
+    bridge_job = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    bridge_job.parent.mkdir(parents=True)
+    bridge_job.write_text(json.dumps({"jobId": job_id, "call": updated["call"]}), encoding="utf-8")
+    if fail_store:
+        write = codex._atomic_json_write
+        def fail_job_write(path, value):
+            if path == codex._pending_path(state, call) and value.get("job_id"):
+                raise OSError("job association could not be stored")
+            return write(path, value)
+        monkeypatch.setattr(codex, "_atomic_json_write", fail_job_write)
+    post = {**call, "hook_event_name": "PostToolUse", "tool_response":
+            {"structuredContent": {"jobId": job_id, "state": "RUNNING" if fail_store else "FAILED",
+                                   **({} if fail_store else {"errorCode": "CODEX_FAILED"})},
+             "isError": not fail_store}}
+    result = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    assert "FULL" in result["hookSpecificOutput"]["additionalContext"]
+    assert cancelled == [job_id]
+    assert not list((state / "pending").glob("*.json"))
+    assert "ASYNC_CALL_ALREADY_ACCEPTED" in codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert any(e["event_type"] == "IMPLEMENTER_FAILED" for e in _all_telemetry_events(state))
+
+
+def test_async_reply_start_keeps_recorded_thread(workspace, config):
+    repo, state = workspace
+    save_live_thread(state, reason="continue")
+    call = event(START_TOOL, prompt="Continue.", mode="reply", threadId="thread-1")
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["mode"] == "reply" and updated["threadId"] == "thread-1"
+    assert "model" not in updated and "config" not in updated
+    pending = codex._read_pending(state, call)
+    assert pending["prior_thread_id"] == "thread-1" and pending["reason"] == "continue"
 
 
 def test_plugin_tool_names_route_new_and_reply(workspace, config):

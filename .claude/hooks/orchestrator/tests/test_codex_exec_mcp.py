@@ -133,7 +133,12 @@ def test_initialize_and_list(client):
         "capabilities": {"tools": {}},
     }
     client.send(2, "tools/list")
-    assert [tool["name"] for tool in client.receive()["result"]["tools"]] == ["codex", "codex-reply", "codex_start", "codex_result", "codex_cancel"]
+    tools = client.receive()["result"]["tools"]
+    assert [tool["name"] for tool in tools] == ["codex", "codex-reply", "codex_start", "codex_result", "codex_cancel"]
+    start = next(tool for tool in tools if tool["name"] == "codex_start")
+    assert "call" not in start["inputSchema"]["required"]
+    missing = call(client, 3, "codex_start", {"prompt": "work"})
+    assert missing["structuredContent"]["errorCode"] == "INVALID_ARGUMENT"
 
 
 def test_new_call_preserves_stdin_and_hook_result(client, area):
@@ -290,6 +295,19 @@ def test_async_failure_timeout_cancel(area):
         assert finish(slow, job["jobId"], "CANCELLED")["errorCode"] == "CANCELLED"
     finally:
         slow.close()
+
+
+def test_async_local_cancel_signal(area):
+    client = Client(area, extra_env={"FAKE_SLOW": "1"})
+    try:
+        job = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "cancel"})
+        record = json.loads((area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json")).read_text(encoding="utf-8"))
+        with socket.create_connection(("127.0.0.1", record["signalPort"]), timeout=4) as connection:
+            connection.sendall(f"{job['jobId']}:{record['signalToken']}:CANCEL".encode("ascii"))
+            assert connection.recv(1) == b"1"
+        assert finish(client, job["jobId"], "CANCELLED")["errorCode"] == "CANCELLED"
+    finally:
+        client.close()
 
 
 def test_async_reply_and_restart_reconciliation(area):

@@ -71,7 +71,7 @@ TOOL_SCHEMAS += [
         "type": "object", "properties": {**TOOL_SCHEMAS[0]["inputSchema"]["properties"],
             "call": {"type": "string"}, "mode": {"type": "string", "enum": ["new", "reply"]},
             "threadId": {"type": "string"}, "timeoutSeconds": {"type": "number"}},
-        "required": ["call", "prompt"]}},
+        "required": ["prompt"]}},
     {"name": "codex_result", "description": "Read a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {"jobId": {"type": "string"}}, "required": ["jobId"]}},
     {"name": "codex_cancel", "description": "Cancel a durable Codex job.", "inputSchema": {
@@ -272,11 +272,16 @@ class Server:
         with connection:
             try:
                 connection.settimeout(5)
-                identity = connection.recv(256).decode("ascii").strip().split(":", 1)
-                if len(identity) != 2:
+                identity = connection.recv(256).decode("ascii").strip().split(":")
+                if len(identity) not in (2, 3):
                     return
                 job = self._read_job(identity[0])
                 if job is None or job.get("signalToken") != identity[1]:
+                    return
+                if len(identity) == 3:
+                    if identity[2] == "CANCEL":
+                        cancelled = self._cancel_job({"jobId": identity[0]})
+                        connection.sendall(b"1" if cancelled.get("structuredContent", {}).get("state") == "CANCELLED" else b"0")
                     return
                 event = self.job_events.get(identity[0])
                 if event is None:

@@ -11,11 +11,13 @@ import math
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from typing import Any
 
 import json_transport
@@ -73,6 +75,7 @@ CODEX_ASYNC_TOOL_NAMES = _configured_tool_names(
     for prefix in ("mcp__codex-main", "mcp__plugin_purser_codex-main")
     for name in ("codex_start", "codex_result", "codex_cancel")
 )
+CODEX_START_TOOL_NAMES = frozenset(name for name in CODEX_ASYNC_TOOL_NAMES if name.endswith("__codex_start"))
 CODEX_TOOLS = CODEX_TOOL_NAMES | CODEX_REPLY_TOOL_NAMES | CODEX_ASYNC_TOOL_NAMES
 _BASELINE_VOLATILE_MARKERS = ("timestamp", "duration", "elapsed", "budget")
 
@@ -1078,6 +1081,7 @@ def internal_pre_error_response(
 ) -> dict[str, Any]:
     """Allow an internally failed PreToolUse call while making the bypass visible."""
 
+    # Async start cannot launch without a baseline for its later result review.
     if event.get("tool_name") in CODEX_ASYNC_TOOL_NAMES:
         return _deny("ASYNC_ENFORCEMENT_FAILED", "Async Codex hook failed; FULL review is required.")
 
@@ -1105,7 +1109,7 @@ def pre_tool_use(
 
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
-    if event.get("tool_name") in CODEX_ASYNC_TOOL_NAMES:
+    if event.get("tool_name") in CODEX_ASYNC_TOOL_NAMES - CODEX_START_TOOL_NAMES:
         return _deny(
             "ASYNC_HOOK_UNAVAILABLE",
             "Async Codex lifecycle enforcement is incomplete; use synchronous codex or codex-reply.",
@@ -1125,9 +1129,36 @@ def pre_tool_use(
             )
 
         tool_name = event["tool_name"]
+        is_start = tool_name in CODEX_START_TOOL_NAMES
+        mode = tool_input.get("mode", "new") if is_start else None
+        if is_start and mode not in ("new", "reply"):
+            return _deny("INVALID_ASYNC_MODE", "codex_start mode must be new or reply.")
+        new_call = tool_name in CODEX_TOOL_NAMES or (is_start and mode == "new")
+        reply_call = tool_name in CODEX_REPLY_TOOL_NAMES or (is_start and mode == "reply")
+        if is_start:
+            input_hash = hashlib.sha256(json_transport.dumps(
+                {key: value for key, value in tool_input.items() if key != "call"},
+                sort_keys=True, default=str,
+            ).encode("utf-8")).hexdigest()
+            try:
+                previous = _read_pending(_state_root(state_root), event)
+            except WiringError as error:
+                if "missing" not in str(error):
+                    return _deny("ASYNC_PENDING_INVALID", str(error))
+            else:
+                if (previous.get("async_ready") is True
+                        and previous.get("async_input_hash") == input_hash
+                        and isinstance(previous.get("async_updated_input"), dict)):
+                    return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                   "updatedInput": previous["async_updated_input"]}}
+                return _deny("ASYNC_CALL_CONFLICT", "This tool use already has a pending call.")
+            call_uuid = str(uuid.uuid5(uuid.NAMESPACE_OID, _call_key(event)))
+            prior_job = hashlib.sha256(call_uuid.encode("utf-8")).hexdigest()
+            if (_state_root(state_root) / "codex_exec_mcp" / "jobs" / f"{prior_job}.json").exists():
+                return _deny("ASYNC_CALL_ALREADY_ACCEPTED", "This tool use already has a bridge job.")
         parsed = policy.parse_orch_prompt(tool_input.get("prompt"), loaded_config)
         reply_without_orch = (
-            tool_name in CODEX_REPLY_TOOL_NAMES
+            reply_call
             and parsed.code == policy.MISSING_ORCH_LINE
             and isinstance(tool_input.get("prompt"), str)
         )
@@ -1138,7 +1169,7 @@ def pre_tool_use(
                 event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
             )
 
-        if (parsed.valid and tool_name in CODEX_TOOL_NAMES
+        if (parsed.valid and new_call
                 and parsed.reason != "user_override"):
             try:
                 quota = codex_quota.read_latest_quota()
@@ -1168,7 +1199,7 @@ def pre_tool_use(
             pass
         _call_key(event)
         indexed_root = None
-        if tool_name in CODEX_REPLY_TOOL_NAMES:
+        if reply_call:
             indexed_root, index_error = _indexed_reply_root(runtime_root, tool_input.get("threadId"))
             if index_error:
                 message = (
@@ -1186,8 +1217,10 @@ def pre_tool_use(
         )
         record: Mapping[str, Any] | None
         live_thread: Mapping[str, Any] | None
-        if tool_name in CODEX_REPLY_TOOL_NAMES:
+        if reply_call:
             forbidden = {"model", "config", "developer-instructions"}.intersection(tool_input)
+            if is_start:
+                forbidden |= set(tool_input) - {"prompt", "threadId", "mode", "call", "timeoutSeconds"}
             if forbidden:
                 return _observed_denial(
                     event,
@@ -1251,7 +1284,7 @@ def pre_tool_use(
         if reply_without_orch and parsed.reason is not None:
             reason_source = "inherited"
         if (
-            tool_name in CODEX_REPLY_TOOL_NAMES
+            reply_call
             and effective_reason is None
             and isinstance(live_thread, Mapping)
             and isinstance(live_thread.get("reason"), str)
@@ -1271,7 +1304,7 @@ def pre_tool_use(
             eta_minutes=parsed.eta_minutes,
         )
 
-        if tool_name in CODEX_TOOL_NAMES:
+        if new_call:
             decision = policy.fresh_codex_decision(requested, live_thread)
             if not decision.allowed:
                 return _observed_denial(
@@ -1311,7 +1344,7 @@ def pre_tool_use(
         updated["prompt"] = parsed.prompt
         if parsed.phase == "implementation":
             updated["prompt"] = _append_worker_validation_instruction(updated["prompt"])
-        if tool_name in CODEX_TOOL_NAMES:
+        if new_call:
             updated["model"] = route.model
             original_codex_config = tool_input.get("config", {})
             if not isinstance(original_codex_config, Mapping):
@@ -1321,6 +1354,9 @@ def pre_tool_use(
             updated["config"] = updated_config
             if "developer-instructions" not in tool_input:
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
+        if is_start:
+            updated["mode"] = mode
+            updated["call"] = call_uuid
 
         resolved_profile = (
             project_profile.load_profile(repository) if repository is not None else None
@@ -1348,7 +1384,7 @@ def pre_tool_use(
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
             )
         if (
-            tool_name in CODEX_REPLY_TOOL_NAMES
+            reply_call
             and baseline.get("status") == ledger.OK
             and _handoff_matches(baseline, live_thread, declared_scope)
         ):
@@ -1387,10 +1423,16 @@ def pre_tool_use(
             "previous_route": previous_route if route_changed else None,
             "new_route": parsed.route if route_changed else None,
         }
+        if is_start:
+            pending.update(async_call=updated["call"], async_mode=mode,
+                           async_input_hash=input_hash, async_updated_input=updated,
+                           async_ready=False, job_id=None,
+                           session_id=event.get("session_id"),
+                           tool_use_id=event.get("tool_use_id"))
         if resolved_profile is not None:
             inherited_checks = (
                 live_thread.get("profile_checks")
-                if tool_name in CODEX_REPLY_TOOL_NAMES and isinstance(live_thread, Mapping)
+                if reply_call and isinstance(live_thread, Mapping)
                 else None
             )
             pending.update(
@@ -1448,7 +1490,6 @@ def pre_tool_use(
             raise WiringError(saved.get("message", "session ledger could not be updated"))
         if continuation_thread_id is not None:
             _record_thread_root(runtime_root, continuation_thread_id, repository)
-
         observation = {
             "task_id": parsed.task_id,
             "state_root": runtime_root,
@@ -1458,8 +1499,8 @@ def pre_tool_use(
             "model": route.model,
             "effort": route.effort,
             "routing_enforced": True,
-            "fresh_thread": tool_name in CODEX_TOOL_NAMES,
-            "reply_call": tool_name in CODEX_REPLY_TOOL_NAMES,
+            "fresh_thread": new_call,
+            "reply_call": reply_call,
             "reason": effective_reason,
             "eta_minutes": parsed.eta_minutes,
             "reason_source": reason_source,
@@ -1469,6 +1510,9 @@ def pre_tool_use(
         }
         _observe("emit", "TASK_ROUTE_SELECTED", **observation)
         _observe("emit", "IMPLEMENTER_STARTED", **observation)
+        if is_start:
+            pending["async_ready"] = True
+            _atomic_json_write(_pending_path(runtime_root, event), pending)
 
         try:
             import claude_transcript_usage
@@ -1533,6 +1577,9 @@ def pre_tool_use(
                 _remove_pending(runtime_root, event)
             except Exception:
                 pass
+        if event.get("tool_name") in CODEX_START_TOOL_NAMES:
+            _record_diagnostic(runtime_root, event, "PreToolUse", error)
+            return _deny("ASYNC_ENFORCEMENT_FAILED", "Async start lacked a durable route/baseline; FULL review is required.")
         recorded = False
         reason = _safe_error(error)
         try:
@@ -1573,6 +1620,81 @@ def _extract_codex_result(tool_response: Any) -> tuple[str, str]:
         if isinstance(thread_id, str) and thread_id:
             return thread_id, content if isinstance(content, str) else ""
     raise WiringError("thread id could not be recovered from Codex MCP text content")
+
+
+def _start_value(tool_response: Any) -> dict[str, Any]:
+    if isinstance(tool_response, Mapping):
+        value = tool_response.get("structuredContent")
+        if isinstance(value, dict):
+            return value
+        tool_response = tool_response.get("content")
+    if isinstance(tool_response, list):
+        for block in tool_response:
+            if isinstance(block, Mapping) and isinstance(block.get("text"), str):
+                try:
+                    value = json.loads(block["text"])
+                except ValueError:
+                    continue
+                if isinstance(value, dict):
+                    return value
+    raise WiringError("codex_start result is unreadable")
+
+
+def _cancel_start_job(root: Path, call_uuid: str, job_id: str) -> bool:
+    """Ask the owning bridge to cancel via its authenticated local signal socket."""
+    if not isinstance(call_uuid, str) or not isinstance(job_id, str):
+        return False
+    if hashlib.sha256(call_uuid.encode("utf-8")).hexdigest() != job_id:
+        return False
+    try:
+        path = root / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+        job = json.loads(path.read_text(encoding="utf-8"))
+        if job.get("jobId") != job_id or job.get("call") != call_uuid:
+            return False
+        with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=3) as connection:
+            connection.sendall(f"{job_id}:{job['signalToken']}:CANCEL".encode("ascii"))
+            return connection.recv(1) == b"1"
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError):
+        return False
+
+
+def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
+                state_root: str | os.PathLike[str] | None) -> dict[str, Any]:
+    root = _state_root(state_root)
+    try:
+        pending = _read_pending(root, event)
+        call_uuid = pending.get("async_call")
+        if pending.get("async_ready") is not True or not isinstance(call_uuid, str):
+            raise WiringError("codex_start has no enforced pending call")
+        value = _start_value(event.get("tool_response"))
+        job_id = value.get("jobId")
+        expected = hashlib.sha256(call_uuid.encode("utf-8")).hexdigest()
+        if (not isinstance(job_id, str) or job_id != expected
+                or value.get("state") not in {"QUEUED", "RUNNING", "SUCCEEDED"}
+                or (isinstance(event.get("tool_response"), Mapping)
+                    and event["tool_response"].get("isError"))):
+            raise WiringError(value.get("errorCode", "codex_start failed or returned a mismatched job"))
+        if pending.get("job_id") not in (None, job_id):
+            raise WiringError("pending call already belongs to another job")
+        if pending.get("job_id") is None:
+            pending["job_id"] = job_id
+            _atomic_json_write(_pending_path(root, event), pending)
+        _atomic_json_write(root / "async_jobs" / f"{job_id}.json", {
+            "jobId": job_id, "call": call_uuid, "call_key": _call_key(event),
+            "session_id": pending.get("session_id"), "project_key": pending.get("project_key"),
+        })
+        return _replacement({"jobId": job_id, "state": value["state"],
+                             "next": "Wait for completion, then call codex_result with this jobId."},
+                            _load_config(config))
+    except Exception as error:
+        failure = post_tool_use_failure({**event, "error": _safe_error(error)},
+                                        state_root=state_root)
+        output = failure.get("hookSpecificOutput", {})
+        return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                "additionalContext": output.get("additionalContext", "Codex start failed; FULL review is required."),
+                _load_config(config)["post_tool_output_field"]: [{"type": "text", "text":
+                    json_transport.dumps({"state": "FAILED", "ambiguous_outcome": True,
+                                          "claude_review_mode": policy.FULL})}]}}
 
 
 def _persist_raw_output(root: Path, event: Mapping[str, Any], value: Any, suffix: str = "") -> Path:
@@ -2183,6 +2305,8 @@ def post_tool_use(
 
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
+    if event.get("tool_name") in CODEX_START_TOOL_NAMES:
+        return _post_start(event, config, state_root)
     start_time = time.monotonic()
     try:
         loaded_config = _load_config(config)
@@ -2858,6 +2982,19 @@ def post_tool_use_failure(
     del config, reviewer
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
+    if event.get("tool_name") in CODEX_START_TOOL_NAMES:
+        try:
+            root = _state_root(state_root)
+            try:
+                call_uuid = _read_pending(root, event).get("async_call")
+            except WiringError:
+                tool_input = event.get("tool_input")
+                call_uuid = tool_input.get("call") if isinstance(tool_input, Mapping) else None
+            if isinstance(call_uuid, str):
+                _cancel_start_job(root, call_uuid,
+                                  hashlib.sha256(call_uuid.encode("utf-8")).hexdigest())
+        except Exception:
+            pass
     runtime_root: Path | None = None
     pending: Mapping[str, Any] | None = None
     try:
@@ -2908,6 +3045,8 @@ def post_tool_use_failure(
         elif routing_enforced:
             raise WiringError("normal pending call identity is incomplete")
         _remove_pending(runtime_root, event)
+        if event.get("tool_name") in CODEX_START_TOOL_NAMES and re.fullmatch(r"[0-9a-f]{64}", str(pending.get("job_id"))):
+            (runtime_root / "async_jobs" / f"{pending['job_id']}.json").unlink(missing_ok=True)
         routing_note = (
             " Routing was NOT enforced by PreToolUse."
             if not routing_enforced
