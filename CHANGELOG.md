@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.27 — 2026-09-25
+
+- /purser:plan: read-only sol/high plan saved to a file with a 4000-char summary; prompts mentioning planning get a hint to offer it.
+- Skill: rare branches moved to references/ (25% smaller); receipts in the turn-ending reply, with time left to the 5h quota reset.
+- Skill: finished parallel results presented one at a time; approved multi-part work continues without asking; prompt rules follow GPT-6 guidance.
+- Fresh Codex calls cap tool output at 8000 tokens (pilot); scripts/codex_token_report.py compares before/after.
+- Ledger no longer flags snapshot paths containing 'token' as secrets; async finalize holds an OS lock and returns LEDGER_RECORD_REJECTED.
+
 ## 0.1.26 — 2026-09-25
 
 - Skill: every Codex call runs async; dispatch and result receipts are one bold line with model, effort and quota.
