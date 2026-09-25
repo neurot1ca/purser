@@ -27,6 +27,7 @@ UNBOUNDED_SCOPE = "UNBOUNDED_SCOPE"
 CONFIG_INVALID = "CONFIG_INVALID"
 
 PHASE_OPERATION = "PHASE_OPERATION"
+PHASE_PLAN = "PHASE_PLAN"
 NO_DELTA = "NO_DELTA"
 BELOW_THRESHOLD = "BELOW_THRESHOLD"
 REVIEWER_UNAVAILABLE = "REVIEWER_UNAVAILABLE"
@@ -43,6 +44,7 @@ _ORCH_KEYS = ("task", "phase", "route", "reason", "basis", "scope", "eta")
 _REQUIRED_ORCH_KEYS = ("task", "phase", "route")
 _REVIEWER_SKIP_PRECEDENCE = (
     PHASE_OPERATION,
+    PHASE_PLAN,
     NO_DELTA,
     BELOW_THRESHOLD,
     REVIEWER_UNAVAILABLE,
@@ -183,7 +185,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
     if configured_skip_reasons != set(_REVIEWER_SKIP_PRECEDENCE):
         raise ConfigError(
             "INVALID_CONFIG_FIELD",
-            "reviewer_skip_reasons must contain the four specified skip codes",
+            "reviewer_skip_reasons must contain the specified skip codes",
         )
     configured_results = set(_string_list(config, "reviewer_results"))
     expected_results = {
@@ -427,8 +429,8 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
             )
 
     scope: tuple[str, ...] = ()
-    if values["phase"] == "implementation":
-        if "scope" not in values:
+    if values["phase"] in ("implementation", "plan"):
+        if values["phase"] == "implementation" and "scope" not in values:
             return _orch_failure(
                 remainder,
                 MISSING_REQUIRED_KEY,
@@ -436,15 +438,24 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
                 values,
             )
         try:
-            scope = _implementation_scope(values["scope"])
+            if "scope" in values:
+                scope = _implementation_scope(values["scope"])
         except ValueError as error:
             code = str(error)
             message = (
-                "Implementation scope cannot resolve to the whole repository."
+                "Scope cannot resolve to the whole repository."
                 if code == UNBOUNDED_SCOPE
-                else "Implementation scope must contain repository-relative paths without traversal."
+                else "Scope must contain repository-relative paths without traversal."
             )
             return _orch_failure(remainder, code, message, values)
+
+    if (values["phase"] == "plan") != (values["route"] == "plan_standard"):
+        return _orch_failure(
+            remainder, INVALID_ENUM_VALUE,
+            "The valid plan pairing is phase=plan with route=plan_standard; "
+            "phase=plan cannot use other routes and route=plan_standard cannot use other phases.",
+            values,
+        )
 
     sol_routes = {"normal", "consequential", "escalated"}
     if values["route"] in sol_routes and not values.get("basis", "").strip():
@@ -582,6 +593,8 @@ def reviewer1_gate(
     # even if another supplied value would otherwise be unclassifiable.
     if phase == "operation":
         return _skip_reviewer(PHASE_OPERATION, "Operation phase does not run Reviewer-1.")
+    if phase == "plan" and route == "plan_standard":
+        return _skip_reviewer(PHASE_PLAN, "Plan phase does not run Reviewer-1.")
 
     try:
         validate_config(config)

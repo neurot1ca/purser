@@ -496,10 +496,15 @@ class Server:
                 return _tool_result(thread_id, error="thread is unknown to this server; a fresh codex call is required")
             cwd = record["cwd"]
             model = record.get("model")
+            saved_sandbox = record.get("sandbox")
             # The resumed thread retains its original output-history budget.
             config_args = [arg for arg in record["config_args"]
                            if not arg.startswith("tool_output_token_limit=")]
+            if saved_sandbox == "read-only":
+                config_args = [arg for arg in config_args if not arg.startswith("sandbox_mode=")]
+                config_args.append('sandbox_mode="read-only"')
         else:
+            saved_sandbox = None
             cwd_value = arguments.get("cwd", os.getcwd())
             if not isinstance(cwd_value, str) or not cwd_value:
                 return _tool_result(None, error="cwd must be a nonempty string")
@@ -538,7 +543,8 @@ class Server:
                     if sandbox not in ("read-only", "workspace-write", "danger-full-access"):
                         raise ValueError("invalid sandbox")
                     command += ["-s", sandbox]
-                command += ["-C", cwd]
+                if name == "codex":
+                    command += ["-C", cwd]
             self.state_dir.mkdir(parents=True, exist_ok=True)
             temp_dir = self.state_dir / ("codex-output-" + uuid.uuid4().hex)
             temp_dir.mkdir()
@@ -603,7 +609,7 @@ class Server:
                 if not last_message:
                     last_message = next((item.get("text") for event in reversed(events) if event.get("type") == "item.completed" for item in [event.get("item")] if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str)), "")
                 if name == "codex":
-                    _save_record(self.state_dir, {"thread_id": started, "cwd": cwd, "model": model, "config_args": config_args})
+                    _save_record(self.state_dir, {"thread_id": started, "cwd": cwd, "model": model, "config_args": config_args, "sandbox": sandbox})
                 return _tool_result(started, content=last_message)
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)

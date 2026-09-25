@@ -17,7 +17,8 @@
   ],
   "allowed_phases": [
     "implementation",
-    "operation"
+    "operation",
+    "plan"
   ],
   "allowed_reasons": [
     "new_task",
@@ -40,7 +41,8 @@
     "normal",
     "consequential",
     "escalated",
-    "operation"
+    "operation",
+    "plan_standard"
   ],
   "routes": {
     "mechanical": {
@@ -66,12 +68,17 @@
     "operation": {
       "model": "gpt-6-luna",
       "effort": "high"
+    },
+    "plan_standard": {
+      "model": "gpt-6-sol",
+      "effort": "high"
     }
   },
   "sol_model": "gpt-6-sol",
   "always_full_routes": [
     "consequential",
-    "escalated"
+    "escalated",
+    "plan_standard"
   ],
   "reviewer_gate": {
     "small_delta_max_lines": 50,
@@ -89,6 +96,7 @@
   "reviewer1_packet_max_bytes": 200000,
   "reviewer_skip_reasons": [
     "PHASE_OPERATION",
+    "PHASE_PLAN",
     "NO_DELTA",
     "BELOW_THRESHOLD",
     "REVIEWER_UNAVAILABLE"

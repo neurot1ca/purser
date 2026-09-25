@@ -144,8 +144,8 @@ _PROJECT_KEY = re.compile(r"(?:[0-9a-f]{16}|unresolved)\Z")
 _WINDOWS_RESERVED = frozenset(
     {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 )
-_ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated", "operation"})
-_PHASES = frozenset({"implementation", "operation"})
+_ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard"})
+_PHASES = frozenset({"implementation", "operation", "plan"})
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 _VALIDATIONS = frozenset({"PASS", "FAIL", "UNKNOWN"})
 _REVIEW_RESULTS = frozenset(
@@ -212,6 +212,7 @@ _PAYLOAD_FIELDS = {
         {
             "duration_ms",
             "route",
+            "phase",
             "changed_paths_count",
             "validation",
             "thread_id",

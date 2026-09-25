@@ -53,6 +53,17 @@ def test_valid_orch_is_structured_and_removed(config):
     assert result.scope == (".claude/hooks/orchestrator",)
 
 
+def test_plan_pairing_and_read_scope(config):
+    plan = policy.parse_orch_prompt(orch(phase="plan", route="plan_standard", scope="src, docs") + "\nPlan.", config)
+    assert plan.valid and plan.scope == ("docs", "src")
+    assert policy.resolve_route(plan.route, config).model == "gpt-6-sol"
+    assert policy.resolve_route(plan.route, config).effort == "high"
+    for phase, route in (("plan", "normal"), ("implementation", "plan_standard"), ("operation", "plan_standard")):
+        denied = policy.parse_orch_prompt(orch(phase=phase, route=route), config)
+        assert not denied.valid and "phase=plan" in denied.message and "route=plan_standard" in denied.message
+    assert not policy.parse_orch_prompt(orch(phase="plan", route="plan_standard", scope="."), config).valid
+
+
 @pytest.mark.parametrize(
     ("prompt", "code"),
     [

@@ -1374,6 +1374,9 @@ def pre_tool_use(
 
         updated = dict(tool_input)
         updated["prompt"] = parsed.prompt
+        if parsed.phase == "plan" and new_call:
+            updated["sandbox"] = "read-only"
+            updated["approval-policy"] = "never"
         if parsed.phase == "implementation":
             updated["prompt"] = _append_worker_validation_instruction(updated["prompt"])
         if new_call:
@@ -1388,6 +1391,9 @@ def pre_tool_use(
                 if isinstance(output_limit, bool) or not isinstance(output_limit, int) or output_limit <= 0:
                     raise WiringError("tool_output_token_limit must be a positive integer")
                 updated_config["tool_output_token_limit"] = output_limit
+            if parsed.phase == "plan":
+                for unsafe_key in ("sandbox_mode", "approval_policy", "sandbox_workspace_write"):
+                    updated_config.pop(unsafe_key, None)
             updated["config"] = updated_config
             if "developer-instructions" not in tool_input:
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
@@ -1417,7 +1423,7 @@ def pre_tool_use(
         else:
             baseline = ledger.capture_baseline(
                 repository,
-                declared_scope if declared_scope else None,
+                None if parsed.phase == "plan" else (declared_scope if declared_scope else None),
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
             )
         if (
@@ -2137,6 +2143,35 @@ def _report_limit(config: Mapping[str, Any], phase: Any) -> int:
     return int(config.get(key, default))
 
 
+def _plan_summary(report: str) -> str:
+    match = re.search(r"(?im)^#{0,6}\s*Summary:\s*(.*)$", report)
+    if match:
+        tail = report[match.start(1):]
+        next_heading = re.search(r"(?m)^#{1,6}\s+\S", tail[1:])
+        return tail[:next_heading.start() + 1 if next_heading else None].strip()[:4000]
+    return report[:4000]
+
+
+def _store_plan(runtime_root: Path, event: Mapping[str, Any], task_id: Any,
+                report: str, bundle: dict[str, Any]) -> None:
+    safe_task = re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id or "task"))[:80]
+    path = (runtime_root / "plans" / f"{safe_task}-{_call_key(event)}.md").resolve()
+    if len(report) > 15000:
+        bundle["findings"].append(_finding("PLAN_OUTPUT_TOO_LONG", "Plan exceeds 15,000 characters."))
+    if not report.strip():
+        bundle["findings"].append(_finding("PLAN_OUTPUT_EMPTY", "Plan output is empty."))
+    content = report[:15000]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temp.write_text(content, encoding="utf-8")
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+    bundle["plan_path"] = str(path)
+    bundle["plan_summary"] = _plan_summary(content)
+
+
 def _non_report_bytes(bundle: Mapping[str, Any]) -> int:
     non_report = {key: value for key, value in bundle.items() if key != "implementer_report"}
     return len(
@@ -2269,6 +2304,8 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
         "changed_paths_sha256": compact.get("changed_paths_sha256"),
         "findings": _copy_findings(bundle.get("findings"), 0),
         "full_bundle_path": bundle.get("full_bundle_path"),
+        "plan_path": bundle.get("plan_path"),
+        "plan_summary": bundle.get("plan_summary"),
         "implementer_report": bundle.get("implementer_report", ""),
     }
     return mandatory, _non_report_bytes(mandatory) > cap
@@ -2463,6 +2500,7 @@ def _post_observations(
         **envelope,
         "duration_ms": _numeric_duration_ms(event.get("duration_ms")),
         "route": pending.get("route"),
+        "phase": pending.get("phase"),
         "changed_paths_count": bundle.get("delta_files"),
         "validation": bundle.get("validation"),
         "thread_id": (
@@ -2622,6 +2660,8 @@ def post_tool_use(
             thread_id, report = _extract_codex_result(event.get("tool_response"))
             bundle["thread_id"] = thread_id
             bundle["implementer_report"] = report
+            if pending.get("phase") == "plan":
+                _store_plan(runtime_root, event, pending.get("task_id"), report, bundle)
             try:
                 bundle["codex_quota"] = codex_quota.read_quota(thread_id)
             except Exception:
@@ -2772,7 +2812,7 @@ def post_tool_use(
             delta = ledger.compute_delta(
                 repository,
                 baseline,
-                scope if scope else None,
+                None if pending.get("phase") == "plan" else (scope if scope else None),
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
             )
         bundle["baseline_head"] = delta.get("baseline_head")
@@ -2783,6 +2823,13 @@ def post_tool_use(
             bundle["changed_paths"] = delta["changed_paths"]
             bundle["delta_lines"] = delta["changed_line_count"]
             bundle["delta_files"] = delta["changed_file_count"]
+            if pending.get("phase") == "plan" and delta["changed_paths"]:
+                bundle["findings"].append(_finding(
+                    "PLAN_MUTATED_REPO",
+                    "Repository source changed during a read-only plan call: "
+                    + ", ".join(delta["changed_paths"][:10]),
+                ))
+                force_full_review = True
             if scope:
                 classification = ledger.classify_concurrent_writers(
                     delta, scope, protected_paths=protected_paths
@@ -2829,7 +2876,7 @@ def post_tool_use(
                 selected = checks.select_checks(
                     _restore_checks(pending.get("profile_checks", [])), delta["changed_paths"]
                 )
-                if selected:
+                if selected and pending.get("phase") != "plan":
                     def run_selected_checks() -> None:
                         try:
                             check_state["result"] = checks.run_checks(
@@ -2855,7 +2902,12 @@ def post_tool_use(
                 )
             reviewer_config["reviewer_gate"] = reviewer_gate_config
             reviewer_callable = reviewer if reviewer is not None else REVIEWER
-            if profile_reviewer == "none":
+            if pending.get("phase") == "plan":
+                gate = policy.reviewer1_gate(
+                    phase="plan", delta_files=0, delta_lines=0,
+                    route=pending["route"], reviewer_available=False, config=reviewer_config,
+                )
+            elif profile_reviewer == "none":
                 gate = policy.SkipReviewerDecision(
                     "skip reviewer",
                     "REVIEWER_DISABLED",
@@ -3160,6 +3212,10 @@ def post_tool_use(
 
         if profile_forces_full:
             bundle["claude_review_mode"] = policy.FULL
+        if pending.get("phase") == "plan":
+            bundle["claude_review_mode"] = policy.FULL
+            bundle["reviewer1_result"] = None
+            bundle["reviewer1_skipped_reason"] = policy.PHASE_PLAN
         if thread_id is None:
             bundle["claude_review_mode"] = policy.FULL
 

@@ -196,6 +196,14 @@ def test_output_limit_passed_on_fresh_call_but_not_reply(client, area):
     assert not any(arg.startswith("tool_output_token_limit=") for arg in client.calls()[2]["argv"])
 
 
+def test_read_only_sandbox_persists_on_reply(client, area):
+    call(client, 1, "codex", {"prompt": "plan", "cwd": str(area), "sandbox": "read-only"})
+    call(client, 2, "codex-reply", {"threadId": "thread-123", "prompt": "continue"})
+    first, second = client.calls()
+    assert first["argv"][first["argv"].index("-s") + 1] == "read-only"
+    assert 'sandbox_mode="read-only"' in second["argv"]
+
+
 def test_unknown_thread_does_not_spawn(client):
     result = call(client, 1, "codex-reply", {"threadId": "absent", "prompt": "hello"})
     assert result["isError"] is True

@@ -150,6 +150,59 @@ def response_bundle(response, config):
     return json.loads(output[0]["text"])
 
 
+def test_plan_sync_read_only_artifact_and_mutation(workspace, config):
+    repo, state = workspace
+    call = event(prompt=orch(phase="plan", route="plan_standard", scope="file0.py") + "\nPlan this.",
+                 sandbox="danger-full-access", **{"approval-policy": "on-request"})
+    pre = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    updated = pre["hookSpecificOutput"]["updatedInput"]
+    assert updated["model"] == "gpt-6-sol"
+    assert updated["config"]["model_reasoning_effort"] == "high"
+    assert updated["sandbox"] == "read-only" and updated["approval-policy"] == "never"
+    (repo / "file1.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "new.py").write_text("new = True\n", encoding="utf-8")
+    content = "# Plan\n\nSummary:\n" + "A" * 4300 + "\n## Milestones\nFinish."
+    post = {**call, "hook_event_name": "PostToolUse", "tool_response":
+            {"structuredContent": {"threadId": "plan-thread", "content": content}}}
+    bundle = response_bundle(codex.post_tool_use(post, config=config, state_root=state, repo_root=repo), config)
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["reviewer1_skipped_reason"] == "PHASE_PLAN"
+    assert bundle["reviewer1_result"] is None
+    assert any(f["code"] == "PLAN_MUTATED_REPO" for f in bundle["findings"])
+    assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == content
+    assert state in Path(bundle["plan_path"]).parents
+    assert len(bundle["plan_summary"]) <= 4000
+
+
+def test_plan_async_result(workspace, config):
+    repo, state = workspace
+    prompt = orch(phase="plan", route="plan_standard", scope=None) + "\nPlan."
+    start, job_id, _ = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
+    pending = codex._read_pending(state, start)
+    assert pending["async_updated_input"]["sandbox"] == "read-only"
+    result = async_followup(RESULT_TOOL, job_id)
+    assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
+    post = {**result, "hook_event_name": "PostToolUse", "tool_response":
+            {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+                                   "content": "Summary:\nAsync plan."}}}
+    bundle = response_bundle(codex.post_tool_use(post, config=config, state_root=state, repo_root=repo), config)
+    assert bundle["phase"] == "plan" and bundle["plan_summary"] == "Async plan."
+    assert bundle["reviewer1_skipped_reason"] == "PHASE_PLAN"
+    assert bundle["claude_review_mode"] == policy.FULL
+    finished = [e["payload"] for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_FINISHED"]
+    assert len(finished) == 1 and finished[0]["phase"] == "plan"
+
+
+def test_plan_file_and_summary_caps(workspace):
+    _, state = workspace
+    report = "Summary:\n" + "x" * 16000
+    bundle = {"findings": []}
+    codex._store_plan(state, event(), "long-plan", report, bundle)
+    assert len(Path(bundle["plan_path"]).read_text(encoding="utf-8")) == 15000
+    assert len(bundle["plan_summary"]) == 4000
+    assert bundle["findings"][0]["code"] == "PLAN_OUTPUT_TOO_LONG"
+
+
 @pytest.mark.parametrize("name", ("codex_result", "codex_cancel"))
 def test_async_unknown_and_foreign_jobs_are_denied(workspace, config, name):
     repo, state = workspace
