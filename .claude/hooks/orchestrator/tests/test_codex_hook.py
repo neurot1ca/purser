@@ -171,9 +171,9 @@ RESULT_TOOL = "mcp__plugin_purser_codex-main__codex_result"
 CANCEL_TOOL = "mcp__plugin_purser_codex-main__codex_cancel"
 
 
-def async_started(workspace, config, *, prompt=None, state_name="RUNNING"):
+def async_started(workspace, config, *, prompt=None, state_name="RUNNING", tool_use_id="async-original"):
     repo, state = workspace
-    start = event(START_TOOL, prompt=prompt, tool_use_id="async-original")
+    start = event(START_TOOL, prompt=prompt, tool_use_id=tool_use_id)
     updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
     job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
     codex.post_tool_use({**start, "hook_event_name": "PostToolUse", "tool_response":
@@ -199,6 +199,7 @@ def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace
     result = async_followup(RESULT_TOOL, job_id)
     denied = codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo)
     assert "still running; wait for the completion signal" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert not list((state / "async_jobs").glob("*.claim*"))
     bypass = codex.internal_pre_error_response(result, RuntimeError("internal"), state_root=state)
     assert "additionalContext" in bypass["hookSpecificOutput"]
 
@@ -292,6 +293,94 @@ def test_async_cleanup_crash_does_not_repeat_finalization(workspace, config, mon
     second = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
                                  reviewer=lambda **kwargs: pytest.fail("second review"))
     assert second == first and not codex._pending_path(state, start).exists()
+
+
+def test_async_real_shaped_token_report_is_recorded(workspace, config, monkeypatch):
+    repo, state = workspace
+    path = "scripts/codex_token_report.py"
+    prompt = orch(scope=f"file0.py,{path}") + "\nUpdate the token report."
+    _, job_id, _ = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
+    capture = ledger.capture_baseline
+    def dirty_token_report(*args, **kwargs):
+        snapshot = capture(*args, **kwargs)
+        snapshot["tracked_snapshots"][path] = {
+            "status": [" M"], "index": [], "worktree": {"kind": "file"}}
+        return snapshot
+    monkeypatch.setattr(ledger, "capture_baseline", dirty_token_report)
+    result = async_followup(RESULT_TOOL, job_id)
+    post = {**result, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+        "content": "Set tool_output_token_limit to 8000."}}}
+    response = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(response, config)
+    assert not any(f["code"].startswith("LEDGER_") for f in bundle["findings"])
+    stored = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")
+    assert stored["status"] == ledger.OK
+    assert stored["record"]["last_outcome"]["raw_output_path"] == bundle["raw_output_path"]
+
+
+def test_async_ledger_rejection_returns_typed_full_bundle(workspace, config, monkeypatch):
+    repo, state = workspace
+    _, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
+    result = async_followup(RESULT_TOOL, job_id)
+    assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
+    monkeypatch.setattr(ledger.SessionLedger, "save", lambda self, record: {
+        "status": "ERROR", "code": "LEDGER_RECORD_INVALID", "message": "rejected"})
+    post = {**result, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(first, config)
+    assert bundle["claude_review_mode"] == "FULL"
+    assert any(f["code"] == "LEDGER_RECORD_REJECTED" and "LEDGER_RECORD_INVALID" in f["message"]
+               for f in bundle["findings"])
+    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["stage"] == "CONSUMED"
+    assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo) == first
+
+
+@pytest.mark.parametrize("reject_ledger", (False, True))
+def test_async_crash_after_bundle_retries_without_second_review(workspace, config, monkeypatch, reject_ledger):
+    repo, state = workspace
+    _, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
+    result = async_followup(RESULT_TOOL, job_id)
+    post = {**result, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
+    if reject_ledger:
+        monkeypatch.setattr(ledger.SessionLedger, "save", lambda self, record: {
+            "status": "ERROR", "code": "LEDGER_RECORD_INVALID", "message": "SECRET_VALUE_PATTERN at last_outcome"})
+    write = codex._atomic_json_write
+    failures = []
+    def crash_before_consumed(path, value):
+        if path == state / "async_jobs" / f"{job_id}.json" and value.get("stage") == "CONSUMED" and not failures:
+            failures.append(True)
+            raise OSError("simulated finalizer crash")
+        return write(path, value)
+    monkeypatch.setattr(codex, "_atomic_json_write", crash_before_consumed)
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    assert response_bundle(first, config)["status"] == "ALREADY_CONSUMED_OR_INTERRUPTED"
+    second = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(second, config)
+    assert bundle["thread_id"] == "async-thread"
+    assert any(f["code"] == "LEDGER_RECORD_REJECTED" for f in bundle["findings"]) == reject_ledger
+    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["stage"] == "CONSUMED"
+
+
+def test_two_parallel_async_jobs_finalize_independently(workspace, config):
+    repo, state = workspace
+    jobs = []
+    for number in (1, 2):
+        prompt = orch(task=f"parallel-{number}") + "\nDo the work."
+        _, job_id, _ = async_started(workspace, config, prompt=prompt,
+                                     state_name="SUCCEEDED", tool_use_id=f"start-{number}")
+        jobs.append(job_id)
+    for number, job_id in enumerate(jobs, 1):
+        result = async_followup(RESULT_TOOL, job_id)
+        result["tool_use_id"] = f"result-{number}"
+        assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
+        post = {**result, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+            "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
+        first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+        assert response_bundle(first, config)["task_id"] == f"parallel-{number}"
+        assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo) == first
 
 
 def test_async_start_requires_orch_and_denies_internal_pre_error(workspace, config):

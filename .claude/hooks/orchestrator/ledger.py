@@ -58,6 +58,8 @@ _SECRET_VALUE_PATTERNS = (
 _PATH_KEYED_RECORD_LOCATIONS = frozenset(
     {
         ("pending_call_baseline", "tracked_snapshots"),
+        ("live_thread", "origin_baseline", "tracked_snapshots"),
+        ("live_thread", "post_state", "tracked_snapshots"),
     }
 )
 
@@ -969,24 +971,34 @@ def _canonical_json(value: Any) -> bytes:
     )
 
 
-def _contains_secret(value: Any, *, _location: tuple[str, ...] = ()) -> bool:
+def _secret_violation(value: Any, *, _location: tuple[str, ...] = ()) -> tuple[str, str] | None:
     if isinstance(value, Mapping):
         path_keyed = _location in _PATH_KEYED_RECORD_LOCATIONS
         for item_key, item in value.items():
             key = str(item_key)
             if any(pattern.search(key) for pattern in _SECRET_VALUE_PATTERNS):
-                return True
+                return (".".join(_location) or "record", "SECRET_PATTERN_IN_FIELD_NAME")
             normalized_key = key.casefold().replace("-", "_")
             if not path_keyed and any(part in normalized_key for part in _SECRET_KEY_PARTS):
-                return True
-            if _contains_secret(item, _location=(*_location, key)):
-                return True
-        return False
+                return (".".join((*_location, key)), "SECRET_FIELD_NAME")
+            nested = _secret_violation(item, _location=(*_location, key))
+            if nested:
+                return nested
+        return None
     if isinstance(value, (list, tuple)):
-        return any(_contains_secret(item, _location=_location) for item in value)
+        for item in value:
+            nested = _secret_violation(item, _location=_location)
+            if nested:
+                return nested
+        return None
     if isinstance(value, str):
-        return any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS)
-    return False
+        if any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS):
+            return (".".join(_location) or "record", "SECRET_VALUE_PATTERN")
+    return None
+
+
+def _contains_secret(value: Any, *, _location: tuple[str, ...] = ()) -> bool:
+    return _secret_violation(value, _location=_location) is not None
 
 
 def _valid_session_record(record: Any, expected_task_id: str | None = None) -> bool:
@@ -1109,10 +1121,13 @@ class SessionLedger:
     def save(self, record: Mapping[str, Any]) -> dict[str, Any]:
         task_id = record.get("task_id") if isinstance(record, Mapping) else None
         if not isinstance(task_id, str) or not _valid_session_record(record, task_id):
+            violation = _secret_violation(record)
+            detail = (f"{violation[1]} at {violation[0]}" if violation
+                      else "INVALID_RECORD_STRUCTURE")
             return {
                 "status": UNKNOWN,
                 "code": "LEDGER_RECORD_INVALID",
-                "message": "The session record is invalid or contains forbidden secret material.",
+                "message": f"The session record was rejected: {detail}.",
             }
         payload = dict(record)
         payload_bytes = _canonical_json(payload)

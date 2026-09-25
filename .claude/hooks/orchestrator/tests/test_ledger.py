@@ -528,6 +528,27 @@ def test_session_record_rejects_secret_named_field(sandbox_dir):
     assert store.save(record)["code"] == "LEDGER_RECORD_INVALID"
 
 
+def test_session_record_accepts_token_report_snapshot_key_but_rejects_api_key(sandbox_dir):
+    store = ledger.SessionLedger(sandbox_dir / "ledger")
+    path = "scripts/codex_token_report.py"
+    baseline = {"status": ledger.OK, "head": "abc", "scope": [path],
+                "manifest_enabled": True, "status_entries": [],
+                "tracked_snapshots": {path: {"status": [" M"], "index": [],
+                                             "worktree": {"kind": "file"}}},
+                "scoped_manifest": []}
+    record = ledger.build_session_record(
+        "task-1", "thread-123", "normal", "gpt-6-sol", "medium",
+        phase="implementation", scope=[path],
+        origin_baseline=baseline, origin_scope=[path], post_state=baseline,
+        last_outcome={"implementer_report": "Set tool_output_token_limit to 8000."},
+    )
+    assert store.save(record)["status"] == ledger.OK
+    record["last_outcome"]["implementer_report"] = "Observed sk-" + "a" * 20
+    rejected = store.save(record)
+    assert rejected["code"] == "LEDGER_RECORD_INVALID"
+    assert "last_outcome.implementer_report" in rejected["message"]
+
+
 def test_truncated_or_checksum_corrupt_record_is_not_a_valid_thread(sandbox_dir):
     store = ledger.SessionLedger(sandbox_dir / "ledger")
     record = ledger.build_session_record(
@@ -678,5 +699,4 @@ def test_session_record_rejects_grounded_contract_with_missing_objective_or_crit
     res3 = ledger_instance.save(good_rec)
     assert res3["status"] == ledger.OK
     assert res3["code"] == "LEDGER_WRITTEN"
-
 

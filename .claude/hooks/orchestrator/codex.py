@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import inspect
@@ -1807,6 +1808,67 @@ def _async_duration(job: Mapping[str, Any] | None) -> int | None:
     return None
 
 
+@contextmanager
+def _async_claim(path: Path):
+    """Hold an OS lock for one finalizer; process exit releases a crashed claim."""
+    claim = path.with_suffix(".claim.lock")
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    with claim.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0)
+            if not handle.read(1):
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _async_ledger_rejection(root: Path, index: Mapping[str, Any], pending: Mapping[str, Any],
+                            artifact: Path, *, success: bool) -> dict[str, str] | None:
+    outcome = ledger.SessionLedger(_project_state_root(root, index["project_key"])).load(pending["task_id"])
+    last = outcome.get("record", {}).get("last_outcome") if outcome.get("status") == ledger.OK else None
+    field = "raw_output_path" if success else "evidence_path"
+    expected = (root / "raw_tool_outputs" / f"{index['call_key']}.json").resolve() if success else artifact
+    if isinstance(last, Mapping) and last.get(field) == str(expected):
+        return None
+    detail = "The session ledger did not retain this job's thread and outcome."
+    if success and artifact.is_file():
+        bundle = json.loads(artifact.read_text(encoding="utf-8"))
+        for item in bundle.get("findings", []) if isinstance(bundle, Mapping) else []:
+            if isinstance(item, Mapping) and str(item.get("code", "")).startswith("LEDGER_"):
+                detail = f"{item.get('code')}: {item.get('message', detail)}"
+                break
+    return _finding("LEDGER_RECORD_REJECTED", detail)
+
+
+def _async_rejected_response(root: Path, original: Mapping[str, Any], artifact: Path,
+                             finding: Mapping[str, str], config: Mapping[str, Any],
+                             *, success: bool) -> dict[str, Any]:
+    if success:
+        bundle = json.loads(artifact.read_text(encoding="utf-8"))
+        if not isinstance(bundle, dict):
+            raise WiringError("async review bundle is invalid")
+        if not any(item.get("code") == "LEDGER_RECORD_REJECTED" for item in bundle.get("findings", [])):
+            bundle.setdefault("findings", []).append(dict(finding))
+        bundle["claude_review_mode"] = policy.FULL
+        bundle["audit_receipt"] = None
+        return _finalize_replacement(bundle, config, root, original)
+    return _replacement({"state": "FAILED", "claude_review_mode": policy.FULL,
+                         "ambiguous_outcome": True, "findings": [dict(finding)]}, config)
+
+
 def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] | None,
                          state_root: str | os.PathLike[str] | None,
                          repo_root: str | os.PathLike[str] | None,
@@ -1817,17 +1879,32 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
     def interrupted() -> dict[str, Any]:
         return _replacement({"status": "ALREADY_CONSUMED_OR_INTERRUPTED",
                              "claude_review_mode": policy.FULL, "ambiguous_outcome": True}, _load_config(config))
+    claim = None
+    claimed = False
     try:
+        path, index, pending, original = _async_owned(root, event, repo_root)
+        claim = _async_claim(path)
+        claim.__enter__()
+        claimed = True
         path, index, pending, original = _async_owned(root, event, repo_root)
         if index.get("stage") == "CONSUMED":
             (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
             return index.get("response") or interrupted()
         if index.get("stage") == "FINALIZING":
-            return interrupted()
-        try:
-            path.with_suffix(".claim").mkdir()
-        except FileExistsError:
-            return interrupted()
+            artifact = root / "bundle_artifacts" / f"{index['call_key']}.json"
+            raw = (root / "raw_tool_outputs" / f"{index['call_key']}.json").resolve()
+            if artifact.is_file() and raw.is_file():
+                bundle = json.loads(artifact.read_text(encoding="utf-8"))
+                if (isinstance(bundle, dict) and bundle.get("task_id") == pending["task_id"]
+                        and bundle.get("raw_output_path") == str(raw)):
+                    rejection = _async_ledger_rejection(root, index, pending, artifact, success=True)
+                    response = (_async_rejected_response(root, original, artifact, rejection,
+                                                         _load_config(config), success=True)
+                                if rejection else _finalize_replacement(bundle, _load_config(config), root, original))
+                    index.update(stage="CONSUMED", bundle_path=str(artifact.resolve()), response=response)
+                    _atomic_json_write(path, index)
+                    _remove_pending(root, original)
+                    return response
         index["stage"] = "FINALIZING"
         _atomic_json_write(path, index)
         job = _async_job(root, index)
@@ -1851,23 +1928,28 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                                      repo_root=repo_root, reviewer=reviewer, micro_repair=micro_repair)
             artifact = (root / "bundle_artifacts" / f"{index['call_key']}.json").resolve()
             expected = str((root / "raw_tool_outputs" / f"{index['call_key']}.json").resolve())
-            outcome = ledger.SessionLedger(_project_state_root(root, index["project_key"])).load(pending["task_id"])
-            last = outcome.get("record", {}).get("last_outcome") if outcome.get("status") == ledger.OK else None
-            if not artifact.is_file() or not isinstance(last, Mapping) or last.get("raw_output_path") != expected:
+            if not artifact.is_file() or not Path(expected).is_file():
                 raise WiringError("successful finalization was not durably recorded")
+            rejection = _async_ledger_rejection(root, index, pending, artifact, success=True)
+            if rejection:
+                response = _async_rejected_response(root, original, artifact, rejection,
+                                                    _load_config(config), success=True)
         else:
             synthetic.update(hook_event_name="PostToolUseFailure",
                              error=event.get("error") or value.get("errorCode") or "ASYNC_TERMINAL_FAILURE")
             response = post_tool_use_failure(synthetic, state_root=state_root)
             artifact = (root / "raw_tool_outputs" / f"{index['call_key']}-failure.json").resolve()
-            outcome = ledger.SessionLedger(_project_state_root(root, index["project_key"])).load(pending["task_id"])
-            last = outcome.get("record", {}).get("last_outcome") if outcome.get("status") == ledger.OK else None
-            if not artifact.is_file() or not isinstance(last, Mapping) or last.get("evidence_path") != str(artifact):
+            if not artifact.is_file():
                 raise WiringError("failed outcome was not durably recorded")
+            rejection = _async_ledger_rejection(root, index, pending, artifact, success=False)
+            if rejection:
+                response = _async_rejected_response(root, original, artifact, rejection,
+                                                    _load_config(config), success=False)
             if event.get("hook_event_name") == "PostToolUse":
                 message = response.get("hookSpecificOutput", {}).get("additionalContext", "Async job failed; FULL review required.")
-                response = _replacement({"state": "FAILED", "ambiguous_outcome": True,
-                                         "claude_review_mode": policy.FULL}, _load_config(config))
+                if not rejection:
+                    response = _replacement({"state": "FAILED", "ambiguous_outcome": True,
+                                             "claude_review_mode": policy.FULL}, _load_config(config))
                 response["hookSpecificOutput"]["additionalContext"] = message
         index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
         _atomic_json_write(path, index)
@@ -1879,6 +1961,9 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
     except Exception as error:
         _record_diagnostic(root, event, "PostToolUse", error)
         return interrupted()
+    finally:
+        if claimed:
+            claim.__exit__(None, None, None)
 
 
 def _persist_raw_output(root: Path, event: Mapping[str, Any], value: Any, suffix: str = "") -> Path:
