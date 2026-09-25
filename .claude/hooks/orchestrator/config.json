@@ -33,6 +33,7 @@
     "high",
     "xhigh"
   ],
+  "tool_output_token_limit": 8000,
   "required_routes": [
     "mechanical",
     "subtle",

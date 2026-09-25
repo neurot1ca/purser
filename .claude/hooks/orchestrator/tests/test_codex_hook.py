@@ -315,6 +315,7 @@ def test_async_start_rewrites_and_retries_same_call(workspace, config):
     assert updated["mode"] == "new"
     assert updated["model"] == config["routes"]["normal"]["model"]
     assert updated["config"]["model_reasoning_effort"] == config["routes"]["normal"]["effort"]
+    assert updated["config"]["tool_output_token_limit"] == 8000
     pending = codex._read_pending(state, call)
     assert pending["async_call"] == updated["call"] and pending["job_id"] is None
     assert pending["baseline"]["status"] == ledger.OK

@@ -1382,6 +1382,11 @@ def pre_tool_use(
                 raise WiringError("tool_input.config must be an object when supplied")
             updated_config = dict(original_codex_config)
             updated_config["model_reasoning_effort"] = route.effort
+            output_limit = loaded_config.get("tool_output_token_limit")
+            if output_limit is not None:
+                if isinstance(output_limit, bool) or not isinstance(output_limit, int) or output_limit <= 0:
+                    raise WiringError("tool_output_token_limit must be a positive integer")
+                updated_config["tool_output_token_limit"] = output_limit
             updated["config"] = updated_config
             if "developer-instructions" not in tool_input:
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS

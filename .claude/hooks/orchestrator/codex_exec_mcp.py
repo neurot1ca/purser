@@ -496,7 +496,9 @@ class Server:
                 return _tool_result(thread_id, error="thread is unknown to this server; a fresh codex call is required")
             cwd = record["cwd"]
             model = record.get("model")
-            config_args = record["config_args"]
+            # The resumed thread retains its original output-history budget.
+            config_args = [arg for arg in record["config_args"]
+                           if not arg.startswith("tool_output_token_limit=")]
         else:
             cwd_value = arguments.get("cwd", os.getcwd())
             if not isinstance(cwd_value, str) or not cwd_value:

@@ -185,6 +185,17 @@ def test_reply_uses_recorded_cwd_and_overrides(client, area):
     assert "-C" not in invocation["argv"] and "-s" not in invocation["argv"]
 
 
+def test_output_limit_passed_on_fresh_call_but_not_reply(client, area):
+    call(client, 1, "codex", {"prompt": "first", "cwd": str(area),
+                              "config": {"tool_output_token_limit": 8000}})
+    call(client, 2, "codex-reply", {"threadId": "thread-123", "prompt": "again"})
+    first, second = client.calls()
+    assert "tool_output_token_limit=8000" in first["argv"]
+    assert not any(arg.startswith("tool_output_token_limit=") for arg in second["argv"])
+    call(client, 3, "codex", {"prompt": "without", "cwd": str(area)})
+    assert not any(arg.startswith("tool_output_token_limit=") for arg in client.calls()[2]["argv"])
+
+
 def test_unknown_thread_does_not_spawn(client):
     result = call(client, 1, "codex-reply", {"threadId": "absent", "prompt": "hello"})
     assert result["isError"] is True
