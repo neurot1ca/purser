@@ -87,6 +87,21 @@ quota or credit exhaustion response, fail over; do not perform proactive quota
 routing.
 After each Codex call, tell the user the bundle's model and effort, and its `codex_quota` 5h and 7d used percentages and reset times when present.
 
+Format both lines as one bold line between two `---` rules, in the user's
+language, with any explanation below in plain text, for example:
+
+```text
+---
+**⚓ Codex: luna/high · operation · fresh · ~6 min (stall after 15 min)**
+---
+```
+
+```text
+---
+**⚓ Codex done: luna/high · 2.4 min · quota 5h 59%, 7d 56%**
+---
+```
+
 ## Protocol line
 
 Claude writes the first prompt line exactly in this shape:
