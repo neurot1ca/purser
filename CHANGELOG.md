@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.23 — 2026-09-25
+
+- **Telemetry:** Codex call events record why the call was made (reason, explicit or inherited) and route changes on a thread (`2ee5fcd`).
+
 ## 0.1.22 — 2026-09-25
 
 - **Fix:** runtime state moves from %LOCALAPPDATA%\claude-agent-orchestrator (virtualized per app under the Store Claude app, invisible to other processes) to `PURSER_STATE_DIR` > `CLAUDE_CONFIG_DIR/purser` > `~/.claude/purser`; `purser_migrate_state.py` copies old state once (3b48442) (`3b48442`).
