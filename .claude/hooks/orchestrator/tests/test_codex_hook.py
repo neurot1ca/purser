@@ -526,18 +526,24 @@ def test_no_declared_hook_checks_preserves_worker_decision(workspace, config, mo
 
 
 def test_hook_checks_overlap_reviewer(workspace, config, monkeypatch):
+    intervals = {}
+    review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
     def slow_check(*args, **kwargs):
+        intervals["check_start"] = time.monotonic()
         time.sleep(0.5)
+        intervals["check_end"] = time.monotonic()
         return check_result("PASS")
     def slow_reviewer(**kwargs):
+        intervals["reviewer_start"] = time.monotonic()
         time.sleep(0.5)
+        intervals["reviewer_end"] = time.monotonic()
         return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
                 "validation": "PASS", "findings": []}
-    started = time.monotonic()
-    bundle = hook_check_call(workspace, config, monkeypatch, check_result=slow_check,
+    bundle = hook_check_call(workspace, review_config, monkeypatch, check_result=slow_check,
                              reviewer=slow_reviewer)
     assert bundle["hook_checks"]["status"] == "PASS"
-    assert time.monotonic() - started < 1.5
+    assert intervals["check_start"] < intervals["reviewer_end"]
+    assert intervals["reviewer_start"] < intervals["check_end"]
 
 
 @pytest.fixture()
