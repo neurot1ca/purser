@@ -535,6 +535,120 @@ def _lease_state(workspace):
     return ledger.ScopeLeases(state / "projects" / project_root.project_key(repo.resolve()))
 
 
+def _attribution_call(task, scope, suffix):
+    prompt = (orch(task=task, scope=scope) + "\n"
+              'TASK_CONTRACT: {"objective":"Edit the owned file","criteria":"Review only that file"}')
+    return event(prompt=prompt, tool_use_id=f"attribution-{suffix}")
+
+
+def _finish_attribution_call(call, workspace, config, observed):
+    repo, state = workspace
+    def review(**kwargs):
+        observed.append(reviewer_module._delegated_diff(
+            repo, kwargs["delta"], kwargs["classification"]))
+        return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "validation": "PASS", "findings": []}
+    post = {**call, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"threadId": call["tool_use_id"], "content":
+            'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS",'
+            '"commands":["focused"],"exit_codes":[0]}'}}}
+    return response_bundle(codex.post_tool_use(
+        post, config=config, state_root=state, repo_root=repo, reviewer=review), config)
+
+
+def test_single_job_compact_bundle_omits_whole_tree_fields(workspace, config):
+    repo, state = workspace
+    call = _attribution_call("single", "file0.py", "single")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    bundle = _finish_attribution_call(call, workspace, config, [])
+    assert not {"whole_tree_delta", "whole_tree_anomaly", "known_concurrent_scopes"} & bundle.keys()
+    artifact = json.loads(Path(bundle["full_bundle_path"]).read_text(encoding="utf-8"))
+    assert artifact["whole_tree_delta"]["changed_paths"] == ["file0.py"]
+    assert artifact["known_concurrent_scopes"] == []
+
+
+def test_known_concurrent_scope_summary_bounds_task_ids(config):
+    bundle = codex._base_bundle()
+    bundle["known_concurrent_scopes"] = [
+        {"path": f"file{n}.py", "task_id": f"task-{n}"} for n in range(8)]
+    bundle["whole_tree_delta"] = {"changed_paths": [f"file{n}.py" for n in range(10000)]}
+    bundle["whole_tree_anomaly"] = {"paths": [f"file{n}.py" for n in range(10000)]}
+    compact, overflow = codex._compact_bundle(bundle, config["bundle_non_report_max_bytes"])
+    assert not overflow
+    assert compact["known_concurrent_scopes"] == {
+        "count": 8, "task_ids": [f"task-{n}" for n in range(5)]}
+    assert "whole_tree_delta" not in compact and "whole_tree_anomaly" not in compact
+
+
+def test_concurrent_leased_jobs_get_only_their_own_diff(workspace, config):
+    repo, state = workspace
+    calls = [_attribution_call(f"owned-{n}", f"file{n}.py", n) for n in (0, 1)]
+    review_config = dict(config, reviewer_gate={"small_delta_max_lines": 0,
+                                                 "small_delta_max_files": 0})
+    for call in calls:
+        codex.pre_tool_use(call, config=review_config, state_root=state, repo_root=repo)
+    for n in (0, 1):
+        (repo / f"file{n}.py").write_text(f"value = {n + 2}\n", encoding="utf-8")
+    for n, call in enumerate(calls):
+        observed = []
+        bundle = _finish_attribution_call(call, workspace, review_config, observed)
+        assert observed and observed[0][0] == [f"file{n}.py"]
+        assert bundle["changed_paths"] == [f"file{n}.py"]
+        assert bundle["delta_files"] == 1
+        assert "whole_tree_delta" not in bundle and "whole_tree_anomaly" not in bundle
+        assert bundle["known_concurrent_scopes"] == {
+            "count": 1, "task_ids": [f"owned-{1-n}"]}
+        artifact = json.loads(Path(bundle["full_bundle_path"]).read_text(encoding="utf-8"))
+        assert artifact["whole_tree_delta"]["changed_file_count"] == 2
+        assert f"file{1-n}.py" in artifact["whole_tree_anomaly"]["paths"]
+        assert artifact["known_concurrent_scopes"] == [
+            {"path": f"file{1-n}.py", "task_id": f"owned-{1-n}"}]
+        finished = [item for item in _all_telemetry_events(state)
+                    if item["event_type"] == "IMPLEMENTER_FINISHED"
+                    and item["task_id"] == f"owned-{n}"]
+        assert finished[-1]["payload"]["known_concurrent_scopes"] == artifact["known_concurrent_scopes"]
+        assert not {"OUT_OF_SCOPE_MODIFICATION", "UNKNOWN_CONCURRENT_WRITER"} & {
+            finding["code"] for finding in bundle["findings"]}
+
+
+def test_unleased_foreign_edit_still_forces_full(workspace, config):
+    repo, state = workspace
+    call = _attribution_call("owned", "file0.py", "unleased")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file1.py").write_text("value = 9\n", encoding="utf-8")
+    bundle = _finish_attribution_call(call, workspace, config, [])
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert "known_concurrent_scopes" not in bundle
+    assert any(f["code"] == "OUT_OF_SCOPE_MODIFICATION" for f in bundle["findings"])
+
+
+def test_ambiguous_foreign_path_still_forces_full(workspace, config):
+    repo, state = workspace
+    (repo / "file1.py").write_text("value = 3\n", encoding="utf-8")
+    calls = [_attribution_call("owned", "file0.py", "ambiguous-a"),
+             _attribution_call("foreign", "file1.py", "ambiguous-b")]
+    for call in calls:
+        codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file1.py").write_text("value = 4\n", encoding="utf-8")
+    bundle = _finish_attribution_call(calls[0], workspace, config, [])
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert "known_concurrent_scopes" not in bundle
+
+
+def test_lease_released_before_job_start_does_not_excuse_path(workspace, config):
+    repo, state = workspace
+    store = _lease_state(workspace)
+    assert store.acquire("former", "former-task", ["file1.py"])["status"] == ledger.OK
+    assert store.release("former")["status"] == ledger.OK
+    call = _attribution_call("owned", "file0.py", "after-release")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file1.py").write_text("value = 9\n", encoding="utf-8")
+    bundle = _finish_attribution_call(call, workspace, config, [])
+    assert "known_concurrent_scopes" not in bundle
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
 def test_scope_lease_disjoint_and_conflicting_starts(workspace, config):
     repo, state = workspace
     first = _lease_call("owner-a", "file0.py", "lease-a")

@@ -2190,6 +2190,9 @@ def _base_bundle(error: str | None = None) -> dict[str, Any]:
         "baseline_head": None,
         "current_head": None,
         "changed_paths": None,
+        "known_concurrent_scopes": [],
+        "whole_tree_delta": None,
+        "whole_tree_anomaly": None,
         "changed_path_count": None,
         "changed_paths_sha256": None,
         "delta_lines": None,
@@ -2328,6 +2331,15 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
     compact = dict(bundle)
     compact.pop("hook_checks_full", None)
     compact.pop("codex_quota", None)
+    compact.pop("whole_tree_delta", None)
+    compact.pop("whole_tree_anomaly", None)
+    compact.pop("known_concurrent_scopes", None)
+    known_scopes = bundle.get("known_concurrent_scopes")
+    if isinstance(known_scopes, list) and known_scopes:
+        compact["known_concurrent_scopes"] = {
+            "count": len(known_scopes),
+            "task_ids": sorted({item["task_id"] for item in known_scopes})[:5],
+        }
     paths = bundle.get("changed_paths")
     if isinstance(paths, list):
         preview, count, digest = _changed_paths_summary(paths)
@@ -2420,6 +2432,8 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
         "plan_summary": bundle.get("plan_summary"),
         "implementer_report": bundle.get("implementer_report", ""),
     }
+    if "known_concurrent_scopes" in compact:
+        mandatory["known_concurrent_scopes"] = compact["known_concurrent_scopes"]
     return mandatory, _non_report_bytes(mandatory) > cap
 
 
@@ -2622,6 +2636,7 @@ def _post_observations(
         "route": pending.get("route"),
         "phase": pending.get("phase"),
         "changed_paths_count": bundle.get("delta_files"),
+        "known_concurrent_scopes": bundle.get("known_concurrent_scopes", []),
         "validation": bundle.get("validation"),
         "thread_id": (
             telemetry_schema.normalize_identifier(bundle.get("thread_id"), fallback="thread")
@@ -2939,6 +2954,38 @@ def post_tool_use(
         bundle["baseline_head"] = delta.get("baseline_head")
         bundle["current_head"] = delta.get("current_head")
         force_full_review = delta.get("status") != ledger.OK
+        out_of_scope_res = None
+        if (pending.get("phase") == "implementation" and scope and repository is not None
+                and baseline.get("status") == ledger.OK):
+            out_of_scope_res = ledger.detect_out_of_scope_modifications(
+                repository, baseline, scope)
+        bundle["whole_tree_anomaly"] = out_of_scope_res
+        if delta.get("status") == ledger.OK and pending.get("phase") == "implementation" and scope:
+            bundle["whole_tree_delta"] = {"changed_paths": delta["changed_paths"],
+                                           "changed_file_count": delta["changed_file_count"],
+                                           "changed_line_count": delta["changed_line_count"]}
+            owner = pending.get("lease_owner")
+            if isinstance(owner, str):
+                try:
+                    foreign_owners = ledger.ScopeLeases(
+                        _project_state_root(runtime_root, _pending_project_key(pending))
+                    ).overlapping_owners(owner)
+                    extra = (out_of_scope_res.get("paths", [])
+                             if isinstance(out_of_scope_res, Mapping)
+                             and out_of_scope_res.get("status") == ledger.OK else [])
+                    delta, known = ledger.attribute_known_concurrent_scopes(
+                        delta, scope, foreign_owners, protected_paths=protected_paths,
+                        additional_paths=extra)
+                    bundle["known_concurrent_scopes"] = known
+                except (OSError, ValueError, TypeError, KeyError):
+                    bundle["findings"].append(_finding(
+                        "LEASE_HISTORY_UNAVAILABLE",
+                        "Scope lease history could not be verified; forcing FULL Claude review."))
+                    force_full_review = True
+            else:
+                force_full_review = True
+                bundle["findings"].append(_finding(
+                    "LEASE_HISTORY_UNAVAILABLE", "This call has no scope lease ownership record."))
 
         if delta.get("status") == ledger.OK:
             bundle["changed_paths"] = delta["changed_paths"]
@@ -2967,17 +3014,11 @@ def post_tool_use(
                 _finding(delta.get("code", "UNKNOWN_DELTA"), delta.get("message", "Delta is UNKNOWN."))
             )
 
-        if (
-            pending.get("phase") == "implementation"
-            and scope
-            and repository is not None
-            and baseline.get("status") == ledger.OK
-        ):
-            out_of_scope_res = ledger.detect_out_of_scope_modifications(
-                repository,
-                baseline,
-                scope,
-            )
+        if out_of_scope_res is not None:
+            if out_of_scope_res.get("status") == ledger.OK:
+                known_paths = {entry["path"] for entry in bundle["known_concurrent_scopes"]}
+                out_of_scope_res = {**out_of_scope_res, "paths": [
+                    path for path in out_of_scope_res.get("paths", []) if path not in known_paths]}
             force_full_review = (
                 _apply_out_of_scope_result(
                     bundle,
@@ -3146,6 +3187,31 @@ def post_tool_use(
                             manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
                         )
                         if re_delta.get("status") == ledger.OK:
+                            bundle["whole_tree_delta"] = {
+                                "changed_paths": re_delta["changed_paths"],
+                                "changed_file_count": re_delta["changed_file_count"],
+                                "changed_line_count": re_delta["changed_line_count"],
+                            }
+                            re_anomaly = ledger.detect_out_of_scope_modifications(
+                                repository, baseline, scope) if scope else None
+                            bundle["whole_tree_anomaly"] = re_anomaly
+                            if scope and isinstance(pending.get("lease_owner"), str):
+                                try:
+                                    foreign_owners = ledger.ScopeLeases(
+                                        _project_state_root(runtime_root, _pending_project_key(pending))
+                                    ).overlapping_owners(pending["lease_owner"])
+                                    re_delta, known = ledger.attribute_known_concurrent_scopes(
+                                        re_delta, scope, foreign_owners,
+                                        protected_paths=protected_paths,
+                                        additional_paths=(re_anomaly.get("paths", [])
+                                                          if isinstance(re_anomaly, Mapping)
+                                                          and re_anomaly.get("status") == ledger.OK else []))
+                                    bundle["known_concurrent_scopes"] = known
+                                except (OSError, ValueError, TypeError, KeyError):
+                                    force_full_review = True
+                                    bundle["findings"].append(_finding(
+                                        "LEASE_HISTORY_UNAVAILABLE",
+                                        "Post-repair scope lease history could not be verified."))
                             delta = re_delta
                             bundle["changed_paths"] = delta["changed_paths"]
                             bundle["delta_lines"] = delta["changed_line_count"]
@@ -3183,11 +3249,14 @@ def post_tool_use(
 
                         if repair_res.get("repaired") is True:
                             # C22-1 & C23-1: Working-tree wide fail-closed out-of-scope check
-                            out_of_scope_res = ledger.detect_out_of_scope_modifications(
-                                repository,
-                                baseline,
-                                scope,
-                            )
+                            out_of_scope_res = (re_anomaly if re_delta.get("status") == ledger.OK
+                                                else ledger.detect_out_of_scope_modifications(
+                                                    repository, baseline, scope))
+                            if out_of_scope_res.get("status") == ledger.OK:
+                                known_paths = {entry["path"] for entry in bundle["known_concurrent_scopes"]}
+                                out_of_scope_res = {**out_of_scope_res, "paths": [
+                                    path for path in out_of_scope_res.get("paths", [])
+                                    if path not in known_paths]}
                             force_full_review = (
                                 _apply_out_of_scope_result(
                                     bundle,

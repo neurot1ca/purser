@@ -117,11 +117,15 @@ class ScopeLeases:
 
     def _write(self, value: dict[str, Any]) -> None:
         cutoff = time.time() - RELEASED_LEASE_RETENTION_SECONDS
+        active_starts = [owner.get("acquired_at") for owner in value["owners"].values()
+                         if owner["state"] == "ACTIVE"]
         value["owners"] = {
             key: owner for key, owner in value["owners"].items()
             if owner["state"] != "RELEASED"
             or not isinstance(owner.get("released_at"), (int, float))
             or owner["released_at"] >= cutoff
+            or any(isinstance(start, (int, float)) and start <= owner["released_at"]
+                   for start in active_starts)
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
@@ -253,6 +257,32 @@ class ScopeLeases:
                  "job_state": self._job_state(owner["job_id"]) if owner.get("job_id") else None}
                 for owner in value["owners"].values() if owner["state"] == "ACTIVE"
             ]
+
+    def overlapping_owners(self, owner_key: str) -> list[dict[str, Any]]:
+        """Read leases whose lifetimes intersect this call."""
+        with _lease_lock(self.lock_path):
+            value = self._read()
+            now = time.time()
+            if self._reconcile(value, now):
+                self._write(value)
+            own = value["owners"].get(owner_key)
+            if own is None or not isinstance(own.get("acquired_at"), (int, float)):
+                raise ValueError("current scope lease history is missing")
+            start = own["acquired_at"]
+            end = own.get("released_at", now)
+            if not isinstance(end, (int, float)):
+                raise ValueError("current scope lease release time is missing")
+            result = []
+            for key, owner in value["owners"].items():
+                if key == owner_key:
+                    continue
+                acquired = owner.get("acquired_at")
+                released = owner.get("released_at", now)
+                if not isinstance(acquired, (int, float)) or not isinstance(released, (int, float)):
+                    raise ValueError("scope lease timing history is missing")
+                if acquired < end and released > start:
+                    result.append({"task_id": owner["task_id"], "scope": list(owner["scope"])})
+            return result
 
     def release_task(self, task_id: str) -> list[dict[str, Any]]:
         with _lease_lock(self.lock_path):
@@ -898,6 +928,7 @@ def compute_delta(
             source_result[name] = {
                 "paths": sorted(paths),
                 "changed_line_count": sum(counts.get(path, 0) for path in paths),
+                "path_line_counts": {path: counts.get(path, 0) for path in paths},
             }
 
         preexisting_paths = sorted(baseline_snapshots)
@@ -933,6 +964,44 @@ def compute_delta(
 
 def _inside(path: str, scope: str) -> bool:
     return scope == "." or path == scope or path.startswith(scope.rstrip("/") + "/")
+
+
+def attribute_known_concurrent_scopes(
+    delta: Mapping[str, Any], own_scope: Iterable[str],
+    foreign_owners: Iterable[Mapping[str, Any]], *, protected_paths: Iterable[str] | None = None,
+    additional_paths: Iterable[str] = (),
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Remove only unambiguous foreign leased paths from the review delta."""
+    if delta.get("status") != OK:
+        return dict(delta), []
+    owners = list(foreign_owners)
+    own = _normalize_scope(own_scope)
+    ambiguous = set(delta.get("ambiguous_paths", []))
+    candidates = sorted(set(delta["changed_paths"]).union(additional_paths))
+    protected = set(detect_protected_paths(candidates, protected_paths=protected_paths))
+    known = []
+    for path in candidates:
+        matches = [owner for owner in owners if any(
+            _inside(path, item) for item in owner["scope"])]
+        if (len(matches) == 1 and path not in ambiguous and path not in protected
+                and not any(_inside(path, item) for item in own)):
+            known.append({"path": path, "task_id": matches[0]["task_id"]})
+    omitted = {item["path"] for item in known}
+    result = dict(delta)
+    result["changed_paths"] = [path for path in delta["changed_paths"] if path not in omitted]
+    result["changed_file_count"] = len(result["changed_paths"])
+    result["path_line_counts"] = {path: count for path, count in delta["path_line_counts"].items()
+                                  if path not in omitted}
+    result["changed_line_count"] = sum(result["path_line_counts"].values())
+    result["sources"] = {
+        name: {**source, "paths": [path for path in source["paths"] if path not in omitted],
+               "changed_line_count": sum(source["path_line_counts"].get(path, 0)
+                                         for path in source["paths"] if path not in omitted),
+               "path_line_counts": {path: count for path, count in source["path_line_counts"].items()
+                                    if path not in omitted}}
+        for name, source in delta["sources"].items()
+    }
+    return result, known
 
 
 def classify_concurrent_writers(

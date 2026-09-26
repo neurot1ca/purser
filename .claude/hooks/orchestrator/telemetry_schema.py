@@ -218,6 +218,7 @@ _PAYLOAD_FIELDS = {
             "route",
             "phase",
             "changed_paths_count",
+            "known_concurrent_scopes",
             "validation",
             "thread_id",
             "claude_review_mode",
@@ -316,6 +317,14 @@ def _project_key(value: Any, *, required: bool) -> str | None:
 
 
 def _payload_value(name: str, value: Any) -> Any:
+    if name == "known_concurrent_scopes":
+        if not isinstance(value, list) or any(
+            not isinstance(item, dict) or set(item) != {"path", "task_id"}
+            or not all(isinstance(item[key], str) and item[key] for key in ("path", "task_id"))
+            for item in value
+        ):
+            raise ValueError("known concurrent scopes are invalid")
+        return value
     if name == "eta_minutes":
         if value is None or (isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 600):
             return value
