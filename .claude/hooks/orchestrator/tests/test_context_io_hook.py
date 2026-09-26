@@ -83,7 +83,7 @@ def test_session_start_appends_duration_hint_and_runs_cleanup(monkeypatch, tmp_p
     assert cleaned == [tmp_path / "state"]
 
 
-def test_session_start_reminds_only_other_session_jobs_and_caps_at_five(monkeypatch, tmp_path):
+def test_session_start_reminds_unconsumed_jobs_and_caps_at_five(monkeypatch, tmp_path):
     state = tmp_path / "state"
     project = "project-key"
     jobs = [("finished-task", "SUCCEEDED"), ("running-task", "RUNNING")]
@@ -127,12 +127,15 @@ def test_session_start_reminds_only_other_session_jobs_and_caps_at_five(monkeypa
     assert len(lines) == 5
     assert "finished-task" in lines[0] and "bitince haber" not in lines[0]
     assert "running-task" in lines[1] and "bitince haber" in lines[1]
-    assert "own-task" not in "\n".join(lines)
-    assert all("jobId=" in line and "in the user's language" in line for line in lines)
+    assert "own-task" not in "\n".join(lines)  # The five older hints fill the cap.
+    assert all("jobId=" in line for line in lines)
     for path in (state / "async_jobs").glob("*.json"):
         if json.loads(path.read_text(encoding="utf-8"))["session_id"] != "current-session":
             path.unlink()
-    assert async_session_maintenance.followup_hints(state, project, "current-session") is None
+    own = async_session_maintenance.followup_hints(state, project, "current-session")
+    assert "Call codex_result" in own and "jobId=" in own
+    assert "adopt or asking the user" in own
+    assert "Tell the user" not in own
 
 
 def test_session_start_job_hint_failure_is_fail_open(monkeypatch, tmp_path):
@@ -169,6 +172,15 @@ def test_resumed_hint_uses_approved_wording_and_ambiguous_job_is_skipped(tmp_pat
     record.write_text(json.dumps(job), encoding="utf-8")
     hint = async_session_maintenance.followup_hints(state, "project-key", "new-session")
     assert "⚓ Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." in hint
+    own = async_session_maintenance.followup_hints(state, "project-key", "old-session")
+    assert "Start purser_wait.py" in own and "without adopt" in own
+    assert "⚓ Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." in own
+    assert "uygulama kapalıyken" not in own
+    job["state"] = "SUCCEEDED"
+    record.write_text(json.dumps(job), encoding="utf-8")
+    own = async_session_maintenance.followup_hints(state, "project-key", "old-session")
+    assert "Call codex_result" in own and "Start purser_wait.py" not in own
+    assert "uygulama kapalıyken" not in own
     job["state"] = "UNKNOWN_OR_IN_PROGRESS"
     record.write_text(json.dumps(job), encoding="utf-8")
     assert async_session_maintenance.followup_hints(state, "project-key", "new-session") is None

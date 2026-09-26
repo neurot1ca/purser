@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import codex
 import async_session_maintenance
+import codex_exec_mcp
 import checks
 import project_profile
 import context_io_telemetry
@@ -308,6 +309,81 @@ def test_async_result_finalizes_once_from_start_baseline(workspace, config, monk
     assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=reviewer) == first
     assert len(reviews) == 1
     assert not codex._pending_path(state, start).exists()
+
+
+def test_recovered_job_reviews_original_baseline_and_releases_lease_after_consumed(workspace, config, monkeypatch):
+    repo, state = workspace
+    start, job_id, record = async_started(workspace, config, prompt=orch(scope="file0.py,file1.py") + "\nUpdate both files.")
+    original_call = json.loads(record.read_text(encoding="utf-8"))["call"]
+    (repo / "file0.py").write_text("before = True\n", encoding="utf-8")
+    job = json.loads(record.read_text(encoding="utf-8"))
+    job.update(generation=1, ownershipToken="old", hostPid=123, hostCreatedAt=456,
+               hostContained=True, deadlineAt=time.time() - 1, signalToken="secret")
+    record.write_text(json.dumps(job), encoding="utf-8")
+    record.with_suffix(".launch").write_text(json.dumps({"name": "codex", "args": {
+        "prompt": "Update both files.", "timeoutSeconds": 30}, "codexBin": "codex"}), encoding="utf-8")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    launches = []
+    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launches.append(args))
+    async_session_maintenance.cleanup_jobs(state)
+    recovered = json.loads(record.read_text(encoding="utf-8"))
+    assert len(launches) == 1 and recovered["state"] == "QUEUED"
+    assert recovered["call"] == original_call and recovered["generation"] == 2
+    owner = codex._call_key(start)
+    assert _lease_state(workspace)._read()["owners"][owner]["state"] == "ACTIVE"
+    assert codex._pending_path(state, start).is_file()
+
+    server = codex_exec_mcp.Server(job_dir=record.parent)
+    server.claim_generation = recovered["generation"]
+    server.claim_token = recovered["ownershipToken"]
+    def fake_codex(*_args, **_kwargs):
+        (repo / "file1.py").write_text("after = True\n", encoding="utf-8")
+        return {"structuredContent": {"threadId": "resumed-thread", "content": "done"}}
+    monkeypatch.setattr(server, "_run_tool", fake_codex)
+    server._job_worker(job_id, "codex", json.loads(record.with_suffix(".launch").read_text())["args"])
+    result = server._result_job({"jobId": job_id})
+    assert result["structuredContent"]["state"] == "SUCCEEDED"
+    assert _lease_state(workspace)._read()["owners"][owner]["state"] == "ACTIVE"
+    followup = async_followup(RESULT_TOOL, job_id)
+    assert codex.pre_tool_use(followup, config=config, state_root=state, repo_root=repo) == {}
+    post = {**followup, "hook_event_name": "PostToolUse", "tool_response": result}
+    reviews = []
+    def reviewer(**kwargs):
+        reviews.append(kwargs)
+        assert _lease_state(workspace)._read()["owners"][owner]["state"] == "ACTIVE"
+        return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"}
+    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=reviewer)
+    bundle = response_bundle(first, config)
+    assert set(bundle["changed_paths"]) == {"file0.py", "file1.py"}
+    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["stage"] == "CONSUMED"
+    assert _lease_state(workspace)._read()["owners"][owner]["state"] == "RELEASED"
+    assert len(reviews) == 1 and not codex._pending_path(state, start).exists()
+    async_session_maintenance.cleanup_jobs(state)
+    assert len(launches) == 1
+    assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
+                               reviewer=lambda **kwargs: pytest.fail("second review")) == first
+
+
+def test_failed_recovery_finalizes_through_ambiguous_path(workspace, config, monkeypatch):
+    repo, state = workspace
+    start, job_id, record = async_started(workspace, config)
+    job = json.loads(record.read_text(encoding="utf-8"))
+    job.update(generation=1, ownershipToken="old", hostPid=123, hostCreatedAt=456,
+               hostContained=True, deadlineAt=time.time() - 1)
+    record.write_text(json.dumps(job), encoding="utf-8")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    async_session_maintenance.cleanup_jobs(state)
+    assert json.loads(record.read_text())["state"] == "UNKNOWN_OR_IN_PROGRESS"
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "ACTIVE"
+    result = codex_exec_mcp.Server(job_dir=record.parent)._result_job({"jobId": job_id})
+    followup = async_followup(RESULT_TOOL, job_id)
+    post = {**followup, "hook_event_name": "PostToolUse", "tool_response": result}
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(first, config)
+    assert bundle["ambiguous_outcome"] is True and bundle["claude_review_mode"] == policy.FULL
+    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["stage"] == "CONSUMED"
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
 
 
 def test_new_session_result_requires_adoption_and_original_baseline(workspace, config):

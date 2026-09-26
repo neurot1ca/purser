@@ -83,7 +83,7 @@ def test_dead_host_reports_recorded_running_state(tmp_path, monkeypatch, capsys)
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
     listener.close()
-    write_job(tmp_path, "closed", signalPort=port)
+    write_job(tmp_path, "closed", signalPort=port, deadlineAt=time.time() - 1)
 
     assert purser_wait.main(["closed"]) == 3
     assert capsys.readouterr().out == "purser-wait closed RUNNING\n"
@@ -114,6 +114,44 @@ def test_wait_timeout_returns_four(tmp_path, monkeypatch, capsys):
     assert purser_wait.main(["timeout"]) == 3
     assert observed["timeout"] <= 61
     assert capsys.readouterr().out == "purser-wait timeout RUNNING\n"
+
+
+def test_wait_follows_replacement_generation_endpoint_and_deadline(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path))
+    old = socket.socket()
+    old.bind(("127.0.0.1", 0))
+    old.listen()
+    replacement = socket.socket()
+    replacement.bind(("127.0.0.1", 0))
+    replacement.listen()
+    write_job(tmp_path, "replaced", signalPort=old.getsockname()[1], generation=1,
+              deadlineAt=time.time() + 0.2)
+    received = []
+
+    def serve():
+        connection, _ = old.accept()
+        with connection:
+            received.append(connection.recv(256))
+            write_job(tmp_path, "replaced", state="QUEUED", generation=2,
+                      signalPort=replacement.getsockname()[1], deadlineAt=time.time() + 2)
+        old.close()
+        connection, _ = replacement.accept()
+        with connection:
+            received.append(connection.recv(256))
+            write_job(tmp_path, "replaced", state="RUNNING", generation=2,
+                      signalPort=replacement.getsockname()[1], deadlineAt=time.time() + 2)
+            time.sleep(0.25)
+            write_job(tmp_path, "replaced", state="SUCCEEDED", generation=2,
+                      signalPort=replacement.getsockname()[1])
+            connection.sendall(b"1")
+        replacement.close()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    assert purser_wait.main(["replaced"]) == 0
+    thread.join(timeout=2)
+    assert received == [b"replaced:secret", b"replaced:secret"]
+    assert capsys.readouterr().out == "purser-wait replaced SUCCEEDED\n"
 
 
 def test_unknown_job_returns_two_and_one_line(tmp_path, monkeypatch, capsys):

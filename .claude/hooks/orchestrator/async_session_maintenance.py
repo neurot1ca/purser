@@ -139,7 +139,6 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
             index = _read_json(path)
             if (not index or index.get("stage") == "CONSUMED"
                     or index.get("jobId") != job_id or index.get("project_key") != project_key
-                    or index.get("session_id") == session_id
                     or not isinstance(index.get("session_id"), str)
                     or not isinstance(index.get("call"), str)
                     or hashlib.sha256(index["call"].encode("utf-8")).hexdigest() != job_id
@@ -164,21 +163,29 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
             task = re.sub(r"\s+", " ", task).strip()[:80]
             state = job.get("state")
             resumed = job.get("resumedAfterInterruption", 0)
+            same_session = index["session_id"] == session_id
             if state in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}:
-                message = (f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
+                message = (None if same_session else
+                           f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
                            "uygulama kapalıyken çalışmaya devam etti ve bitti. Sonucunu alıp inceleyeyim mi?")
-                instruction = "Ask for the user's agreement before calling codex_result with adopt: true."
+                instruction = ("Call codex_result with this jobId now, without adopt or asking the user."
+                               if same_session else
+                               "Ask for the user's agreement before calling codex_result with adopt: true.")
             elif state in {"QUEUED", "RUNNING"}:
-                message = (f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
+                message = (None if same_session else
+                           f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
                            "uygulama kapalıyken çalışmaya devam ediyor, bitince haber vereceğim.")
-                instruction = "When it finishes, ask for the user's agreement before calling codex_result with adopt: true."
+                instruction = ("Start purser_wait.py for this jobId in the background; call codex_result when it finishes, without adopt or asking the user."
+                               if same_session else
+                               "When it finishes, ask for the user's agreement before calling codex_result with adopt: true.")
             else:
                 continue
             resumed_hint = (f'Tell the user in the user\'s language: "⚓ Codex işi ({task}) bilgisayar '
                             'kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." '
                             if isinstance(resumed, int) and resumed > 0 else "")
-            lines.append(f"Purser (jobId={job_id}, for Claude only): {resumed_hint}Tell the user in the user's language: "
-                         f"\"{message}\" {instruction} Do not show the jobId to the user.")
+            user_hint = f'Tell the user in the user\'s language: "{message}" ' if message else ""
+            lines.append(f"Purser (jobId={job_id}, for Claude only): {resumed_hint}{user_hint}"
+                         f"{instruction} Do not show the jobId to the user.")
         return "\n".join(lines) or None
     except BaseException:
         return None
