@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.32 — 2026-09-26
+
+- Plan calls accept changes from an overlapping job's leased scope; with two or more active jobs, responses show one task/route/elapsed/state line per job.
+- A repair reply on a finished job is attributed to the same task, so other jobs are not reviewed on its files.
+- The result line check accepts "%N" or "N%", stops repeating once satisfied, and skips quota when the 5h window has reset.
+- The token report splits Codex jobs by project (`--project`).
+
 ## 0.1.31 — 2026-09-26
 
 - A job interrupted by a reboot or crash resumes automatically where it stopped (at most twice); failed recovery is reported as uncertain, never as success.
