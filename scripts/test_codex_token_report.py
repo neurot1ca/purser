@@ -27,16 +27,21 @@ def area():
         shutil.rmtree(path)
 
 
-def rollout(thread, date):
+def rollout(thread, date, cwd="C:/workspace/Purser", context_cwd=None):
     def call(call_id, command, output):
         return [
             {"type": "response_item", "payload": {"type": "custom_tool_call", "call_id": call_id, "input": command}},
             {"type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": call_id,
                                                     "output": [{"type": "input_text", "text": output}]}},
         ]
-    return ([{"type": "session_meta", "payload": {"id": thread, "originator": "codex_exec", "timestamp": date}},
-             {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
-                 "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "reasoning_output_tokens": 0}}}}]
+    meta = {"id": thread, "originator": "codex_exec", "timestamp": date}
+    if cwd is not None:
+        meta["cwd"] = cwd
+    context = ([{"type": "turn_context", "payload": {"cwd": context_cwd}}]
+               if context_cwd is not None else [])
+    return ([{"type": "session_meta", "payload": meta}] + context +
+            [{"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "reasoning_output_tokens": 0}}}}]
             + call("r", 'tools.exec_command({cmd:"rg -n x files"})', "read")
             + call("t", 'tools.exec_command({cmd:"pytest -q"})', "test")
             + call("o", 'tools.exec_command({cmd:"git status"})', "other")
@@ -63,3 +68,28 @@ def test_join_period_and_command_classes(area):
             result["jobs"][0]["other_chars"]) == (4, 4, 5)
     assert result["summary"]["before"]["jobs"] == result["summary"]["after"]["jobs"] == 1
     assert result["summary"]["after"]["duration_ms"] == 2500
+
+
+def test_project_split_filter_and_missing_cwd(area):
+    sessions = area / "sessions"
+    events = area / "events"
+    for thread, cwd, context_cwd in (("purser", "C:/workspace/Purser", None),
+                                     ("agentpool", None, "C:/workspace/AgentPool"),
+                                     ("unknown", None, None)):
+        write(sessions / "2026/09/25" / f"rollout-{thread}.jsonl",
+              rollout(thread, "2026-09-25T01:00:00Z", cwd, context_cwd))
+    write(events / "2026-09/session_1.jsonl", [
+        {"event_type": "IMPLEMENTER_FINISHED", "session_id": "s", "task_id": thread,
+         "payload": {"thread_id": thread, "duration_ms": 100}}
+        for thread in ("purser", "agentpool", "unknown")])
+
+    since = reporter.timestamp("2026-09-25T00:00:00Z")
+    result = reporter.report(sessions, events, since)
+    assert {job["project"] for job in result["jobs"]} == {"Purser", "AgentPool", "unknown"}
+    assert result["project_summary"]["Purser"]["after"]["jobs"] == 1
+    assert result["project_summary"]["AgentPool"]["after"]["jobs"] == 1
+    assert result["project_summary"]["unknown"]["after"]["jobs"] == 1
+
+    filtered = reporter.report(sessions, events, since, project="pUrSeR")
+    assert [job["project"] for job in filtered["jobs"]] == ["Purser"]
+    assert filtered["summary"]["after"]["jobs"] == 1

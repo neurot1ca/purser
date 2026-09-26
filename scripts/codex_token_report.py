@@ -46,6 +46,7 @@ def output_chars(value):
 
 def rollout(path):
     meta = None
+    cwd = None
     usage = None
     calls = {}
     sizes = defaultdict(int)
@@ -54,6 +55,11 @@ def rollout(path):
         kind = payload.get("type")
         if item.get("type") == "session_meta":
             meta = payload
+            cwd = cwd or payload.get("cwd")
+        elif item.get("type") == "turn_context":
+            cwd = cwd or payload.get("cwd")
+        elif item.get("type") == "event_msg" and kind == "turn_context":
+            cwd = cwd or payload.get("cwd")
         elif item.get("type") == "event_msg" and kind == "token_count":
             latest = (payload.get("info") or {}).get("total_token_usage")
             if latest:
@@ -66,6 +72,7 @@ def rollout(path):
         return None
     return {"thread_id": meta.get("id") or meta.get("session_id"),
             "date": meta.get("timestamp"), "input": usage.get("input_tokens", 0),
+            "project": Path(cwd).name if isinstance(cwd, str) and cwd.strip() else "unknown",
             "cached": usage.get("cached_input_tokens", 0),
             "output": usage.get("output_tokens", 0),
             "reasoning": usage.get("reasoning_output_tokens", 0),
@@ -92,12 +99,14 @@ def telemetry_index(root):
     return finished
 
 
-def report(sessions, events, since, *, day=None):
+def report(sessions, events, since, *, day=None, project=None):
     index = telemetry_index(events)
     jobs = []
     for path in sessions.glob("**/rollout-*.jsonl"):
         job = rollout(path)
         if not job or job["thread_id"] not in index:
+            continue
+        if project and job["project"].casefold() != project.casefold():
             continue
         job.update(index[job["thread_id"]])
         started = timestamp(job["date"])
@@ -110,11 +119,18 @@ def report(sessions, events, since, *, day=None):
     fields = ("input", "cached", "uncached", "output", "reasoning", "duration_ms",
               "read_search_chars", "test_chars", "other_chars")
     summary = {}
+    project_summary = {}
     for period in ("before", "after"):
         subset = [job for job in jobs if job["period"] == period]
         summary[period] = {"jobs": len(subset), **{field: sum(job[field] or 0 for job in subset)
                                                   for field in fields}}
-    return {"since": since.isoformat(), "jobs": jobs, "summary": summary}
+        for name in sorted({job["project"] for job in subset}, key=str.casefold):
+            project_jobs = [job for job in subset if job["project"] == name]
+            project_summary.setdefault(name, {})[period] = {
+                "jobs": len(project_jobs),
+                **{field: sum(job[field] or 0 for job in project_jobs) for field in fields}}
+    return {"since": since.isoformat(), "jobs": jobs, "summary": summary,
+            "project_summary": project_summary}
 
 
 def main(argv=None):
@@ -123,19 +139,23 @@ def main(argv=None):
     parser.add_argument("--sessions", type=Path, default=Path.home() / ".codex/sessions")
     parser.add_argument("--events", type=Path, default=Path.home() / ".claude/purser/telemetry/events")
     parser.add_argument("--day", type=lambda value: datetime.fromisoformat(value).date())
+    parser.add_argument("--project", help="Filter to a project folder name (case-insensitive)")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    result = report(args.sessions, args.events, args.since, day=args.day)
+    result = report(args.sessions, args.events, args.since, day=args.day, project=args.project)
     if args.json:
         print(json.dumps(result, indent=2))
         return
-    print("date UTC | task | route | input | cached | uncached | output | reasoning | duration ms | read/search chars | test chars | other chars")
+    print("date UTC | project | task | route | input | cached | uncached | output | reasoning | duration ms | read/search chars | test chars | other chars")
     for job in result["jobs"]:
         print(" | ".join(str(job.get(field, "")) for field in
-                         ("date", "task", "route", "input", "cached", "uncached", "output",
+                         ("date", "project", "task", "route", "input", "cached", "uncached", "output",
                           "reasoning", "duration_ms", "read_search_chars", "test_chars", "other_chars")))
     for period, values in result["summary"].items():
         print(f"{period}: " + " ".join(f"{key}={value}" for key, value in values.items()))
+    for name, periods in result["project_summary"].items():
+        for period, values in periods.items():
+            print(f"project={name} {period}: " + " ".join(f"{key}={value}" for key, value in values.items()))
 
 
 if __name__ == "__main__":
