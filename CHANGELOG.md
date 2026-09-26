@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.30 — 2026-09-26
+
+- The detached job host starts with a hidden console, so a venv python no longer opens terminal windows.
+- A new session reports jobs finished while the app was closed and adopts one only after you agree.
+- The compact notice is enforced by hooks and re-shown until it appears.
+
 ## 0.1.29 — 2026-09-26
 
 - Codex runs with no console window, so no PowerShell/python windows pop up during async jobs.
