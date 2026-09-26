@@ -127,6 +127,19 @@ def test_preexisting_disjoint_dirty_change_is_reported_but_not_reviewed_or_rever
     assert (repo / "notes.txt").read_text(encoding="utf-8") == "user work\n"
 
 
+def test_attribution_accepts_sequential_leases_for_one_foreign_task(repo):
+    baseline = ledger.capture_baseline(repo, ["notes.txt"])
+    (repo / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    delta = ledger.compute_delta(repo, baseline)
+    owners = [{"task_id": "repair", "scope": ["src/target.py"]},
+              {"task_id": "repair", "scope": ["src/target.py"]}]
+
+    attributed, known = ledger.attribute_known_concurrent_scopes(delta, ["notes.txt"], owners)
+
+    assert known == [{"path": "src/target.py", "task_id": "repair"}]
+    assert attributed["changed_paths"] == []
+
+
 def test_disjoint_out_of_scope_change_proceeds_and_is_excluded_from_review(repo):
     baseline = ledger.capture_baseline(repo, ["src"])
     (repo / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")

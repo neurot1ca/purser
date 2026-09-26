@@ -811,6 +811,65 @@ def test_concurrent_leased_jobs_get_only_their_own_diff(workspace, config):
             finding["code"] for finding in bundle["findings"]}
 
 
+def test_reply_lease_attributes_same_task_repair_during_foreign_result(workspace, config):
+    repo, state = workspace
+    foreign = _attribution_call("foreign", "file1.py", "reply-foreign")
+    first = _attribution_call("repair", "file0.py", "reply-first")
+    codex.pre_tool_use(foreign, config=config, state_root=state, repo_root=repo)
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    _finish_attribution_call(first, workspace, config, [])
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(first)]["state"] == "RELEASED"
+
+    reply = event(START_TOOL, prompt="Continue the repair.", tool_use_id="reply-lease",
+                  mode="reply", threadId=first["tool_use_id"])
+    pre = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in pre["hookSpecificOutput"]
+    owner = _lease_state(workspace)._read()["owners"][codex._call_key(reply)]
+    assert owner["state"] == "ACTIVE" and owner["task_id"] == "repair"
+    assert owner["scope"] == ["file0.py"]
+    call_uuid = pre["hookSpecificOutput"]["updatedInput"]["call"]
+    job_id = hashlib.sha256(call_uuid.encode()).hexdigest()
+    codex.post_tool_use({**reply, "hook_event_name": "PostToolUse", "tool_response":
+                         {"structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
+                        config=config, state_root=state, repo_root=repo)
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(reply)]["state"] == "ACTIVE"
+    (repo / "file0.py").write_text("value = 3\n", encoding="utf-8")
+
+    bundle = _finish_attribution_call(foreign, workspace, config, [])
+    artifact = json.loads(Path(bundle["full_bundle_path"]).read_text(encoding="utf-8"))
+    assert artifact["known_concurrent_scopes"] == [{"path": "file0.py", "task_id": "repair"}]
+    assert bundle["changed_paths"] == []
+    assert not any(item["code"] == "OUT_OF_SCOPE_MODIFICATION" for item in bundle["findings"])
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(reply)]["state"] == "ACTIVE"
+    bridge_job = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    bridge_job.parent.mkdir(parents=True, exist_ok=True)
+    bridge_job.write_text(json.dumps({"jobId": job_id, "call": call_uuid,
+                                      "state": "SUCCEEDED", "threadId": first["tool_use_id"]}),
+                          encoding="utf-8")
+    result = async_followup(RESULT_TOOL, job_id)
+    codex.post_tool_use({**result, "hook_event_name": "PostToolUse", "tool_response":
+                         {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED",
+                                                "threadId": first["tool_use_id"], "content": "done"}}},
+                        config=config, state_root=state, repo_root=repo)
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(reply)]["state"] == "RELEASED"
+
+
+def test_reply_lease_denies_conflicting_active_task(workspace, config):
+    repo, state = workspace
+    first = _attribution_call("repair", "file0.py", "reply-conflict-first")
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    _finish_attribution_call(first, workspace, config, [])
+    conflicting = _lease_call("other", "file0.py", "reply-conflict-other")
+    codex.pre_tool_use(conflicting, config=config, state_root=state, repo_root=repo)
+
+    reply = event(START_TOOL, prompt="Continue the repair.", tool_use_id="reply-conflict",
+                  mode="reply", threadId=first["tool_use_id"])
+    denied = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert codex._call_key(reply) not in _lease_state(workspace)._read()["owners"]
+
+
 def test_unleased_foreign_edit_still_forces_full(workspace, config):
     repo, state = workspace
     call = _attribution_call("owned", "file0.py", "unleased")

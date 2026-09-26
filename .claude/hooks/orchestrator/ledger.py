@@ -1001,11 +1001,11 @@ def attribute_known_concurrent_scopes(
     protected = set(detect_protected_paths(candidates, protected_paths=protected_paths))
     known = []
     for path in candidates:
-        matches = [owner for owner in owners if any(
-            _inside(path, item) for item in owner["scope"])]
-        if (len(matches) == 1 and path not in ambiguous and path not in protected
+        matching_tasks = {owner["task_id"] for owner in owners if any(
+            _inside(path, item) for item in owner["scope"])}
+        if (len(matching_tasks) == 1 and path not in ambiguous and path not in protected
                 and not any(_inside(path, item) for item in own)):
-            known.append({"path": path, "task_id": matches[0]["task_id"]})
+            known.append({"path": path, "task_id": next(iter(matching_tasks))})
     omitted = {item["path"] for item in known}
     result = dict(delta)
     result["changed_paths"] = [path for path in delta["changed_paths"] if path not in omitted]
