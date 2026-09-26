@@ -95,6 +95,8 @@ CONTINUATION_PROMPT = ("The previous execution was interrupted. Inspect the work
                        "in this thread, avoid repeating completed steps, finish the remaining work, "
                        "run the required focused validation, and report the final result.")
 RETENTION_SECONDS = 7 * 24 * 60 * 60
+# Allow codex exec to exit normally after its terminal stdout event before stopping a hung tree.
+CODEX_TERMINAL_GRACE_SECONDS = 20
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
 WINDOWS_DETACHED_PROCESS = 0x00000008
@@ -1009,6 +1011,8 @@ class Server:
                         self._write_job(job)
                 events: list[dict[str, Any]] = []
                 stderr_chunks: list[bytes] = []
+                terminal_event = threading.Event()
+                exit_forced_after_terminal = False
 
                 def read_stdout() -> None:
                     for line in process.stdout:
@@ -1019,11 +1023,14 @@ class Server:
                         if not isinstance(event, dict):
                             continue
                         events.append(event)
+                        if event.get("type") in ("turn.completed", "turn.failed", "error"):
+                            terminal_event.set()
                         started_id = event.get("thread_id")
                         if (async_job and event.get("type") == "thread.started"
                                 and isinstance(started_id, str) and started_id):
                             thread_config = {"cwd": cwd, "model": model,
-                                             "config_args": config_args, "sandbox": sandbox}
+                                             "config_args": config_args,
+                                             "sandbox": saved_sandbox if name == "codex-reply" else sandbox}
                             with self.jobs_lock:
                                 current = self._read_job(request_id)
                                 if current is not None and current["state"] not in TERMINAL:
@@ -1046,8 +1053,31 @@ class Server:
                             process.stdin.close()
                         except BrokenPipeError:
                             pass
-                    remaining = max(0, job["deadlineAt"] - time.time()) if async_job else None
-                    process.wait(timeout=remaining)
+                    if async_job:
+                        while process.poll() is None and not terminal_event.is_set():
+                            remaining = job["deadlineAt"] - time.time()
+                            if remaining <= 0:
+                                raise subprocess.TimeoutExpired(command, remaining)
+                            terminal_event.wait(timeout=min(remaining, 0.1))
+                        if process.poll() is None:
+                            remaining = max(0, job["deadlineAt"] - time.time())
+                            try:
+                                process.wait(timeout=min(CODEX_TERMINAL_GRACE_SECONDS, remaining))
+                            except subprocess.TimeoutExpired:
+                                if time.time() >= job["deadlineAt"]:
+                                    raise
+                                tree_kill_confirmed = _stop_process(process)
+                                try:
+                                    process.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    self._finish_job(request_id, "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED")
+                                    return _tool_result(None, error="process termination unconfirmed")
+                                if not tree_kill_confirmed and not _child_tree_stopped(process, self.child_job_handle):
+                                    self._finish_job(request_id, "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED")
+                                    return _tool_result(None, error="child tree termination unconfirmed")
+                                exit_forced_after_terminal = True
+                    else:
+                        process.wait()
                 except subprocess.TimeoutExpired:
                     _stop_process(process)
                     try:
@@ -1074,14 +1104,24 @@ class Server:
                             return _tool_result(None, error="cancelled")
                 started = next((event.get("thread_id") for event in events if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str) and event.get("thread_id")), None)
                 failures = [_event_message(event) for event in events if event.get("type") in ("error", "turn.failed")]
-                if process.returncode != 0 or not started or failures:
-                    detail = "\n".join(failures) if failures else stderr[-4000:] or f"exit code {process.returncode}"
+                completed = any(event.get("type") == "turn.completed" for event in events)
+                forced_complete = exit_forced_after_terminal and completed and not failures
+                if (process.returncode != 0 and not forced_complete) or not started or failures or (async_job and not completed):
+                    detail = ("\n".join(failures) if failures else
+                              "turn completion event missing" if async_job and not completed else
+                              stderr[-4000:] or f"exit code {process.returncode}")
                     return _tool_result(started, error=detail)
                 last_message = output_path.read_text(encoding="utf-8") if output_path.is_file() else ""
                 if not last_message:
                     last_message = next((item.get("text") for event in reversed(events) if event.get("type") == "item.completed" for item in [event.get("item")] if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str)), "")
                 if name == "codex":
                     _save_record(self.state_dir, {"thread_id": started, "cwd": cwd, "model": model, "config_args": config_args, "sandbox": sandbox})
+                if async_job and forced_complete:
+                    with self.jobs_lock:
+                        job = self._read_job(request_id)
+                        if job is not None and job["state"] not in TERMINAL:
+                            job["exitForcedAfterComplete"] = True
+                            self._write_job(job)
                 return _tool_result(started, content=last_message)
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)

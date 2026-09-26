@@ -58,12 +58,26 @@ if release:
 print(json.dumps({"type": "turn.started"}), flush=True)
 if os.environ.get("FAKE_FAIL") == "1":
     print(json.dumps({"type": "turn.failed", "error": {"message": "Quota exceeded: try again tomorrow"}}), flush=True)
+    if os.environ.get("FAKE_HANG_AFTER_TERMINAL") == "1":
+        time.sleep(60)
     sys.exit(2)
+if os.environ.get("FAKE_HANG_BEFORE_TERMINAL") == "1":
+    time.sleep(60)
 message = "Reply from fake Codex"
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": message}}), flush=True)
-print(json.dumps({"type": "turn.completed", "usage": {}}), flush=True)
+if os.environ.get("FAKE_NO_COMPLETION_EVENT") != "1":
+    print(json.dumps({"type": "turn.completed", "usage": {}}), flush=True)
 if os.environ.get("FAKE_NO_OUTPUT") != "1":
     Path(args[args.index("-o") + 1]).write_text(message, encoding="utf-8")
+if os.environ.get("FAKE_EXIT_DELAY_AFTER_TERMINAL"):
+    time.sleep(float(os.environ["FAKE_EXIT_DELAY_AFTER_TERMINAL"]))
+if os.environ.get("FAKE_HANG_AFTER_TERMINAL") == "1":
+    import subprocess
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+    Path(os.environ["FAKE_CHILD_PID_FILE"]).write_text(str(child.pid), encoding="ascii")
+    time.sleep(60)
 '''
 
 
@@ -602,6 +616,108 @@ def test_thread_identity_and_config_are_durable_before_exit(area):
     finally:
         release.touch()
         client.close()
+
+
+def test_completed_turn_hang_succeeds_and_stops_child_tree(area, monkeypatch):
+    fake = area / "fake_codex.py"
+    fake.write_text(FAKE, encoding="utf-8")
+    child_pid_file = area / "child.pid"
+    monkeypatch.setenv("FAKE_RECORD", str(area / "calls.jsonl"))
+    monkeypatch.setenv("FAKE_HANG_AFTER_TERMINAL", "1")
+    monkeypatch.setenv("FAKE_CHILD_PID_FILE", str(child_pid_file))
+    monkeypatch.setattr(codex_exec_mcp, "CODEX_TERMINAL_GRACE_SECONDS", 0.2, raising=False)
+    if os.name == "nt":
+        # The restricted runner denies taskkill; exercise the host's confirmed
+        # tree-stop branch while still checking that both real processes die.
+        def stop_tree(process):
+            child_pid = int(child_pid_file.read_text(encoding="ascii"))
+            os.kill(child_pid, 9)
+            process.kill()
+            return True
+        monkeypatch.setattr(codex_exec_mcp, "_stop_process", stop_tree)
+    jobs = area / "jobs"
+    jobs.mkdir()
+    server = codex_exec_mcp.Server(codex_bin=json.dumps([sys.executable, str(fake)]), job_dir=jobs)
+    server.state_dir = area / "state"
+    codex_exec_mcp._save_record(server.state_dir, {"thread_id": "thread-123", "cwd": str(area),
+                                                   "model": None, "config_args": [], "sandbox": None})
+    job_id = uuid.uuid4().hex
+    server._write_job({"jobId": job_id, "state": "QUEUED", "deadlineAt": time.time() + 5})
+    try:
+        server._job_worker(job_id, "codex-reply", {"threadId": "thread-123", "prompt": "complete then hang"})
+        record = server._read_job(job_id)
+        assert record["state"] == "SUCCEEDED"
+        assert record["exitForcedAfterComplete"] is True
+        assert record["threadId"] == "thread-123"
+        assert (jobs / record["outputFile"]).read_text(encoding="utf-8") == "Reply from fake Codex"
+        child_pid = int(child_pid_file.read_text(encoding="ascii"))
+        assert windows_process_exited(child_pid) if os.name == "nt" else not _pid_alive(child_pid)
+    finally:
+        if child_pid_file.exists():
+            try:
+                os.kill(int(child_pid_file.read_text(encoding="ascii")), 9)
+            except OSError:
+                pass
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _run_local_fake_job(area, monkeypatch, *, deadline=5):
+    fake = area / "fake_codex.py"
+    fake.write_text(FAKE, encoding="utf-8")
+    monkeypatch.setenv("FAKE_RECORD", str(area / "calls.jsonl"))
+    monkeypatch.setattr(codex_exec_mcp, "CODEX_TERMINAL_GRACE_SECONDS", 0.2)
+    jobs = area / "jobs"
+    jobs.mkdir()
+    server = codex_exec_mcp.Server(codex_bin=json.dumps([sys.executable, str(fake)]), job_dir=jobs)
+    server.state_dir = area / "state"
+    job_id = uuid.uuid4().hex
+    server._write_job({"jobId": job_id, "state": "QUEUED", "deadlineAt": time.time() + deadline})
+    server._job_worker(job_id, "codex", {"prompt": "test terminal handling", "cwd": str(area)})
+    return server._read_job(job_id)
+
+
+def test_normal_exit_after_completed_turn_has_no_forced_flag(area, monkeypatch):
+    monkeypatch.setenv("FAKE_EXIT_DELAY_AFTER_TERMINAL", "0.05")
+    record = _run_local_fake_job(area, monkeypatch)
+    assert record["state"] == "SUCCEEDED"
+    assert record["threadId"] == "thread-123"
+    assert "exitForcedAfterComplete" not in record
+
+
+def test_hang_without_completed_turn_keeps_deadline_failure(area, monkeypatch):
+    monkeypatch.setenv("FAKE_HANG_BEFORE_TERMINAL", "1")
+    record = _run_local_fake_job(area, monkeypatch, deadline=0.5)
+    assert record["state"] == "TIMED_OUT"
+    assert record["errorCode"] == "DEADLINE_EXCEEDED"
+    assert "exitForcedAfterComplete" not in record
+
+
+def test_normal_exit_without_completed_turn_is_not_success(area, monkeypatch):
+    monkeypatch.setenv("FAKE_NO_COMPLETION_EVENT", "1")
+    record = _run_local_fake_job(area, monkeypatch)
+    assert record["state"] == "FAILED"
+    assert "exitForcedAfterComplete" not in record
+
+
+def test_failed_turn_hang_stays_failed(area, monkeypatch):
+    monkeypatch.setenv("FAKE_FAIL", "1")
+    monkeypatch.setenv("FAKE_HANG_AFTER_TERMINAL", "1")
+    if os.name == "nt":
+        def stop_root(process):
+            process.kill()
+            return True
+        monkeypatch.setattr(codex_exec_mcp, "_stop_process", stop_root)
+    record = _run_local_fake_job(area, monkeypatch)
+    assert record["state"] == "FAILED"
+    assert record["errorCode"] == "CODEX_FAILED"
+    assert "exitForcedAfterComplete" not in record
 
 
 def test_async_failure_timeout_cancel(area):
