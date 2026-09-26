@@ -556,6 +556,7 @@ class Server:
                     os.replace(temporary, output)
                     job.update(threadId=result["threadId"], outputFile=output.name)
             self._write_job(job)
+            (self.job_dir / (job_id + ".launch")).unlink(missing_ok=True)
             self.jobs.pop(job_id, None)
             self.job_processes.pop(job_id, None)
             event = self.job_events.get(job_id)
@@ -666,10 +667,16 @@ class Server:
                 self._write_job(job)
             return _job_result({"jobId": job["jobId"], "state": "FAILED", "errorCode": "JOB_EXPIRED", "message": "Job record expired"})
         if state not in TERMINAL and not self._host_alive(job):
-            # A dead host can leave a child whose termination is unproved.
-            # Do not finalize this observation or permit a relaunch.
-            state = "UNKNOWN_OR_IN_PROGRESS"
-            job = {**job, "errorCode": "PROCESS_UNCONFIRMED", "message": "Process state cannot be confirmed"}
+            if (state == "QUEUED" and isinstance(job.get("acceptedAt"), (int, float))
+                    and time.time() - job["acceptedAt"] < 10):
+                return _job_result({"jobId": job["jobId"], "state": "RUNNING"})
+            # The durable claim prevents a relaunch; child-tree death is unproved.
+            job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=time.time(),
+                       errorCode="PROCESS_UNCONFIRMED",
+                       message="Host and child-tree termination unconfirmed")
+            self._write_job(job)
+            (self.job_dir / (job["jobId"] + ".launch")).unlink(missing_ok=True)
+            state = job["state"]
         value = {"jobId": job["jobId"], "state": "RUNNING" if state == "QUEUED" else state}
         if state == "SUCCEEDED":
             try:

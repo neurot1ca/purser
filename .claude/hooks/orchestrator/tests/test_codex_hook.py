@@ -17,6 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import codex
+import async_session_maintenance
 import checks
 import project_profile
 import context_io_telemetry
@@ -380,6 +381,46 @@ def test_interrupted_first_finalize_then_new_session_adoption_recovers_bundle(wo
     assert len(reviews) == 1
     assert codex.post_tool_use(adopted, config=config, state_root=state, repo_root=repo) == second
     assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
+
+
+def test_finalizing_crash_before_bundle_survives_cleanup_and_recovers(workspace, config, monkeypatch):
+    repo, state = workspace
+    start, job_id, record = async_started(workspace, config, state_name="SUCCEEDED")
+    job = json.loads(record.read_text(encoding="utf-8"))
+    job["finishedAt"] = time.time() - 8 * 86400
+    record.write_text(json.dumps(job), encoding="utf-8")
+    result = async_followup(RESULT_TOOL, job_id)
+    post = {**result, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
+    original_job = codex._async_job
+    failed = []
+    def crash_once(*args):
+        if not failed:
+            failed.append(True)
+            raise OSError("crash after FINALIZING")
+        return original_job(*args)
+    monkeypatch.setattr(codex, "_async_job", crash_once)
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    assert response_bundle(first, config)["status"] == "ALREADY_CONSUMED_OR_INTERRUPTED"
+    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["stage"] == "FINALIZING"
+    async_session_maintenance.cleanup_jobs(state)
+    assert record.exists() and codex._pending_path(state, start).exists()
+    second = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    assert response_bundle(second, config)["task_id"] == "task-1"
+    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["stage"] == "CONSUMED"
+
+
+def test_stale_pending_cleanup_keeps_async_baseline_without_lease_field(workspace, config):
+    repo, state = workspace
+    start, job_id, _ = async_started(workspace, config)
+    path = codex._pending_path(state, start)
+    pending = json.loads(path.read_text(encoding="utf-8"))
+    pending.pop("lease_owner", None)
+    path.write_text(json.dumps(pending), encoding="utf-8")
+    old = time.time() - codex.PENDING_MAX_AGE_SECONDS - 60
+    os.utime(path, (old, old))
+    codex._cleanup_stale_pending(state, event(tool_use_id="another-call"))
+    assert path.exists() and pending["job_id"] == job_id
 
 
 @pytest.mark.parametrize("state_name", ("FAILED", "TIMED_OUT", "CANCELLED", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED", "UNREADABLE"))

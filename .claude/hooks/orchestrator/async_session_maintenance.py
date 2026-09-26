@@ -13,6 +13,9 @@ import statistics
 import time
 from typing import Any
 
+import codex_exec_mcp
+import codex
+import ledger
 import telemetry
 
 
@@ -23,7 +26,7 @@ MAX_JOB_RECORD_BYTES = 64 * 1024
 MAX_TELEMETRY_FILES = 32
 MAX_TELEMETRY_BYTES = 2 * 1024 * 1024
 MAX_TELEMETRY_LINES = 4096
-TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS"}
+TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED"}
 _JOB_ID = re.compile(r"[0-9a-f]{64}")
 
 
@@ -184,45 +187,80 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
-    """Remove at most 256 expired terminal bridge jobs; never touch active jobs."""
+    """Reconcile dead hosts and remove expired evidence with its ownership records."""
     try:
         root = Path(state_root)
         jobs = root / "codex_exec_mcp" / "jobs"
+        bridge = codex_exec_mcp.Server(job_dir=jobs)
         current = time.time() if now is None else now
         for path in islice(jobs.glob("*.json"), MAX_JOB_RECORDS):
             if not _JOB_ID.fullmatch(path.stem):
                 continue
             job = _read_json(path)
-            if not job or job.get("jobId") != path.stem or job.get("state") not in TERMINAL:
+            if not job or job.get("jobId") != path.stem:
                 continue
+            if bridge._host_alive(job):
+                continue
+            if (job.get("state") == "QUEUED" and isinstance(job.get("acceptedAt"), (int, float))
+                    and current - job["acceptedAt"] < 10):
+                continue
+            if job.get("state") not in TERMINAL:
+                job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=current,
+                           errorCode="PROCESS_UNCONFIRMED",
+                           message="Host and child-tree termination unconfirmed")
+                bridge._write_job(job)
+                (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
+                continue
+            (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
             finished = job.get("finishedAt")
             if isinstance(finished, bool) or not isinstance(finished, (int, float)) or current - finished < RETENTION_SECONDS:
                 continue
-            index_path = root / "async_jobs" / f"{path.stem}.json"
-            index = _read_json(index_path)
-            pending = None
-            pending_exists = False
-            pending_path = None
-            if index and index.get("stage") != "CONSUMED":
-                call_key = index.get("call_key")
-                if isinstance(call_key, str) and _JOB_ID.fullmatch(call_key):
-                    pending_path = root / "pending" / f"{call_key}.json"
-                    pending_exists = pending_path.is_file()
-                    pending = _read_json(pending_path)
-            if pending_exists and index is not None and not index.get("unfetched_event_emitted"):
-                index["unfetched_event_emitted"] = True
-                _write_json(index_path, index)
-                telemetry.emit("CODEX_RESULT_UNFETCHED",
-                               project_key=index.get("project_key"), route=pending.get("route") if pending else None,
-                               code="RESULT_NOT_FETCHED", state_root=root)
-            output_name = job.get("outputFile")
-            if isinstance(output_name, str) and output_name == path.stem + ".output":
-                output_path = jobs / output_name
-                if output_path.parent == jobs:
-                    output_path.unlink(missing_ok=True)
-            path.unlink(missing_ok=True)
-            if index and index.get("stage") == "CONSUMED":
-                index_path.unlink(missing_ok=True)
+            try:
+                with codex._async_claim(root / "async_jobs" / f"{path.stem}.json"):
+                    index_path = root / "async_jobs" / f"{path.stem}.json"
+                    index = _read_json(index_path)
+                    if index_path.exists() and (not index or index.get("jobId") != path.stem
+                            or index.get("call") != job.get("call")
+                            or not isinstance(index.get("call_key"), str)
+                            or not _JOB_ID.fullmatch(index["call_key"])
+                            or not re.fullmatch(r"[0-9a-f]{16}", str(index.get("project_key")))
+                            or index.get("stage") == "FINALIZING"):
+                        continue
+                    pending = None
+                    pending_exists = False
+                    pending_path = None
+                    if index:
+                        call_key = index.get("call_key")
+                        pending_path = root / "pending" / f"{call_key}.json"
+                        pending_exists = pending_path.is_file()
+                        pending = _read_json(pending_path) if pending_exists else None
+                        if pending_exists and (not pending or pending.get("job_id") != path.stem
+                                               or pending.get("async_call") != index["call"]):
+                            continue
+                        owner = pending.get("lease_owner") if pending else call_key
+                        if isinstance(owner, str):
+                            lease = ledger.ScopeLeases(root / "projects" / index["project_key"])
+                            released = lease.release(owner)
+                            if released["status"] != ledger.OK and released["code"] != "LEASE_OWNER_MISSING":
+                                continue
+                    if pending_exists and index is not None and index.get("stage") != "CONSUMED" and not index.get("unfetched_event_emitted"):
+                        index["unfetched_event_emitted"] = True
+                        _write_json(index_path, index)
+                        telemetry.emit("CODEX_RESULT_UNFETCHED",
+                                       project_key=index.get("project_key"), route=pending.get("route") if pending else None,
+                                       code="RESULT_NOT_FETCHED", state_root=root)
+                    output_name = job.get("outputFile")
+                    if isinstance(output_name, str) and output_name == path.stem + ".output":
+                        output_path = jobs / output_name
+                        if output_path.parent == jobs:
+                            output_path.unlink(missing_ok=True)
+                    path.unlink(missing_ok=True)
+                    if pending_path is not None:
+                        pending_path.unlink(missing_ok=True)
+                    if index:
+                        index_path.unlink(missing_ok=True)
+            except OSError:
+                continue
     except BaseException:
         return None
 

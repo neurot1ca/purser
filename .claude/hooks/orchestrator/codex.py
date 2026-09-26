@@ -937,7 +937,9 @@ def _cleanup_stale_pending(root: Path, event: Mapping[str, Any]) -> None:
                 continue
             try:
                 old = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(old, dict) and isinstance(old.get("lease_owner"), str):
+                if isinstance(old, dict) and (isinstance(old.get("lease_owner"), str)
+                                              or isinstance(old.get("async_call"), str)
+                                              or isinstance(old.get("job_id"), str)):
                     continue
             except (OSError, ValueError, TypeError):
                 continue

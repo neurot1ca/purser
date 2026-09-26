@@ -242,6 +242,24 @@ def test_windows_codex_child_uses_hidden_process_group_flags():
     assert flags & codex_exec_mcp.WINDOWS_CREATE_NEW_PROCESS_GROUP
 
 
+def test_dead_host_result_persists_ambiguous_terminal_without_relaunch(tmp_path, monkeypatch):
+    job_id = "a" * 64
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    server._write_job({"jobId": job_id, "call": "accepted-call", "state": "RUNNING",
+                       "acceptedAt": 1, "signalPort": 0, "signalToken": "missing"})
+    launch = tmp_path / f"{job_id}.launch"
+    launch.write_text("prompt and args", encoding="utf-8")
+    monkeypatch.setattr(server, "_host_alive", lambda job: False)
+    first = server._result_job({"jobId": job_id})["structuredContent"]
+    record = read_job_record(tmp_path / f"{job_id}.json")
+    second = server._result_job({"jobId": job_id})["structuredContent"]
+    assert first == second
+    assert record["state"] == "UNKNOWN_OR_IN_PROGRESS"
+    assert record["errorCode"] == "PROCESS_UNCONFIRMED"
+    assert record["finishedAt"] > 0
+    assert not launch.exists()
+
+
 def test_windows_host_launch_uses_hidden_console_flags(monkeypatch, tmp_path):
     class MockFunction:
         def __init__(self, callback):

@@ -1,11 +1,14 @@
 import json
 import os
+import hashlib
 from pathlib import Path
 import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import async_session_maintenance as maintenance
+import codex_exec_mcp
+import ledger
 import telemetry_schema
 
 
@@ -78,43 +81,92 @@ def test_duration_hint_uses_newest_files_when_file_byte_and_line_caps_hit(tmp_pa
     assert hint == "Purser: typical Codex durations here (median/p90, n): mechanical 2/2 min (n=10)."
 
 
-def test_cleanup_removes_only_old_terminal_jobs_and_reports_unfetched_once(tmp_path, monkeypatch):
-    jobs = tmp_path / "codex_exec_mcp" / "jobs"
-    indices = tmp_path / "async_jobs"
-    jobs.mkdir(parents=True)
-    indices.mkdir()
+def test_cleanup_live_job_preserves_pending_and_lease(tmp_path, monkeypatch):
+    job_id, pending, lease = _job_fixture(tmp_path, "RUNNING", 1000)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: True)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 9 * 86400)
+    assert (tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json").exists()
+    assert pending.exists()
+    assert lease._read()["owners"][job_id]["state"] == "ACTIVE"
+
+
+def _job_fixture(root, state, finished, *, stage="PENDING"):
+    call = "job-" + state + "-" + stage
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    jobs = root / "codex_exec_mcp" / "jobs"
+    indices = root / "async_jobs"
+    pending_dir = root / "pending"
+    for directory in (jobs, indices, pending_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    (jobs / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "call": call, "state": state, "acceptedAt": 1,
+        "finishedAt": finished, "outputFile": f"{job_id}.output"}), encoding="utf-8")
+    (jobs / f"{job_id}.output").write_text("result", encoding="utf-8")
+    (jobs / f"{job_id}.launch").write_text("secret prompt", encoding="utf-8")
+    (indices / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "call": call, "call_key": job_id,
+        "project_key": PROJECT_KEY, "stage": stage}), encoding="utf-8")
+    pending = pending_dir / f"{job_id}.json"
+    pending.write_text(json.dumps({"job_id": job_id, "async_call": call,
+        "lease_owner": job_id, "route": "subtle", "project_key": PROJECT_KEY}), encoding="utf-8")
+    lease = ledger.ScopeLeases(root / "projects" / PROJECT_KEY)
+    assert lease.acquire(job_id, "task-a", ["file.py"])["status"] == ledger.OK
+    return job_id, pending, lease
+
+
+def test_cleanup_dead_host_reconciles_once_to_ambiguous(tmp_path, monkeypatch):
+    job_id, pending, lease = _job_fixture(tmp_path, "RUNNING", 1)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+    maintenance.cleanup_jobs(tmp_path, now=1000)
+    record = tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    first = json.loads(record.read_text())
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    assert json.loads(record.read_text()) == first
+    assert first["state"] == "UNKNOWN_OR_IN_PROGRESS"
+    assert first["errorCode"] == "PROCESS_UNCONFIRMED"
+    assert "unconfirmed" in first["message"]
+    assert pending.exists() and lease._read()["owners"][job_id]["state"] == "ACTIVE"
+    assert not record.with_suffix(".launch").exists()
+
+
+def test_cleanup_consumed_job_does_not_refinalize(tmp_path, monkeypatch):
+    job_id, pending, lease = _job_fixture(tmp_path, "SUCCEEDED", 1000, stage="CONSUMED")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
     emitted = []
-    monkeypatch.setattr(maintenance.telemetry, "emit", lambda *a, **kw: emitted.append((a, kw)))
+    monkeypatch.setattr(maintenance.telemetry, "emit", lambda *a, **kw: emitted.append(a))
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    assert (tmp_path / "async_jobs" / f"{job_id}.json").exists()
+    assert pending.exists() and not emitted
 
-    def make(job_id, state, finished, *, stage="PENDING"):
-        output_name = job_id + ".output"
-        (jobs / f"{job_id}.json").write_text(json.dumps({"jobId": job_id, "state": state,
-            "finishedAt": finished, "outputFile": output_name}), encoding="utf-8")
-        (jobs / output_name).write_text("result", encoding="utf-8")
-        (indices / f"{job_id}.json").write_text(json.dumps({"jobId": job_id, "call": job_id,
-            "call_key": job_id, "project_key": PROJECT_KEY, "stage": stage}), encoding="utf-8")
 
-    old = 1000
-    now = old + 8 * 86400
-    make("a" * 64, "SUCCEEDED", old)
-    make("b" * 64, "FAILED", now - 3600)
-    make("c" * 64, "RUNNING", old)
-    (tmp_path / "pending").mkdir()
-    (tmp_path / "pending" / ("a" * 64 + ".json")).write_text(json.dumps({
-        "task_id": "task-a", "route": "subtle", "project_key": PROJECT_KEY}), encoding="utf-8")
+def test_cleanup_removes_expired_terminal_evidence_pending_and_lease_once(tmp_path, monkeypatch):
+    job_id, pending, lease = _job_fixture(tmp_path, "SUCCEEDED", 1000)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+    emitted = []
+    monkeypatch.setattr(maintenance.telemetry, "emit", lambda *a, **kw: emitted.append(a))
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    assert not (jobs / f"{job_id}.json").exists()
+    assert not (jobs / f"{job_id}.output").exists()
+    assert not (tmp_path / "async_jobs" / f"{job_id}.json").exists()
+    assert not pending.exists()
+    assert lease._read()["owners"][job_id]["state"] == "RELEASED"
+    assert len(emitted) == 1 and emitted[0][0] == "CODEX_RESULT_UNFETCHED"
 
-    maintenance.cleanup_jobs(tmp_path, now=now)
-    maintenance.cleanup_jobs(tmp_path, now=now)
 
-    assert not (jobs / ("a" * 64 + ".json")).exists()
-    assert not (jobs / ("a" * 64 + ".output")).exists()
-    assert (jobs / ("b" * 64 + ".json")).exists()
-    assert (jobs / ("c" * 64 + ".json")).exists()
-    assert len(emitted) == 1
-    assert emitted[0][0][0] == "CODEX_RESULT_UNFETCHED"
-    assert (indices / ("a" * 64 + ".json")).exists()
-    diagnostic = telemetry_schema.build_event(
-        "CODEX_RESULT_UNFETCHED", project_key=PROJECT_KEY,
-        payload={"code": "RESULT_NOT_FETCHED", "route": "subtle"}
-    )
-    assert telemetry_schema.valid_event(diagnostic)
+def test_cleanup_removes_launch_payload_for_recent_terminal_job(tmp_path, monkeypatch):
+    job_id, pending, _ = _job_fixture(tmp_path, "FAILED", 1000)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    assert (jobs / f"{job_id}.json").exists() and pending.exists()
+    assert not (jobs / f"{job_id}.launch").exists()
+
+
+def test_cleanup_preserves_finalizing_evidence_for_retry(tmp_path, monkeypatch):
+    job_id, pending, lease = _job_fixture(tmp_path, "SUCCEEDED", 1000, stage="FINALIZING")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+    assert (tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json").exists()
+    assert pending.exists() and lease._read()["owners"][job_id]["state"] == "ACTIVE"
