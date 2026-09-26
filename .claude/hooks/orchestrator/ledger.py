@@ -110,7 +110,8 @@ class ScopeLeases:
                     or owner.get("state") not in {"ACTIVE", "RELEASED"}
                     or not isinstance(owner.get("task_id"), str)
                     or not isinstance(owner.get("scope"), list)
-                    or not owner["scope"]
+                    or (not owner["scope"] and owner.get("read_only") is not True)
+                    or (owner.get("read_only") is True and bool(owner["scope"]))
                     or any(not isinstance(path, str) or not path for path in owner["scope"])):
                 raise ValueError("scope lease owner is invalid")
         return value
@@ -186,8 +187,9 @@ class ScopeLeases:
         return changed
 
     def acquire(self, owner_key: str, task_id: str, scope: Sequence[str],
-                *, job_id: str | None = None, timeout_seconds: float | None = None) -> dict[str, Any]:
-        if not owner_key or not task_id or not scope:
+                *, job_id: str | None = None, timeout_seconds: float | None = None,
+                read_only: bool = False) -> dict[str, Any]:
+        if not owner_key or not task_id or (not scope and not read_only) or (scope and read_only):
             return {"status": UNKNOWN, "code": "LEASE_INVALID"}
         try:
             with _lease_lock(self.lock_path):
@@ -211,6 +213,8 @@ class ScopeLeases:
                     "task_id": task_id, "scope": list(scope), "state": "ACTIVE",
                     "job_id": job_id, "acquired_at": now,
                 }
+                if read_only:
+                    owner["read_only"] = True
                 if job_id is None:
                     owner["deadline_at"] = now + (
                         timeout_seconds + LEASE_TIMEOUT_MARGIN_SECONDS
@@ -990,7 +994,8 @@ def attribute_known_concurrent_scopes(
     if delta.get("status") != OK:
         return dict(delta), []
     owners = list(foreign_owners)
-    own = _normalize_scope(own_scope)
+    own_values = list(own_scope)
+    own = _normalize_scope(own_values) if own_values else []
     ambiguous = set(delta.get("ambiguous_paths", []))
     candidates = sorted(set(delta["changed_paths"]).union(additional_paths))
     protected = set(detect_protected_paths(candidates, protected_paths=protected_paths))

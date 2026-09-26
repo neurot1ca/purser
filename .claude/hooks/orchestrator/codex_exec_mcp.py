@@ -78,7 +78,9 @@ TOOL_SCHEMAS += [
     {"name": "codex_start", "description": "Start a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {**TOOL_SCHEMAS[0]["inputSchema"]["properties"],
             "call": {"type": "string"}, "mode": {"type": "string", "enum": ["new", "reply"]},
-            "threadId": {"type": "string"}, "timeoutSeconds": {"type": "number"}},
+            "threadId": {"type": "string"}, "timeoutSeconds": {"type": "number"},
+            "taskId": {"type": "string"}, "route": {"type": "string"},
+            "etaMinutes": {"type": "integer"}},
         "required": ["prompt"]}},
     {"name": "codex_result", "description": "Read a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {"jobId": {"type": "string"},
@@ -797,6 +799,9 @@ class Server:
                 job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
                        "deadlineAt": now + timeout, "signalToken": uuid.uuid4().hex,
                        "generation": 1, "ownershipToken": uuid.uuid4().hex}
+                for field in ("taskId", "route", "etaMinutes"):
+                    if field in args:
+                        job[field] = args[field]
                 self.job_dir.mkdir(parents=True, exist_ok=True)
                 if os.name != "nt":
                     os.chmod(self.job_dir, 0o700)

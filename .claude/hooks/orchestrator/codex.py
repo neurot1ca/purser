@@ -24,6 +24,7 @@ from typing import Any
 import json_transport
 import compaction_advisor
 import codex_quota
+import codex_exec_mcp
 import checks
 import ledger
 import policy
@@ -1453,6 +1454,10 @@ def pre_tool_use(
         if is_start:
             updated["mode"] = mode
             updated["call"] = call_uuid
+            updated["taskId"] = parsed.task_id
+            updated["route"] = parsed.route
+            if parsed.eta_minutes is not None:
+                updated["etaMinutes"] = parsed.eta_minutes
 
         resolved_profile = (
             project_profile.load_profile(repository) if repository is not None else None
@@ -1564,12 +1569,13 @@ def pre_tool_use(
             )
         # Unresolved roots keep the existing UNKNOWN/FULL path; there is no
         # repository identity against which to key a scope lease.
-        if parsed.phase == "implementation" and repository is not None:
+        if parsed.phase in {"implementation", "plan"} and repository is not None:
             _reconcile_rejected_starts(runtime_root, project_namespace)
             owner = _call_key(event)
             job_id = hashlib.sha256(updated["call"].encode("utf-8")).hexdigest() if is_start else None
             admitted = ledger.ScopeLeases(_project_state_root(runtime_root, project_namespace)).acquire(
-                owner, parsed.task_id, declared_scope, job_id=job_id,
+                owner, parsed.task_id, declared_scope if parsed.phase == "implementation" else [],
+                job_id=job_id, read_only=parsed.phase == "plan",
                 timeout_seconds=updated.get("timeoutSeconds") if is_start else None,
             )
             if admitted["status"] != ledger.OK:
@@ -1802,6 +1808,55 @@ def _start_job_terminal_or_absent(root: Path, pending: Mapping[str, Any]) -> boo
             and job.get("state") in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"})
 
 
+def _job_host_classification(job: Mapping[str, Any]) -> str:
+    return codex_exec_mcp.Server._classify_host(None, job)
+
+
+def _append_project_job_status(response: dict[str, Any], root: Path,
+                               project_key: str) -> dict[str, Any]:
+    """Add a bounded snapshot to the existing hook response, without polling."""
+    try:
+        jobs = []
+        for path in (root / "async_jobs").glob("*.json"):
+            try:
+                index = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(index, dict) or index.get("project_key") != project_key:
+                continue
+            job_id = index.get("jobId")
+            if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{64}", job_id):
+                continue
+            try:
+                job = json.loads((root / "codex_exec_mcp" / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if (not isinstance(job, dict) or job.get("jobId") != job_id
+                    or job.get("call") != index.get("call")
+                    or job.get("state") not in {"QUEUED", "RUNNING"}):
+                continue
+            jobs.append(job)
+        if len(jobs) < 2:
+            return response
+        now = time.time()
+        lines = []
+        for job in sorted(jobs, key=lambda item: (item.get("acceptedAt", 0), item["jobId"]))[:5]:
+            started = job.get("acceptedAt")
+            elapsed = max(0, int((now - started) / 60)) if isinstance(started, (int, float)) else 0
+            eta = job.get("etaMinutes")
+            eta_label = f"{eta}m" if isinstance(eta, int) and not isinstance(eta, bool) else "?"
+            state = ("uncertain" if _job_host_classification(job) == "UNCONFIRMED"
+                     else job["state"].lower())
+            lines.append(f'{job.get("taskId", "?")} | {job.get("route", "?")} | '
+                         f'{elapsed}m/{eta_label} | {state}')
+        block = "Purser jobs:\n" + "\n".join(lines)
+        prior = response.get("systemMessage")
+        response["systemMessage"] = f"{prior}\n{block}" if isinstance(prior, str) and prior else block
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass  # Status is observational; it cannot disable enforcement.
+    return response
+
+
 def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
                 state_root: str | os.PathLike[str] | None) -> dict[str, Any]:
     root = _state_root(state_root)
@@ -1829,8 +1884,9 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
         waiter = Path(__file__).resolve().parent / "purser_wait.py"
         command = (f'Run in the background: "{sys.executable}" "{waiter}" {job_id} '
                    "; when it finishes, call codex_result with this jobId.")
-        return _replacement({"jobId": job_id, "state": value["state"], "next": command},
-                            _load_config(config))
+        return _append_project_job_status(
+            _replacement({"jobId": job_id, "state": value["state"], "next": command},
+                         _load_config(config)), root, pending["project_key"])
     except Exception as error:
         failure = post_tool_use_failure({**event, "error": _safe_error(error)},
                                         state_root=state_root)
@@ -2072,6 +2128,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                     response = _replacement({"state": "FAILED", "ambiguous_outcome": True,
                                              "claude_review_mode": policy.FULL}, _load_config(config))
                 response["hookSpecificOutput"]["additionalContext"] = message
+        if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES:
+            response = _append_project_job_status(response, root, index["project_key"])
         index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
         _atomic_json_write(path, index)
         _release_async_lease(root, index, pending)
@@ -2971,10 +3029,12 @@ def post_tool_use(
             out_of_scope_res = ledger.detect_out_of_scope_modifications(
                 repository, baseline, scope)
         bundle["whole_tree_anomaly"] = out_of_scope_res
-        if delta.get("status") == ledger.OK and pending.get("phase") == "implementation" and scope:
-            bundle["whole_tree_delta"] = {"changed_paths": delta["changed_paths"],
-                                           "changed_file_count": delta["changed_file_count"],
-                                           "changed_line_count": delta["changed_line_count"]}
+        if delta.get("status") == ledger.OK and (pending.get("phase") == "plan" or
+                                                  (pending.get("phase") == "implementation" and scope)):
+            if pending.get("phase") == "implementation":
+                bundle["whole_tree_delta"] = {"changed_paths": delta["changed_paths"],
+                                               "changed_file_count": delta["changed_file_count"],
+                                               "changed_line_count": delta["changed_line_count"]}
             owner = pending.get("lease_owner")
             if isinstance(owner, str):
                 try:
@@ -2985,7 +3045,8 @@ def post_tool_use(
                              if isinstance(out_of_scope_res, Mapping)
                              and out_of_scope_res.get("status") == ledger.OK else [])
                     delta, known = ledger.attribute_known_concurrent_scopes(
-                        delta, scope, foreign_owners, protected_paths=protected_paths,
+                        delta, scope if pending.get("phase") == "implementation" else [],
+                        foreign_owners, protected_paths=protected_paths,
                         additional_paths=extra)
                     bundle["known_concurrent_scopes"] = known
                 except (OSError, ValueError, TypeError, KeyError):

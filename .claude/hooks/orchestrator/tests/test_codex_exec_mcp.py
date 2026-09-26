@@ -559,11 +559,15 @@ def test_async_start_result_idempotency_and_sync(area):
     client = Client(area, extra_env={"FAKE_SLOW": "1"})
     try:
         key = str(uuid.uuid4())
-        started = job_call(client, "codex_start", {"call": key, "prompt": "slow"})
+        started = job_call(client, "codex_start", {"call": key, "prompt": "slow",
+                                                  "taskId": "bridge-task", "route": "subtle",
+                                                  "etaMinutes": 7})
         assert started["state"] == "RUNNING" and started["acceptedAt"] < started["deadlineAt"]
         assert job_call(client, "codex_result", {"jobId": started["jobId"]})["state"] == "RUNNING"
         assert job_call(client, "codex_start", {"call": key, "prompt": "slow"})["jobId"] == started["jobId"]
         record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
+        assert (record["taskId"], record["route"], record["etaMinutes"]) == (
+            "bridge-task", "subtle", 7)
         with socket.create_connection(("127.0.0.1", record["signalPort"]), timeout=4) as signal_connection:
             signal_connection.sendall(f"{started['jobId']}:{record['signalToken']}".encode("ascii"))
             assert signal_connection.recv(1) == b"1"

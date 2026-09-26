@@ -211,6 +211,33 @@ def test_plan_async_result(workspace, config):
     assert len(finished) == 1 and finished[0]["phase"] == "plan"
 
 
+@pytest.mark.parametrize("unleased", (False, True))
+def test_plan_attributes_only_foreign_leased_changes(workspace, config, unleased):
+    repo, state = workspace
+    plan = event(prompt=orch(phase="plan", route="plan_standard", scope=None) + "\nPlan.",
+                 tool_use_id="plan-with-foreign")
+    codex.pre_tool_use(plan, config=config, state_root=state, repo_root=repo)
+    foreign = _attribution_call("foreign-plan-writer", "file1.py", "plan-foreign")
+    codex.pre_tool_use(foreign, config=config, state_root=state, repo_root=repo)
+    (repo / "file1.py").write_text("value = 2\n", encoding="utf-8")
+    if unleased:
+        (repo / "file2.py").write_text("value = 3\n", encoding="utf-8")
+    post = {**plan, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"threadId": "plan-foreign-thread", "content": "Summary:\nPlan."}}}
+    bundle = response_bundle(codex.post_tool_use(post, config=config, state_root=state,
+                                                   repo_root=repo), config)
+    assert bundle["claude_review_mode"] == policy.FULL
+    artifact = json.loads(Path(bundle["full_bundle_path"]).read_text(encoding="utf-8"))
+    assert artifact["known_concurrent_scopes"] == [
+        {"path": "file1.py", "task_id": "foreign-plan-writer"}]
+    mutations = [finding for finding in bundle["findings"]
+                 if finding["code"] == "PLAN_MUTATED_REPO"]
+    assert bool(mutations) == unleased
+    if unleased:
+        assert "file2.py" in mutations[0]["message"]
+        assert "file1.py" not in mutations[0]["message"]
+
+
 def test_plan_file_and_summary_caps(workspace):
     _, state = workspace
     report = "Summary:\n" + "x" * 16000
@@ -262,6 +289,61 @@ def async_followup(name, job_id):
     call = event(name, tool_use_id=f"followup-{name}")
     call["tool_input"] = {"jobId": job_id}
     return call
+
+
+@pytest.mark.parametrize("job_count", (1, 2, 6))
+def test_async_status_block_reads_project_jobs(workspace, config, monkeypatch, job_count):
+    repo, state = workspace
+    monkeypatch.setattr(codex, "_job_host_classification", lambda job: (
+        "UNCONFIRMED" if job["taskId"] == "status-2" else "ALIVE"))
+    responses = []
+    for number in range(1, job_count + 1):
+        prompt = orch(task=f"status-{number}", scope=f"owned-{number}.py") + "\nWork."
+        start = event(START_TOOL, prompt=prompt, tool_use_id=f"status-start-{number}")
+        updated = codex.pre_tool_use(start, config=config, state_root=state,
+                                     repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+        job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
+        path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"jobId": job_id, "call": updated["call"],
+                                    "state": "RUNNING", "acceptedAt": time.time() - 120,
+                                    "taskId": f"status-{number}", "route": "normal",
+                                    "etaMinutes": 10}), encoding="utf-8")
+        responses.append(codex.post_tool_use({**start, "hook_event_name": "PostToolUse",
+            "tool_response": {"structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
+            config=config, state_root=state, repo_root=repo))
+    message = responses[-1].get("systemMessage", "")
+    if job_count == 1:
+        assert "status-1 |" not in message
+    else:
+        lines = [line for line in message.splitlines() if line.startswith("status-")]
+        assert len(lines) == min(job_count, 5)
+        assert "status-2 | normal | 2m/10m | uncertain" in lines
+        assert all(" | normal | " in line for line in lines)
+
+
+def test_async_result_status_lists_remaining_active_jobs(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(codex, "_job_host_classification", lambda _job: "ALIVE")
+    jobs = []
+    for number, job_state in ((1, "SUCCEEDED"), (2, "RUNNING"), (3, "RUNNING")):
+        prompt = orch(task=f"result-status-{number}", scope=f"owned-{number}.py") + "\nWork."
+        _, job_id, path = async_started(workspace, config, prompt=prompt,
+                                         state_name=job_state, tool_use_id=f"result-status-{number}")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.update(taskId=f"result-status-{number}", route="normal", etaMinutes=5)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        jobs.append(job_id)
+    result = async_followup(RESULT_TOOL, jobs[0])
+    assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
+    post = {**result, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"jobId": jobs[0], "state": "SUCCEEDED",
+                              "threadId": "async-thread", "content": "done"}}}
+    response = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    lines = [line for line in response.get("systemMessage", "").splitlines()
+             if line.startswith("result-status-")]
+    assert len(lines) == 2
+    assert all(" | normal | " in line for line in lines)
 
 
 def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace, config):
@@ -973,14 +1055,18 @@ def test_async_lease_survives_start_and_releases_after_finalize(workspace, confi
 
 
 @pytest.mark.parametrize("phase,route", (("plan", "plan_standard"), ("operation", "normal")))
-def test_nonimplementation_calls_take_no_lease(workspace, config, phase, route):
+def test_nonimplementation_calls_take_no_write_lease(workspace, config, phase, route):
     repo, state = workspace
     first = _lease_call("owner", "file0.py", "lease-active")
     codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
     call = event(prompt=orch(task="read-only", phase=phase, route=route,
                              scope="file0.py") + "\nInspect.", tool_use_id=f"lease-{phase}")
     assert "updatedInput" in codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-    assert len(_lease_state(workspace)._read()["owners"]) == 1
+    owners = _lease_state(workspace)._read()["owners"]
+    assert len(owners) == (2 if phase == "plan" else 1)
+    if phase == "plan":
+        assert owners[codex._call_key(call)]["scope"] == []
+        assert owners[codex._call_key(call)]["read_only"] is True
 
 
 def test_async_start_requires_orch_and_denies_internal_pre_error(workspace, config):
