@@ -242,6 +242,55 @@ def test_windows_codex_child_uses_hidden_process_group_flags():
     assert flags & codex_exec_mcp.WINDOWS_CREATE_NEW_PROCESS_GROUP
 
 
+def test_windows_host_launch_uses_hidden_console_flags(monkeypatch, tmp_path):
+    class MockFunction:
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    creation = {}
+    kernel = type("Kernel", (), {})()
+    user = type("User", (), {})()
+    user.GetShellWindow = MockFunction(lambda: 1)
+
+    def get_shell_pid(_window, pid_pointer):
+        ctypes.cast(pid_pointer, ctypes.POINTER(codex_exec_mcp.wintypes.DWORD))[0] = 321
+        return 1
+
+    user.GetWindowThreadProcessId = MockFunction(get_shell_pid)
+    kernel.OpenProcess = MockFunction(lambda *_args: 1234)
+    kernel.CloseHandle = MockFunction(lambda *_args: 1)
+
+    def initialize_attributes(_attributes, _count, _flags, size_pointer):
+        ctypes.cast(size_pointer, ctypes.POINTER(ctypes.c_size_t))[0] = 64
+        return 1
+
+    kernel.InitializeProcThreadAttributeList = MockFunction(initialize_attributes)
+    kernel.UpdateProcThreadAttribute = MockFunction(lambda *_args: 1)
+    kernel.DeleteProcThreadAttributeList = MockFunction(lambda *_args: None)
+
+    def create_process(*args):
+        creation["flags"] = args[5]
+        return 1
+
+    kernel.CreateProcessW = MockFunction(create_process)
+
+    def win_dll(name, **_kwargs):
+        return kernel if name == "kernel32" else user
+
+    monkeypatch.setattr(codex_exec_mcp.ctypes, "WinDLL", win_dll, raising=False)
+    monkeypatch.setattr(codex_exec_mcp, "os", type("WindowsOS", (), {"name": "nt", "environ": {}})())
+    codex_exec_mcp._launch_host(tmp_path, "job")
+
+    flags = creation["flags"]
+    assert flags & codex_exec_mcp.WINDOWS_CREATE_NO_WINDOW
+    assert not flags & codex_exec_mcp.WINDOWS_DETACHED_PROCESS
+    assert flags & 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+    assert flags & codex_exec_mcp.WINDOWS_CREATE_NEW_PROCESS_GROUP
+
+
 def test_new_call_preserves_stdin_and_hook_result(client, area):
     cwd = area / "working"
     cwd.mkdir()

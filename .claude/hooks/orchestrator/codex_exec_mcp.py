@@ -86,6 +86,7 @@ TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROG
 RETENTION_SECONDS = 7 * 24 * 60 * 60
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
+WINDOWS_DETACHED_PROCESS = 0x00000008
 
 
 def _process_creation_options(*, windows: bool | None = None) -> dict[str, Any]:
@@ -167,7 +168,7 @@ def _launch_host(job_dir: Path, job_id: str) -> None:
             startup.lpAttributeList = ctypes.cast(attributes, ctypes.c_void_p)
             info = PROCESS_INFORMATION()
             line = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
-            flags = 0x00080000 | 0x01000000 | 0x00000200 | 0x00000008  # EXTENDED, BREAKAWAY, GROUP, DETACHED
+            flags = 0x00080000 | 0x01000000 | WINDOWS_CREATE_NEW_PROCESS_GROUP | WINDOWS_CREATE_NO_WINDOW
             kernel.CreateProcessW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.c_void_p,
                                                ctypes.c_void_p, wintypes.BOOL, wintypes.DWORD,
                                                ctypes.c_void_p, wintypes.LPCWSTR, ctypes.c_void_p,
@@ -371,7 +372,8 @@ def _stop_process(process: subprocess.Popen[bytes]) -> bool:
     try:
         if os.name == "nt":
             stopped = subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+                                     creationflags=WINDOWS_CREATE_NO_WINDOW)
             if stopped.returncode == 0:
                 return True  # taskkill confirmed the complete Windows process tree.
             process.kill()
