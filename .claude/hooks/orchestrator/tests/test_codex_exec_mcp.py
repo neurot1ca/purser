@@ -48,6 +48,13 @@ if os.environ.get("FAKE_SLOW") == "1":
     time.sleep(float(os.environ.get("FAKE_SLEEP_SECONDS", "2")))
 thread = os.environ.get("FAKE_THREAD", "thread-123")
 print(json.dumps({"type": "thread.started", "thread_id": thread}), flush=True)
+release = os.environ.get("FAKE_RELEASE_AFTER_START")
+if release:
+    deadline = time.monotonic() + 45
+    while not Path(release).exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    if not Path(release).exists():
+        sys.exit(3)
 print(json.dumps({"type": "turn.started"}), flush=True)
 if os.environ.get("FAKE_FAIL") == "1":
     print(json.dumps({"type": "turn.failed", "error": {"message": "Quota exceeded: try again tomorrow"}}), flush=True)
@@ -242,22 +249,65 @@ def test_windows_codex_child_uses_hidden_process_group_flags():
     assert flags & codex_exec_mcp.WINDOWS_CREATE_NEW_PROCESS_GROUP
 
 
-def test_dead_host_result_persists_ambiguous_terminal_without_relaunch(tmp_path, monkeypatch):
+def test_slow_claim_does_not_become_terminal(tmp_path, monkeypatch):
     job_id = "a" * 64
     server = codex_exec_mcp.Server(job_dir=tmp_path)
-    server._write_job({"jobId": job_id, "call": "accepted-call", "state": "RUNNING",
+    server._write_job({"jobId": job_id, "call": "accepted-call", "state": "QUEUED",
                        "acceptedAt": 1, "signalPort": 0, "signalToken": "missing"})
     launch = tmp_path / f"{job_id}.launch"
     launch.write_text("prompt and args", encoding="utf-8")
-    monkeypatch.setattr(server, "_host_alive", lambda job: False)
+    monkeypatch.setattr(server, "_classify_host", lambda job: "UNCONFIRMED")
     first = server._result_job({"jobId": job_id})["structuredContent"]
     record = read_job_record(tmp_path / f"{job_id}.json")
     second = server._result_job({"jobId": job_id})["structuredContent"]
     assert first == second
-    assert record["state"] == "UNKNOWN_OR_IN_PROGRESS"
-    assert record["errorCode"] == "PROCESS_UNCONFIRMED"
-    assert record["finishedAt"] > 0
-    assert not launch.exists()
+    assert record["state"] == "QUEUED"
+    assert first["state"] == "QUEUED"
+    assert "unconfirmed" in first["message"].lower()
+    assert launch.exists()
+
+
+@pytest.mark.parametrize("ping", [False, True])
+def test_unconfirmed_host_never_writes_terminal(tmp_path, monkeypatch, ping):
+    job_id = "d" * 64
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    job = {"jobId": job_id, "state": "RUNNING", "acceptedAt": 1}
+    server._write_job(job)
+    monkeypatch.setattr(server, "_classify_host", lambda _job: "UNCONFIRMED")
+    monkeypatch.setattr(server, "_host_ping", lambda _job: ping)
+    monkeypatch.setattr(server, "_write_job", lambda _job: pytest.fail("unconfirmed host wrote a terminal record"))
+    result = server._result_job({"jobId": job_id})["structuredContent"]
+    assert result["state"] == "RUNNING"
+    assert "unconfirmed" in result["message"].lower()
+    assert read_job_record(tmp_path / f"{job_id}.json") == job
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process identity")
+def test_host_identity_detects_pid_reuse_and_unreachable_live_process(tmp_path, monkeypatch):
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    state, created = codex_exec_mcp._windows_process_identity(os.getpid())
+    assert state == "ALIVE" and created
+    job = {"hostPid": os.getpid(), "hostCreatedAt": created, "hostContained": True}
+    monkeypatch.setattr(server, "_host_ping", lambda _job: False)
+    assert server._classify_host(job) == "ALIVE"
+    assert server._host_alive(job)
+    job_id = "c" * 64
+    server._write_job({**job, "jobId": job_id, "state": "RUNNING", "acceptedAt": time.time()})
+    assert server._result_job({"jobId": job_id})["structuredContent"]["state"] == "RUNNING"
+    job["hostCreatedAt"] = created + 1
+    assert server._classify_host(job) == "DEAD"
+
+
+def test_superseded_generation_exits_without_starting_codex(tmp_path, monkeypatch):
+    job_id = "b" * 64
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    server._write_job({"jobId": job_id, "state": "QUEUED", "generation": 2,
+                       "ownershipToken": "new-owner"})
+    monkeypatch.setattr(codex_exec_mcp.Server, "_job_worker",
+                        lambda *args: pytest.fail("superseded host started Codex"))
+    codex_exec_mcp._host_main(job_id, tmp_path, 1, "old-owner")
+    assert read_job_record(tmp_path / f"{job_id}.json")["generation"] == 2
+    assert not (tmp_path / f"{job_id}.host-claim").exists()
 
 
 def test_windows_host_launch_uses_hidden_console_flags(monkeypatch, tmp_path):
@@ -525,6 +575,31 @@ def test_async_start_result_idempotency_and_sync(area):
         client.close()
 
 
+def test_thread_identity_and_config_are_durable_before_exit(area):
+    release = area / "release-codex"
+    client = Client(area, extra_env={"FAKE_RELEASE_AFTER_START": str(release)})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                   "config": {"model_reasoning_effort": "high"}})
+        path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            record = read_job_record(path)
+            thread = codex_exec_mcp._load_record(area / "state", "thread-123")
+            if record.get("threadId") == "thread-123" and thread is not None:
+                break
+            time.sleep(0.05)
+        assert record["state"] == "RUNNING"
+        assert record["threadId"] == "thread-123"
+        assert 'model_reasoning_effort="high"' in record["threadConfig"]["config_args"]
+        assert 'model_reasoning_effort="high"' in thread["config_args"]
+        release.touch()
+        finish(client, started["jobId"], "SUCCEEDED")
+    finally:
+        release.touch()
+        client.close()
+
+
 def test_async_failure_timeout_cancel(area):
     failed = Client(area, extra_env={"FAKE_FAIL": "1"})
     try:
@@ -588,7 +663,9 @@ def test_async_host_ack_duplicate_restart_and_payload_removal(area):
         assert record["state"] == "RUNNING" and record["hostPid"] > 0
         if os.name == "nt":
             assert windows_parent_pid(record["hostPid"]) != first.process.pid
-        assert not (path.parent / (started["jobId"] + ".launch")).exists()
+        launch = path.parent / (started["jobId"] + ".launch")
+        assert launch.exists()
+        assert "private slow prompt" in launch.read_text(encoding="utf-8")
         assert "private slow prompt" not in codex_exec_mcp.purser_state_root.retry_permission_error(
             lambda: path.read_text(encoding="utf-8"))
         kill_bridge_tree(first)
@@ -602,6 +679,7 @@ def test_async_host_ack_duplicate_restart_and_payload_removal(area):
             try:
                 assert job_call(third, "codex_result", {"jobId": started["jobId"]})["state"] == "RUNNING"
                 result = finish(third, started["jobId"], "SUCCEEDED")
+                assert not launch.exists()
                 assert (result["threadId"], result["content"]) == ("thread-123", "Reply from fake Codex")
                 assert len(third.calls()) == 1
             finally:

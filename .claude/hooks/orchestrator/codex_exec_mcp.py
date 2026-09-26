@@ -11,6 +11,7 @@ host writes terminal output and state before notifying connected waiters.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import ctypes
 import hashlib
 import json
@@ -26,6 +27,11 @@ import threading
 import time
 from typing import Any
 import uuid
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 if os.name == "nt":
     from ctypes import wintypes
@@ -97,9 +103,11 @@ def _process_creation_options(*, windows: bool | None = None) -> dict[str, Any]:
     return {"start_new_session": True}
 
 
-def _launch_host(job_dir: Path, job_id: str) -> None:
+def _launch_host(job_dir: Path, job_id: str, generation: int = 1,
+                 ownership_token: str = "") -> None:
     command = [sys.executable, str(Path(__file__).resolve()), "--host-job", job_id,
-               "--host-job-dir", str(job_dir)]
+               "--host-job-dir", str(job_dir), "--generation", str(generation),
+               "--ownership-token", ownership_token]
     if os.name != "nt":
         subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
@@ -243,6 +251,64 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         purser_state_root.retry_permission_error(lambda: os.replace(temp, path))
     finally:
         temp.unlink(missing_ok=True)
+
+
+@contextmanager
+def _ownership_lock(job_dir: Path, job_id: str):
+    """Serialize generation claims across bridge and host processes."""
+    job_dir.mkdir(parents=True, exist_ok=True)
+    path = job_dir / (job_id + ".owner-lock")
+    with open(path, "a+b") as stream:
+        if os.name != "nt":
+            os.chmod(path, 0o600)
+            fcntl.flock(stream, fcntl.LOCK_EX)
+        else:
+            while True:
+                try:
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.02)
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def _windows_process_identity(pid: int) -> tuple[str, int | None]:
+    """Return process state and Windows creation FILETIME ticks."""
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+                                       ctypes.c_void_p, ctypes.c_void_p]
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x00100000 | 0x00000400, False, pid)
+    if not handle:
+        return ("DEAD" if ctypes.get_last_error() == 87 else "UNCONFIRMED", None)
+    try:
+        created = ctypes.c_uint64()
+        exited = ctypes.c_uint64()
+        kernel_time = ctypes.c_uint64()
+        user_time = ctypes.c_uint64()
+        if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                      ctypes.byref(kernel_time), ctypes.byref(user_time)):
+            return "UNCONFIRMED", None
+        wait = kernel.WaitForSingleObject(handle, 0)
+        if wait == 0:
+            return "DEAD", created.value
+        if wait != 0x102:
+            return "UNCONFIRMED", created.value
+        return "ALIVE", created.value
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def _toml(value: Any) -> str:
@@ -433,6 +499,8 @@ class Server:
         self.job_processes: dict[str, subprocess.Popen[bytes]] = {}
         self.job_events: dict[str, threading.Event] = {}
         self.child_job_handle: Any = None
+        self.claim_generation: int | None = None
+        self.claim_token: str | None = None
         self.listener = None
         if not host:
             return
@@ -498,7 +566,7 @@ class Server:
     def _write_job(self, job: dict[str, Any]) -> None:
         _atomic_json(self._job_path(job["jobId"]), job)
 
-    def _host_alive(self, job: dict[str, Any]) -> bool:
+    def _host_ping(self, job: dict[str, Any]) -> bool:
         try:
             with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=0.5) as connection:
                 connection.settimeout(0.5)
@@ -507,11 +575,28 @@ class Server:
         except (OSError, KeyError, TypeError, ValueError):
             return False
 
+    def _classify_host(self, job: dict[str, Any]) -> str:
+        if os.name != "nt":
+            return "UNCONFIRMED"
+        pid = job.get("hostPid")
+        created = job.get("hostCreatedAt")
+        if (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+                or not isinstance(created, int) or isinstance(created, bool)
+                or not job.get("hostContained")):
+            return "UNCONFIRMED"
+        state, actual_created = _windows_process_identity(pid)
+        if actual_created is not None and actual_created != created:
+            return "DEAD"
+        return state
+
+    def _host_alive(self, job: dict[str, Any]) -> bool:
+        return self._classify_host(job) == "ALIVE"
+
     def _await_host(self, job_id: str) -> dict[str, Any]:
         until = time.monotonic() + 10
         while time.monotonic() < until:
             job = self._read_job(job_id)
-            if job is not None and job.get("state") == "RUNNING" and self._host_alive(job):
+            if job is not None and job.get("state") == "RUNNING" and (self._host_alive(job) or self._host_ping(job)):
                 return _job_result({key: job[key] for key in ("jobId", "state", "acceptedAt", "deadlineAt")})
             if job is not None and job.get("state") in TERMINAL - {"UNKNOWN_OR_IN_PROGRESS"}:
                 return _job_result({**{key: job[key] for key in ("jobId", "acceptedAt", "deadlineAt")},
@@ -556,7 +641,8 @@ class Server:
                     os.replace(temporary, output)
                     job.update(threadId=result["threadId"], outputFile=output.name)
             self._write_job(job)
-            (self.job_dir / (job_id + ".launch")).unlink(missing_ok=True)
+            if state != "UNKNOWN_OR_IN_PROGRESS":
+                (self.job_dir / (job_id + ".launch")).unlink(missing_ok=True)
             self.jobs.pop(job_id, None)
             self.job_processes.pop(job_id, None)
             event = self.job_events.get(job_id)
@@ -611,7 +697,8 @@ class Server:
                     return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
                 now = time.time()
                 job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
-                       "deadlineAt": now + timeout, "signalToken": uuid.uuid4().hex}
+                       "deadlineAt": now + timeout, "signalToken": uuid.uuid4().hex,
+                       "generation": 1, "ownershipToken": uuid.uuid4().hex}
                 self.job_dir.mkdir(parents=True, exist_ok=True)
                 if os.name != "nt":
                     os.chmod(self.job_dir, 0o700)
@@ -627,10 +714,9 @@ class Server:
                                  {"name": name, "args": args, "codexBin": self.codex_bin})
                     self._write_job(job)
                     try:
-                        _launch_host(self.job_dir, job_id)
+                        _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
                     except OSError as exc:
                         print(f"Codex host launch failed: {exc}", file=sys.stderr, flush=True)
-                        (self.job_dir / (job_id + ".launch")).unlink(missing_ok=True)
                         return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
                                             "errorCode": "PROCESS_UNCONFIRMED", "message": "Host launch unconfirmed"})
         return self._await_host(job_id)
@@ -639,7 +725,10 @@ class Server:
         try:
             with self.jobs_lock:
                 job = self._read_job(job_id)
-                if job is None or job["state"] != "QUEUED":
+                if (job is None or job["state"] != "QUEUED"
+                        or (self.claim_generation is not None and
+                            (job.get("generation") != self.claim_generation or
+                             job.get("ownershipToken") != self.claim_token))):
                     return
                 job.update(state="RUNNING", startedAt=time.time())
                 self._write_job(job)
@@ -666,18 +755,18 @@ class Server:
                 job.update(state="EXPIRED", errorCode="JOB_EXPIRED", message="Job record expired")
                 self._write_job(job)
             return _job_result({"jobId": job["jobId"], "state": "FAILED", "errorCode": "JOB_EXPIRED", "message": "Job record expired"})
-        if state not in TERMINAL and not self._host_alive(job):
-            if (state == "QUEUED" and isinstance(job.get("acceptedAt"), (int, float))
-                    and time.time() - job["acceptedAt"] < 10):
-                return _job_result({"jobId": job["jobId"], "state": "RUNNING"})
-            # The durable claim prevents a relaunch; child-tree death is unproved.
-            job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=time.time(),
-                       errorCode="PROCESS_UNCONFIRMED",
-                       message="Host and child-tree termination unconfirmed")
-            self._write_job(job)
-            (self.job_dir / (job["jobId"] + ".launch")).unlink(missing_ok=True)
-            state = job["state"]
-        value = {"jobId": job["jobId"], "state": "RUNNING" if state == "QUEUED" else state}
+        if state not in TERMINAL:
+            host_state = self._classify_host(job)
+            if host_state == "DEAD":
+                job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=time.time(),
+                           errorCode="PROCESS_UNCONFIRMED",
+                           message="Host exited; completion evidence requires reconciliation")
+                self._write_job(job)
+                state = job["state"]
+            elif host_state == "UNCONFIRMED":
+                return _job_result({"jobId": job["jobId"], "state": state,
+                                    "message": "Host identity unconfirmed"})
+        value = {"jobId": job["jobId"], "state": state}
         if state == "SUCCEEDED":
             try:
                 value.update(threadId=job["threadId"], content=(self.job_dir / job["outputFile"]).read_text(encoding="utf-8"))
@@ -816,23 +905,61 @@ class Server:
                         job = self._read_job(request_id)
                         job["pid"] = process.pid
                         self._write_job(job)
+                events: list[dict[str, Any]] = []
+                stderr_chunks: list[bytes] = []
+
+                def read_stdout() -> None:
+                    for line in process.stdout:
+                        try:
+                            event = json.loads(line)
+                        except (ValueError, UnicodeError):
+                            continue
+                        if not isinstance(event, dict):
+                            continue
+                        events.append(event)
+                        started_id = event.get("thread_id")
+                        if (async_job and event.get("type") == "thread.started"
+                                and isinstance(started_id, str) and started_id):
+                            thread_config = {"cwd": cwd, "model": model,
+                                             "config_args": config_args, "sandbox": sandbox}
+                            with self.jobs_lock:
+                                current = self._read_job(request_id)
+                                if current is not None and current["state"] not in TERMINAL:
+                                    current.update(threadId=started_id, threadConfig=thread_config)
+                                    self._write_job(current)
+                            if name == "codex":
+                                _save_record(self.state_dir, {"thread_id": started_id, **thread_config})
+
+                stdout_reader = threading.Thread(target=read_stdout, daemon=True)
+                stderr_reader = threading.Thread(target=lambda: stderr_chunks.append(process.stderr.read()), daemon=True)
+                stdout_reader.start()
+                stderr_reader.start()
                 try:
-                    if async_job:
-                        remaining = max(0, job["deadlineAt"] - time.time())
-                        stdout_bytes, stderr_bytes = process.communicate(input=prompt.encode("utf-8"), timeout=remaining)
-                    else:
-                        stdout_bytes, stderr_bytes = process.communicate(input=prompt.encode("utf-8"))
+                    try:
+                        process.stdin.write(prompt.encode("utf-8"))
+                    except BrokenPipeError:
+                        pass  # The child exited before consuming stdin.
+                    finally:
+                        try:
+                            process.stdin.close()
+                        except BrokenPipeError:
+                            pass
+                    remaining = max(0, job["deadlineAt"] - time.time()) if async_job else None
+                    process.wait(timeout=remaining)
                 except subprocess.TimeoutExpired:
                     _stop_process(process)
                     try:
-                        process.communicate(timeout=5)
+                        process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         self._finish_job(request_id, "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED")
                         return _tool_result(None, error="process termination unconfirmed")
+                    stdout_reader.join()
+                    stderr_reader.join()
                     self._finish_job(request_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
                     return _tool_result(None, error="deadline exceeded")
-                stdout = stdout_bytes.decode("utf-8", errors="replace")
-                stderr = stderr_bytes.decode("utf-8", errors="replace")
+                stdout_reader.join()
+                stderr_reader.join()
+                stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
                 with self.jobs_lock:
                     self.jobs[request_id] = None
                     if async_job:
@@ -843,14 +970,6 @@ class Server:
                         self.job_processes.pop(request_id, None)
                         if request_id in self.cancelled:
                             return _tool_result(None, error="cancelled")
-                events = []
-                for line in stdout.splitlines():
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(event, dict):
-                        events.append(event)
                 started = next((event.get("thread_id") for event in events if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str) and event.get("thread_id")), None)
                 failures = [_event_message(event) for event in events if event.get("type") in ("error", "turn.failed")]
                 if process.returncode != 0 or not started or failures:
@@ -934,7 +1053,8 @@ class Server:
         self.send({"jsonrpc": "2.0", "id": request_id, "result": result})
 
 
-def _host_main(job_id: str, job_dir: Path | None) -> None:
+def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
+               ownership_token: str = "") -> None:
     if job_dir is None or len(job_id) != 64 or any(ch not in "0123456789abcdef" for ch in job_id):
         return
     server = Server(host=True, job_dir=job_dir)
@@ -942,24 +1062,30 @@ def _host_main(job_id: str, job_dir: Path | None) -> None:
     try:
         if server.listener is None:
             raise OSError("host signal listener unavailable")
-        claim = job_dir / (job_id + ".host-claim")
-        try:
-            claim.mkdir()  # Exclusive and durable: no second host may own this job.
-        except FileExistsError:
-            return
-        containment = _contain_host_children()
-        server.child_job_handle = containment
-        try:
+        with _ownership_lock(job_dir, job_id):
+            job = server._read_job(job_id)
+            if (job is None or job.get("state") != "QUEUED"
+                    or job.get("generation") != generation
+                    or job.get("ownershipToken") != ownership_token):
+                return  # A later generation owns the job.
+            containment = _contain_host_children()
+            server.child_job_handle = containment
+            if os.name == "nt":
+                if not containment:
+                    raise OSError("host Job Object containment unconfirmed")
+                process_state, created = _windows_process_identity(os.getpid())
+                if process_state != "ALIVE" or created is None:
+                    raise OSError("host process identity unavailable")
+            else:
+                created = None
             launch = json.loads(launch_path.read_text(encoding="utf-8"))
-        finally:
-            launch_path.unlink(missing_ok=True)
-        job = server._read_job(job_id)
-        if job is None or job.get("state") != "QUEUED":
-            raise ValueError("job record is not queued")
+            job.update(hostPid=os.getpid(), hostCreatedAt=created,
+                       hostContained=bool(containment), signalPort=server.listener.getsockname()[1])
+            server._write_job(job)
         server.codex_bin = launch["codexBin"]
+        server.claim_generation = generation
+        server.claim_token = ownership_token
         server.job_events[job_id] = threading.Event()
-        job.update(hostPid=os.getpid(), signalPort=server.listener.getsockname()[1])
-        server._write_job(job)
         server._job_worker(job_id, launch["name"], launch["args"])
         # Let connected signal clients receive the terminal notification.
         time.sleep(0.2)
@@ -967,13 +1093,7 @@ def _host_main(job_id: str, job_dir: Path | None) -> None:
         # have already exited. A forced host death closes it in the kernel.
         _ = containment
     except BaseException as exc:
-        launch_path.unlink(missing_ok=True)
         try:
-            job = server._read_job(job_id)
-            if job is not None and job.get("state") not in TERMINAL:
-                job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=time.time(),
-                           errorCode="PROCESS_UNCONFIRMED", message="Host ownership or child state unconfirmed")
-                server._write_job(job)
             (job_dir / (job_id + ".host-error")).write_text(str(exc)[:500], encoding="utf-8")
         except OSError:
             pass
@@ -984,9 +1104,11 @@ def main() -> None:
     parser.add_argument("--codex-bin", help="Codex binary path (or JSON argv prefix for test harnesses)")
     parser.add_argument("--host-job", help=argparse.SUPPRESS)
     parser.add_argument("--host-job-dir", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--generation", type=int, default=1, help=argparse.SUPPRESS)
+    parser.add_argument("--ownership-token", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.host_job:
-        _host_main(args.host_job, args.host_job_dir)
+        _host_main(args.host_job, args.host_job_dir, args.generation, args.ownership_token)
         return
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
