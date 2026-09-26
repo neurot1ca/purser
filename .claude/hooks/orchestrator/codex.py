@@ -554,6 +554,10 @@ class WiringError(RuntimeError):
     pass
 
 
+class AsyncAdoptionRequired(WiringError):
+    """A same-project successor session needs explicit user consent."""
+
+
 def _observe(entrypoint: str, *args: Any, **kwargs: Any) -> None:
     """Keep even a broken or monkeypatched telemetry entry point observational."""
 
@@ -1847,20 +1851,32 @@ def _async_owned(root: Path, event: Mapping[str, Any], repo_root: str | os.PathL
         repository, _ = _repo_root(event, repo_root)
         if (not isinstance(index, dict) or repository is None
                 or index.get("jobId") != job_id
-                or index.get("session_id") != event.get("session_id")
                 or index.get("project_key") != project_root.project_key(repository)
-                or not re.fullmatch(r"[0-9a-f]{64}", str(index.get("call_key")))):
+                or not re.fullmatch(r"[0-9a-f]{64}", str(index.get("call_key")))
+                or not isinstance(index.get("session_id"), str) or not index["session_id"]
+                or not isinstance(index.get("call"), str)
+                or hashlib.sha256(index["call"].encode("utf-8")).hexdigest() != job_id):
             raise WiringError("job is not owned by this session/project")
         pending = None
         original = None
         if index.get("stage") != "CONSUMED":
             pending = json.loads((root / "pending" / f"{index['call_key']}.json").read_text(encoding="utf-8"))
-            original = dict(event, tool_name=CODEX_TOOL, tool_use_id=pending["tool_use_id"])
+            original = dict(event, tool_name=CODEX_TOOL, session_id=index["session_id"],
+                            tool_use_id=pending["tool_use_id"])
             if (_call_key(original) != index["call_key"] or pending.get("job_id") != job_id
                     or pending.get("async_call") != index.get("call")
                     or pending.get("session_id") != index["session_id"]
-                    or pending.get("project_key") != index["project_key"]):
+                    or pending.get("project_key") != index["project_key"]
+                    or not isinstance(pending.get("task_id"), str) or not pending["task_id"]
+                    or not isinstance(pending.get("baseline"), dict)):
                 raise WiringError("job and pending call do not match")
+        if index["session_id"] != event.get("session_id"):
+            if event.get("tool_name") not in CODEX_RESULT_TOOL_NAMES:
+                raise WiringError("job is not owned by this session/project")
+            if index.get("stage") != "CONSUMED" and _async_job(root, index) is None:
+                raise WiringError("job and durable result do not match")
+            if not isinstance(tool_input, Mapping) or tool_input.get("adopt") is not True:
+                raise AsyncAdoptionRequired("user consent is required for adoption")
         return path, index, pending, original
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise WiringError("unknown async job") from error
@@ -1879,6 +1895,9 @@ def _async_pre_followup(event: Mapping[str, Any], state_root: str | os.PathLike[
     try:
         root = _state_root(state_root)
         _, index, _, _ = _async_owned(root, event, repo_root)
+    except AsyncAdoptionRequired:
+        return _deny("ASYNC_ADOPTION_REQUIRES_USER_CONSENT",
+                     "Ask the user before adopting this earlier session's job; after agreement call codex_result with adopt: true.")
     except WiringError:
         return _deny("UNKNOWN_ASYNC_JOB", "No pending job belongs to this session/project.")
     if index.get("stage") == "CONSUMED":

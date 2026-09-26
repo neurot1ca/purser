@@ -309,6 +309,79 @@ def test_async_result_finalizes_once_from_start_baseline(workspace, config, monk
     assert not codex._pending_path(state, start).exists()
 
 
+def test_new_session_result_requires_adoption_and_original_baseline(workspace, config):
+    repo, state = workspace
+    prompt = orch(task="original-task", scope="file0.py") + "\nDo the work."
+    start, job_id, _ = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
+    (repo / "file0.py").write_text("value = 9\n", encoding="utf-8")
+    followup = async_followup(RESULT_TOOL, job_id)
+    followup["session_id"] = "new-session"
+    denied = codex.pre_tool_use(followup, config=config, state_root=state, repo_root=repo)
+    assert "ASYNC_ADOPTION_REQUIRES_USER_CONSENT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    followup["tool_input"]["adopt"] = True
+    assert codex.pre_tool_use(followup, config=config, state_root=state, repo_root=repo) == {}
+    post = {**followup, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(first, config)
+    assert bundle["task_id"] == "original-task"
+    assert bundle["changed_paths"] == ["file0.py"]
+    assert Path(bundle["raw_output_path"]).stem == codex._call_key(start)
+    assert not codex._pending_path(state, start).exists()
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
+    assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
+                               reviewer=lambda **kwargs: pytest.fail("second review")) == first
+
+
+def test_new_session_adoption_rejects_wrong_project_and_mismatched_chain(workspace, config, tmp_path):
+    repo, state = workspace
+    start, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
+    followup = async_followup(RESULT_TOOL, job_id)
+    followup.update(session_id="new-session", tool_input={"jobId": job_id, "adopt": True})
+    wrong = tmp_path / "other-repo"
+    wrong.mkdir()
+    assert "UNKNOWN_ASYNC_JOB" in codex.pre_tool_use(
+        followup, config=config, state_root=state, repo_root=wrong)["hookSpecificOutput"]["permissionDecisionReason"]
+    pending_path = codex._pending_path(state, start)
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending["job_id"] = "0" * 64
+    pending_path.write_text(json.dumps(pending), encoding="utf-8")
+    assert "UNKNOWN_ASYNC_JOB" in codex.pre_tool_use(
+        followup, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_interrupted_first_finalize_then_new_session_adoption_recovers_bundle(workspace, config, monkeypatch):
+    repo, state = workspace
+    start, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
+    (repo / "file0.py").write_text("value = 5\n", encoding="utf-8")
+    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
+    original = async_followup(RESULT_TOOL, job_id)
+    post = {**original, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
+    write = codex._atomic_json_write
+    reviews = []
+    failures = []
+    def interrupt_once(path, value):
+        if path == state / "async_jobs" / f"{job_id}.json" and value.get("stage") == "CONSUMED" and not failures:
+            failures.append(True)
+            raise OSError("interrupted before consumed record")
+        return write(path, value)
+    monkeypatch.setattr(codex, "_atomic_json_write", interrupt_once)
+    reviewer = lambda **kwargs: reviews.append(kwargs) or {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE}
+    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=reviewer)
+    assert response_bundle(first, config)["status"] == "ALREADY_CONSUMED_OR_INTERRUPTED"
+    assert len(reviews) == 1
+    adopted = {**post, "session_id": "new-session", "tool_input": {"jobId": job_id, "adopt": True}}
+    assert codex.pre_tool_use({**adopted, "hook_event_name": "PreToolUse"},
+                              config=config, state_root=state, repo_root=repo) == {}
+    second = codex.post_tool_use(adopted, config=config, state_root=state, repo_root=repo,
+                                 reviewer=lambda **kwargs: pytest.fail("second review"))
+    assert response_bundle(second, config)["task_id"] == "task-1"
+    assert len(reviews) == 1
+    assert codex.post_tool_use(adopted, config=config, state_root=state, repo_root=repo) == second
+    assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
+
+
 @pytest.mark.parametrize("state_name", ("FAILED", "TIMED_OUT", "CANCELLED", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED", "UNREADABLE"))
 def test_async_terminal_failure_uses_ambiguous_path(workspace, config, state_name):
     repo, state = workspace

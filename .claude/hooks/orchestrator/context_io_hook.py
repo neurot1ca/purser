@@ -111,6 +111,18 @@ def main() -> int:
                                 )
                     except BaseException:
                         pass
+                    try:
+                        if repository is not None:
+                            followup = async_session_maintenance.followup_hints(
+                                state_root.default_state_root(),
+                                project_root.project_key(repository), value.get("session_id")
+                            )
+                            if followup:
+                                additional_context = "\n".join(
+                                    part for part in (additional_context, followup) if part
+                                )
+                    except BaseException:
+                        pass
                     if additional_context:
                         output = {
                             "hookSpecificOutput": {

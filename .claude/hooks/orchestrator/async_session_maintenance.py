@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 from itertools import islice
 import math
@@ -117,6 +118,65 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def followup_hints(state_root: str | Path, project_key: str, session_id: str) -> str | None:
+    """Remind a successor session of up to five verified, unconsumed jobs."""
+    if not isinstance(session_id, str) or not session_id or not project_key:
+        return None
+    try:
+        root = Path(state_root)
+        lines = []
+        paths = sorted(islice((root / "async_jobs").glob("*.json"), MAX_JOB_RECORDS),
+                       key=lambda path: (path.stat().st_mtime_ns, path.name))
+        for path in paths:
+            if len(lines) == 5:
+                break
+            job_id = path.stem
+            if not _JOB_ID.fullmatch(job_id):
+                continue
+            index = _read_json(path)
+            if (not index or index.get("stage") == "CONSUMED"
+                    or index.get("jobId") != job_id or index.get("project_key") != project_key
+                    or index.get("session_id") == session_id
+                    or not isinstance(index.get("session_id"), str)
+                    or not isinstance(index.get("call"), str)
+                    or hashlib.sha256(index["call"].encode("utf-8")).hexdigest() != job_id
+                    or not _JOB_ID.fullmatch(str(index.get("call_key")))):
+                continue
+            pending = _read_json(root / "pending" / f"{index['call_key']}.json")
+            job = _read_json(root / "codex_exec_mcp" / "jobs" / f"{job_id}.json")
+            if (not pending or not job or pending.get("job_id") != job_id
+                    or pending.get("async_call") != index["call"]
+                    or pending.get("session_id") != index["session_id"]
+                    or pending.get("project_key") != project_key
+                    or job.get("jobId") != job_id or job.get("call") != index["call"]):
+                continue
+            tool_use_id = pending.get("tool_use_id")
+            if (not isinstance(tool_use_id, str)
+                    or hashlib.sha256(f"{index['session_id']}\0{tool_use_id}".encode("utf-8")).hexdigest()
+                    != index["call_key"]):
+                continue
+            task = pending.get("task_id")
+            if not isinstance(task, str) or not task:
+                continue
+            task = re.sub(r"\s+", " ", task).strip()[:80]
+            state = job.get("state")
+            if state in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}:
+                message = (f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
+                           "uygulama kapalıyken çalışmaya devam etti ve bitti. Sonucunu alıp inceleyeyim mi?")
+                instruction = "Ask for the user's agreement before calling codex_result with adopt: true."
+            elif state in {"QUEUED", "RUNNING"}:
+                message = (f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
+                           "uygulama kapalıyken çalışmaya devam ediyor, bitince haber vereceğim.")
+                instruction = "When it finishes, ask for the user's agreement before calling codex_result with adopt: true."
+            else:
+                continue
+            lines.append(f"Purser (jobId={job_id}, for Claude only): Tell the user in the user's language: "
+                         f"\"{message}\" {instruction} Do not show the jobId to the user.")
+        return "\n".join(lines) or None
+    except BaseException:
+        return None
+
+
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
@@ -167,4 +227,4 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
         return None
 
 
-__all__ = ["cleanup_jobs", "duration_hint"]
+__all__ = ["cleanup_jobs", "duration_hint", "followup_hints"]

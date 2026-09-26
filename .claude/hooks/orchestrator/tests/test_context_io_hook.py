@@ -1,5 +1,7 @@
 import io
+import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -7,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import context_io_hook
+import async_session_maintenance
 
 
 def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None, advice=None, unreadable=False):
@@ -77,6 +80,71 @@ def test_session_start_appends_duration_hint_and_runs_cleanup(monkeypatch, tmp_p
         "restored context\nPurser: typical Codex durations here (median/p90, n): mechanical 2/6 min (n=41)."
     )
     assert cleaned == [tmp_path / "state"]
+
+
+def test_session_start_reminds_only_other_session_jobs_and_caps_at_five(monkeypatch, tmp_path):
+    state = tmp_path / "state"
+    project = "project-key"
+    jobs = [("finished-task", "SUCCEEDED"), ("running-task", "RUNNING")]
+    jobs += [(f"extra-{number}", "SUCCEEDED") for number in range(4)]
+    jobs += [("own-task", "SUCCEEDED")]
+    for number, (task, job_state) in enumerate(jobs):
+        call = f"call-{number}"
+        job_id = hashlib.sha256(call.encode()).hexdigest()
+        call_key = hashlib.sha256(f"old-session\0tool-{number}".encode()).hexdigest()
+        session = "current-session" if task == "own-task" else "old-session"
+        if session == "current-session":
+            call_key = hashlib.sha256(f"current-session\0tool-{number}".encode()).hexdigest()
+        for folder, name, value in (
+            ("async_jobs", job_id, {"jobId": job_id, "call": call, "call_key": call_key,
+                                     "session_id": session, "project_key": project}),
+            ("pending", call_key, {"job_id": job_id, "async_call": call, "session_id": session,
+                                   "tool_use_id": f"tool-{number}", "project_key": project, "task_id": task}),
+            ("codex_exec_mcp/jobs", job_id, {"jobId": job_id, "call": call, "state": job_state}),
+        ):
+            path = state / folder / f"{name}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(value), encoding="utf-8")
+            if folder == "async_jobs":
+                os.utime(path, (100 + number, 100 + number))
+    payload = {"hook_event_name": "SessionStart", "cwd": str(tmp_path), "session_id": "current-session"}
+    input_raw = io.BytesIO(json.dumps(payload).encode("utf-8"))
+    output_raw = io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(context_io_hook.project_root, "project_key", lambda _root: project)
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: state)
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *_args: None)
+    assert context_io_hook.main() == 0
+    lines = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"].splitlines()
+    assert len(lines) == 5
+    assert "finished-task" in lines[0] and "bitince haber" not in lines[0]
+    assert "running-task" in lines[1] and "bitince haber" in lines[1]
+    assert "own-task" not in "\n".join(lines)
+    assert all("jobId=" in line and "in the user's language" in line for line in lines)
+    for path in (state / "async_jobs").glob("*.json"):
+        if json.loads(path.read_text(encoding="utf-8"))["session_id"] != "current-session":
+            path.unlink()
+    assert async_session_maintenance.followup_hints(state, project, "current-session") is None
+
+
+def test_session_start_job_hint_failure_is_fail_open(monkeypatch, tmp_path):
+    monkeypatch.setattr(async_session_maintenance, "followup_hints", lambda *_args: (_ for _ in ()).throw(OSError("bad state")))
+    payload = {"hook_event_name": "SessionStart", "cwd": str(tmp_path), "session_id": "new"}
+    input_raw = io.BytesIO(json.dumps(payload).encode("utf-8"))
+    output_raw = io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: "restored context")
+    monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *_args: None)
+    assert context_io_hook.main() == 0
+    assert "restored context" in output_raw.getvalue().decode("utf-8")
 
 
 def test_user_prompt_adds_recorded_non_english_reply_language(monkeypatch, tmp_path):

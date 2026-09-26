@@ -75,7 +75,9 @@ TOOL_SCHEMAS += [
             "threadId": {"type": "string"}, "timeoutSeconds": {"type": "number"}},
         "required": ["prompt"]}},
     {"name": "codex_result", "description": "Read a durable Codex job.", "inputSchema": {
-        "type": "object", "properties": {"jobId": {"type": "string"}}, "required": ["jobId"]}},
+        "type": "object", "properties": {"jobId": {"type": "string"},
+            "adopt": {"type": "boolean", "description": "After user consent, finalize a job from an earlier session in this project."}},
+        "required": ["jobId"]}},
     {"name": "codex_cancel", "description": "Cancel a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {"jobId": {"type": "string"}, "reason": {"type": "string"}}, "required": ["jobId"]}},
 ]
