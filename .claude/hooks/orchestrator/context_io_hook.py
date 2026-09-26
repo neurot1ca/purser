@@ -51,7 +51,17 @@ def main() -> int:
                 protected_paths=protected_paths,
                 hook_started_ns=started,
             )
-            if value.get("hook_event_name") == "UserPromptSubmit":
+            if value.get("hook_event_name") == "Stop":
+                try:
+                    response = compaction_advisor.stop(value, repository)
+                    if response:
+                        stdout_buffer = getattr(sys.stdout, "buffer", None)
+                        if stdout_buffer is not None:
+                            stdout_buffer.write(json.dumps(response, ensure_ascii=False).encode("utf-8"))
+                            stdout_buffer.flush()
+                except BaseException:
+                    pass
+            elif value.get("hook_event_name") == "UserPromptSubmit":
                 try:
                     try:
                         language = compaction_advisor.recorded_user_language(repository)
@@ -95,6 +105,7 @@ def main() -> int:
                     pass
             elif value.get("hook_event_name") == "SessionStart":
                 try:
+                    compaction_advisor.clear_pending(value, repository)
                     try:
                         async_session_maintenance.cleanup_jobs(state_root.default_state_root())
                     except BaseException:

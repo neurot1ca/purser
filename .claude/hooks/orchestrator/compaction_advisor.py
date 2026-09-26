@@ -333,14 +333,20 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(value, dict) and value.get("session_id") == session_id:
+            pending = value.get("notice_pending")
+            if not (isinstance(pending, dict) and type(pending.get("context")) is int
+                    and type(pending.get("percentage")) is int
+                    and isinstance(pending.get("handoff"), str)):
+                pending = None
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
                 "last_task_id": value.get("last_task_id") if isinstance(value.get("last_task_id"), str) else None,
                 "session_id": session_id,
+                "notice_pending": pending,
             }
     except (OSError, ValueError, TypeError):
         pass
-    return {"last_suggested_context": 0, "last_task_id": None, "session_id": session_id}
+    return {"last_suggested_context": 0, "last_task_id": None, "session_id": session_id, "notice_pending": None}
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -409,6 +415,85 @@ def _mechanical_state(repository: Path, context: int, triggers: list[str], calls
     return full
 
 
+def _blockquote(notice: Mapping[str, Any]) -> str:
+    return (
+        f"> ⚓ **Context passed {notice['context'] // 1000}K. Purser prepared your handoff.**\n"
+        f"> *Type `/compact` now to save **~{notice['percentage']}%** on every later message!*\n"
+        "> *The ship stays dry: decisions and the next step will be read from the handoff Purser prepared. Nothing is lost.*\n"
+        f"> *Handoff: `{notice['handoff']}`*"
+    )
+
+
+def _notice_advice(notice: Mapping[str, Any], triggers: list[str]) -> str:
+    context = notice["context"]
+    handoff = notice["handoff"]
+    return (
+        f"Purser: {context:,} context tokens; trigger(s): {', '.join(triggers)}. Handoff: {handoff}. "
+        "After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total). Keep the first Goal line `User language: <language>` set to the language the user writes in. Link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction. End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n"
+        + _blockquote(notice)
+        + "\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself."
+    )
+
+
+def _assistant_text(record: Mapping[str, Any]) -> str:
+    content = _message(record).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(block.get("text", "") for block in content
+                         if isinstance(block, Mapping) and isinstance(block.get("text"), str))
+    return ""
+
+
+def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] | None:
+    """Ask for one retry when the pending notice is absent from the last reply."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return None
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        notice = state["notice_pending"]
+        if notice is None:
+            return None
+        if "last_assistant_message" in payload:
+            last = payload["last_assistant_message"]
+            message = last if isinstance(last, str) else ""
+        else:
+            records = _read_transcript(payload.get("transcript_path"))
+            message = next((text for record in reversed(records)
+                            if _record_type(record) == "assistant"
+                            if (text := _assistant_text(record))), "")
+        if any(line.startswith("> ⚓") for line in message.splitlines()):
+            state["notice_pending"] = None
+            _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+            return None
+        if payload.get("stop_hook_active") is True or notice.get("blocked") is True:
+            return None
+        notice["blocked"] = True
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        return {"decision": "block", "reason":
+                "End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n"
+                + _blockquote(notice)}
+    except BaseException:
+        return None
+
+
+def clear_pending(payload: Mapping[str, Any], repository: Path | None) -> None:
+    """Discard a notice after context is compacted or cleared."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or payload.get("source") not in {"compact", "clear"} or not isinstance(session_id, str) or not session_id:
+            return
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        if state["notice_pending"] is not None:
+            state["notice_pending"] = None
+            _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    except BaseException:
+        pass
+
+
 def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: datetime | None = None) -> str | None:
     """Return UserPromptSubmit additionalContext or None, without model calls."""
     settings = _settings()
@@ -432,6 +517,9 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     directory = _state_directory(repository)
     state_path = directory / "compaction_advisor.json"
     state = _read_state(state_path, session_id)
+    if state["notice_pending"] is not None:
+        pending = state["notice_pending"]
+        return _notice_advice(pending, pending.get("triggers", []))
     task_completed = False
     task_completed = bool(current_task_id and current_task_id in completed_current_tasks and current_task_id != state["last_task_id"])
     if task_completed:
@@ -454,12 +542,10 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     handoff = handoff_path(repository)
     _replace_state_block(handoff, _mechanical_state(repository, context, triggers, calls))
     state["last_suggested_context"] = context
-    _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
     pct = max(0, round(100 * (1 - POST_COMPACT_CONTEXT_TOKENS / context)))
-    return (
-        f"Purser: {context:,} context tokens; trigger(s): {', '.join(triggers)}. Handoff: {handoff}. "
-        f"After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total). Keep the first Goal line `User language: <language>` set to the language the user writes in. Link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction. End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n> ⚓ **Context passed {context // 1000}K. Purser prepared your handoff.**\n> *Type `/compact` now to save **~{pct}%** on every later message!*\n> *The ship stays dry: decisions and the next step will be read from the handoff Purser prepared. Nothing is lost.*\n> *Handoff: `{handoff}`*\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself."
-    )
+    state["notice_pending"] = {"context": context, "percentage": pct, "handoff": str(handoff), "triggers": triggers, "blocked": False}
+    _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    return _notice_advice(state["notice_pending"], triggers)
 
 
 __all__ = ["advise"]

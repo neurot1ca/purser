@@ -219,15 +219,101 @@ def test_dedupe_requires_regrow_or_drop_below_threshold(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit", context=260_000))
     assert advisor.advise(event, repo, now=NOW)
-    assert advisor.advise(event, repo, now=NOW) is None
+    assert advisor.advise(event, repo, now=NOW)
+    advisor.clear_pending({"session_id": "session-1", "source": "compact"}, repo)
     event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 250_000))
     assert advisor.advise(event, repo, now=NOW) is None
     event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 320_000))
     assert advisor.advise(event, repo, now=NOW)
+    advisor.clear_pending({"session_id": "session-1", "source": "compact"}, repo)
     event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 200_000))
     assert advisor.advise(event, repo, now=NOW) is None
     event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 250_000))
     assert advisor.advise(event, repo, now=NOW)
+
+
+def _pending_state(repo):
+    return advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["notice_pending"]
+
+
+def test_missing_notice_blocks_once_and_persists_retry(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit", context=263_373))
+    assert advisor.advise(event, repo, now=NOW)
+    assert _pending_state(repo)["context"] == 263_373
+    assert _pending_state(repo)["percentage"] == 72
+    assert _pending_state(repo)["handoff"] == str(advisor.handoff_path(repo))
+    result = advisor.stop({**event, "last_assistant_message": "Finished."}, repo)
+    assert result["decision"] == "block"
+    assert "> ⚓ **Context passed 263K" in result["reason"]
+    assert result["reason"].count("> ") == 4
+    assert advisor.stop({**event, "last_assistant_message": "Still missing."}, repo) is None
+    assert _pending_state(repo) is not None
+
+
+def test_present_notice_from_transcript_clears_pending(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    transcript = Path(event["transcript_path"])
+    with transcript.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(_assistant(content=[{"type": "text", "text": "Done.\n> ⚓ **Context passed 260K.**"}])) + "\n")
+    assert advisor.stop(event, repo) is None
+    assert _pending_state(repo) is None
+
+
+def test_stop_hook_active_does_not_block(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    assert advisor.stop({**event, "last_assistant_message": "missing", "stop_hook_active": True}, repo) is None
+    assert _pending_state(repo)["blocked"] is False
+
+
+def test_pending_reissued_on_next_prompt_below_threshold(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    first = advisor.advise(event, repo, now=NOW)
+    assert advisor.stop({**event, "last_assistant_message": "missing"}, repo)
+    event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 100_000))
+    assert advisor.advise(event, repo, now=NOW) == first
+
+
+@pytest.mark.parametrize("source", ["compact", "clear"])
+def test_compact_or_clear_removes_pending(setup, source):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    advisor.clear_pending({**event, "source": source}, repo)
+    assert _pending_state(repo) is None
+    assert advisor.stop({**event, "last_assistant_message": "missing"}, repo) is None
+
+
+def test_context_io_stop_and_session_start_wire_notice(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (repo, "test"))
+
+    def run(payload):
+        input_raw, output_raw = io.BytesIO(json.dumps(payload).encode("utf-8")), io.BytesIO()
+        monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="utf-8"))
+        monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="utf-8"))
+        assert context_io_hook.main() == 0
+        return json.loads(output_raw.getvalue().decode("utf-8")) if output_raw.getvalue() else None
+
+    assert run({**event, "hook_event_name": "Stop", "last_assistant_message": "missing"})["decision"] == "block"
+    run({**event, "hook_event_name": "SessionStart", "source": "compact"})
+    assert _pending_state(repo) is None
+
+
+def test_stop_state_write_error_fails_open(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    monkeypatch.setattr(advisor, "_atomic_write", lambda *_args: (_ for _ in ()).throw(OSError("disk full")))
+    assert advisor.stop({**event, "last_assistant_message": "missing"}, repo) is None
 
 
 def _rewrite_context(tmp_path, source, value):
