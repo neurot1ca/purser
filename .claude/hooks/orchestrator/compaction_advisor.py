@@ -338,15 +338,21 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                     and type(pending.get("percentage")) is int
                     and isinstance(pending.get("handoff"), str)):
                 pending = None
+            receipt = value.get("receipt_pending")
+            if not (isinstance(receipt, dict) and isinstance(receipt.get("model"), str)
+                    and receipt["model"] and isinstance(receipt.get("effort"), str)):
+                receipt = None
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
                 "last_task_id": value.get("last_task_id") if isinstance(value.get("last_task_id"), str) else None,
                 "session_id": session_id,
                 "notice_pending": pending,
+                "receipt_pending": receipt,
             }
     except (OSError, ValueError, TypeError):
         pass
-    return {"last_suggested_context": 0, "last_task_id": None, "session_id": session_id, "notice_pending": None}
+    return {"last_suggested_context": 0, "last_task_id": None, "session_id": session_id,
+            "notice_pending": None, "receipt_pending": None}
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -445,6 +451,50 @@ def _assistant_text(record: Mapping[str, Any]) -> str:
     return ""
 
 
+def queue_receipt(payload: Mapping[str, Any], repository: Path | None,
+                  bundle: Mapping[str, Any]) -> None:
+    """Replace the session's receipt with the latest finalized Codex bundle."""
+    try:
+        session_id = payload.get("session_id")
+        model = bundle.get("model")
+        if repository is None or not isinstance(session_id, str) or not session_id or not isinstance(model, str) or not model:
+            return
+        receipt: dict[str, Any] = {"model": model, "effort": str(bundle.get("effort") or "unknown"), "blocked": False}
+        quota = bundle.get("codex_quota")
+        if isinstance(quota, Mapping):
+            for key in ("5h_used_pct", "5h_resets_at", "7d_used_pct"):
+                value = quota.get(key)
+                if key.endswith("pct") and type(value) in (int, float):
+                    receipt[key] = round(value)
+                elif key == "5h_resets_at" and isinstance(value, str):
+                    receipt[key] = value
+        path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(path, session_id)
+        state["receipt_pending"] = receipt
+        _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    except BaseException:
+        pass
+
+
+def _receipt_advice(receipt: Mapping[str, Any], now: datetime | None = None) -> str:
+    parts = [f"model {receipt['model']}", f"effort {receipt['effort']}"]
+    if "5h_used_pct" in receipt:
+        parts.append(f"5h used {receipt['5h_used_pct']}%")
+    reset = receipt.get("5h_resets_at")
+    if isinstance(reset, str):
+        try:
+            parsed = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                minutes = max(0, int((parsed - (now or datetime.now(timezone.utc))).total_seconds() // 60))
+                parts.append(f"time until 5h reset {minutes // 60}h {minutes % 60}m")
+        except ValueError:
+            pass
+    if "7d_used_pct" in receipt:
+        parts.append(f"7d used {receipt['7d_used_pct']}%")
+    return ("Write one bold line between `---` rules with blank lines around it, in the user's language, "
+            "showing " + ", ".join(parts) + ".")
+
+
 def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] | None:
     """Ask for one retry when the pending notice is absent from the last reply."""
     try:
@@ -454,7 +504,8 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         state_path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(state_path, session_id)
         notice = state["notice_pending"]
-        if notice is None:
+        receipt = state["receipt_pending"]
+        if notice is None and receipt is None:
             return None
         if "last_assistant_message" in payload:
             last = payload["last_assistant_message"]
@@ -464,17 +515,35 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             message = next((text for record in reversed(records)
                             if _record_type(record) == "assistant"
                             if (text := _assistant_text(record))), "")
-        if any(line.startswith("> ⚓") for line in message.splitlines()):
+        changed = False
+        if notice is not None and any(line.startswith("> ⚓") for line in message.splitlines()):
             state["notice_pending"] = None
+            changed = True
+        if receipt is not None and receipt["model"] in message and (
+            "7d_used_pct" not in receipt or re.search(r"(?<!\d)" + re.escape(str(receipt["7d_used_pct"])) + r"\s*%(?!\d)", message)
+        ):
+            state["receipt_pending"] = None
+            changed = True
+        notice = state["notice_pending"]
+        receipt = state["receipt_pending"]
+        if notice is None and receipt is None:
+            if changed:
+                _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+            return None
+        if payload.get("stop_hook_active") is True:
+            if changed:
+                _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+            return None
+        reasons = []
+        if notice is not None and not notice.get("blocked"):
+            notice["blocked"] = True
+            reasons.append("End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n" + _blockquote(notice))
+        if receipt is not None and not receipt.get("blocked"):
+            receipt["blocked"] = True
+            reasons.append(_receipt_advice(receipt))
+        if changed or reasons:
             _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
-            return None
-        if payload.get("stop_hook_active") is True or notice.get("blocked") is True:
-            return None
-        notice["blocked"] = True
-        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
-        return {"decision": "block", "reason":
-                "End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n"
-                + _blockquote(notice)}
+        return {"decision": "block", "reason": "\n\n".join(reasons)} if reasons else None
     except BaseException:
         return None
 
@@ -517,9 +586,14 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     directory = _state_directory(repository)
     state_path = directory / "compaction_advisor.json"
     state = _read_state(state_path, session_id)
+    receipt = state["receipt_pending"]
+    receipt_advice = _receipt_advice(receipt) if receipt is not None else None
+    if receipt is not None:
+        state["receipt_pending"] = None
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
     if state["notice_pending"] is not None:
         pending = state["notice_pending"]
-        return _notice_advice(pending, pending.get("triggers", []))
+        return "\n".join(part for part in (_notice_advice(pending, pending.get("triggers", [])), receipt_advice) if part)
     task_completed = False
     task_completed = bool(current_task_id and current_task_id in completed_current_tasks and current_task_id != state["last_task_id"])
     if task_completed:
@@ -529,14 +603,14 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     if context < settings["threshold_tokens"]:
         state["last_suggested_context"] = 0
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
-        return None
+        return receipt_advice
     if not triggers:
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
-        return None
+        return receipt_advice
     last_suggested = state["last_suggested_context"]
     if last_suggested and context < last_suggested + settings["regrow_tokens"]:
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
-        return None
+        return receipt_advice
 
     directory.mkdir(parents=True, exist_ok=True)
     handoff = handoff_path(repository)
@@ -545,7 +619,7 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     pct = max(0, round(100 * (1 - POST_COMPACT_CONTEXT_TOKENS / context)))
     state["notice_pending"] = {"context": context, "percentage": pct, "handoff": str(handoff), "triggers": triggers, "blocked": False}
     _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
-    return _notice_advice(state["notice_pending"], triggers)
+    return "\n".join(part for part in (_notice_advice(state["notice_pending"], triggers), receipt_advice) if part)
 
 
 __all__ = ["advise"]

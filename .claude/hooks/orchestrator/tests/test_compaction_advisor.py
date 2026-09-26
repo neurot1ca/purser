@@ -236,6 +236,63 @@ def _pending_state(repo):
     return advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["notice_pending"]
 
 
+def _receipt_state(repo):
+    return advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["receipt_pending"]
+
+
+def _queue_receipt(event, repo, model="gpt-6-sol"):
+    advisor.queue_receipt(event, repo, {"model": model, "effort": "high", "codex_quota": {
+        "5h_used_pct": 24, "5h_resets_at": "2099-09-24T13:20:00Z", "7d_used_pct": 46,
+    }})
+
+
+def test_missing_receipt_blocks_once(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo)
+    result = advisor.stop({**event, "last_assistant_message": "Done."}, repo)
+    assert result["decision"] == "block"
+    assert "gpt-6-sol" in result["reason"] and "24%" in result["reason"] and "46%" in result["reason"]
+    assert "time until 5h reset" in result["reason"]
+    assert advisor.stop({**event, "last_assistant_message": "Done."}, repo) is None
+
+
+def test_present_receipt_clears_pending(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo)
+    assert advisor.stop({**event, "last_assistant_message": "**gpt-6-sol high · 7d 46%**"}, repo) is None
+    assert _receipt_state(repo) is None
+
+
+def test_receipt_stop_hook_active_does_not_block(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo)
+    assert advisor.stop({**event, "last_assistant_message": "missing", "stop_hook_active": True}, repo) is None
+    assert _receipt_state(repo)["blocked"] is False
+
+
+def test_notice_and_receipt_share_one_stop_block(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    _queue_receipt(event, repo)
+    result = advisor.stop({**event, "last_assistant_message": "missing"}, repo)
+    assert result["decision"] == "block"
+    assert "> ⚓" in result["reason"] and "gpt-6-sol" in result["reason"]
+    assert advisor.stop({**event, "last_assistant_message": "missing"}, repo) is None
+
+
+def test_receipt_reissued_once_then_cleared(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo)
+    assert "gpt-6-sol" in advisor.advise(event, repo, now=NOW)
+    assert _receipt_state(repo) is None
+    assert advisor.advise(event, repo, now=NOW) is None
+
+
 def test_missing_notice_blocks_once_and_persists_retry(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit", context=263_373))

@@ -22,6 +22,7 @@ import uuid
 from typing import Any
 
 import json_transport
+import compaction_advisor
 import codex_quota
 import checks
 import ledger
@@ -2016,7 +2017,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                     rejection = _async_ledger_rejection(root, index, pending, artifact, success=True)
                     response = (_async_rejected_response(root, original, artifact, rejection,
                                                          _load_config(config), success=True)
-                                if rejection else _finalize_replacement(bundle, _load_config(config), root, original))
+                                if rejection else _finalize_replacement(bundle, _load_config(config), root, original,
+                                                                       pending.get("repo_root")))
                     index.update(stage="CONSUMED", bundle_path=str(artifact.resolve()), response=response)
                     _atomic_json_write(path, index)
                     _release_async_lease(root, index, pending)
@@ -2442,6 +2444,7 @@ def _finalize_replacement(
     config: Mapping[str, Any],
     runtime_root: Path,
     event: Mapping[str, Any],
+    repo_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     artifact_path = (runtime_root / "bundle_artifacts" / f"{_call_key(event)}.json").resolve()
     bundle["full_bundle_path"] = str(artifact_path)
@@ -2479,6 +2482,11 @@ def _finalize_replacement(
                 else quota_message
             )
     except Exception:
+        pass
+    try:
+        repository, _reason = _repo_root(event, repo_root)
+        compaction_advisor.queue_receipt(event, repository, bundle)
+    except BaseException:
         pass
     return response
 
@@ -2583,7 +2591,8 @@ def _internal_post_response(
         pass
     _record_diagnostic(runtime_root, event, "PostToolUse", error)
     if runtime_root is not None:
-        response = _finalize_replacement(bundle, loaded_config, runtime_root, event)
+        response = _finalize_replacement(bundle, loaded_config, runtime_root, event,
+                                         pending.get("repo_root") if isinstance(pending, Mapping) else None)
         if isinstance(pending, Mapping) and not pending.get("async_call"):
             try:
                 _release_scope_lease(runtime_root, pending)
@@ -2855,7 +2864,7 @@ def post_tool_use(
                     state_root=runtime_root,
                     project_key=project_namespace,
                 )
-            return _finalize_replacement(bundle, loaded_config, runtime_root, event)
+            return _finalize_replacement(bundle, loaded_config, runtime_root, event, pending.get("repo_root"))
 
         stored_profile = (
             isinstance(pending.get("protected_paths"), list)
@@ -3479,7 +3488,7 @@ def post_tool_use(
             bundle["audit_receipt"] = _build_audit_receipt(bundle, pending.get("task_id"))
         else:
             bundle["audit_receipt"] = None
-        response = _finalize_replacement(bundle, loaded_config, runtime_root, event)
+        response = _finalize_replacement(bundle, loaded_config, runtime_root, event, pending.get("repo_root"))
         if not pending.get("async_call"):
             _release_scope_lease(runtime_root, pending)
             _remove_pending(runtime_root, event)

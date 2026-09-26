@@ -1006,6 +1006,8 @@ def test_plugin_tool_names_route_new_and_reply(workspace, config):
 ])
 def test_quota_reply_bundle_and_review_mode(workspace, config, monkeypatch, quota):
     repo, state = workspace
+    receipts = []
+    monkeypatch.setattr(codex.compaction_advisor, "queue_receipt", lambda event, repository, bundle: receipts.append((repository, bundle)))
     monkeypatch.setattr(codex.codex_quota, "read_quota", lambda thread_id: quota)
     prompt = orch(scope="file0.py") + "\n## Objective\nInspect file0.\n## Acceptance criteria\n- Report result."
     first = event(prompt=prompt, tool_use_id="quota-first")
@@ -1023,6 +1025,9 @@ def test_quota_reply_bundle_and_review_mode(workspace, config, monkeypatch, quot
     bundle = response_bundle(result, config)
     assert bundle["codex_quota"] == quota
     assert bundle["claude_review_mode"] == policy.FULL
+    assert receipts[-1][0] == repo.resolve()
+    assert receipts[-1][1]["model"] == bundle["model"]
+    assert receipts[-1][1]["codex_quota"] == quota
 
 
 def test_quota_does_not_change_review_mode_under_cap(workspace, config):
