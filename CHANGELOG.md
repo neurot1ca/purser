@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.31 — 2026-09-26
+
+- A job interrupted by a reboot or crash resumes automatically where it stopped (at most twice); failed recovery is reported as uncertain, never as success.
+- After a restart the same session is told to fetch or re-await its jobs; cleanup never removes a live job.
+- Parallel jobs: each job is reviewed only on its own changes when another job's leased scope changed alongside it.
+- The model, effort and quota line after a Codex result is enforced by hooks.
+
 ## 0.1.30 — 2026-09-26
 
 - The detached job host starts with a hidden console, so a venv python no longer opens terminal windows.
