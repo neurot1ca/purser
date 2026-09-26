@@ -227,7 +227,11 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
             state = job.get("state")
             resumed = job.get("resumedAfterInterruption", 0)
             same_session = index["session_id"] == session_id
-            if state in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}:
+            if (same_session and state in TERMINAL - {"SUCCEEDED"}
+                    and job.get("waiterObservedTerminalState") == state
+                    and job.get("waiterObservedTerminalAt") is not None):
+                continue
+            if state in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"} or (same_session and state in TERMINAL):
                 message = (None if same_session else
                            f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
                            "uygulama kapalıyken çalışmaya devam etti ve bitti. Sonucunu alıp inceleyeyim mi?")

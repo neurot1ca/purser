@@ -10,6 +10,7 @@ import sys
 import time
 from typing import Any
 
+import codex_exec_mcp
 import state_root as purser_state_root
 
 
@@ -28,6 +29,17 @@ def _job_record(job_id: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) and value.get("jobId") == job_id else None
 
 
+def _record_terminal_observation(job_id: str, state: str) -> None:
+    job_dir = purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs"
+    with codex_exec_mcp._ownership_lock(job_dir, job_id):
+        current = _job_record(job_id)
+        if current is None or current.get("state") != state:
+            return
+        current["waiterObservedTerminalAt"] = time.time()
+        current["waiterObservedTerminalState"] = state
+        codex_exec_mcp._atomic_json(job_dir / f"{job_id}.json", current)
+
+
 def _report_record_state(job_id: str, job: dict[str, Any] | None = None) -> int:
     """Report a durable terminal state or an expired/unreadable job."""
     job = _job_record(job_id) if job is None else job
@@ -38,6 +50,11 @@ def _report_record_state(job_id: str, job: dict[str, Any] | None = None) -> int:
     if not isinstance(state, str) or not state:
         print(f"purser-wait {job_id} INVALID_JOB")
         return 3
+    if state in TERMINAL:
+        try:
+            _record_terminal_observation(job_id, state)
+        except BaseException:
+            pass
     print(f"purser-wait {job_id} {state}")
     return 0 if state == "SUCCEEDED" else 1 if state in TERMINAL else 3
 

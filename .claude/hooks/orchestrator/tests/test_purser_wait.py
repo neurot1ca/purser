@@ -17,12 +17,18 @@ def write_job(root, job_id, **values):
     (folder / f"{job_id}.json").write_text(json.dumps(job), encoding="utf-8")
 
 
+def read_job(root, job_id):
+    return json.loads((root / "codex_exec_mcp" / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+
+
 def test_terminal_job_returns_immediately(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path))
     write_job(tmp_path, "terminal", state="SUCCEEDED")
 
     assert purser_wait.main(["terminal"]) == 0
     assert capsys.readouterr().out == "purser-wait terminal SUCCEEDED\n"
+    assert read_job(tmp_path, "terminal")["waiterObservedTerminalState"] == "SUCCEEDED"
+    assert isinstance(read_job(tmp_path, "terminal")["waiterObservedTerminalAt"], float)
 
 
 def test_terminal_failed_job_is_non_success(tmp_path, monkeypatch, capsys):
@@ -31,6 +37,18 @@ def test_terminal_failed_job_is_non_success(tmp_path, monkeypatch, capsys):
 
     assert purser_wait.main(["failed"]) == 1
     assert capsys.readouterr().out == "purser-wait failed FAILED\n"
+    assert read_job(tmp_path, "failed")["waiterObservedTerminalState"] == "FAILED"
+
+
+def test_terminal_observation_write_failure_preserves_waiter_result(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path))
+    write_job(tmp_path, "failed", state="FAILED")
+    monkeypatch.setattr(purser_wait.codex_exec_mcp, "_atomic_json",
+                        lambda *_args: (_ for _ in ()).throw(OSError("disk full")))
+
+    assert purser_wait.main(["failed"]) == 1
+    assert capsys.readouterr().out == "purser-wait failed FAILED\n"
+    assert "waiterObservedTerminalAt" not in read_job(tmp_path, "failed")
 
 
 def test_job_record_read_retries_transient_permission_error(tmp_path, monkeypatch, capsys):

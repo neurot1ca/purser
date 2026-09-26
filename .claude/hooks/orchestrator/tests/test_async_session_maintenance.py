@@ -16,6 +16,48 @@ import telemetry_schema
 PROJECT_KEY = "0123456789abcdef"
 
 
+def _single_followup_job(tmp_path, state, observed=False):
+    call = "failed-call"
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    call_key = hashlib.sha256(b"session-1\0tool-1").hexdigest()
+    records = (
+        ("async_jobs", job_id, {"jobId": job_id, "call": call, "call_key": call_key,
+                                "session_id": "session-1", "project_key": PROJECT_KEY}),
+        ("pending", call_key, {"job_id": job_id, "async_call": call,
+                               "session_id": "session-1", "project_key": PROJECT_KEY,
+                               "tool_use_id": "tool-1", "task_id": "failed-task"}),
+        ("codex_exec_mcp/jobs", job_id, {"jobId": job_id, "call": call, "state": state,
+                                           **({"waiterObservedTerminalAt": 123,
+                                               "waiterObservedTerminalState": state} if observed else {})}),
+    )
+    for folder, name, value in records:
+        path = tmp_path / folder / f"{name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value), encoding="utf-8")
+
+
+def test_same_session_observed_failed_job_has_no_followup_hint(tmp_path):
+    _single_followup_job(tmp_path, "FAILED", observed=True)
+    assert maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-1") is None
+    assert "adopt: true" in maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-2")
+
+
+def test_same_session_unobserved_failed_job_is_reminded(tmp_path):
+    _single_followup_job(tmp_path, "FAILED")
+    assert "Call codex_result" in maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-1")
+
+
+def test_same_session_observed_success_is_still_reminded(tmp_path):
+    _single_followup_job(tmp_path, "SUCCEEDED", observed=True)
+    assert "Call codex_result" in maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-1")
+
+
+def test_same_session_unobserved_unknown_job_is_reminded(tmp_path):
+    _single_followup_job(tmp_path, "UNKNOWN_OR_IN_PROGRESS")
+    assert "Call codex_result" in maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-1")
+    assert maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-2") is None
+
+
 def event(kind, route=None, duration=None, project=PROJECT_KEY, stamp="2026-09-01T00:00:00Z"):
     payload = {}
     if route is not None:
