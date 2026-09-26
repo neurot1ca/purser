@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.33 — 2026-09-26
+
+- A Codex job that finished its work but whose process did not exit is completed after a 20-second grace instead of hanging as running.
+
 ## 0.1.32 — 2026-09-26
 
 - Plan calls accept changes from an overlapping job's leased scope; with two or more active jobs, responses show one task/route/elapsed/state line per job.
