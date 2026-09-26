@@ -83,6 +83,38 @@ def test_session_start_appends_duration_hint_and_runs_cleanup(monkeypatch, tmp_p
     assert cleaned == [tmp_path / "state"]
 
 
+def test_accuracy_runs_only_on_compact_and_preserves_context_on_failure(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(context_io_hook.project_root, "project_key", lambda _root: "project-key")
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_a, **_k: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_a: "restored")
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "cleanup_jobs", lambda *_a: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint", lambda *_a: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "followup_hints", lambda *_a: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "compact_accuracy_hint",
+                        lambda *_a: seen.append(True) or "Tell the user: message")
+    for source in ("startup", "resume", "clear", "compact"):
+        incoming = io.BytesIO(json.dumps({"hook_event_name": "SessionStart", "source": source,
+                                          "cwd": str(tmp_path)}).encode())
+        outgoing = io.BytesIO()
+        monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(incoming, encoding="utf-8"))
+        monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(outgoing, encoding="utf-8"))
+        assert context_io_hook.main() == 0
+        result = json.loads(outgoing.getvalue())["hookSpecificOutput"]["additionalContext"]
+        assert result == ("restored\nTell the user: message" if source == "compact" else "restored")
+    assert seen == [True]
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "compact_accuracy_hint",
+                        lambda *_a: (_ for _ in ()).throw(ValueError("bad state")))
+    incoming = io.BytesIO(json.dumps({"hook_event_name": "SessionStart", "source": "compact",
+                                      "cwd": str(tmp_path)}).encode())
+    outgoing = io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(incoming, encoding="utf-8"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(outgoing, encoding="utf-8"))
+    assert context_io_hook.main() == 0
+    assert json.loads(outgoing.getvalue())["hookSpecificOutput"]["additionalContext"] == "restored"
+
+
 def test_session_start_reminds_unconsumed_jobs_and_caps_at_five(monkeypatch, tmp_path):
     state = tmp_path / "state"
     project = "project-key"

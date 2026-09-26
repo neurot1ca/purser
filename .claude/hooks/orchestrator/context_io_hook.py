@@ -134,6 +134,17 @@ def main() -> int:
                                 )
                     except BaseException:
                         pass
+                    try:
+                        if repository is not None and value.get("source") == "compact":
+                            accuracy = async_session_maintenance.compact_accuracy_hint(
+                                state_root.default_state_root(), project_root.project_key(repository)
+                            )
+                            if accuracy:
+                                additional_context = "\n".join(
+                                    part for part in (additional_context, accuracy) if part
+                                )
+                    except BaseException:
+                        pass
                     if additional_context:
                         output = {
                             "hookSpecificOutput": {

@@ -82,6 +82,82 @@ def test_duration_hint_uses_newest_files_when_file_byte_and_line_caps_hit(tmp_pa
     assert hint == "Purser: typical Codex durations here (median/p90, n): mechanical 2/2 min (n=10)."
 
 
+def test_duration_hint_prefers_agent_after_five_and_keeps_other_samples(tmp_path):
+    emitted = telemetry_schema.build_event("IMPLEMENTER_FINISHED", task_id="task", project_key=PROJECT_KEY,
+                                           payload={"implementer": "codex-main", "route": "normal",
+                                                    "duration_ms": 120000})
+    assert telemetry_schema.valid_event(emitted)
+    month = tmp_path / "telemetry" / "events" / "2026-09"
+    month.mkdir(parents=True)
+    records = []
+    for agent, count, minutes in (("codex-main", 4, 2), ("claude", 10, 10)):
+        for _ in range(count):
+            item = event("IMPLEMENTER_FINISHED", "mechanical", minutes * 60000)
+            item["payload"]["implementer"] = agent
+            records.append(item)
+    (month / "session_agents.jsonl").write_text(
+        "{bad\n" + "\n".join(json.dumps(item) for item in records), encoding="utf-8")
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc).timestamp()
+    pooled = maintenance.duration_hint(tmp_path, PROJECT_KEY, now=now)
+    assert "mechanical 10/10 min (n=14)" in pooled
+    records.append(records[0])
+    (month / "session_agents.jsonl").write_text("\n".join(map(json.dumps, records)), encoding="utf-8")
+    own = maintenance.duration_hint(tmp_path, PROJECT_KEY, now=now)
+    other = maintenance.duration_hint(tmp_path, PROJECT_KEY, now=now, implementer="claude")
+    assert "mechanical 2/2 min (n=5)" in own
+    assert "typical Codex durations" in own
+    assert "mechanical 10/10 min (n=10)" in other
+    assert "typical Claude durations" in other
+
+
+def test_compact_accuracy_baseline_improvement_regression_and_bad_data(tmp_path):
+    month = tmp_path / "telemetry" / "events" / "2026-09"
+    month.mkdir(parents=True)
+    path = month / "session_accuracy.jsonl"
+    item = event("IMPLEMENTER_FINISHED", "normal", 120000)
+    item["payload"].update(implementer="codex-main", eta_minutes=4)
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc).timestamp()
+    malformed = event("IMPLEMENTER_FINISHED", "normal", 120000)
+    malformed["payload"].update(implementer="codex-main", eta_minutes="oops")
+    path.write_text("{bad\n" + json.dumps(malformed) + "\n" + json.dumps(item), encoding="utf-8")
+    for _ in range(4):
+        assert maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now) is None
+    state_path = tmp_path / "projects" / PROJECT_KEY / "duration_accuracy.json"
+    assert json.loads(state_path.read_text())["compacts"] == 4
+    assert maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now) is None
+    assert json.loads(state_path.read_text())["errors"]["codex-main"] == 100
+    item["payload"]["eta_minutes"] = 3
+    path.write_text("{bad\n" + json.dumps(item), encoding="utf-8")
+    for _ in range(4):
+        assert maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now) is None
+    message = maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now)
+    assert message == ('Tell the user in the user\'s language: "⚓ Codex\'in iş süresi tahminleri '
+                       'self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %50."')
+    item["payload"]["eta_minutes"] = 5
+    path.write_text(json.dumps(item), encoding="utf-8")
+    for _ in range(5):
+        assert maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now) is None
+    assert json.loads(state_path.read_text())["errors"]["codex-main"] == 150
+
+
+def test_compact_accuracy_claude_and_unknown_possessives(tmp_path):
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc).timestamp()
+    for agent, possessive in (("claude", "Claude'un"), ("agent-x", "agent-x'in")):
+        root = tmp_path / agent
+        month = root / "telemetry" / "events" / "2026-09"
+        month.mkdir(parents=True)
+        item = event("IMPLEMENTER_FINISHED", "normal", 120000)
+        item["payload"].update(implementer=agent, eta_minutes=3)
+        (month / "session_accuracy.jsonl").write_text(json.dumps(item), encoding="utf-8")
+        state_path = root / "projects" / PROJECT_KEY / "duration_accuracy.json"
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(json.dumps({"compacts": 4, "errors": {agent: 100}}), encoding="utf-8")
+        assert maintenance.compact_accuracy_hint(root, PROJECT_KEY, now=now) == (
+            f'Tell the user in the user\'s language: "⚓ {possessive} iş süresi tahminleri '
+            'self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %50."'
+        )
+
+
 def test_cleanup_live_job_preserves_pending_and_lease(tmp_path, monkeypatch):
     job_id, pending, lease = _job_fixture(tmp_path, "RUNNING", 1000)
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "ALIVE")

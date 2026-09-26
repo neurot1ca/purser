@@ -215,6 +215,7 @@ _PAYLOAD_FIELDS = {
     "IMPLEMENTER_FINISHED": frozenset(
         {
             "duration_ms",
+            "implementer",
             "route",
             "phase",
             "changed_paths_count",
@@ -435,7 +436,7 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name == "served_model_attestation" and value == "UNAVAILABLE":
         return value
-    if name in {"model", "thread_id", "reviewer1_provider", "reviewer1_model_requested"}:
+    if name in {"model", "thread_id", "implementer", "reviewer1_provider", "reviewer1_model_requested"}:
         return _identifier(value)
     raise ValueError("telemetry enum is invalid")
 

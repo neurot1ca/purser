@@ -2702,6 +2702,7 @@ def _post_observations(
         "state_root": runtime_root,
         **envelope,
         "duration_ms": _numeric_duration_ms(event.get("duration_ms")),
+        "implementer": bundle.get("implementer"),
         "route": pending.get("route"),
         "phase": pending.get("phase"),
         "changed_paths_count": bundle.get("delta_files"),

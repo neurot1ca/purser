@@ -26,6 +26,10 @@ MAX_JOB_RECORD_BYTES = 64 * 1024
 MAX_TELEMETRY_FILES = 32
 MAX_TELEMETRY_BYTES = 2 * 1024 * 1024
 MAX_TELEMETRY_LINES = 4096
+ACCURACY_WINDOW = 30
+IMPLEMENTER = "codex-main"
+ROUTES = ("mechanical", "subtle", "normal", "consequential", "escalated", "operation")
+AGENT_NAMES = {"codex-main": ("Codex", "in"), "claude": ("Claude", "un")}
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED"}
 _JOB_ID = re.compile(r"[0-9a-f]{64}")
 
@@ -34,79 +38,138 @@ def _number_minutes(value: float) -> int:
     return max(1, math.floor(value / 60000 + 0.5))
 
 
-def duration_hint(state_root: str | Path, project_key: str, *, now: float | None = None) -> str | None:
-    """Build one calibration line from a bounded, newest-first raw-event scan."""
+def _finished_events(state_root: str | Path, project_key: str, now: float):
+    """Yield recent finished calls from the existing bounded telemetry scan."""
+    current_dt = datetime.fromtimestamp(now, timezone.utc)
+    cutoff = datetime.fromtimestamp(now - HISTORY_SECONDS, timezone.utc)
+    root = Path(state_root) / "telemetry" / "events"
+    month = cutoff.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    final_month = current_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    files: list[Path] = []
+    while month <= final_month:
+        directory = root / month.strftime("%Y-%m")
+        if directory.is_dir():
+            files.extend(directory.glob("session_*.jsonl"))
+        next_year = month.year + 1 if month.month == 12 else month.year
+        next_month = 1 if month.month == 12 else month.month + 1
+        month = month.replace(year=next_year, month=next_month)
+    files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    files = files[:MAX_TELEMETRY_FILES]
+    scanned = lines = 0
+    for path in files:
+        with path.open("rb") as stream:
+            while scanned < MAX_TELEMETRY_BYTES and lines < MAX_TELEMETRY_LINES:
+                raw = stream.readline(MAX_TELEMETRY_BYTES - scanned)
+                if not raw:
+                    break
+                scanned += len(raw)
+                lines += 1
+                try:
+                    item = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                if item.get("event_type") != "IMPLEMENTER_FINISHED" or item.get("project_key") != project_key:
+                    continue
+                payload = item.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                route = payload.get("route")
+                duration = payload.get("duration_ms")
+                if not isinstance(route, str) or route not in ROUTES:
+                    continue
+                if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+                    continue
+                try:
+                    if not math.isfinite(duration) or duration <= 0:
+                        continue
+                except (OverflowError, TypeError):
+                    continue
+                try:
+                    parsed = datetime.fromisoformat(str(item.get("ts_utc")).replace("Z", "+00:00"))
+                except (ValueError, TypeError, OverflowError):
+                    continue
+                try:
+                    in_window = parsed.tzinfo is not None and cutoff <= parsed.astimezone(timezone.utc) <= current_dt
+                except (OverflowError, ValueError):
+                    continue
+                if not in_window:
+                    continue
+                yield item, payload, float(duration), parsed.astimezone(timezone.utc)
+        if scanned >= MAX_TELEMETRY_BYTES or lines >= MAX_TELEMETRY_LINES:
+            break
+
+
+def duration_hint(state_root: str | Path, project_key: str, *, now: float | None = None,
+                  implementer: str = IMPLEMENTER) -> str | None:
+    """Prefer an implementer's route sample after five calls; otherwise use the pool."""
     try:
-        current = time.time() if now is None else now
-        current_dt = datetime.fromtimestamp(current, timezone.utc)
-        cutoff = datetime.fromtimestamp(current - HISTORY_SECONDS, timezone.utc)
-        root = Path(state_root) / "telemetry" / "events"
-        month = cutoff.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        final_month = current_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        files: list[Path] = []
-        while month <= final_month:
-            directory = root / month.strftime("%Y-%m")
-            if directory.is_dir():
-                files.extend(directory.glob("session_*.jsonl"))
-            next_year = month.year + 1 if month.month == 12 else month.year
-            next_month = 1 if month.month == 12 else month.month + 1
-            month = month.replace(year=next_year, month=next_month)
-        files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-        files = files[:MAX_TELEMETRY_FILES]
         grouped: dict[str, list[float]] = {}
-        scanned = lines = 0
-        for path in files:
-            with path.open("rb") as stream:
-                while scanned < MAX_TELEMETRY_BYTES and lines < MAX_TELEMETRY_LINES:
-                    raw = stream.readline(MAX_TELEMETRY_BYTES - scanned)
-                    if not raw:
-                        break
-                    scanned += len(raw)
-                    lines += 1
-                    try:
-                        item = json.loads(raw)
-                    except (ValueError, UnicodeDecodeError):
-                        continue
-                    if not isinstance(item, dict):
-                        continue
-                    if item.get("event_type") != "IMPLEMENTER_FINISHED" or item.get("project_key") != project_key:
-                        continue
-                    payload = item.get("payload")
-                    if not isinstance(payload, dict):
-                        continue
-                    route = payload.get("route")
-                    duration = payload.get("duration_ms")
-                    if not isinstance(route, str) or route not in {"mechanical", "subtle", "normal", "consequential", "escalated", "operation"}:
-                        continue
-                    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
-                        continue
-                    try:
-                        if not math.isfinite(duration) or duration <= 0:
-                            continue
-                    except (OverflowError, TypeError):
-                        continue
-                    try:
-                        parsed = datetime.fromisoformat(str(item.get("ts_utc")).replace("Z", "+00:00"))
-                    except (ValueError, TypeError, OverflowError):
-                        continue
-                    try:
-                        in_window = parsed.tzinfo is not None and cutoff <= parsed.astimezone(timezone.utc) <= current_dt
-                    except (OverflowError, ValueError):
-                        continue
-                    if not in_window:
-                        continue
-                    grouped.setdefault(route, []).append(float(duration))
-            if scanned >= MAX_TELEMETRY_BYTES or lines >= MAX_TELEMETRY_LINES:
-                break
+        own: dict[str, list[float]] = {}
+        for item, payload, duration, _stamp in _finished_events(
+                state_root, project_key, time.time() if now is None else now):
+            route = payload["route"]
+            grouped.setdefault(route, []).append(duration)
+            if payload.get("implementer") == implementer:
+                own.setdefault(route, []).append(duration)
         parts = []
-        for route in ("mechanical", "subtle", "normal", "consequential", "escalated", "operation"):
-            values = grouped.get(route, [])
-            if len(values) < 10:
+        for route in ROUTES:
+            values = own.get(route, [])
+            agent_ready = len(values) >= 5
+            if not agent_ready:
+                values = grouped.get(route, [])
+            if len(values) < (5 if agent_ready else 10):
                 continue
             ordered = sorted(values)
             p90 = ordered[math.ceil(0.9 * len(ordered)) - 1]
             parts.append(f"{route} {_number_minutes(statistics.median(ordered))}/{_number_minutes(p90)} min (n={len(ordered)})")
-        return "Purser: typical Codex durations here (median/p90, n): " + ", ".join(parts) + "." if parts else None
+        name, _suffix = AGENT_NAMES.get(implementer, (implementer, "in"))
+        return f"Purser: typical {name} durations here (median/p90, n): " + ", ".join(parts) + "." if parts else None
+    except BaseException:
+        return None
+
+
+def compact_accuracy_hint(state_root: str | Path, project_key: str, *, now: float | None = None) -> str | None:
+    """Count compactions and compare each implementer's last 30 usable estimates."""
+    try:
+        root = Path(state_root) / "projects" / project_key
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / "duration_accuracy.json"
+        with codex._async_claim(path):
+            state = _read_json(path) if path.exists() else {"compacts": 0, "errors": {}}
+            if (state is None or type(state.get("compacts")) is not int
+                    or state["compacts"] < 0 or not isinstance(state.get("errors"), dict)):
+                return None
+            count = state["compacts"] + 1
+            state["compacts"] = count
+            if count % 5:
+                _write_json(path, state)
+                return None
+            jobs: dict[str, list[tuple[datetime, float]]] = {}
+            for _item, payload, duration, stamp in _finished_events(
+                    state_root, project_key, time.time() if now is None else now):
+                agent = payload.get("implementer")
+                eta = payload.get("eta_minutes")
+                if (not isinstance(agent, str) or not agent or isinstance(eta, bool)
+                        or not isinstance(eta, (int, float)) or not math.isfinite(eta)
+                        or eta <= 0):
+                    continue
+                error = abs(eta * 60000 - duration) / duration * 100
+                if math.isfinite(error):
+                    jobs.setdefault(agent, []).append((stamp, error))
+            messages = []
+            for agent, samples in jobs.items():
+                samples.sort(key=lambda sample: sample[0], reverse=True)
+                error = statistics.mean(value for _stamp, value in samples[:ACCURACY_WINDOW])
+                previous = state["errors"].get(agent)
+                state["errors"][agent] = error
+                if (isinstance(previous, (int, float)) and not isinstance(previous, bool)
+                        and math.isfinite(previous) and error < previous):
+                    name, suffix = AGENT_NAMES.get(agent, (agent, "in"))
+                    messages.append(f'Tell the user in the user\'s language: "⚓ {name}\'{suffix} iş süresi tahminleri self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %{round(error)}."')
+            _write_json(path, state)
+            return "\n".join(messages) or None
     except BaseException:
         return None
 
