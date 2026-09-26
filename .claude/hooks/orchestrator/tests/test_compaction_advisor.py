@@ -240,9 +240,9 @@ def _receipt_state(repo):
     return advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["receipt_pending"]
 
 
-def _queue_receipt(event, repo, model="gpt-6-sol"):
+def _queue_receipt(event, repo, model="gpt-6-sol", *, seven_day_pct=46, reset_at="2099-09-24T13:20:00Z"):
     advisor.queue_receipt(event, repo, {"model": model, "effort": "high", "codex_quota": {
-        "5h_used_pct": 24, "5h_resets_at": "2099-09-24T13:20:00Z", "7d_used_pct": 46,
+        "5h_used_pct": 24, "5h_resets_at": reset_at, "7d_used_pct": seven_day_pct,
     }})
 
 
@@ -262,6 +262,59 @@ def test_present_receipt_clears_pending(setup):
     event = _event(scratch, repo, local, _records(context=100_000))
     _queue_receipt(event, repo)
     assert advisor.stop({**event, "last_assistant_message": "**gpt-6-sol high · 7d 46%**"}, repo) is None
+    assert _receipt_state(repo) is None
+
+
+@pytest.mark.parametrize("percentage", ["%58", "58%"])
+def test_receipt_accepts_percentage_before_or_after_value(setup, percentage):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo, seven_day_pct=58)
+
+    result = advisor.stop({
+        **event,
+        "last_assistant_message": f"**gpt-6-sol high · 7d {percentage}**",
+    }, repo)
+
+    assert result is None
+    assert _receipt_state(repo) is None
+
+
+def test_satisfied_receipt_clears_on_active_stop_and_is_not_reissued(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo, seven_day_pct=58)
+    assert advisor.stop({**event, "last_assistant_message": "missing"}, repo)["decision"] == "block"
+
+    result = advisor.stop({
+        **event,
+        "last_assistant_message": "**gpt-6-sol high · 7d %58**",
+        "stop_hook_active": True,
+    }, repo)
+
+    assert result is None
+    assert _receipt_state(repo) is None
+    assert advisor.advise(event, repo, now=NOW) is None
+
+
+def test_expired_quota_snapshot_only_requires_model_and_effort(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    reset_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    _queue_receipt(event, repo, reset_at=reset_at)
+
+    result = advisor.stop({**event, "last_assistant_message": "missing"}, repo)
+
+    assert result["decision"] == "block"
+    assert "quota snapshot is stale" in result["reason"].lower()
+    assert "0h 0m" not in result["reason"]
+    assert "5h used" not in result["reason"]
+    assert "7d used" not in result["reason"]
+    assert advisor.stop({
+        **event,
+        "last_assistant_message": "**gpt-6-sol high**",
+        "stop_hook_active": True,
+    }, repo) is None
     assert _receipt_state(repo) is None
 
 

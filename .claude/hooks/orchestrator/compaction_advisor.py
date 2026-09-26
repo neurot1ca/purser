@@ -476,8 +476,28 @@ def queue_receipt(payload: Mapping[str, Any], repository: Path | None,
         pass
 
 
+def _receipt_quota_current(receipt: Mapping[str, Any], now: datetime | None = None) -> bool:
+    reset = receipt.get("5h_resets_at")
+    if not isinstance(reset, str):
+        return True
+    try:
+        parsed = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return True
+        clock = now or datetime.now(timezone.utc)
+        if clock.tzinfo is None:
+            clock = clock.replace(tzinfo=timezone.utc)
+        return parsed > clock.astimezone(parsed.tzinfo)
+    except ValueError:
+        return True
+
+
 def _receipt_advice(receipt: Mapping[str, Any], now: datetime | None = None) -> str:
     parts = [f"model {receipt['model']}", f"effort {receipt['effort']}"]
+    stale = not _receipt_quota_current(receipt, now)
+    if stale:
+        return ("The quota snapshot is stale. Write one bold line between `---` rules with blank lines around it, "
+                "in the user's language, showing " + ", ".join(parts) + ".")
     if "5h_used_pct" in receipt:
         parts.append(f"5h used {receipt['5h_used_pct']}%")
     reset = receipt.get("5h_resets_at")
@@ -485,7 +505,10 @@ def _receipt_advice(receipt: Mapping[str, Any], now: datetime | None = None) -> 
         try:
             parsed = datetime.fromisoformat(reset.replace("Z", "+00:00"))
             if parsed.tzinfo is not None:
-                minutes = max(0, int((parsed - (now or datetime.now(timezone.utc))).total_seconds() // 60))
+                clock = now or datetime.now(timezone.utc)
+                if clock.tzinfo is None:
+                    clock = clock.replace(tzinfo=timezone.utc)
+                minutes = max(0, int((parsed - clock.astimezone(parsed.tzinfo)).total_seconds() // 60))
                 parts.append(f"time until 5h reset {minutes // 60}h {minutes % 60}m")
         except ValueError:
             pass
@@ -493,6 +516,18 @@ def _receipt_advice(receipt: Mapping[str, Any], now: datetime | None = None) -> 
         parts.append(f"7d used {receipt['7d_used_pct']}%")
     return ("Write one bold line between `---` rules with blank lines around it, in the user's language, "
             "showing " + ", ".join(parts) + ".")
+
+
+def _receipt_satisfied(receipt: Mapping[str, Any], message: str, now: datetime) -> bool:
+    if receipt["model"] not in message or receipt["effort"] not in message:
+        return False
+    if not _receipt_quota_current(receipt, now):
+        return True
+    if "7d_used_pct" in receipt:
+        percentage = re.escape(str(receipt["7d_used_pct"]))
+        if not re.search(r"(?<!\d)(?:" + percentage + r"\s*%|%\s*" + percentage + r")(?!\d)", message):
+            return False
+    return True
 
 
 def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] | None:
@@ -519,9 +554,8 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         if notice is not None and any(line.startswith("> ⚓") for line in message.splitlines()):
             state["notice_pending"] = None
             changed = True
-        if receipt is not None and receipt["model"] in message and (
-            "7d_used_pct" not in receipt or re.search(r"(?<!\d)" + re.escape(str(receipt["7d_used_pct"])) + r"\s*%(?!\d)", message)
-        ):
+        clock = datetime.now(timezone.utc)
+        if receipt is not None and _receipt_satisfied(receipt, message, clock):
             state["receipt_pending"] = None
             changed = True
         notice = state["notice_pending"]
