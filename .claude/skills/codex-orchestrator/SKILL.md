@@ -106,7 +106,9 @@ call it before the waiter finishes; use `codex_cancel` only at user request.
 
 When an accepted part of an approved multi-part task finishes, start the next
 part in the same turn without asking. Stop only for approval-gated actions,
-real decisions, failed review, or residual risk the user must weigh.
+real decisions, failed review, or residual risk the user must weigh. Quota is
+not a reason to stop unless 5h or 7d remaining is at most 10%; then warn
+before the task and let the user choose.
 
 With several jobs, keep a list of finished results the user has not yet
 decided on. Present them one at a time in finish order, and do not move to the
