@@ -89,6 +89,9 @@ TOOL_SCHEMAS += [
 ]
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS"}
+CONTINUATION_PROMPT = ("The previous execution was interrupted. Inspect the working tree and the task "
+                       "in this thread, avoid repeating completed steps, finish the remaining work, "
+                       "run the required focused validation, and report the final result.")
 RETENTION_SECONDS = 7 * 24 * 60 * 60
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
@@ -592,6 +595,100 @@ class Server:
     def _host_alive(self, job: dict[str, Any]) -> bool:
         return self._classify_host(job) == "ALIVE"
 
+    def recover_job(self, job_id: str, *, now: float | None = None) -> str:
+        """Claim one replacement generation after durable host and child-tree proof."""
+        with _ownership_lock(self.job_dir, job_id):
+            job = self._read_job(job_id)
+            if job is None or job.get("state") in TERMINAL:
+                return "UNCHANGED"
+            root = self.job_dir.parent.parent
+            try:
+                index = json.loads((root / "async_jobs" / (job_id + ".json")).read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                index = None
+            if isinstance(index, dict) and index.get("stage") == "CONSUMED":
+                return "UNCHANGED"
+            # An unclaimed QUEUED generation can still start. No process identity
+            # means there is no proof that it is safe to replace it.
+            if not job.get("hostPid") or not job.get("hostContained"):
+                return "UNCONFIRMED"
+            classification = self._classify_host(job)
+            if classification != "DEAD":
+                return classification
+            current = time.time() if now is None else now
+
+            def ambiguous(code: str, message: str) -> str:
+                job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=current,
+                           errorCode=code, message=message)
+                self._write_job(job)
+                return "AMBIGUOUS"
+
+            if not isinstance(job.get("hostCreatedAt"), int) or not isinstance(job.get("generation"), int):
+                return ambiguous("RECOVERY_PROOF_MISSING", "Host or child-tree termination proof is missing")
+            attempts = job.get("resumedAfterInterruption", 0)
+            if not isinstance(attempts, int) or attempts < 0:
+                return ambiguous("RECOVERY_PROOF_MISSING", "Recovery attempt history is invalid")
+            if attempts >= 2:
+                return ambiguous("RECOVERY_ATTEMPTS_EXHAUSTED", "Automatic recovery attempt limit reached")
+            launch_path = self.job_dir / (job_id + ".launch")
+            try:
+                launch = json.loads(launch_path.read_text(encoding="utf-8"))
+                original_name = launch.get("originalName", launch["name"])
+                original_args = launch.get("originalArgs", launch["args"])
+                if original_name not in ("codex", "codex-reply") or not isinstance(original_args, dict):
+                    raise ValueError("invalid launch arguments")
+                thread_id = job.get("threadId")
+                if thread_id is not None and (not isinstance(thread_id, str) or not thread_id):
+                    raise ValueError("invalid thread identity")
+                if thread_id:
+                    config = job.get("threadConfig")
+                    if not isinstance(config, dict) or not isinstance(config.get("cwd"), str) or not isinstance(config.get("config_args"), list):
+                        return ambiguous("RECOVERY_THREAD_CONFIG_MISSING", "Thread resume configuration is missing")
+                    name = "codex-reply"
+                    args = {"threadId": thread_id, "prompt": CONTINUATION_PROMPT}
+                    _save_record(self.state_dir, {"thread_id": thread_id, **config})
+                else:
+                    if original_name != "codex":
+                        return ambiguous("RECOVERY_THREAD_MISSING", "Original reply thread identity is missing")
+                    name = "codex"
+                    args = {**original_args, "prompt": original_args["prompt"] + "\n\n" + CONTINUATION_PROMPT}
+                if not isinstance(original_args.get("prompt"), str):
+                    raise ValueError("original prompt missing")
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return ambiguous("RECOVERY_LAUNCH_MISSING", f"Recovery launch data unavailable: {exc}")
+            timeout = original_args.get("timeoutSeconds", 2700)
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+                return ambiguous("RECOVERY_LAUNCH_MISSING", "Recovery timeout is invalid")
+            deadline = time.time() + timeout
+            if isinstance(index, dict):
+                try:
+                    if index.get("jobId") != job_id or index.get("call") != job.get("call"):
+                        raise ValueError("async index does not match job")
+                    pending = json.loads((root / "pending" / (index["call_key"] + ".json")).read_text(encoding="utf-8"))
+                    if pending.get("job_id") != job_id or pending.get("async_call") != job.get("call"):
+                        raise ValueError("pending call does not match job")
+                    import ledger
+                    lease = ledger.ScopeLeases(root / "projects" / index["project_key"])
+                    extension = lease.extend_retention(pending.get("lease_owner", index["call_key"]),
+                                                       deadline + RETENTION_SECONDS)
+                    if extension["status"] != ledger.OK:
+                        raise ValueError(extension["code"])
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    return ambiguous("RECOVERY_OWNERSHIP_MISSING", f"Async ownership unavailable: {exc}")
+            launch.update(name=name, args=args, originalName=original_name, originalArgs=original_args)
+            _atomic_json(launch_path, launch)
+            job.update(state="QUEUED", generation=job["generation"] + 1,
+                       ownershipToken=uuid.uuid4().hex, resumedAfterInterruption=attempts + 1,
+                       deadlineAt=deadline)
+            for key in ("hostPid", "hostCreatedAt", "hostContained", "signalPort", "startedAt", "finishedAt", "exitCode", "errorCode", "message"):
+                job.pop(key, None)
+            self._write_job(job)
+            try:
+                _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
+            except OSError as exc:
+                return ambiguous("RECOVERY_HOST_LAUNCH_FAILED", f"Replacement host launch failed: {exc}")
+            return "RECOVERED"
+
     def _await_host(self, job_id: str) -> dict[str, Any]:
         until = time.monotonic() + 10
         while time.monotonic() < until:
@@ -624,6 +721,7 @@ class Server:
                 job.update(errorCode=code, message={
                     "CODEX_FAILED": "Codex failed", "DEADLINE_EXCEEDED": "Codex deadline exceeded",
                     "CANCELLED": "Codex cancelled", "PROCESS_UNCONFIRMED": "Process termination unconfirmed",
+                    "RECOVERY_RESUME_FAILED": "Interrupted Codex thread could not be resumed",
                 }[code])
             if result is not None:
                 output = self.job_dir / (job_id + ".output")
@@ -735,7 +833,10 @@ class Server:
             result = self._run_tool(name, args, job_id, async_job=True)
             value = result.get("structuredContent")
             if result.get("isError") or not isinstance(value, dict):
-                self._finish_job(job_id, "FAILED", "CODEX_FAILED")
+                if self._read_job(job_id).get("resumedAfterInterruption") and name == "codex-reply":
+                    self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "RECOVERY_RESUME_FAILED")
+                else:
+                    self._finish_job(job_id, "FAILED", "CODEX_FAILED")
             else:
                 self._finish_job(job_id, "SUCCEEDED", result=value)
         except Exception as exc:
@@ -756,14 +857,10 @@ class Server:
                 self._write_job(job)
             return _job_result({"jobId": job["jobId"], "state": "FAILED", "errorCode": "JOB_EXPIRED", "message": "Job record expired"})
         if state not in TERMINAL:
-            host_state = self._classify_host(job)
-            if host_state == "DEAD":
-                job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=time.time(),
-                           errorCode="PROCESS_UNCONFIRMED",
-                           message="Host exited; completion evidence requires reconciliation")
-                self._write_job(job)
-                state = job["state"]
-            elif host_state == "UNCONFIRMED":
+            host_state = self.recover_job(job["jobId"])
+            job = self._read_job(job["jobId"]) or job
+            state = job["state"]
+            if host_state == "UNCONFIRMED":
                 return _job_result({"jobId": job["jobId"], "state": state,
                                     "message": "Host identity unconfirmed"})
         value = {"jobId": job["jobId"], "state": state}
@@ -1113,6 +1210,11 @@ def main() -> None:
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
     server = Server(args.codex_bin)
+    try:
+        import async_session_maintenance
+        async_session_maintenance.cleanup_jobs(server.job_dir.parent.parent)
+    except Exception as exc:
+        print(f"Codex recovery scan unavailable: {exc}", file=sys.stderr, flush=True)
     for line in sys.stdin:
         try:
             message = json.loads(line)

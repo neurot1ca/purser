@@ -163,6 +163,7 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
                 continue
             task = re.sub(r"\s+", " ", task).strip()[:80]
             state = job.get("state")
+            resumed = job.get("resumedAfterInterruption", 0)
             if state in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}:
                 message = (f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
                            "uygulama kapalıyken çalışmaya devam etti ve bitti. Sonucunu alıp inceleyeyim mi?")
@@ -173,7 +174,10 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
                 instruction = "When it finishes, ask for the user's agreement before calling codex_result with adopt: true."
             else:
                 continue
-            lines.append(f"Purser (jobId={job_id}, for Claude only): Tell the user in the user's language: "
+            resumed_hint = (f'Tell the user in the user\'s language: "⚓ Codex işi ({task}) bilgisayar '
+                            'kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." '
+                            if isinstance(resumed, int) and resumed > 0 else "")
+            lines.append(f"Purser (jobId={job_id}, for Claude only): {resumed_hint}Tell the user in the user's language: "
                          f"\"{message}\" {instruction} Do not show the jobId to the user.")
         return "\n".join(lines) or None
     except BaseException:
@@ -199,19 +203,11 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
             job = _read_json(path)
             if not job or job.get("jobId") != path.stem:
                 continue
-            if bridge._host_alive(job):
-                continue
-            if (job.get("state") == "QUEUED" and isinstance(job.get("acceptedAt"), (int, float))
-                    and current - job["acceptedAt"] < 10):
-                continue
             if job.get("state") not in TERMINAL:
-                job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=current,
-                           errorCode="PROCESS_UNCONFIRMED",
-                           message="Host and child-tree termination unconfirmed")
-                bridge._write_job(job)
-                (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
+                bridge.recover_job(path.stem, now=current)
                 continue
-            (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
+            if job.get("state") != "UNKNOWN_OR_IN_PROGRESS":
+                (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
             finished = job.get("finishedAt")
             if isinstance(finished, bool) or not isinstance(finished, (int, float)) or current - finished < RETENTION_SECONDS:
                 continue
@@ -255,6 +251,7 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
                         if output_path.parent == jobs:
                             output_path.unlink(missing_ok=True)
                     path.unlink(missing_ok=True)
+                    (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
                     if pending_path is not None:
                         pending_path.unlink(missing_ok=True)
                     if index:

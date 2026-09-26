@@ -748,7 +748,7 @@ def test_waiter_started_after_bridge_death_wakes_on_host_completion(area):
             first.close()
 
 
-def test_async_dead_host_without_output_is_unconfirmed(area):
+def test_async_dead_host_without_output_resumes_same_job(area):
     first = Client(area, extra_env={"FAKE_SLOW": "1"})
     try:
         started = job_call(first, "codex_start", {"call": str(uuid.uuid4()), "prompt": "slow"})
@@ -775,19 +775,11 @@ def test_async_dead_host_without_output_is_unconfirmed(area):
             env["PURSER_STATE_DIR"] = str(area / "root")
             waiter = subprocess.run([sys.executable, str(ROOT / "purser_wait.py"), started["jobId"]],
                                     capture_output=True, text=True, encoding="utf-8", env=env, timeout=8)
-            assert waiter.returncode == 3
-            assert waiter.stdout == f"purser-wait {started['jobId']} RUNNING\n"
-            cancel = job_call(second, "codex_cancel", {"jobId": started["jobId"]})
-            assert cancel["state"] == "UNKNOWN_OR_IN_PROGRESS"
-            assert cancel["errorCode"] == "PROCESS_UNCONFIRMED"
-            deadline = time.monotonic() + 3
-            while True:
-                result = job_call(second, "codex_result", {"jobId": started["jobId"]})
-                if result["state"] == "UNKNOWN_OR_IN_PROGRESS" or time.monotonic() >= deadline:
-                    break
-                time.sleep(0.02)
-            assert result["state"] == "UNKNOWN_OR_IN_PROGRESS"
-            assert result["errorCode"] == "PROCESS_UNCONFIRMED"
+            assert waiter.returncode == 0
+            assert waiter.stdout == f"purser-wait {started['jobId']} SUCCEEDED\n"
+            assert read_job_record(path)["resumedAfterInterruption"] == 1
+            result = job_call(second, "codex_result", {"jobId": started["jobId"]})
+            assert result["state"] == "SUCCEEDED"
         finally:
             second.close()
     finally:

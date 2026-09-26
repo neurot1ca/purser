@@ -1,6 +1,7 @@
 import json
 import os
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
 from datetime import datetime, timezone
@@ -83,7 +84,7 @@ def test_duration_hint_uses_newest_files_when_file_byte_and_line_caps_hit(tmp_pa
 
 def test_cleanup_live_job_preserves_pending_and_lease(tmp_path, monkeypatch):
     job_id, pending, lease = _job_fixture(tmp_path, "RUNNING", 1000)
-    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: True)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "ALIVE")
     maintenance.cleanup_jobs(tmp_path, now=1000 + 9 * 86400)
     assert (tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json").exists()
     assert pending.exists()
@@ -116,17 +117,19 @@ def _job_fixture(root, state, finished, *, stage="PENDING"):
 
 def test_cleanup_dead_host_reconciles_once_to_ambiguous(tmp_path, monkeypatch):
     job_id, pending, lease = _job_fixture(tmp_path, "RUNNING", 1)
-    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
-    maintenance.cleanup_jobs(tmp_path, now=1000)
     record = tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    job = json.loads(record.read_text())
+    job.update(hostPid=123, hostContained=True)
+    record.write_text(json.dumps(job), encoding="utf-8")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    maintenance.cleanup_jobs(tmp_path, now=1000)
     first = json.loads(record.read_text())
     maintenance.cleanup_jobs(tmp_path, now=2000)
     assert json.loads(record.read_text()) == first
     assert first["state"] == "UNKNOWN_OR_IN_PROGRESS"
-    assert first["errorCode"] == "PROCESS_UNCONFIRMED"
-    assert "unconfirmed" in first["message"]
+    assert first["errorCode"] == "RECOVERY_PROOF_MISSING"
     assert pending.exists() and lease._read()["owners"][job_id]["state"] == "ACTIVE"
-    assert not record.with_suffix(".launch").exists()
+    assert record.with_suffix(".launch").exists()
 
 
 def test_cleanup_consumed_job_does_not_refinalize(tmp_path, monkeypatch):
@@ -170,3 +173,100 @@ def test_cleanup_preserves_finalizing_evidence_for_retry(tmp_path, monkeypatch):
     maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
     assert (tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json").exists()
     assert pending.exists() and lease._read()["owners"][job_id]["state"] == "ACTIVE"
+
+
+def _recoverable(root, *, thread_id=None, stage="PENDING", attempts=0):
+    job_id, pending, lease = _job_fixture(root, "RUNNING", 1, stage=stage)
+    jobs = root / "codex_exec_mcp" / "jobs"
+    record = jobs / f"{job_id}.json"
+    job = json.loads(record.read_text(encoding="utf-8"))
+    job.update(generation=1, ownershipToken="old", hostPid=123,
+               hostCreatedAt=456, hostContained=True, deadlineAt=100,
+               resumedAfterInterruption=attempts)
+    if thread_id:
+        job["threadId"] = thread_id
+        job["threadConfig"] = {"cwd": str(root), "model": None,
+                               "config_args": [], "sandbox": "workspace-write"}
+    record.write_text(json.dumps(job), encoding="utf-8")
+    (jobs / f"{job_id}.launch").write_text(json.dumps({
+        "name": "codex", "args": {"prompt": "original", "timeoutSeconds": 90},
+        "codexBin": "codex"}), encoding="utf-8")
+    return job_id, record, pending, lease
+
+
+def test_concurrent_recoverers_launch_one_host(tmp_path, monkeypatch):
+    job_id, record, pending, lease = _recoverable(tmp_path)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    launches = []
+    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launches.append(args))
+    bridge = codex_exec_mcp.Server(job_dir=record.parent)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda action: action(),
+                      (lambda: maintenance.cleanup_jobs(tmp_path, now=1000),
+                       lambda: bridge.recover_job(job_id, now=1000))))
+    job = json.loads(record.read_text())
+    assert len(launches) == 1
+    assert job["generation"] == 2 and job["resumedAfterInterruption"] == 1
+    assert pending.exists() and lease._read()["owners"][job_id]["state"] == "ACTIVE"
+    assert lease._read()["owners"][job_id]["retention_after"] >= job["deadlineAt"] + codex_exec_mcp.RETENTION_SECONDS
+
+
+def test_recovery_with_thread_resumes_and_without_thread_inspects(tmp_path, monkeypatch):
+    for thread_id in ("thread-1", None):
+        root = tmp_path / (thread_id or "fresh")
+        job_id, record, _, _ = _recoverable(root, thread_id=thread_id)
+        monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+        monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: None)
+        maintenance.cleanup_jobs(root, now=1000)
+        launch = json.loads(record.with_suffix(".launch").read_text())
+        assert launch["name"] == ("codex-reply" if thread_id else "codex")
+        assert launch["args"].get("threadId") == thread_id
+        assert "previous execution was interrupted" in launch["args"]["prompt"].lower()
+        assert json.loads(record.read_text())["state"] == "QUEUED"
+
+
+def test_recovery_attempt_cap_and_unconfirmed_and_consumed(tmp_path, monkeypatch):
+    job_id, record, _, _ = _recoverable(tmp_path / "cap", attempts=2)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    launches = []
+    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launches.append(args))
+    maintenance.cleanup_jobs(tmp_path / "cap", now=1000)
+    assert json.loads(record.read_text())["errorCode"] == "RECOVERY_ATTEMPTS_EXHAUSTED"
+    for label, host, stage in (("uncertain", "UNCONFIRMED", "PENDING"),
+                               ("consumed", "DEAD", "CONSUMED")):
+        root = tmp_path / label
+        _, path, _, _ = _recoverable(root, stage=stage)
+        before = path.read_text()
+        monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job, host=host: host)
+        maintenance.cleanup_jobs(root, now=1000)
+        assert path.read_text() == before
+    assert not launches
+
+
+def test_recovery_missing_launch_stays_ambiguous(tmp_path, monkeypatch):
+    _, record, _, _ = _recoverable(tmp_path)
+    record.with_suffix(".launch").unlink()
+    monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    maintenance.cleanup_jobs(tmp_path, now=1000)
+    job = json.loads(record.read_text())
+    assert job["state"] == "UNKNOWN_OR_IN_PROGRESS"
+    assert job["errorCode"] == "RECOVERY_LAUNCH_MISSING"
+    assert job["resumedAfterInterruption"] == 0
+
+
+def test_failed_thread_resume_never_starts_a_fresh_thread(tmp_path, monkeypatch):
+    job_id, record, _, _ = _recoverable(tmp_path, thread_id="thread-1")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: None)
+    maintenance.cleanup_jobs(tmp_path, now=1000)
+    server = codex_exec_mcp.Server(job_dir=record.parent)
+    job = json.loads(record.read_text())
+    server.claim_generation = job["generation"]
+    server.claim_token = job["ownershipToken"]
+    calls = []
+    monkeypatch.setattr(server, "_run_tool", lambda name, args, *_a, **_kw: (calls.append(name), {"isError": True})[1])
+    server._job_worker(job_id, "codex-reply", json.loads(record.with_suffix(".launch").read_text())["args"])
+    result = json.loads(record.read_text())
+    assert calls == ["codex-reply"]
+    assert result["state"] == "UNKNOWN_OR_IN_PROGRESS"
+    assert result["errorCode"] == "RECOVERY_RESUME_FAILED"

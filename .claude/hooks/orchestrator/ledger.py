@@ -245,6 +245,21 @@ class ScopeLeases:
         except (OSError, ValueError, TypeError):
             return {"status": UNKNOWN, "code": "LEASE_RELEASE_UNCERTAIN"}
 
+    def extend_retention(self, owner_key: str, horizon: float) -> dict[str, Any]:
+        """Keep the original async owner through a replacement attempt."""
+        try:
+            with _lease_lock(self.lock_path):
+                value = self._read()
+                owner = value["owners"].get(owner_key)
+                if (owner is None or owner["state"] != "ACTIVE"
+                        or not isinstance(horizon, (int, float)) or not math.isfinite(horizon)):
+                    return {"status": UNKNOWN, "code": "LEASE_OWNER_MISSING"}
+                owner["retention_after"] = max(owner.get("retention_after", 0), horizon)
+                self._write(value)
+                return {"status": OK, "code": "LEASE_EXTENDED"}
+        except (OSError, ValueError, TypeError):
+            return {"status": UNKNOWN, "code": "LEASE_EXTENSION_UNCERTAIN"}
+
     def active(self) -> list[dict[str, Any]]:
         with _lease_lock(self.lock_path):
             value = self._read()

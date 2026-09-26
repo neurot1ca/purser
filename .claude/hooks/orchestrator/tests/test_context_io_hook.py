@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import context_io_hook
 import async_session_maintenance
+import codex_exec_mcp
 
 
 def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None, advice=None, unreadable=False):
@@ -100,7 +101,9 @@ def test_session_start_reminds_only_other_session_jobs_and_caps_at_five(monkeypa
                                      "session_id": session, "project_key": project}),
             ("pending", call_key, {"job_id": job_id, "async_call": call, "session_id": session,
                                    "tool_use_id": f"tool-{number}", "project_key": project, "task_id": task}),
-            ("codex_exec_mcp/jobs", job_id, {"jobId": job_id, "call": call, "state": job_state}),
+            ("codex_exec_mcp/jobs", job_id, {"jobId": job_id, "call": call, "state": job_state,
+                                              **({"hostPid": 123, "hostCreatedAt": 456,
+                                                  "hostContained": True} if job_state == "RUNNING" else {})}),
         ):
             path = state / folder / f"{name}.json"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,6 +121,7 @@ def test_session_start_reminds_only_other_session_jobs_and_caps_at_five(monkeypa
     monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: None)
     monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: state)
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *_args: None)
+    monkeypatch.setattr(codex_exec_mcp, "_windows_process_identity", lambda _pid: ("ALIVE", 456))
     assert context_io_hook.main() == 0
     lines = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"].splitlines()
     assert len(lines) == 5
@@ -145,6 +149,29 @@ def test_session_start_job_hint_failure_is_fail_open(monkeypatch, tmp_path):
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *_args: None)
     assert context_io_hook.main() == 0
     assert "restored context" in output_raw.getvalue().decode("utf-8")
+
+
+def test_resumed_hint_uses_approved_wording_and_ambiguous_job_is_skipped(tmp_path):
+    state = tmp_path / "state"
+    call = "resumed-call"
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    call_key = hashlib.sha256(b"old-session\0tool-1").hexdigest()
+    for folder in ("async_jobs", "pending", "codex_exec_mcp/jobs"):
+        (state / folder).mkdir(parents=True, exist_ok=True)
+    (state / "async_jobs" / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "call": call, "call_key": call_key,
+        "session_id": "old-session", "project_key": "project-key"}), encoding="utf-8")
+    (state / "pending" / f"{call_key}.json").write_text(json.dumps({
+        "job_id": job_id, "async_call": call, "session_id": "old-session",
+        "project_key": "project-key", "tool_use_id": "tool-1", "task_id": "task-a"}), encoding="utf-8")
+    record = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    job = {"jobId": job_id, "call": call, "state": "RUNNING", "resumedAfterInterruption": 1}
+    record.write_text(json.dumps(job), encoding="utf-8")
+    hint = async_session_maintenance.followup_hints(state, "project-key", "new-session")
+    assert "⚓ Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." in hint
+    job["state"] = "UNKNOWN_OR_IN_PROGRESS"
+    record.write_text(json.dumps(job), encoding="utf-8")
+    assert async_session_maintenance.followup_hints(state, "project-key", "new-session") is None
 
 
 def test_user_prompt_adds_recorded_non_english_reply_language(monkeypatch, tmp_path):
