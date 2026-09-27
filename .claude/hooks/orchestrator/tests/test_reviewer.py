@@ -353,6 +353,142 @@ def test_no_material_verdict_with_findings_is_rejected(config):
     assert result["error_code"] == "REVIEWER_RESPONSE_INVALID"
 
 
+def reviewer_opencode_stream(final_text=None, *, model="vendor/model-id"):
+    content = json.dumps(response()) if final_text is None else final_text
+    return "\n".join(
+        json.dumps(event)
+        for event in (
+            {"type": "step_start", "providerID": "vendor", "modelID": model.split("/", 1)[-1]},
+            {"type": "text", "part": {"text": content}},
+            {"type": "step_finish", "part": {"reason": "stop"}},
+        )
+    )
+
+
+def test_opencode_command_uses_deny_config_and_isolated_scratch_dir(config, tmp_path):
+    opencode_config = {
+        **config,
+        "reviewer1_executable": r"C:\tools\opencode.exe",
+        "reviewer1_model_requested": "vendor/model-id",
+        "reviewer1_agent": "reviewer",
+    }
+
+    class InspectingRunner(FakeRunner):
+        def __call__(self, command, **kwargs):
+            opencode_dir = Path(command[command.index("--dir") + 1])
+            prompt = command[-1]
+            packet_path = Path(prompt.split("REVIEW_PACKET_PATH=", 1)[1])
+            assert packet_path.parent == opencode_dir
+            assert packet_path.name == "review-packet.json"
+            assert sorted(path.name for path in opencode_dir.iterdir()) == [packet_path.name]
+            self.isolated_dir = opencode_dir
+            return super().__call__(command, **kwargs)
+
+    runner = InspectingRunner(stdout=reviewer_opencode_stream())
+    packet = reviewer.build_review_packet(
+        materials(), config["reviewer1_packet_max_bytes"]
+    )
+    caller_workdir = tmp_path / "caller-workdir"
+    caller_workdir.mkdir()
+    (caller_workdir / "must-not-be-visible.txt").write_text("private", encoding="utf-8")
+    reviewed_root = tmp_path / "reviewed"
+    reviewed_root.mkdir()
+
+    result = reviewer.invoke_packet(
+        packet,
+        opencode_config,
+        runner=runner,
+        cwd=caller_workdir,
+        repo_root=reviewed_root,
+        reviewer_agent="opencode",
+    )
+
+    assert isinstance(result, reviewer.CompletedReview), getattr(result, "message", None)
+    command, kwargs = runner.calls[0]
+    assert command[:2] == [r"C:\tools\opencode.exe", "run"]
+    assert command[command.index("--model") + 1] == "vendor/model-id"
+    assert command[command.index("--agent") + 1] == "reviewer"
+    assert Path(command[command.index("--dir") + 1]) == runner.isolated_dir
+    assert runner.isolated_dir != caller_workdir
+    assert not {"--standalone", "--yolo", "--dangerously-skip-permissions"}.intersection(command)
+    permissions = json.loads(kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+    denied = {"edit", "write", "bash", "webfetch", "task", "external_directory"}
+    assert all(permissions["permission"][key] == "deny" for key in denied)
+    assert all(permissions["agent"]["reviewer"]["permission"][key] == "deny" for key in denied)
+    assert result["provider"] == "opencode"
+    assert result["served_model_attestation"] == "vendor/model-id"
+    assert sorted(path.name for path in caller_workdir.iterdir()) == ["must-not-be-visible.txt"]
+
+
+def test_provider_reviewers_accept_one_json_fence_and_reject_ambiguous_text():
+    fenced = "```json\n" + json.dumps(response()) + "\n```"
+    parsed = reviewer.OPENCODE_ADAPTER.parse(reviewer_opencode_stream(fenced))
+    assert parsed[1]["result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+    for invalid in (
+        fenced + "\n" + fenced,
+        "The review is clean.\n" + json.dumps(response()),
+        "```json\n"
+        + json.dumps(response(
+            policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+            findings=[{"code": "BUG", "message": "A material issue exists."}],
+        ))
+        + "\n```",
+    ):
+        with pytest.raises(ValueError):
+            reviewer.OPENCODE_ADAPTER.parse(reviewer_opencode_stream(invalid))
+
+
+def test_codex_command_enforces_read_only_execution(config, tmp_path):
+    codex_config = {
+        **config,
+        "reviewer1_executable": r"C:\tools\codex.exe",
+        "reviewer1_model_requested": "codex-review-model",
+    }
+    command = reviewer.CODEX_ADAPTER.build_command(
+        "Review packet", reviewer.REVIEW_SCHEMA, codex_config, cwd=tmp_path
+    )
+
+    assert command[:2] == [r"C:\tools\codex.exe", "exec"]
+    assert "--json" in command
+    assert command[command.index("-s") + 1] == "read-only"
+    assert command[command.index("-c") + 1] == 'approval_policy="never"'
+    assert command[command.index("-C") + 1] == str(tmp_path)
+
+
+def test_codex_adapter_provider_is_reported_on_outcome(config, tmp_path):
+    codex_config = {
+        **config,
+        "reviewer1_executable": r"C:\tools\codex.exe",
+        "reviewer1_model_requested": "codex-review-model",
+    }
+    stream = "\n".join((
+        json.dumps({"type": "item.completed", "item": {
+            "type": "agent_message", "text": json.dumps(response())
+        }}),
+        json.dumps({"type": "turn.completed"}),
+    ))
+    runner = FakeRunner(stdout=stream)
+    packet = reviewer.build_review_packet(
+        materials(), config["reviewer1_packet_max_bytes"]
+    )
+    working_directory = tmp_path / "work"
+    working_directory.mkdir()
+    reviewed_root = tmp_path / "reviewed"
+    reviewed_root.mkdir()
+
+    result = reviewer.invoke_packet(
+        packet,
+        codex_config,
+        runner=runner,
+        cwd=working_directory,
+        repo_root=reviewed_root,
+        reviewer_agent="codex",
+    )
+
+    assert isinstance(result, reviewer.CompletedReview)
+    assert result["provider"] == "codex"
+
+
 def test_non_pinned_model_configuration_is_unavailable(config):
     unpinned = dict(config)
     unpinned["reviewer1_model_requested"] = "some-other-model"

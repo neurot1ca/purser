@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import time
 from typing import Any
+import uuid
 
 import ledger
 import policy
@@ -150,7 +151,173 @@ class _AgyAdapter:
 
 AGY_ADAPTER = _AgyAdapter()
 PINNED_MODEL = AGY_ADAPTER.allowed_model
-REVIEWER_ADAPTERS: dict[str, Any] = {AGY_ADAPTER.provider: AGY_ADAPTER}
+
+
+_OPENCODE_DENIED_PERMISSIONS = {
+    "edit": "deny",
+    "write": "deny",
+    "bash": "deny",
+    "webfetch": "deny",
+    "task": "deny",
+    "external_directory": "deny",
+}
+
+
+class _OpenCodeAdapter:
+    provider = "opencode"
+
+    def validate_model(self, model: Any) -> None:
+        if (
+            not isinstance(model, str)
+            or model.count("/") != 1
+            or not all(model.split("/"))
+        ):
+            raise ValueError("OpenCode reviewer model must be provider/model")
+
+    def build_command(
+        self,
+        prompt: str,
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+        *,
+        cwd: Path,
+    ) -> list[str]:
+        executable = config.get("reviewer1_executable")
+        model = config.get("reviewer1_model_requested")
+        agent = config.get("reviewer1_agent", "reviewer")
+        if not isinstance(executable, str) or not os.path.isabs(executable):
+            raise ValueError("reviewer1_executable must be an absolute path")
+        self.validate_model(model)
+        if not isinstance(agent, str) or not agent.strip():
+            raise ValueError("reviewer1_agent must be a nonempty name")
+        return [
+            executable,
+            "run",
+            "--format",
+            "json",
+            "--model",
+            model,
+            "--agent",
+            agent,
+            "--dir",
+            str(cwd.resolve()),
+            prompt,
+        ]
+
+    def invoke(
+        self,
+        command: Sequence[str],
+        *,
+        runner: Callable[..., subprocess.CompletedProcess[str]],
+        cwd: Path,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        agent = command[command.index("--agent") + 1]
+        permissions = {
+            "permission": dict(_OPENCODE_DENIED_PERMISSIONS),
+            "agent": {
+                agent: {"permission": dict(_OPENCODE_DENIED_PERMISSIONS)}
+            },
+        }
+        kwargs: dict[str, Any] = {
+            "cwd": cwd,
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "timeout": timeout,
+            "check": False,
+            "env": {
+                **os.environ,
+                "OPENCODE_CONFIG_CONTENT": _canonical_json(permissions).decode("utf-8"),
+            },
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+        return runner(command, **kwargs)
+
+    def parse(
+        self,
+        stdout: str,
+        *,
+        include_metadata: bool = False,
+    ) -> tuple[str, dict[str, Any], float | None, dict[str, int | float], str]:
+        return _parse_event_stream(stdout, self.provider)
+
+
+class _CodexAdapter:
+    provider = "codex"
+
+    def validate_model(self, model: Any) -> None:
+        if model is not None and (not isinstance(model, str) or not model.strip()):
+            raise ValueError("Codex reviewer model must be a nonempty string")
+
+    def build_command(
+        self,
+        prompt: str,
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+        *,
+        cwd: Path,
+    ) -> list[str]:
+        executable = config.get("reviewer1_executable")
+        model = config.get("reviewer1_model_requested")
+        if not isinstance(executable, str) or not os.path.isabs(executable):
+            raise ValueError("reviewer1_executable must be an absolute path")
+        self.validate_model(model)
+        command = [
+            executable,
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "-s",
+            "read-only",
+            "-c",
+            'approval_policy="never"',
+            "-C",
+            str(cwd.resolve()),
+        ]
+        if model:
+            command.extend(("-m", model))
+        return [*command, prompt]
+
+    def invoke(
+        self,
+        command: Sequence[str],
+        *,
+        runner: Callable[..., subprocess.CompletedProcess[str]],
+        cwd: Path,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        kwargs: dict[str, Any] = {
+            "cwd": cwd,
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "timeout": timeout,
+            "check": False,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+        return runner(command, **kwargs)
+
+    def parse(
+        self,
+        stdout: str,
+        *,
+        include_metadata: bool = False,
+    ) -> tuple[str, dict[str, Any], float | None, dict[str, int | float], str]:
+        return _parse_event_stream(stdout, self.provider)
+
+
+OPENCODE_ADAPTER = _OpenCodeAdapter()
+CODEX_ADAPTER = _CodexAdapter()
+REVIEWER_ADAPTERS: dict[str, Any] = {
+    AGY_ADAPTER.provider: AGY_ADAPTER,
+    OPENCODE_ADAPTER.provider: OPENCODE_ADAPTER,
+    CODEX_ADAPTER.provider: CODEX_ADAPTER,
+}
 
 
 def register_reviewer_adapter(agent: str, adapter: Any) -> None:
@@ -234,6 +401,7 @@ class CompletedReview(_ResultMapping):
     duration_seconds: float | None = None
     usage: tuple[tuple[str, int | float], ...] = ()
     provider: str = AGY_ADAPTER.provider
+    served_model_attestation: str = "UNAVAILABLE"
 
     def __post_init__(self) -> None:
         if self.result not in _COMPLETED_RESULTS:
@@ -251,7 +419,7 @@ class CompletedReview(_ResultMapping):
             ],
             "conversation_id": self.conversation_id,
             "reviewer1_model_requested": self.reviewer1_model_requested,
-            "served_model_attestation": "UNAVAILABLE",
+            "served_model_attestation": self.served_model_attestation,
         }
 
 
@@ -328,6 +496,9 @@ def _completed(
     config: Mapping[str, Any],
     duration_seconds: float | None = None,
     usage: Mapping[str, int | float] | None = None,
+    *,
+    provider: str = AGY_ADAPTER.provider,
+    served_model_attestation: str = "UNAVAILABLE",
 ) -> CompletedReview:
     return CompletedReview(
         result=result,
@@ -337,14 +508,20 @@ def _completed(
         reviewer1_model_requested=_requested_model(config),
         duration_seconds=duration_seconds,
         usage=tuple(sorted((usage or {}).items())),
-        provider=str(config.get("reviewer1_agent", AGY_ADAPTER.provider)),
+        provider=provider,
+        served_model_attestation=served_model_attestation,
     )
 
 
-def _unavailable(code: str, message: str, config: Mapping[str, Any]) -> UnavailableReview:
+def _unavailable(
+    code: str,
+    message: str,
+    config: Mapping[str, Any],
+    *,
+    provider: str = AGY_ADAPTER.provider,
+) -> UnavailableReview:
     return UnavailableReview(
-        code, message, _requested_model(config),
-        provider=str(config.get("reviewer1_agent", AGY_ADAPTER.provider)),
+        code, message, _requested_model(config), provider=provider
     )
 
 
@@ -354,13 +531,18 @@ def _stderr_tail(value: Any) -> str | None:
     return value[-2048:] if isinstance(value, str) and value else None
 
 
-def _incomplete_packet(packet: PacketOmitted, config: Mapping[str, Any]) -> IncompleteReview:
+def _incomplete_packet(
+    packet: PacketOmitted,
+    config: Mapping[str, Any],
+    *,
+    provider: str = AGY_ADAPTER.provider,
+) -> IncompleteReview:
     return IncompleteReview(
         packet.code,
         packet.message,
         packet.omitted,
         _requested_model(config),
-        provider=str(config.get("reviewer1_agent", AGY_ADAPTER.provider)),
+        provider=provider,
     )
 
 
@@ -685,6 +867,90 @@ def _validate_response(value: Any) -> dict[str, Any]:
     }
 
 
+_JSON_FENCE = re.compile(r"\A\s*```json\s*\r?\n(.*?)\r?\n```\s*\Z", re.DOTALL)
+
+
+def _parse_bare_or_fenced_response(text: str) -> dict[str, Any]:
+    match = _JSON_FENCE.fullmatch(text)
+    payload = match.group(1) if match is not None else text
+    return _validate_response(json.loads(payload))
+
+
+def _parse_event_stream(
+    stdout: str, provider: str
+) -> tuple[str, dict[str, Any], float | None, dict[str, int | float], str]:
+    events = []
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if not isinstance(event, Mapping):
+            raise ValueError(f"{provider} event was not an object")
+        events.append(event)
+    if not events:
+        raise ValueError(f"{provider} event stream was empty")
+
+    text_parts: list[str] = []
+    conversation_id = "UNAVAILABLE"
+    served_model = "UNAVAILABLE"
+    completed = False
+    for event in events:
+        session = event.get("sessionID", event.get("thread_id"))
+        if isinstance(session, str) and session:
+            conversation_id = session
+        model = event.get("model")
+        model_id = event.get("modelID")
+        model_provider = event.get("providerID")
+        if isinstance(model, str) and model:
+            served_model = model
+        elif isinstance(model_id, str) and model_id:
+            served_model = (
+                f"{model_provider}/{model_id}"
+                if isinstance(model_provider, str) and model_provider
+                else model_id
+            )
+        if provider == "opencode":
+            part = event.get("part")
+            if event.get("type") == "text" and isinstance(part, Mapping):
+                value = part.get("text")
+                if isinstance(value, str):
+                    text_parts.append(value)
+            if (
+                event.get("type") == "step_finish"
+                and isinstance(part, Mapping)
+                and part.get("reason") == "stop"
+            ):
+                completed = True
+        elif (
+            event.get("type") == "item.completed"
+            and isinstance(event.get("item"), Mapping)
+            and event["item"].get("type") == "agent_message"
+            and isinstance(event["item"].get("text"), str)
+        ):
+            text_parts.append(event["item"]["text"])
+        if provider == "codex" and event.get("type") == "turn.completed":
+            completed = True
+        if event.get("type") in {"error", "turn.failed"}:
+            raise ValueError(f"{provider} event stream reported a failure")
+        part = event.get("part")
+        if (
+            provider == "opencode"
+            and event.get("type") == "tool_use"
+            and isinstance(part, Mapping)
+            and isinstance(part.get("state"), Mapping)
+            and part["state"].get("status") == "error"
+        ):
+            raise ValueError("OpenCode reported a failed tool")
+
+    if not text_parts:
+        raise ValueError(f"{provider} event stream had no final assistant text")
+    if not completed:
+        raise ValueError(f"{provider} event stream had no successful completion marker")
+    final_text = "".join(text_parts) if provider == "opencode" else text_parts[-1]
+    response = _parse_bare_or_fenced_response(final_text.strip())
+    return conversation_id, response, None, {}, served_model
+
+
 def _structured_payload(envelope: Mapping[str, Any]) -> Any:
     """Return the schema-enforced result payload.
 
@@ -798,21 +1064,24 @@ def invoke_packet(
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     cwd: str | os.PathLike[str] | None = None,
     repo_root: str | os.PathLike[str] | None = None,
-    agent: str = "agy",
+    reviewer_agent: str = "agy",
+    reviewer_model: str | None = None,
 ) -> ReviewOutcome:
-    if isinstance(packet, PacketOmitted):
-        return _incomplete_packet(packet, config)
-    packet_path: Path | None = None
-    scratch_root: Path | None = None
-    retried = False
-    adapter = REVIEWER_ADAPTERS.get(agent)
+    if reviewer_model is not None:
+        config = {**config, "reviewer1_model_requested": reviewer_model}
+    adapter = REVIEWER_ADAPTERS.get(reviewer_agent)
     if adapter is None:
         return UnavailableReview(
             "REVIEWER_ADAPTER_UNAVAILABLE",
-            f"No reviewer adapter is registered for {agent}.",
+            f"No reviewer adapter is registered for {reviewer_agent}.",
             _requested_model(config),
-            provider=agent,
+            provider=reviewer_agent,
         )
+    if isinstance(packet, PacketOmitted):
+        return _incomplete_packet(packet, config, provider=adapter.provider)
+    packet_path: Path | None = None
+    scratch_root: Path | None = None
+    retried = False
     try:
         timeout = config["reviewer1_timeout_seconds"]
         if (
@@ -830,7 +1099,15 @@ def invoke_packet(
         # repository, which is removed afterwards, and the repository is never
         # handed to it.  Never run it in the package root -- that is inside the
         # working tree it is reviewing.
-        if cwd is not None:
+        if adapter.provider == OPENCODE_ADAPTER.provider:
+            scratch_parent = (
+                Path(cwd).resolve() if cwd is not None else Path(tempfile.gettempdir())
+            )
+            scratch_root = scratch_parent / f"reviewer1-opencode-{uuid.uuid4().hex}"
+            scratch_root.mkdir()
+            scratch_root = scratch_root.resolve()
+            working_directory = scratch_root
+        elif cwd is not None:
             working_directory = Path(cwd).resolve()
         else:
             scratch_root = Path(tempfile.mkdtemp(prefix="reviewer1-scratch-")).resolve()
@@ -839,24 +1116,37 @@ def invoke_packet(
             raise ValueError("the repository root is required for reviewer confinement")
         repository = Path(repo_root).resolve()
         _refuse_repository_working_directory(working_directory, repository)
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            prefix=".reviewer1-packet-",
-            suffix=".json",
-            dir=working_directory,
-            delete=False,
-        ) as handle:
-            packet_path = Path(handle.name).resolve()
+        if adapter.provider == OPENCODE_ADAPTER.provider:
+            if any(working_directory.iterdir()):
+                raise ValueError("OpenCode reviewer working directory must be empty")
+            packet_path = working_directory / "review-packet.json"
+            handle_context = packet_path.open("xb")
+        else:
+            handle_context = tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=".reviewer1-packet-",
+                suffix=".json",
+                dir=working_directory,
+                delete=False,
+            )
+        with handle_context as handle:
+            if packet_path is None:
+                packet_path = Path(handle.name).resolve()
             handle.write(packet.encoded)
             handle.flush()
             os.fsync(handle.fileno())
         adapter.validate_model(_requested_model(config))
-        command = adapter.build_command(
-            _review_prompt(packet_path),
-            REVIEW_SCHEMA,
-            config,
-            repository_root=repository,
-        )
+        if adapter.provider == AGY_ADAPTER.provider:
+            command = adapter.build_command(
+                _review_prompt(packet_path),
+                REVIEW_SCHEMA,
+                config,
+                repository_root=repository,
+            )
+        else:
+            command = adapter.build_command(
+                _review_prompt(packet_path), REVIEW_SCHEMA, config, cwd=working_directory
+            )
         elapsed_total = 0.0
         attempt_timeout = timeout
         while True:
@@ -877,7 +1167,7 @@ def invoke_packet(
                     _requested_model(config),
                     elapsed_seconds=elapsed_total,
                     stderr_tail=_stderr_tail(error.stderr),
-                    provider=agent,
+                    provider=reviewer_agent,
                 )
             elapsed = max(0.0, time.monotonic() - started)
             elapsed_total += elapsed
@@ -906,12 +1196,15 @@ def invoke_packet(
                 _requested_model(config),
                 elapsed_seconds=elapsed_total,
                 stderr_tail=stderr_tail,
-                provider=agent,
+                provider=reviewer_agent,
             )
         try:
-            conversation_id, response, duration_seconds, usage = adapter.parse(
-                stdout, include_metadata=True
-            )
+            parsed = adapter.parse(stdout, include_metadata=True)
+            if adapter.provider == AGY_ADAPTER.provider:
+                conversation_id, response, duration_seconds, usage = parsed
+                served_model = "UNAVAILABLE"
+            else:
+                conversation_id, response, duration_seconds, usage, served_model = parsed
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             return UnavailableReview(
                 "REVIEWER_RESPONSE_INVALID",
@@ -921,7 +1214,7 @@ def invoke_packet(
                 raw_stdout=stdout[-262144:],
                 decoder_detail=str(error)[:200],
                 elapsed_seconds=elapsed_total,
-                provider=agent,
+                provider=reviewer_agent,
             )
         if response["result"] == policy.REVIEWER1_UNAVAILABLE:
             return UnavailableReview(
@@ -932,7 +1225,7 @@ def invoke_packet(
                 duration_seconds,
                 tuple(sorted(usage.items())),
                 elapsed_seconds=elapsed_total,
-                provider=agent,
+                provider=reviewer_agent,
             )
         result = response["result"]
         findings = response["findings"]
@@ -960,6 +1253,8 @@ def invoke_packet(
             config,
             duration_seconds,
             usage,
+            provider=adapter.provider,
+            served_model_attestation=served_model,
         )
     except FileNotFoundError:
         return UnavailableReview(
@@ -967,7 +1262,7 @@ def invoke_packet(
             "The configured Reviewer-1 executable was not found."
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
-            provider=agent,
+            provider=reviewer_agent,
         )
     except (json.JSONDecodeError, TypeError, ValueError, OSError) as error:
         return UnavailableReview(
@@ -975,7 +1270,7 @@ def invoke_packet(
             f"Reviewer-1 response or configuration was invalid ({type(error).__name__})."
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
-            provider=agent,
+            provider=reviewer_agent,
         )
     except Exception as error:
         return UnavailableReview(
@@ -983,7 +1278,7 @@ def invoke_packet(
             f"Reviewer-1 failed unexpectedly ({type(error).__name__})."
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
-            provider=AGY_ADAPTER.provider,
+            provider=adapter.provider,
         )
     finally:
         if packet_path is not None:
@@ -1014,6 +1309,7 @@ def review_materials(
             "REVIEWER_CONFIG_INVALID",
             f"Reviewer-1 configuration was invalid ({type(error).__name__}).",
             fallback,
+            provider=reviewer_agent,
         )
     if reviewer_model is not None or reviewer_timeout_seconds is not None:
         loaded = dict(loaded)
@@ -1030,11 +1326,20 @@ def review_materials(
             "REVIEW_PACKET_BUILD_FAILED",
             f"The review packet failed unexpectedly ({type(error).__name__}).",
             loaded,
+            provider=reviewer_agent,
         )
     if isinstance(packet, PacketOmitted):
-        return _incomplete_packet(packet, loaded)
+        adapter = REVIEWER_ADAPTERS.get(reviewer_agent)
+        return _incomplete_packet(
+            packet,
+            loaded,
+            provider=adapter.provider if adapter is not None else reviewer_agent,
+        )
     if cwd is not None:
-        return invoke_packet(packet, loaded, runner=runner, cwd=cwd, repo_root=repo_root, agent=reviewer_agent)
+        return invoke_packet(
+            packet, loaded, runner=runner, cwd=cwd, repo_root=repo_root,
+            reviewer_agent=reviewer_agent, reviewer_model=reviewer_model,
+        )
     try:
         # Deliberately the system temp root, NOT the package directory: a live
         # check showed the reviewer can create files even under
@@ -1042,13 +1347,15 @@ def review_materials(
         # worktree it is reviewing.
         with tempfile.TemporaryDirectory(prefix="reviewer1-") as scratch:
             return invoke_packet(
-                packet, loaded, runner=runner, cwd=scratch, repo_root=repo_root, agent=reviewer_agent
+                packet, loaded, runner=runner, cwd=scratch, repo_root=repo_root,
+                reviewer_agent=reviewer_agent, reviewer_model=reviewer_model,
             )
     except OSError as error:
         return _unavailable(
             "REVIEWER_WORKDIR_UNAVAILABLE",
             f"The isolated Reviewer-1 working directory failed ({type(error).__name__}).",
             loaded,
+            provider=reviewer_agent,
         )
 
 
