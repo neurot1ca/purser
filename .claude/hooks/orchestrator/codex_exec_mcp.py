@@ -86,7 +86,9 @@ TOOL_SCHEMAS += [
             "worktree": {"type": "boolean"},
             "threadId": {"type": "string"}, "timeoutSeconds": {"type": "number"},
             "taskId": {"type": "string"}, "route": {"type": "string"},
-            "etaMinutes": {"type": "integer"}},
+            "etaMinutes": {"type": "integer"}, "jobModel": {"type": "string"},
+            "jobEffort": {"type": "string"}, "jobLabel": {"type": "string"},
+            "jobPhase": {"type": "string"}},
         "required": ["prompt"]}},
     {"name": "codex_result", "description": "Read a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {"jobId": {"type": "string"},
@@ -1028,6 +1030,11 @@ class Server:
                 for field in ("taskId", "route", "etaMinutes"):
                     if field in args:
                         job[field] = args[field]
+                for stored, supplied in (("model", "jobModel"), ("effort", "jobEffort"),
+                                         ("label", "jobLabel"), ("phase", "jobPhase")):
+                    value = args.get(supplied, args.get(stored))
+                    if value is not None:
+                        job[stored] = value
                 self.job_dir.mkdir(parents=True, exist_ok=True)
                 if os.name != "nt":
                     os.chmod(self.job_dir, 0o700)
@@ -1180,6 +1187,8 @@ class Server:
                      {"applied": False, "conflicts": outcome["conflicts"],
                       "applicable": outcome["applicable"], "worktreePath": job["worktreePath"]})
             job.update(applyState="applied" if outcome["applied"] else "conflict", applyResult=value)
+            if outcome["applied"]:
+                job["appliedAt"] = time.time()
             self._write_job(job)
             return _job_result(value)
 

@@ -19,6 +19,7 @@ PLUGIN_TOOLS = {
     "mcp__plugin_purser_codex-main__codex_result",
     "mcp__plugin_purser_codex-main__codex_cancel",
 }
+PLUGIN_APPLY_TOOL = "mcp__plugin_purser_codex-main__codex_apply"
 
 
 def test_plugin_hooks_match_manual_installer():
@@ -95,6 +96,10 @@ def test_plugin_manifest_paths_and_registration():
                 tool for tool in PLUGIN_TOOLS if re.fullmatch(entry["matcher"], tool)
             }
             assert matched == PLUGIN_TOOLS
+            if name == "PostToolUse":
+                assert re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
+            else:
+                assert not re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
             assert not re.fullmatch(entry["matcher"], "mcp__codex-main__codex")
         command, = entry["hooks"]
         assert command["timeout"] == timeout

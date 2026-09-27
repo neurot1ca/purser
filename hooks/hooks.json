@@ -34,7 +34,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$",
+        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel|codex_apply)$",
         "hooks": [
           {
             "type": "command",

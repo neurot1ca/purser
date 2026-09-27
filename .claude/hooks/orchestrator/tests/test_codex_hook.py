@@ -921,59 +921,123 @@ def test_async_result_uses_indexed_project_when_event_cwd_is_nested_repo(workspa
     assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))["stage"] == "CONSUMED"
 
 
-@pytest.mark.parametrize("job_count", (1, 2, 6))
-def test_async_status_block_reads_project_jobs(workspace, config, monkeypatch, job_count):
-    repo, state = workspace
-    monkeypatch.setattr(codex, "_job_host_classification", lambda job: (
-        "UNCONFIRMED" if job["taskId"] == "status-2" else "ALIVE"))
-    responses = []
-    for number in range(1, job_count + 1):
-        prompt = orch(task=f"status-{number}", scope=f"owned-{number}.py") + "\nWork."
-        start = event(START_TOOL, prompt=prompt, tool_use_id=f"status-start-{number}")
-        updated = codex.pre_tool_use(start, config=config, state_root=state,
-                                     repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-        job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
-        path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"jobId": job_id, "call": updated["call"],
-                                    "state": "RUNNING", "acceptedAt": time.time() - 120,
-                                    "taskId": f"status-{number}", "route": "normal",
-                                    "etaMinutes": 10}), encoding="utf-8")
-        responses.append(codex.post_tool_use({**start, "hook_event_name": "PostToolUse",
-            "tool_response": {"structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
-            config=config, state_root=state, repo_root=repo))
-    message = responses[-1].get("systemMessage", "")
-    if job_count == 1:
-        assert "status-1 |" not in message
-    else:
-        lines = [line for line in message.splitlines() if line.startswith("status-")]
-        assert len(lines) == min(job_count, 5)
-        assert "status-2 | normal | 2m/10m | uncertain" in lines
-        assert all(" | normal | " in line for line in lines)
+def _board_job(state_root, name, status="RUNNING", **values):
+    job_id = hashlib.sha256(name.encode()).hexdigest()
+    call_key = hashlib.sha256((name + "-call").encode()).hexdigest()
+    index = {"jobId": job_id, "call": name, "call_key": call_key,
+             "project_key": "project", "session_id": "session"}
+    job = {"jobId": job_id, "call": name, "state": status, "acceptedAt": time.time(),
+           "label": name, "model": "gpt-6-sol", "effort": "medium", "route": "normal",
+           **values}
+    (state_root / "async_jobs").mkdir(parents=True, exist_ok=True)
+    (state_root / "codex_exec_mcp" / "jobs").mkdir(parents=True, exist_ok=True)
+    (state_root / "async_jobs" / f"{job_id}.json").write_text(json.dumps(index), encoding="utf-8")
+    (state_root / "codex_exec_mcp" / "jobs" / f"{job_id}.json").write_text(json.dumps(job), encoding="utf-8")
+    return job_id, call_key
 
 
-def test_async_result_status_lists_remaining_active_jobs(workspace, config, monkeypatch):
+def test_project_job_board_is_omitted_with_one_job(workspace):
+    _, state = workspace
+    _board_job(state, "only")
+    response = codex._append_project_job_status({}, state, "project")
+    assert "systemMessage" not in response
+
+
+def test_project_job_board_orders_attention_running_queued_and_applied(workspace):
+    _, state = workspace
+    rows = [
+        ("applied", "SUCCEEDED", {"applyState": "applied", "appliedAt": time.time()}),
+        ("queued", "QUEUED", {}),
+        ("running", "RUNNING", {}),
+        ("done", "SUCCEEDED", {}),
+        ("conflict", "SUCCEEDED", {"applyState": "conflict"}),
+        ("failed", "FAILED", {"finishedAt": time.time()}),
+    ]
+    for label, state_name, values in rows:
+        _, call_key = _board_job(state, label, state_name, **values)
+        (state / "bundle_artifacts").mkdir(exist_ok=True)
+        (state / "bundle_artifacts" / f"{call_key}.json").write_text(json.dumps({
+            "phase": "implementation", "apply": "codex_apply",
+            "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        }), encoding="utf-8")
+    message = codex._append_project_job_status({}, state, "project")["systemMessage"]
+    tasks = [line.strip("|").split("|")[0].strip() for line in message.splitlines()
+             if line.startswith("| ") and not line.startswith("| Task |") and "---" not in line]
+    assert tasks == ["failed", "conflict", "done", "running", "queued", "applied"]
+    assert "| Task | Model | State | ETA | Review | Apply |" in message
+
+
+def test_project_job_board_renders_overdue_and_unknown_eta(workspace, monkeypatch):
+    _, state = workspace
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
+    _board_job(state, "overdue", etaMinutes=2, acceptedAt=time.time() - 180)
+    _board_job(state, "unknown", etaMinutes=None, acceptedAt=time.time() - 10)
+    message = codex._append_project_job_status({}, state, "project")["systemMessage"]
+    assert "| overdue | gpt-6-sol (medium) | running | overdue |" in message
+    assert "| unknown | gpt-6-sol (medium) | running | — |" in message
+
+
+def test_project_job_board_drops_applied_jobs_after_an_hour(workspace):
+    _, state = workspace
+    _board_job(state, "old-applied", "SUCCEEDED", applyState="applied",
+               appliedAt=time.time() - 3601)
+    _board_job(state, "old-failed", "FAILED", finishedAt=time.time() - 3601)
+    _board_job(state, "active-one")
+    _board_job(state, "active-two")
+    message = codex._append_project_job_status({}, state, "project")["systemMessage"]
+    assert "old-applied" not in message
+    assert "old-failed" not in message
+    assert "active-one" in message and "active-two" in message
+
+
+def test_async_dispatch_receipt_is_followed_by_project_job_board(workspace):
+    _, state = workspace
+    _board_job(state, "dispatch-one")
+    _board_job(state, "dispatch-two")
+    response = codex._append_dispatch_receipt({"systemMessage": "accepted"}, {
+        "label": "new work", "model": "gpt-6-sol", "effort": "medium",
+        "route": "normal", "async_call": "call", "project_key": "project",
+    }, state)
+    message = response["systemMessage"]
+    assert message.index("task: new work") < message.index("Purser jobs:")
+
+
+def test_async_result_response_appends_project_job_board(workspace, config, monkeypatch):
     repo, state = workspace
-    monkeypatch.setattr(codex, "_job_host_classification", lambda _job: "ALIVE")
+    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs:
+                        policy.RunReviewerDecision("run reviewer", "TEST", "test"))
     jobs = []
-    for number, job_state in ((1, "SUCCEEDED"), (2, "RUNNING"), (3, "RUNNING")):
-        prompt = orch(task=f"result-status-{number}", scope=f"owned-{number}.py") + "\nWork."
-        _, job_id, path = async_started(workspace, config, prompt=prompt,
-                                         state_name=job_state, tool_use_id=f"result-status-{number}")
+    for number, job_state in ((1, "SUCCEEDED"), (2, "RUNNING")):
+        _, job_id, path = async_started(workspace, config, prompt=orch(task=f"board-result-{number}") + "\nWork.",
+                                         state_name=job_state, tool_use_id=f"board-result-{number}")
         record = json.loads(path.read_text(encoding="utf-8"))
-        record.update(taskId=f"result-status-{number}", route="normal", etaMinutes=5)
+        record.update(label=f"result-{number}", model="gpt-6-sol", effort="medium",
+                      route="normal", etaMinutes=5)
         path.write_text(json.dumps(record), encoding="utf-8")
         jobs.append(job_id)
-    result = async_followup(RESULT_TOOL, jobs[0])
-    assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
-    post = {**result, "hook_event_name": "PostToolUse", "tool_response": {
+    followup = async_followup(RESULT_TOOL, jobs[0])
+    post = {**followup, "hook_event_name": "PostToolUse", "tool_response": {
         "structuredContent": {"jobId": jobs[0], "state": "SUCCEEDED",
                               "threadId": "async-thread", "content": "done"}}}
-    response = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
-    lines = [line for line in response.get("systemMessage", "").splitlines()
-             if line.startswith("result-status-")]
-    assert len(lines) == 2
-    assert all(" | normal | " in line for line in lines)
+    response = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
+                                   reviewer=lambda **kwargs: {
+                                       "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                                       "provider": "agy"})
+    assert "| Task | Model | State | ETA | Review | Apply |" in response["systemMessage"]
+    assert "| result-2 | gpt-6-sol (medium) | running |" in response["systemMessage"]
+
+
+def test_codex_apply_response_appends_project_job_board(workspace, config):
+    _, state = workspace
+    job_id, _ = _board_job(state, "applied-job", "SUCCEEDED", applyState="applied",
+                           appliedAt=time.time())
+    _board_job(state, "still-running")
+    event_value = {"tool_name": "mcp__plugin_purser_codex-main__codex_apply",
+                   "tool_input": {"jobId": job_id}}
+    assert codex.pre_tool_use(event_value, config=config, state_root=state) == {}
+    response = codex.post_tool_use(event_value, config=config, state_root=state)
+    assert "| Task | Model | State | ETA | Review | Apply |" in response["systemMessage"]
+    assert "| applied-job | gpt-6-sol (medium) | done | — | — | applied |" in response["systemMessage"]
 
 
 def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace, config):

@@ -82,6 +82,10 @@ CODEX_ASYNC_TOOL_NAMES = _configured_tool_names(
 CODEX_START_TOOL_NAMES = frozenset(name for name in CODEX_ASYNC_TOOL_NAMES if name.endswith("__codex_start"))
 CODEX_RESULT_TOOL_NAMES = frozenset(name for name in CODEX_ASYNC_TOOL_NAMES if name.endswith("__codex_result"))
 CODEX_CANCEL_TOOL_NAMES = frozenset(name for name in CODEX_ASYNC_TOOL_NAMES if name.endswith("__codex_cancel"))
+CODEX_APPLY_TOOL_NAMES = frozenset(
+    f"{prefix}__codex_apply"
+    for prefix in ("mcp__codex-main", "mcp__plugin_purser_codex-main")
+)
 CODEX_TOOLS = CODEX_TOOL_NAMES | CODEX_REPLY_TOOL_NAMES | CODEX_ASYNC_TOOL_NAMES
 _BASELINE_VOLATILE_MARKERS = ("timestamp", "duration", "elapsed", "budget")
 
@@ -1588,6 +1592,10 @@ def pre_tool_use(
             updated["call"] = call_uuid
             updated["taskId"] = parsed.task_id
             updated["route"] = parsed.route
+            updated["jobModel"] = model
+            updated["jobEffort"] = effort
+            updated["jobLabel"] = task_label
+            updated["jobPhase"] = parsed.phase
             if parsed.eta_minutes is not None:
                 updated["etaMinutes"] = parsed.eta_minutes
 
@@ -1959,11 +1967,31 @@ def _job_host_classification(job: Mapping[str, Any]) -> str:
     return codex_exec_mcp.Server._classify_host(None, job)
 
 
+def _route_duration_median(pending: Mapping[str, Any], state_root: Path) -> int | None:
+    try:
+        import async_session_maintenance
+
+        implementer = {"codex": "codex-main", "opencode": "opencode-main",
+                       "agy": "agy-main"}.get(pending.get("agent"), "codex-main")
+        hint = async_session_maintenance.duration_hint(
+            state_root, str(pending.get("project_key", "")), implementer=implementer
+        )
+        route = pending.get("route")
+        if isinstance(hint, str) and isinstance(route, str):
+            match = re.search(rf"(?:^|: |, )({re.escape(route)}) (\d+)/(\d+) min \(n=\d+\)", hint)
+            if match:
+                return int(match.group(2))
+    except BaseException:
+        pass
+    return None
+
+
 def _append_project_job_status(response: dict[str, Any], root: Path,
                                project_key: str) -> dict[str, Any]:
-    """Add a bounded snapshot to the existing hook response, without polling."""
+    """Append the current project job board without polling any worker."""
     try:
         jobs = []
+        now = time.time()
         for path in (root / "async_jobs").glob("*.json"):
             try:
                 index = json.loads(path.read_text(encoding="utf-8"))
@@ -1979,23 +2007,83 @@ def _append_project_job_status(response: dict[str, Any], root: Path,
             except (OSError, ValueError):
                 continue
             if (not isinstance(job, dict) or job.get("jobId") != job_id
-                    or job.get("call") != index.get("call")
-                    or job.get("state") not in {"QUEUED", "RUNNING"}):
+                    or job.get("call") != index.get("call")):
                 continue
-            jobs.append(job)
+            state = job.get("state")
+            apply_state = job.get("applyState")
+            finished = (job.get("appliedAt", job.get("finishedAt")) if apply_state == "applied"
+                        else job.get("finishedAt"))
+            if ((apply_state == "applied" or state in {"FAILED", "TIMED_OUT"})
+                    and isinstance(finished, (int, float)) and now - finished > 3600):
+                continue
+            jobs.append((job, index))
         if len(jobs) < 2:
             return response
-        now = time.time()
-        lines = []
-        for job in sorted(jobs, key=lambda item: (item.get("acceptedAt", 0), item["jobId"]))[:5]:
-            started = job.get("acceptedAt")
-            elapsed = max(0, int((now - started) / 60)) if isinstance(started, (int, float)) else 0
-            eta = job.get("etaMinutes")
-            eta_label = f"{eta}m" if isinstance(eta, int) and not isinstance(eta, bool) else "?"
-            state = ("uncertain" if _job_host_classification(job) == "UNCONFIRMED"
-                     else job["state"].lower())
-            lines.append(f'{job.get("taskId", "?")} | {job.get("route", "?")} | '
-                         f'{elapsed}m/{eta_label} | {state}')
+
+        def board_row(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple[int, int, float, str]:
+            job, index = item
+            raw_state = job.get("state")
+            state = {"QUEUED": "queued", "RUNNING": "running", "SUCCEEDED": "done",
+                     "FAILED": "failed", "TIMED_OUT": "failed", "CANCELLED": "cancelled",
+                     "UNKNOWN_OR_IN_PROGRESS": "running"}.get(raw_state, "failed")
+            call_key = index.get("call_key")
+            bundle = {}
+            try:
+                if isinstance(call_key, str):
+                    bundle = json.loads((root / "bundle_artifacts" / f"{call_key}.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+            review = "—"
+            if isinstance(bundle, dict):
+                if bundle.get("reviewer1_result"):
+                    review = "failed" if bundle.get("reviewer1_result") == policy.REVIEWER1_UNAVAILABLE else "reviewed"
+                elif bundle.get("reviewer1_skipped_reason"):
+                    review = "failed" if bundle.get("reviewer1_skipped_reason") == "REVIEWER1_UNAVAILABLE" else "skipped"
+                elif bundle.get("claude_review_mode") in {policy.FULL, policy.AUDIT}:
+                    review = "failed"
+                elif raw_state in {"FAILED", "TIMED_OUT"}:
+                    review = "failed"
+            apply = "—"
+            if job.get("applyState") in {"applied", "conflict"}:
+                apply = job["applyState"]
+            elif isinstance(bundle, dict) and bundle:
+                if job.get("phase", bundle.get("phase")) in {"operation", "plan"} or bundle.get("apply") != "codex_apply":
+                    apply = "n/a"
+            elif job.get("phase") in {"operation", "plan"}:
+                apply = "n/a"
+            eta_label = "—"
+            if state in {"queued", "running"}:
+                started = job.get("acceptedAt")
+                elapsed = max(0.0, (now - started) / 60) if isinstance(started, (int, float)) else None
+                expected = job.get("etaMinutes")
+                if isinstance(expected, bool) or not isinstance(expected, int):
+                    expected = _route_duration_median({"route": job.get("route"), "project_key": project_key,
+                                                       "agent": job.get("agent", "codex")}, root)
+                if elapsed is not None and expected is not None:
+                    eta_label = "overdue" if elapsed > expected else f"~{max(0, math.ceil(expected - elapsed))} min"
+            attention = (state == "failed" or apply == "conflict"
+                         or (state == "done" and apply not in {"applied", "n/a"}))
+            if attention:
+                order = 0
+            elif state == "running":
+                order = 1
+            elif state == "queued":
+                order = 2
+            elif apply == "applied":
+                order = 4
+            else:
+                order = 3
+            label = str(job.get("label", "—")).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+            model, effort = job.get("model"), job.get("effort")
+            model_label = (f"{model} ({effort})".replace("|", "\\|")
+                           if isinstance(model, str) and isinstance(effort, str) else "—")
+            text = f"| {label} | {model_label} | {state} | {eta_label} | {review} | {apply} |"
+            stamp = job.get("acceptedAt")
+            attention_order = (0 if state == "failed" else 1 if apply == "conflict" else 2) if order == 0 else 0
+            return order, attention_order, float(stamp) if isinstance(stamp, (int, float)) else 0.0, text
+
+        lines = ["| Task | Model | State | ETA | Review | Apply |", "| --- | --- | --- | --- | --- | --- |"]
+        lines.extend(row[3] for row in sorted(map(board_row, jobs), key=lambda row: row[:3]))
         block = "Purser jobs:\n" + "\n".join(lines)
         prior = response.get("systemMessage")
         response["systemMessage"] = f"{prior}\n{block}" if isinstance(prior, str) and prior else block
@@ -2011,23 +2099,7 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
     effort, route = pending.get("effort"), pending.get("route")
     if not all(isinstance(value, str) and value for value in (label, model, effort, route)):
         return response
-    median = None
-    try:
-        import async_session_maintenance
-
-        implementer = {"codex": "codex-main", "opencode": "opencode-main",
-                       "agy": "agy-main"}.get(pending.get("agent"), "codex-main")
-        hint = async_session_maintenance.duration_hint(
-            state_root, str(pending.get("project_key", "")), implementer=implementer
-        )
-        if isinstance(hint, str):
-            match = re.search(
-                rf"(?:^|: |, )({re.escape(route)}) (\d+)/(\d+) min \(n=\d+\)", hint
-            )
-            if match:
-                median = match.group(2)
-    except BaseException:
-        pass
+    median = _route_duration_median(pending, state_root)
     prior_thread_id = pending.get("prior_thread_id")
     continuity = "Continuing session" if isinstance(prior_thread_id, str) and prior_thread_id else "New session"
     fields = [f"{continuity} · model: {model} ({effort}) · task: {label}"]
@@ -2036,6 +2108,8 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
     receipt = f"**{' · '.join(fields)}**"
     prior = response.get("systemMessage")
     response["systemMessage"] = f"{prior}\n\n{receipt}" if isinstance(prior, str) and prior else receipt
+    if pending.get("async_call") and isinstance(pending.get("project_key"), str):
+        _append_project_job_status(response, state_root, pending["project_key"])
     return response
 
 
@@ -2066,9 +2140,8 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
         waiter = Path(__file__).resolve().parent / "purser_wait.py"
         command = (f'Run in the background: "{sys.executable}" "{waiter}" {job_id} '
                    "; when it finishes, call codex_result with this jobId.")
-        response = _append_project_job_status(
-            _replacement({"jobId": job_id, "state": value["state"], "next": command},
-                         _load_config(config)), root, pending["project_key"])
+        response = _replacement({"jobId": job_id, "state": value["state"], "next": command},
+                                _load_config(config))
         return _append_dispatch_receipt(response, pending, root)
     except Exception as error:
         failure = post_tool_use_failure({**event, "error": _safe_error(error)},
@@ -3037,6 +3110,20 @@ def post_tool_use(
 ) -> dict[str, Any]:
     """Replace a raw Codex result with the compact reviewed bundle."""
 
+    if event.get("tool_name") in CODEX_APPLY_TOOL_NAMES:
+        try:
+            root = _state_root(state_root)
+            tool_input = event.get("tool_input")
+            job_id = tool_input.get("jobId") if isinstance(tool_input, Mapping) else None
+            if isinstance(job_id, str):
+                index = json.loads((root / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+                job = _async_job(root, index)
+                if (isinstance(index, dict) and job is not None
+                        and job.get("applyState") in {"applied", "conflict"}):
+                    return _append_project_job_status({}, root, index.get("project_key", ""))
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        return {}
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
     if event.get("tool_name") in CODEX_START_TOOL_NAMES:
