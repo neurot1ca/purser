@@ -1505,7 +1505,7 @@ def pre_tool_use(
         )
 
         if new_call:
-            decision = policy.fresh_codex_decision(requested, live_thread)
+            decision = policy.fresh_codex_decision(requested, live_thread, parsed.reason)
             if not decision.allowed:
                 return _observed_denial(
                     event,

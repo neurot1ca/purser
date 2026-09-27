@@ -698,6 +698,71 @@ def _admitted_start_response(workspace, config, *, task_id, tool_use_id, label=N
     return start, response
 
 
+def _seed_live_thread(workspace, task_id):
+    repo, state = workspace
+    route = policy.resolve_route("normal", json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+    record = ledger.build_session_record(
+        task_id, f"thread-{task_id}", "normal", route.model, route.effort,
+        phase="implementation", scope=["file0.py"], reason="new_task", label="existing task",
+    )
+    session_ledger = ledger.SessionLedger(
+        codex._project_state_root(state, project_root.project_key(repo.resolve()))
+    )
+    assert session_ledger.save(record)["status"] == ledger.OK
+    return session_ledger
+
+
+def test_denied_fresh_start_does_not_poison_new_task_id(workspace, config):
+    repo, state = workspace
+    session_ledger = _seed_live_thread(workspace, "denied-task")
+    before = session_ledger.load("denied-task")["record"]
+    denied = event(
+        START_TOOL, prompt=orch(task="denied-task", scope="file0.py") + "\nWork.",
+        tool_use_id="denied-fresh-start", mode="new",
+    )
+
+    response = codex.pre_tool_use(denied, config=config, state_root=state, repo_root=repo)
+
+    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert session_ledger.load("denied-task")["record"] == before
+    retry = event(
+        START_TOOL, prompt=orch(task="brand-new-task", scope="file0.py") + "\nWork.",
+        tool_use_id="brand-new-after-denial", mode="new",
+    )
+    allowed = codex.pre_tool_use(retry, config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in allowed["hookSpecificOutput"]
+
+
+@pytest.mark.parametrize("reason", ["user_override", "reanchor"])
+def test_fresh_start_override_reason_allows_compatible_live_thread(workspace, config, reason):
+    repo, state = workspace
+    _seed_live_thread(workspace, f"override-{reason}")
+    call = event(
+        START_TOOL,
+        prompt=orch(task=f"override-{reason}", reason=reason, scope="file0.py") + "\nWork.",
+        tool_use_id=f"override-fresh-{reason}", mode="new",
+    )
+
+    response = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+
+    assert "updatedInput" in response["hookSpecificOutput"]
+
+
+def test_plain_new_task_fresh_start_still_denies_compatible_live_thread(workspace, config):
+    repo, state = workspace
+    _seed_live_thread(workspace, "plain-new-task")
+    call = event(
+        START_TOOL,
+        prompt=orch(task="plain-new-task", reason="new_task", scope="file0.py") + "\nWork.",
+        tool_use_id="plain-new-task-fresh", mode="new",
+    )
+
+    response = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+
+    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "USE_CODEX_REPLY" in response["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_dispatch_receipt_renders_english_in_approved_format(workspace, config, monkeypatch):
     repo, state = workspace
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:

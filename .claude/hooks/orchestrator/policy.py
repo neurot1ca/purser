@@ -863,11 +863,19 @@ decide_thread_compatibility = thread_compatibility
 def fresh_codex_decision(
     requested: Mapping[str, Any],
     recorded: Mapping[str, Any] | None,
+    reason: str | None = None,
 ) -> FreshCodexDecision:
     """Return the inverse guard for a fresh codex call."""
 
     compatibility = thread_compatibility(requested, recorded)
     if compatibility.compatible:
+        if reason in ("user_override", "reanchor"):
+            return FreshCodexDecision(
+                "allow fresh codex",
+                True,
+                "FRESH_THREAD_OVERRIDE",
+                f"Explicit reason={reason} allows a fresh thread despite a compatible live thread.",
+            )
         return FreshCodexDecision(
             "deny fresh codex",
             False,
