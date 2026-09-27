@@ -50,6 +50,7 @@ TOOL_SCHEMAS = [
             "type": "object",
             "properties": {
                 "prompt": {"type": "string"},
+                "label": {"type": "string", "description": "Short human task description in the user's language (up to 80 characters)."},
                 "model": {"type": "string"},
                 "cwd": {"type": "string"},
                 "config": {"type": "object"},
@@ -71,6 +72,7 @@ TOOL_SCHEMAS = [
                 "threadId": {"type": "string"},
                 "conversationId": {"type": "string", "description": "Deprecated alias for threadId."},
                 "prompt": {"type": "string"},
+                "label": {"type": "string", "description": "Short human task description in the user's language (up to 80 characters); may be omitted to reuse the thread label."},
             },
             "required": ["prompt"],
         },

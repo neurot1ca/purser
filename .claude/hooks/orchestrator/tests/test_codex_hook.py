@@ -138,6 +138,8 @@ def orch(
 
 def event(tool_name=codex.CODEX_TOOL, *, prompt=None, tool_use_id="call-1", **fields):
     tool_input = {"prompt": prompt if prompt is not None else orch() + "\nDo the work."}
+    if tool_name in codex.CODEX_TOOLS:
+        tool_input["label"] = "test task"
     tool_input.update(fields)
     return {
         "session_id": "session-1",
@@ -435,6 +437,71 @@ def test_unavailable_primary_falls_back_and_records_attempts(workspace, config, 
     ]
 
 
+def test_opencode_selection_reaches_reviewer_adapter_with_fake_runner(workspace, config, tmp_path):
+    packet_response = {
+        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+        "validation": "PASS",
+        "findings": [],
+    }
+    stream = "\n".join(json.dumps(event) for event in (
+        {"type": "step_start", "providerID": "vendor", "modelID": "review-model"},
+        {"type": "text", "part": {"text": json.dumps(packet_response)}},
+        {"type": "step_finish", "part": {"reason": "stop"}},
+    ))
+
+    class FakeRunner:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, command, **kwargs):
+            self.calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, stdout=stream, stderr="")
+
+    runner = FakeRunner()
+    caller_workdir = tmp_path / "opencode-caller"
+    caller_workdir.mkdir()
+
+    def selected_reviewer(**kwargs):
+        selected_config = {
+            **reviewer_module._load_config(config),
+            "reviewer1_executable": r"C:\tools\opencode.exe",
+        }
+        return reviewer_module.review_materials(
+            {
+                "objective": "Review the delegated change.",
+                "acceptance_criteria": "The adapter returns a valid review.",
+                "authority_contract": "Use only the supplied packet.",
+                "delegated_diff": "diff --git a/a.py b/a.py\n-old\n+new\n",
+                "validation_summary": "Focused tests requested.",
+            },
+            config=selected_config,
+            runner=runner,
+            cwd=caller_workdir,
+            repo_root=Path("C:/reviewed-repo"),
+            reviewer_agent=kwargs["reviewer_agent"],
+            reviewer_model=kwargs["reviewer_model"],
+            reviewer_timeout_seconds=kwargs["reviewer_timeout_seconds"],
+        )
+
+    candidate_model = "vendor/review-model"
+    bundle = _post_with_reviewer_candidates(
+        workspace,
+        config,
+        [{"agent": "opencode", "model": candidate_model}],
+        selected_reviewer,
+        coder_family="unknown",
+    )
+
+    assert len(runner.calls) == 1
+    command, run_kwargs = runner.calls[0]
+    assert command[:2] == [r"C:\tools\opencode.exe", "run"]
+    assert command[command.index("--model") + 1] == candidate_model
+    assert run_kwargs["env"]["OPENCODE_CONFIG_CONTENT"]
+    assert bundle["reviewer1_provider"] == "opencode"
+    assert bundle["reviewer1_model_requested"] == candidate_model
+    assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+
+
 def test_all_reviewer_candidates_exhausted_forces_full(workspace, config, monkeypatch):
     def unavailable(**kwargs):
         return {"review_status": "UNAVAILABLE", "provider": kwargs["reviewer_agent"],
@@ -615,6 +682,83 @@ def async_followup(name, job_id):
     call = event(name, tool_use_id=f"followup-{name}")
     call["tool_input"] = {"jobId": job_id}
     return call
+
+
+def _admitted_start_response(workspace, config, *, task_id, tool_use_id, label=None):
+    repo, state = workspace
+    start = event(START_TOOL, prompt=orch(task=task_id, scope="file0.py") + "\nWork.",
+                  tool_use_id=tool_use_id, label=label or task_id)
+    updated = codex.pre_tool_use(start, config=config, state_root=state,
+                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert "label" not in updated
+    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
+    response = codex.post_tool_use({**start, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
+        config=config, state_root=state, repo_root=repo)
+    return start, response
+
+
+def test_dispatch_receipt_renders_english_in_approved_format(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:
+        "Purser: typical Codex durations here (median/p90, n): normal 5/8 min (n=10).")
+    receipt = codex._append_dispatch_receipt({}, {
+        "task_id": "task-1", "label": "OpenCode and Codex reviewer adapters",
+        "model": "gpt-6-luna", "effort": "high", "route": "normal",
+        "project_key": "project", "repo_root": str(repo), "agent": "codex",
+    }, state)
+    assert receipt["systemMessage"] == (
+        "**New session · model: gpt-6-luna (high) · task: OpenCode and Codex reviewer adapters · "
+        "estimated completion: 5 min**"
+    )
+
+
+def test_dispatch_receipt_uses_continuing_session_wording(workspace, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
+    receipt = codex._append_dispatch_receipt({}, {
+        "task_id": "task-1", "label": "Keep working", "model": "gpt-6-luna",
+        "effort": "high", "route": "normal", "project_key": "project",
+        "repo_root": str(repo), "agent": "codex", "prior_thread_id": "thread-1",
+    }, state)
+    assert receipt["systemMessage"] == (
+        "**Continuing session · model: gpt-6-luna (high) · task: Keep working**"
+    )
+
+
+def test_dispatch_receipt_omits_estimate_without_duration_history(workspace, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
+    receipt = codex._append_dispatch_receipt({}, {
+        "task_id": "task-1", "label": "First run", "model": "gpt-6-luna",
+        "effort": "high", "route": "normal", "project_key": "project",
+        "repo_root": str(repo), "agent": "codex",
+    }, state)
+    assert receipt["systemMessage"] == "**New session · model: gpt-6-luna (high) · task: First run**"
+
+
+def test_two_admitted_codex_starts_emit_two_dispatch_receipts(workspace, config, monkeypatch):
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:
+        "Purser: typical Codex durations here (median/p90, n): normal 2/6 min (n=10).")
+    first = _admitted_start_response(
+        workspace, config, task_id="receipt-first", tool_use_id="receipt-first-start")[1]
+    second = _admitted_start_response(
+        workspace, config, task_id="receipt-second", tool_use_id="receipt-second-start")[1]
+    messages = [first.get("systemMessage", ""), second.get("systemMessage", "")]
+    assert sum(message.count("**New session · model: gpt-6-sol (medium) · task:") for message in messages) == 2
+    assert "task: receipt-first · estimated completion: 2 min**" in messages[0]
+    assert "task: receipt-second · estimated completion: 2 min**" in messages[1]
+
+
+def test_denied_codex_start_emits_no_dispatch_receipt(workspace, config):
+    repo, state = workspace
+    start = event(START_TOOL, prompt=orch(scope="file0.py") + "\nWork.",
+                  tool_use_id="receipt-denied")
+    start["tool_input"].pop("label")
+    response = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)
+    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "label" in response["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "fix" in response["hookSpecificOutput"]["permissionDecisionReason"].casefold()
 
 
 def test_async_implementation_starts_with_overlapping_scope_are_admitted(workspace, config):

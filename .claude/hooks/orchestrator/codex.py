@@ -1234,6 +1234,23 @@ def pre_tool_use(
             return _deny("INVALID_ASYNC_MODE", "codex_start mode must be new or reply.")
         new_call = tool_name in CODEX_TOOL_NAMES or (is_start and mode == "new")
         reply_call = tool_name in CODEX_REPLY_TOOL_NAMES or (is_start and mode == "reply")
+        task_label = None
+        if "label" in tool_input:
+            value = tool_input.get("label")
+            if (not isinstance(value, str) or not value.strip()
+                    or len(value.strip()) > 80 or not value.strip().isprintable()):
+                return _observed_denial(
+                    event, "INVALID_TASK_LABEL",
+                    "Use a non-empty `label` of at most 80 characters in the user's language.",
+                    state_root=state_root,
+                )
+            task_label = value.strip()
+        elif not reply_call:
+            return _observed_denial(
+                event, "MISSING_TASK_LABEL",
+                "Fix: add `label` with a short human description in the user's language (1–80 characters).",
+                state_root=state_root,
+            )
         if is_start:
             input_hash = hashlib.sha256(json_transport.dumps(
                 {key: value for key, value in tool_input.items() if key != "call"},
@@ -1323,7 +1340,9 @@ def pre_tool_use(
         if reply_call:
             forbidden = {"model", "config", "developer-instructions"}.intersection(tool_input)
             if is_start:
-                forbidden |= set(tool_input) - {"prompt", "threadId", "mode", "call", "timeoutSeconds"}
+                forbidden |= set(tool_input) - {
+                    "prompt", "threadId", "mode", "call", "timeoutSeconds", "label"
+                }
             if forbidden:
                 caller = "codex_start mode=reply" if is_start else "codex-reply"
                 allowed = "threadId, prompt and mode" if is_start else "threadId and prompt"
@@ -1405,6 +1424,18 @@ def pre_tool_use(
                 raise WiringError("session ledger is unreadable")
             record = loaded.get("record") if loaded["status"] == ledger.OK else None
             live_thread = record.get("live_thread") if isinstance(record, Mapping) else None
+
+        if task_label is None:
+            inherited_label = live_thread.get("label") if isinstance(live_thread, Mapping) else None
+            if isinstance(inherited_label, str) and inherited_label.strip() and len(inherited_label.strip()) <= 80:
+                task_label = inherited_label.strip()
+            else:
+                return _observed_denial(
+                    event, "MISSING_TASK_LABEL",
+                    "Fix: add `label` with a short human description in the user's language (1–80 characters); "
+                    "this thread has no saved label to reuse.",
+                    state_root=state_root, task_id=parsed.task_id,
+                )
 
         route = policy.resolve_route(parsed.route, loaded_config)
         if not route.valid:
@@ -1505,6 +1536,7 @@ def pre_tool_use(
         bypass_metadata["prior_thread_id"] = continuation_thread_id
 
         updated = dict(tool_input)
+        updated.pop("label", None)
         updated["prompt"] = parsed.prompt
         if mechanical_candidate:
             updated.update(mechanicalFallback=True, fallbackAgent=loaded_config.get("coder_agent", "codex"),
@@ -1610,6 +1642,7 @@ def pre_tool_use(
             "route": parsed.route,
             "model": model,
             "effort": effort,
+            "label": task_label,
             "agent": agent,
             "scope": declared_scope,
             "repo_root": str(repository) if repository is not None else None,
@@ -1725,6 +1758,7 @@ def pre_tool_use(
             task_contract_grounded=task_contract_grounded,
             profile_checks=pending.get("profile_checks"),
             reason=effective_reason,
+            label=task_label,
         )
         saved = session_ledger.save(session_record)
         if saved["status"] != ledger.OK:
@@ -1969,6 +2003,41 @@ def _append_project_job_status(response: dict[str, Any], root: Path,
     return response
 
 
+def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any],
+                             state_root: Path) -> dict[str, Any]:
+    """Render one admitted-call receipt from the recorded route and local duration history."""
+    label, model = pending.get("label"), pending.get("model")
+    effort, route = pending.get("effort"), pending.get("route")
+    if not all(isinstance(value, str) and value for value in (label, model, effort, route)):
+        return response
+    median = None
+    try:
+        import async_session_maintenance
+
+        implementer = {"codex": "codex-main", "opencode": "opencode-main",
+                       "agy": "agy-main"}.get(pending.get("agent"), "codex-main")
+        hint = async_session_maintenance.duration_hint(
+            state_root, str(pending.get("project_key", "")), implementer=implementer
+        )
+        if isinstance(hint, str):
+            match = re.search(
+                rf"(?:^|: |, )({re.escape(route)}) (\d+)/(\d+) min \(n=\d+\)", hint
+            )
+            if match:
+                median = match.group(2)
+    except BaseException:
+        pass
+    prior_thread_id = pending.get("prior_thread_id")
+    continuity = "Continuing session" if isinstance(prior_thread_id, str) and prior_thread_id else "New session"
+    fields = [f"{continuity} · model: {model} ({effort}) · task: {label}"]
+    if median is not None:
+        fields.append(f"estimated completion: {median} min")
+    receipt = f"**{' · '.join(fields)}**"
+    prior = response.get("systemMessage")
+    response["systemMessage"] = f"{prior}\n\n{receipt}" if isinstance(prior, str) and prior else receipt
+    return response
+
+
 def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
                 state_root: str | os.PathLike[str] | None) -> dict[str, Any]:
     root = _state_root(state_root)
@@ -1996,9 +2065,10 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
         waiter = Path(__file__).resolve().parent / "purser_wait.py"
         command = (f'Run in the background: "{sys.executable}" "{waiter}" {job_id} '
                    "; when it finishes, call codex_result with this jobId.")
-        return _append_project_job_status(
+        response = _append_project_job_status(
             _replacement({"jobId": job_id, "state": value["state"], "next": command},
                          _load_config(config)), root, pending["project_key"])
+        return _append_dispatch_receipt(response, pending, root)
     except Exception as error:
         failure = post_tool_use_failure({**event, "error": _safe_error(error)},
                                         state_root=state_root)
@@ -3066,6 +3136,7 @@ def post_tool_use(
                         scope=pending.get("scope", []),
                         pending_call_baseline=None,
                         last_outcome=bundle,
+                        label=pending.get("label"),
                     )
                 )
                 if saved["status"] != ledger.OK:
@@ -3809,6 +3880,7 @@ def post_tool_use(
             task_contract_grounded=pending.get("task_contract_grounded", False),
             reason=pending.get("reason"),
             profile_checks=pending.get("profile_checks"),
+            label=pending.get("label"),
             **handoff_kwargs,
         )
         saved = session_ledger.save(session_record)
@@ -3843,6 +3915,7 @@ def post_tool_use(
         if pending.get("has_code_map") and bundle.get("changed_paths"):
             bundle["code_map"] = "STALE"
         response = _finalize_replacement(bundle, loaded_config, runtime_root, event, pending.get("repo_root"))
+        response = _append_dispatch_receipt(response, pending, runtime_root)
         if not pending.get("async_call"):
             _release_scope_lease(runtime_root, pending)
             _remove_pending(runtime_root, event)
@@ -3929,6 +4002,7 @@ def post_tool_use_failure(
                     reason=pending.get("reason"),
                     pending_call_baseline=None,
                     last_outcome=outcome,
+                    label=pending.get("label"),
                 )
             )
             if saved["status"] != ledger.OK:

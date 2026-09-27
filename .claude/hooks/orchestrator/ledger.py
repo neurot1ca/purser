@@ -1467,6 +1467,7 @@ def build_session_record(
     last_outcome: Any = None,
     task_objective: str | None = None,
     acceptance_criteria: str | None = None,
+    label: str | None = None,
     task_contract_grounded: bool = False,
     reason: str | None = None,
     profile_checks: list[dict[str, Any]] | None = None,
@@ -1489,6 +1490,8 @@ def build_session_record(
             live_thread["agent"] = agent
         if reason is not None:
             live_thread["reason"] = reason
+        if label is not None:
+            live_thread["label"] = label
         if phase is not None:
             live_thread["phase"] = phase
             live_thread["scope"] = [os.fspath(path) for path in scope]
@@ -1578,6 +1581,7 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         "scope",
         "task_objective",
         "acceptance_criteria",
+        "label",
         "task_contract_grounded",
         "reason",
         "profile_checks",
@@ -1607,6 +1611,13 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
     if "task_objective" in thread and not isinstance(thread.get("task_objective"), str):
         return False
     if "acceptance_criteria" in thread and not isinstance(thread.get("acceptance_criteria"), str):
+        return False
+    if "label" in thread and (
+        not isinstance(thread.get("label"), str)
+        or not thread["label"].strip()
+        or len(thread["label"].strip()) > 80
+        or not thread["label"].strip().isprintable()
+    ):
         return False
     if "task_contract_grounded" in thread and not isinstance(thread.get("task_contract_grounded"), bool):
         return False

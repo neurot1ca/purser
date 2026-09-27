@@ -794,6 +794,7 @@ def test_unexpected_parser_or_import_failure_records_safe_health(tmp_path, monke
         "session_id": "sess-err",
         "transcript_path": str(tmp_path / "projects" / "sess-err.jsonl"),
         "tool_input": {
+            "label": "Parser failure health handling",
             "prompt": "ORCH|task=task-err|phase=implementation|route=normal|reason=new_task|basis=specific repository boundary|scope=test.py\nDo work."
         },
     }
@@ -874,6 +875,7 @@ def test_full_hook_lifecycle_e2e_synthetic_to_obsidian(tmp_path, monkeypatch):
         "session_id": "sess-hook-e2e",
         "transcript_path": str(transcript),
         "tool_input": {
+            "label": "Synthetic hook lifecycle",
             "prompt": "ORCH|task=task-hook-e2e|phase=implementation|route=normal|reason=new_task|basis=specific repository boundary|scope=test.py\nDo work."
         },
     }

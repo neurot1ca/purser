@@ -62,19 +62,17 @@ prompts. Resolved consequential implementation may use `subtle` only with the
 accepted map and every invariant explicit; Claude still reviews it as
 consequential. `gpt-6-luna` + `xhigh` is invalid; unresolved work uses `gpt-6-sol`.
 
-Before each call, give one brief user receipt: route, model, effort, continuity
-(`reply`, `fresh`, or `failover-fresh`), reason, expected duration, and stall
-threshold. Runtime configuration owns capability; never pass `sandbox` or
+Runtime configuration owns capability; never pass `sandbox` or
 `approval-policy`. Fail over on typed quota/credit exhaustion, never route
 proactively by quota. After each call, report bundle model and effort plus
 `codex_quota` 5h/7d used percentages and reset times when present; show the
 5h reset as time remaining (e.g. "resets in 1h 20m").
-
-Format each as one bold line between `---` rules in the user's language, with
-a blank line before and after the bold line (otherwise Markdown turns it into a
-heading); explain below in plain text. Put the dispatch receipt in the reply
-that ends the turn after `codex_start`, not in text before the tool call (the
-desktop app can hide that). If needed, see [examples](references/receipt_examples.md).
+Format the completion receipt as one bold line between `---` rules, with blank
+lines around it, in the user's language; explain below in plain text.
+Pass `label` on every `codex_start`, `codex`, and `codex-reply` call: a short
+human description of the task in the user's language, at most 80 characters.
+A reply may omit it only when the existing thread has a saved label. Purser
+emits the dispatch receipt; Claude must not write one.
 
 ## Protocol line
 
