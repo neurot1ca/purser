@@ -1040,13 +1040,14 @@ def test_project_job_board_is_omitted_with_one_job(workspace):
 
 def test_project_job_board_orders_attention_running_queued_and_applied(workspace):
     _, state = workspace
+    now = time.time()
     rows = [
-        ("applied", "SUCCEEDED", {"applyState": "applied", "appliedAt": time.time()}),
+        ("applied", "SUCCEEDED", {"applyState": "applied", "appliedAt": now - 1}),
         ("queued", "QUEUED", {}),
         ("running", "RUNNING", {}),
-        ("done", "SUCCEEDED", {}),
-        ("conflict", "SUCCEEDED", {"applyState": "conflict"}),
-        ("failed", "FAILED", {"finishedAt": time.time()}),
+        ("done", "SUCCEEDED", {"finishedAt": now - 2}),
+        ("conflict", "SUCCEEDED", {"applyState": "conflict", "finishedAt": now - 3}),
+        ("failed", "FAILED", {"finishedAt": now - 4}),
     ]
     for label, state_name, values in rows:
         _, call_key = _board_job(state, label, state_name, **values)
@@ -1058,8 +1059,22 @@ def test_project_job_board_orders_attention_running_queued_and_applied(workspace
     message = codex._project_job_board(state, "project")
     tasks = [line.strip("|").split("|")[0].strip() for line in message.splitlines()
              if line.startswith("| ") and not line.startswith("| Task |") and "---" not in line]
-    assert tasks == ["failed", "conflict", "done", "running", "queued", "applied"]
+    assert tasks == ["running", "queued", "applied", "done", "conflict"]
     assert "| Task | Model | State | ETA | Review | Apply |" in message
+
+
+def test_project_job_board_keeps_all_in_progress_and_three_newest_finished(workspace):
+    _, state = workspace
+    now = time.time()
+    for offset in range(5):
+        _board_job(state, f"finished-{offset}", "SUCCEEDED", finishedAt=now - offset - 1)
+    _board_job(state, "running", "RUNNING")
+
+    message = codex._project_job_board(state, "project")
+
+    tasks = [line.strip("|").split("|")[0].strip() for line in message.splitlines()
+             if line.startswith("| ") and not line.startswith("| Task |") and "---" not in line]
+    assert tasks == ["running", "finished-0", "finished-1", "finished-2"]
 
 
 def test_project_job_board_renders_overdue_and_unknown_eta(workspace, monkeypatch):

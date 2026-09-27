@@ -47,6 +47,7 @@ CHANGED_PATH_PREVIEW_LIMIT = 10
 GIT_HEAD_READ_LIMIT = 4096
 PENDING_MAX_AGE_SECONDS = 24 * 60 * 60
 PENDING_CLEANUP_LIMIT = 32
+PROJECT_JOB_BOARD_FINISHED_LIMIT = 3
 INDEPENDENCE_INSTRUCTIONS = (
     "Codex must not blindly accept Claude's proposed solution. It should "
     "independently verify the relevant repository state and project rules, "
@@ -2074,7 +2075,8 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
             if previous is None or (accepted_stamp, job["jobId"]) > (previous_stamp, previous[0]["jobId"]):
                 newest_by_thread[key] = item
 
-        jobs = []
+        in_progress = []
+        finished_jobs = []
         for job, index in newest_by_thread.values():
             label = job.get("label")
             if not isinstance(label, str) or not label.strip():
@@ -2086,7 +2088,14 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
             if (state not in {"QUEUED", "RUNNING"}
                     and isinstance(finished, (int, float)) and now - finished > 3600):
                 continue
-            jobs.append((job, index))
+            item = (job, index)
+            if state in {"QUEUED", "RUNNING"}:
+                in_progress.append(item)
+            else:
+                finished_jobs.append((finished if isinstance(finished, (int, float)) else 0, item))
+        jobs = in_progress + [item for _finished, item in sorted(
+            finished_jobs, key=lambda entry: entry[0], reverse=True
+        )[:PROJECT_JOB_BOARD_FINISHED_LIMIT]]
         if len(jobs) < 2:
             return None
 
@@ -2137,26 +2146,19 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
                                                        "agent": job.get("agent", "codex")}, root)
                 if elapsed is not None and expected is not None:
                     eta_label = "overdue" if elapsed > expected else f"~{max(0, math.ceil(expected - elapsed))} min"
-            attention = (state == "failed" or apply == "conflict"
-                         or (state == "done" and apply not in {"applied", "n/a"}))
-            if attention:
-                order = 0
-            elif state == "running":
-                order = 1
-            elif state == "queued":
-                order = 2
-            elif apply == "applied":
-                order = 4
-            else:
-                order = 3
             label = str(job.get("label", "—")).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
             model, effort = job.get("model"), job.get("effort")
             model_label = (f"{model} ({effort})".replace("|", "\\|")
                            if isinstance(model, str) and isinstance(effort, str) else "—")
             text = f"| {label} | {model_label} | {state} | {eta_label} | {review} | {apply} |"
-            stamp = job.get("acceptedAt")
-            attention_order = (0 if state == "failed" else 1 if apply == "conflict" else 2) if order == 0 else 0
-            return order, attention_order, float(stamp) if isinstance(stamp, (int, float)) else 0.0, text
+            if raw_state in {"QUEUED", "RUNNING"}:
+                stamp = job.get("acceptedAt")
+                return (0, 0 if raw_state == "RUNNING" else 1,
+                        -float(stamp) if isinstance(stamp, (int, float)) else 0.0, text)
+            stamp = job.get("appliedAt") if job.get("applyState") == "applied" else None
+            if not isinstance(stamp, (int, float)):
+                stamp = job.get("finishedAt")
+            return 1, 0, -float(stamp) if isinstance(stamp, (int, float)) else 0.0, text
 
         lines = ["| Task | Model | State | ETA | Review | Apply |", "| --- | --- | --- | --- | --- | --- |"]
         lines.extend(row[3] for row in sorted(map(board_row, jobs), key=lambda row: row[:3]))
