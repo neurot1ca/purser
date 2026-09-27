@@ -50,13 +50,17 @@ def _validate_catalog(value: Any) -> tuple[dict[str, dict[str, dict[str, Any]]],
                     raise ValueError("invalid name or reasoning")
                 fact: dict[str, Any] = {"id": model_id, "name": name, "reasoning": reasoning}
                 cost = model.get("cost")
-                if isinstance(cost, dict) and all(
-                    isinstance(cost.get(key), (int, float))
-                    and not isinstance(cost.get(key), bool)
-                    and math.isfinite(cost[key])
-                    and cost[key] >= 0
-                    for key in ("input", "output")
-                ):
+                try:
+                    valid_cost = isinstance(cost, dict) and all(
+                        isinstance(cost.get(key), (int, float))
+                        and not isinstance(cost.get(key), bool)
+                        and math.isfinite(cost[key])
+                        and cost[key] >= 0
+                        for key in ("input", "output")
+                    )
+                except OverflowError:
+                    valid_cost = False
+                if valid_cost:
                     fact["cost"] = {key: cost[key] for key in ("input", "output")}
                 if "family" in model:
                     family = model["family"]

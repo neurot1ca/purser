@@ -237,9 +237,34 @@ def test_detect_refreshes_candidates_for_installed_opencode(site, monkeypatch):
     monkeypatch.setattr(purser_init, "_opencode_models", lambda _binary: ["vendor/model-free"])
     monkeypatch.setattr(purser_init, "_agent", lambda *_args: {"available": True, "path": "opencode"})
     monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {"opencode": {}}})
-    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda providers: calls.append(providers))
+    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda providers, **_kwargs: calls.append(providers))
     purser_init.detect(Path("missing-config"), Path.cwd())
     assert calls == [{"opencode": {}}]
+
+
+def test_detect_lists_opencode_models_once(site, monkeypatch):
+    import subprocess
+
+    calls = []
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    monkeypatch.setattr(purser_init, "_agent", lambda name, *_args: {
+        "available": name == "opencode", "path": "opencode" if name == "opencode" else None,
+        "version": None,
+    })
+    monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {"opencode": {}}})
+    monkeypatch.setattr(purser_init.model_listing.state_root, "default_state_root", lambda: site[0] / "state")
+
+    def run(args, **_kwargs):
+        if args[1:] == ["models"]:
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, "vendor/model-free\n", "")
+        raise AssertionError(f"unexpected subprocess: {args}")
+
+    monkeypatch.setattr(purser_init.subprocess, "run", run)
+
+    purser_init.detect(Path("missing-config"), site[1])
+
+    assert calls == [["opencode", "models"]]
 
 
 def test_agy_absent_is_hidden_from_coder_options(site, monkeypatch, capsys):

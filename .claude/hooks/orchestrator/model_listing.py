@@ -125,11 +125,13 @@ def stale(max_age_hours=24, *, root=None) -> bool:
         return True
 
 
-def refresh_candidates(providers: dict, *, root=None) -> bool:
+def refresh_candidates(providers: dict, *, model_ids: list[str] | None = None, root=None) -> bool:
     """Refresh the local eligible-free OpenCode inventory; leave it intact on failure."""
     path = _candidates_path(root)
     try:
-        listing = list_models("opencode", providers)
+        listing = (list_models("opencode", providers) if model_ids is None else {
+            "status": "available", "models": [{"id": model_id} for model_id in model_ids],
+        })
         if (listing.get("status") != "available" or not isinstance(listing.get("models"), list)
                 or not listing["models"]):
             return False

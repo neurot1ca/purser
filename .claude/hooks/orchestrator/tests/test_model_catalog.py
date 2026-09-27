@@ -68,6 +68,25 @@ def test_good_fetch_writes_checked_cache_and_ignores_unknown_fields(tmp_path, mo
     assert cached["providers"]["openai"]["models"] == result["providers"]["openai"]
 
 
+def test_huge_integer_cost_is_ignored_without_rejecting_model():
+    catalog = {
+        "openai": {"models": {
+            "huge-cost": {
+                "name": "Huge Cost",
+                "reasoning": False,
+                "cost": {"input": 10**400, "output": 1},
+            },
+        }},
+    }
+
+    providers, dropped_count = model_catalog._read_document(json.dumps(catalog).encode())
+
+    assert providers["openai"]["huge-cost"] == {
+        "id": "huge-cost", "name": "Huge Cost", "reasoning": False, "limits": {},
+    }
+    assert dropped_count == 0
+
+
 def _assert_last_good(tmp_path, monkeypatch, configure_failure):
     monkeypatch.setattr(model_catalog, "urlopen", lambda *_args, **_kwargs: _Response(_payload()))
     good = model_catalog.load_catalog(root=tmp_path)
