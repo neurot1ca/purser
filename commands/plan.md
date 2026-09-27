@@ -1,5 +1,6 @@
 ---
 description: Ask Codex for a read-only, evidence-based implementation plan.
+allowed-tools: Bash(python *)
 ---
 
 Use the user's request below as the planning goal. Plan only; do not edit code or start implementation.
@@ -13,7 +14,7 @@ ORCH|task=<stable-id>|phase=plan|route=plan_standard|reason=new_task[|scope=<rep
 Include `scope=` only for verified, bounded repository-relative paths that are relevant; omit it when unsure. Replace the bracketed optional portion with the actual scope field or omit it entirely. Keep the prompt in English and give Codex a compact brief containing:
 
 - **Goal:** the user's requested outcome.
-- **Verified context:** only observed repository facts, with relevant paths and symbols; label assumptions explicitly.
+- **Verified context:** only observed repository facts, with relevant paths and symbols; label assumptions explicitly. Before dispatch, run `python "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/code_map.py" --repo <project root>` (substitute the actual project root) and append its single output line `CODE_MAP=<path> STATUS=<FRESH|STALE|UNAVAILABLE>` here; the map is navigation only, so open relevant sections on demand and verify current source. If the command fails or prints nothing, omit the line and say planning proceeds without it.
 - **Constraints and exclusions:** applicable repository instructions, requested boundaries, and explicit exclusions.
 - **Required plan shape:** Markdown with these sections and limits:
   - A leading `Summary:` section of at most 4000 characters.
