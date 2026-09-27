@@ -14,7 +14,7 @@ if orchestrator_dir not in sys.path:
 @pytest.fixture
 def tmp_path():
     """Keep pytest scratch in the repository's ignored .tmp directory."""
-    scratch_root = Path(__file__).resolve().parents[4] / ".tmp"
+    scratch_root = Path(__file__).parents[4] / ".tmp"
     scratch_root.mkdir(parents=True, exist_ok=True)
     scratch = scratch_root / f"pytest-{uuid.uuid4().hex}"
     scratch.mkdir()
