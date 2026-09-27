@@ -2191,7 +2191,7 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
         fields.append(f"estimated completion: {median} min")
     receipt = f"**{' · '.join(fields)}**"
     repository = Path(pending["repo_root"]) if isinstance(pending.get("repo_root"), str) else None
-    if event is not None:
+    if event is not None and event.get("tool_name") in CODEX_START_TOOL_NAMES:
         compaction_advisor.queue_dispatch(event, repository, line=receipt)
     if pending.get("async_call") and isinstance(pending.get("project_key"), str):
         _append_project_job_status(response, state_root, pending["project_key"], event)

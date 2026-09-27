@@ -1175,10 +1175,15 @@ def test_async_result_response_appends_project_job_board(workspace, config, monk
                                          state_name=job_state, tool_use_id=f"board-result-{number}")
         record = json.loads(path.read_text(encoding="utf-8"))
         record.update(label=f"result-{number}", model="gpt-6-sol", effort="medium",
-                      route="normal", etaMinutes=5)
+                      route="normal", etaMinutes=5, finishedAt=time.time())
         path.write_text(json.dumps(record), encoding="utf-8")
         jobs.append(job_id)
+    queued_dispatches = []
+    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
+                        lambda event, repository, **kwargs: queued_dispatches.append(kwargs))
     followup = async_followup(RESULT_TOOL, jobs[0])
+    followup["cwd"] = str(repo)
+    assert codex.pre_tool_use(followup, config=config, state_root=state, repo_root=repo) == {}
     post = {**followup, "hook_event_name": "PostToolUse", "tool_response": {
         "structuredContent": {"jobId": jobs[0], "state": "SUCCEEDED",
                               "threadId": "async-thread", "content": "done"}}}
@@ -1187,18 +1192,26 @@ def test_async_result_response_appends_project_job_board(workspace, config, monk
                                        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
                                        "provider": "agy"})
     assert "systemMessage" not in response
+    assert queued_dispatches and all("line" not in queued for queued in queued_dispatches), response
 
 
-def test_codex_apply_response_appends_project_job_board(workspace, config):
-    _, state = workspace
+def test_codex_apply_replaces_pending_board_with_applied_status(workspace, config):
+    repo, state = workspace
     job_id, _ = _board_job(state, "applied-job", "SUCCEEDED", applyState="applied",
                            appliedAt=time.time())
     _board_job(state, "still-running")
-    event_value = {"tool_name": "mcp__plugin_purser_codex-main__codex_apply",
-                   "tool_input": {"jobId": job_id}}
+    event_value = event("mcp__plugin_purser_codex-main__codex_apply", jobId=job_id,
+                        cwd=str(repo))
     assert codex.pre_tool_use(event_value, config=config, state_root=state) == {}
+    codex.compaction_advisor.queue_dispatch(event_value, repo, board="outdated board")
     response = codex.post_tool_use(event_value, config=config, state_root=state)
     assert "systemMessage" not in response
+    pending = codex.compaction_advisor._read_state(
+        codex.compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1"
+    )["dispatch_pending"]
+    assert pending["board"] is not None
+    assert "| applied-job |" in pending["board"]
+    assert "outdated board" not in pending["board"]
 
 
 def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace, config):
