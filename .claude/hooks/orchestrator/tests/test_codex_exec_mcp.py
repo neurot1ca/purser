@@ -94,6 +94,11 @@ def emit(kind, **data):
     print(json.dumps({"type": kind, "timestamp": 1, "sessionID": session, **data}), flush=True)
 if os.environ.get("FAKE_NO_SESSION") == "1":
     sys.exit(0)
+model = args[args.index("--model") + 1]
+if model in os.environ.get("FAKE_OC_MISSING_MODELS", "").split(","):
+    emit("error", error={"name": "ModelNotFoundError", "data": {
+        "message": f"Model `{model}` not found", "modelID": model}})
+    sys.exit(1)
 # Exact nonblank lines from .tmp/oc-events-success.jsonl (OpenCode 1.18.31).
 recorded = [
     '{"type":"step_start","timestamp":1790501264681,"sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","part":{"id":"prt_0e2311d23001zDJKOvYZwjIh1K","messageID":"msg_0e23110af001DJoi4gGP5T8WRU","sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","snapshot":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","type":"step-start"}}',
@@ -1024,6 +1029,15 @@ def _opencode_client(area, **flags):
                   extra_env={"PURSER_AGENT": "opencode", **flags})
 
 
+def _candidate_inventory(area, *models):
+    path = area / "root" / "opencode" / "candidates.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"refreshed_at": "2026-09-27T00:00:00Z", "candidates": [
+        {"id": model, "status": "measured", "added_at": "2026-09-27T00:00:00Z"}
+        for model in models]}), encoding="utf-8")
+    return path
+
+
 FAKE_AGY = r'''
 import json
 import os
@@ -1126,6 +1140,71 @@ def test_opencode_job_fails_on_event_or_missing_session(area, flag):
         started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
                                                    "cwd": str(area), "model": "opencode/test"})
         assert finish(client, started["jobId"], "FAILED")["errorCode"] == "CODEX_FAILED"
+    finally:
+        client.close()
+
+
+def test_mechanical_first_measured_opencode_candidate_serves(area):
+    model = "vendor/first-free"
+    _candidate_inventory(area, model)
+    client = _opencode_client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+            "cwd": str(area), "agent": "opencode", "model": model, "mechanicalFallback": True,
+            "fallbackAgent": "opencode", "fallbackModel": "configured/model", "fallbackEffort": "none"})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        assert (result["attemptedModels"], result["servedAgent"], result["servedModel"]) == ([model], "opencode", model)
+        assert len(client.calls()) == 1
+    finally:
+        client.close()
+
+
+def test_mechanical_missing_model_retries_next_measured_candidate(area):
+    first, second = "vendor/missing-free", "vendor/second-free"
+    path = _candidate_inventory(area, first, second)
+    client = _opencode_client(area, FAKE_OC_MISSING_MODELS=first)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+            "cwd": str(area), "agent": "opencode", "model": first, "mechanicalFallback": True,
+            "fallbackAgent": "opencode", "fallbackModel": "configured/model", "fallbackEffort": "none"})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        inventory = json.loads(path.read_text(encoding="utf-8"))["candidates"]
+        assert inventory[0]["status"] == "failed"
+        assert result["attemptedModels"] == [first, second]
+        assert (result["servedAgent"], result["servedModel"]) == ("opencode", second)
+    finally:
+        client.close()
+
+
+def test_mechanical_all_missing_uses_configured_fallback_binding(area):
+    first, second, fallback = "vendor/missing-a", "vendor/missing-b", "configured/model"
+    _candidate_inventory(area, first, second)
+    client = _opencode_client(area, FAKE_OC_MISSING_MODELS=f"{first},{second}")
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+            "cwd": str(area), "agent": "opencode", "model": first, "mechanicalFallback": True,
+            "fallbackAgent": "opencode", "fallbackModel": fallback, "fallbackEffort": "none"})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        assert result["attemptedModels"] == [first, second, fallback]
+        assert (result["servedAgent"], result["servedModel"]) == ("opencode", fallback)
+        assert [call["argv"][call["argv"].index("--model") + 1] for call in client.calls()] == [first, second, fallback]
+    finally:
+        client.close()
+
+
+def test_ambiguous_opencode_error_does_not_retry(area):
+    first, second = "vendor/ambiguous", "vendor/next"
+    path = _candidate_inventory(area, first, second)
+    client = _opencode_client(area, FAKE_OC_ERROR="1")
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+            "cwd": str(area), "agent": "opencode", "model": first, "mechanicalFallback": True,
+            "fallbackAgent": "opencode", "fallbackModel": "configured/model", "fallbackEffort": "none"})
+        result = finish(client, started["jobId"], "FAILED")
+        assert result["errorCode"] == "CODEX_FAILED"
+        assert result["attemptedModels"] == [first]
+        assert len(client.calls()) == 1
+        assert json.loads(path.read_text(encoding="utf-8"))["candidates"][0]["status"] == "measured"
     finally:
         client.close()
 

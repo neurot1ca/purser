@@ -188,3 +188,25 @@ def _atomic_write(path: Path, value: dict) -> None:
                 temporary.unlink()
             except OSError:
                 pass
+
+
+def mark_candidate_failed(model_id: str, *, root=None) -> bool:
+    """Atomically retire one candidate while preserving the rest of the inventory."""
+    path = _candidates_path(root)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or not isinstance(value.get("candidates"), list):
+            return False
+        found = False
+        for item in value["candidates"]:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                return False
+            if item["id"] == model_id:
+                item["status"] = "failed"
+                found = True
+        if not found:
+            return False
+        _atomic_write(path, value)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False

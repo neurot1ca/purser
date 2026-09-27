@@ -223,6 +223,41 @@ def test_mechanical_candidate_binds_opencode_per_job(workspace, config, monkeypa
     assert (stored["agent"], stored["model"]) == ("opencode", "provider/model-candidate")
 
 
+def test_served_model_updates_ledger_and_finished_telemetry(workspace, config, monkeypatch):
+    repo, state = workspace
+    candidate = "vendor/mechanical-free"
+    monkeypatch.setattr(coder_config, "opencode_candidates", lambda: [candidate])
+    config["coder_family"] = "gemini"
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the change.")
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["fallbackAgent"] == config["coder_agent"]
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    observed_pending = []
+    original_observations = codex._post_observations
+    def capture(*args, **kwargs):
+        observed_pending.append(dict(args[2]))
+        return original_observations(*args, **kwargs)
+    monkeypatch.setattr(codex, "_post_observations", capture)
+    reviewed = []
+    response = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"threadId": "served-thread", "content": "Done", "servedAgent": "codex",
+                               "servedModel": "gpt-6-sol", "attemptedModels": [candidate]}}},
+        config=config, state_root=state, repo_root=repo,
+        reviewer=lambda **kw: reviewed.append(kw) or {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                                                      "validation": "PASS", "findings": []})
+    bundle = response_bundle(response, config)
+    record = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]
+    assert observed_pending[0]["model"] == "gpt-6-sol"
+    assert record["live_thread"]["model"] == "gpt-6-sol"
+    assert bundle["model"] == "gpt-6-sol"
+    assert reviewed and reviewed[0]["model"] == "gpt-6-sol"
+    finished = [item["payload"] for item in _all_telemetry_events(state)
+                if item["event_type"] == "IMPLEMENTER_FINISHED"]
+    assert finished[-1]["served_model"] == "gpt-6-sol"
+    assert finished[-1]["implementer"] == "codex"
+
+
 def test_agy_start_passes_route_effort_to_bridge(workspace, config):
     repo, state = workspace
     config["coder_agent"] = "agy"

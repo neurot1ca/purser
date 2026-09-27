@@ -6,6 +6,8 @@ import json
 import subprocess
 
 import model_listing
+import coder_config
+import state_root
 
 
 FIXTURES = Path(__file__).with_name("fixtures")
@@ -91,3 +93,17 @@ def test_candidate_inventory_stale_after_24_hours(tmp_path):
     assert not model_listing.stale(root=tmp_path)
     path.write_text(json.dumps({"refreshed_at": (now - timedelta(hours=25)).isoformat(), "candidates": []}), encoding="utf-8")
     assert model_listing.stale(root=tmp_path)
+
+
+def test_opencode_candidates_reads_only_measured_inventory_ids(monkeypatch, tmp_path):
+    path = tmp_path / "opencode" / "candidates.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"refreshed_at": "ignored", "candidates": [
+        {"id": "first/model-free", "status": "measured"},
+        {"id": "second/model-free", "status": "unmeasured"},
+        {"id": "third/model-free", "status": "failed"},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(state_root, "default_state_root", lambda: tmp_path)
+    assert coder_config.opencode_candidates() == ["first/model-free"]
+    path.write_text("not json", encoding="utf-8")
+    assert coder_config.opencode_candidates() == []

@@ -1406,6 +1406,7 @@ def pre_tool_use(
         agent = loaded_config.get("coder_agent", "codex")
         model = route.model
         effort = route.effort
+        mechanical_candidate = False
         if reply_call and parsed.route == "mechanical" and isinstance(live_thread, Mapping):
             agent = live_thread.get("agent", "codex")
             stored_model = live_thread.get("model")
@@ -1421,6 +1422,7 @@ def pre_tool_use(
                 if not isinstance(candidate, str) or not coder_config.MODEL.fullmatch(candidate):
                     raise WiringError("mechanical OpenCode candidate model is invalid")
                 agent, model = "opencode", candidate
+                mechanical_candidate = True
         if new_call and agent in ("opencode", "agy") and parsed.phase == "plan":
             return _observed_denial(event, "OPENCODE_PLAN_UNISOLATED" if agent == "opencode" else "AGY_PLAN_UNISOLATED",
                                     "OpenCode has no verified read-only sandbox for plan calls." if agent == "opencode"
@@ -1493,7 +1495,10 @@ def pre_tool_use(
 
         updated = dict(tool_input)
         updated["prompt"] = parsed.prompt
-        if agent != loaded_config.get("coder_agent", "codex"):
+        if mechanical_candidate:
+            updated.update(mechanicalFallback=True, fallbackAgent=loaded_config.get("coder_agent", "codex"),
+                           fallbackModel=route.model, fallbackEffort=route.effort)
+        if agent != loaded_config.get("coder_agent", "codex") or mechanical_candidate:
             updated["agent"] = agent
         if parsed.phase == "plan" and new_call and agent == "codex":
             updated["sandbox"] = "read-only"
@@ -2174,6 +2179,10 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                    and value["threadId"] == job.get("threadId")
                    and isinstance(value.get("content"), str)
                    and not _codex_response_is_error(event.get("tool_response")))
+        if success and value.get("servedAgent") in {"codex", "opencode", "agy"} and isinstance(value.get("servedModel"), str):
+            pending = dict(pending, agent=value["servedAgent"], model=value["servedModel"],
+                           attempted_models=value.get("attemptedModels", []))
+            _atomic_json_write(_pending_path(root, original), pending)
         synthetic = dict(original, duration_ms=duration)
         if success:
             synthetic.update(hook_event_name="PostToolUse", tool_response={"content": [
@@ -2789,7 +2798,8 @@ def _post_observations(
         "state_root": runtime_root,
         **envelope,
         "duration_ms": _numeric_duration_ms(event.get("duration_ms")),
-        "implementer": bundle.get("implementer"),
+        "implementer": pending.get("agent", bundle.get("implementer")),
+        "served_model": pending.get("model"),
         "route": pending.get("route"),
         "phase": pending.get("phase"),
         "changed_paths_count": bundle.get("delta_files"),
@@ -2920,6 +2930,14 @@ def post_tool_use(
         except BaseException:
             pass
         pending = _read_pending(runtime_root, event)
+        try:
+            served = _start_value(event.get("tool_response"))
+        except WiringError:
+            served = {}
+        if served.get("servedAgent") in {"codex", "opencode", "agy"} and isinstance(served.get("servedModel"), str):
+            pending = dict(pending, agent=served["servedAgent"], model=served["servedModel"],
+                           attempted_models=served.get("attemptedModels", []))
+            _atomic_json_write(_pending_path(runtime_root, event), pending)
         project_namespace = _pending_project_key(pending)
         project_runtime_root = _project_state_root(runtime_root, project_namespace)
         raw_path = _persist_raw_output(runtime_root, event, event.get("tool_response"))
@@ -3249,7 +3267,11 @@ def post_tool_use(
                     config=reviewer_config,
                 )
             if gate.should_run:
-                implementer_family = policy.vendor_family(loaded_config.get("coder_family")) or policy.model_family(pending.get("model"))
+                implementer_family = (
+                    policy.model_family(pending.get("model"))
+                    if pending.get("attempted_models") else
+                    policy.vendor_family(loaded_config.get("coder_family")) or policy.model_family(pending.get("model"))
+                )
                 reviewer_family = policy.model_family(loaded_config["reviewer1_model_requested"])
                 if not implementer_family or not reviewer_family or implementer_family == reviewer_family:
                     gate = policy.SkipReviewerDecision(

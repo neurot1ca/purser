@@ -18,6 +18,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import socket
@@ -38,6 +39,7 @@ if os.name == "nt":
 
 import state_root as purser_state_root
 import coder_config
+import model_listing
 
 
 TOOL_SCHEMAS = [
@@ -524,6 +526,31 @@ def _agent_event(agent: str, event: dict[str, Any]) -> tuple[str | None, bool, s
     return session, kind in ("turn.completed", "turn.failed", "error"), failure, final if isinstance(final, str) else None
 
 
+def _opencode_missing_model(event: dict[str, Any], model: str) -> bool:
+    """Accept only a structured model-not-found error naming the requested model."""
+    error = event.get("error")
+    if event.get("type") != "error" or not isinstance(error, dict):
+        return False
+    data = error.get("data")
+    name = error.get("name")
+    if not isinstance(data, dict) or name not in {"ModelNotFoundError", "ProviderError"}:
+        return False
+    message = data.get("message")
+    if not isinstance(message, str) or not re.search(r"\bmodel\b.{0,40}\bnot found\b", message, re.I):
+        return False
+    return data.get("modelID") == model or model in message
+
+
+def _opencode_has_work(events: list[dict[str, Any]]) -> bool:
+    for event in events:
+        kind = event.get("type")
+        part = event.get("part")
+        tool = part.get("tool") if isinstance(part, dict) else None
+        if kind == "tool_use" or (isinstance(kind, str) and "edit" in kind.casefold()) or tool in {"edit", "write", "patch"}:
+            return True
+    return False
+
+
 def _stop_process(process: subprocess.Popen[bytes]) -> bool:
     if process.poll() is not None:
         return False
@@ -885,6 +912,10 @@ class Server:
                         os.fsync(stream.fileno())
                     os.replace(temporary, output)
                     job.update(threadId=result["threadId"], outputFile=output.name)
+                    if "attemptedModels" in result:
+                        job.update(attemptedModels=result["attemptedModels"],
+                                   servedAgent=result.get("servedAgent"),
+                                   servedModel=result.get("servedModel"))
             self._write_job(job)
             if job.get("leaseQueued") and "startedAt" not in job and state in {"CANCELLED", "TIMED_OUT"}:
                 try:
@@ -1034,6 +1065,11 @@ class Server:
             value = result.get("structuredContent")
             if result.get("isError") or not isinstance(value, dict):
                 current = self._read_job(job_id)
+                if current is not None and isinstance(result.get("attemptedModels"), list):
+                    current.update(attemptedModels=result["attemptedModels"],
+                                   servedAgent=result.get("servedAgent"),
+                                   servedModel=result.get("servedModel"))
+                    self._write_job(current)
                 if (current is not None and "pid" not in current
                         and time.time() >= current["deadlineAt"]):
                     self._finish_job(job_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
@@ -1068,6 +1104,9 @@ class Server:
                 return _job_result({"jobId": job["jobId"], "state": state,
                                     "message": "Host identity unconfirmed"})
         value = {"jobId": job["jobId"], "state": state}
+        if "attemptedModels" in job:
+            value.update(attemptedModels=job["attemptedModels"],
+                         servedAgent=job.get("servedAgent"), servedModel=job.get("servedModel"))
         if state == "SUCCEEDED":
             try:
                 value.update(threadId=job["threadId"], content=(self.job_dir / job["outputFile"]).read_text(encoding="utf-8"))
@@ -1129,6 +1168,69 @@ class Server:
 
     def _run_tool(self, name: str, arguments: dict[str, Any], request_id: Any,
                   async_job: bool = False) -> dict[str, Any]:
+        if arguments.get("mechanicalFallback") is not True:
+            return self._run_tool_once(name, arguments, request_id, async_job)
+        if not async_job:
+            model, agent = arguments.get("model"), arguments.get("agent", self.agent)
+            result = self._run_tool_once(name, arguments, request_id, async_job)
+            value = result.get("structuredContent")
+            if isinstance(value, dict):
+                value.update(attemptedModels=[model] if isinstance(model, str) else [],
+                             servedAgent=agent, servedModel=model)
+            return result
+        fallback_agent = arguments.get("fallbackAgent")
+        fallback_model = arguments.get("fallbackModel")
+        fallback_effort = arguments.get("fallbackEffort")
+        if (name != "codex" or arguments.get("agent") != "opencode"
+                or not isinstance(arguments.get("model"), str)
+                or fallback_agent not in ("codex", "opencode", "agy")
+                or not isinstance(fallback_model, str) or not isinstance(fallback_effort, str)):
+            return self._run_tool_once(name, arguments, request_id, async_job)
+        attempted = []
+        current = dict(arguments)
+        while True:
+            model = current.get("model")
+            agent = current.get("agent", "opencode")
+            if agent == "opencode":
+                attempted.append(model)
+            result = self._run_tool_once(name, current, request_id, async_job)
+            if result.get("isError"):
+                if result.get("retryableModelMissing") is not True:
+                    result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
+                    return result
+                with self.jobs_lock:
+                    if request_id in self.cancelled:
+                        return _tool_result(None, error="cancelled") | {
+                            "attemptedModels": attempted, "servedAgent": None, "servedModel": None}
+                    current_job = self._read_job(request_id)
+                    if current_job is None or time.time() >= current_job["deadlineAt"]:
+                        return _tool_result(None, error="deadline exceeded") | {
+                            "attemptedModels": attempted, "servedAgent": None, "servedModel": None}
+                if not model_listing.mark_candidate_failed(model):
+                    result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
+                    return result
+                candidates = [item for item in coder_config.opencode_candidates() if item not in attempted]
+                if candidates:
+                    current = dict(arguments, agent="opencode", model=candidates[0])
+                    continue
+                config = dict(arguments.get("config", {}))
+                if fallback_agent in ("codex", "agy") and fallback_effort != "none":
+                    config["model_reasoning_effort"] = fallback_effort
+                current = dict(arguments, agent=fallback_agent, model=fallback_model, config=config)
+                current.pop("mechanicalFallback", None)
+                agent, model = fallback_agent, fallback_model
+                attempted.append(model)
+                result = self._run_tool_once(name, current, request_id, async_job)
+                if result.get("isError"):
+                    result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
+                    return result
+            value = result.get("structuredContent")
+            if isinstance(value, dict):
+                value.update(attemptedModels=attempted, servedAgent=agent, servedModel=model)
+            return result
+
+    def _run_tool_once(self, name: str, arguments: dict[str, Any], request_id: Any,
+                       async_job: bool = False) -> dict[str, Any]:
         if name not in ("codex", "codex-reply"):
             return _tool_result(None, error=f"unknown tool: {name}")
         agent = arguments.get("agent", self.agent)
@@ -1323,7 +1425,11 @@ class Server:
                     detail = ("\n".join(failures) if failures else
                               "turn completion event missing" if async_job and not completed else
                               stderr[-4000:] or f"exit code {process.returncode}")
-                    return _tool_result(started, error=detail)
+                    failed_result = _tool_result(started, error=detail)
+                    if (agent == "opencode" and async_job and not _opencode_has_work(events)
+                            and any(_opencode_missing_model(event, model) for event in events)):
+                        failed_result["retryableModelMissing"] = True
+                    return failed_result
                 last_message = output_path.read_text(encoding="utf-8") if agent == "codex" and output_path.is_file() else ""
                 if not last_message:
                     last_message = next((final for _, _, _, final in reversed(parsed) if final), "")

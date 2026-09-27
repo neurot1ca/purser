@@ -216,6 +216,7 @@ _PAYLOAD_FIELDS = {
         {
             "duration_ms",
             "implementer",
+            "served_model",
             "route",
             "phase",
             "changed_paths_count",
@@ -438,6 +439,8 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name in {"model", "thread_id", "implementer", "reviewer1_provider", "reviewer1_model_requested"}:
         return _identifier(value)
+    if name == "served_model" and isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", value):
+        return value
     raise ValueError("telemetry enum is invalid")
 
 

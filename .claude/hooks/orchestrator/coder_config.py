@@ -15,8 +15,19 @@ FAMILY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
 def opencode_candidates() -> list[str]:
-    """Ordered OpenCode model candidates; populated only when candidates are enabled."""
-    return []
+    """Return measured OpenCode candidates from the local inventory, without probing."""
+    try:
+        import state_root
+        path = state_root.default_state_root() / "opencode" / "candidates.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        candidates = value.get("candidates") if isinstance(value, dict) else None
+        if not isinstance(candidates, list):
+            return []
+        return [item["id"] for item in candidates
+                if isinstance(item, dict) and item.get("status") == "measured"
+                and isinstance(item.get("id"), str) and MODEL.fullmatch(item["id"])]
+    except (OSError, ValueError, TypeError, AttributeError):
+        return []
 
 
 def agy_binary() -> str | None:
