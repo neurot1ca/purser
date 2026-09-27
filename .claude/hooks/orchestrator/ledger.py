@@ -424,6 +424,7 @@ def _run_git(
     operation: str,
     *,
     input_data: bytes | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> bytes:
     try:
         completed = subprocess.run(
@@ -435,6 +436,7 @@ def _run_git(
             stderr=subprocess.PIPE,
             timeout=timeout,
             check=False,
+            env={**os.environ, **env} if env is not None else None,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
         )
     except subprocess.TimeoutExpired as error:
@@ -586,13 +588,66 @@ def job_patch(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
     """Return a binary patch from the immutable snapshot tree to current job state."""
     worktree = Path(worktree_path).resolve()
     _run_git(worktree, ["add", "-A"], 30.0, "staging job changes for patch generation")
-    raw = _run_git(
-        worktree,
-        ["diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", snapshot, "--"],
-        30.0,
-        "generating job patch",
-    )
+    names = _run_git(worktree, ["diff", "--name-only", "-z", "--no-renames", snapshot, "--"],
+                     30.0, "listing job patch paths").split(b"\0")
+    paths = [_decode_path(path) for path in names if path]
+    if not paths:
+        return ""
+    paths = _filter_job_paths(worktree, paths)
+    if not paths:
+        return ""
+    raw = _run_git(worktree, ["diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames",
+                              snapshot, "--", *[f":(literal){path}" for path in paths]],
+                   30.0, "generating job patch")
     return raw.decode("utf-8", "surrogateescape")
+
+
+def _is_job_cache_path(path: str) -> bool:
+    parts = path.replace("\\", "/").split("/")
+    return any(part in {".pytest_cache", "__pycache__", "node_modules"} for part in parts) or path.endswith(".pyc")
+
+
+def _filter_job_paths(root: Path, paths: Sequence[str]) -> list[str]:
+    if not paths:
+        return []
+    check = subprocess.run(
+        ["git", "check-ignore", "--no-index", "-z", "--stdin"], cwd=root,
+        input=b"\0".join(os.fsencode(path) for path in paths) + b"\0",
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30.0, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
+    )
+    if check.returncode not in (0, 1):
+        raise _InspectionError("GIT_FAILED", "Git could not filter ignored job patch paths.")
+    ignored = {_decode_path(path) for path in check.stdout.split(b"\0") if path}
+    return [path for path in paths if path not in ignored and not _is_job_cache_path(path)]
+
+
+def filter_job_delta(repo_root: str | os.PathLike[str], delta: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove ignored and default cache paths from an async worktree delta."""
+    if delta.get("status") != OK or not isinstance(delta.get("changed_paths"), list):
+        return dict(delta)
+    root = Path(repo_root).resolve()
+    paths = _filter_job_paths(root, delta["changed_paths"])
+    keep = set(paths)
+    result = dict(delta)
+    result.update(changed_paths=paths, changed_file_count=len(paths))
+    if isinstance(delta.get("path_line_counts"), Mapping):
+        counts = {path: count for path, count in delta["path_line_counts"].items() if path in keep}
+        result["path_line_counts"] = counts
+        result["changed_line_count"] = sum(counts.values())
+    if isinstance(delta.get("ambiguous_paths"), list):
+        result["ambiguous_paths"] = [path for path in delta["ambiguous_paths"] if path in keep]
+    if isinstance(delta.get("sources"), Mapping):
+        result["sources"] = {
+            name: {**source,
+                  "paths": [path for path in source.get("paths", []) if path in keep],
+                  "path_line_counts": {path: count for path, count in source.get("path_line_counts", {}).items()
+                                       if path in keep},
+                  "changed_line_count": sum(count for path, count in source.get("path_line_counts", {}).items()
+                                             if path in keep)}
+            for name, source in delta["sources"].items() if isinstance(source, Mapping)
+        }
+    return result
 
 
 def apply_job_patch(repo_root: str | os.PathLike[str], patch: str) -> dict[str, Any]:
@@ -610,17 +665,123 @@ def apply_job_patch(repo_root: str | os.PathLike[str], patch: str) -> dict[str, 
         except _InspectionError:
             return []
 
+    paths = patch_paths()
+    if not paths:
+        try:
+            _run_git(root, ["apply", "--binary", "-"], 30.0,
+                     "applying job patch", input_data=raw_patch)
+            return {"applied": True, "conflicts": []}
+        except _InspectionError:
+            return {"applied": False, "conflicts": [], "applicable": []}
+
+    def check_paths() -> tuple[list[str], list[str]]:
+        applicable, conflicts = [], []
+        for path in paths:
+            try:
+                _run_git(root, ["apply", "--check", "--binary", f"--include={path}", "-"], 30.0,
+                         "checking job patch path", input_data=raw_patch)
+                applicable.append(path)
+            except _InspectionError:
+                conflicts.append(path)
+        return conflicts, applicable
+
     try:
         _run_git(root, ["apply", "--check", "--binary", "-"], 30.0,
                  "checking job patch", input_data=raw_patch)
     except _InspectionError:
-        return {"applied": False, "conflicts": patch_paths()}
+        conflicts, applicable = check_paths()
+        try:
+            merged_patch = _try_three_way_job_patch(root, paths, raw_patch)
+        except _InspectionError:
+            merged_patch = None
+        if merged_patch is not None:
+            if not merged_patch:
+                return {"applied": True, "conflicts": []}
+            try:
+                _run_git(root, ["apply", "--check", "--binary", "-"], 30.0,
+                         "checking merged job patch", input_data=merged_patch)
+                _run_git(root, ["apply", "--binary", "-"], 30.0,
+                         "applying merged job patch", input_data=merged_patch)
+                return {"applied": True, "conflicts": []}
+            except _InspectionError:
+                # A changed tree between preflight and application is reported without
+                # replaying the original patch or exposing the temporary merge.
+                pass
+        return {"applied": False, "conflicts": conflicts, "applicable": applicable}
     try:
         _run_git(root, ["apply", "--binary", "-"], 30.0,
                  "applying job patch", input_data=raw_patch)
         return {"applied": True, "conflicts": []}
     except _InspectionError:
-        return {"applied": False, "conflicts": patch_paths()}
+        conflicts, applicable = check_paths()
+        return {"applied": False, "conflicts": conflicts, "applicable": applicable}
+
+
+def _try_three_way_job_patch(root: Path, paths: Sequence[str], patch: bytes) -> bytes | None:
+    """Merge a failed patch in an isolated scratch tree; return only its merge delta."""
+    scratch_parent = root / ".tmp"
+    scratch_parent.mkdir(exist_ok=True)
+    scratch = scratch_parent / f"purser-apply-{os.getpid()}-{time.time_ns()}"
+    scratch.mkdir()
+    worktree = scratch / "tree"
+    try:
+        worktree.mkdir()
+        git_dir = _decode_path(_run_git(root, ["rev-parse", "--absolute-git-dir"], 30.0,
+                                        "locating job apply repository")).strip()
+        env = {"GIT_DIR": git_dir, "GIT_WORK_TREE": os.fspath(worktree),
+               "GIT_INDEX_FILE": os.fspath(scratch / "index")}
+        _run_git(worktree, ["read-tree", "HEAD"], 30.0, "initializing isolated merge index", env=env)
+        _run_git(worktree, ["checkout-index", "--all", "--force"], 30.0,
+                 "populating isolated merge tree", env=env)
+        for name in paths:
+            rel = Path(name)
+            if rel.is_absolute() or ".." in rel.parts:
+                raise _InspectionError("GIT_FAILED", "Job patch contains an unsafe path.")
+            source, target = root / rel, worktree / rel
+            if not source.parent.resolve().is_relative_to(root):
+                raise _InspectionError("GIT_FAILED", "Job patch traverses a repository symlink.")
+            if not target.parent.resolve().is_relative_to(worktree):
+                raise _InspectionError("GIT_FAILED", "Job patch traverses a scratch-tree symlink.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_symlink():
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                target.symlink_to(os.readlink(source), target_is_directory=source.is_dir())
+            elif source.is_file():
+                shutil.copy2(source, target)
+            elif target.exists() or target.is_symlink():
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+        pathspecs = [f":(literal){path}" for path in paths]
+        _run_git(worktree, ["add", "-A", "--", *pathspecs], 30.0,
+                 "staging current job target paths", env=env)
+        before = _decode_path(_run_git(worktree, ["write-tree"], 30.0,
+                                       "saving isolated merge base", env=env)).strip()
+        _run_git(worktree, ["apply", "--3way", "--index", "-"], 30.0,
+                 "merging job patch", input_data=patch, env=env)
+        unmerged = _run_git(worktree, ["ls-files", "-u", "-z", "--", *pathspecs], 30.0,
+                            "checking isolated merge conflicts", env=env)
+        if unmerged or any(_has_conflict_markers(worktree / path) for path in paths):
+            return None
+        after = _decode_path(_run_git(worktree, ["write-tree"], 30.0,
+                                      "saving merged job tree", env=env)).strip()
+        return _run_git(worktree, ["diff", "--binary", "--no-ext-diff", "--no-textconv",
+                                   before, after, "--"], 30.0,
+                        "exporting clean merged job patch", env=env)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _has_conflict_markers(path: Path) -> bool:
+    try:
+        if not path.is_file() or path.is_symlink():
+            return False
+        return any(line.startswith((b"<<<<<<< ", b"||||||| ", b"=======", b">>>>>>> "))
+                   for line in path.read_bytes().splitlines())
+    except OSError:
+        return False
 
 
 def _decode_path(value: bytes) -> str:

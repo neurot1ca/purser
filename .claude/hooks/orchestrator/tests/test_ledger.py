@@ -889,7 +889,7 @@ def test_apply_job_patch_conflict_is_atomic_and_reports_path(repo, tmp_path):
     applied = ledger.apply_job_patch(repo, patch)
     after_tree = {path.relative_to(repo).as_posix(): path.read_bytes()
                   for path in repo.rglob("*") if path.is_file() and ".git" not in path.parts}
-    assert applied == {"applied": False, "conflicts": ["src/target.py"]}
+    assert applied == {"applied": False, "conflicts": ["src/target.py"], "applicable": []}
     assert after_tree == before_tree
     assert git(repo, "diff", "--cached", "--binary").stdout == before_index
 
@@ -906,3 +906,72 @@ def test_failed_job_snapshot_removes_partial_worktree(repo, tmp_path, monkeypatc
     assert not (parent / ("d" * 12)).exists()
     listed = git(repo, "worktree", "list", "--porcelain").stdout
     assert str(parent / ("d" * 12)) not in listed
+
+
+def test_apply_job_patch_reports_failed_and_applicable_paths(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "e" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    (worktree / "notes.txt").write_text("job note\n", encoding="utf-8")
+    patch = ledger.job_patch(worktree, result["snapshot"])
+    (repo / "src" / "target.py").write_text("value = user\n", encoding="utf-8")
+
+    applied = ledger.apply_job_patch(repo, patch)
+
+    assert applied == {"applied": False, "conflicts": ["src/target.py"],
+                       "applicable": ["notes.txt"]}
+    assert (repo / "notes.txt").read_text(encoding="utf-8") == "original\n"
+
+
+def test_job_patch_excludes_gitignored_and_default_cache_paths(repo, tmp_path):
+    (repo / ".gitignore").write_text("repo-cache/\n", encoding="utf-8")
+    git(repo, "add", ".gitignore")
+    git(repo, "commit", "-qm", "ignore repo cache")
+    result = ledger.create_job_worktree(repo, "f" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    baseline = ledger.capture_baseline(worktree, ["src", "repo-cache", ".pytest_cache", "node_modules"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    for relative in ("repo-cache/new.dat", ".pytest_cache/v/cache", "src/__pycache__/x.pyc",
+                     "node_modules/pkg/index.js", "src/module.pyc"):
+        path = worktree / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("cache\n", encoding="utf-8")
+    patch = ledger.job_patch(worktree, result["snapshot"])
+    delta = ledger.filter_job_delta(worktree, ledger.compute_delta(worktree, baseline))
+
+    assert "target.py" in patch
+    assert delta["changed_paths"] == ["src/target.py"]
+    for ignored in ("repo-cache", ".pytest_cache", "__pycache__", "node_modules", ".pyc"):
+        assert ignored not in patch
+
+
+def test_apply_job_patch_three_way_merges_nonoverlapping_change(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "1" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    source = (worktree / "src" / "target.py").read_text(encoding="utf-8")
+    (worktree / "src" / "target.py").write_text(source + "job = True\n", encoding="utf-8")
+    patch = ledger.job_patch(worktree, result["snapshot"])
+    (repo / "src" / "target.py").write_text("user = True\n" + source, encoding="utf-8")
+
+    applied = ledger.apply_job_patch(repo, patch)
+
+    assert applied == {"applied": True, "conflicts": []}
+    assert (repo / "src" / "target.py").read_text(encoding="utf-8") == "user = True\n" + source + "job = True\n"
+    assert "<<<<<<<" not in (repo / "src" / "target.py").read_text(encoding="utf-8")
+
+
+def test_apply_job_patch_three_way_conflict_leaves_tree_untouched(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "2" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    patch = ledger.job_patch(worktree, result["snapshot"])
+    (repo / "src" / "target.py").write_text("value = user\n", encoding="utf-8")
+    before_tree = {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob("*")
+                   if p.is_file() and ".git" not in p.parts}
+
+    applied = ledger.apply_job_patch(repo, patch)
+
+    after_tree = {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob("*")
+                  if p.is_file() and ".git" not in p.parts}
+    assert applied == {"applied": False, "conflicts": ["src/target.py"], "applicable": []}
+    assert after_tree == before_tree
