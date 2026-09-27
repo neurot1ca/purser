@@ -584,6 +584,14 @@ def create_job_worktree(
         raise
 
 
+def capture_job_snapshot(worktree_path: str | os.PathLike[str], *, timeout: float = 30.0) -> str:
+    """Capture the current worktree state as the baseline for a new job."""
+    worktree = Path(worktree_path).resolve()
+    _run_git(worktree, ["add", "-A"], timeout, "staging worktree baseline")
+    return _decode_path(_run_git(worktree, ["write-tree"], timeout,
+                                 "writing worktree baseline tree")).strip()
+
+
 def job_patch(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
     """Return a binary patch from the immutable snapshot tree to current job state."""
     worktree = Path(worktree_path).resolve()

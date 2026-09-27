@@ -1640,12 +1640,21 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
             job.update(hostPid=os.getpid(), hostCreatedAt=created,
                        hostContained=bool(containment), signalPort=server.listener.getsockname()[1])
             server._write_job(job)
-        if launch["name"] == "codex" and launch["args"].get("worktree") is True:
+        if (launch["name"] in ("codex", "codex-reply")
+                and (job.get("worktreePath") or launch["args"].get("worktree") is True)):
+            import ledger
             if job.get("worktreePath"):
                 worktree_path = Path(job["worktreePath"])
                 if not worktree_path.is_dir():
                     server._finish_job(job_id, "FAILED", "WORKTREE_MISSING")
                     return
+                try:
+                    snapshot = ledger.capture_job_snapshot(worktree_path)
+                except Exception:
+                    server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_FAILED")
+                    return
+                job["snapshot"] = snapshot
+                server._write_job(job)
                 repo_root = Path(job.get("repoRoot", worktree_path)).resolve()
                 requested_cwd = Path(launch["args"].get("cwd", repo_root)).resolve()
                 try:
@@ -1654,7 +1663,6 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                     relative_cwd = Path()
                 launch["args"] = {**launch["args"], "cwd": os.fspath(worktree_path / relative_cwd)}
             else:
-                import ledger
                 requested_cwd = Path(launch["args"].get("cwd", os.getcwd())).resolve()
                 repo_root = requested_cwd
                 try:

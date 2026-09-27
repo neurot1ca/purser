@@ -683,6 +683,55 @@ def test_worktree_job_records_snapshot_and_reply_reuses_it(area):
         client.close()
 
 
+def test_reply_worktree_uses_new_snapshot_and_applies_only_reply_delta(area):
+    import ledger
+
+    repo = _git_repo(area)
+    tracked = repo / "tracked.txt"
+    baseline = "first\nc1\nc2\nc3\nc4\nc5\nsecond\nc6\nc7\nc8\nc9\nc10\nthird\n"
+    first_content = baseline.replace("first\n", "first A\n")
+    tracked.write_text(baseline, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "set fixture"], check=True)
+    client = Client(area)
+    try:
+        first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "first",
+                                                  "cwd": str(repo), "worktree": True})
+        first_result = finish(client, first["jobId"], "SUCCEEDED")
+        worktree = Path(first_result["worktreePath"])
+        (worktree / "tracked.txt").write_text(first_content, encoding="utf-8")
+        first_record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                       (first["jobId"] + ".json"))
+        first_patch = ledger.job_patch(worktree, first_record["snapshot"])
+        assert ledger.apply_job_patch(repo, first_patch)["applied"]
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "apply first job"], check=True)
+
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                  "threadId": "thread-123", "prompt": "reply"})
+        finish(client, reply["jobId"], "SUCCEEDED")
+        reply_record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                       (reply["jobId"] + ".json"))
+        assert reply_record["snapshot"] != first_record["snapshot"]
+        reply_content = first_content.replace("second\n", "second B\n")
+        (worktree / "tracked.txt").write_text(reply_content, encoding="utf-8")
+        reply_patch = ledger.job_patch(worktree, reply_record["snapshot"])
+        assert "second B" in reply_patch
+        assert "+first A" not in reply_patch
+        assert ledger.compute_job_delta(worktree, reply_record["snapshot"])["changed_line_count"] == 2
+
+        tracked.write_text(first_content.replace("third\n", "third unrelated\n"), encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "unrelated change"], check=True)
+        applied = ledger.apply_job_patch(repo, reply_patch)
+
+        assert applied == {"applied": True, "conflicts": []}
+        assert tracked.read_text(encoding="utf-8") == reply_content.replace(
+            "third\n", "third unrelated\n")
+    finally:
+        client.close()
+
+
 def test_worktree_job_falls_back_when_requested_cwd_is_missing(area):
     repo = _git_repo(area)
     (repo / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
