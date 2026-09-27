@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 
 import coder_config
+import state_root
 
 
 _EFFORTS = ("low", "medium", "high", "max")
@@ -102,3 +107,84 @@ def list_models(agent: str, providers: dict) -> dict:
         model["family"] = _family(model["id"], providers)
         model["source"] = source
     return {"status": "available", "models": models, "source": source}
+
+
+def _candidates_path(root=None) -> Path:
+    return (Path(root) if root is not None else state_root.default_state_root()) / "opencode" / "candidates.json"
+
+
+def stale(max_age_hours=24, *, root=None) -> bool:
+    """Return whether the OpenCode candidate inventory is missing or old."""
+    try:
+        value = json.loads(_candidates_path(root).read_text(encoding="utf-8"))
+        refreshed = datetime.fromisoformat(value["refreshed_at"].replace("Z", "+00:00"))
+        if refreshed.tzinfo is None or not isinstance(value.get("candidates"), list):
+            return True
+        return datetime.now(timezone.utc) - refreshed > timedelta(hours=max_age_hours)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        return True
+
+
+def refresh_candidates(providers: dict, *, root=None) -> bool:
+    """Refresh the local eligible-free OpenCode inventory; leave it intact on failure."""
+    path = _candidates_path(root)
+    try:
+        listing = list_models("opencode", providers)
+        if (listing.get("status") != "available" or not isinstance(listing.get("models"), list)
+                or not listing["models"]):
+            return False
+        eligible = []
+        for model in listing["models"]:
+            model_id = model.get("id") if isinstance(model, dict) else None
+            if not isinstance(model_id, str) or not coder_config.MODEL.fullmatch(model_id):
+                return False
+            provider, separator, bare_id = model_id.partition("/")
+            fact = providers.get("opencode", {}).get(bare_id if separator and provider == "opencode" else model_id)
+            cost = fact.get("cost") if isinstance(fact, dict) else None
+            if model_id.endswith("-free") or (
+                isinstance(cost, dict) and cost.get("input") == 0 and cost.get("output") == 0
+            ):
+                eligible.append(model_id)
+
+        existing = {"refreshed_at": None, "candidates": []}
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict) or not isinstance(existing.get("candidates"), list):
+                return False
+        except FileNotFoundError:
+            pass
+        old_by_id = {}
+        for item in existing["candidates"]:
+            if (not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                    or item.get("status") not in ("unmeasured", "measured", "failed")
+                    or not isinstance(item.get("added_at"), str)):
+                return False
+            old_by_id[item["id"]] = item
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        candidates = [old_by_id[model_id] for model_id in old_by_id if model_id in eligible]
+        candidates.extend({"id": model_id, "status": "unmeasured", "added_at": now}
+                          for model_id in eligible if model_id not in old_by_id)
+        _atomic_write(path, {"refreshed_at": now, "candidates": candidates})
+        return True
+    except Exception:
+        return False
+
+
+def _atomic_write(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(value, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass

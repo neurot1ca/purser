@@ -617,10 +617,11 @@ class Server:
             raise ValueError("coder_agent must be codex, opencode or agy")
         return selected
 
-    def _agent_prefix(self) -> list[str]:
-        if self.agent == "codex":
+    def _agent_prefix(self, agent: str | None = None) -> list[str]:
+        agent = agent or self.agent
+        if agent == "codex":
             return _binary_prefix(self.codex_bin)
-        if self.agent not in ("opencode", "agy"):
+        if agent not in ("opencode", "agy"):
             raise ValueError("unknown agent")
         if self.codex_bin:
             value = json.loads(self.codex_bin) if self.codex_bin.startswith("[") else self.codex_bin
@@ -629,9 +630,9 @@ class Server:
             if isinstance(value, list) and value and all(isinstance(item, str) and item for item in value):
                 return value
             raise ValueError("invalid agent binary override")
-        binary = coder_config.opencode_binary() if self.agent == "opencode" else coder_config.agy_binary()
+        binary = coder_config.opencode_binary() if agent == "opencode" else coder_config.agy_binary()
         if not binary:
-            raise ValueError(f"{self.agent} executable was not found")
+            raise ValueError(f"{agent} executable was not found")
         return [binary]
 
     def _signal_loop(self) -> None:
@@ -903,9 +904,12 @@ class Server:
                 event.set()
 
     def _start_job(self, args: dict[str, Any]) -> dict[str, Any]:
-        if not self._fixed_agent and not os.environ.get("PURSER_AGENT"):
+        job_agent = args.get("agent", self.agent)
+        if job_agent not in ("codex", "opencode", "agy"):
+            return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "Invalid agent"})
+        if "agent" not in args and not self._fixed_agent and not os.environ.get("PURSER_AGENT"):
             try:
-                self.agent = self._configured_agent()
+                job_agent = self._configured_agent()
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 return _job_result({"state": "FAILED", "errorCode": "INVALID_CONFIG", "message": str(exc)})
         call = args.get("call")
@@ -927,7 +931,7 @@ class Server:
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "invalid mode"})
         name = "codex-reply" if mode == "reply" else "codex"
         try:
-            self._agent_prefix()
+            self._agent_prefix(job_agent)
             if mode == "new":
                 if not isinstance(args.get("cwd", os.getcwd()), str) or not args.get("cwd", os.getcwd()):
                     raise ValueError("invalid cwd")
@@ -943,11 +947,11 @@ class Server:
                 for field in ("developer-instructions", "base-instructions", "compact-prompt"):
                     if field in args and not isinstance(args[field], str):
                         raise ValueError("invalid " + field)
-                if self.agent in ("opencode", "agy"):
+                if job_agent in ("opencode", "agy"):
                     if args.get("approval-policy") is not None or any(
                             field in args for field in ("developer-instructions", "base-instructions", "compact-prompt")):
                         raise ValueError("unsupported OpenCode option")
-                    _agent_command(self.agent, [], name, args.get("cwd", os.getcwd()),
+                    _agent_command(job_agent, [], name, args.get("cwd", os.getcwd()),
                                    args.get("model"), _flatten_config(args.get("config", {})),
                                    args.get("sandbox"), None, Path("unused"), prompt)
         except (OSError, ValueError, TypeError):
@@ -982,7 +986,7 @@ class Server:
                     # bridge can observe but never start this call a second time.
                     _atomic_json(self.job_dir / (job_id + ".launch"),
                                  {"name": name, "args": args, "codexBin": self.codex_bin,
-                                  "agent": self.agent})
+                                 "agent": job_agent})
                     self._write_job(job)
                     try:
                         _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
@@ -1127,6 +1131,9 @@ class Server:
                   async_job: bool = False) -> dict[str, Any]:
         if name not in ("codex", "codex-reply"):
             return _tool_result(None, error=f"unknown tool: {name}")
+        agent = arguments.get("agent", self.agent)
+        if agent not in ("codex", "opencode", "agy"):
+            return _tool_result(None, error="agent must be codex, opencode or agy")
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str):
             return _tool_result(None, error="prompt must be a string")
@@ -1137,7 +1144,7 @@ class Server:
             record = _load_record(self.state_dir, thread_id)
             if record is None:
                 return _tool_result(thread_id, error="thread is unknown to this server; a fresh codex call is required")
-            if record.get("agent", "codex") != self.agent:
+            if record.get("agent", "codex") != agent:
                 return _tool_result(thread_id, error="thread belongs to a different agent")
             cwd = record["cwd"]
             model = record.get("model")
@@ -1179,7 +1186,7 @@ class Server:
                 if sandbox is not None:
                     if sandbox not in ("read-only", "workspace-write", "danger-full-access"):
                         raise ValueError("invalid sandbox")
-                if self.agent in ("opencode", "agy") and (arguments.get("approval-policy") is not None or any(
+                if agent in ("opencode", "agy") and (arguments.get("approval-policy") is not None or any(
                         field in arguments for field in ("developer-instructions", "base-instructions", "compact-prompt"))):
                     raise ValueError("unsupported OpenCode option")
             else:
@@ -1189,7 +1196,7 @@ class Server:
             temp_dir.mkdir()
             try:
                 output_path = temp_dir / "last-message.txt"
-                command = _agent_command(self.agent, self._agent_prefix(), name, cwd, model,
+                command = _agent_command(agent, self._agent_prefix(agent), name, cwd, model,
                                          config_args, sandbox, thread_id if name == "codex-reply" else None,
                                          output_path, prompt)
                 creation = _process_creation_options()
@@ -1198,7 +1205,7 @@ class Server:
                         return _tool_result(None, error="cancelled")
                     if async_job and time.time() >= self._read_job(request_id)["deadlineAt"]:
                         return _tool_result(None, error="deadline exceeded")
-                    process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE if self.agent == "codex" else subprocess.DEVNULL,
+                    process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE if agent == "codex" else subprocess.DEVNULL,
                                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, **creation)
                     self.jobs[request_id] = process
                     if async_job:
@@ -1221,14 +1228,14 @@ class Server:
                         if not isinstance(event, dict):
                             continue
                         events.append(event)
-                        started_id, terminal, _, _ = _agent_event(self.agent, event)
+                        started_id, terminal, _, _ = _agent_event(agent, event)
                         if terminal:
                             terminal_event.set()
                         if async_job and started_id and not recorded_session:
                             recorded_session = True
                             thread_config = {"cwd": cwd, "model": model,
                                              "config_args": config_args,
-                                             "sandbox": sandbox, "agent": self.agent}
+                                             "sandbox": sandbox, "agent": agent}
                             with self.jobs_lock:
                                 current = self._read_job(request_id)
                                 if current is not None and current["state"] not in TERMINAL:
@@ -1242,7 +1249,7 @@ class Server:
                 stdout_reader.start()
                 stderr_reader.start()
                 try:
-                    if self.agent == "codex":
+                    if agent == "codex":
                         try:
                             process.stdin.write(prompt.encode("utf-8"))
                         except BrokenPipeError:
@@ -1301,28 +1308,28 @@ class Server:
                         self.job_processes.pop(request_id, None)
                         if request_id in self.cancelled:
                             return _tool_result(None, error="cancelled")
-                parsed = [_agent_event(self.agent, event) for event in events]
+                parsed = [_agent_event(agent, event) for event in events]
                 started = next((session for session, _, _, _ in parsed if session), None)
                 failures = [failure for _, _, failure, _ in parsed if failure]
-                if self.agent == "agy" and name == "codex-reply" and started != thread_id:
+                if agent == "agy" and name == "codex-reply" and started != thread_id:
                     failures.append("Antigravity did not resume the requested conversation; start a fresh call")
                 completed = any(event.get("type") == "step_finish" and isinstance(event.get("part"), dict)
-                                and event["part"].get("reason") == "stop" for event in events) if self.agent == "opencode" else any(
+                                and event["part"].get("reason") == "stop" for event in events) if agent == "opencode" else any(
                                     isinstance(event.get("status"), str) and event["status"].casefold() == "success"
-                                    for event in events) if self.agent == "agy" else any(
+                                    for event in events) if agent == "agy" else any(
                                     event.get("type") == "turn.completed" for event in events)
                 forced_complete = exit_forced_after_terminal and completed and not failures
-                if (process.returncode != 0 and not forced_complete) or not started or failures or ((async_job or self.agent in ("opencode", "agy")) and not completed):
+                if (process.returncode != 0 and not forced_complete) or not started or failures or ((async_job or agent in ("opencode", "agy")) and not completed):
                     detail = ("\n".join(failures) if failures else
                               "turn completion event missing" if async_job and not completed else
                               stderr[-4000:] or f"exit code {process.returncode}")
                     return _tool_result(started, error=detail)
-                last_message = output_path.read_text(encoding="utf-8") if self.agent == "codex" and output_path.is_file() else ""
+                last_message = output_path.read_text(encoding="utf-8") if agent == "codex" and output_path.is_file() else ""
                 if not last_message:
                     last_message = next((final for _, _, _, final in reversed(parsed) if final), "")
                 if name == "codex":
                     _save_record(self.state_dir, {"thread_id": started, "cwd": cwd, "model": model,
-                                                          "config_args": config_args, "sandbox": sandbox, "agent": self.agent})
+                                                          "config_args": config_args, "sandbox": sandbox, "agent": agent})
                 if async_job and forced_complete:
                     with self.jobs_lock:
                         job = self._read_job(request_id)

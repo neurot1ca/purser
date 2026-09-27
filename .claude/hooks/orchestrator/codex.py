@@ -1404,6 +1404,23 @@ def pre_tool_use(
             )
         requested = _requested_thread(parsed, route)
         agent = loaded_config.get("coder_agent", "codex")
+        model = route.model
+        effort = route.effort
+        if reply_call and parsed.route == "mechanical" and isinstance(live_thread, Mapping):
+            agent = live_thread.get("agent", "codex")
+            stored_model = live_thread.get("model")
+            if isinstance(stored_model, str):
+                requested["model"] = model = stored_model
+            stored_effort = live_thread.get("effort")
+            if isinstance(stored_effort, str):
+                requested["effort"] = effort = stored_effort
+        elif new_call and parsed.route == "mechanical":
+            candidates = coder_config.opencode_candidates()
+            if candidates:
+                candidate = candidates[0]
+                if not isinstance(candidate, str) or not coder_config.MODEL.fullmatch(candidate):
+                    raise WiringError("mechanical OpenCode candidate model is invalid")
+                agent, model = "opencode", candidate
         if new_call and agent in ("opencode", "agy") and parsed.phase == "plan":
             return _observed_denial(event, "OPENCODE_PLAN_UNISOLATED" if agent == "opencode" else "AGY_PLAN_UNISOLATED",
                                     "OpenCode has no verified read-only sandbox for plan calls." if agent == "opencode"
@@ -1431,8 +1448,8 @@ def pre_tool_use(
             task_id=parsed.task_id,
             phase=parsed.phase,
             route=parsed.route,
-            model=route.model,
-            effort=route.effort,
+            model=model,
+            effort=effort,
             scope=list(parsed.scope),
             reason=effective_reason,
             eta_minutes=parsed.eta_minutes,
@@ -1476,19 +1493,21 @@ def pre_tool_use(
 
         updated = dict(tool_input)
         updated["prompt"] = parsed.prompt
+        if agent != loaded_config.get("coder_agent", "codex"):
+            updated["agent"] = agent
         if parsed.phase == "plan" and new_call and agent == "codex":
             updated["sandbox"] = "read-only"
             updated["approval-policy"] = "never"
         if parsed.phase == "implementation":
             updated["prompt"] = _append_worker_validation_instruction(updated["prompt"])
         if new_call:
-            updated["model"] = route.model
+            updated["model"] = model
             original_codex_config = tool_input.get("config", {})
             if not isinstance(original_codex_config, Mapping):
                 raise WiringError("tool_input.config must be an object when supplied")
             updated_config = dict(original_codex_config)
-            if route.effort != "none":
-                updated_config["model_reasoning_effort"] = route.effort
+            if effort != "none" and agent != "opencode":
+                updated_config["model_reasoning_effort"] = effort
             output_limit = loaded_config.get("tool_output_token_limit") if agent == "codex" else None
             if output_limit is not None:
                 if isinstance(output_limit, bool) or not isinstance(output_limit, int) or output_limit <= 0:
@@ -1557,8 +1576,8 @@ def pre_tool_use(
             "project_key": project_namespace,
             "phase": parsed.phase,
             "route": parsed.route,
-            "model": route.model,
-            "effort": route.effort,
+            "model": model,
+            "effort": effort,
             "agent": agent,
             "scope": declared_scope,
             "repo_root": str(repository) if repository is not None else None,
@@ -1656,8 +1675,8 @@ def pre_tool_use(
             parsed.task_id,
             pending["prior_thread_id"],
             parsed.route,
-            route.model,
-            route.effort,
+            model,
+            effort,
             agent=agent,
             phase=parsed.phase,
             scope=declared_scope,
@@ -1680,8 +1699,8 @@ def pre_tool_use(
             "project_key": project_namespace,
             "phase": parsed.phase,
             "route": parsed.route,
-            "model": route.model,
-            "effort": route.effort,
+            "model": model,
+            "effort": effort,
             "routing_enforced": True,
             "fresh_thread": new_call,
             "reply_call": reply_call,
@@ -1736,14 +1755,9 @@ def pre_tool_use(
                 if isinstance(parsed.route, str) and parsed.route
                 else "unknown"
             )
-            model_value = updated.get("model") if "model" in updated else route.model
+            model_value = model
             model_name = model_value if isinstance(model_value, str) and model_value else "unknown"
-            updated_config = updated.get("config")
-            effort_value = (
-                updated_config.get("model_reasoning_effort")
-                if isinstance(updated_config, Mapping) and "model_reasoning_effort" in updated_config
-                else route.effort
-            )
+            effort_value = effort
             effort_name = (
                 effort_value
                 if isinstance(effort_value, str) and effort_value

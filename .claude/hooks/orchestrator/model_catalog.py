@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from http.client import HTTPException
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -48,6 +49,15 @@ def _validate_catalog(value: Any) -> tuple[dict[str, dict[str, dict[str, Any]]],
                 if not isinstance(name, str) or not name or not isinstance(reasoning, bool):
                     raise ValueError("invalid name or reasoning")
                 fact: dict[str, Any] = {"id": model_id, "name": name, "reasoning": reasoning}
+                cost = model.get("cost")
+                if isinstance(cost, dict) and all(
+                    isinstance(cost.get(key), (int, float))
+                    and not isinstance(cost.get(key), bool)
+                    and math.isfinite(cost[key])
+                    and cost[key] >= 0
+                    for key in ("input", "output")
+                ):
+                    fact["cost"] = {key: cost[key] for key in ("input", "output")}
                 if "family" in model:
                     family = model["family"]
                     if not isinstance(family, str) or not family:
@@ -133,6 +143,17 @@ def _read_cache(path: Path) -> tuple[dict[str, dict[str, dict[str, Any]]], str, 
     return _cache_record(json.loads(raw.decode("utf-8")))
 
 
+def load_cached_catalog(*, root: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """Return checked cached facts without contacting models.dev."""
+    cache_path = (Path(root) if root is not None else state_root.default_state_root()) / "model-catalog" / "catalog.json"
+    try:
+        providers, fetched_at, dropped_count = _read_cache(cache_path)
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError, RecursionError):
+        providers, dropped_count = _validate_catalog(json.loads(_BOOTSTRAP_PATH.read_text(encoding="utf-8")))
+        return {"source": "bootstrap", "fetched_at": None, "providers": providers, "dropped_count": dropped_count}
+    return {"source": "cache", "fetched_at": fetched_at, "providers": providers, "dropped_count": dropped_count}
+
+
 def load_catalog(*, root: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     """Return checked facts, preferring the network and preserving last good data."""
     cache_path = (Path(root) if root is not None else state_root.default_state_root()) / "model-catalog" / "catalog.json"
@@ -152,11 +173,4 @@ def load_catalog(*, root: str | os.PathLike[str] | None = None) -> dict[str, Any
             "dropped_count": dropped_count,
         }
     except (OSError, HTTPException, TimeoutError, ValueError, UnicodeError, json.JSONDecodeError, RecursionError):
-        pass
-
-    try:
-        providers, fetched_at, dropped_count = _read_cache(cache_path)
-    except (OSError, ValueError, UnicodeError, json.JSONDecodeError, RecursionError):
-        providers, dropped_count = _validate_catalog(json.loads(_BOOTSTRAP_PATH.read_text(encoding="utf-8")))
-        return {"source": "bootstrap", "fetched_at": None, "providers": providers, "dropped_count": dropped_count}
-    return {"source": "cache", "fetched_at": fetched_at, "providers": providers, "dropped_count": dropped_count}
+        return load_cached_catalog(root=root)

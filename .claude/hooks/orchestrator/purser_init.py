@@ -130,6 +130,10 @@ def detect(config_path: Path, project: Path) -> dict:
         else:
             opencode = _agent("opencode", binary)
             opencode["models"] = models
+            try:
+                model_listing.refresh_candidates(model_catalog.load_cached_catalog()["providers"])
+            except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+                pass
     return {
         "agents": {
             "codex": _agent("codex"),

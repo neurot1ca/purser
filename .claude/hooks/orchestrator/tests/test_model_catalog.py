@@ -12,6 +12,7 @@ def _payload():
                     "name": "Sample Model",
                     "family": "sample-family",
                     "reasoning": True,
+                    "cost": {"input": 0, "output": 0, "cache_read": 99},
                     "limit": {"context": 12000, "output": 2000},
                     "unknown": "ignored",
                 },
@@ -59,6 +60,7 @@ def test_good_fetch_writes_checked_cache_and_ignores_unknown_fields(tmp_path, mo
         "name": "Sample Model",
         "family": "sample-family",
         "reasoning": True,
+        "cost": {"input": 0, "output": 0},
         "limits": {"context": 12000, "output": 2000},
     }
     cached = json.loads((tmp_path / "model-catalog" / "catalog.json").read_text(encoding="utf-8"))

@@ -14,6 +14,11 @@ AGY_EFFORTS = frozenset(("low", "medium", "high", "max"))
 FAMILY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
+def opencode_candidates() -> list[str]:
+    """Ordered OpenCode model candidates; populated only when candidates are enabled."""
+    return []
+
+
 def agy_binary() -> str | None:
     return shutil.which("agy")
 

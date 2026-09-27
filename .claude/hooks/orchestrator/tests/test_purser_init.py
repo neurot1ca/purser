@@ -231,6 +231,17 @@ def test_opencode_absent_is_unavailable(site, monkeypatch, capsys):
         "available": False, "path": None, "version": None, "models": []}
 
 
+def test_detect_refreshes_candidates_for_installed_opencode(site, monkeypatch):
+    calls = []
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    monkeypatch.setattr(purser_init, "_opencode_models", lambda _binary: ["vendor/model-free"])
+    monkeypatch.setattr(purser_init, "_agent", lambda *_args: {"available": True, "path": "opencode"})
+    monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {"opencode": {}}})
+    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda providers: calls.append(providers))
+    purser_init.detect(Path("missing-config"), Path.cwd())
+    assert calls == [{"opencode": {}}]
+
+
 def test_agy_absent_is_hidden_from_coder_options(site, monkeypatch, capsys):
     original_which = shutil.which
     monkeypatch.setattr(coder_config, "agy_binary", lambda: None)

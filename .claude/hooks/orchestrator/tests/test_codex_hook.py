@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 import codex
 import async_session_maintenance
 import codex_exec_mcp
+import coder_config
 import checks
 import project_profile
 import context_io_telemetry
@@ -171,6 +172,55 @@ def test_opencode_start_and_cross_agent_reply_denied(workspace, config):
     denied = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "different coding agent" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_mechanical_empty_candidates_keep_configured_opencode_binding(workspace, config):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    for entry in config["routes"].values():
+        entry.update(model="provider/global", effort="none")
+    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the small change.")
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert "agent" not in updated
+    assert updated["model"] == "provider/global"
+    assert "model_reasoning_effort" not in updated["config"]
+    pending = codex._read_pending(state, call)
+    assert (pending["agent"], pending["model"], pending["effort"]) == ("opencode", "provider/global", "none")
+    codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+                         {"structuredContent": {"threadId": "mechanical-cold", "content": "Done"}}},
+                        config=config, state_root=state, repo_root=repo)
+    stored = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]["live_thread"]
+    assert (stored["agent"], stored["model"], stored["effort"]) == ("opencode", "provider/global", "none")
+
+
+def test_nonmechanical_route_binding_is_unchanged(workspace, config):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    for entry in config["routes"].values():
+        entry.update(model="provider/global", effort="none")
+    call = event(route="normal", scope="file0.py")
+    updated = codex.pre_tool_use(call, config=config, state_root=state,
+                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["model"] == "provider/global"
+    pending = codex._read_pending(state, call)
+    assert pending["agent"] == "opencode"
+
+
+def test_mechanical_candidate_binds_opencode_per_job(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(coder_config, "opencode_candidates", lambda: ["provider/model-candidate"])
+    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the change.")
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["agent"] == "opencode"
+    assert updated["model"] == "provider/model-candidate"
+    assert updated["config"] == {}
+    pending = codex._read_pending(state, call)
+    assert (pending["agent"], pending["model"]) == ("opencode", "provider/model-candidate")
+    codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+                         {"structuredContent": {"threadId": "mechanical-opencode", "content": "Done"}}},
+                        config=config, state_root=state, repo_root=repo)
+    stored = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]["live_thread"]
+    assert (stored["agent"], stored["model"]) == ("opencode", "provider/model-candidate")
 
 
 def test_agy_start_passes_route_effort_to_bridge(workspace, config):
