@@ -18,6 +18,8 @@ import tomllib
 
 import compaction_advisor
 import coder_config
+import model_catalog
+import model_listing
 
 
 HEAD = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
@@ -329,6 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--detect", action="store_true")
+    modes.add_argument("--list-models", action="store_true")
     modes.add_argument("--plan", action="store_true")
     modes.add_argument("--apply", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -341,6 +344,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.detect:
         if not args.json or args.coder or args.model or args.reviewer or args.trust or args.scaffold_profile:
             parser.error("--detect requires --json and no change options")
+    elif args.list_models:
+        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.reviewer or args.trust or args.scaffold_profile:
+            parser.error("--list-models requires --json and --coder codex, opencode, or agy")
     elif args.json or args.coder is None or args.reviewer is None:
         parser.error("--plan and --apply require --coder and --reviewer, without --json")
     if args.coder not in ("opencode", "agy") and args.model is not None:
@@ -352,6 +358,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.detect:
             print(json.dumps(detect(config, project), indent=2))
+            return 0
+        if args.list_models:
+            catalog = model_catalog.load_catalog()
+            print(json.dumps(model_listing.list_models(args.coder, catalog["providers"]), indent=2))
             return 0
         if args.coder == "opencode":
             binary = coder_config.opencode_binary()
