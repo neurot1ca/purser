@@ -1093,6 +1093,46 @@ def test_project_job_board_hides_unlabelled_jobs(workspace):
     assert "unlabelled" not in message
 
 
+def test_project_job_board_keeps_newest_job_for_thread(workspace):
+    _, state = workspace
+    _, old_call_key = _board_job(state, "continued-old", "RUNNING", label="continued",
+                                 threadId="thread-board", acceptedAt=time.time() - 60)
+    _, new_call_key = _board_job(
+        state, "continued-new", "SUCCEEDED", label="continued", threadId="thread-board", applyState="conflict",
+        finishedAt=time.time(), acceptedAt=time.time(),
+    )
+    _board_job(state, "independent")
+    (state / "bundle_artifacts").mkdir(exist_ok=True)
+    (state / "bundle_artifacts" / f"{new_call_key}.json").write_text(json.dumps({
+        "phase": "implementation", "apply": "codex_apply", "changed_paths": ["file.py"],
+        "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+    }), encoding="utf-8")
+    (state / "bundle_artifacts" / f"{old_call_key}.json").write_text(json.dumps({
+        "phase": "implementation", "apply": "codex_apply",
+    }), encoding="utf-8")
+
+    message = codex._project_job_board(state, "project")
+
+    assert message.count("| continued |") == 1
+    assert "| continued | gpt-6-sol (medium) | done | — | reviewed | conflict |" in message
+
+
+def test_project_job_board_shows_no_change_and_pending_apply(workspace):
+    _, state = workspace
+    _, no_change_key = _board_job(state, "no-change", "SUCCEEDED", finishedAt=time.time())
+    _, changed_key = _board_job(state, "changed", "SUCCEEDED", finishedAt=time.time())
+    (state / "bundle_artifacts").mkdir(exist_ok=True)
+    for call_key, paths in ((no_change_key, []), (changed_key, ["file.py"])):
+        (state / "bundle_artifacts" / f"{call_key}.json").write_text(json.dumps({
+            "phase": "implementation", "apply": "codex_apply", "changed_paths": paths,
+        }), encoding="utf-8")
+
+    message = codex._project_job_board(state, "project")
+
+    assert "| no-change | gpt-6-sol (medium) | done | — | — | no change |" in message
+    assert "| changed | gpt-6-sol (medium) | done | — | — | — |" in message
+
+
 def test_project_job_board_retains_recent_and_active_jobs(workspace):
     _, state = workspace
     _board_job(state, "terminal-61m", "SUCCEEDED", finishedAt=time.time() - 61 * 60)

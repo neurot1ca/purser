@@ -2057,10 +2057,29 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
             if (not isinstance(job, dict) or job.get("jobId") != job_id
                     or job.get("call") != index.get("call")):
                 continue
-            state = job.get("state")
+            jobs.append((job, index))
+
+        newest_by_thread: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+        for item in jobs:
+            job, _index = item
+            thread_id = job.get("threadId")
+            key = thread_id if isinstance(thread_id, str) and thread_id else job["jobId"]
+            previous = newest_by_thread.get(key)
+            accepted_at = job.get("acceptedAt")
+            previous_accepted_at = previous[0].get("acceptedAt") if previous else None
+            accepted_stamp = (accepted_at if isinstance(accepted_at, (int, float))
+                              and not isinstance(accepted_at, bool) else 0)
+            previous_stamp = (previous_accepted_at if isinstance(previous_accepted_at, (int, float))
+                              and not isinstance(previous_accepted_at, bool) else 0)
+            if previous is None or (accepted_stamp, job["jobId"]) > (previous_stamp, previous[0]["jobId"]):
+                newest_by_thread[key] = item
+
+        jobs = []
+        for job, index in newest_by_thread.values():
             label = job.get("label")
             if not isinstance(label, str) or not label.strip():
                 continue
+            state = job.get("state")
             finished = job.get("appliedAt") if job.get("applyState") == "applied" else None
             if not isinstance(finished, (int, float)):
                 finished = job.get("finishedAt")
@@ -2102,6 +2121,12 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
                     apply = "n/a"
             elif job.get("phase") in {"operation", "plan"}:
                 apply = "n/a"
+            changed_paths = job.get("changed_paths")
+            if not isinstance(changed_paths, list) and isinstance(bundle, dict):
+                changed_paths = bundle.get("changed_paths")
+            if (apply == "—" and raw_state not in {"QUEUED", "RUNNING", "UNKNOWN_OR_IN_PROGRESS"}
+                    and changed_paths == []):
+                apply = "no change"
             eta_label = "—"
             if state in {"queued", "running"}:
                 started = job.get("acceptedAt")
