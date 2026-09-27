@@ -1475,7 +1475,8 @@ def pre_tool_use(
             if isinstance(stored_effort, str):
                 requested["effort"] = effort = stored_effort
         elif new_call and parsed.route == "mechanical":
-            candidates = coder_config.opencode_candidates()
+            candidates = (coder_config.opencode_candidates()
+                         if loaded_config.get("mechanical_opencode_enabled", True) else [])
             if candidates:
                 candidate = candidates[0]
                 if not isinstance(candidate, str) or not coder_config.MODEL.fullmatch(candidate):

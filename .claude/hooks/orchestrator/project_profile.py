@@ -420,7 +420,7 @@ def _valid_security_value(section: str, key: str, value: Any) -> tuple[bool, str
         allowed = {
             "orchestrator": {"claude-code"},
             "coder": {"codex", "claude", "opencode", "agy"},
-            "reviewer": {"agy", "none"},
+            "reviewer": {"agy", "opencode", "codex", "none"},
         }
         if isinstance(value, str) and value in allowed[key]:
             return True, ""

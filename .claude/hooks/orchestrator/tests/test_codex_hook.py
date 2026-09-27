@@ -225,6 +225,17 @@ def test_mechanical_candidate_binds_opencode_per_job(workspace, config, monkeypa
     assert (stored["agent"], stored["model"]) == ("opencode", "provider/model-candidate")
 
 
+def test_mechanical_opencode_opt_out_keeps_configured_coder(workspace, config, monkeypatch):
+    repo, state = workspace
+    config["mechanical_opencode_enabled"] = False
+    monkeypatch.setattr(coder_config, "opencode_candidates", lambda: ["provider/model-candidate"])
+    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the change.")
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["model"] == config["routes"]["mechanical"]["model"]
+    assert "agent" not in updated
+    assert "fallbackAgent" not in updated
+
+
 def test_served_model_updates_ledger_and_finished_telemetry(workspace, config, monkeypatch):
     repo, state = workspace
     candidate = "vendor/mechanical-free"

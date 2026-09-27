@@ -225,15 +225,50 @@ def test_apply_creates_handoff_and_preserves_existing_file(site, capsys):
 
 
 def test_opencode_absent_is_unavailable(site, monkeypatch, capsys):
-    monkeypatch.setattr(coder_config, "opencode_binary", lambda: None)
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: [])
     assert run("--detect", "--json") == 0
-    assert json.loads(capsys.readouterr().out)["agents"]["opencode"] == {
-        "available": False, "path": None, "version": None, "models": []}
+    unavailable = json.loads(capsys.readouterr().out)["agents"]["opencode"]
+    assert unavailable["available"] is False
+    assert unavailable["reason"] == "OpenCode command and platform binary failed"
+
+
+def test_opencode_detection_falls_back_to_platform_binary(site, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["opencode-shim", "platform-opencode"])
+    monkeypatch.setattr(purser_init, "_agent", lambda name, executable=None: {
+        "available": name == "opencode", "path": executable, "version": None})
+    monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda *_args, **_kwargs: None)
+
+    def run(args, **_kwargs):
+        if args[0] == "opencode-shim":
+            return subprocess.CompletedProcess(args, 1, "", "placeholder")
+        if args == ["platform-opencode", "models"]:
+            return subprocess.CompletedProcess(args, 0, "opencode/big-pickle\n", "")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(purser_init.subprocess, "run", run)
+    result = purser_init.detect(Path("missing-config"), site[1])
+    assert result["agents"]["opencode"]["available"] is True
+    assert result["agents"]["opencode"]["path"] == "platform-opencode"
+
+
+def test_opencode_binary_candidates_include_installed_platform_package(tmp_path, monkeypatch):
+    if os.name != "nt":
+        pytest.skip("Windows npm package layout")
+    shim = tmp_path / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
+    platform_binary = shim.parent.parent / "node_modules" / "opencode-windows-x64" / "bin" / "opencode.exe"
+    platform_binary.parent.mkdir(parents=True)
+    platform_binary.write_bytes(b"native")
+    monkeypatch.setattr(coder_config.shutil, "which", lambda _name: str(shim))
+    monkeypatch.setattr(coder_config.sys, "platform", "win32")
+    assert coder_config.opencode_binaries() == [str(shim), str(platform_binary)]
 
 
 def test_detect_refreshes_candidates_for_installed_opencode(site, monkeypatch):
     calls = []
-    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["opencode"])
     monkeypatch.setattr(purser_init, "_opencode_models", lambda _binary: ["vendor/model-free"])
     monkeypatch.setattr(purser_init, "_agent", lambda *_args: {"available": True, "path": "opencode"})
     monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {"opencode": {}}})
@@ -246,7 +281,7 @@ def test_detect_lists_opencode_models_once(site, monkeypatch):
     import subprocess
 
     calls = []
-    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["opencode"])
     monkeypatch.setattr(purser_init, "_agent", lambda name, *_args: {
         "available": name == "opencode", "path": "opencode" if name == "opencode" else None,
         "version": None,
@@ -265,6 +300,83 @@ def test_detect_lists_opencode_models_once(site, monkeypatch):
     purser_init.detect(Path("missing-config"), site[1])
 
     assert calls == [["opencode", "models"]]
+
+
+def test_opencode_free_options_collapse_and_deepseek_remains_separate():
+    options = purser_init._model_options("opencode", [
+        {"id": "opencode/alpha-free", "family": "opencode"},
+        {"id": "opencode/big-pickle", "family": "opencode"},
+        {"id": "deepseek/deepseek-flash", "family": "deepseek"},
+        {"id": "deepseek/deepseek-v4-pro", "family": "deepseek"},
+    ])
+    assert options == [
+        {"label": "Free OpenCode models (Purser races them)",
+         "models": ["opencode/alpha-free", "opencode/big-pickle"], "family": "opencode"},
+        {"label": "deepseek/deepseek-flash", "models": ["deepseek/deepseek-flash"], "family": "deepseek"},
+        {"label": "deepseek/deepseek-v4-pro", "models": ["deepseek/deepseek-v4-pro"], "family": "deepseek"},
+    ]
+
+
+def test_reviewer_options_mark_same_vendor_family():
+    options = [{"family": "google"}, {"family": "deepseek"}]
+    assert purser_init._mark_reviewer_options(options, "gemini") == [
+        {"family": "google", "same_family": True},
+        {"family": "deepseek", "same_family": False},
+    ]
+
+
+def test_detect_marks_reviewer_options_and_keeps_family_when_coder_unselected(site, monkeypatch):
+    monkeypatch.setattr(coder_config, "agy_binary", lambda: None)
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["opencode-native"])
+    monkeypatch.setattr(purser_init, "_agent", lambda name, executable=None: {
+        "available": name == "opencode", "path": executable, "version": None})
+    monkeypatch.setattr(purser_init, "_opencode_models", lambda _binary: [
+        "opencode/alpha-free", "opencode/big-pickle", "deepseek/deepseek-flash"])
+    monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda *_args, **_kwargs: None)
+
+    selected = purser_init.detect(Path("missing-config"), site[1], "opencode", "opencode/alpha-free")
+    assert selected["coder_family"] == "opencode"
+    assert [option["same_family"] for option in selected["reviewer_options"]] == [True, True, False]
+
+    unselected = purser_init.detect(Path("missing-config"), site[1])
+    assert unselected["coder_family"] is None
+    assert all("family" in option and "same_family" not in option
+               for option in unselected["reviewer_options"])
+
+
+def test_reviewer_options_keep_free_models_individual_and_pinned():
+    options = purser_init._reviewer_options("opencode", [
+        "opencode/alpha-free", "opencode/big-pickle", "deepseek/deepseek-flash"])
+    assert [option["model"] for option in options] == [
+        "opencode/alpha-free", "opencode/big-pickle", "deepseek/deepseek-flash"]
+    assert all(len(option) == 4 and option["label"] == option["model"] for option in options)
+
+
+def test_reviewer_selection_is_in_plan_and_saved_config(site, monkeypatch, capsys):
+    home, _ = site
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["C:/opencode.exe"])
+    monkeypatch.setattr(purser_init, "_opencode_models", lambda _binary: ["deepseek/deepseek-flash"])
+    args = ("--coder", "codex", "--reviewer", "opencode", "--reviewer-model", "deepseek/deepseek-flash")
+    assert run("--plan", *args) == 0
+    plan = capsys.readouterr().out
+    assert 'selected = { agent = "opencode", model = "deepseek/deepseek-flash" }' in plan
+    assert run("--apply", *args) == 0
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert saved["reviewer"]["selected"] == {"agent": "opencode", "model": "deepseek/deepseek-flash"}
+    assert saved["reviewer"]["executable"] == "C:/opencode.exe"
+    assert saved["roles"]["reviewer"] == "opencode"
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_mechanical_opencode_opt_in_and_opt_out(site, enabled):
+    home, _ = site
+    flag = "--opencode-mechanical" if enabled else "--no-opencode-mechanical"
+    assert run("--apply", "--coder", "codex", "--reviewer", "none", flag) == 0
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert saved["mechanical"]["opencode_enabled"] is enabled
+    loaded = coder_config.load(Path(__file__).parents[1] / "config.json")
+    assert loaded["mechanical_opencode_enabled"] is enabled
 
 
 def test_agy_absent_is_hidden_from_coder_options(site, monkeypatch, capsys):
@@ -297,7 +409,7 @@ def test_agy_choice_persists_gemini_routes(site, monkeypatch):
 
 def test_unknown_opencode_model_is_rejected_before_write(site, monkeypatch):
     home, _ = site
-    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode-native")
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["opencode-native"])
     monkeypatch.setattr(purser_init, "_opencode_models", lambda binary: ["opencode/big-pickle"])
     assert run("--apply", "--coder", "opencode", "--model", "other/model", "--reviewer", "none") == 1
     assert not (home / ".orchestrator").exists()
@@ -305,7 +417,7 @@ def test_unknown_opencode_model_is_rejected_before_write(site, monkeypatch):
 
 def test_opencode_choice_loads_same_model_on_all_routes(site, monkeypatch):
     home, _ = site
-    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode-native")
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["opencode-native"])
     monkeypatch.setattr(purser_init, "_opencode_models", lambda binary: ["opencode/big-pickle"])
     listing = {"status": "available", "models": [{"id": "opencode/big-pickle", "family": "opencode", "efforts": None}]}
     monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
@@ -328,7 +440,7 @@ def test_opencode_choice_loads_same_model_on_all_routes(site, monkeypatch):
 
 def test_switch_from_opencode_to_claude_clears_routes(site, monkeypatch):
     home, _ = site
-    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode-native")
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["opencode-native"])
     monkeypatch.setattr(purser_init, "_opencode_models", lambda binary: ["opencode/big-pickle"])
     monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
     monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {
@@ -364,7 +476,7 @@ def test_manual_plan_shows_resolved_route_model_effort_pairs(site, monkeypatch, 
 
 def test_opencode_plan_without_mode_shows_resolved_route_pairs(site, monkeypatch, capsys):
     model = "openai/gpt-6-astra"
-    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    monkeypatch.setattr(coder_config, "opencode_binaries", lambda: ["opencode"])
     monkeypatch.setattr(purser_init, "_opencode_models", lambda _: [model])
     monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
     monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {

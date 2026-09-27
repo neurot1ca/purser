@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tomllib
 
 
@@ -35,17 +36,34 @@ def agy_binary() -> str | None:
 
 
 def opencode_binary() -> str | None:
+    candidates = opencode_binaries()
+    return candidates[1] if len(candidates) > 1 else candidates[0] if candidates else None
+
+
+def opencode_binaries() -> list[str]:
     launcher = shutil.which("opencode")
     if not launcher:
-        return None
-    if os.name == "nt":
-        package = Path(launcher).parent / "node_modules" / "opencode-ai" / "node_modules"
-        for variant in ("opencode-windows-x64", "opencode-windows-x64-baseline"):
-            candidate = package / variant / "bin" / "opencode.exe"
+        return []
+    candidates = [launcher]
+    platform_packages = {
+        "win32": ("opencode-windows-x64", "opencode-windows-x64-baseline"),
+        "linux": ("opencode-linux-x64", "opencode-linux-arm64"),
+        "darwin": ("opencode-darwin-x64", "opencode-darwin-arm64"),
+    }
+    launcher_path = Path(launcher)
+    package_roots = [launcher_path.parent / "node_modules" / "opencode-ai" / "node_modules",
+                     launcher_path.parent.parent / "node_modules" / "opencode-ai" / "node_modules",
+                     launcher_path.parent.parent / "node_modules",
+                     launcher_path.parent.parent / "opencode-ai" / "node_modules"]
+    binary_name = "opencode.exe" if os.name == "nt" else "opencode"
+    for package in dict.fromkeys(package_roots):
+        for variant in platform_packages.get(sys.platform, ()):
+            candidate = package / variant / "bin" / binary_name
             if candidate.is_file():
-                return str(candidate)
-        return launcher if Path(launcher).suffix.lower() == ".exe" else None
-    return launcher
+                candidates.append(str(candidate))
+    if os.name == "nt" and Path(launcher).suffix.lower() != ".exe":
+        candidates.remove(launcher)
+    return list(dict.fromkeys(candidates))
 
 
 def load(config_path: Path) -> dict:
@@ -55,6 +73,10 @@ def load(config_path: Path) -> dict:
         return config
     with user_path.open("rb") as stream:
         user = tomllib.load(stream)
+    mechanical = user.get("mechanical", {})
+    if not isinstance(mechanical, dict) or type(mechanical.get("opencode_enabled", True)) is not bool:
+        raise ValueError("[mechanical] opencode_enabled must be a boolean")
+    config["mechanical_opencode_enabled"] = mechanical.get("opencode_enabled", True)
     coding = user.get("coding", {})
     if not isinstance(coding, dict):
         raise ValueError("[coding] must be a table")

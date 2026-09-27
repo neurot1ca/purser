@@ -57,6 +57,20 @@ setup = "npm ci"
     )
 
 
+@pytest.mark.parametrize("agent", ["opencode", "codex"])
+def test_reviewer_role_accepts_selected_agent(profile_root, agent):
+    result = _load(profile_root, user_text=f'''schema_version = 1
+[roles]
+reviewer = "{agent}"
+[reviewer.selected]
+agent = "{agent}"
+model = "deepseek/deepseek-flash"
+''')
+    assert result.user_status == "ok"
+    assert result.roles.reviewer == agent
+    assert result.reviewer_candidates[0].agent == agent
+
+
 def test_invalid_worktree_profile_fields_warn_and_are_ignored(profile_root):
     result = _load(profile_root, '''schema_version = 1
 [worktree]
@@ -158,7 +172,7 @@ def test_user_roles_load_valid_values(profile_root):
 
 @pytest.mark.parametrize(
     "roles",
-    ['reviewer = "codex"', 'extra = "agy"'],
+    ['reviewer = "claude"', 'extra = "agy"'],
     ids=["invalid-value", "unknown-key"],
 )
 def test_invalid_user_roles_reject_user_tier(profile_root, roles):

@@ -105,7 +105,7 @@ def _agent(name: str, executable: str | None = None) -> dict:
     return {"available": True, "path": path, "version": version}
 
 
-def detect(config_path: Path, project: Path) -> dict:
+def detect(config_path: Path, project: Path, coder: str | None = None, model: str | None = None) -> dict:
     data = tomllib.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
     reviewer = data.get("reviewer", {})
     configured = reviewer.get("executable") if isinstance(reviewer, dict) else None
@@ -120,29 +120,49 @@ def detect(config_path: Path, project: Path) -> dict:
             agy["models"] = _agy_models(agy["path"])
         except (OSError, UnicodeError, ValueError):
             pass
-    binary = coder_config.opencode_binary()
-    opencode = {"available": False, "path": None, "version": None, "models": []}
-    if binary:
+    if agy["models"]:
+        agy["options"] = _model_options("agy", agy["models"])
+    opencode = {"available": False, "path": None, "version": None, "models": [],
+                "reason": "OpenCode command and platform binary failed"}
+    working = _working_opencode()
+    if working:
+        binary, models = working
+        opencode = _agent("opencode", binary)
+        opencode["models"] = models
+        opencode["options"] = _model_options("opencode", models)
         try:
-            models = _opencode_models(binary)
-        except (OSError, UnicodeError, ValueError):
+            model_listing.refresh_candidates(
+                model_catalog.load_cached_catalog()["providers"], model_ids=models
+            )
+        except (OSError, UnicodeError, ValueError, KeyError, TypeError):
             pass
-        else:
-            opencode = _agent("opencode", binary)
-            opencode["models"] = models
-            try:
-                model_listing.refresh_candidates(
-                    model_catalog.load_cached_catalog()["providers"], model_ids=models
-                )
-            except (OSError, UnicodeError, ValueError, KeyError, TypeError):
-                pass
+    codex = _agent("codex")
+    codex["models"] = []
+    codex["options"] = []
+    if codex["available"]:
+        try:
+            listing = model_listing.list_models("codex", model_catalog.load_cached_catalog()["providers"])
+            if listing.get("status") == "available":
+                codex["models"] = [entry["id"] for entry in listing["models"]]
+                codex["options"] = _model_options("codex", listing["models"])
+        except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+            pass
+    reviewer_options = []
+    for agent, report in (("codex", codex), ("agy", agy), ("opencode", opencode)):
+        if report.get("available"):
+            reviewer_options.extend(_reviewer_options(agent, report.get("models", [])))
+    coder_family = _selected_coder_family(data, coder, model)
+    if coder_family is not None:
+        reviewer_options = _mark_reviewer_options(reviewer_options, coder_family)
     return {
         "agents": {
-            "codex": _agent("codex"),
+            "codex": codex,
             "agy": agy,
             "claude": _agent("claude"),
             "opencode": opencode,
         },
+        "reviewer_options": reviewer_options,
+        "coder_family": coder_family,
         "roles": roles,
         "trusted": str(project) in trust.get("paths", []) if isinstance(trust, dict) else False,
         "profile_exists": (project / ".orchestrator" / "profile.toml").exists(),
@@ -160,6 +180,109 @@ def _opencode_models(binary: str) -> list[str]:
     if not models or any(coder_config.MODEL.fullmatch(model) is None for model in models):
         raise ValueError("opencode models returned an invalid list")
     return models
+
+
+def _working_opencode(model: str | None = None) -> tuple[str, list[str]] | None:
+    for binary in coder_config.opencode_binaries():
+        try:
+            models = _opencode_models(binary)
+        except (OSError, UnicodeError, ValueError):
+            continue
+        if model is None or model in models:
+            return binary, models
+    return None
+
+
+def _model_options(agent: str, models: list[dict]) -> list[dict]:
+    entries = []
+    for model in models:
+        entry = {"id": model, "family": policy.model_family(model)} if isinstance(model, str) else dict(model)
+        if agent == "opencode" and isinstance(entry.get("id"), str) and (
+                entry["id"] == "opencode/big-pickle" or entry["id"].startswith("opencode/") and entry["id"].endswith("-free")):
+            entry["family"] = "opencode"
+        entries.append(entry)
+    free = [entry for entry in entries if agent == "opencode" and (
+        entry.get("id") == "opencode/big-pickle" or
+        (isinstance(entry.get("id"), str) and entry["id"].startswith("opencode/") and entry["id"].endswith("-free")))]
+    options = []
+    if free:
+        families = {policy.vendor_family(entry.get("family")) for entry in free}
+        options.append({"label": "Free OpenCode models (Purser races them)",
+                        "models": [entry["id"] for entry in free],
+                        "family": next(iter(families)) if len(families) == 1 else None})
+    options.extend({"label": entry["id"], "models": [entry["id"]],
+                    "family": policy.vendor_family(entry.get("family"))}
+                   for entry in entries if entry not in free)
+    return options
+
+
+def _reviewer_options(agent: str, models: list) -> list[dict]:
+    options = []
+    for entry in models:
+        model = entry if isinstance(entry, str) else entry.get("id")
+        if not isinstance(model, str):
+            continue
+        family = entry.get("family") if isinstance(entry, dict) else policy.model_family(model)
+        if agent == "opencode" and (model == "opencode/big-pickle" or
+                                     model.startswith("opencode/") and model.endswith("-free")):
+            family = "opencode"
+        options.append({"agent": agent, "model": model, "label": model,
+                        "family": policy.vendor_family(family)})
+    return options
+
+
+def _selected_coder_family(data: dict, coder: str | None, model: str | None) -> str | None:
+    roles = data.get("roles", {})
+    coding = data.get("coding", {})
+    selected_coder = coder or (roles.get("coder") if isinstance(roles, dict) else None)
+    if selected_coder == "claude":
+        return "anthropic"
+    if selected_coder not in ("codex", "opencode", "agy"):
+        return None
+    selected_model = model
+    configured_coder = roles.get("coder") if isinstance(roles, dict) else None
+    if selected_model is None and configured_coder == selected_coder and isinstance(coding, dict):
+        routes = coding.get("routes", {})
+        route = routes.get("normal") if isinstance(routes, dict) else None
+        selected_model = route.get("model") if isinstance(route, dict) else route
+    if selected_model is None and selected_coder == "codex":
+        shipped = json.loads(Path(__file__).with_name("config.json").read_text(encoding="utf-8"))
+        selected_model = shipped["routes"]["normal"]["model"]
+    family = (coding.get("family") if model is None and configured_coder == selected_coder
+              and isinstance(coding, dict) else None)
+    if family is None and selected_model is not None:
+        options = _model_options(selected_coder, [selected_model])
+        family = options[0].get("family") if options else None
+    return policy.vendor_family(family)
+
+
+def _same_vendor(option: dict, coder_family: str | None) -> bool:
+    family = policy.vendor_family(coder_family)
+    return family is not None and option.get("family") == family
+
+
+def _mark_reviewer_options(options: list[dict], coder_family: str | None) -> list[dict]:
+    return [{**option, "same_family": _same_vendor(option, coder_family)} for option in options]
+
+
+def _reviewer_executable(agent: str, model: str) -> str | None:
+    if agent == "agy":
+        binary = coder_config.agy_binary()
+        if not binary or model not in _agy_models(binary):
+            raise ValueError("selected Reviewer-1 model is absent from agy models")
+        return binary
+    if agent == "opencode":
+        working = _working_opencode(model)
+        if not working:
+            raise ValueError("selected Reviewer-1 model is absent from opencode models")
+        return working[0]
+    if agent == "codex":
+        binary = shutil.which("codex")
+        listing = model_listing.list_models("codex", model_catalog.load_cached_catalog()["providers"])
+        if not binary or listing.get("status") != "available" or model not in {entry["id"] for entry in listing["models"]}:
+            raise ValueError("selected Reviewer-1 model is absent from codex models")
+        return binary
+    return None
 
 
 def _agy_models(binary: str) -> list[str]:
@@ -293,7 +416,10 @@ def _append_trust_path(text: str, path: str, newline: str) -> str:
 
 
 def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, project: Path,
-               model: str | None = None, routes: dict | None = None, family: str | None = None) -> bytes:
+               model: str | None = None, routes: dict | None = None, family: str | None = None,
+               reviewer_model: str | None = None,
+               reviewer_executable: str | None = None,
+               opencode_mechanical: bool | None = None) -> bytes:
     text = original.decode("utf-8") if original is not None else "schema_version = 1\n"
     before = tomllib.loads(text)
     newline = "\r\n" if "\r\n" in text else "\n"
@@ -304,6 +430,25 @@ def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, p
     roles.update(orchestrator="claude-code", coder=coder, reviewer=reviewer)
     for key in ("orchestrator", "coder", "reviewer"):
         text = _upsert(text, "roles", key, roles[key], newline)
+    if reviewer != "none" and reviewer_model is not None:
+        selected = after.setdefault("reviewer", {})
+        if not isinstance(selected, dict):
+            raise ValueError("[reviewer] must be a table")
+        selected["selected"] = {"agent": reviewer, "model": reviewer_model}
+        text = _upsert(text, "reviewer", "selected", {"agent": reviewer, "model": reviewer_model}, newline,
+                       rendered=f"selected = {{ agent = {json.dumps(reviewer)}, model = {json.dumps(reviewer_model)} }}{newline}")
+    if reviewer_executable is not None:
+        reviewer_table = after.setdefault("reviewer", {})
+        if not isinstance(reviewer_table, dict):
+            raise ValueError("[reviewer] must be a table")
+        reviewer_table["executable"] = reviewer_executable
+        text = _upsert(text, "reviewer", "executable", reviewer_executable, newline)
+    if opencode_mechanical is not None:
+        mechanical = after.setdefault("mechanical", {})
+        if not isinstance(mechanical, dict):
+            raise ValueError("[mechanical] must be a table")
+        mechanical["opencode_enabled"] = opencode_mechanical
+        text = _upsert(text, "mechanical", "opencode_enabled", opencode_mechanical, newline)
     if routes is not None or coder in ("opencode", "agy") or "coding" in after:
         coding = after.setdefault("coding", {})
         if not isinstance(coding, dict):
@@ -422,20 +567,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model")
     parser.add_argument("--mode", choices=("balanced", "maximum", "manual"))
     parser.add_argument("--effort")
-    parser.add_argument("--reviewer", choices=("agy", "none"))
+    parser.add_argument("--reviewer", choices=("agy", "opencode", "codex", "none"))
+    parser.add_argument("--reviewer-model")
+    parser.add_argument("--opencode-mechanical", action="store_const", const=True, default=None)
+    parser.add_argument("--no-opencode-mechanical", action="store_const", const=False, dest="opencode_mechanical")
     parser.add_argument("--trust", action="store_true")
     parser.add_argument("--scaffold-profile", action="store_true")
     args = parser.parse_args(argv)
     if args.detect:
-        if not args.json or args.coder or args.model or args.mode or args.effort or args.reviewer or args.trust or args.scaffold_profile:
-            parser.error("--detect requires --json and no change options")
+        if not args.json or args.mode or args.effort or args.reviewer or args.reviewer_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
+            parser.error("--detect requires --json and accepts only optional --coder and --model")
+        if args.model and not args.coder:
+            parser.error("--detect --model requires --coder")
     elif args.list_models:
-        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.mode or args.effort or args.reviewer or args.trust or args.scaffold_profile:
+        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.mode or args.effort or args.reviewer or args.reviewer_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
             parser.error("--list-models requires --json and --coder codex, opencode, or agy")
     elif args.json or args.coder is None or args.reviewer is None:
         parser.error("--plan and --apply require --coder and --reviewer, without --json")
     if args.mode == "manual" and not args.model:
         parser.error("--mode manual requires --model")
+    if args.reviewer_model and args.reviewer == "none":
+        parser.error("--reviewer-model cannot be used with --reviewer none")
+    if args.reviewer in ("opencode", "codex") and not args.reviewer_model:
+        parser.error(f"--reviewer {args.reviewer} requires --reviewer-model")
+    if args.reviewer_model and args.reviewer is None:
+        parser.error("--reviewer-model requires --reviewer")
     if args.mode in ("balanced", "maximum") and (args.model is not None or args.effort is not None):
         parser.error("--model and --effort require --mode manual")
     if not args.mode and args.effort is not None:
@@ -448,7 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     profile = project / ".orchestrator" / "profile.toml"
     try:
         if args.detect:
-            print(json.dumps(detect(config, project), indent=2))
+            print(json.dumps(detect(config, project, args.coder, args.model), indent=2))
             return 0
         if args.list_models:
             catalog = model_catalog.load_catalog()
@@ -466,8 +622,8 @@ def main(argv: list[str] | None = None) -> int:
                                  for name, value in routes.items()}
             policy.validate_config(shipped)
         if args.coder == "opencode" and not args.mode:
-            binary = coder_config.opencode_binary()
-            if not binary or not args.model or args.model not in _opencode_models(binary):
+            working = _working_opencode(args.model)
+            if not working:
                 raise ValueError("OpenCode is unavailable or selected model is absent from opencode models")
         if args.coder == "agy" and not args.mode:
             binary = coder_config.agy_binary()
@@ -477,7 +633,13 @@ def main(argv: list[str] | None = None) -> int:
             family = _listed_family(args.coder, args.model)
         handoff = compaction_advisor.handoff_path(project)
         original = config.read_bytes() if config.exists() else None
-        changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model, routes, family)
+        reviewer_executable = None
+        if args.reviewer_model:
+            reviewer_executable = _reviewer_executable(args.reviewer, args.reviewer_model)
+            if not reviewer_executable:
+                raise ValueError(f"Reviewer-1 executable is unavailable for {args.reviewer}")
+        changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model, routes, family,
+                             args.reviewer_model, reviewer_executable, args.opencode_mechanical)
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
         handoff_missing = not handoff.exists()
         python_original = python_file.read_bytes() if python_file.exists() else None
