@@ -129,15 +129,20 @@ class _AgyAdapter:
         cwd: Path,
         timeout: float,
     ) -> subprocess.CompletedProcess[str]:
+        kwargs: dict[str, Any] = {
+            "cwd": cwd,
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "timeout": timeout,
+            "check": False,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         return runner(
             command,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
+            **kwargs,
         )
 
     def parse(
@@ -1495,6 +1500,7 @@ def _run_git(repo_root: Path, args: Sequence[str]) -> str:
         errors="strict",
         timeout=30,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
     )
     if completed.returncode != 0:
         raise ValueError("git could not reconstruct the delegated diff")
@@ -1525,6 +1531,7 @@ def _new_file_diff(repo_root: Path, path: str) -> str:
         errors="strict",
         timeout=30,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
     )
     if completed.returncode not in {0, 1}:
         raise ValueError("git could not reconstruct the complete new-file addition")

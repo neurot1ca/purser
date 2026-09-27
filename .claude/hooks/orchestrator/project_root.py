@@ -43,6 +43,7 @@ def resolve_candidate(
             errors="replace",
             timeout=10,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
         )
     except FileNotFoundError:
         return None, "project root unresolved: git executable is unavailable"

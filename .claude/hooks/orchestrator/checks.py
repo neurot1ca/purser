@@ -32,6 +32,7 @@ def _status(repo_root: Path) -> dict[str, str] | None:
             ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
             cwd=repo_root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=10, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
         )
         if completed.returncode != 0:
             return None
@@ -120,6 +121,7 @@ def _stop_tree(process: subprocess.Popen[bytes]) -> None:
                 ["taskkill", "/T", "/F", "/PID", str(process.pid)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=1, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
             )
         except (OSError, subprocess.TimeoutExpired):
             pass
@@ -195,7 +197,9 @@ def _run_one(repo_root: Path, check: Check, remaining: float) -> dict[str, objec
         return {"name": check.name, "status": "UNKNOWN", "exit_code": None,
                 "duration_ms": 0, "tail": f"unresolvable executable: {check.argv[0]}"}
     command = [executable, *check.argv[1:]]
-    creation = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    creation = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | getattr(
+        subprocess, "CREATE_NO_WINDOW", 0x08000000
+    )} if os.name == "nt" else {"start_new_session": True}
     try:
         process = subprocess.Popen(
             command, cwd=repo_root, env={**os.environ, "CI": "1"},

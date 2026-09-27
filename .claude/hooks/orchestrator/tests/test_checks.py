@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,39 @@ def _commit_files(repo, *paths):
     subprocess.run(["git", "config", "user.name", "Purser Tests"], cwd=repo, check=True)
     subprocess.run(["git", "add", *paths], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "test baseline"], cwd=repo, check=True)
+
+
+def test_check_subprocesses_hide_windows_console(monkeypatch):
+    run_calls = []
+    popen_calls = []
+    monkeypatch.setattr(checks, "os", SimpleNamespace(name="nt", environ=os.environ))
+    monkeypatch.setattr(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
+    monkeypatch.setattr(checks.subprocess, "run", lambda *args, **kwargs: run_calls.append(kwargs)
+                        or SimpleNamespace(returncode=0, stdout=b""))
+
+    class Process:
+        pid = 123
+        returncode = 0
+
+        def communicate(self, **kwargs):
+            return b"", None
+
+        def poll(self):
+            return 0
+
+    process = Process()
+    monkeypatch.setattr(checks.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append(kwargs) or process)
+    monkeypatch.setattr(checks.shutil, "which", lambda _: "check.exe")
+    monkeypatch.setattr(checks, "_windows_descendants", lambda _: [])
+    monkeypatch.setattr(checks, "_windows_terminate", lambda _: None)
+
+    checks._status(Path.cwd())
+    checks._run_one(Path.cwd(), _python("pass", "pass"), 5)
+    checks._stop_tree(process)
+
+    assert len(run_calls) == 2
+    assert all(call["creationflags"] & 0x08000000 for call in run_calls)
+    assert popen_calls[0]["creationflags"] & 0x08000000
 
 
 def test_pass_and_empty_selection(repo):

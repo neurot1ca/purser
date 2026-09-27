@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -71,6 +72,33 @@ def materials(diff="diff --git a/a.py b/a.py\n-old\n+new\n"):
 
 def credential_text():
     return "api_" + "key = '" + "abcdefghijklmnopqrstuvwxyz012345" + "'"
+
+
+def test_reviewer_launches_and_git_calls_hide_windows_console(monkeypatch):
+    monkeypatch.setattr(reviewer, "os", SimpleNamespace(
+        name="nt", path=os.path, devnull=os.devnull, environ=os.environ,
+    ))
+    launch_calls = []
+    git_calls = []
+    runner = lambda *args, **kwargs: launch_calls.append(kwargs) or subprocess.CompletedProcess(args[0], 0, "", "")
+    cwd = Path.cwd()
+    for adapter, command in (
+        (reviewer.AGY_ADAPTER, ["agy"]),
+        (reviewer.OPENCODE_ADAPTER, ["opencode", "--agent", "reviewer"]),
+        (reviewer.CODEX_ADAPTER, ["codex"]),
+    ):
+        adapter.invoke(command, runner=runner, cwd=cwd, timeout=1)
+
+    monkeypatch.setattr(reviewer.subprocess, "run", lambda *args, **kwargs: git_calls.append(kwargs)
+                        or subprocess.CompletedProcess(args[0], 0, "diff", ""))
+    repo = Path(__file__).parents[1]
+    reviewer._run_git(repo, ["status"])
+    reviewer._new_file_diff(repo, "reviewer.py")
+
+    assert len(launch_calls) == 3
+    assert all(call["creationflags"] & 0x08000000 for call in launch_calls)
+    assert len(git_calls) == 2
+    assert all(call["creationflags"] & 0x08000000 for call in git_calls)
 
 
 def diff_for(path, *lines, new_file=False):

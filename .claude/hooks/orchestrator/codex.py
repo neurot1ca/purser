@@ -532,6 +532,7 @@ def _attempt_in_hook_micro_repair(
             text=True,
             timeout=timeout_seconds,
             shell=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
         )
         if proc.returncode == 0:
             sys.stderr.write("[orchestrator] In-hook micro-repair succeeded; re-evaluating with Reviewer-1...\n")

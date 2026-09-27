@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 import sys
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -74,3 +75,17 @@ def test_explicit_root_precedes_hook_candidates_without_git_lookup(tmp_path):
 
     assert resolved == explicit.resolve()
     assert reason == ""
+
+
+def test_git_root_lookup_hides_windows_console(monkeypatch):
+    calls = []
+    candidate = Path.cwd()
+    monkeypatch.setattr(project_root, "os", SimpleNamespace(name="nt", PathLike=os.PathLike))
+    monkeypatch.setattr(project_root.subprocess, "run", lambda *args, **kwargs: calls.append(kwargs)
+                        or subprocess.CompletedProcess(args[0], 0, str(candidate), ""))
+
+    resolved, reason = project_root.resolve_candidate(candidate)
+
+    assert resolved == candidate.resolve()
+    assert reason == ""
+    assert calls[0]["creationflags"] & 0x08000000

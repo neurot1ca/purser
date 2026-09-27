@@ -4465,6 +4465,17 @@ def test_post_tool_use_micro_repair_triggers_on_changes_required(workspace, conf
     assert bundle["audit_receipt"]["verdict"] == "READY_FOR_ONE_TURN_ACCEPT"
 
 
+def test_micro_repair_hides_windows_console(monkeypatch):
+    calls = []
+    monkeypatch.setattr(codex, "os", type("OS", (), {"name": "nt"})())
+    monkeypatch.setattr(codex.subprocess, "run", lambda *args, **kwargs: calls.append(kwargs)
+                        or subprocess.CompletedProcess(args[0], 0, "ok", ""))
+
+    codex._attempt_in_hook_micro_repair("thread", [{"code": "F", "message": "finding"}], Path.cwd())
+
+    assert calls[0]["creationflags"] & 0x08000000
+
+
 def test_post_tool_use_micro_repair_stale_delta_forces_full_review(workspace, config, monkeypatch):
     repo, state = workspace
     call = event()
