@@ -1025,6 +1025,8 @@ class Server:
                 if reply_record is not None:
                     job.update({key: reply_record[key] for key in
                                 ("worktreePath", "snapshot", "head", "repoRoot") if key in reply_record})
+                    if job.get("worktreePath"):
+                        job["replySnapshotPending"] = True
                 if args.get("leaseQueued") is True:
                     job["leaseQueued"] = True
                 for field in ("taskId", "route", "etaMinutes"):
@@ -1648,13 +1650,18 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                 if not worktree_path.is_dir():
                     server._finish_job(job_id, "FAILED", "WORKTREE_MISSING")
                     return
-                try:
-                    snapshot = ledger.capture_job_snapshot(worktree_path)
-                except Exception:
-                    server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_FAILED")
-                    return
-                job["snapshot"] = snapshot
-                server._write_job(job)
+                if job.get("replySnapshotPending") is True:
+                    if job.get("resumedAfterInterruption"):
+                        server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_INTERRUPTED")
+                        return
+                    try:
+                        snapshot = ledger.capture_job_snapshot(worktree_path)
+                    except Exception:
+                        server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_FAILED")
+                        return
+                    job["snapshot"] = snapshot
+                    job.pop("replySnapshotPending", None)
+                    server._write_job(job)
                 repo_root = Path(job.get("repoRoot", worktree_path)).resolve()
                 requested_cwd = Path(launch["args"].get("cwd", repo_root)).resolve()
                 try:
