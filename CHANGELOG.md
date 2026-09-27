@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.35 — 2026-09-27
+
+- The code map runs through the plugin's Python locator, and the operations guide documents it.
+- AGENTS.md asks for small targeted edits instead of whole-file rewrites.
+- The handoff keeps the last three user messages and the last reply verbatim, refreshed from the transcript at compact.
+- OpenCode can be the coder (`coder_agent`); routes, receipts, telemetry and replies follow the agent, and an unknown model family forces FULL review.
+- After a consumed Codex result, the Stop hook nudges Claude once to continue instead of asking.
 ## 0.1.34 — 2026-09-27
 
 - Codex ETA learning is per coding agent; every fifth compact measures estimate error and reports when it improves.
