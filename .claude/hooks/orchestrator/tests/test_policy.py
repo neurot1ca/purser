@@ -29,6 +29,15 @@ def test_opencode_route_requires_qualified_model_and_variant(config):
     assert policy.resolve_route("normal", config).code == policy.CONFIG_INVALID
 
 
+def test_complete_non_sol_routes_validate_but_incomplete_routes_fail(config):
+    for entry in config["routes"].values():
+        entry.update(model="gpt-6-astra", effort="ultra")
+    assert policy.validate_config(config) is None
+    del config["routes"]["normal"]
+    with pytest.raises(policy.ConfigError, match="ROUTE_TABLE_INCOMPLETE"):
+        policy.validate_config(config)
+
+
 def test_agy_route_is_gemini_family(config):
     config["coder_agent"] = "agy"
     for entry in config["routes"].values():

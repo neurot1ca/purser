@@ -286,3 +286,54 @@ def test_switch_from_opencode_to_claude_clears_routes(site, monkeypatch):
     assert saved["roles"]["coder"] == "claude"
     assert saved["coding"] == {"coder_agent": "codex", "routes": {}}
     assert coder_config.load(Path(__file__).parents[1] / "config.json")["routes"]["normal"]["model"] == "gpt-6-sol"
+
+
+def test_balanced_persists_exact_shipped_codex_routes(site):
+    home, _ = site
+    assert run("--apply", "--coder", "codex", "--reviewer", "none", "--mode", "balanced") == 0
+    shipped = json.loads((Path(__file__).parents[1] / "config.json").read_text(encoding="utf-8"))
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert saved["coding"]["routes"] == shipped["routes"]
+    assert coder_config.load(Path(__file__).parents[1] / "config.json")["routes"] == shipped["routes"]
+
+
+def test_maximum_uses_top_listed_effort_on_every_route(site, monkeypatch):
+    home, _ = site
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {
+        "status": "available", "models": [{"id": "gpt-6-astra", "efforts": ["ultra", "high"]}]})
+    assert run("--apply", "--coder", "codex", "--reviewer", "none", "--mode", "maximum") == 0
+    loaded = coder_config.load(Path(__file__).parents[1] / "config.json")
+    assert set(loaded["routes"]) == set(loaded["required_routes"])
+    assert set((entry["model"], entry["effort"]) for entry in loaded["routes"].values()) == {
+        ("gpt-6-astra", "ultra")}
+
+
+def test_manual_opencode_without_listed_efforts_omits_effort(site, monkeypatch):
+    home, _ = site
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {
+        "status": "available", "models": [{"id": "openai/gpt-6-astra", "efforts": None}]})
+    assert run("--apply", "--coder", "opencode", "--reviewer", "none", "--mode", "manual",
+               "--model", "openai/gpt-6-astra") == 0
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert set(saved["coding"]["routes"].values()) == {"openai/gpt-6-astra"}
+    assert {entry["effort"] for entry in coder_config.load(Path(__file__).parents[1] / "config.json")["routes"].values()} == {"none"}
+
+
+@pytest.mark.parametrize("mode,model,effort,listing", [
+    ("maximum", None, None, {"status": "unavailable", "reason": "CLI failed"}),
+    ("maximum", None, None, {"status": "available", "models": [{"id": "gpt-other", "efforts": ["ultra"]}]}),
+    ("manual", "gpt-6-astra", "ultra", {"status": "unavailable", "reason": "CLI failed"}),
+    ("manual", "gpt-unknown", "high", {"status": "available", "models": [{"id": "gpt-6-astra", "efforts": ["high"]}]}),
+    ("manual", "gpt-6-astra", "ultra", {"status": "available", "models": [{"id": "gpt-6-astra", "efforts": ["high"]}]}),
+])
+def test_unverified_mode_choice_rejects_before_write(site, monkeypatch, mode, model, effort, listing):
+    home, _ = site
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: listing)
+    args = ["--apply", "--coder", "codex", "--reviewer", "none", "--mode", mode]
+    if model:
+        args.extend(("--model", model, "--effort", effort))
+    assert run(*args) == 1
+    assert not (home / ".orchestrator").exists()

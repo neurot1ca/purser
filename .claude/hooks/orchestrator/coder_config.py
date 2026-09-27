@@ -65,7 +65,17 @@ def load(config_path: Path) -> dict:
             if len(set(routes.values())) != 1:
                 raise ValueError("[coding] coder routes must use one model")
             config["routes"] = {name: {"model": model, "effort": "none"} for name, model in routes.items()}
-    elif role in ("opencode", "agy") or coding.get("routes", {}) != {}:
+    elif role in ("opencode", "agy"):
         raise ValueError("[coding] coder agent and routes disagree")
+    else:
+        routes = coding.get("routes", {})
+        if not isinstance(routes, dict) or (routes and (role != "codex" or set(routes) != set(config["required_routes"]))):
+            raise ValueError("[coding] coder routes or role are invalid")
+        if routes:
+            if not all(isinstance(entry, dict) and set(entry) == {"model", "effort"}
+                       and isinstance(entry["model"], str) and re.fullmatch(r"[A-Za-z0-9._-]+", entry["model"])
+                       and entry["effort"] in config["allowed_efforts"] for entry in routes.values()):
+                raise ValueError("[coding] Codex route model or effort is invalid")
+            config["routes"] = routes
     config["coder_agent"] = agent
     return config

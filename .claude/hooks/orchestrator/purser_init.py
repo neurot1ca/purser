@@ -20,10 +20,53 @@ import compaction_advisor
 import coder_config
 import model_catalog
 import model_listing
+import policy
 
 
 HEAD = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
 KEY = re.compile(r"^\s*([A-Za-z0-9_-]+)\s*=")
+# Ugur 2026-09-27: reviewed Maximum model policy; listings supply the effort.
+MAXIMUM_MODELS = {"codex": "gpt-6-astra"}
+
+
+def _mode_routes(mode: str, coder: str, model: str | None, effort: str | None) -> dict:
+    shipped = json.loads(Path(__file__).with_name("config.json").read_text(encoding="utf-8"))
+    if mode == "balanced":
+        if coder != "codex":
+            raise ValueError("balanced mode has no reviewed policy for this coder")
+        return deepcopy(shipped["routes"])
+    if mode == "maximum":
+        model = MAXIMUM_MODELS.get(coder)
+        if model is None:
+            raise ValueError(f"maximum mode has no reviewed model policy for {coder}")
+    catalog = model_catalog.load_catalog()
+    listing = model_listing.list_models(coder, catalog["providers"])
+    if listing["status"] != "available":
+        raise ValueError(f"{coder} model listing unavailable: {listing.get('reason', 'unknown reason')}")
+    choices = {entry["id"]: entry for entry in listing["models"]}
+    if not isinstance(model, str) or model not in choices:
+        raise ValueError(f"model {model!r} is absent from the live {coder} listing")
+    levels = choices[model]["efforts"]
+    if mode == "maximum":
+        if not levels:
+            raise ValueError(f"{model} has no listed effort levels")
+        try:
+            effort = max(levels, key=shipped["allowed_efforts"].index)
+        except ValueError as exc:
+            raise ValueError(f"{model} lists an unsupported effort level") from exc
+    elif (levels is None and effort is not None) or (levels is not None and effort not in levels):
+        raise ValueError(f"effort {effort!r} is absent from the live listing for {model}")
+    if coder == "codex":
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", model) or effort not in shipped["allowed_efforts"]:
+            raise ValueError("listed Codex model or effort is invalid for Purser routes")
+    elif coder == "opencode":
+        if not coder_config.MODEL.fullmatch(model) or effort is not None:
+            raise ValueError("listed OpenCode model or effort is invalid for Purser routes")
+    elif coder == "agy":
+        if not coder_config.AGY_MODEL.fullmatch(model) or effort not in coder_config.AGY_EFFORTS:
+            raise ValueError("listed Antigravity model or effort is invalid for Purser routes")
+    pair = {"model": model, "effort": effort} if effort is not None else model
+    return {route: deepcopy(pair) for route in shipped["required_routes"]}
 
 
 def _agent(name: str, executable: str | None = None) -> dict:
@@ -225,7 +268,7 @@ def _append_trust_path(text: str, path: str, newline: str) -> str:
 
 
 def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, project: Path,
-               model: str | None = None) -> bytes:
+               model: str | None = None, routes: dict | None = None) -> bytes:
     text = original.decode("utf-8") if original is not None else "schema_version = 1\n"
     before = tomllib.loads(text)
     newline = "\r\n" if "\r\n" in text else "\n"
@@ -236,12 +279,12 @@ def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, p
     roles.update(orchestrator="claude-code", coder=coder, reviewer=reviewer)
     for key in ("orchestrator", "coder", "reviewer"):
         text = _upsert(text, "roles", key, roles[key], newline)
-    if coder in ("opencode", "agy") or "coding" in after:
+    if routes is not None or coder in ("opencode", "agy") or "coding" in after:
         coding = after.setdefault("coding", {})
         if not isinstance(coding, dict):
             raise ValueError("[coding] must be a table")
         coding["coder_agent"] = coder if coder in ("opencode", "agy") else "codex"
-        coding["routes"] = ({name: ({"model": model, "effort": "medium"} if coder == "agy" else model)
+        coding["routes"] = routes if routes is not None else ({name: ({"model": model, "effort": "medium"} if coder == "agy" else model)
                              for name in json.loads(
             (Path(__file__).with_name("config.json")).read_text(encoding="utf-8"))["required_routes"]}
             if coder in ("opencode", "agy") else {})
@@ -249,7 +292,7 @@ def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, p
         routes = coding["routes"]
         rendered = "routes = {" + ", ".join(
             f"{name} = {{ model = {json.dumps(value['model'])}, effort = {json.dumps(value['effort'])} }}"
-            if coder == "agy" else f"{name} = {json.dumps(value)}"
+            if isinstance(value, dict) else f"{name} = {json.dumps(value)}"
             for name, value in routes.items()) + "}" + newline
         text = _upsert(text, "coding", "routes", routes, newline, rendered=rendered)
     if trust:
@@ -337,19 +380,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--coder", choices=("codex", "claude", "opencode", "agy"))
     parser.add_argument("--model")
+    parser.add_argument("--mode", choices=("balanced", "maximum", "manual"))
+    parser.add_argument("--effort")
     parser.add_argument("--reviewer", choices=("agy", "none"))
     parser.add_argument("--trust", action="store_true")
     parser.add_argument("--scaffold-profile", action="store_true")
     args = parser.parse_args(argv)
     if args.detect:
-        if not args.json or args.coder or args.model or args.reviewer or args.trust or args.scaffold_profile:
+        if not args.json or args.coder or args.model or args.mode or args.effort or args.reviewer or args.trust or args.scaffold_profile:
             parser.error("--detect requires --json and no change options")
     elif args.list_models:
-        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.reviewer or args.trust or args.scaffold_profile:
+        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.mode or args.effort or args.reviewer or args.trust or args.scaffold_profile:
             parser.error("--list-models requires --json and --coder codex, opencode, or agy")
     elif args.json or args.coder is None or args.reviewer is None:
         parser.error("--plan and --apply require --coder and --reviewer, without --json")
-    if args.coder not in ("opencode", "agy") and args.model is not None:
+    if args.mode == "manual" and not args.model:
+        parser.error("--mode manual requires --model")
+    if args.mode in ("balanced", "maximum") and (args.model is not None or args.effort is not None):
+        parser.error("--model and --effort require --mode manual")
+    if not args.mode and args.effort is not None:
+        parser.error("--effort requires --mode manual")
+    if not args.mode and args.coder not in ("opencode", "agy") and args.model is not None:
         parser.error("--model requires --coder opencode or agy")
     project = Path.cwd().resolve()
     config = Path.home() / ".orchestrator" / "config.toml"
@@ -363,17 +414,24 @@ def main(argv: list[str] | None = None) -> int:
             catalog = model_catalog.load_catalog()
             print(json.dumps(model_listing.list_models(args.coder, catalog["providers"]), indent=2))
             return 0
-        if args.coder == "opencode":
+        routes = _mode_routes(args.mode, args.coder, args.model, args.effort) if args.mode else None
+        if routes is not None:
+            shipped = json.loads(Path(__file__).with_name("config.json").read_text(encoding="utf-8"))
+            shipped["coder_agent"] = args.coder
+            shipped["routes"] = {name: value if isinstance(value, dict) else {"model": value, "effort": "none"}
+                                 for name, value in routes.items()}
+            policy.validate_config(shipped)
+        if args.coder == "opencode" and not args.mode:
             binary = coder_config.opencode_binary()
             if not binary or not args.model or args.model not in _opencode_models(binary):
                 raise ValueError("OpenCode is unavailable or selected model is absent from opencode models")
-        if args.coder == "agy":
+        if args.coder == "agy" and not args.mode:
             binary = coder_config.agy_binary()
             if not binary or not args.model or args.model not in _agy_models(binary):
                 raise ValueError("Antigravity is unavailable or selected model is absent from agy models")
         handoff = compaction_advisor.handoff_path(project)
         original = config.read_bytes() if config.exists() else None
-        changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model)
+        changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model, routes)
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
         handoff_missing = not handoff.exists()
         python_original = python_file.read_bytes() if python_file.exists() else None

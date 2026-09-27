@@ -111,8 +111,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
     agent = config.get("coder_agent", "codex")
     if agent not in ("codex", "opencode", "agy"):
         raise ConfigError("INVALID_CONFIG_FIELD", "coder_agent must be codex, opencode or agy")
-    if agent == "codex" and "sol_model" not in config:
-        raise ConfigError("MISSING_CONFIG_FIELD", "config is missing required field(s): sol_model")
     required_routes = set(_string_list(config, "required_routes"))
 
     routes = config["routes"]
@@ -141,13 +139,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
                 "INVALID_ROUTE_EFFORT",
                 f"route {route!r} names unsupported effort {effort!r}",
             )
-
-    if agent == "codex":
-        sol_model = config["sol_model"]
-        if not isinstance(sol_model, str) or not sol_model:
-            raise ConfigError("INVALID_CONFIG_FIELD", "sol_model must be a non-empty string")
-        if not any(entry["model"] == sol_model for entry in routes.values()):
-            raise ConfigError("INVALID_CONFIG_FIELD", "sol_model is absent from the route table")
 
     always_full_routes = set(_string_list(config, "always_full_routes"))
     if not always_full_routes.issubset(routes):
