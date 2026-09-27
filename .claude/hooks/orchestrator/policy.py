@@ -584,18 +584,41 @@ def _skip_reviewer(reason: str, message: str) -> SkipReviewerDecision:
 def model_family(model: str) -> str | None:
     if not isinstance(model, str):
         return None
+    prefix, separator, _ = model.partition("/")
+    if separator and prefix.lower() in {"openai", "google", "deepseek", "anthropic", "qwen", "mistral", "llama"}:
+        return {"anthropic": "claude"}.get(prefix.lower(), prefix.lower())
     name = model.split("/", 1)[-1].lower()
-    if name.startswith("gemini-"):
+    if name.startswith(("gemini-", "google/")):
         return "gemini"
-    if name.startswith("gpt-"):
+    if name.startswith("gpt-") or re.match(r"^o[134](?:-|$)", name):
         return "gpt"
+    for vendor in ("qwen", "mistral", "llama"):
+        if name.startswith(vendor + "-") or re.match(rf"^{vendor}[0-9]", name):
+            return vendor
+    if name.startswith("deepseek-"):
+        return "deepseek"
+    if name.startswith("claude-"):
+        return "claude"
     return None
 
 
 def vendor_family(family: str | None) -> str | None:
     if not isinstance(family, str):
         return None
-    vendor = family.split("-", 1)[0].lower()
+    normalized = family.strip().lower()
+    aliases = {
+        "gpt": "openai", "openai": "openai",
+        "gemini": "google", "google": "google",
+        "deepseek": "deepseek",
+        "claude": "anthropic", "anthropic": "anthropic",
+        "qwen3": "qwen", "mistral": "mistral", "llama3": "llama",
+    }
+    vendor = normalized.split("-", 1)[0].split("/", 1)[0]
+    if vendor in aliases:
+        return aliases[vendor]
+    for known in ("qwen", "mistral", "llama"):
+        if vendor.startswith(known) and vendor[len(known):].isdigit():
+            return known
     return vendor or None
 
 

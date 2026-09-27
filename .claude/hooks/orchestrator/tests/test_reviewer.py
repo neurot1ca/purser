@@ -337,6 +337,22 @@ def test_well_formed_success_parses_and_attests_only_requested_model(config):
     assert runner.packet_path is not None and not runner.packet_path.exists()
 
 
+def test_no_material_verdict_with_findings_is_rejected(config):
+    runner = FakeRunner(
+        stdout=envelope(
+            response(
+                policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                findings=[{"code": "BUG", "message": "A material bug was found."}],
+            )
+        )
+    )
+
+    result = run_review(config, runner)
+
+    assert_unavailable(result)
+    assert result["error_code"] == "REVIEWER_RESPONSE_INVALID"
+
+
 def test_non_pinned_model_configuration_is_unavailable(config):
     unpinned = dict(config)
     unpinned["reviewer1_model_requested"] = "some-other-model"

@@ -269,7 +269,7 @@ def test_agy_start_passes_route_effort_to_bridge(workspace, config):
     assert updated["config"] == {"model_reasoning_effort": "medium"}
 
 
-def test_unknown_model_family_skips_reviewer_and_forces_full(workspace, config):
+def test_unknown_model_family_still_reviews(workspace, config):
     repo, state = workspace
     config["coder_agent"] = "opencode"
     for entry in config["routes"].values():
@@ -283,18 +283,17 @@ def test_unknown_model_family_skips_reviewer_and_forces_full(workspace, config):
         {"structuredContent": {"threadId": "mystery-thread", "content": "Done"}}},
         config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
     bundle = response_bundle(result, config)
-    assert not invoked
-    assert bundle["reviewer1_skipped_reason"] == policy.REVIEWER_UNAVAILABLE
+    assert invoked
+    assert bundle["reviewer1_skipped_reason"] is None
+    assert bundle["reviewer1_result"] == policy.UNCERTAIN
     assert bundle["claude_review_mode"] == policy.FULL
     assert bundle["implementer"] == "opencode-main"
 
 
-@pytest.mark.parametrize("family", [None, "gemini"])
-def test_missing_or_matching_stored_family_skips_reviewer_and_forces_full(workspace, config, family):
+def test_same_vendor_stored_family_skips_reviewer_and_forces_full(workspace, config):
     repo, state = workspace
     config["coder_agent"] = "opencode"
-    if family is not None:
-        config["coder_family"] = family
+    config["coder_family"] = "google"
     for entry in config["routes"].values():
         entry.update(model="opencode/big-pickle", effort="none")
     config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
@@ -307,8 +306,8 @@ def test_missing_or_matching_stored_family_skips_reviewer_and_forces_full(worksp
         config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
     bundle = response_bundle(result, config)
     assert not invoked
-    assert bundle["reviewer1_result"] is None
-    assert bundle["reviewer1_skipped_reason"] == policy.REVIEWER_UNAVAILABLE
+    assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
+    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
     assert bundle["claude_review_mode"] == policy.FULL
 
 
@@ -328,8 +327,8 @@ def test_stored_gemini_subfamily_matches_gemini_reviewer(workspace, config):
         config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
     bundle = response_bundle(result, config)
     assert not invoked
-    assert bundle["reviewer1_result"] is None
-    assert bundle["reviewer1_skipped_reason"] == policy.REVIEWER_UNAVAILABLE
+    assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
+    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
     assert bundle["claude_review_mode"] == policy.FULL
 
 
@@ -352,6 +351,115 @@ def test_different_stored_family_runs_reviewer(workspace, config):
     bundle = response_bundle(result, config)
     assert invoked
     assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+
+
+class _RegisteredReviewerFixture:
+    def validate_model(self, model):
+        return None
+
+    def build_command(self, *args, **kwargs):
+        return []
+
+    def invoke(self, *args, **kwargs):
+        return None
+
+    def parse(self, *args, **kwargs):
+        return None
+
+
+def _post_with_reviewer_candidates(workspace, config, candidates, reviewer, monkeypatch=None,
+                                  coder_family="unknown"):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    config["coder_family"] = coder_family
+    for entry in config["routes"].values():
+        entry.update(model="opencode/big-pickle", effort="none")
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    pending_path = codex._pending_path(state, call)
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending["reviewer_candidates"] = candidates
+    codex._atomic_json_write(pending_path, pending)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    if monkeypatch is not None:
+        monkeypatch.setitem(reviewer_module.REVIEWER_ADAPTERS, "codex", _RegisteredReviewerFixture())
+    result = codex.post_tool_use(
+        {**call, "hook_event_name": "PostToolUse", "tool_response":
+         {"structuredContent": {"threadId": "reviewer-fallback-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo, reviewer=reviewer,
+    )
+    return response_bundle(result, config)
+
+
+def test_primary_reviewer_success_reports_selected_provider_and_no_attempt_list(workspace, config):
+    report = {
+        "review_status": "COMPLETED", "provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+        "validation": "PASS", "findings": [],
+    }
+    bundle = _post_with_reviewer_candidates(
+        workspace, config, [{"agent": "agy", "model": "gemini-3.8-flash-high"}],
+        lambda **kwargs: report,
+    )
+    assert bundle["reviewer1_provider"] == "agy"
+    assert bundle["reviewer1_model_requested"] == "gemini-3.8-flash-high"
+    assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+    assert "reviewer1_attempts" not in bundle
+
+
+def test_unavailable_primary_falls_back_and_records_attempts(workspace, config, monkeypatch):
+    calls = []
+    def reviewer(**kwargs):
+        calls.append(kwargs)
+        if kwargs["reviewer_agent"] == "agy":
+            return {"review_status": "UNAVAILABLE", "provider": "agy",
+                    "reviewer1_model_requested": kwargs["reviewer_model"],
+                    "result": policy.REVIEWER1_UNAVAILABLE, "validation": "UNKNOWN", "findings": []}
+        return {"review_status": "COMPLETED", "provider": "codex",
+                "reviewer1_model_requested": kwargs["reviewer_model"],
+                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "validation": "PASS", "findings": []}
+    bundle = _post_with_reviewer_candidates(
+        workspace, config,
+        [{"agent": "agy", "model": "gemini-3.8-flash-high"},
+         {"agent": "codex", "model": "gpt-6-sol"}], reviewer, monkeypatch,
+    )
+    assert [call["reviewer_agent"] for call in calls] == ["agy", "codex"]
+    assert bundle["reviewer1_provider"] == "codex"
+    assert bundle["reviewer1_model_requested"] == "gpt-6-sol"
+    assert bundle["reviewer1_attempts"] == [
+        {"agent": "agy", "model": "gemini-3.8-flash-high", "outcome": "UNAVAILABLE"},
+        {"agent": "codex", "model": "gpt-6-sol", "outcome": "COMPLETED"},
+    ]
+
+
+def test_all_reviewer_candidates_exhausted_forces_full(workspace, config, monkeypatch):
+    def unavailable(**kwargs):
+        return {"review_status": "UNAVAILABLE", "provider": kwargs["reviewer_agent"],
+                "reviewer1_model_requested": kwargs["reviewer_model"],
+                "result": policy.REVIEWER1_UNAVAILABLE, "validation": "UNKNOWN", "findings": []}
+    bundle = _post_with_reviewer_candidates(
+        workspace, config,
+        [{"agent": "agy", "model": "gemini-3.8-flash-high"},
+         {"agent": "codex", "model": "gpt-6-sol"}], unavailable, monkeypatch,
+    )
+    assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert [item["outcome"] for item in bundle["reviewer1_attempts"]] == ["UNAVAILABLE", "UNAVAILABLE"]
+
+
+def test_same_unaliased_vendor_reviewer_is_refused(workspace, config):
+    invoked = []
+    bundle = _post_with_reviewer_candidates(
+        workspace, config, [{"agent": "agy", "model": "qwen3-32b"}],
+        lambda **kwargs: invoked.append(kwargs), coder_family="qwen",
+    )
+    assert not invoked
+    assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
+    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
+    assert bundle["claude_review_mode"] == policy.FULL
 
 
 @pytest.mark.parametrize(("phase", "route", "reason"), [

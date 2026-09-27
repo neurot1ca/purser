@@ -1654,6 +1654,10 @@ def pre_tool_use(
                     "skip_max_files": resolved_profile.skip_max_files,
                     "reviewer_executable": resolved_profile.reviewer_executable,
                     "reviewer": resolved_profile.roles.reviewer,
+                    "reviewer_candidates": [
+                        {"agent": candidate.agent, "model": candidate.model}
+                        for candidate in resolved_profile.reviewer_candidates
+                    ],
                     "authority_sources": [
                         {
                             "path": source.path,
@@ -3094,6 +3098,18 @@ def post_tool_use(
             and isinstance(pending.get("configured"), bool)
             and isinstance(pending.get("user_status"), str)
             and isinstance(pending.get("project_status"), str)
+            and (
+                pending.get("reviewer_candidates") is None
+                or (
+                    isinstance(pending.get("reviewer_candidates"), list)
+                    and all(
+                        isinstance(candidate, Mapping)
+                        and isinstance(candidate.get("agent"), str)
+                        and isinstance(candidate.get("model"), str)
+                        for candidate in pending["reviewer_candidates"]
+                    )
+                )
+            )
         )
         if stored_profile:
             protected_paths = pending["protected_paths"]
@@ -3102,6 +3118,9 @@ def post_tool_use(
             profile_skip_max_files = pending["skip_max_files"]
             profile_reviewer_executable = pending.get("reviewer_executable")
             profile_reviewer = pending.get("reviewer", "agy")
+            profile_reviewer_candidates = pending.get("reviewer_candidates") or [
+                {"agent": "agy", "model": loaded_config["reviewer1_model_requested"]}
+            ]
             profile_authority_sources = pending.get("authority_sources")
             profile_configured = pending["configured"]
             profile_user_status = pending["user_status"]
@@ -3114,6 +3133,9 @@ def post_tool_use(
             profile_skip_max_files = None
             profile_reviewer_executable = None
             profile_reviewer = "agy"
+            profile_reviewer_candidates = [
+                {"agent": "agy", "model": loaded_config["reviewer1_model_requested"]}
+            ]
             profile_authority_sources = None
             profile_configured = None
             profile_user_status = None
@@ -3320,28 +3342,6 @@ def post_tool_use(
                     config=reviewer_config,
                 )
             if gate.should_run:
-                implementer_family = (
-                    policy.model_family(pending.get("model"))
-                    if pending.get("attempted_models") else
-                    policy.vendor_family(loaded_config.get("coder_family")) or policy.model_family(pending.get("model"))
-                )
-                reviewer_family = policy.model_family(loaded_config["reviewer1_model_requested"])
-                if not implementer_family or not reviewer_family or implementer_family == reviewer_family:
-                    gate = policy.SkipReviewerDecision(
-                        "skip reviewer", policy.REVIEWER_UNAVAILABLE,
-                        "Reviewer model family is unknown or matches the implementer; FULL review required.",
-                    )
-            if gate.should_run:
-                reviewer_started = True
-                _observe(
-                    "emit",
-                    "REVIEWER1_STARTED",
-                    task_id=pending["task_id"],
-                    state_root=runtime_root,
-                    **_telemetry_envelope(event, repository, project_namespace),
-                    reviewer1_provider="agy",
-                    reviewer1_model_requested=loaded_config["reviewer1_model_requested"],
-                )
                 validation_text = (
                     f"Worker-reported validation summary (status={worker_validation['status']}): "
                     f"{worker_validation['summary'][:IMPLEMENTER_REPORT_LIMIT]}"
@@ -3385,8 +3385,115 @@ def post_tool_use(
                     and (accepts_kwargs or "authority_sources" in params)
                 ):
                     reviewer_kwargs["authority_sources"] = profile_authority_sources
-
-                reviewer_report = reviewer_callable(**reviewer_kwargs)
+                implementer_family = (
+                    policy.vendor_family(policy.model_family(pending.get("model")))
+                    if pending.get("attempted_models") else
+                    policy.vendor_family(loaded_config.get("coder_family"))
+                    or policy.vendor_family(policy.model_family(pending.get("model")))
+                )
+                reviewer_attempts: list[dict[str, str]] = []
+                reviewer_report = None
+                reviewer_invoked = False
+                reviewer_started = False
+                available_budget = max(
+                    0.0,
+                    max_total_hook_budget - (time.monotonic() - start_time),
+                )
+                reviewer_deadline = time.monotonic() + min(
+                    float(loaded_config.get("reviewer1_timeout_seconds", 90)),
+                    available_budget,
+                )
+                for candidate in profile_reviewer_candidates:
+                    candidate_agent = candidate["agent"]
+                    candidate_model = candidate["model"]
+                    candidate_vendor = policy.vendor_family(policy.model_family(candidate_model))
+                    if implementer_family and candidate_vendor and implementer_family == candidate_vendor:
+                        reviewer_attempts.append({
+                            "agent": candidate_agent, "model": candidate_model,
+                            "outcome": "SKIPPED_SAME_VENDOR",
+                        })
+                        continue
+                    if candidate_agent not in reviewer1.REVIEWER_ADAPTERS:
+                        reviewer_attempts.append({
+                            "agent": candidate_agent, "model": candidate_model,
+                            "outcome": "SKIPPED_ADAPTER_UNREGISTERED",
+                        })
+                        continue
+                    remaining_budget = reviewer_deadline - time.monotonic()
+                    if remaining_budget <= 0:
+                        reviewer_attempts.append({
+                            "agent": candidate_agent, "model": candidate_model,
+                            "outcome": "UNAVAILABLE_BUDGET_EXHAUSTED",
+                        })
+                        continue
+                    candidate_kwargs = dict(reviewer_kwargs)
+                    if accepts_kwargs or "reviewer_agent" in params:
+                        candidate_kwargs["reviewer_agent"] = candidate_agent
+                    if accepts_kwargs or "reviewer_model" in params:
+                        candidate_kwargs["reviewer_model"] = candidate_model
+                    if accepts_kwargs or "reviewer_timeout_seconds" in params:
+                        candidate_kwargs["reviewer_timeout_seconds"] = remaining_budget
+                    _observe(
+                        "emit", "REVIEWER1_STARTED", task_id=pending["task_id"],
+                        state_root=runtime_root,
+                        **_telemetry_envelope(event, repository, project_namespace),
+                        reviewer1_provider=candidate_agent,
+                        reviewer1_model_requested=candidate_model,
+                    )
+                    reviewer_started = True
+                    reviewer_invoked = True
+                    reviewer_kwargs = candidate_kwargs
+                    attempted_report = reviewer_callable(**candidate_kwargs)
+                    unavailable = (
+                        isinstance(attempted_report, Mapping)
+                        and (
+                            attempted_report.get("review_status") == "UNAVAILABLE"
+                            or attempted_report.get("result") == policy.REVIEWER1_UNAVAILABLE
+                        )
+                    )
+                    reviewer_attempts.append({
+                        "agent": candidate_agent, "model": candidate_model,
+                        "outcome": "UNAVAILABLE" if unavailable else "COMPLETED",
+                    })
+                    reviewer_report = attempted_report
+                    if not unavailable:
+                        break
+                if len(reviewer_attempts) > 1:
+                    bundle["reviewer1_attempts"] = reviewer_attempts
+                if reviewer_report is None and not reviewer_invoked:
+                    last_attempt = reviewer_attempts[-1] if reviewer_attempts else None
+                    terminal_reason = (
+                        last_attempt.get("outcome") if isinstance(last_attempt, Mapping) else None
+                    )
+                    skipped_code = (
+                        "REVIEWER_ADAPTER_UNAVAILABLE"
+                        if terminal_reason == "SKIPPED_ADAPTER_UNREGISTERED"
+                        else "REVIEWER_VENDOR_CONFLICT"
+                        if terminal_reason == "SKIPPED_SAME_VENDOR"
+                        else policy.REVIEWER_UNAVAILABLE
+                    )
+                    bundle["reviewer1_skipped_reason"] = skipped_code
+                    reviewer_report = {
+                        "review_status": "UNAVAILABLE",
+                        "provider": (
+                            reviewer_attempts[-1]["agent"] if reviewer_attempts else "agy"
+                        ),
+                        "reviewer1_model_requested": (
+                            reviewer_attempts[-1]["model"]
+                            if reviewer_attempts else loaded_config["reviewer1_model_requested"]
+                        ),
+                        "result": policy.REVIEWER1_UNAVAILABLE,
+                        "validation": "UNKNOWN",
+                        "findings": [_finding(
+                            skipped_code,
+                            "No eligible registered Reviewer-1 adapter was available; FULL review required.",
+                        )],
+                    }
+                elif isinstance(reviewer_report, Mapping) and (
+                    reviewer_report.get("review_status") == "UNAVAILABLE"
+                    or reviewer_report.get("result") == policy.REVIEWER1_UNAVAILABLE
+                ):
+                    bundle["reviewer1_skipped_reason"] = "REVIEWER1_UNAVAILABLE"
                 result = reviewer_report.get("result") if isinstance(reviewer_report, Mapping) else None
                 if result not in loaded_config["reviewer_results"]:
                     result = policy.UNCERTAIN
@@ -3540,6 +3647,12 @@ def post_tool_use(
                             bundle["micro_repair"]["status"] = status
 
                 bundle["reviewer1_provider"] = provider if isinstance(provider, str) else "agy"
+                reported_model = (
+                    reviewer_report.get("reviewer1_model_requested")
+                    if isinstance(reviewer_report, Mapping) else None
+                )
+                if isinstance(reported_model, str) and reported_model:
+                    bundle["reviewer1_model_requested"] = reported_model
                 bundle["reviewer1_result"] = result
                 if isinstance(findings, list):
                     bundle["findings"].extend(findings)

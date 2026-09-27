@@ -64,7 +64,7 @@ def is_protected(path: str, patterns: Iterable[str]) -> bool:
 _USER_SECURITY = {
     "roles": {"orchestrator", "coder", "reviewer"},
     "coding": {"coder_agent", "routes", "family"},
-    "reviewer": {"executable"},
+    "reviewer": {"executable", "selected", "alternatives"},
     "trust": {"paths"},
     "paths": {"protected"},
     "review": {"force_full", "skip_max_lines", "skip_max_files"},
@@ -111,6 +111,12 @@ class Roles:
     reviewer: str = "agy"
 
 
+@dataclass(frozen=True)
+class ReviewerCandidate:
+    agent: str
+    model: str
+
+
 _PROJECT_NON_SECURITY = {"project": {"id"}, "authority": {"sources"}}
 _PROJECT_NON_SECURITY["worktree"] = {"copy", "setup", "setup_timeout_seconds"}
 _DEFAULT_AUTHORITY_SOURCES = (
@@ -128,6 +134,7 @@ class ResolvedProfile:
     skip_max_files: int
     trusted: bool
     reviewer_executable: str | None
+    reviewer_candidates: tuple[ReviewerCandidate, ...]
     roles: Roles
     authority_sources: tuple[AuthoritySource, ...]
     checks: tuple[Check, ...]
@@ -174,6 +181,7 @@ def load_profile(
             skip_max_files=_ENGINE_DEFAULTS["skip_max_files"],
             trusted=False,
             reviewer_executable=None,
+            reviewer_candidates=(ReviewerCandidate("agy", "gemini-3.8-flash-high"),),
             roles=Roles(),
             authority_sources=_DEFAULT_AUTHORITY_SOURCES,
             checks=(),
@@ -427,10 +435,31 @@ def _valid_security_value(section: str, key: str, value: Any) -> tuple[bool, str
             return False, f"[review] {key} has an invalid type or value"
         return True, ""
 
-    if section == "reviewer" and key == "executable":
-        if isinstance(value, str) and os.path.isabs(value):
-            return True, ""
-        return False, "[reviewer] executable must be an absolute path string"
+    if section == "reviewer":
+        if key == "executable":
+            if isinstance(value, str) and os.path.isabs(value):
+                return True, ""
+            return False, "[reviewer] executable must be an absolute path string"
+        candidates = [value] if key == "selected" else value
+        if key == "alternatives" and not isinstance(value, list):
+            return False, "[reviewer] alternatives must be an array of candidate tables"
+        if key == "selected" and not isinstance(value, dict):
+            return False, "[reviewer] selected must be an agent/model table"
+        if not isinstance(candidates, list) or (key == "selected" and len(candidates) != 1):
+            return False, f"[reviewer] {key} must contain an agent/model pair"
+        for candidate in candidates:
+            if (
+                not isinstance(candidate, dict)
+                or set(candidate) != {"agent", "model"}
+                or not isinstance(candidate["agent"], str)
+                or not candidate["agent"]
+                or len(candidate["agent"]) > 64
+                or not isinstance(candidate["model"], str)
+                or not candidate["model"]
+                or len(candidate["model"]) > 128
+            ):
+                return False, f"[reviewer] {key} entries must contain non-empty agent and model strings"
+        return True, ""
 
     if section == "trust" and key == "paths":
         if isinstance(value, list) and all(
@@ -496,7 +525,21 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
     roles = Roles(
         orchestrator=user_values.get("roles.orchestrator", "claude-code"),
         coder=user_values.get("roles.coder", "codex"),
-        reviewer=user_values.get("roles.reviewer", "agy"),
+        reviewer=(
+            "none" if user_values.get("roles.reviewer") == "none" else
+            user_values.get("reviewer.selected", {}).get(
+                "agent", user_values.get("roles.reviewer", "agy")
+            )
+        ),
+    )
+    selected = user_values.get("reviewer.selected", {
+        "agent": roles.reviewer if roles.reviewer != "none" else "agy",
+        "model": "gemini-3.8-flash-high",
+    })
+    reviewer_candidates = (
+        ReviewerCandidate(selected["agent"], selected["model"]),
+        *(ReviewerCandidate(candidate["agent"], candidate["model"])
+          for candidate in user_values.get("reviewer.alternatives", ())),
     )
     return ResolvedProfile(
         configured=project.status != "missing",
@@ -507,6 +550,7 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
         skip_max_files=skip_files,
         trusted=trusted,
         reviewer_executable=user_values.get("reviewer.executable"),
+        reviewer_candidates=reviewer_candidates,
         roles=roles,
         authority_sources=authority_sources,
         checks=project_values.get("checks", ()) if trusted else (),
@@ -556,4 +600,4 @@ def _exception_text(exc: Exception) -> str:
     return text or exc.__class__.__name__
 
 
-__all__ = ["AuthoritySource", "Check", "ResolvedProfile", "is_protected", "load_profile"]
+__all__ = ["AuthoritySource", "Check", "ResolvedProfile", "ReviewerCandidate", "is_protected", "load_profile"]

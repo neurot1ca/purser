@@ -52,6 +52,28 @@ def test_agy_route_is_gemini_family(config):
     assert policy.resolve_route("normal", config).code == policy.CONFIG_INVALID
 
 
+@pytest.mark.parametrize(("family", "vendor"), [
+    ("gpt", "openai"), ("openai", "openai"),
+    ("gemini", "google"), ("google", "google"),
+    ("deepseek", "deepseek"), ("claude", "anthropic"), ("qwen", "qwen"),
+    ("unrecognized", "unrecognized"), (None, None),
+])
+def test_vendor_family_normalizes_known_families(family, vendor):
+    assert policy.vendor_family(family) == vendor
+
+
+@pytest.mark.parametrize(("model", "family"), [
+    ("gpt-6-sol", "gpt"), ("openai/custom-model", "openai"),
+    ("gemini-3.8-flash-high", "gemini"), ("google/gemini-2.5-pro", "google"),
+    ("deepseek-r1", "deepseek"), ("claude-sonnet-4-6", "claude"),
+    ("qwen3-32b", "qwen"),
+    ("unknown/model", None),
+    ("o3xyz-model", None),
+])
+def test_model_family_recognizes_known_vendors(model, family):
+    assert policy.model_family(model) == family
+
+
 def orch(**overrides):
     values = {
         "task": "task-1",

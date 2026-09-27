@@ -118,6 +118,33 @@ def test_unknown_project_top_level_key_warns(profile_root):
 def test_roles_defaults_when_user_section_absent(profile_root):
     result = _load(profile_root)
     assert result.roles == project_profile.Roles("claude-code", "codex", "agy")
+    assert result.reviewer_candidates == (
+        project_profile.ReviewerCandidate("agy", "gemini-3.8-flash-high"),
+    )
+
+
+def test_user_reviewer_candidates_load_with_legacy_default_unchanged(profile_root):
+    result = _load(
+        profile_root,
+        user_text='''schema_version = 1
+[reviewer.selected]
+agent = "agy"
+model = "gemini-3.8-flash-high"
+[[reviewer.alternatives]]
+agent = "codex"
+model = "gpt-6-sol"
+[[reviewer.alternatives]]
+agent = "opencode"
+model = "google/gemini-2.5-pro"
+''',
+    )
+    assert result.user_status == "ok"
+    assert result.roles.reviewer == "agy"
+    assert result.reviewer_candidates == (
+        project_profile.ReviewerCandidate("agy", "gemini-3.8-flash-high"),
+        project_profile.ReviewerCandidate("codex", "gpt-6-sol"),
+        project_profile.ReviewerCandidate("opencode", "google/gemini-2.5-pro"),
+    )
 
 
 def test_user_roles_load_valid_values(profile_root):

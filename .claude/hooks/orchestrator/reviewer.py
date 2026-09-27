@@ -21,7 +21,6 @@ import policy
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _CONFIG_PATH = _PACKAGE_ROOT / "config.json"
-PINNED_MODEL = "gemini-3.8-flash-high"
 _PACKET_FIELDS = (
     "objective",
     "acceptance_criteria",
@@ -74,6 +73,93 @@ _BUILD_SPEC_HEADINGS = (
     "Hard constraints",
 )
 _DIFF_REDACTION_MARKER = "[[REDACTED: PRE-EXISTING OR REMOVED SENSITIVE SPAN]]"
+
+
+class _AgyAdapter:
+    provider = "agy"
+    allowed_model = "gemini-3.8-flash-high"
+
+    def validate_model(self, model: Any) -> None:
+        if model != self.allowed_model:
+            raise ValueError(
+                f"reviewer1_model_requested must equal the pinned id {self.allowed_model}"
+            )
+
+    def build_command(
+        self,
+        prompt: str,
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+        *,
+        add_dirs: Sequence[str | os.PathLike[str]] = (),
+        extra_flags: Sequence[str] = (),
+        repository_root: Path | None = None,
+    ) -> list[str]:
+        executable = config.get("reviewer1_executable")
+        model = config.get("reviewer1_model_requested")
+        if not isinstance(executable, str) or not os.path.isabs(executable):
+            raise ValueError("reviewer1_executable must be an absolute path")
+        self.validate_model(model)
+        command = [
+            executable,
+            "--print",
+            prompt,
+            "--output-format",
+            "json",
+            "--json-schema",
+            _canonical_json(schema).decode("utf-8"),
+            "--model",
+            model,
+            "--mode",
+            "plan",
+            "--sandbox",
+        ]
+        for directory in add_dirs:
+            command.extend(("--add-dir", str(Path(directory).resolve())))
+        command.extend(extra_flags)
+        refuse_unsafe_flag_combination(command, repository_root=repository_root)
+        return command
+
+    def invoke(
+        self,
+        command: Sequence[str],
+        *,
+        runner: Callable[..., subprocess.CompletedProcess[str]],
+        cwd: Path,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        return runner(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+
+    def parse(
+        self,
+        stdout: str,
+        *,
+        include_metadata: bool = False,
+    ) -> tuple[str, dict[str, Any]] | tuple[str, dict[str, Any], float, dict[str, int | float]]:
+        return _parse_agy_envelope(stdout, include_metadata=include_metadata)
+
+
+AGY_ADAPTER = _AgyAdapter()
+PINNED_MODEL = AGY_ADAPTER.allowed_model
+REVIEWER_ADAPTERS: dict[str, Any] = {AGY_ADAPTER.provider: AGY_ADAPTER}
+
+
+def register_reviewer_adapter(agent: str, adapter: Any) -> None:
+    """Register an agent-specific transport/parser without changing selection."""
+    if not isinstance(agent, str) or not agent or not all(
+        callable(getattr(adapter, name, None)) for name in ("build_command", "invoke", "parse", "validate_model")
+    ):
+        raise ValueError("reviewer adapter registration is invalid")
+    REVIEWER_ADAPTERS[agent] = adapter
 
 
 REVIEW_SCHEMA: dict[str, Any] = {
@@ -147,6 +233,7 @@ class CompletedReview(_ResultMapping):
     reviewer1_model_requested: str
     duration_seconds: float | None = None
     usage: tuple[tuple[str, int | float], ...] = ()
+    provider: str = AGY_ADAPTER.provider
 
     def __post_init__(self) -> None:
         if self.result not in _COMPLETED_RESULTS:
@@ -156,7 +243,7 @@ class CompletedReview(_ResultMapping):
         return {
             "review_status": "COMPLETED",
             "available": True,
-            "provider": "agy",
+            "provider": self.provider,
             "result": self.result,
             "validation": self.validation,
             "findings": [
@@ -181,12 +268,13 @@ class UnavailableReview(_ResultMapping):
     decoder_detail: str | None = None
     elapsed_seconds: float | None = None
     stderr_tail: str | None = None
+    provider: str = AGY_ADAPTER.provider
 
     def _values(self) -> dict[str, Any]:
         return {
             "review_status": "UNAVAILABLE",
             "available": False,
-            "provider": "agy",
+            "provider": self.provider,
             "result": policy.REVIEWER1_UNAVAILABLE,
             "validation": "UNKNOWN",
             "findings": [_finding(self.error_code, self.message)],
@@ -204,12 +292,13 @@ class IncompleteReview(_ResultMapping):
     message: str
     omitted: tuple[str, ...]
     reviewer1_model_requested: str
+    provider: str = AGY_ADAPTER.provider
 
     def _values(self) -> dict[str, Any]:
         return {
             "review_status": "NOT_RUN_INCOMPLETE_PACKET",
             "available": True,
-            "provider": "agy",
+            "provider": self.provider,
             "result": policy.UNCERTAIN,
             "validation": "UNKNOWN",
             "findings": [_finding(self.code, self.message)],
@@ -248,11 +337,15 @@ def _completed(
         reviewer1_model_requested=_requested_model(config),
         duration_seconds=duration_seconds,
         usage=tuple(sorted((usage or {}).items())),
+        provider=str(config.get("reviewer1_agent", AGY_ADAPTER.provider)),
     )
 
 
 def _unavailable(code: str, message: str, config: Mapping[str, Any]) -> UnavailableReview:
-    return UnavailableReview(code, message, _requested_model(config))
+    return UnavailableReview(
+        code, message, _requested_model(config),
+        provider=str(config.get("reviewer1_agent", AGY_ADAPTER.provider)),
+    )
 
 
 def _stderr_tail(value: Any) -> str | None:
@@ -267,6 +360,7 @@ def _incomplete_packet(packet: PacketOmitted, config: Mapping[str, Any]) -> Inco
         packet.message,
         packet.omitted,
         _requested_model(config),
+        provider=str(config.get("reviewer1_agent", AGY_ADAPTER.provider)),
     )
 
 
@@ -547,31 +641,14 @@ def build_command(
     extra_flags: Sequence[str] = (),
     repository_root: Path | None = None,
 ) -> list[str]:
-    executable = config.get("reviewer1_executable")
-    model = config.get("reviewer1_model_requested")
-    if not isinstance(executable, str) or not os.path.isabs(executable):
-        raise ValueError("reviewer1_executable must be an absolute path")
-    if model != PINNED_MODEL:
-        raise ValueError(f"reviewer1_model_requested must equal the pinned id {PINNED_MODEL}")
-    command = [
-        executable,
-        "--print",
+    return AGY_ADAPTER.build_command(
         prompt,
-        "--output-format",
-        "json",
-        "--json-schema",
-        _canonical_json(schema).decode("utf-8"),
-        "--model",
-        model,
-        "--mode",
-        "plan",
-        "--sandbox",
-    ]
-    for directory in add_dirs:
-        command.extend(("--add-dir", str(Path(directory).resolve())))
-    command.extend(extra_flags)
-    refuse_unsafe_flag_combination(command, repository_root=repository_root)
-    return command
+        schema,
+        config,
+        add_dirs=add_dirs,
+        extra_flags=extra_flags,
+        repository_root=repository_root,
+    )
 
 
 def _valid_finding(value: Any) -> bool:
@@ -599,6 +676,8 @@ def _validate_response(value: Any) -> dict[str, Any]:
         _valid_finding(item) for item in findings
     ):
         raise ValueError("findings violate the result schema")
+    if result == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE and findings:
+        raise ValueError("NO_MATERIAL finding verdict cannot include material findings")
     return {
         "result": result,
         "validation": validation,
@@ -643,7 +722,7 @@ _USAGE_TOKEN_FIELDS = frozenset(
 )
 
 
-def parse_envelope(
+def _parse_agy_envelope(
     stdout: str,
     *,
     include_metadata: bool = False,
@@ -690,6 +769,14 @@ def parse_envelope(
     return conversation_id, response, duration, usage
 
 
+def parse_envelope(
+    stdout: str,
+    *,
+    include_metadata: bool = False,
+) -> tuple[str, dict[str, Any]] | tuple[str, dict[str, Any], float, dict[str, int | float]]:
+    return AGY_ADAPTER.parse(stdout, include_metadata=include_metadata)
+
+
 def _review_prompt(packet_path: Path) -> str:
     return (
         "You are Reviewer-1. Read and review only the JSON packet at the exact path below. "
@@ -711,12 +798,21 @@ def invoke_packet(
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     cwd: str | os.PathLike[str] | None = None,
     repo_root: str | os.PathLike[str] | None = None,
+    agent: str = "agy",
 ) -> ReviewOutcome:
     if isinstance(packet, PacketOmitted):
         return _incomplete_packet(packet, config)
     packet_path: Path | None = None
     scratch_root: Path | None = None
     retried = False
+    adapter = REVIEWER_ADAPTERS.get(agent)
+    if adapter is None:
+        return UnavailableReview(
+            "REVIEWER_ADAPTER_UNAVAILABLE",
+            f"No reviewer adapter is registered for {agent}.",
+            _requested_model(config),
+            provider=agent,
+        )
     try:
         timeout = config["reviewer1_timeout_seconds"]
         if (
@@ -754,7 +850,8 @@ def invoke_packet(
             handle.write(packet.encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        command = build_command(
+        adapter.validate_model(_requested_model(config))
+        command = adapter.build_command(
             _review_prompt(packet_path),
             REVIEW_SCHEMA,
             config,
@@ -765,15 +862,11 @@ def invoke_packet(
         while True:
             started = time.monotonic()
             try:
-                completed = runner(
+                completed = adapter.invoke(
                     command,
+                    runner=runner,
                     cwd=working_directory,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
                     timeout=attempt_timeout,
-                    check=False,
                 )
             except subprocess.TimeoutExpired as error:
                 elapsed_total += max(0.0, time.monotonic() - started)
@@ -784,6 +877,7 @@ def invoke_packet(
                     _requested_model(config),
                     elapsed_seconds=elapsed_total,
                     stderr_tail=_stderr_tail(error.stderr),
+                    provider=agent,
                 )
             elapsed = max(0.0, time.monotonic() - started)
             elapsed_total += elapsed
@@ -812,9 +906,10 @@ def invoke_packet(
                 _requested_model(config),
                 elapsed_seconds=elapsed_total,
                 stderr_tail=stderr_tail,
+                provider=agent,
             )
         try:
-            conversation_id, response, duration_seconds, usage = parse_envelope(
+            conversation_id, response, duration_seconds, usage = adapter.parse(
                 stdout, include_metadata=True
             )
         except (json.JSONDecodeError, TypeError, ValueError) as error:
@@ -826,6 +921,7 @@ def invoke_packet(
                 raw_stdout=stdout[-262144:],
                 decoder_detail=str(error)[:200],
                 elapsed_seconds=elapsed_total,
+                provider=agent,
             )
         if response["result"] == policy.REVIEWER1_UNAVAILABLE:
             return UnavailableReview(
@@ -836,6 +932,7 @@ def invoke_packet(
                 duration_seconds,
                 tuple(sorted(usage.items())),
                 elapsed_seconds=elapsed_total,
+                provider=agent,
             )
         result = response["result"]
         findings = response["findings"]
@@ -870,6 +967,7 @@ def invoke_packet(
             "The configured Reviewer-1 executable was not found."
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
+            provider=agent,
         )
     except (json.JSONDecodeError, TypeError, ValueError, OSError) as error:
         return UnavailableReview(
@@ -877,6 +975,7 @@ def invoke_packet(
             f"Reviewer-1 response or configuration was invalid ({type(error).__name__})."
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
+            provider=agent,
         )
     except Exception as error:
         return UnavailableReview(
@@ -884,6 +983,7 @@ def invoke_packet(
             f"Reviewer-1 failed unexpectedly ({type(error).__name__})."
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
+            provider=AGY_ADAPTER.provider,
         )
     finally:
         if packet_path is not None:
@@ -902,6 +1002,9 @@ def review_materials(
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     cwd: str | os.PathLike[str] | None = None,
     repo_root: str | os.PathLike[str] | None = None,
+    reviewer_agent: str = "agy",
+    reviewer_model: str | None = None,
+    reviewer_timeout_seconds: float | None = None,
 ) -> ReviewOutcome:
     try:
         loaded = _load_config(config)
@@ -912,6 +1015,14 @@ def review_materials(
             f"Reviewer-1 configuration was invalid ({type(error).__name__}).",
             fallback,
         )
+    if reviewer_model is not None or reviewer_timeout_seconds is not None:
+        loaded = dict(loaded)
+        if reviewer_model is not None:
+            loaded["reviewer1_model_requested"] = reviewer_model
+        if reviewer_timeout_seconds is not None:
+            loaded["reviewer1_timeout_seconds"] = reviewer_timeout_seconds
+    if isinstance(loaded, dict):
+        loaded["reviewer1_agent"] = reviewer_agent
     try:
         packet = build_review_packet(materials, loaded["reviewer1_packet_max_bytes"])
     except Exception as error:
@@ -923,7 +1034,7 @@ def review_materials(
     if isinstance(packet, PacketOmitted):
         return _incomplete_packet(packet, loaded)
     if cwd is not None:
-        return invoke_packet(packet, loaded, runner=runner, cwd=cwd, repo_root=repo_root)
+        return invoke_packet(packet, loaded, runner=runner, cwd=cwd, repo_root=repo_root, agent=reviewer_agent)
     try:
         # Deliberately the system temp root, NOT the package directory: a live
         # check showed the reviewer can create files even under
@@ -931,7 +1042,7 @@ def review_materials(
         # worktree it is reviewing.
         with tempfile.TemporaryDirectory(prefix="reviewer1-") as scratch:
             return invoke_packet(
-                packet, loaded, runner=runner, cwd=scratch, repo_root=repo_root
+                packet, loaded, runner=runner, cwd=scratch, repo_root=repo_root, agent=reviewer_agent
             )
     except OSError as error:
         return _unavailable(
@@ -945,14 +1056,13 @@ def _load_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     loaded = (
         json.loads(_CONFIG_PATH.read_text(encoding="utf-8")) if config is None else config
     )
-    executable = loaded.get("reviewer1_executable")
     timeout = loaded.get("reviewer1_timeout_seconds")
     budget = loaded.get("reviewer1_packet_max_bytes")
     model = loaded.get("reviewer1_model_requested")
-    if not isinstance(executable, str) or not os.path.isabs(executable):
-        raise ValueError("reviewer1_executable must be an absolute path")
-    if model != PINNED_MODEL:
-        raise ValueError(f"reviewer1_model_requested must equal the pinned id {PINNED_MODEL}")
+    if not isinstance(model, str) or not model:
+        raise ValueError("reviewer1_model_requested must be a non-empty string")
+    if loaded.get("reviewer1_agent", AGY_ADAPTER.provider) == AGY_ADAPTER.provider:
+        AGY_ADAPTER.validate_model(model)
     if (
         not isinstance(timeout, (int, float))
         or isinstance(timeout, bool)
@@ -1297,6 +1407,9 @@ def review(
     acceptance_criteria: str | None = None,
     reviewer_executable: str | None = None,
     authority_sources: Sequence[Any] | None = None,
+    reviewer_agent: str = "agy",
+    reviewer_model: str | None = None,
+    reviewer_timeout_seconds: float | None = None,
 ) -> ReviewOutcome:
     """Reviewer callable matching the accepted ``codex.py`` seam."""
 
@@ -1324,7 +1437,11 @@ def review(
             acceptance_criteria=acceptance_criteria,
             authority_sources=authority_sources,
         )
-        return review_materials(materials, config=config, repo_root=repo_root)
+        return review_materials(
+            materials, config=config, repo_root=repo_root,
+            reviewer_agent=reviewer_agent, reviewer_model=reviewer_model,
+            reviewer_timeout_seconds=reviewer_timeout_seconds,
+        )
     except (OSError, UnicodeDecodeError, ValueError) as error:
         error_text = str(error)[:200]
         packet = PacketOmitted(
@@ -1352,6 +1469,7 @@ __all__ = [
     "PacketReady",
     "PINNED_MODEL",
     "REVIEW_SCHEMA",
+    "REVIEWER_ADAPTERS",
     "ReviewOutcome",
     "UnavailableReview",
     "build_command",
@@ -1361,4 +1479,5 @@ __all__ = [
     "refuse_unsafe_flag_combination",
     "review",
     "review_materials",
+    "register_reviewer_adapter",
 ]
