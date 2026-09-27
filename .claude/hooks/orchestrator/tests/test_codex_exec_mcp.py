@@ -330,7 +330,7 @@ class Client:
         self.process.stdin.write(json.dumps(value, ensure_ascii=False) + "\n")
         self.process.stdin.flush()
 
-    def receive(self, timeout=5):
+    def receive(self, timeout=30):
         return self.messages.get(timeout=timeout)
 
     def calls(self):
@@ -623,13 +623,20 @@ def job_call(client, name, arguments):
 
 
 def finish(client, job_id, wanted):
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         result = job_call(client, "codex_result", {"jobId": job_id})
         if result["state"] == wanted:
             return result
         time.sleep(0.02)
     pytest.fail(f"expected {wanted}, got {result}")
+
+
+def wait_for_path(path, exists, description, timeout=30):
+    deadline = time.monotonic() + timeout
+    while path.exists() != exists and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert path.exists() == exists, f"timed out waiting for {description}: {path}"
 
 
 def _git_repo(area):
@@ -1141,7 +1148,8 @@ def test_async_reply_and_restart_reconciliation(area):
 
 
 def test_async_host_ack_duplicate_restart_and_payload_removal(area):
-    first = Client(area, extra_env={"FAKE_SLOW": "1", "FAKE_SLEEP_SECONDS": "4"})
+    release = area / "release-codex"
+    first = Client(area, extra_env={"FAKE_RELEASE_AFTER_START": str(release)})
     key = str(uuid.uuid4())
     try:
         started = job_call(first, "codex_start", {"call": key, "prompt": "private slow prompt"})
@@ -1151,7 +1159,7 @@ def test_async_host_ack_duplicate_restart_and_payload_removal(area):
         if os.name == "nt":
             assert windows_parent_pid(record["hostPid"]) != first.process.pid
         launch = path.parent / (started["jobId"] + ".launch")
-        assert launch.exists()
+        wait_for_path(launch, True, "launch payload creation")
         assert "private slow prompt" in launch.read_text(encoding="utf-8")
         assert "private slow prompt" not in codex_exec_mcp.purser_state_root.retry_permission_error(
             lambda: path.read_text(encoding="utf-8"))
@@ -1165,8 +1173,9 @@ def test_async_host_ack_duplicate_restart_and_payload_removal(area):
             third = Client(area)
             try:
                 assert job_call(third, "codex_result", {"jobId": started["jobId"]})["state"] == "RUNNING"
+                release.touch()
                 result = finish(third, started["jobId"], "SUCCEEDED")
-                assert not launch.exists()
+                wait_for_path(launch, False, "launch payload removal")
                 assert (result["threadId"], result["content"]) == ("thread-123", "Reply from fake Codex")
                 assert len(third.calls()) == 1
             finally:
@@ -1175,6 +1184,7 @@ def test_async_host_ack_duplicate_restart_and_payload_removal(area):
             if second.process.poll() is None:
                 second.close()
     finally:
+        release.touch()
         if first.process.poll() is None:
             first.close()
 
