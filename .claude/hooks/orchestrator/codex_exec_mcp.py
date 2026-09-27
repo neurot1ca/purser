@@ -894,14 +894,22 @@ class Server:
             if process is not None and process.poll() is not None:
                 job["exitCode"] = process.returncode
             if code:
-                job.update(errorCode=code, message={
+                message = {
                     "CODEX_FAILED": "Codex failed", "DEADLINE_EXCEEDED": "Codex deadline exceeded",
                     "CANCELLED": "Codex cancelled", "PROCESS_UNCONFIRMED": "Process termination unconfirmed",
                     "RECOVERY_RESUME_FAILED": "Interrupted Codex thread could not be resumed",
                     "ADMISSION_BASELINE_UNAVAILABLE": "Fresh admission baseline could not be bound; FULL review required",
                     "WORKTREE_SNAPSHOT_FAILED": "Worktree snapshot could not be created",
                     "WORKTREE_MISSING": "Job worktree is unavailable",
-                }[code])
+                    "WORKTREE_SETUP_FAILED": "Worktree setup failed",
+                }[code]
+                if code == "WORKTREE_SETUP_FAILED":
+                    setup_error = job.get("setupError", {})
+                    reason = ("timed out" if setup_error.get("timedOut") else
+                              f"exited with code {setup_error.get('exitCode')}")
+                    output = setup_error.get("output", "")
+                    message = f"Worktree setup {reason}" + (f": {output}" if output else "")
+                job.update(errorCode=code, message=message)
             if result is not None:
                 output = self.job_dir / (job_id + ".output")
                 data = result["content"].encode("utf-8")
@@ -1632,8 +1640,20 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                     repo_root = Path(os.fsdecode(ledger._run_git(
                         repo_root, ["rev-parse", "--show-toplevel"], 30.0, "resolving job repository root")).strip()).resolve()
                     relative_cwd = requested_cwd.relative_to(repo_root)
+                    worktree_parent = purser_state_root.default_state_root() / "wt"
                     snapshot = ledger.create_job_worktree(
-                        repo_root, job_id, purser_state_root.default_state_root() / "wt")
+                        repo_root, job_id, worktree_parent)
+                except ledger.WorktreeSetupError as exc:
+                    output = exc.output.encode("utf-8", "replace")[-2048:].decode("utf-8", "replace")
+                    job = server._read_job(job_id)
+                    if job is not None:
+                        job.update(worktreePath=os.fspath(worktree_parent / job_id[:12]),
+                                   repoRoot=os.fspath(repo_root),
+                                   setupError={"exitCode": exc.exit_code,
+                                               "timedOut": exc.timed_out, "output": output})
+                        server._write_job(job)
+                    server._finish_job(job_id, "FAILED", "WORKTREE_SETUP_FAILED")
+                    return
                 except Exception:
                     server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_FAILED")
                     return

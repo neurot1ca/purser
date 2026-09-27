@@ -745,6 +745,47 @@ def test_relaunched_worktree_job_with_missing_directory_fails(area, monkeypatch)
     assert not worker_args
 
 
+def test_worktree_setup_failure_is_recorded_and_does_not_launch_worker(area, monkeypatch):
+    import ledger
+
+    repo = _git_repo(area)
+    job_id, job_dir = _prepare_host_worktree_job(area, repo)
+    job_path = job_dir / f"{job_id}.json"
+    job = read_job_record(job_path)
+    for key in ("worktreePath", "snapshot", "head", "repoRoot"):
+        job.pop(key)
+    codex_exec_mcp.Server(host=True, job_dir=job_dir)._write_job(job)
+    (job_dir / f"{job_id}.launch").write_text(json.dumps({
+        "name": "codex", "codexBin": "codex", "args": {"cwd": str(repo), "worktree": True}
+    }), encoding="utf-8")
+    worktree = area / "root" / "wt" / job_id[:12]
+    output = "setup failed after installing dependencies"
+
+    def fail_setup(repo_root, requested_job_id, parent):
+        assert Path(repo_root) == repo.resolve()
+        assert requested_job_id == job_id
+        assert Path(parent) == area / "root" / "wt"
+        worktree.mkdir(parents=True)
+        raise ledger.WorktreeSetupError(17, output)
+
+    monkeypatch.setattr(ledger, "create_job_worktree", fail_setup)
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root",
+                        lambda: area / "root")
+    worker_args = []
+    _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args)
+
+    assert not (job_dir / f"{job_id}.host-error").exists(), (job_dir / f"{job_id}.host-error").read_text()
+    result = read_job_record(job_path)
+    assert result["state"] == "FAILED"
+    assert result["errorCode"] == "WORKTREE_SETUP_FAILED"
+    assert "17" in result["message"] and output in result["message"]
+    assert result["worktreePath"] == str(worktree)
+    assert result["repoRoot"] == str(repo.resolve())
+    assert result["setupError"] == {"exitCode": 17, "timedOut": False, "output": output}
+    assert worktree.is_dir()
+    assert worker_args == []
+
+
 def test_codex_apply_is_idempotent_and_reports_conflicts(area):
     repo = _git_repo(area)
     client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
