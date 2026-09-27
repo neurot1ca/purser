@@ -21,7 +21,7 @@ Include `scope=` only for verified, bounded repository-relative paths that are r
   - `Goal and boundaries`.
   - `Current evidence` with paths and symbols, clearly separating observed facts from assumptions.
   - `Decision` with one recommended approach and brief alternatives.
-  - `Milestones`: no more than five; each must state bounded scope, observable acceptance, validation, and dependency.
+  - `Milestones`: no more than five; each must state bounded scope, observable acceptance, validation, dependency, proposed touched files/dirs, and a parallel group (milestones in the same group touch disjoint paths and may run together).
   - `Risks/open decisions`: no more than five, each with an owner or a question that stops progress.
   - `Implementation handoff`: the first task's bounded repository paths and acceptance criteria.
 

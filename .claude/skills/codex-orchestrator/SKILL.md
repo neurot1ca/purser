@@ -96,10 +96,13 @@ Put estimated duration in `eta` beside the recorded actual duration.
 
 ### Async by default
 
-Split work into parallel jobs only for disjoint scopes with no shared generated
-files or validation inputs, and only when the longest job plus fan-in review is
-clearly shorter than serial work. Review each result on its own delta;
-otherwise run sequentially.
+Treat plan paths as estimates. Claude may start several accepted, disjoint
+milestones as separate async `codex_start` calls only when the longest job plus
+fan-in review is clearly shorter than serial work. Include shared generated
+files and validation inputs when judging disjointness. Overlapping milestones
+may also be started; the conflict queue serializes them, and a reply on a
+conflicting scope is still denied. Review each result on its own delta;
+otherwise run disjoint work sequentially.
 
 Use the SessionStart duration hint for `eta` when present. Dispatch every call
 with `codex_start`; for continuation use `mode=reply`, `threadId`, the same ORCH
