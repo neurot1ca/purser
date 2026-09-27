@@ -3,6 +3,16 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.39 — 2026-09-27
+
+- Purser writes the dispatch receipt itself from a required short task label; with two or more jobs in flight it adds a job board (task, model, state, remaining ETA, review, apply).
+- OpenCode and Codex can serve as Reviewer-1 through read-only adapters, chosen with the configured order and the vendor-family rule.
+- `codex_apply` reports only the files that failed, lists the ones that would apply, leaves caches out of job patches, and tries a 3-way merge before reporting a conflict.
+- A job's delta, scope check and review diff come from its own worktree snapshot; changes made outside the job are flagged instead of attributed to the worker.
+- A job started from a folder missing in its worktree runs at the worktree root, and a failed Codex launch reports its cause.
+- No console window flashes during `codex_result` on Windows.
+- The Codex token report splits totals by project.
+
 ## 0.1.38 — 2026-09-27
 
 - Async implementation jobs run in their own git worktree built from your current tree, so parallel plan milestones no longer wait on each other; review and checks run there, and `codex_apply` applies the reviewed patch once.
