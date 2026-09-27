@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import uuid
 
 import pytest
@@ -68,6 +69,8 @@ def test_join_period_and_command_classes(area):
             result["jobs"][0]["other_chars"]) == (4, 4, 5)
     assert result["summary"]["before"]["jobs"] == result["summary"]["after"]["jobs"] == 1
     assert result["summary"]["after"]["duration_ms"] == 2500
+    assert result["project_route_summary"]["Purser"]["normal"]["before"]["jobs"] == 1
+    assert result["project_route_summary"]["Purser"]["subtle"]["after"]["jobs"] == 1
 
 
 def test_project_split_filter_and_missing_cwd(area):
@@ -93,3 +96,43 @@ def test_project_split_filter_and_missing_cwd(area):
     filtered = reporter.report(sessions, events, since, project="pUrSeR")
     assert [job["project"] for job in filtered["jobs"]] == ["Purser"]
     assert filtered["summary"]["after"]["jobs"] == 1
+
+
+def init_repo(path):
+    path.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(path), "init"], check=True, capture_output=True)
+
+
+def test_project_uses_git_root_for_plain_repo_cwd(area):
+    repo = area / "polymarket-btc5m-lab"
+    init_repo(repo)
+
+    assert reporter.project_for_cwd(str(repo)) == "polymarket-btc5m-lab"
+
+
+def test_project_uses_git_root_for_nested_cwd(area):
+    repo = area / "agentpool"
+    init_repo(repo)
+    nested = repo / "packages" / "worker"
+    nested.mkdir(parents=True)
+
+    assert reporter.project_for_cwd(str(nested)) == "agentpool"
+
+
+def test_project_maps_job_worktree_to_repo_root(area):
+    repo = area / "purser"
+    init_repo(repo)
+    worktree = area / ".claude" / "purser" / "wt" / "0123456789ab"
+    cwd = worktree / "scripts"
+    cwd.mkdir(parents=True)
+    jobs = area / "jobs"
+    jobs.mkdir()
+    (jobs / "job.json").write_text(json.dumps({"worktreePath": str(worktree),
+                                                 "repoRoot": str(repo)}), encoding="utf-8")
+    mappings = reporter.worktree_repositories(jobs)
+
+    assert reporter.project_for_cwd(str(cwd), mappings) == "purser"
+
+
+def test_project_without_cwd_is_unknown():
+    assert reporter.project_for_cwd(None) == "unknown"
