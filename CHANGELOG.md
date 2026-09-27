@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.41 — 2026-09-27
+
+- The job board shows one row per Codex thread, in-progress jobs plus the three most recently finished, and marks jobs without changes as `no change`; results and applies no longer re-demand the dispatch receipt.
+- The worker contract asks for focused tests, the smallest change and skipping unrelated hanging tests; `review.full_suite_required` in a project profile asks for one full-suite run instead.
+- The OpenCode Reviewer-1 confines tools with `ask`, which OpenCode Zen free models accept.
 ## 0.1.40 — 2026-09-27
 
 - Dispatch receipts and the job board are required in the next reply through the Stop hook, and the board shows only labelled, live or recently finished jobs.
