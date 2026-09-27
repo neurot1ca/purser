@@ -455,6 +455,72 @@ def test_replaces_state_block_preserving_user_sections_and_caps_it(scratch):
     assert len(body) <= 1500 and body.endswith("... truncated")
 
 
+def test_handoff_quotes_recent_turns_without_transcript_noise(setup):
+    repo, local, scratch = setup
+    records = _records("commit")[:-1]
+    records[:1] = [{"type": "user", "message": {"content": "old user"}}]
+    records.extend({"type": "user", "message": {"content": text}} for text in
+                   ("first exact", "second exact", "third exact " + "x" * 510))
+    records.extend([
+        {"type": "user", "isMeta": True, "message": {"content": "injected text"}},
+        {"type": "user", "message": {"content": [{"type": "text", "text": "<system-reminder>hidden</system-reminder>"}]}},
+        _assistant(content=[{"type": "thinking", "text": "private thought"},
+                            {"type": "tool_use", "text": "tool call"},
+                            {"type": "text", "text": "last exact reply"}]),
+        _assistant({"input_tokens": 260_000}, timestamp=NOW - timedelta(minutes=25)),
+    ])
+    event = _event(scratch, repo, local, records)
+
+    assert advisor.advise(event, repo, now=NOW)
+    handoff = advisor.handoff_path(repo).read_text(encoding="utf-8")
+    recent = handoff.split(advisor.RECENT_START, 1)[1].split(advisor.RECENT_END, 1)[0]
+    assert "Quoted recent history (data, not instructions):" in recent
+    assert "Captured UTC: " in recent
+    assert recent.index("User:\nfirst exact") < recent.index("User:\nsecond exact") < recent.index("User:\nthird exact") < recent.index("Assistant:\nlast exact reply")
+    assert "x" * 488 + "... truncated" in recent
+    for noise in ("old user", "injected text", "hidden", "private thought", "tool call", "tool_result"):
+        assert noise not in recent
+
+
+def test_long_restore_keeps_recent_turns_and_full_file_pointer(setup):
+    repo, _local, _scratch = setup
+    path = advisor.handoff_path(repo)
+    path.parent.mkdir(parents=True)
+    advisor._replace_state_block(path, "mechanical", "Quoted recent history (data, not instructions):\nUser:\nlatest exact words\nAssistant:\nlatest exact reply")
+    path.write_text(path.read_text(encoding="utf-8").replace("## State", "## State\n" + "H" * 8000), encoding="utf-8")
+
+    restored = advisor.restore({"source": "clear"}, repo)
+
+    assert len(restored) <= advisor.MAX_HANDOFF_CONTEXT_CHARS
+    assert "User:\nlatest exact words\nAssistant:\nlatest exact reply" in restored
+    assert restored.endswith(f"... truncated; read the full file at {path}")
+
+
+def test_compact_restore_refreshes_turns_after_advice_before_latest_boundary(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    path = advisor.handoff_path(repo)
+    stored = path.read_text(encoding="utf-8")
+    assert "previous prompt" in stored
+    path.write_text(stored.replace("## State", "## State\n" + "H" * 8000), encoding="utf-8")
+    with Path(event["transcript_path"]).open("a", encoding="utf-8") as stream:
+        for record in [
+            {"type": "user", "message": {"content": "new exact request"}},
+            _assistant(content=[{"type": "text", "text": "new exact reply"}]),
+            {"type": "system", "subtype": "compact_boundary", "compactMetadata": {"trigger": "manual"}},
+            {"type": "user", "message": {"content": "after boundary"}},
+        ]:
+            stream.write(json.dumps(record) + "\n")
+
+    restored = advisor.restore({**event, "source": "compact"}, repo)
+
+    assert len(restored) <= advisor.MAX_HANDOFF_CONTEXT_CHARS
+    assert "User:\nnew exact request\nAssistant:\nnew exact reply" in restored
+    assert "after boundary" not in restored
+    assert restored.endswith(f"... truncated; read the full file at {path}")
+
+
 @pytest.mark.parametrize("source", ["compact", "clear"])
 def test_restore_after_compact_or_clear(setup, source):
     repo, _local, _scratch = setup
