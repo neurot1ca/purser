@@ -3,6 +3,15 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.38 — 2026-09-27
+
+- Async implementation jobs run in their own git worktree built from your current tree, so parallel plan milestones no longer wait on each other; review and checks run there, and `codex_apply` applies the reviewed patch once.
+- A trusted project profile's `[worktree]` section can copy ignored files and run a setup command in each job worktree; a failed setup reports `WORKTREE_SETUP_FAILED` with its output.
+- Cleanup removes applied or discarded job worktrees and week-old orphans; relaunched jobs reuse their worktree.
+- Mechanical jobs can run on a free OpenCode model from a local inventory kept by `/purser:init`, falling back to the next candidate and then your configured coder; the served model drives review family and telemetry.
+- The compaction notice repeats every 15 messages with the tokens lost so far while you have not compacted.
+- An oversized models.dev cost no longer crashes the catalog, and `/purser:init` lists OpenCode models once.
+
 ## 0.1.37 — 2026-09-27
 
 - `/purser:init` asks Codex users how Purser should work (Balanced, Maximum, Manual) and shows the resolved route-to-model pairs before applying; models come from the installed agent's live list, with models.dev facts cached for offline use.

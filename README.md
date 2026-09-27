@@ -6,6 +6,10 @@ independently reviewed by a model of a different family — and the orchestrator
 counts every token it spends, because saving Claude's context and time is the
 reason it exists.
 
+Unlike other tools, Purser splits long tasks into bounded steps for high
+savings and efficiency, then plans and runs them end to end without
+interruption.
+
 ## Status
 
 Extracted on 2026-09-21 from `polymarket-btc5m-lab` (branch
