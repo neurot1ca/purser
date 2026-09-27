@@ -49,6 +49,14 @@ def test_quota_newest_rate_limits_wins(quota_home):
     }
 
 
+def test_quota_preserves_rate_limit_snapshot_timestamp(quota_home):
+    event = json.loads(record(24))
+    event["timestamp"] = "2026-09-23T12:00:00Z"
+    rollout(quota_home, [json.dumps(event)])
+
+    assert read_quota(THREAD, codex_home=quota_home)["snapshot_at"] == event["timestamp"]
+
+
 def test_quota_weekly_window_without_primary_omits_5h(quota_home):
     limits = {"secondary": {"used_percent": 38, "window_minutes": 10080, "resets_at": 1790611663}}
     event = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "rate_limits": limits}})

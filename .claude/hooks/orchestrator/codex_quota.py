@@ -68,6 +68,8 @@ def _read_quota_path(path: Path) -> dict | None:
             if window is not None:
                 result[f"{label}_used_pct"] = window[0]
                 result[f"{label}_resets_at"] = window[1]
+        if isinstance(event.get("timestamp"), str):
+            result["snapshot_at"] = event["timestamp"]
         return result or None
     return None
 

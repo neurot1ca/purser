@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -533,11 +533,11 @@ def queue_receipt(payload: Mapping[str, Any], repository: Path | None,
         receipt: dict[str, Any] = {"model": model, "effort": str(bundle.get("effort") or "unknown"), "blocked": False}
         quota = bundle.get("codex_quota")
         if isinstance(quota, Mapping):
-            for key in ("5h_used_pct", "5h_resets_at", "7d_used_pct"):
+            for key in ("5h_used_pct", "5h_resets_at", "7d_used_pct", "snapshot_at"):
                 value = quota.get(key)
                 if key.endswith("pct") and type(value) in (int, float):
                     receipt[key] = round(value)
-                elif key == "5h_resets_at" and isinstance(value, str):
+                elif key in ("5h_resets_at", "snapshot_at") and isinstance(value, str):
                     receipt[key] = value
         path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(path, session_id)
@@ -548,6 +548,18 @@ def queue_receipt(payload: Mapping[str, Any], repository: Path | None,
 
 
 def _receipt_quota_current(receipt: Mapping[str, Any], now: datetime | None = None) -> bool:
+    captured_at = receipt.get("snapshot_at")
+    if isinstance(captured_at, str):
+        try:
+            captured = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+            if captured.tzinfo is not None:
+                clock = now or datetime.now(timezone.utc)
+                if clock.tzinfo is None:
+                    clock = clock.replace(tzinfo=timezone.utc)
+                if clock.astimezone(captured.tzinfo) - captured > timedelta(hours=1):
+                    return False
+        except ValueError:
+            pass
     reset = receipt.get("5h_resets_at")
     if not isinstance(reset, str):
         return True

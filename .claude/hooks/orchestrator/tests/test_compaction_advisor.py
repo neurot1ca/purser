@@ -315,9 +315,10 @@ def _receipt_state(repo):
     return advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["receipt_pending"]
 
 
-def _queue_receipt(event, repo, model="gpt-6-sol", *, seven_day_pct=46, reset_at="2099-09-24T13:20:00Z"):
+def _queue_receipt(event, repo, model="gpt-6-sol", *, seven_day_pct=46, reset_at="2099-09-24T13:20:00Z", snapshot_at=None):
     advisor.queue_receipt(event, repo, {"model": model, "effort": "high", "codex_quota": {
         "5h_used_pct": 24, "5h_resets_at": reset_at, "7d_used_pct": seven_day_pct,
+        **({"snapshot_at": snapshot_at} if snapshot_at is not None else {}),
     }})
 
 
@@ -430,6 +431,20 @@ def test_expired_quota_snapshot_only_requires_model_and_effort(setup):
         "stop_hook_active": True,
     }, repo) is None
     assert _receipt_state(repo) is None
+
+
+def test_old_quota_snapshot_uses_stale_receipt_variant(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    captured_at = (NOW - timedelta(hours=2)).isoformat()
+    _queue_receipt(event, repo, snapshot_at=captured_at)
+
+    receipt = _receipt_state(repo)
+    advice = advisor._receipt_advice(receipt, now=NOW)
+
+    assert "quota snapshot is stale" in advice.lower()
+    assert "5h used" not in advice
+    assert "7d used" not in advice
 
 
 def test_receipt_stop_hook_active_does_not_block(setup):

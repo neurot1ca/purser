@@ -1355,18 +1355,19 @@ def pre_tool_use(
                 return _observed_denial(
                     event,
                     "CODEX_REPLY_INPUT_INVALID",
-                    f"{caller} accepts only {allowed}; remove: {fields}.",
+                    f"{caller} accepts only {allowed}; field {fields} is not allowed on reply.",
                     state_root=state_root,
                     task_id=parsed.task_id,
                 )
         if reply_without_orch:
+            caller = "codex_start mode=reply" if is_start else "codex-reply"
             supplied_thread_id = tool_input.get("threadId")
             recorded = session_ledger.find_by_thread_id(supplied_thread_id)
             if recorded is None:
                 return _observed_denial(
                     event,
                     "NO_LIVE_THREAD",
-                    "No recoverable ledger record exists for this codex-reply thread.",
+                    f"No recoverable ledger record exists for this {caller} thread.",
                     state_root=state_root,
                 )
             candidate_thread = recorded.get("live_thread")
@@ -1374,7 +1375,7 @@ def pre_tool_use(
                 return _observed_denial(
                     event,
                     "NO_LIVE_THREAD",
-                    "The codex-reply thread record has no recoverable live thread context.",
+                    f"The {caller} thread record has no recoverable live thread context.",
                     state_root=state_root,
                 )
             inherited = _inherited_reply_parse(tool_input.get("prompt"), candidate_thread)
@@ -1382,7 +1383,7 @@ def pre_tool_use(
                 return _observed_denial(
                     event,
                     "NO_LIVE_THREAD",
-                    "The codex-reply thread record lacks recoverable phase or scope context.",
+                    f"The {caller} thread record lacks recoverable phase or scope context.",
                     state_root=state_root,
                 )
             parsed = inherited
@@ -1414,12 +1415,23 @@ def pre_tool_use(
                                 mismatches.append((code, field, old_value, new_value))
                     if mismatches:
                         code, field, recorded_value, requested_value = mismatches[0]
+                        caller = "codex_start mode=reply" if is_start else "codex-reply"
+                        if field == "task":
+                            message = (
+                                f"task id differs from thread {tool_input.get('threadId')}'s task "
+                                f"{recorded_value}; this {caller} requests {requested_value}. "
+                                "Reuse that task or start a fresh thread."
+                            )
+                        else:
+                            message = (
+                                f"thread {tool_input.get('threadId')} was recorded for {field} "
+                                f"{recorded_value}; this {caller} says {requested_value}. "
+                                f"Reuse that {field} or start a fresh thread."
+                            )
                         return _observed_denial(
                             event,
                             code,
-                            f"thread {tool_input.get('threadId')} was recorded for {field} "
-                            f"{recorded_value}; this call says {requested_value}. "
-                            f"Reuse that {field} or start a fresh thread.",
+                            message,
                             state_root=state_root,
                             task_id=parsed.task_id,
                             continuity=True,
@@ -1519,10 +1531,14 @@ def pre_tool_use(
         else:
             compatibility = policy.thread_compatibility(requested, live_thread)
             if not compatibility.compatible:
+                caller = "codex_start mode=reply" if is_start else "codex-reply"
+                message = compatibility.message
+                if compatibility.code == "NO_LIVE_THREAD":
+                    message = f"{message} This {caller} cannot continue without a compatible recorded thread."
                 return _observed_denial(
                     event,
                     compatibility.code,
-                    compatibility.message,
+                    message,
                     state_root=state_root,
                     task_id=parsed.task_id,
                     continuity=True,
