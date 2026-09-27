@@ -439,6 +439,66 @@ def _event_message(event: dict[str, Any]) -> str:
     return ": ".join(parts) if parts else json.dumps(event, ensure_ascii=False)
 
 
+def _agent_command(agent: str, prefix: list[str], name: str, cwd: str,
+                   model: str | None, config_args: list[str], sandbox: str | None,
+                   thread_id: str | None, output_path: Path, prompt: str) -> list[str]:
+    if agent == "opencode":
+        if not model or "/" not in model or model.startswith("/") or model.endswith("/"):
+            raise ValueError("OpenCode model must be provider/model")
+        if sandbox is not None:
+            raise ValueError("OpenCode sandbox has no verified equivalent")
+        variants = [arg.split("=", 1)[1] for arg in config_args
+                    if arg.startswith("model_reasoning_effort=")]
+        if len(variants) > 1 or len(variants) != len(config_args):
+            raise ValueError("unsupported OpenCode config")
+        command = prefix + ["run", "--format", "json", "--model", model]
+        if variants:
+            variant = json.loads(variants[0])
+            if not isinstance(variant, str) or not variant:
+                raise ValueError("OpenCode variant must be a nonempty string")
+            command += ["--variant", variant]
+        if name == "codex-reply":
+            command += ["--session", thread_id]
+        return command + ["--", prompt]
+    command = prefix + ["exec"]
+    if name == "codex-reply":
+        command.append("resume")
+    command += ["--json", "--skip-git-repo-check"]
+    if model:
+        command += ["-m", model]
+    for arg in config_args:
+        command += ["-c", arg]
+    if name == "codex":
+        if sandbox is not None:
+            command += ["-s", sandbox]
+        command += ["-C", cwd]
+    command += ["-o", str(output_path)]
+    if name == "codex-reply":
+        command.append(thread_id)
+    return command + ["-"]
+
+
+def _agent_event(agent: str, event: dict[str, Any]) -> tuple[str | None, bool, str | None, str | None]:
+    """Return session identity, terminal marker, failure, and final text."""
+    kind = event.get("type")
+    if agent == "opencode":
+        session = event.get("sessionID")
+        session = session if isinstance(session, str) and session else None
+        part = event.get("part")
+        failure = _event_message(event) if kind == "error" else None
+        if kind == "tool_use" and isinstance(part, dict) and part.get("state", {}).get("status") == "error":
+            failure = str(part["state"].get("error") or "OpenCode tool failed")
+        final = part.get("text") if kind == "text" and isinstance(part, dict) else None
+        stopped = kind == "step_finish" and isinstance(part, dict) and part.get("reason") == "stop"
+        return session, stopped or bool(failure), failure, final if isinstance(final, str) else None
+    session = event.get("thread_id") if kind == "thread.started" else None
+    session = session if isinstance(session, str) and session else None
+    failure = _event_message(event) if kind in ("error", "turn.failed") else None
+    item = event.get("item")
+    final = item.get("text") if kind == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message" else None
+    return session, kind in ("turn.completed", "turn.failed", "error"), failure, final if isinstance(final, str) else None
+
+
 def _stop_process(process: subprocess.Popen[bytes]) -> bool:
     if process.poll() is not None:
         return False
@@ -495,8 +555,9 @@ def _child_tree_stopped(process: subprocess.Popen[bytes], job_handle: Any) -> bo
 
 class Server:
     def __init__(self, codex_bin: str | None = None, *, host: bool = False,
-                 job_dir: Path | None = None) -> None:
+                 job_dir: Path | None = None, agent: str | None = None) -> None:
         self.codex_bin = codex_bin
+        self.agent = agent or os.environ.get("PURSER_AGENT", "codex")
         self.state_dir = _state_dir()
         self.write_lock = threading.Lock()
         self.jobs_lock = threading.Lock()
@@ -521,6 +582,30 @@ class Server:
             if self.listener is not None:
                 self.listener.close()
             self.listener = None
+
+    def _agent_prefix(self) -> list[str]:
+        if self.agent == "codex":
+            return _binary_prefix(self.codex_bin)
+        if self.agent != "opencode":
+            raise ValueError("unknown agent")
+        if self.codex_bin:
+            value = json.loads(self.codex_bin) if self.codex_bin.startswith("[") else self.codex_bin
+            if isinstance(value, str) and value:
+                return [value]
+            if isinstance(value, list) and value and all(isinstance(item, str) and item for item in value):
+                return value
+            raise ValueError("invalid OpenCode binary override")
+        binary = shutil.which("opencode")
+        if not binary:
+            raise ValueError("OpenCode executable was not found")
+        launcher = Path(binary)
+        if os.name == "nt":
+            package = launcher.parent / "node_modules" / "opencode-ai"
+            for variant in ("opencode-windows-x64", "opencode-windows-x64-baseline"):
+                candidate = package / "node_modules" / variant / "bin" / "opencode.exe"
+                if candidate.is_file():
+                    return [str(candidate)]
+        return [binary]
 
     def _signal_loop(self) -> None:
         while True:
@@ -771,7 +856,7 @@ class Server:
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "invalid mode"})
         name = "codex-reply" if mode == "reply" else "codex"
         try:
-            _binary_prefix(self.codex_bin)
+            self._agent_prefix()
             if mode == "new":
                 if not isinstance(args.get("cwd", os.getcwd()), str) or not args.get("cwd", os.getcwd()):
                     raise ValueError("invalid cwd")
@@ -787,6 +872,13 @@ class Server:
                 for field in ("developer-instructions", "base-instructions", "compact-prompt"):
                     if field in args and not isinstance(args[field], str):
                         raise ValueError("invalid " + field)
+                if self.agent == "opencode":
+                    if args.get("approval-policy") is not None or any(
+                            field in args for field in ("developer-instructions", "base-instructions", "compact-prompt")):
+                        raise ValueError("unsupported OpenCode option")
+                    _agent_command("opencode", [], name, args.get("cwd", os.getcwd()),
+                                   args.get("model"), _flatten_config(args.get("config", {})),
+                                   args.get("sandbox"), None, Path("unused"), prompt)
         except (OSError, ValueError, TypeError):
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "Invalid Codex launch arguments"})
         with self.jobs_lock:
@@ -816,7 +908,8 @@ class Server:
                     # Claim persists even if the launching bridge dies. A later
                     # bridge can observe but never start this call a second time.
                     _atomic_json(self.job_dir / (job_id + ".launch"),
-                                 {"name": name, "args": args, "codexBin": self.codex_bin})
+                                 {"name": name, "args": args, "codexBin": self.codex_bin,
+                                  "agent": self.agent})
                     self._write_job(job)
                     try:
                         _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
@@ -938,6 +1031,8 @@ class Server:
             record = _load_record(self.state_dir, thread_id)
             if record is None:
                 return _tool_result(thread_id, error="thread is unknown to this server; a fresh codex call is required")
+            if record.get("agent", "codex") != self.agent:
+                return _tool_result(thread_id, error="thread belongs to a different agent")
             cwd = record["cwd"]
             model = record.get("model")
             saved_sandbox = record.get("sandbox")
@@ -973,36 +1068,30 @@ class Server:
             except ValueError as exc:
                 return _tool_result(None, error=str(exc))
         try:
-            command = _binary_prefix(self.codex_bin) + ["exec"]
-            if name == "codex-reply":
-                command.append("resume")
-            command += ["--json", "--skip-git-repo-check"]
-            if model:
-                command += ["-m", model]
-            for arg in config_args:
-                command += ["-c", arg]
             if name == "codex":
                 sandbox = arguments.get("sandbox")
                 if sandbox is not None:
                     if sandbox not in ("read-only", "workspace-write", "danger-full-access"):
                         raise ValueError("invalid sandbox")
-                    command += ["-s", sandbox]
-                if name == "codex":
-                    command += ["-C", cwd]
+                if self.agent == "opencode" and (arguments.get("approval-policy") is not None or any(
+                        field in arguments for field in ("developer-instructions", "base-instructions", "compact-prompt"))):
+                    raise ValueError("unsupported OpenCode option")
+            else:
+                sandbox = saved_sandbox
             self.state_dir.mkdir(parents=True, exist_ok=True)
             temp_dir = self.state_dir / ("codex-output-" + uuid.uuid4().hex)
             temp_dir.mkdir()
             try:
                 output_path = temp_dir / "last-message.txt"
-                command += ["-o", str(output_path)]
-                if name == "codex-reply":
-                    command.append(thread_id)
-                command.append("-")
+                command = _agent_command(self.agent, self._agent_prefix(), name, cwd, model,
+                                         config_args, sandbox, thread_id if name == "codex-reply" else None,
+                                         output_path, prompt)
                 creation = _process_creation_options()
                 with self.jobs_lock:
                     if request_id in self.cancelled:
                         return _tool_result(None, error="cancelled")
-                    process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **creation)
+                    process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE if self.agent == "codex" else subprocess.DEVNULL,
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, **creation)
                     self.jobs[request_id] = process
                     if async_job:
                         self.job_processes[request_id] = process
@@ -1015,6 +1104,7 @@ class Server:
                 exit_forced_after_terminal = False
 
                 def read_stdout() -> None:
+                    recorded_session = False
                     for line in process.stdout:
                         try:
                             event = json.loads(line)
@@ -1023,14 +1113,14 @@ class Server:
                         if not isinstance(event, dict):
                             continue
                         events.append(event)
-                        if event.get("type") in ("turn.completed", "turn.failed", "error"):
+                        started_id, terminal, _, _ = _agent_event(self.agent, event)
+                        if terminal:
                             terminal_event.set()
-                        started_id = event.get("thread_id")
-                        if (async_job and event.get("type") == "thread.started"
-                                and isinstance(started_id, str) and started_id):
+                        if async_job and started_id and not recorded_session:
+                            recorded_session = True
                             thread_config = {"cwd": cwd, "model": model,
                                              "config_args": config_args,
-                                             "sandbox": saved_sandbox if name == "codex-reply" else sandbox}
+                                             "sandbox": sandbox, "agent": self.agent}
                             with self.jobs_lock:
                                 current = self._read_job(request_id)
                                 if current is not None and current["state"] not in TERMINAL:
@@ -1044,15 +1134,16 @@ class Server:
                 stdout_reader.start()
                 stderr_reader.start()
                 try:
-                    try:
-                        process.stdin.write(prompt.encode("utf-8"))
-                    except BrokenPipeError:
-                        pass  # The child exited before consuming stdin.
-                    finally:
+                    if self.agent == "codex":
                         try:
-                            process.stdin.close()
+                            process.stdin.write(prompt.encode("utf-8"))
                         except BrokenPipeError:
-                            pass
+                            pass  # The child exited before consuming stdin.
+                        finally:
+                            try:
+                                process.stdin.close()
+                            except BrokenPipeError:
+                                pass
                     if async_job:
                         while process.poll() is None and not terminal_event.is_set():
                             remaining = job["deadlineAt"] - time.time()
@@ -1102,20 +1193,24 @@ class Server:
                         self.job_processes.pop(request_id, None)
                         if request_id in self.cancelled:
                             return _tool_result(None, error="cancelled")
-                started = next((event.get("thread_id") for event in events if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str) and event.get("thread_id")), None)
-                failures = [_event_message(event) for event in events if event.get("type") in ("error", "turn.failed")]
-                completed = any(event.get("type") == "turn.completed" for event in events)
+                parsed = [_agent_event(self.agent, event) for event in events]
+                started = next((session for session, _, _, _ in parsed if session), None)
+                failures = [failure for _, _, failure, _ in parsed if failure]
+                completed = any(event.get("type") == "step_finish" and isinstance(event.get("part"), dict)
+                                and event["part"].get("reason") == "stop" for event in events) if self.agent == "opencode" else any(
+                                    event.get("type") == "turn.completed" for event in events)
                 forced_complete = exit_forced_after_terminal and completed and not failures
-                if (process.returncode != 0 and not forced_complete) or not started or failures or (async_job and not completed):
+                if (process.returncode != 0 and not forced_complete) or not started or failures or ((async_job or self.agent == "opencode") and not completed):
                     detail = ("\n".join(failures) if failures else
                               "turn completion event missing" if async_job and not completed else
                               stderr[-4000:] or f"exit code {process.returncode}")
                     return _tool_result(started, error=detail)
-                last_message = output_path.read_text(encoding="utf-8") if output_path.is_file() else ""
+                last_message = output_path.read_text(encoding="utf-8") if self.agent == "codex" and output_path.is_file() else ""
                 if not last_message:
-                    last_message = next((item.get("text") for event in reversed(events) if event.get("type") == "item.completed" for item in [event.get("item")] if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str)), "")
+                    last_message = next((final for _, _, _, final in reversed(parsed) if final), "")
                 if name == "codex":
-                    _save_record(self.state_dir, {"thread_id": started, "cwd": cwd, "model": model, "config_args": config_args, "sandbox": sandbox})
+                    _save_record(self.state_dir, {"thread_id": started, "cwd": cwd, "model": model,
+                                                          "config_args": config_args, "sandbox": sandbox, "agent": self.agent})
                 if async_job and forced_complete:
                     with self.jobs_lock:
                         job = self._read_job(request_id)
@@ -1225,6 +1320,7 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                        hostContained=bool(containment), signalPort=server.listener.getsockname()[1])
             server._write_job(job)
         server.codex_bin = launch["codexBin"]
+        server.agent = launch.get("agent", "codex")
         server.claim_generation = generation
         server.claim_token = ownership_token
         server.job_events[job_id] = threading.Event()

@@ -81,6 +81,47 @@ if os.environ.get("FAKE_HANG_AFTER_TERMINAL") == "1":
 '''
 
 
+FAKE_OPENCODE = r'''
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+with open(os.environ["FAKE_RECORD"], "a", encoding="utf-8") as stream:
+    stream.write(json.dumps({"argv": args, "cwd": os.getcwd()}) + "\n")
+session = "ses_f1dcef146ffez46V9C0TN9cmiZ"
+def emit(kind, **data):
+    print(json.dumps({"type": kind, "timestamp": 1, "sessionID": session, **data}), flush=True)
+if os.environ.get("FAKE_NO_SESSION") == "1":
+    sys.exit(0)
+# Exact nonblank lines from .tmp/oc-events-success.jsonl (OpenCode 1.18.31).
+recorded = [
+    '{"type":"step_start","timestamp":1790501264681,"sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","part":{"id":"prt_0e2311d23001zDJKOvYZwjIh1K","messageID":"msg_0e23110af001DJoi4gGP5T8WRU","sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","snapshot":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","type":"step-start"}}',
+    '{"type":"tool_use","timestamp":1790501264895,"sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","part":{"type":"tool","tool":"write","callID":"call_function_p4kswnp5o4wr_1","state":{"status":"completed","input":{"filePath":"C:\\\\Projects\\\\purser\\\\.tmp\\\\oc-probe\\\\hello.txt","content":"hi\\n"},"output":"Wrote file successfully.","metadata":{"diagnostics":{},"filepath":"C:\\\\Projects\\\\purser\\\\.tmp\\\\oc-probe\\\\hello.txt","exists":false,"truncated":false},"title":"hello.txt","time":{"start":1790501264884,"end":1790501264893}},"id":"prt_0e2311d26001xs61fjZw3wbMnd","sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","messageID":"msg_0e23110af001DJoi4gGP5T8WRU"}}',
+    '{"type":"step_finish","timestamp":1790501265221,"sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","part":{"id":"prt_0e2311f40001LqLMagXeJMpI8V","reason":"tool-calls","snapshot":"7a2871192d49caaff5451df37b27afc373d8298b","messageID":"msg_0e23110af001DJoi4gGP5T8WRU","sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","type":"step-finish","tokens":{"total":9959,"input":7970,"output":51,"reasoning":0,"cache":{"write":0,"read":1938}},"cost":0}}',
+    '{"type":"step_start","timestamp":1790501266456,"sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","part":{"id":"prt_0e2312413001seTlI250dukfBW","messageID":"msg_0e23120150015B4P6wWnI2TE19","sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","snapshot":"7a2871192d49caaff5451df37b27afc373d8298b","type":"step-start"}}',
+    '{"type":"text","timestamp":1790501266468,"sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","part":{"id":"prt_0e2312416001cdRmB7ifQl7PvZ","messageID":"msg_0e23120150015B4P6wWnI2TE19","sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","type":"text","text":"DONE","time":{"start":1790501266454,"end":1790501266465}}}',
+    '{"type":"step_finish","timestamp":1790501266628,"sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","part":{"id":"prt_0e23124c0001zSb2nL5x72t5cn","reason":"stop","snapshot":"7a2871192d49caaff5451df37b27afc373d8298b","messageID":"msg_0e23120150015B4P6wWnI2TE19","sessionID":"ses_f1dcef146ffez46V9C0TN9cmiZ","type":"step-finish","tokens":{"total":9982,"input":22,"output":3,"reasoning":0,"cache":{"write":0,"read":9957}},"cost":0}}',
+]
+print(recorded[0], flush=True)
+if os.environ.get("FAKE_OC_ERROR") == "1":
+    emit("error", error={"name": "ProviderError", "data": {"message": "model failed"}})
+    sys.exit(1)
+if os.environ.get("FAKE_OC_DENIED") == "1":
+    denied = json.loads(recorded[1])
+    denied["part"]["state"] = {"status": "error", "error": "Permission denied"}
+    print(json.dumps(denied), flush=True)
+    sys.exit(0)
+for line in recorded[1:-1]:
+    print(line, flush=True)
+if os.environ.get("FAKE_OC_NO_STOP") != "1":
+    print(recorded[-1], flush=True)
+if os.environ.get("FAKE_OC_HANG_AFTER_STOP") == "1":
+    import time
+    time.sleep(60)
+'''
+
+
 @pytest.fixture
 def area():
     SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -904,3 +945,73 @@ def test_async_dead_host_without_output_resumes_same_job(area):
             second.close()
     finally:
         first.close()
+
+
+def _opencode_client(area, **flags):
+    fake = area / "fake_opencode.py"
+    fake.write_text(FAKE_OPENCODE, encoding="utf-8")
+    return Client(area, bin_override=json.dumps([sys.executable, str(fake)]),
+                  extra_env={"PURSER_AGENT": "opencode", **flags})
+
+
+def test_opencode_job_session_resume_and_command(area):
+    client = _opencode_client(area)
+    try:
+        first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+                                                 "cwd": str(area), "model": "opencode/test",
+                                                 "config": {"model_reasoning_effort": "high"}})
+        result = finish(client, first["jobId"], "SUCCEEDED")
+        assert (result["threadId"], result["content"]) == ("ses_f1dcef146ffez46V9C0TN9cmiZ", "DONE")
+        second = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                  "threadId": result["threadId"], "prompt": "two"})
+        assert finish(client, second["jobId"], "SUCCEEDED")["threadId"] == "ses_f1dcef146ffez46V9C0TN9cmiZ"
+        calls = client.calls()
+        assert calls[0]["argv"] == ["run", "--format", "json", "--model", "opencode/test",
+                                    "--variant", "high", "--", "one"]
+        assert calls[1]["argv"] == ["run", "--format", "json", "--model", "opencode/test",
+                                    "--variant", "high", "--session", "ses_f1dcef146ffez46V9C0TN9cmiZ", "--", "two"]
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("flag", ["FAKE_OC_ERROR", "FAKE_OC_DENIED", "FAKE_OC_NO_STOP", "FAKE_NO_SESSION"])
+def test_opencode_job_fails_on_event_or_missing_session(area, flag):
+    client = _opencode_client(area, **{flag: "1"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+                                                   "cwd": str(area), "model": "opencode/test"})
+        assert finish(client, started["jobId"], "FAILED")["errorCode"] == "CODEX_FAILED"
+    finally:
+        client.close()
+
+
+def test_opencode_rejects_unmapped_launch_options(area):
+    client = _opencode_client(area)
+    try:
+        for invalid in ({"model": "unqualified"}, {"model": "opencode/test", "sandbox": "workspace-write"},
+                        {"model": "opencode/test", "approval-policy": "never"}):
+            result = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one", **invalid})
+            assert result["state"] == "FAILED"
+        assert client.calls() == []
+    finally:
+        client.close()
+
+
+def test_opencode_final_stop_triggers_existing_exit_grace(area, monkeypatch):
+    fake = area / "fake_opencode.py"
+    fake.write_text(FAKE_OPENCODE, encoding="utf-8")
+    monkeypatch.setenv("FAKE_RECORD", str(area / "calls.jsonl"))
+    monkeypatch.setenv("FAKE_OC_HANG_AFTER_STOP", "1")
+    monkeypatch.setattr(codex_exec_mcp, "CODEX_TERMINAL_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(codex_exec_mcp, "_stop_process", lambda process: (process.kill(), True)[1])
+    jobs = area / "jobs"
+    jobs.mkdir()
+    server = codex_exec_mcp.Server(codex_bin=json.dumps([sys.executable, str(fake)]),
+                                    job_dir=jobs, agent="opencode")
+    server.state_dir = area / "state"
+    job_id = uuid.uuid4().hex
+    server._write_job({"jobId": job_id, "state": "QUEUED", "deadlineAt": time.time() + 5})
+    server._job_worker(job_id, "codex", {"prompt": "one", "cwd": str(area), "model": "opencode/test"})
+    record = server._read_job(job_id)
+    assert record["state"] == "SUCCEEDED"
+    assert record["exitForcedAfterComplete"] is True
