@@ -2193,7 +2193,8 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
         fields.append(f"estimated completion: {median} min")
     receipt = f"**{' · '.join(fields)}**"
     repository = Path(pending["repo_root"]) if isinstance(pending.get("repo_root"), str) else None
-    if event is not None and event.get("tool_name") in CODEX_START_TOOL_NAMES:
+    if (event is not None
+            and event.get("tool_name") not in (CODEX_RESULT_TOOL_NAMES | CODEX_APPLY_TOOL_NAMES)):
         compaction_advisor.queue_dispatch(event, repository, line=receipt)
     if pending.get("async_call") and isinstance(pending.get("project_key"), str):
         _append_project_job_status(response, state_root, pending["project_key"], event)
@@ -4125,7 +4126,8 @@ def post_tool_use(
         if pending.get("has_code_map") and bundle.get("changed_paths"):
             bundle["code_map"] = "STALE"
         response = _finalize_replacement(bundle, loaded_config, runtime_root, event, pending.get("repo_root"))
-        response = _append_dispatch_receipt(response, pending, runtime_root, event)
+        if not pending.get("async_call"):
+            response = _append_dispatch_receipt(response, pending, runtime_root, event)
         if not pending.get("async_call"):
             _release_scope_lease(runtime_root, pending)
             _remove_pending(runtime_root, event)

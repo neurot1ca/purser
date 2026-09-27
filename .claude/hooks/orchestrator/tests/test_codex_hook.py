@@ -3494,7 +3494,7 @@ def test_compatible_reply_only_strips_orch(workspace, config):
 
     assert updated == {
         "threadId": "thread-1",
-        "prompt": "Continue.\n" + codex._WORKER_VALIDATION_INSTRUCTION,
+        "prompt": codex._append_worker_validation_instruction("Continue."),
     }
 
 
@@ -3515,9 +3515,8 @@ def test_reply_without_orch_inherits_recorded_thread_context(workspace, config):
     assert "permissionDecision" not in output
     assert output["updatedInput"] == {
         "threadId": "thread-1",
-        "prompt": (
-            "Continue without repeating routing.\n"
-            + codex._WORKER_VALIDATION_INSTRUCTION
+        "prompt": codex._append_worker_validation_instruction(
+            "Continue without repeating routing."
         ),
     }
     pending = next((state / "pending").glob("*.json"))
@@ -3561,8 +3560,8 @@ def test_pretool_strips_minimal_orch_and_pins_consequential_route(workspace, con
     output = result["hookSpecificOutput"]
 
     assert "permissionDecision" not in output
-    assert output["updatedInput"]["prompt"] == (
-        "\nbody text\n" + codex._WORKER_VALIDATION_INSTRUCTION
+    assert output["updatedInput"]["prompt"] == codex._append_worker_validation_instruction(
+        "\nbody text"
     )
     assert output["updatedInput"]["model"] == "gpt-6-sol"
     assert output["updatedInput"]["config"]["model_reasoning_effort"] == "high"
