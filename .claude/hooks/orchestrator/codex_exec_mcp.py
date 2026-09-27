@@ -724,20 +724,47 @@ class Server:
                 index = None
             if isinstance(index, dict) and index.get("stage") == "CONSUMED":
                 return "UNCHANGED"
+            current = time.time() if now is None else now
             # An unclaimed QUEUED generation can still start. No process identity
             # means there is no proof that it is safe to replace it.
+            if job.get("leaseQueued") and job["state"] == "QUEUED" and not job.get("hostPid"):
+                if current >= job["deadlineAt"]:
+                    self._finish_job(job_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
+                    return "TIMED_OUT"
+                job.update(generation=job["generation"] + 1,
+                           ownershipToken=uuid.uuid4().hex)
+                self._write_job(job)
+                try:
+                    _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
+                except OSError:
+                    return "UNCONFIRMED"
+                return "RECOVERED"
             if not job.get("hostPid") or not job.get("hostContained"):
                 return "UNCONFIRMED"
             classification = self._classify_host(job)
             if classification != "DEAD":
                 return classification
-            current = time.time() if now is None else now
 
             def ambiguous(code: str, message: str) -> str:
                 job.update(state="UNKNOWN_OR_IN_PROGRESS", finishedAt=current,
                            errorCode=code, message=message)
                 self._write_job(job)
                 return "AMBIGUOUS"
+
+            if job.get("leaseQueued") and job["state"] == "QUEUED":
+                if current >= job["deadlineAt"]:
+                    self._finish_job(job_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
+                    return "TIMED_OUT"
+                job.update(generation=job["generation"] + 1,
+                           ownershipToken=uuid.uuid4().hex)
+                for key in ("hostPid", "hostCreatedAt", "hostContained", "signalPort"):
+                    job.pop(key, None)
+                self._write_job(job)
+                try:
+                    _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
+                except OSError:
+                    return ambiguous("RECOVERY_HOST_LAUNCH_FAILED", "Queued host launch failed")
+                return "RECOVERED"
 
             if not isinstance(job.get("hostCreatedAt"), int) or not isinstance(job.get("generation"), int):
                 return ambiguous("RECOVERY_PROOF_MISSING", "Host or child-tree termination proof is missing")
@@ -809,6 +836,8 @@ class Server:
         until = time.monotonic() + 10
         while time.monotonic() < until:
             job = self._read_job(job_id)
+            if job is not None and job.get("leaseQueued") and job.get("state") == "QUEUED" and self._host_ping(job):
+                return _job_result({key: job[key] for key in ("jobId", "state", "acceptedAt", "deadlineAt")})
             if job is not None and job.get("state") == "RUNNING" and (self._host_alive(job) or self._host_ping(job)):
                 return _job_result({key: job[key] for key in ("jobId", "state", "acceptedAt", "deadlineAt")})
             if job is not None and job.get("state") in TERMINAL - {"UNKNOWN_OR_IN_PROGRESS"}:
@@ -838,6 +867,7 @@ class Server:
                     "CODEX_FAILED": "Codex failed", "DEADLINE_EXCEEDED": "Codex deadline exceeded",
                     "CANCELLED": "Codex cancelled", "PROCESS_UNCONFIRMED": "Process termination unconfirmed",
                     "RECOVERY_RESUME_FAILED": "Interrupted Codex thread could not be resumed",
+                    "ADMISSION_BASELINE_UNAVAILABLE": "Fresh admission baseline could not be bound; FULL review required",
                 }[code])
             if result is not None:
                 output = self.job_dir / (job_id + ".output")
@@ -855,6 +885,15 @@ class Server:
                     os.replace(temporary, output)
                     job.update(threadId=result["threadId"], outputFile=output.name)
             self._write_job(job)
+            if job.get("leaseQueued") and "startedAt" not in job and state in {"CANCELLED", "TIMED_OUT"}:
+                try:
+                    import ledger
+                    root = self.job_dir.parent.parent
+                    index = json.loads((root / "async_jobs" / (job_id + ".json")).read_text(encoding="utf-8"))
+                    lease = ledger.ScopeLeases(root / "projects" / index["project_key"])
+                    lease.release(index["call_key"])
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass  # Finalization retries lease release if the index is unavailable.
             if state != "UNKNOWN_OR_IN_PROGRESS":
                 (self.job_dir / (job_id + ".launch")).unlink(missing_ok=True)
             self.jobs.pop(job_id, None)
@@ -925,6 +964,8 @@ class Server:
                 job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
                        "deadlineAt": now + timeout, "signalToken": uuid.uuid4().hex,
                        "generation": 1, "ownershipToken": uuid.uuid4().hex}
+                if args.get("leaseQueued") is True:
+                    job["leaseQueued"] = True
                 for field in ("taskId", "route", "etaMinutes"):
                     if field in args:
                         job[field] = args[field]
@@ -953,6 +994,29 @@ class Server:
 
     def _job_worker(self, job_id: str, name: str, args: dict[str, Any]) -> None:
         try:
+            if self._read_job(job_id).get("leaseQueued") is True:
+                import codex
+                root = self.job_dir.parent.parent
+                while True:
+                    job = self._read_job(job_id)
+                    if job is None or job["state"] != "QUEUED":
+                        return
+                    if time.time() >= job["deadlineAt"]:
+                        self._finish_job(job_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
+                        return
+                    try:
+                        admitted = codex.bind_queued_baseline(root, job_id)
+                    except FileNotFoundError:
+                        admitted = False  # PostToolUse has not written the index yet.
+                    except (OSError, ValueError, TypeError, KeyError, codex.WiringError):
+                        self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "ADMISSION_BASELINE_UNAVAILABLE")
+                        return
+                    if admitted:
+                        break
+                    time.sleep(1.0)
+            if time.time() >= self._read_job(job_id)["deadlineAt"]:
+                self._finish_job(job_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
+                return
             with self.jobs_lock:
                 job = self._read_job(job_id)
                 if (job is None or job["state"] != "QUEUED"
@@ -965,7 +1029,11 @@ class Server:
             result = self._run_tool(name, args, job_id, async_job=True)
             value = result.get("structuredContent")
             if result.get("isError") or not isinstance(value, dict):
-                if self._read_job(job_id).get("resumedAfterInterruption") and name == "codex-reply":
+                current = self._read_job(job_id)
+                if (current is not None and "pid" not in current
+                        and time.time() >= current["deadlineAt"]):
+                    self._finish_job(job_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
+                elif current and current.get("resumedAfterInterruption") and name == "codex-reply":
                     self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "RECOVERY_RESUME_FAILED")
                 else:
                     self._finish_job(job_id, "FAILED", "CODEX_FAILED")
@@ -1010,6 +1078,12 @@ class Server:
         if job is None:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
+        if job.get("leaseQueued") and job["state"] == "QUEUED":
+            with _ownership_lock(self.job_dir, job_id):
+                current = self._read_job(job_id)
+                if current is not None and current["state"] == "QUEUED":
+                    self._finish_job(job_id, "CANCELLED", "CANCELLED")
+                    return self._result_job({"jobId": job_id})
         if self.listener is None:
             if job["state"] in TERMINAL:
                 return self._result_job({"jobId": job_id})
@@ -1122,6 +1196,8 @@ class Server:
                 with self.jobs_lock:
                     if request_id in self.cancelled:
                         return _tool_result(None, error="cancelled")
+                    if async_job and time.time() >= self._read_job(request_id)["deadlineAt"]:
+                        return _tool_result(None, error="deadline exceeded")
                     process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE if self.agent == "codex" else subprocess.DEVNULL,
                                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, **creation)
                     self.jobs[request_id] = process

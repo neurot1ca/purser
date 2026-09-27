@@ -12,6 +12,18 @@ import ledger
 import policy
 
 
+def test_expired_queued_job_releases_scope_before_new_acquire(tmp_path, monkeypatch):
+    store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
+    monkeypatch.setattr(store, "_job_state", lambda job_id:
+                        "JOB_EXPIRED" if job_id == "b" * 64 else "RUNNING")
+    assert store.acquire("blocker", "blocker-task", ["src"], job_id="a" * 64)["status"] == ledger.OK
+    assert store.acquire("waiter", "waiter-task", ["src"], job_id="b" * 64,
+                         queue_conflict=True)["code"] == "LEASE_QUEUED"
+    assert store.owner_state("waiter") == "RELEASED"
+    assert store.release("blocker")["status"] == ledger.OK
+    assert store.acquire("new", "new-task", ["src"])["status"] == ledger.OK
+
+
 @pytest.fixture()
 def tmp_path():
     root = (

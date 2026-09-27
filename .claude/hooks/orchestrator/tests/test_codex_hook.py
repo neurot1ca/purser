@@ -1097,6 +1097,23 @@ def test_async_missing_job_record_requires_retention_cutoff(workspace, monkeypat
     assert store.acquire("next", "next-task", ["file0.py"])["status"] == ledger.OK
 
 
+def test_owner_state_promotes_waiter_after_blocker_retention_expires(workspace, monkeypatch):
+    store = _lease_state(workspace)
+    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
+    assert store.acquire("blocker", "blocking-task", ["file0.py"],
+                         job_id="a" * 64, timeout_seconds=100)["status"] == ledger.OK
+    cutoff = store._read()["owners"]["blocker"]["retention_after"]
+    monkeypatch.setattr(ledger.time, "time", lambda: cutoff - 10)
+    assert store.acquire("waiter", "waiting-task", ["file0.py"],
+                         job_id="b" * 64, timeout_seconds=100,
+                         queue_conflict=True)["code"] == "LEASE_QUEUED"
+    monkeypatch.setattr(ledger.time, "time", lambda: cutoff)
+    assert store.owner_state("waiter") == "ACTIVE"
+    owners = store._read()["owners"]
+    assert owners["blocker"]["state"] == "RELEASED"
+    assert owners["waiter"]["acquired_at"] == cutoff
+
+
 def test_released_lease_entries_are_pruned_on_write(workspace, monkeypatch):
     store = _lease_state(workspace)
     monkeypatch.setattr(ledger.time, "time", lambda: 1_000_000.0)
@@ -1136,17 +1153,60 @@ def test_lease_cli_lists_and_releases_only_named_task(workspace, monkeypatch):
     assert [row["task_id"] for row in store.active()] == ["task-two"]
 
 
-def test_simultaneous_conflicting_starts_admit_one(workspace, config):
+def test_simultaneous_conflicting_starts_queue_one_and_disjoint_runs(workspace, config):
     repo, state = workspace
     calls = [_lease_call(f"race-{n}", "file0.py", f"lease-race-{n}", tool_name=START_TOOL)
              for n in (1, 2)]
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda call: codex.pre_tool_use(
             call, config=config, state_root=state, repo_root=repo), calls))
-    allowed = ["updatedInput" in result["hookSpecificOutput"] for result in results]
-    assert sorted(allowed) == [False, True]
-    assert "SCOPE_LEASE_CONFLICT" in next(result for result, ok in zip(results, allowed)
-                                     if not ok)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert all("updatedInput" in result["hookSpecificOutput"] for result in results)
+    assert sorted(result["hookSpecificOutput"]["updatedInput"].get("leaseQueued", False)
+                  for result in results) == [False, True]
+    disjoint = _lease_call("disjoint", "file1.py", "lease-disjoint", tool_name=START_TOOL)
+    assert "leaseQueued" not in codex.pre_tool_use(
+        disjoint, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    owners = _lease_state(workspace)._read()["owners"]
+    assert sorted(owner["state"] for owner in owners.values()) == ["ACTIVE", "ACTIVE", "QUEUED"]
+
+
+def test_queued_admission_binds_fresh_baseline_and_launches_once(workspace, config, monkeypatch):
+    repo, state = workspace
+    first = _lease_call("first", "file0.py", "queue-first", tool_name=START_TOOL)
+    second = _lease_call("second", "file0.py", "queue-second", tool_name=START_TOOL)
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    updated = codex.pre_tool_use(second, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["leaseQueued"] is True
+    assert codex._read_pending(state, second)["baseline"]["code"] == "QUEUED"
+    assert _lease_state(workspace).overlapping_owners(codex._call_key(first)) == []
+    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
+    jobs = state / "codex_exec_mcp" / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *_args: None)
+    monkeypatch.setattr(server, "_await_host", lambda *_args: {"structuredContent": {"jobId": job_id, "state": "QUEUED"}})
+    server._start_job(updated)
+    codex.post_tool_use({**second, "hook_event_name": "PostToolUse", "tool_response":
+                         {"structuredContent": {"jobId": job_id, "state": "QUEUED"}}},
+                        config=config, state_root=state, repo_root=repo)
+    waiting = codex.pre_tool_use(async_followup(RESULT_TOOL, job_id),
+                                 config=config, state_root=state, repo_root=repo)
+    assert "ASYNC_STILL_RUNNING" in waiting["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "queued" in waiting["hookSpecificOutput"]["permissionDecisionReason"]
+    launched = []
+    monkeypatch.setattr(server, "_run_tool", lambda *_args, **_kwargs:
+                        launched.append(True) or {"structuredContent": {"threadId": "queued-thread", "content": "done"}})
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        worker = pool.submit(server._job_worker, job_id, "codex", updated)
+        time.sleep(0.1)
+        assert not launched
+        (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+        assert _lease_state(workspace).release(codex._call_key(first))["status"] == ledger.OK
+        worker.result(timeout=10)
+    assert launched == [True]
+    pending = codex._read_pending(state, second)
+    assert pending["baseline"]["status"] == ledger.OK
+    assert pending["baseline"]["status_entries"]
+    assert _lease_state(workspace).overlapping_owners(codex._call_key(second)) == []
 
 
 def test_sync_finalize_releases_scope_lease(workspace, config):

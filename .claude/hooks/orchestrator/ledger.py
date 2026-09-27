@@ -107,12 +107,15 @@ class ScopeLeases:
             raise ValueError("scope lease record is invalid")
         for key, owner in value["owners"].items():
             if (not isinstance(key, str) or not isinstance(owner, dict)
-                    or owner.get("state") not in {"ACTIVE", "RELEASED"}
+                    or owner.get("state") not in {"ACTIVE", "QUEUED", "RELEASED"}
                     or not isinstance(owner.get("task_id"), str)
                     or not isinstance(owner.get("scope"), list)
                     or (not owner["scope"] and owner.get("read_only") is not True)
                     or (owner.get("read_only") is True and bool(owner["scope"]))
-                    or any(not isinstance(path, str) or not path for path in owner["scope"])):
+                    or any(not isinstance(path, str) or not path for path in owner["scope"])
+                    or (owner["state"] == "QUEUED" and
+                        (not isinstance(owner.get("job_id"), str)
+                         or not isinstance(owner.get("queued_at"), (int, float))))):
                 raise ValueError("scope lease owner is invalid")
         return value
 
@@ -163,7 +166,7 @@ class ScopeLeases:
     def _reconcile(self, value: dict[str, Any], now: float) -> bool:
         changed = False
         for owner in value["owners"].values():
-            if owner["state"] != "ACTIVE":
+            if owner["state"] not in {"ACTIVE", "QUEUED"}:
                 continue
             job_id = owner.get("job_id")
             if job_id is None:
@@ -186,9 +189,21 @@ class ScopeLeases:
                 changed = True
         return changed
 
+    def _promote(self, value: dict[str, Any], now: float) -> bool:
+        changed = False
+        for owner in value["owners"].values():
+            if owner["state"] != "QUEUED":
+                continue
+            if any(other["state"] == "ACTIVE" and _scopes_overlap(owner["scope"], other["scope"])
+                   for other in value["owners"].values()):
+                continue
+            owner.update(state="ACTIVE", acquired_at=now)
+            changed = True
+        return changed
+
     def acquire(self, owner_key: str, task_id: str, scope: Sequence[str],
                 *, job_id: str | None = None, timeout_seconds: float | None = None,
-                read_only: bool = False) -> dict[str, Any]:
+                read_only: bool = False, queue_conflict: bool = False) -> dict[str, Any]:
         if not owner_key or not task_id or (not scope and not read_only) or (scope and read_only):
             return {"status": UNKNOWN, "code": "LEASE_INVALID"}
         try:
@@ -196,23 +211,31 @@ class ScopeLeases:
                 value = self._read()
                 now = time.time()
                 if self._reconcile(value, now):
+                    self._promote(value, now)
                     self._write(value)
                 prior = value["owners"].get(owner_key)
                 if prior is not None:
-                    return ({"status": OK, "code": "LEASE_ACQUIRED"}
-                            if prior["state"] == "ACTIVE" and prior["task_id"] == task_id
+                    return ({"status": OK, "code": "LEASE_QUEUED" if prior["state"] == "QUEUED" else "LEASE_ACQUIRED"}
+                            if prior["state"] in {"ACTIVE", "QUEUED"} and prior["task_id"] == task_id
                             and prior["scope"] == list(scope) else
                             {"status": UNKNOWN, "code": "LEASE_OWNER_CONFLICT"})
+                conflict = None
                 for other in value["owners"].values():
-                    if other["state"] != "ACTIVE":
+                    if other["state"] not in {"ACTIVE", "QUEUED"}:
                         continue
                     if _scopes_overlap(scope, other["scope"]):
-                        return {"status": UNKNOWN, "code": "SCOPE_LEASE_CONFLICT",
-                                "task_id": other["task_id"]}
+                        conflict = other
+                        break
+                if conflict is not None and not (queue_conflict and job_id and not read_only):
+                    return {"status": UNKNOWN, "code": "SCOPE_LEASE_CONFLICT",
+                            "task_id": conflict["task_id"]}
                 owner = {
-                    "task_id": task_id, "scope": list(scope), "state": "ACTIVE",
-                    "job_id": job_id, "acquired_at": now,
+                    "task_id": task_id, "scope": list(scope),
+                    "state": "QUEUED" if conflict is not None else "ACTIVE",
+                    "job_id": job_id, "queued_at": now,
                 }
+                if conflict is None:
+                    owner["acquired_at"] = now
                 if read_only:
                     owner["read_only"] = True
                 if job_id is None:
@@ -230,7 +253,7 @@ class ScopeLeases:
                     owner["retention_after"] = now + job_timeout + JOB_RETENTION_SECONDS
                 value["owners"][owner_key] = owner
                 self._write(value)
-                return {"status": OK, "code": "LEASE_ACQUIRED"}
+                return {"status": OK, "code": "LEASE_QUEUED" if conflict is not None else "LEASE_ACQUIRED"}
         except (OSError, ValueError, TypeError):
             return {"status": UNKNOWN, "code": "LEASE_ADMISSION_UNCERTAIN"}
 
@@ -241,9 +264,10 @@ class ScopeLeases:
                 owner = value["owners"].get(owner_key)
                 if owner is None:
                     return {"status": UNKNOWN, "code": "LEASE_OWNER_MISSING"}
-                if owner["state"] == "ACTIVE":
+                if owner["state"] in {"ACTIVE", "QUEUED"}:
                     owner["state"] = "RELEASED"
                     owner["released_at"] = time.time()
+                    self._promote(value, owner["released_at"])
                     self._write(value)
                 return {"status": OK, "code": "LEASE_RELEASED"}
         except (OSError, ValueError, TypeError):
@@ -255,7 +279,7 @@ class ScopeLeases:
             with _lease_lock(self.lock_path):
                 value = self._read()
                 owner = value["owners"].get(owner_key)
-                if (owner is None or owner["state"] != "ACTIVE"
+                if (owner is None or owner["state"] not in {"ACTIVE", "QUEUED"}
                         or not isinstance(horizon, (int, float)) or not math.isfinite(horizon)):
                     return {"status": UNKNOWN, "code": "LEASE_OWNER_MISSING"}
                 owner["retention_after"] = max(owner.get("retention_after", 0), horizon)
@@ -269,6 +293,7 @@ class ScopeLeases:
             value = self._read()
             now = time.time()
             if self._reconcile(value, now):
+                self._promote(value, now)
                 self._write(value)
             return [
                 {"task_id": owner["task_id"], "scope": list(owner["scope"]),
@@ -277,12 +302,22 @@ class ScopeLeases:
                 for owner in value["owners"].values() if owner["state"] == "ACTIVE"
             ]
 
+    def owner_state(self, owner_key: str) -> str:
+        with _lease_lock(self.lock_path):
+            value = self._read()
+            now = time.time()
+            if self._reconcile(value, now):
+                self._promote(value, now)
+                self._write(value)
+            return value["owners"].get(owner_key, {}).get("state", "MISSING")
+
     def overlapping_owners(self, owner_key: str) -> list[dict[str, Any]]:
         """Read leases whose lifetimes intersect this call."""
         with _lease_lock(self.lock_path):
             value = self._read()
             now = time.time()
             if self._reconcile(value, now):
+                self._promote(value, now)
                 self._write(value)
             own = value["owners"].get(owner_key)
             if own is None or not isinstance(own.get("acquired_at"), (int, float)):
@@ -293,7 +328,7 @@ class ScopeLeases:
                 raise ValueError("current scope lease release time is missing")
             result = []
             for key, owner in value["owners"].items():
-                if key == owner_key:
+                if key == owner_key or "acquired_at" not in owner:
                     continue
                 acquired = owner.get("acquired_at")
                 released = owner.get("released_at", now)
@@ -309,12 +344,13 @@ class ScopeLeases:
             now = time.time()
             released = []
             for owner in value["owners"].values():
-                if owner["state"] == "ACTIVE" and owner["task_id"] == task_id:
+                if owner["state"] in {"ACTIVE", "QUEUED"} and owner["task_id"] == task_id:
                     released.append({"task_id": task_id, "scope": list(owner["scope"]),
                                      "job_id": owner.get("job_id")})
                     owner["state"] = "RELEASED"
                     owner["released_at"] = now
             if released:
+                self._promote(value, now)
                 self._write(value)
             return released
 _SECRET_KEY_PARTS = (

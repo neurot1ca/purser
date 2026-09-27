@@ -197,6 +197,76 @@ def test_job_read_retries_transient_permission_error(area, monkeypatch):
     assert attempts == 2
 
 
+def test_queued_job_deadline_never_launches(area, monkeypatch):
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    job_id = "1" * 64
+    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
+                       "acceptedAt": time.time(), "deadlineAt": time.time() + 0.05})
+    monkeypatch.setattr(codex, "bind_queued_baseline", lambda *_args: False)
+    monkeypatch.setattr(server, "_run_tool", lambda *_args, **_kwargs: pytest.fail("queued worker launched"))
+    server._job_worker(job_id, "codex", {"leaseQueued": True})
+    assert server._read_job(job_id)["state"] == "TIMED_OUT"
+
+
+def test_queued_cancel_never_launches(area, monkeypatch):
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    job_id = "2" * 64
+    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
+                       "acceptedAt": time.time(), "deadlineAt": time.time() + 30})
+    monkeypatch.setattr(server, "_run_tool", lambda *_args, **_kwargs: pytest.fail("cancelled worker launched"))
+    assert server._cancel_job({"jobId": job_id})["structuredContent"]["state"] == "CANCELLED"
+    server._job_worker(job_id, "codex", {"leaseQueued": True})
+    assert server._read_job(job_id)["state"] == "CANCELLED"
+
+
+def test_queued_baseline_failure_is_uncertain_without_launch(area, monkeypatch):
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    job_id = "3" * 64
+    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
+                       "acceptedAt": time.time(), "deadlineAt": time.time() + 30})
+    monkeypatch.setattr(codex, "bind_queued_baseline", lambda *_args: (_ for _ in ()).throw(
+        codex.WiringError("baseline unavailable")))
+    monkeypatch.setattr(server, "_run_tool", lambda *_args, **_kwargs: pytest.fail("uncertain worker launched"))
+    server._job_worker(job_id, "codex", {"leaseQueued": True})
+    job = server._read_job(job_id)
+    assert (job["state"], job["errorCode"]) == ("UNKNOWN_OR_IN_PROGRESS", "ADMISSION_BASELINE_UNAVAILABLE")
+
+
+def test_never_launched_queue_recovery_fences_old_generation(area, monkeypatch):
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    job_id = "4" * 64
+    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
+                       "generation": 1, "ownershipToken": "old",
+                       "acceptedAt": time.time(), "deadlineAt": time.time() + 30})
+    launched = []
+    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launched.append(args))
+    assert server.recover_job(job_id) == "RECOVERED"
+    job = server._read_job(job_id)
+    assert job["state"] == "QUEUED" and job["generation"] == 2
+    assert len(launched) == 1 and launched[0][2:] == (2, job["ownershipToken"])
+
+
+def test_queued_job_with_host_pid_recovers(area, monkeypatch):
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    job_id = "5" * 64
+    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
+                       "generation": 1, "ownershipToken": "old", "hostPid": 123,
+                       "hostCreatedAt": 1, "hostContained": True,
+                       "acceptedAt": 1000.0, "deadlineAt": 1100.0})
+    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
+    launched = []
+    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launched.append(args))
+    assert server.recover_job(job_id, now=1001.0) == "RECOVERED"
+    job = server._read_job(job_id)
+    assert job["generation"] == 2 and "hostPid" not in job
+    assert len(launched) == 1 and launched[0][2:] == (2, job["ownershipToken"])
+
+
 def test_atomic_job_write_retries_transient_replace_permission_error(area, monkeypatch):
     job_id = "b" * 64
     jobs = area / "root" / "codex_exec_mcp" / "jobs"

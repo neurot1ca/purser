@@ -778,6 +778,39 @@ def _release_async_lease(runtime_root: Path, index: Mapping[str, Any],
         raise WiringError(result["code"])
 
 
+def bind_queued_baseline(runtime_root: Path, job_id: str) -> bool:
+    """Bind fresh review evidence after the queued lease becomes active."""
+    index = json.loads((runtime_root / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+    pending_path = runtime_root / "pending" / f"{index['call_key']}.json"
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    if (index.get("jobId") != job_id or pending.get("job_id") != job_id
+            or not pending.get("lease_queued")
+            or index.get("call") != pending.get("async_call")
+            or index.get("project_key") != pending.get("project_key")
+            or index.get("call_key") != pending.get("lease_owner")
+            or hashlib.sha256(index["call"].encode("utf-8")).hexdigest() != job_id):
+        raise WiringError("queued job ownership is unavailable")
+    project_state = _project_state_root(runtime_root, pending["project_key"])
+    if ledger.ScopeLeases(project_state).owner_state(pending["lease_owner"]) != "ACTIVE":
+        return False
+    baseline = ledger.capture_baseline(
+        Path(pending["repo_root"]), pending["scope"],
+    )
+    if baseline.get("status") != ledger.OK:
+        raise WiringError("admission baseline is unavailable")
+    session = ledger.SessionLedger(project_state)
+    loaded = session.load(pending["task_id"])
+    if loaded["status"] != ledger.OK:
+        raise WiringError("queued session record is unavailable")
+    record = dict(loaded["record"], pending_call_baseline=baseline)
+    saved = session.save(record)
+    if saved["status"] != ledger.OK:
+        raise WiringError("admission baseline could not be bound")
+    pending["baseline"] = baseline
+    _atomic_json_write(pending_path, pending)
+    return True
+
+
 def _reconcile_rejected_starts(runtime_root: Path, project_key: str) -> None:
     """Clear a rejected start only after its durable bridge job is terminal."""
     for path in (runtime_root / "pending").glob("*.json"):
@@ -1593,6 +1626,7 @@ def pre_tool_use(
                 owner, parsed.task_id, declared_scope if parsed.phase == "implementation" else [],
                 job_id=job_id, read_only=parsed.phase == "plan",
                 timeout_seconds=updated.get("timeoutSeconds") if is_start else None,
+                queue_conflict=is_start and mode == "new" and parsed.phase == "implementation",
             )
             if admitted["status"] != ledger.OK:
                 return _observed_denial(
@@ -1606,6 +1640,11 @@ def pre_tool_use(
                 )
             pending["lease_owner"] = owner
             lease_pending = pending
+            if admitted["code"] == "LEASE_QUEUED":
+                pending["lease_queued"] = True
+                pending["baseline"] = {"status": ledger.UNKNOWN, "code": "QUEUED"}
+                baseline = pending["baseline"]
+                updated["leaseQueued"] = True
         _atomic_json_write(_pending_path(runtime_root, event), pending)
         pending_written = True
 
@@ -1985,7 +2024,8 @@ def _async_pre_followup(event: Mapping[str, Any], state_root: str | os.PathLike[
     if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES:
         job = _async_job(root, index)
         if job is not None and job.get("state") in {"QUEUED", "RUNNING"}:
-            return _deny("ASYNC_STILL_RUNNING", "still running; wait for the completion signal")
+            status = "still running" if job["state"] == "RUNNING" else "queued"
+            return _deny("ASYNC_STILL_RUNNING", f"{status}; wait for the completion signal")
     return {}
 
 
