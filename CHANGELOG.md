@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.40 — 2026-09-27
+
+- Dispatch receipts and the job board are required in the next reply through the Stop hook, and the board shows only labelled, live or recently finished jobs.
+- Init lists Reviewer-1 options by model with same-family marks, accepts OpenCode or Codex reviewers, offers free OpenCode models for mechanical chores, and finds the platform OpenCode binary.
+- A fresh start with reason `user_override` or `reanchor` is allowed beside a compatible live thread; reply denials name the caller and the mismatched field.
+- Quota receipts older than an hour use the stale variant, and the handoff skips harness system notifications.
 ## 0.1.39 — 2026-09-27
 
 - Purser writes the dispatch receipt itself from a required short task label; with two or more jobs in flight it adds a job board (task, model, state, remaining ETA, review, apply).
