@@ -72,7 +72,7 @@ _USER_SECURITY = {
 _USER_NON_SECURITY = {"telemetry": {"vault_root"}}
 _PROJECT_SECURITY = {
     "paths": {"protected"},
-    "review": {"force_full", "skip_max_lines", "skip_max_files"},
+    "review": {"force_full", "skip_max_lines", "skip_max_files", "full_suite_required"},
 }
 _DEFAULT_AUTHORITY_HEADINGS = (
     "Authority",
@@ -130,6 +130,7 @@ class ResolvedProfile:
     project_id: str | None
     protected_paths: tuple[str, ...]
     force_full_review: bool
+    full_suite_required: bool
     skip_max_lines: int
     skip_max_files: int
     trusted: bool
@@ -177,6 +178,7 @@ def load_profile(
             project_id=None,
             protected_paths=tuple(sorted(_ENGINE_PROTECTED)),
             force_full_review=True,
+            full_suite_required=False,
             skip_max_lines=_ENGINE_DEFAULTS["skip_max_lines"],
             skip_max_files=_ENGINE_DEFAULTS["skip_max_files"],
             trusted=False,
@@ -427,7 +429,7 @@ def _valid_security_value(section: str, key: str, value: Any) -> tuple[bool, str
         return False, f"[roles] {key} has an invalid type or value"
 
     if section == "review":
-        if key == "force_full":
+        if key in ("force_full", "full_suite_required"):
             valid = type(value) is bool
         else:
             valid = type(value) is int and value >= 0
@@ -546,6 +548,7 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
         project_id=project_values.get("project.id"),
         protected_paths=tuple(sorted(protected)),
         force_full_review=force_full,
+        full_suite_required=bool(project_values.get("review.full_suite_required", False)),
         skip_max_lines=skip_lines,
         skip_max_files=skip_files,
         trusted=trusted,

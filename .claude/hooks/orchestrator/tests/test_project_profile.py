@@ -45,6 +45,16 @@ argv = ["python", "-V"]
     assert not any("unknown" in warning for warning in valid.warnings)
 
 
+def test_non_boolean_full_suite_required_rejects_project_profile(profile_root):
+    result = _load(
+        profile_root,
+        "schema_version = 1\n[review]\nfull_suite_required = 1\n",
+    )
+    assert result.project_status == "rejected"
+    assert result.full_suite_required is False
+    assert result.force_full_review
+
+
 def test_worktree_profile_values_and_defaults(profile_root):
     result = _load(profile_root, '''schema_version = 1
 [worktree]

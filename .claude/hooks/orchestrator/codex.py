@@ -305,13 +305,39 @@ _WORKER_VALIDATION_INSTRUCTION = (
 )
 
 
-def _append_worker_validation_instruction(prompt: str) -> str:
+_WORKER_TEST_INSTRUCTIONS = {
+    False: "Run focused tests for what you changed; do not run the full test suite unless the task asks for it.",
+    True: "Run focused tests while working, then run the full test suite once before your final report.",
+}
+_WORKER_CHANGE_INSTRUCTIONS = (
+    "Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors."
+)
+_WORKER_HANG_INSTRUCTION = (
+    "If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue."
+)
+
+
+def _append_worker_validation_instruction(
+    prompt: str, *, full_suite_required: bool = False
+) -> str:
     """Append the worker-report contract once, preserving the caller's prompt text."""
 
-    if _WORKER_VALIDATION_INSTRUCTION in prompt:
+    additions = (
+        _WORKER_TEST_INSTRUCTIONS[bool(full_suite_required)],
+        _WORKER_CHANGE_INSTRUCTIONS,
+        _WORKER_HANG_INSTRUCTION,
+    )
+    instruction = " ".join((_WORKER_VALIDATION_INSTRUCTION, *additions))
+    if instruction in prompt:
         return prompt
+    if _WORKER_VALIDATION_INSTRUCTION in prompt:
+        missing = tuple(sentence for sentence in additions if sentence not in prompt)
+        if not missing:
+            return prompt
+        separator = "" if not prompt or prompt.endswith("\n") else " "
+        return f"{prompt}{separator}{' '.join(missing)}"
     separator = "" if not prompt or prompt.endswith("\n") else "\n"
-    return f"{prompt}{separator}{_WORKER_VALIDATION_INSTRUCTION}"
+    return f"{prompt}{separator}{instruction}"
 
 
 def _canonical_unknown_validation(summary: str | None = None) -> dict[str, Any]:
@@ -1336,6 +1362,9 @@ def pre_tool_use(
         repository, project_root_reason = (
             (indexed_root, "") if indexed_root is not None else _repo_root(event, repo_root)
         )
+        resolved_profile = (
+            project_profile.load_profile(repository) if repository is not None else None
+        )
         project_namespace = project_root.project_key(repository)
         session_ledger = ledger.SessionLedger(
             _project_state_root(runtime_root, project_namespace)
@@ -1569,7 +1598,13 @@ def pre_tool_use(
             updated["sandbox"] = "read-only"
             updated["approval-policy"] = "never"
         if parsed.phase == "implementation":
-            updated["prompt"] = _append_worker_validation_instruction(updated["prompt"])
+            updated["prompt"] = _append_worker_validation_instruction(
+                updated["prompt"],
+                full_suite_required=(
+                    resolved_profile.full_suite_required
+                    if resolved_profile is not None else False
+                ),
+            )
         worktree_start = is_start and mode == "new" and parsed.phase == "implementation"
         worktree_reply_path = (_thread_worktree_path(tool_input.get("threadId"))
                                if is_start and mode == "reply" and parsed.phase == "implementation"
@@ -1616,9 +1651,6 @@ def pre_tool_use(
             if parsed.eta_minutes is not None:
                 updated["etaMinutes"] = parsed.eta_minutes
 
-        resolved_profile = (
-            project_profile.load_profile(repository) if repository is not None else None
-        )
         protected_paths = (
             resolved_profile.protected_paths
             if resolved_profile is not None

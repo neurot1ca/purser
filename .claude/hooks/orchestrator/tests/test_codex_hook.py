@@ -3103,9 +3103,7 @@ def test_each_route_sets_exact_model_and_effort(workspace, config, route, model,
 
     assert updated["model"] == model
     assert updated["config"]["model_reasoning_effort"] == effort
-    assert updated["prompt"] == (
-        "Implement.\n" + codex._WORKER_VALIDATION_INSTRUCTION
-    )
+    assert updated["prompt"] == codex._append_worker_validation_instruction("Implement.")
 
 
 def test_routed_call_shows_selected_model_and_effort(workspace, config):
@@ -3195,6 +3193,42 @@ def test_worker_validation_instruction_separates_final_runs_from_deliberate_red_
         "List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line."
         in codex._WORKER_VALIDATION_INSTRUCTION
     )
+
+
+def test_worker_contract_requires_focused_tests_by_default():
+    prompt = codex._append_worker_validation_instruction("Implement.")
+    assert "Run focused tests for what you changed; do not run the full test suite unless the task asks for it." in prompt
+
+
+def test_worker_contract_requires_smallest_change():
+    prompt = codex._append_worker_validation_instruction("Implement.")
+    assert "Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors." in prompt
+
+
+def test_worker_contract_stops_unrelated_hanging_tests():
+    prompt = codex._append_worker_validation_instruction("Implement.")
+    assert "If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue." in prompt
+
+
+def test_project_profile_can_require_one_full_suite(workspace, config):
+    repo, state = workspace
+    profile = repo / ".orchestrator" / "profile.toml"
+    profile.parent.mkdir()
+    profile.write_text(
+        'schema_version = 1\n[review]\nfull_suite_required = true\n',
+        encoding="utf-8",
+    )
+
+    result = codex.pre_tool_use(
+        event(prompt=orch() + "\nImplement."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    prompt = result["hookSpecificOutput"]["updatedInput"]["prompt"]
+    assert "Run focused tests while working, then run the full test suite once before your final report." in prompt
+    assert "do not run the full test suite unless the task asks for it" not in prompt
 
 
 @pytest.mark.parametrize("tool_name", [codex.CODEX_TOOL, codex.CODEX_REPLY_TOOL])
