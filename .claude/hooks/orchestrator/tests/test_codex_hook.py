@@ -1069,6 +1069,35 @@ def test_project_job_board_drops_applied_jobs_after_an_hour(workspace):
     assert "active-one" in message and "active-two" in message
 
 
+def test_project_job_board_hides_unlabelled_jobs(workspace):
+    _, state = workspace
+    _board_job(state, "labelled-one")
+    _board_job(state, "labelled-two")
+    _board_job(state, "unlabelled", label="")
+
+    message = codex._project_job_board(state, "project")
+
+    assert "| labelled-one |" in message
+    assert "| labelled-two |" in message
+    assert "unlabelled" not in message
+
+
+def test_project_job_board_retains_recent_and_active_jobs(workspace):
+    _, state = workspace
+    _board_job(state, "terminal-61m", "SUCCEEDED", finishedAt=time.time() - 61 * 60)
+    _board_job(state, "terminal-59m", "CANCELLED", finishedAt=time.time() - 59 * 60)
+    _board_job(state, "running-over-hour", "RUNNING", acceptedAt=time.time() - 90 * 60)
+    _board_job(state, "queued-over-hour", "QUEUED", acceptedAt=time.time() - 90 * 60)
+
+    message = codex._project_job_board(state, "project")
+
+    assert message is not None
+    assert "terminal-61m" not in message
+    assert "| terminal-59m |" in message
+    assert "| running-over-hour |" in message
+    assert "| queued-over-hour |" in message
+
+
 def test_async_dispatch_receipt_is_followed_by_project_job_board(workspace):
     _, state = workspace
     _board_job(state, "dispatch-one")

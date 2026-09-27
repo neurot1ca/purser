@@ -2025,10 +2025,13 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
                     or job.get("call") != index.get("call")):
                 continue
             state = job.get("state")
-            apply_state = job.get("applyState")
-            finished = (job.get("appliedAt", job.get("finishedAt")) if apply_state == "applied"
-                        else job.get("finishedAt"))
-            if ((apply_state == "applied" or state in {"FAILED", "TIMED_OUT"})
+            label = job.get("label")
+            if not isinstance(label, str) or not label.strip():
+                continue
+            finished = job.get("appliedAt") if job.get("applyState") == "applied" else None
+            if not isinstance(finished, (int, float)):
+                finished = job.get("finishedAt")
+            if (state not in {"QUEUED", "RUNNING"}
                     and isinstance(finished, (int, float)) and now - finished > 3600):
                 continue
             jobs.append((job, index))
