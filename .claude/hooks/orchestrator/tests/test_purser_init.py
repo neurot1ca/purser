@@ -314,6 +314,30 @@ def test_balanced_persists_exact_shipped_codex_routes(site):
     assert coder_config.load(Path(__file__).parents[1] / "config.json")["routes"] == shipped["routes"]
 
 
+def test_manual_plan_shows_resolved_route_model_effort_pairs(site, monkeypatch, capsys):
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {
+        "status": "available", "models": [{"id": "gpt-6-astra", "efforts": ["high"]}]})
+    assert run("--plan", "--coder", "codex", "--reviewer", "none", "--mode", "manual",
+               "--model", "gpt-6-astra", "--effort", "high") == 0
+    output = capsys.readouterr().out
+    assert "Resolved routes:\n" in output
+    assert "  normal -> gpt-6-astra / high\n" in output
+    assert "  plan_standard -> gpt-6-astra / high\n" in output
+
+
+def test_opencode_plan_without_mode_shows_resolved_route_pairs(site, monkeypatch, capsys):
+    model = "openai/gpt-6-astra"
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    monkeypatch.setattr(purser_init, "_opencode_models", lambda _: [model])
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {
+        "status": "available", "models": [{"id": model, "efforts": None, "family": "openai"}]})
+    assert run("--plan", "--coder", "opencode", "--model", model, "--reviewer", "none") == 0
+    output = capsys.readouterr().out
+    assert f"  normal -> {model} / none\n" in output
+
+
 def test_maximum_uses_top_listed_effort_on_every_route(site, monkeypatch):
     home, _ = site
     monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})

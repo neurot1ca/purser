@@ -479,6 +479,15 @@ def main(argv: list[str] | None = None) -> int:
         python_changed = (str(python_path) + "\n").encode("utf-8") if sys.version_info >= (3, 11) else None
         python_update = python_changed is not None and python_original != python_changed
         if args.plan:
+            planned_routes = routes
+            if planned_routes is None and args.coder in ("opencode", "agy"):
+                planned_routes = tomllib.loads(changed.decode("utf-8")).get("coding", {}).get("routes")
+            if planned_routes is not None:
+                print("Resolved routes:")
+                for name, value in planned_routes.items():
+                    model = value["model"] if isinstance(value, dict) else value
+                    effort = value.get("effort", "none") if isinstance(value, dict) else "none"
+                    print(f"  {name} -> {model} / {effort}")
             if python_changed is not None:
                 print(f"Python locator: {python_path}")
             if in_venv and python_path == Path(sys.executable).resolve():
