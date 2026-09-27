@@ -78,14 +78,34 @@ def test_unsupported_language_without_parser_is_listed(tmp_path, monkeypatch):
     assert "Covered languages: none" in data
 
 
-def test_tree_sitter_when_installed(tmp_path):
+def test_tree_sitter_when_installed(tmp_path, monkeypatch):
     name, backend = code_map._backend()
     if backend is None or not hasattr(backend, "get_tags_query"):
         pytest.skip("tree-sitter language pack with tags unavailable")
+    backend.configure(backend.PackConfig(cache_dir=str(tmp_path / "parser-cache")))
     repo = _repo(tmp_path)
-    (repo / "sample.js").write_text("function hello() {}\n", encoding="utf-8")
+    (repo / "sample.ts").write_text(
+        "export function named() {}\n"
+        "export default function Default() {}\n"
+        "export const Arrow = (x: number) => x;\n"
+        "export const Func = function () {};\n"
+        "export class Widget { run() {} }\n"
+        "export interface Shape { x: number }\n"
+        "export type Thing = string;\n", encoding="utf-8")
+    (repo / "sample.tsx").write_text(
+        "export const Card = () => <div />;\n"
+        "export default function() { return <Card />; }\n", encoding="utf-8")
     path, entries = _entries(repo)
-    if not backend.get_tags_query("javascript"):
-        pytest.skip("JavaScript tags query unavailable")
-    assert entries["sample.js"]["coverage"] == "tree-sitter"
-    assert "function hello" in path.read_text(encoding="utf-8")
+    assert entries["sample.ts"]["coverage"] == entries["sample.tsx"]["coverage"] == "tree-sitter"
+    data = path.read_text(encoding="utf-8")
+    for symbol in ("function named", "function Default", "function Arrow", "function Func",
+                   "class Widget", "method Widget.run", "interface Shape", "type Thing",
+                   "function Card", "function default"):
+        assert symbol in data
+    def broken_parser(*_):
+        raise OSError("query failed: QueryError")
+
+    monkeypatch.setattr(code_map, "_tree_symbols", broken_parser)
+    (repo / "sample.ts").write_text((repo / "sample.ts").read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    path, _ = _entries(repo)
+    assert "sample.ts\n  symbols: unavailable (query failed: QueryError)" in path.read_text(encoding="utf-8")

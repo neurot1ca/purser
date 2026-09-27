@@ -14,7 +14,7 @@ import subprocess
 import time
 
 
-VERSION = 3
+VERSION = 4
 MAX_FILES = 5_000
 MAX_FILE_BYTES = 512 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
@@ -29,6 +29,14 @@ LANGUAGES = {
     ".scala": "scala", ".lua": "lua", ".sh": "bash", ".bash": "bash",
 }
 KINDS = {"function", "method", "class", "type", "interface", "enum", "struct", "trait"}
+TYPESCRIPT_TAGS = """
+(function_declaration name: (identifier) @name) @definition.function
+(class_declaration name: (type_identifier) @name) @definition.class
+(interface_declaration name: (type_identifier) @name) @definition.interface
+(type_alias_declaration name: (type_identifier) @name) @definition.type
+(method_definition name: (property_identifier) @name) @definition.method
+(variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function
+"""
 
 
 class MapLimit(Exception):
@@ -98,7 +106,8 @@ def _backend():
 
 
 def _tree_symbols(source: bytes, language: str, backend: object) -> list[list[object]] | None:
-    """Use a grammar's bundled tags; no guessed declarations from source text."""
+    """Use definition queries, including TypeScript forms absent from bundled tags."""
+    stage = "parser"
     try:
         if hasattr(backend, "has_parser") and not backend.has_parser(language):
             return None
@@ -107,6 +116,7 @@ def _tree_symbols(source: bytes, language: str, backend: object) -> list[list[ob
             grammar = backend.get_language(language)
         except (LookupError, ValueError, TypeError):
             return None
+        stage = "parse"
         root = parser.parse(source).root_node
         def compile_query(pattern: str):
             try:
@@ -115,7 +125,10 @@ def _tree_symbols(source: bytes, language: str, backend: object) -> list[list[ob
                 from tree_sitter import Query  # optional, inside the indexer only
                 return Query(grammar, pattern)
 
+        stage = "query"
         tags = backend.get_tags_query(language) if hasattr(backend, "get_tags_query") else None
+        if language in {"typescript", "tsx"}:
+            tags = (tags or "") + TYPESCRIPT_TAGS
         if not tags:
             patterns = []
             node_types = (grammar.node_kind_for_id(index) for index in range(grammar.node_kind_count))
@@ -171,9 +184,15 @@ def _tree_symbols(source: bytes, language: str, backend: object) -> list[list[ob
             if kind == "function" and parents:
                 kind = "method"
             found.append([name_node.start_point[0] + 1, kind, qualified, ""])
+        if language in {"typescript", "tsx"}:
+            for node in root.named_children:
+                if node.type == "export_statement" and source[node.start_byte:node.end_byte].startswith(b"export default"):
+                    for child in node.named_children:
+                        if child.type in {"function_expression", "arrow_function"}:
+                            found.append([child.start_point[0] + 1, "function", "default", ""])
         return sorted({tuple(item) for item in found}, key=lambda item: (item[0], item[2]))
     except Exception as exc:
-        raise OSError("tree-sitter indexing failed") from exc
+        raise OSError(f"{stage} failed: {type(exc).__name__}") from exc
 
 
 def _inventory(repo: Path, deadline: float) -> list[str]:
@@ -197,7 +216,7 @@ def _render(entries: dict[str, dict], backend_name: str) -> bytes:
             continue
         lines.append(path)
         if entry["coverage"] == "unavailable" and entry["language"] not in {"unknown", "python"}:
-            lines.append("  symbols: unavailable (install tree-sitter-language-pack)")
+            lines.append(f"  symbols: unavailable ({entry.get('reason', 'install tree-sitter-language-pack')})")
         for line, kind, name, signature in entry["symbols"]:
             rendered = f"  {line} {kind} {name}{signature}"
             lines.append(rendered if not signature or len(rendered) <= 120 else rendered[:119] + "…")
@@ -258,6 +277,7 @@ def refresh(repo: Path, state: Path | None = None) -> tuple[Path, str]:
                 language = "python" if path.suffix.lower() in {".py", ".pyi"} else LANGUAGES.get(path.suffix.lower(), "unknown")
                 symbols: list[list[object]] = []
                 coverage = "unavailable"
+                reason = "parser or definition query unavailable"
                 test_file = _is_test_file(relative)
                 tests = 0
                 if test_file or language == "python" or (backend is not None and language != "unknown"):
@@ -281,11 +301,18 @@ def refresh(repo: Path, state: Path | None = None) -> tuple[Path, str]:
                         except (SyntaxError, UnicodeError, ValueError):
                             pass
                     else:
-                        parsed = _tree_symbols(source, language, backend)
-                        if parsed is not None:
-                            symbols, coverage = parsed, "tree-sitter"
+                        try:
+                            parsed = _tree_symbols(source, language, backend)
+                            if parsed is not None:
+                                symbols, coverage = parsed, "tree-sitter"
+                            else:
+                                reason = "parser or definition query unavailable"
+                        except OSError as exc:
+                            reason = str(exc)
                 entries[relative] = {"mtime_ns": info.st_mtime_ns, "size": info.st_size,
                                      "language": language, "coverage": coverage, "symbols": symbols}
+                if language != "python" and backend is not None and language != "unknown" and coverage == "unavailable":
+                    entries[relative]["reason"] = reason
                 if test_file:
                     entries[relative]["tests"] = tests
             data = _render(entries, backend_name)
