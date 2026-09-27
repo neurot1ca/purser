@@ -676,6 +676,45 @@ def test_worktree_job_records_snapshot_and_reply_reuses_it(area):
         client.close()
 
 
+def test_worktree_job_falls_back_when_requested_cwd_is_missing(area):
+    repo = _git_repo(area)
+    (repo / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
+    requested_cwd = repo / ".tmp" / "opencode-probe"
+    requested_cwd.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "add", ".gitignore"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "ignore scratch"], check=True)
+    client = Client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(requested_cwd), "worktree": True})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
+        call_record = client.calls()[0]
+        assert call_record["cwd"] == result["worktreePath"]
+        assert job["cwdFallback"] == os.fspath(Path(".tmp") / "opencode-probe")
+    finally:
+        client.close()
+
+
+def test_worktree_job_keeps_existing_relative_cwd(area):
+    repo = _git_repo(area)
+    requested_cwd = repo / "nested"
+    requested_cwd.mkdir()
+    (requested_cwd / "tracked.txt").write_text("nested\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "nested/tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "nested cwd"], check=True)
+    client = Client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(requested_cwd), "worktree": True})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
+        assert client.calls()[0]["cwd"] == str(Path(result["worktreePath"]) / "nested")
+        assert "cwdFallback" not in job
+    finally:
+        client.close()
+
+
 def test_worktree_snapshot_failure_does_not_launch_worker(area):
     client = Client(area)
     try:
@@ -809,6 +848,7 @@ def test_codex_apply_is_idempotent_and_reports_conflicts(area):
         (repo / "tracked.txt").write_text("repo concurrent change\n", encoding="utf-8")
         conflict = job_call(client, "codex_apply", {"jobId": other["jobId"]})
         assert conflict == {"applied": False, "conflicts": ["tracked.txt"],
+                            "applicable": [],
                             "worktreePath": other_result["worktreePath"]}
         conflict_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (other["jobId"] + ".json"))
         assert conflict_job["applyState"] == "conflict"
@@ -1046,6 +1086,19 @@ def test_async_failure_timeout_cancel(area):
         assert finish(slow, job["jobId"], "CANCELLED")["errorCode"] == "CANCELLED"
     finally:
         slow.close()
+
+
+def test_async_codex_launch_failure_includes_cause(area):
+    missing_codex = area / "missing-codex.exe"
+    client = Client(area, bin_override=str(missing_codex))
+    try:
+        job = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "launch failure"})
+        result = finish(client, job["jobId"], "FAILED")
+        assert result["errorCode"] == "CODEX_FAILED"
+        assert "Codex failed" in result["message"]
+        assert "WinError 2" in result["message"] or "No such file or directory" in result["message"]
+    finally:
+        client.close()
 
 
 def test_async_local_cancel_signal(area):

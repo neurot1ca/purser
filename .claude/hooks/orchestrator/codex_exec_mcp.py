@@ -884,7 +884,7 @@ class Server:
                             "errorCode": "PROCESS_UNCONFIRMED", "message": "Host ownership was not acknowledged"})
 
     def _finish_job(self, job_id: str, state: str, code: str | None = None,
-                    result: dict[str, Any] | None = None) -> None:
+                    result: dict[str, Any] | None = None, message: str | None = None) -> None:
         with self.jobs_lock:
             job = self._read_job(job_id)
             if job is None or job["state"] in TERMINAL:
@@ -896,7 +896,7 @@ class Server:
             if process is not None and process.poll() is not None:
                 job["exitCode"] = process.returncode
             if code:
-                message = {
+                message = message or {
                     "CODEX_FAILED": "Codex failed", "DEADLINE_EXCEEDED": "Codex deadline exceeded",
                     "CANCELLED": "Codex cancelled", "PROCESS_UNCONFIRMED": "Process termination unconfirmed",
                     "RECOVERY_RESUME_FAILED": "Interrupted Codex thread could not be resumed",
@@ -1100,7 +1100,16 @@ class Server:
                 elif current and current.get("resumedAfterInterruption") and name == "codex-reply":
                     self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "RECOVERY_RESUME_FAILED")
                 else:
-                    self._finish_job(job_id, "FAILED", result.get("errorCode", "CODEX_FAILED"))
+                    detail = None
+                    if result.get("isError") and result.get("content"):
+                        try:
+                            error_value = json.loads(result["content"][0]["text"]).get("error")
+                            if isinstance(error_value, str) and error_value:
+                                detail = f"Codex failed: {error_value.splitlines()[0]}"[:200]
+                        except (IndexError, KeyError, TypeError, ValueError):
+                            pass
+                    self._finish_job(job_id, "FAILED", result.get("errorCode", "CODEX_FAILED"),
+                                     message=detail)
             else:
                 self._finish_job(job_id, "SUCCEEDED", result=value)
         except Exception as exc:
@@ -1168,7 +1177,8 @@ class Server:
                 paths = [ledger._decode_path(row.split(b"\t", 2)[2]) for row in raw_paths.split(b"\0") if row]
             outcome = ledger.apply_job_patch(repo_root, patch)
             value = ({"applied": True, "paths": paths} if outcome["applied"] else
-                     {"applied": False, "conflicts": outcome["conflicts"], "worktreePath": job["worktreePath"]})
+                     {"applied": False, "conflicts": outcome["conflicts"],
+                      "applicable": outcome["applicable"], "worktreePath": job["worktreePath"]})
             job.update(applyState="applied" if outcome["applied"] else "conflict", applyResult=value)
             self._write_job(job)
             return _job_result(value)
@@ -1664,6 +1674,13 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                            head=snapshot["head"], repoRoot=os.fspath(repo_root))
                 server._write_job(job)
                 launch["args"] = {**launch["args"], "cwd": os.fspath(Path(snapshot["path"]) / relative_cwd)}
+                worktree_path = Path(snapshot["path"])
+            mapped_cwd = Path(launch["args"]["cwd"])
+            if not mapped_cwd.is_dir():
+                job = server._read_job(job_id)
+                job["cwdFallback"] = os.fspath(mapped_cwd.relative_to(worktree_path))
+                server._write_job(job)
+                launch["args"] = {**launch["args"], "cwd": os.fspath(worktree_path)}
         server.codex_bin = launch["codexBin"]
         server.agent = launch.get("agent", "codex")
         server.claim_generation = generation

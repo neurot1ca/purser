@@ -3276,6 +3276,8 @@ def post_tool_use(
                 None if pending.get("phase") == "plan" else (scope if scope else None),
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
             )
+            if worktree_path:
+                delta = ledger.filter_job_delta(delta_repository, delta)
         bundle["baseline_head"] = delta.get("baseline_head")
         bundle["current_head"] = delta.get("current_head")
         force_full_review = delta.get("status") != ledger.OK
@@ -3612,6 +3614,8 @@ def post_tool_use(
                             scope if scope else None,
                             manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
                         )
+                        if worktree_path:
+                            re_delta = ledger.filter_job_delta(delta_repository, re_delta)
                         if re_delta.get("status") == ledger.OK:
                             bundle["whole_tree_delta"] = {
                                 "changed_paths": re_delta["changed_paths"],
