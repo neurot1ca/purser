@@ -246,6 +246,45 @@ def _queue_receipt(event, repo, model="gpt-6-sol", *, seven_day_pct=46, reset_at
     }})
 
 
+def _flow_records(*, tool_name="mcp__plugin_purser_codex-main__codex_result", is_error=False):
+    return [
+        {"type": "user", "message": {"role": "user", "content": "Continue the approved task."}},
+        _assistant(content=[{"type": "tool_use", "id": "result-1", "name": tool_name, "input": {"jobId": "job-1"}}]),
+        {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "result-1", "is_error": is_error, "content": "completed"}]}},
+        _assistant(content=[{"type": "text", "text": "Shall I start the next part?"}]),
+    ]
+
+
+def test_codex_result_question_prompts_next_part_once_per_user_turn(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _flow_records())
+
+    result = advisor.stop(event, repo)
+
+    assert result == {
+        "decision": "block",
+        "reason": "Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question.",
+    }
+    assert advisor.stop(event, repo) is None
+
+
+def test_flow_question_without_codex_result_is_silent(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _flow_records(tool_name="mcp__plugin_purser_codex-main__codex"))
+
+    assert advisor.stop(event, repo) is None
+    failed_event = _event(scratch, repo, local, _flow_records(is_error=True), session="session-failed")
+    assert advisor.stop(failed_event, repo) is None
+
+
+def test_flow_question_stop_hook_active_is_silent(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _flow_records())
+
+    assert advisor.stop({**event, "stop_hook_active": True}, repo) is None
+    assert advisor.stop(event, repo)["decision"] == "block"
+
+
 def test_missing_receipt_blocks_once(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))

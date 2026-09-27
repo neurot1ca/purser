@@ -402,11 +402,12 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "session_id": session_id,
                 "notice_pending": pending,
                 "receipt_pending": receipt,
+                "flow_blocked_user": value.get("flow_blocked_user") if type(value.get("flow_blocked_user")) is int else None,
             }
     except (OSError, ValueError, TypeError):
         pass
     return {"last_suggested_context": 0, "last_task_id": None, "session_id": session_id,
-            "notice_pending": None, "receipt_pending": None}
+            "notice_pending": None, "receipt_pending": None, "flow_blocked_user": None}
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -585,7 +586,7 @@ def _receipt_satisfied(receipt: Mapping[str, Any], message: str, now: datetime) 
 
 
 def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] | None:
-    """Ask for one retry when the pending notice is absent from the last reply."""
+    """Ask for one retry when a pending notice is absent or flow stalls after Codex."""
     try:
         session_id = payload.get("session_id")
         if repository is None or not isinstance(session_id, str) or not session_id:
@@ -594,13 +595,14 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         state = _read_state(state_path, session_id)
         notice = state["notice_pending"]
         receipt = state["receipt_pending"]
-        if notice is None and receipt is None:
-            return None
+        records = _read_transcript(payload.get("transcript_path"))
+        flow_message = next((text for record in reversed(records)
+                             if _record_type(record) == "assistant"
+                             if (text := _assistant_text(record))), "")
         if "last_assistant_message" in payload:
             last = payload["last_assistant_message"]
             message = last if isinstance(last, str) else ""
         else:
-            records = _read_transcript(payload.get("transcript_path"))
             message = next((text for record in reversed(records)
                             if _record_type(record) == "assistant"
                             if (text := _assistant_text(record))), "")
@@ -614,10 +616,6 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             changed = True
         notice = state["notice_pending"]
         receipt = state["receipt_pending"]
-        if notice is None and receipt is None:
-            if changed:
-                _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
-            return None
         if payload.get("stop_hook_active") is True:
             if changed:
                 _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
@@ -629,6 +627,25 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         if receipt is not None and not receipt.get("blocked"):
             receipt["blocked"] = True
             reasons.append(_receipt_advice(receipt))
+
+        if not reasons and flow_message.rstrip().endswith(("?", "؟", "？")):
+            latest_user = max((i for i, record in enumerate(records) if _genuine_user(record)), default=-1)
+            if latest_user >= 0 and state["flow_blocked_user"] != latest_user:
+                uses: dict[str, str] = {}
+                successful_result = False
+                for record in records[latest_user + 1:]:
+                    for block in _content(record):
+                        if not isinstance(block, Mapping):
+                            continue
+                        if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+                            uses[block["id"]] = str(block.get("name", ""))
+                        elif block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                            name = uses.pop(block["tool_use_id"], "")
+                            if name.endswith("__codex_result") and not _result_error(block):
+                                successful_result = True
+                if successful_result:
+                    state["flow_blocked_user"] = latest_user
+                    reasons.append("Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question.")
         if changed or reasons:
             _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return {"decision": "block", "reason": "\n\n".join(reasons)} if reasons else None
