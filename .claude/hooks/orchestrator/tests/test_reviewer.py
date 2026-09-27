@@ -393,7 +393,7 @@ def reviewer_opencode_stream(final_text=None, *, model="vendor/model-id"):
     )
 
 
-def test_opencode_command_uses_deny_config_and_isolated_scratch_dir(config, tmp_path):
+def test_opencode_command_uses_ask_config_and_isolated_scratch_dir(config, tmp_path):
     opencode_config = {
         **config,
         "reviewer1_executable": r"C:\tools\opencode.exe",
@@ -440,9 +440,9 @@ def test_opencode_command_uses_deny_config_and_isolated_scratch_dir(config, tmp_
     assert runner.isolated_dir != caller_workdir
     assert not {"--standalone", "--yolo", "--dangerously-skip-permissions"}.intersection(command)
     permissions = json.loads(kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
-    denied = {"edit", "write", "bash", "webfetch", "task", "external_directory"}
-    assert all(permissions["permission"][key] == "deny" for key in denied)
-    assert all(permissions["agent"]["reviewer"]["permission"][key] == "deny" for key in denied)
+    confined = {"edit", "write", "bash", "webfetch", "task", "external_directory"}
+    assert all(permissions["permission"][key] == "ask" for key in confined)
+    assert all(permissions["agent"]["reviewer"]["permission"][key] == "ask" for key in confined)
     assert result["provider"] == "opencode"
     assert result["served_model_attestation"] == "vendor/model-id"
     assert sorted(path.name for path in caller_workdir.iterdir()) == ["must-not-be-visible.txt"]

@@ -507,7 +507,12 @@ def test_opencode_selection_reaches_reviewer_adapter_with_fake_runner(workspace,
     command, run_kwargs = runner.calls[0]
     assert command[:2] == [r"C:\tools\opencode.exe", "run"]
     assert command[command.index("--model") + 1] == candidate_model
-    assert run_kwargs["env"]["OPENCODE_CONFIG_CONTENT"]
+    agent = command[command.index("--agent") + 1]
+    assert agent == "opencode"
+    permissions = json.loads(run_kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+    confined = {"edit", "write", "bash", "webfetch", "task", "external_directory"}
+    assert all(permissions["permission"][key] == "ask" for key in confined)
+    assert all(permissions["agent"][agent]["permission"][key] == "ask" for key in confined)
     assert bundle["reviewer1_provider"] == "opencode"
     assert bundle["reviewer1_model_requested"] == candidate_model
     assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE

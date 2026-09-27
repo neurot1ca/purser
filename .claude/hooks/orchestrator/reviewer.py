@@ -158,13 +158,13 @@ AGY_ADAPTER = _AgyAdapter()
 PINNED_MODEL = AGY_ADAPTER.allowed_model
 
 
-_OPENCODE_DENIED_PERMISSIONS = {
-    "edit": "deny",
-    "write": "deny",
-    "bash": "deny",
-    "webfetch": "deny",
-    "task": "deny",
-    "external_directory": "deny",
+_OPENCODE_CONFINED_PERMISSIONS = {
+    "edit": "ask",
+    "write": "ask",
+    "bash": "ask",
+    "webfetch": "ask",
+    "task": "ask",
+    "external_directory": "ask",
 }
 
 
@@ -219,9 +219,9 @@ class _OpenCodeAdapter:
     ) -> subprocess.CompletedProcess[str]:
         agent = command[command.index("--agent") + 1]
         permissions = {
-            "permission": dict(_OPENCODE_DENIED_PERMISSIONS),
+            "permission": dict(_OPENCODE_CONFINED_PERMISSIONS),
             "agent": {
-                agent: {"permission": dict(_OPENCODE_DENIED_PERMISSIONS)}
+                agent: {"permission": dict(_OPENCODE_CONFINED_PERMISSIONS)}
             },
         }
         kwargs: dict[str, Any] = {
