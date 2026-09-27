@@ -3,6 +3,17 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.37 — 2026-09-27
+
+- `/purser:init` asks Codex users how Purser should work (Balanced, Maximum, Manual) and shows the resolved route-to-model pairs before applying; models come from the installed agent's live list, with models.dev facts cached for offline use.
+- A complete route table without a Sol model now validates, so Maximum can run every route on the strongest model.
+- The reviewer gate uses the coder's verified model family at vendor level, so OpenCode and agy coders can get a different-vendor Reviewer-1.
+- An async job whose scope overlaps a running job is queued and starts when that job's lease frees, with a fresh baseline; replies and sync calls are still denied on conflict.
+- Plans name each milestone's touched paths and parallel group; an accepted plan runs its milestones in order without asking between them.
+- `codex_result` finds a job from its own session whatever the shell's working directory.
+- The low-quota denial offers a free background wait until the 5-hour reset.
+- The handoff no longer quotes background task notifications as user messages.
+
 ## 0.1.36 — 2026-09-27
 
 - `/purser:init` offers OpenCode and Antigravity (agy) as coders when installed, with a model from the agent's own list; the choice persists in `~/.orchestrator/config.toml`.
