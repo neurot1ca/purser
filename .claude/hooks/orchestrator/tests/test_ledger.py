@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 import shutil
 import subprocess
@@ -769,6 +770,90 @@ def test_job_worktree_reproduces_mixed_staged_unstaged_and_untracked_state(repo,
     assert (worktree / "untracked.bin").read_bytes() == binary
     assert git(worktree, "ls-files", "--stage", "run.sh").stdout.split()[0] == source_mode
     assert git(worktree, "write-tree").stdout.strip() == result["snapshot"]
+
+
+def _worktree_profile(repo, *, copy=(), setup=None, timeout=600):
+    profile = repo / ".orchestrator" / "profile.toml"
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["schema_version = 1", "", "[worktree]"]
+    if copy:
+        lines.append("copy = [" + ", ".join(json.dumps(path) for path in copy) + "]")
+    if setup is not None:
+        lines.append("setup = " + json.dumps(setup))
+    if timeout != 600:
+        lines.append(f"setup_timeout_seconds = {timeout}")
+    profile.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _trust_worktree_profile(repo, tmp_path, monkeypatch):
+    user_config = tmp_path / "user-profile.toml"
+    user_config.write_text(
+        "schema_version = 1\n[trust]\npaths = ["
+        + json.dumps(str(repo.resolve()))
+        + "]\n",
+        encoding="utf-8",
+    )
+    load_profile = ledger.project_profile.load_profile
+    monkeypatch.setattr(
+        ledger.project_profile,
+        "load_profile",
+        lambda root: load_profile(root, user_config_path=user_config),
+    )
+
+
+def test_job_worktree_copies_profile_file_and_directory(repo, tmp_path, monkeypatch):
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.write_text(exclude.read_text(encoding="utf-8") + "\n.env\nconfig/\n", encoding="utf-8")
+    (repo / ".env").write_text("TOKEN=local\n", encoding="utf-8")
+    (repo / "config").mkdir()
+    (repo / "config" / "local.json").write_text('{"local": true}\n', encoding="utf-8")
+    _worktree_profile(repo, copy=(".env", "config", "missing-local-file"))
+    _trust_worktree_profile(repo, tmp_path, monkeypatch)
+
+    result = ledger.create_job_worktree(repo, "e" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    assert (worktree / ".env").read_text(encoding="utf-8") == "TOKEN=local\n"
+    assert (worktree / "config" / "local.json").read_text(encoding="utf-8") == '{"local": true}\n'
+
+
+@pytest.mark.parametrize("entry", ["../outside", "/outside", "C:\\outside"])
+def test_job_worktree_rejects_unsafe_profile_copy_path(repo, tmp_path, monkeypatch, entry):
+    _worktree_profile(repo, copy=(entry,))
+    _trust_worktree_profile(repo, tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="worktree copy path"):
+        ledger.create_job_worktree(repo, "f" * 64, tmp_path / "worktrees")
+
+
+def test_job_worktree_runs_profile_setup_in_worktree(repo, tmp_path, monkeypatch):
+    command = f'"{sys.executable}" -c "from pathlib import Path; Path(\'setup-cwd.txt\').write_text(str(Path.cwd()))"'
+    _worktree_profile(repo, setup=command)
+    _trust_worktree_profile(repo, tmp_path, monkeypatch)
+
+    result = ledger.create_job_worktree(repo, "1" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    assert (worktree / "setup-cwd.txt").read_text(encoding="utf-8") == str(worktree)
+
+
+def test_job_worktree_setup_failure_keeps_worktree_and_reports_output(repo, tmp_path, monkeypatch):
+    command = f'"{sys.executable}" -c "import sys; print(\'setup failed marker\'); sys.exit(7)"'
+    _worktree_profile(repo, setup=command)
+    _trust_worktree_profile(repo, tmp_path, monkeypatch)
+    parent = tmp_path / "worktrees"
+
+    with pytest.raises(ledger.WorktreeSetupError) as raised:
+        ledger.create_job_worktree(repo, "2" * 64, parent)
+    worktree = parent / ("2" * 12)
+    assert worktree.is_dir()
+    assert raised.value.exit_code == 7
+    assert "setup failed marker" in raised.value.output
+
+
+def test_job_worktree_without_profile_section_keeps_existing_behavior(repo, tmp_path):
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.write_text(exclude.read_text(encoding="utf-8") + "\n.env\n", encoding="utf-8")
+    (repo / ".env").write_text("TOKEN=local\n", encoding="utf-8")
+    result = ledger.create_job_worktree(repo, "3" * 64, tmp_path / "worktrees")
+    assert not (Path(result["path"]) / ".env").exists()
 
 
 def test_job_patch_excludes_preexisting_user_changes_and_applies_to_dirty_tree(repo, tmp_path):

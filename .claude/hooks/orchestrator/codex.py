@@ -1130,6 +1130,17 @@ def _requested_thread(parsed: policy.OrchParseResult, route: policy.RouteResolut
     }
 
 
+def _thread_worktree_path(thread_id: Any) -> str | None:
+    if not isinstance(thread_id, str) or not thread_id:
+        return None
+    try:
+        record = codex_exec_mcp._load_record(codex_exec_mcp._state_dir(), thread_id)
+        path = record.get("worktreePath") if isinstance(record, Mapping) else None
+        return path if isinstance(path, str) and path else None
+    except Exception:
+        return None
+
+
 def _inherited_reply_parse(
     prompt: Any,
     live_thread: Mapping[str, Any],
@@ -1505,6 +1516,21 @@ def pre_tool_use(
             updated["approval-policy"] = "never"
         if parsed.phase == "implementation":
             updated["prompt"] = _append_worker_validation_instruction(updated["prompt"])
+        worktree_start = is_start and mode == "new" and parsed.phase == "implementation"
+        worktree_reply_path = (_thread_worktree_path(tool_input.get("threadId"))
+                               if is_start and mode == "reply" and parsed.phase == "implementation"
+                               else None)
+        worktree_reply = worktree_reply_path is not None
+        if worktree_start:
+            updated["worktree"] = True
+            if repository is not None:
+                requested_cwd = tool_input.get("cwd", event.get("cwd"))
+                try:
+                    launch_cwd = Path(requested_cwd).resolve() if isinstance(requested_cwd, str) else repository
+                    relative_cwd = launch_cwd.relative_to(repository)
+                except (OSError, RuntimeError, ValueError):
+                    relative_cwd = Path()
+                updated["cwd"] = str(repository / relative_cwd)
         if new_call:
             updated["model"] = model
             original_codex_config = tool_input.get("config", {})
@@ -1552,8 +1578,9 @@ def pre_tool_use(
                 "baseline_head": None,
             }
         else:
+            baseline_repository = Path(worktree_reply_path).resolve() if worktree_reply_path else repository
             baseline = ledger.capture_baseline(
-                repository,
+                baseline_repository,
                 None if parsed.phase == "plan" else (declared_scope if declared_scope else None),
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
             )
@@ -1601,6 +1628,8 @@ def pre_tool_use(
             "previous_route": previous_route if route_changed else None,
             "new_route": parsed.route if route_changed else None,
         }
+        if worktree_reply_path:
+            pending["worktree_path"] = worktree_reply_path
         if is_start:
             pending.update(async_call=updated["call"], async_mode=mode,
                            async_input_hash=input_hash, async_updated_input=updated,
@@ -1654,7 +1683,7 @@ def pre_tool_use(
                 owner, parsed.task_id, declared_scope if parsed.phase == "implementation" else [],
                 job_id=job_id, read_only=parsed.phase == "plan",
                 timeout_seconds=updated.get("timeoutSeconds") if is_start else None,
-                queue_conflict=is_start and mode == "new" and parsed.phase == "implementation",
+                allow_overlap=worktree_start or worktree_reply,
             )
             if admitted["status"] != ledger.OK:
                 return _observed_denial(
@@ -2125,6 +2154,14 @@ def _async_rejected_response(root: Path, original: Mapping[str, Any], artifact: 
                          "ambiguous_outcome": True, "findings": [dict(finding)]}, config)
 
 
+def _append_worktree_apply_context(response: dict[str, Any], job_id: str) -> dict[str, Any]:
+    sentence = (f"After accepting the review, call codex_apply with jobId {job_id} in the same turn; "
+                "a conflict result lists the paths and keeps the worktree.")
+    prior = response.get("systemMessage")
+    response["systemMessage"] = f"{prior}\n{sentence}" if isinstance(prior, str) and prior else sentence
+    return response
+
+
 def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] | None,
                          state_root: str | os.PathLike[str] | None,
                          repo_root: str | os.PathLike[str] | None,
@@ -2159,6 +2196,9 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                                                          _load_config(config), success=True)
                                 if rejection else _finalize_replacement(bundle, _load_config(config), root, original,
                                                                        pending.get("repo_root")))
+                    job = _async_job(root, index)
+                    if bundle.get("apply") == "codex_apply" and job is not None:
+                        response = _append_worktree_apply_context(response, index["jobId"])
                     index.update(stage="CONSUMED", bundle_path=str(artifact.resolve()), response=response)
                     _atomic_json_write(path, index)
                     _release_async_lease(root, index, pending)
@@ -2179,6 +2219,12 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                    and value["threadId"] == job.get("threadId")
                    and isinstance(value.get("content"), str)
                    and not _codex_response_is_error(event.get("tool_response")))
+        worktree_path = value.get("worktreePath") if isinstance(value.get("worktreePath"), str) else None
+        if worktree_path is None and job is not None and isinstance(job.get("worktreePath"), str):
+            worktree_path = job["worktreePath"]
+        if success and worktree_path:
+            pending = dict(pending, worktree_path=worktree_path)
+            _atomic_json_write(_pending_path(root, original), pending)
         if success and value.get("servedAgent") in {"codex", "opencode", "agy"} and isinstance(value.get("servedModel"), str):
             pending = dict(pending, agent=value["servedAgent"], model=value["servedModel"],
                            attempted_models=value.get("attemptedModels", []))
@@ -2217,6 +2263,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                 response["hookSpecificOutput"]["additionalContext"] = message
         if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES:
             response = _append_project_job_status(response, root, index["project_key"])
+        if success and worktree_path:
+            response = _append_worktree_apply_context(response, index["jobId"])
         index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
         _atomic_json_write(path, index)
         _release_async_lease(root, index, pending)
@@ -3107,13 +3155,18 @@ def post_tool_use(
             resolved_reason = "project root unresolved: pre-tool root was unavailable"
         project_root_reason = pending.get("project_root_reason") or resolved_reason
         bundle["project_root_reason"] = project_root_reason or None
+        delta_repository = repository
+        worktree_path = pending.get("worktree_path")
+        if isinstance(worktree_path, str) and worktree_path:
+            delta_repository = Path(worktree_path).resolve()
+            bundle["apply"] = "codex_apply"
         scope = pending.get("scope")
         if not isinstance(scope, list) or (pending.get("phase") == "implementation" and not scope):
             raise WiringError("pending call scope is missing")
         baseline = pending.get("baseline")
         if not isinstance(baseline, Mapping):
             raise WiringError("pending call baseline is missing")
-        if repository is None or baseline.get("status") != ledger.OK:
+        if delta_repository is None or baseline.get("status") != ledger.OK:
             delta = {
                 "status": ledger.UNKNOWN,
                 "code": baseline.get("code", "BASELINE_UNAVAILABLE"),
@@ -3124,7 +3177,7 @@ def post_tool_use(
             }
         else:
             delta = ledger.compute_delta(
-                repository,
+                delta_repository,
                 baseline,
                 None if pending.get("phase") == "plan" else (scope if scope else None),
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
@@ -3133,10 +3186,10 @@ def post_tool_use(
         bundle["current_head"] = delta.get("current_head")
         force_full_review = delta.get("status") != ledger.OK
         out_of_scope_res = None
-        if (pending.get("phase") == "implementation" and scope and repository is not None
+        if (pending.get("phase") == "implementation" and scope and delta_repository is not None
                 and baseline.get("status") == ledger.OK):
             out_of_scope_res = ledger.detect_out_of_scope_modifications(
-                repository, baseline, scope)
+                delta_repository, baseline, scope)
         bundle["whole_tree_anomaly"] = out_of_scope_res
         if delta.get("status") == ledger.OK and (pending.get("phase") == "plan" or
                                                   (pending.get("phase") == "implementation" and scope)):
@@ -3224,7 +3277,7 @@ def post_tool_use(
                     def run_selected_checks() -> None:
                         try:
                             check_state["result"] = checks.run_checks(
-                                repository, selected, deadline_seconds=check_deadline
+                                delta_repository, selected, deadline_seconds=check_deadline
                             )
                         except Exception as error:
                             check_state["error"] = type(error).__name__
@@ -3311,7 +3364,7 @@ def post_tool_use(
                     "route": pending["route"],
                     "model": pending["model"],
                     "effort": pending["effort"],
-                    "repo_root": repository,
+                    "repo_root": delta_repository,
                     "delta": delta,
                     "classification": classification,
                 }
@@ -3369,13 +3422,13 @@ def post_tool_use(
                         repair_res = repair_callable(
                             thread_id=thread_id,
                             findings=findings if isinstance(findings, list) else [],
-                            repo_root=repository,
+                            repo_root=delta_repository,
                             scope=scope,
                             timeout_seconds=actual_timeout,
                         )
                         # Universal delta recomputation (C19-1): always recompute after attempt
                         re_delta = ledger.compute_delta(
-                            repository,
+                            delta_repository,
                             baseline,
                             scope if scope else None,
                             manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
@@ -3387,7 +3440,7 @@ def post_tool_use(
                                 "changed_line_count": re_delta["changed_line_count"],
                             }
                             re_anomaly = ledger.detect_out_of_scope_modifications(
-                                repository, baseline, scope) if scope else None
+                                delta_repository, baseline, scope) if scope else None
                             bundle["whole_tree_anomaly"] = re_anomaly
                             if scope and isinstance(pending.get("lease_owner"), str):
                                 try:
@@ -3445,7 +3498,7 @@ def post_tool_use(
                             # C22-1 & C23-1: Working-tree wide fail-closed out-of-scope check
                             out_of_scope_res = (re_anomaly if re_delta.get("status") == ledger.OK
                                                 else ledger.detect_out_of_scope_modifications(
-                                                    repository, baseline, scope))
+                                                    delta_repository, baseline, scope))
                             if out_of_scope_res.get("status") == ledger.OK:
                                 known_paths = {entry["path"] for entry in bundle["known_concurrent_scopes"]}
                                 out_of_scope_res = {**out_of_scope_res, "paths": [

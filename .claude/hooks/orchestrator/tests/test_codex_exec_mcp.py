@@ -688,6 +688,63 @@ def test_worktree_snapshot_failure_does_not_launch_worker(area):
         client.close()
 
 
+def _prepare_host_worktree_job(area, worktree_path):
+    job_id = "a" * 64
+    job_dir = area / "jobs"
+    job_dir.mkdir()
+    server = codex_exec_mcp.Server(host=True, job_dir=job_dir)
+    server._write_job({"jobId": job_id, "state": "QUEUED", "generation": 2,
+                       "ownershipToken": "owner", "worktreePath": str(worktree_path),
+                       "snapshot": "saved-snapshot", "head": "saved-head",
+                       "repoRoot": "saved-repo-root"})
+    (job_dir / f"{job_id}.launch").write_text(json.dumps({
+        "name": "codex", "codexBin": "codex", "args": {"cwd": str(area), "worktree": True}
+    }), encoding="utf-8")
+    return job_id, job_dir
+
+
+def _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args):
+    monkeypatch.setattr(codex_exec_mcp, "_contain_host_children", lambda: True)
+    if os.name == "nt":
+        monkeypatch.setattr(codex_exec_mcp, "_windows_process_identity",
+                            lambda _pid: ("ALIVE", 1))
+    monkeypatch.setattr(codex_exec_mcp.Server, "_job_worker",
+                        lambda _self, _job_id, _name, args: worker_args.append(args))
+    codex_exec_mcp._host_main(job_id, job_dir, 2, "owner")
+
+
+def test_relaunched_worktree_job_reuses_recorded_worktree(area, monkeypatch):
+    worktree = area / "existing-worktree"
+    worktree.mkdir()
+    job_id, job_dir = _prepare_host_worktree_job(area, worktree)
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root",
+                        lambda: area / "root")
+    worker_args = []
+
+    _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args)
+
+    job = read_job_record(job_dir / f"{job_id}.json")
+    assert worker_args[0]["cwd"] == str(worktree)
+    assert {key: job[key] for key in ("worktreePath", "snapshot", "head", "repoRoot")} == {
+        "worktreePath": str(worktree), "snapshot": "saved-snapshot",
+        "head": "saved-head", "repoRoot": "saved-repo-root"}
+
+
+def test_relaunched_worktree_job_with_missing_directory_fails(area, monkeypatch):
+    missing_worktree = area / "missing-worktree"
+    job_id, job_dir = _prepare_host_worktree_job(area, missing_worktree)
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root",
+                        lambda: area / "root")
+    worker_args = []
+
+    _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args)
+
+    job = read_job_record(job_dir / f"{job_id}.json")
+    assert job["state"] == "FAILED"
+    assert job["errorCode"] == "WORKTREE_MISSING"
+    assert not worker_args
+
+
 def test_codex_apply_is_idempotent_and_reports_conflicts(area):
     repo = _git_repo(area)
     client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})

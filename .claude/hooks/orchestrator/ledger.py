@@ -14,7 +14,7 @@ import hmac
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import stat
@@ -44,6 +44,17 @@ LEASE_TIMEOUT_MARGIN_SECONDS = 60
 ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS = 2700
 JOB_RETENTION_SECONDS = 7 * 24 * 60 * 60
 RELEASED_LEASE_RETENTION_SECONDS = 7 * 24 * 60 * 60
+
+
+class WorktreeSetupError(RuntimeError):
+    """A configured setup command failed after the job worktree was created."""
+
+    def __init__(self, exit_code: int | None, output: str, *, timed_out: bool = False):
+        self.exit_code = exit_code
+        self.output = output.encode("utf-8", "replace")[-2048:].decode("utf-8", "replace")
+        self.timed_out = timed_out
+        reason = "timed out" if timed_out else f"exited with code {exit_code}"
+        super().__init__(f"Worktree setup {reason}: {self.output}")
 
 
 @contextmanager
@@ -204,7 +215,8 @@ class ScopeLeases:
 
     def acquire(self, owner_key: str, task_id: str, scope: Sequence[str],
                 *, job_id: str | None = None, timeout_seconds: float | None = None,
-                read_only: bool = False, queue_conflict: bool = False) -> dict[str, Any]:
+                read_only: bool = False, queue_conflict: bool = False,
+                allow_overlap: bool = False) -> dict[str, Any]:
         if not owner_key or not task_id or (not scope and not read_only) or (scope and read_only):
             return {"status": UNKNOWN, "code": "LEASE_INVALID"}
         try:
@@ -227,15 +239,15 @@ class ScopeLeases:
                     if _scopes_overlap(scope, other["scope"]):
                         conflict = other
                         break
-                if conflict is not None and not (queue_conflict and job_id and not read_only):
+                if conflict is not None and not allow_overlap and not (queue_conflict and job_id and not read_only):
                     return {"status": UNKNOWN, "code": "SCOPE_LEASE_CONFLICT",
                             "task_id": conflict["task_id"]}
                 owner = {
                     "task_id": task_id, "scope": list(scope),
-                    "state": "QUEUED" if conflict is not None else "ACTIVE",
+                    "state": "QUEUED" if conflict is not None and not allow_overlap else "ACTIVE",
                     "job_id": job_id, "queued_at": now,
                 }
-                if conflict is None:
+                if conflict is None or allow_overlap:
                     owner["acquired_at"] = now
                 if read_only:
                     owner["read_only"] = True
@@ -254,7 +266,7 @@ class ScopeLeases:
                     owner["retention_after"] = now + job_timeout + JOB_RETENTION_SECONDS
                 value["owners"][owner_key] = owner
                 self._write(value)
-                return {"status": OK, "code": "LEASE_QUEUED" if conflict is not None else "LEASE_ACQUIRED"}
+                return {"status": OK, "code": "LEASE_QUEUED" if owner["state"] == "QUEUED" else "LEASE_ACQUIRED"}
         except (OSError, ValueError, TypeError):
             return {"status": UNKNOWN, "code": "LEASE_ADMISSION_UNCERTAIN"}
 
@@ -467,6 +479,67 @@ def _copy_untracked(repo_root: Path, worktree: Path, timeout: float) -> None:
             raise _InspectionError("UNTRACKED_FILE_UNSUPPORTED", "An untracked path was not a regular file or symlink.")
 
 
+def _copy_profile_paths(repo_root: Path, worktree: Path, paths: Iterable[str]) -> None:
+    root = repo_root.resolve()
+    for raw_path in paths:
+        normalized = raw_path.replace("\\", "/")
+        relative = PurePosixPath(normalized)
+        windows_path = PureWindowsPath(raw_path)
+        if (
+            not normalized
+            or "\x00" in normalized
+            or relative.is_absolute()
+            or not relative.parts
+            or windows_path.is_absolute()
+            or windows_path.drive
+            or ".." in relative.parts
+        ):
+            raise ValueError(f"Unsafe worktree copy path: {raw_path!r}")
+        source = root.joinpath(*relative.parts)
+        try:
+            source.resolve().relative_to(root)
+        except (OSError, ValueError, RuntimeError):
+            raise ValueError(f"Unsafe worktree copy path: {raw_path!r}") from None
+        if not source.exists() and not source.is_symlink():
+            continue
+        target = worktree.joinpath(*relative.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_symlink():
+            target.symlink_to(os.readlink(source), target_is_directory=source.is_dir())
+        elif source.is_dir():
+            shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
+        elif source.is_file():
+            shutil.copy2(source, target)
+        else:
+            raise ValueError(f"Unsupported worktree copy path: {raw_path!r}")
+
+
+def _run_worktree_setup(worktree: Path, setup: project_profile.WorktreeSetup) -> None:
+    if setup.setup is None:
+        return
+    kwargs: dict[str, Any] = {
+        "shell": True,
+        "cwd": worktree,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "timeout": setup.setup_timeout_seconds,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        completed = subprocess.run(setup.setup, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", "replace")
+        raise WorktreeSetupError(None, output, timed_out=True) from exc
+    except OSError as exc:
+        raise WorktreeSetupError(None, str(exc)) from exc
+    if completed.returncode:
+        raise WorktreeSetupError(completed.returncode, completed.stdout or "")
+
+
 def create_job_worktree(
     repo_root: str | os.PathLike[str], job_id: str, parent_dir: str | os.PathLike[str]
 ) -> dict[str, str]:
@@ -489,7 +562,12 @@ def create_job_worktree(
         _copy_untracked(root, worktree, timeout)
         _run_git(worktree, ["add", "-A"], timeout, "staging snapshot files")
         snapshot = _decode_path(_run_git(worktree, ["write-tree"], timeout, "writing snapshot tree")).strip()
+        profile = project_profile.load_profile(root)
+        _copy_profile_paths(root, worktree, profile.worktree.copy)
+        _run_worktree_setup(worktree, profile.worktree)
         return {"path": os.fspath(worktree), "head": head, "snapshot": snapshot}
+    except WorktreeSetupError:
+        raise
     except BaseException:
         try:
             _run_git(root, ["worktree", "remove", "--force", os.fspath(worktree)], timeout,
@@ -1717,6 +1795,7 @@ __all__ = [
     "SessionLedger",
     "UNKNOWN",
     "UNKNOWN_CONCURRENT_WRITER",
+    "WorktreeSetupError",
     "build_session_record",
     "apply_job_patch",
     "capture_baseline",

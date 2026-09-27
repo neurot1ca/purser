@@ -509,6 +509,85 @@ def async_followup(name, job_id):
     return call
 
 
+def test_async_implementation_starts_with_overlapping_scope_are_admitted(workspace, config):
+    repo, state = workspace
+    nested = repo / "tests"
+    nested.mkdir()
+    starts = [event(START_TOOL, prompt=orch(task=f"overlap-{n}", scope="tests/") + "\nWork.",
+                    tool_use_id=f"overlap-start-{n}", cwd=str(nested)) for n in range(2)]
+    updated = [codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)
+               ["hookSpecificOutput"]["updatedInput"] for start in starts]
+    assert all(item["worktree"] is True and "leaseQueued" not in item for item in updated)
+    assert all(Path(item["cwd"]) == nested for item in updated)
+    leases = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))
+    assert len(leases.overlapping_owners(codex._call_key(starts[0]))) == 1
+    assert all(owner["state"] == "ACTIVE" for owner in leases._read()["owners"].values())
+
+
+def test_async_worktree_delta_and_apply_use_only_job_changes(workspace, config):
+    repo, state = workspace
+    start, job_id, job_path = async_started(
+        workspace, config, prompt=orch(task="worktree-delta", scope="file1.py") + "\nWork."
+    )
+    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
+    (Path(snapshot["path"]) / "file1.py").write_text("job = True\n", encoding="utf-8")
+    (repo / "file0.py").write_text("shared = True\n", encoding="utf-8")
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"], snapshot=snapshot["snapshot"],
+               head=snapshot["head"], repoRoot=str(repo))
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    followup = async_followup(RESULT_TOOL, job_id)
+    response = codex.post_tool_use({**followup, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+                              "content": "done", "worktreePath": snapshot["path"]}}},
+        config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(response, config)
+    assert bundle["changed_paths"] == ["file1.py"]
+    assert bundle["apply"] == "codex_apply"
+    assert "codex_apply" in response["systemMessage"]
+
+
+def test_async_worktree_reply_is_admitted_during_overlapping_job(workspace, config, monkeypatch):
+    repo, state = workspace
+    async_started(
+        workspace, config, prompt=orch(task="active-worktree", scope="tests/") + "\nWork."
+    )
+    worktree = state / "wt" / "reply-thread"
+    worktree.mkdir(parents=True)
+    bridge_threads = state / "bridge-threads"
+    monkeypatch.setattr(codex_exec_mcp, "_state_dir", lambda: bridge_threads)
+    codex_exec_mcp._save_record(bridge_threads, {"thread_id": "worktree-thread", "cwd": str(worktree),
+        "config_args": [], "worktreePath": str(worktree), "snapshot": "snapshot", "head": "head",
+        "repoRoot": str(repo)})
+    route = policy.resolve_route("normal", config)
+    saved = ledger.SessionLedger(codex._project_state_root(state, project_root.project_key(repo))).save(
+        ledger.build_session_record("worktree-reply", "worktree-thread", "normal", route.model,
+                                    route.effort, phase="implementation", scope=["tests/"],
+                                    reason="new_task"))
+    assert saved["status"] == ledger.OK
+    reply = event(START_TOOL, prompt=orch(task="worktree-reply", scope="tests/") + "\nContinue.",
+                  tool_use_id="worktree-reply-start", mode="reply", threadId="worktree-thread")
+    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    assert updated["mode"] == "reply"
+    assert "leaseQueued" not in updated
+
+
+def test_worktree_flag_does_not_change_sync_plan_or_operation_calls(workspace, config):
+    repo, state = workspace
+    sync = codex.pre_tool_use(event(prompt=orch(task="sync-worktree", scope="file0.py") + "\nWork."),
+                              config=config, state_root=state, repo_root=repo)
+    plan = codex.pre_tool_use(event(START_TOOL,
+        prompt=orch(task="plan-worktree", phase="plan", route="plan_standard", scope=None) + "\nPlan.",
+        tool_use_id="plan-worktree"), config=config, state_root=state, repo_root=repo)
+    operation = codex.pre_tool_use(event(START_TOOL,
+        prompt=orch(task="operation-worktree", phase="operation", route="operation", scope=None) + "\nInspect.",
+        tool_use_id="operation-worktree"), config=config, state_root=state, repo_root=repo)
+    assert "worktree" not in sync["hookSpecificOutput"]["updatedInput"]
+    assert "worktree" not in plan["hookSpecificOutput"]["updatedInput"]
+    assert "worktree" not in operation["hookSpecificOutput"]["updatedInput"]
+
+
 def test_async_result_uses_indexed_project_when_event_cwd_is_nested_repo(workspace, config, monkeypatch):
     repo, state = workspace
     _, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
@@ -1321,7 +1400,7 @@ def test_lease_cli_lists_and_releases_only_named_task(workspace, monkeypatch):
     assert [row["task_id"] for row in store.active()] == ["task-two"]
 
 
-def test_simultaneous_conflicting_starts_queue_one_and_disjoint_runs(workspace, config):
+def test_simultaneous_overlapping_worktree_starts_run_and_disjoint_runs(workspace, config):
     repo, state = workspace
     calls = [_lease_call(f"race-{n}", "file0.py", f"lease-race-{n}", tool_name=START_TOOL)
              for n in (1, 2)]
@@ -1329,52 +1408,36 @@ def test_simultaneous_conflicting_starts_queue_one_and_disjoint_runs(workspace, 
         results = list(pool.map(lambda call: codex.pre_tool_use(
             call, config=config, state_root=state, repo_root=repo), calls))
     assert all("updatedInput" in result["hookSpecificOutput"] for result in results)
-    assert sorted(result["hookSpecificOutput"]["updatedInput"].get("leaseQueued", False)
-                  for result in results) == [False, True]
+    assert all(result["hookSpecificOutput"]["updatedInput"].get("worktree") is True
+               and "leaseQueued" not in result["hookSpecificOutput"]["updatedInput"]
+               for result in results)
     disjoint = _lease_call("disjoint", "file1.py", "lease-disjoint", tool_name=START_TOOL)
     assert "leaseQueued" not in codex.pre_tool_use(
         disjoint, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
     owners = _lease_state(workspace)._read()["owners"]
-    assert sorted(owner["state"] for owner in owners.values()) == ["ACTIVE", "ACTIVE", "QUEUED"]
+    assert sorted(owner["state"] for owner in owners.values()) == ["ACTIVE", "ACTIVE", "ACTIVE"]
 
 
-def test_queued_admission_binds_fresh_baseline_and_launches_once(workspace, config, monkeypatch):
+def test_overlapping_worktree_admission_keeps_baseline_without_waiting(workspace, config, monkeypatch):
     repo, state = workspace
     first = _lease_call("first", "file0.py", "queue-first", tool_name=START_TOOL)
     second = _lease_call("second", "file0.py", "queue-second", tool_name=START_TOOL)
     codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
     updated = codex.pre_tool_use(second, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["leaseQueued"] is True
-    assert codex._read_pending(state, second)["baseline"]["code"] == "QUEUED"
-    assert _lease_state(workspace).overlapping_owners(codex._call_key(first)) == []
+    assert updated["worktree"] is True
+    assert "leaseQueued" not in updated
+    assert codex._read_pending(state, second)["baseline"]["status"] == ledger.OK
+    assert len(_lease_state(workspace).overlapping_owners(codex._call_key(first))) == 1
     job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
     jobs = state / "codex_exec_mcp" / "jobs"
     server = codex_exec_mcp.Server(job_dir=jobs)
     monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *_args: None)
     monkeypatch.setattr(server, "_await_host", lambda *_args: {"structuredContent": {"jobId": job_id, "state": "QUEUED"}})
     server._start_job(updated)
-    codex.post_tool_use({**second, "hook_event_name": "PostToolUse", "tool_response":
-                         {"structuredContent": {"jobId": job_id, "state": "QUEUED"}}},
-                        config=config, state_root=state, repo_root=repo)
-    waiting = codex.pre_tool_use(async_followup(RESULT_TOOL, job_id),
-                                 config=config, state_root=state, repo_root=repo)
-    assert "ASYNC_STILL_RUNNING" in waiting["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "queued" in waiting["hookSpecificOutput"]["permissionDecisionReason"]
-    launched = []
-    monkeypatch.setattr(server, "_run_tool", lambda *_args, **_kwargs:
-                        launched.append(True) or {"structuredContent": {"threadId": "queued-thread", "content": "done"}})
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        worker = pool.submit(server._job_worker, job_id, "codex", updated)
-        time.sleep(0.1)
-        assert not launched
-        (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-        assert _lease_state(workspace).release(codex._call_key(first))["status"] == ledger.OK
-        worker.result(timeout=10)
-    assert launched == [True]
+    job = json.loads((jobs / f"{job_id}.json").read_text(encoding="utf-8"))
+    assert "leaseQueued" not in job
     pending = codex._read_pending(state, second)
-    assert pending["baseline"]["status"] == ledger.OK
-    assert pending["baseline"]["status_entries"]
-    assert _lease_state(workspace).overlapping_owners(codex._call_key(second)) == []
+    assert isinstance(pending["baseline"]["status_entries"], list)
 
 
 def test_sync_finalize_releases_scope_lease(workspace, config):

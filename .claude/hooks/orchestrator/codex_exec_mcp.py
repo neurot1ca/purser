@@ -1612,21 +1612,36 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                        hostContained=bool(containment), signalPort=server.listener.getsockname()[1])
             server._write_job(job)
         if launch["name"] == "codex" and launch["args"].get("worktree") is True:
-            import ledger
-            repo_root = Path(launch["args"].get("cwd", os.getcwd())).resolve()
-            try:
-                repo_root = Path(os.fsdecode(ledger._run_git(
-                    repo_root, ["rev-parse", "--show-toplevel"], 30.0, "resolving job repository root")).strip()).resolve()
-                snapshot = ledger.create_job_worktree(
-                    repo_root, job_id, purser_state_root.default_state_root() / "wt")
-            except Exception:
-                server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_FAILED")
-                return
-            job = server._read_job(job_id)
-            job.update(worktreePath=snapshot["path"], snapshot=snapshot["snapshot"],
-                       head=snapshot["head"], repoRoot=os.fspath(repo_root))
-            server._write_job(job)
-            launch["args"] = {**launch["args"], "cwd": snapshot["path"]}
+            if job.get("worktreePath"):
+                worktree_path = Path(job["worktreePath"])
+                if not worktree_path.is_dir():
+                    server._finish_job(job_id, "FAILED", "WORKTREE_MISSING")
+                    return
+                repo_root = Path(job.get("repoRoot", worktree_path)).resolve()
+                requested_cwd = Path(launch["args"].get("cwd", repo_root)).resolve()
+                try:
+                    relative_cwd = requested_cwd.relative_to(repo_root)
+                except ValueError:
+                    relative_cwd = Path()
+                launch["args"] = {**launch["args"], "cwd": os.fspath(worktree_path / relative_cwd)}
+            else:
+                import ledger
+                requested_cwd = Path(launch["args"].get("cwd", os.getcwd())).resolve()
+                repo_root = requested_cwd
+                try:
+                    repo_root = Path(os.fsdecode(ledger._run_git(
+                        repo_root, ["rev-parse", "--show-toplevel"], 30.0, "resolving job repository root")).strip()).resolve()
+                    relative_cwd = requested_cwd.relative_to(repo_root)
+                    snapshot = ledger.create_job_worktree(
+                        repo_root, job_id, purser_state_root.default_state_root() / "wt")
+                except Exception:
+                    server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_FAILED")
+                    return
+                job = server._read_job(job_id)
+                job.update(worktreePath=snapshot["path"], snapshot=snapshot["snapshot"],
+                           head=snapshot["head"], repoRoot=os.fspath(repo_root))
+                server._write_job(job)
+                launch["args"] = {**launch["args"], "cwd": os.fspath(Path(snapshot["path"]) / relative_cwd)}
         server.codex_bin = launch["codexBin"]
         server.agent = launch.get("agent", "codex")
         server.claim_generation = generation

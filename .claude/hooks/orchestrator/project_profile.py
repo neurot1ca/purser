@@ -98,6 +98,13 @@ class Check:
 
 
 @dataclass(frozen=True)
+class WorktreeSetup:
+    copy: tuple[str, ...] = ()
+    setup: str | None = None
+    setup_timeout_seconds: int = 600
+
+
+@dataclass(frozen=True)
 class Roles:
     orchestrator: str = "claude-code"
     coder: str = "codex"
@@ -105,6 +112,7 @@ class Roles:
 
 
 _PROJECT_NON_SECURITY = {"project": {"id"}, "authority": {"sources"}}
+_PROJECT_NON_SECURITY["worktree"] = {"copy", "setup", "setup_timeout_seconds"}
 _DEFAULT_AUTHORITY_SOURCES = (
     AuthoritySource("AGENTS.md", _DEFAULT_AUTHORITY_HEADINGS),
 )
@@ -123,6 +131,7 @@ class ResolvedProfile:
     roles: Roles
     authority_sources: tuple[AuthoritySource, ...]
     checks: tuple[Check, ...]
+    worktree: WorktreeSetup
     vault_root: str | None
     loosenings_ignored: int
     user_status: str
@@ -168,6 +177,7 @@ def load_profile(
             roles=Roles(),
             authority_sources=_DEFAULT_AUTHORITY_SOURCES,
             checks=(),
+            worktree=WorktreeSetup(),
             vault_root=None,
             loosenings_ignored=0,
             user_status="rejected",
@@ -254,6 +264,30 @@ def _load_tier(
                 )
                 warnings.extend(authority_warnings)
                 values["authority.sources"] = authority_sources
+                continue
+            if section_name == "worktree":
+                if key == "copy":
+                    if not isinstance(value, list) or not all(
+                        isinstance(path, str) and path for path in value
+                    ):
+                        warnings.append(
+                            f"{tier_name}: [worktree] copy must be a list of non-empty strings; ignored"
+                        )
+                    else:
+                        values["worktree.copy"] = tuple(value)
+                elif key == "setup":
+                    if not isinstance(value, str) or not value.strip():
+                        warnings.append(
+                            f"{tier_name}: [worktree] setup must be a non-empty string; ignored"
+                        )
+                    else:
+                        values["worktree.setup"] = value
+                elif type(value) is not int or not 1 <= value <= 3600:
+                    warnings.append(
+                        f"{tier_name}: [worktree] setup_timeout_seconds must be an integer from 1 to 3600; ignored"
+                    )
+                else:
+                    values["worktree.setup_timeout_seconds"] = value
                 continue
             if not isinstance(value, str):
                 warnings.append(
@@ -456,6 +490,8 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
     trusted = _is_trusted(project_root, user)
     if "checks" in project_values and not trusted:
         warnings += ("project: [[checks]] ignored because the project is not trusted",)
+    if any(key.startswith("worktree.") for key in project_values) and not trusted:
+        warnings += ("project: [worktree] ignored because the project is not trusted",)
     authority_sources = project_values.get("authority.sources") or _DEFAULT_AUTHORITY_SOURCES
     roles = Roles(
         orchestrator=user_values.get("roles.orchestrator", "claude-code"),
@@ -474,6 +510,15 @@ def _resolve_profile(project_root: Path, user: _Tier, project: _Tier) -> Resolve
         roles=roles,
         authority_sources=authority_sources,
         checks=project_values.get("checks", ()) if trusted else (),
+        worktree=(
+            WorktreeSetup(
+                copy=project_values.get("worktree.copy", ()),
+                setup=project_values.get("worktree.setup"),
+                setup_timeout_seconds=project_values.get("worktree.setup_timeout_seconds", 600),
+            )
+            if trusted
+            else WorktreeSetup()
+        ),
         vault_root=user_values.get("telemetry.vault_root"),
         loosenings_ignored=loosenings_ignored,
         user_status=user.status,

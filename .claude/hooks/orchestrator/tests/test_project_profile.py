@@ -45,12 +45,47 @@ argv = ["python", "-V"]
     assert not any("unknown" in warning for warning in valid.warnings)
 
 
+def test_worktree_profile_values_and_defaults(profile_root):
+    result = _load(profile_root, '''schema_version = 1
+[worktree]
+copy = [".env", "config/local.json"]
+setup = "npm ci"
+''', user_text=f'schema_version = 1\n[trust]\npaths = ["{profile_root.as_posix()}"]\n')
+    assert result.project_status == "ok"
+    assert result.worktree == project_profile.WorktreeSetup(
+        copy=(".env", "config/local.json"), setup="npm ci", setup_timeout_seconds=600
+    )
+
+
+def test_invalid_worktree_profile_fields_warn_and_are_ignored(profile_root):
+    result = _load(profile_root, '''schema_version = 1
+[worktree]
+copy = "../outside"
+setup = 12
+setup_timeout_seconds = 0
+''')
+    assert result.project_status == "ok"
+    assert result.worktree == project_profile.WorktreeSetup()
+    assert len([warning for warning in result.warnings if "[worktree]" in warning]) == 3
+
+
 def test_untrusted_project_checks_are_ignored_with_warning(profile_root):
     result = _load(profile_root, 'schema_version = 1\n[[checks]]\nname = "lint"\nargv = ["python", "-V"]\n')
     assert result.project_status == "ok"
     assert result.trusted is False
     assert result.checks == ()
     assert "project: [[checks]] ignored because the project is not trusted" in result.warnings
+
+
+def test_untrusted_project_worktree_setup_and_copy_are_ignored(profile_root):
+    result = _load(profile_root, '''schema_version = 1
+[worktree]
+copy = [".env"]
+setup = "touch should-not-run"
+''')
+    assert result.trusted is False
+    assert result.worktree == project_profile.WorktreeSetup()
+    assert "project: [worktree] ignored because the project is not trusted" in result.warnings
 
 
 @pytest.mark.parametrize("section", [
