@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.36 — 2026-09-27
+
+- `/purser:init` offers OpenCode and Antigravity (agy) as coders when installed, with a model from the agent's own list; the choice persists in `~/.orchestrator/config.toml`.
+- agy coder runs are bound to the job directory (agy otherwise writes into its last-used project) and pass the route effort.
 ## 0.1.35 — 2026-09-27
 
 - The code map runs through the plugin's Python locator, and the operations guide documents it.
