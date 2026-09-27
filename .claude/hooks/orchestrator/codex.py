@@ -22,6 +22,7 @@ import uuid
 from typing import Any
 
 import json_transport
+import coder_config
 import compaction_advisor
 import codex_quota
 import codex_exec_mcp
@@ -681,7 +682,7 @@ def _codex_usage(tool_response: Any) -> dict[str, int | float]:
 
 def _load_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     if config is None:
-        loaded = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        loaded = coder_config.load(_CONFIG_PATH)
     else:
         loaded = config
     policy.validate_config(loaded)

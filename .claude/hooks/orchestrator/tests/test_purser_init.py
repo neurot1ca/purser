@@ -10,6 +10,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import purser_init
+import coder_config
+import codex
+import codex_exec_mcp
 
 
 @pytest.fixture
@@ -218,3 +221,44 @@ def test_apply_creates_handoff_and_preserves_existing_file(site, capsys):
     handoff.write_text("user handoff; keep it\n", encoding="utf-8")
     assert run(*args) == 0
     assert handoff.read_text(encoding="utf-8") == "user handoff; keep it\n"
+
+
+def test_opencode_absent_is_unavailable(site, monkeypatch, capsys):
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: None)
+    assert run("--detect", "--json") == 0
+    assert json.loads(capsys.readouterr().out)["agents"]["opencode"] == {
+        "available": False, "path": None, "version": None, "models": []}
+
+
+def test_unknown_opencode_model_is_rejected_before_write(site, monkeypatch):
+    home, _ = site
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode-native")
+    monkeypatch.setattr(purser_init, "_opencode_models", lambda binary: ["opencode/big-pickle"])
+    assert run("--apply", "--coder", "opencode", "--model", "other/model", "--reviewer", "none") == 1
+    assert not (home / ".orchestrator").exists()
+
+
+def test_opencode_choice_loads_same_model_on_all_routes(site, monkeypatch):
+    home, _ = site
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode-native")
+    monkeypatch.setattr(purser_init, "_opencode_models", lambda binary: ["opencode/big-pickle"])
+    assert run("--apply", "--coder", "opencode", "--model", "opencode/big-pickle", "--reviewer", "none") == 0
+    loaded = coder_config.load(Path(__file__).parents[1] / "config.json")
+    assert loaded["coder_agent"] == "opencode"
+    assert set(loaded["routes"]) == set(loaded["required_routes"])
+    assert set((entry["model"], entry["effort"]) for entry in loaded["routes"].values()) == {
+        ("opencode/big-pickle", "none")}
+    assert codex._load_config(None)["routes"] == loaded["routes"]
+    assert codex_exec_mcp.Server._configured_agent() == "opencode"
+
+
+def test_switch_from_opencode_to_claude_clears_routes(site, monkeypatch):
+    home, _ = site
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode-native")
+    monkeypatch.setattr(purser_init, "_opencode_models", lambda binary: ["opencode/big-pickle"])
+    assert run("--apply", "--coder", "opencode", "--model", "opencode/big-pickle", "--reviewer", "none") == 0
+    assert run("--apply", "--coder", "claude", "--reviewer", "none") == 0
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert saved["roles"]["coder"] == "claude"
+    assert saved["coding"] == {"coder_agent": "codex", "routes": {}}
+    assert coder_config.load(Path(__file__).parents[1] / "config.json")["routes"]["normal"]["model"] == "gpt-6-sol"

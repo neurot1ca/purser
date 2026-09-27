@@ -17,6 +17,7 @@ import tempfile
 import tomllib
 
 import compaction_advisor
+import coder_config
 
 
 HEAD = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
@@ -49,16 +50,40 @@ def detect(config_path: Path, project: Path) -> dict:
     agy = _agent("agy", configured if isinstance(configured, str) else None)
     if not agy["available"] and configured:
         agy = _agent("agy")
+    binary = coder_config.opencode_binary()
+    opencode = {"available": False, "path": None, "version": None, "models": []}
+    if binary:
+        try:
+            models = _opencode_models(binary)
+        except (OSError, UnicodeError, ValueError):
+            pass
+        else:
+            opencode = _agent("opencode", binary)
+            opencode["models"] = models
     return {
         "agents": {
             "codex": _agent("codex"),
             "agy": agy,
             "claude": _agent("claude"),
+            "opencode": opencode,
         },
         "roles": roles,
         "trusted": str(project) in trust.get("paths", []) if isinstance(trust, dict) else False,
         "profile_exists": (project / ".orchestrator" / "profile.toml").exists(),
     }
+
+
+def _opencode_models(binary: str) -> list[str]:
+    try:
+        result = subprocess.run([binary, "models"], capture_output=True, text=True, timeout=30, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("opencode models timed out") from exc
+    if result.returncode:
+        raise ValueError("opencode models failed")
+    models = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not models or any(coder_config.MODEL.fullmatch(model) is None for model in models):
+        raise ValueError("opencode models returned an invalid list")
+    return models
 
 
 def _span(lines: list[str], section: str) -> tuple[int, int] | None:
@@ -177,7 +202,8 @@ def _append_trust_path(text: str, path: str, newline: str) -> str:
     raise ValueError("unterminated [trust] paths array")
 
 
-def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, project: Path) -> bytes:
+def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, project: Path,
+               model: str | None = None) -> bytes:
     text = original.decode("utf-8") if original is not None else "schema_version = 1\n"
     before = tomllib.loads(text)
     newline = "\r\n" if "\r\n" in text else "\n"
@@ -188,6 +214,18 @@ def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, p
     roles.update(orchestrator="claude-code", coder=coder, reviewer=reviewer)
     for key in ("orchestrator", "coder", "reviewer"):
         text = _upsert(text, "roles", key, roles[key], newline)
+    if coder == "opencode" or "coding" in after:
+        coding = after.setdefault("coding", {})
+        if not isinstance(coding, dict):
+            raise ValueError("[coding] must be a table")
+        coding["coder_agent"] = "opencode" if coder == "opencode" else "codex"
+        coding["routes"] = ({name: model for name in json.loads(
+            (Path(__file__).with_name("config.json")).read_text(encoding="utf-8"))["required_routes"]}
+            if coder == "opencode" else {})
+        text = _upsert(text, "coding", "coder_agent", coding["coder_agent"], newline)
+        routes = coding["routes"]
+        rendered = "routes = {" + ", ".join(f"{name} = {json.dumps(value)}" for name, value in routes.items()) + "}" + newline
+        text = _upsert(text, "coding", "routes", routes, newline, rendered=rendered)
     if trust:
         table = after.setdefault("trust", {})
         if not isinstance(table, dict) or not isinstance(table.get("paths", []), list) or not all(isinstance(p, str) for p in table.get("paths", [])):
@@ -270,16 +308,19 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--plan", action="store_true")
     modes.add_argument("--apply", action="store_true")
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--coder", choices=("codex", "claude"))
+    parser.add_argument("--coder", choices=("codex", "claude", "opencode"))
+    parser.add_argument("--model")
     parser.add_argument("--reviewer", choices=("agy", "none"))
     parser.add_argument("--trust", action="store_true")
     parser.add_argument("--scaffold-profile", action="store_true")
     args = parser.parse_args(argv)
     if args.detect:
-        if not args.json or args.coder or args.reviewer or args.trust or args.scaffold_profile:
+        if not args.json or args.coder or args.model or args.reviewer or args.trust or args.scaffold_profile:
             parser.error("--detect requires --json and no change options")
     elif args.json or args.coder is None or args.reviewer is None:
         parser.error("--plan and --apply require --coder and --reviewer, without --json")
+    if args.coder != "opencode" and args.model is not None:
+        parser.error("--model requires --coder opencode")
     project = Path.cwd().resolve()
     config = Path.home() / ".orchestrator" / "config.toml"
     python_file = config.with_name("python")
@@ -288,9 +329,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.detect:
             print(json.dumps(detect(config, project), indent=2))
             return 0
+        if args.coder == "opencode":
+            binary = coder_config.opencode_binary()
+            if not binary or not args.model or args.model not in _opencode_models(binary):
+                raise ValueError("OpenCode is unavailable or selected model is absent from opencode models")
         handoff = compaction_advisor.handoff_path(project)
         original = config.read_bytes() if config.exists() else None
-        changed = _candidate(original, args.coder, args.reviewer, args.trust, project)
+        changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model)
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
         handoff_missing = not handoff.exists()
         python_original = python_file.read_bytes() if python_file.exists() else None

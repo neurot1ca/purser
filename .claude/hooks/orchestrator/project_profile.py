@@ -63,6 +63,7 @@ def is_protected(path: str, patterns: Iterable[str]) -> bool:
 
 _USER_SECURITY = {
     "roles": {"orchestrator", "coder", "reviewer"},
+    "coding": {"coder_agent", "routes"},
     "reviewer": {"executable"},
     "trust": {"paths"},
     "paths": {"protected"},
@@ -360,10 +361,19 @@ def _authority_path(value: Any) -> str | None:
 
 
 def _valid_security_value(section: str, key: str, value: Any) -> tuple[bool, str]:
+    if section == "coding":
+        if key == "coder_agent":
+            valid = value in ("codex", "opencode")
+        else:
+            valid = isinstance(value, dict) and all(
+                isinstance(name, str) and isinstance(model, str)
+                for name, model in value.items()
+            )
+        return valid, "" if valid else f"[coding] {key} has an invalid value"
     if section == "roles":
         allowed = {
             "orchestrator": {"claude-code"},
-            "coder": {"codex", "claude"},
+            "coder": {"codex", "claude", "opencode"},
             "reviewer": {"agy", "none"},
         }
         if isinstance(value, str) and value in allowed[key]:

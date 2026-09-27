@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 import context_io_telemetry
+import coder_config
 import async_session_maintenance
 import compaction_advisor
 import project_profile
@@ -114,7 +115,7 @@ def main() -> int:
                     additional_context = compaction_advisor.restore(value, repository)
                     try:
                         if repository is not None:
-                            selected = json.loads((Path(__file__).with_name("config.json")).read_text(encoding="utf-8")).get("coder_agent", "codex")
+                            selected = coder_config.load(Path(__file__).with_name("config.json")).get("coder_agent", "codex")
                             hint = async_session_maintenance.duration_hint(
                                 state_root.default_state_root(), project_root.project_key(repository),
                                 implementer="opencode-main" if selected == "opencode" else "codex-main",

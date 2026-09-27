@@ -37,6 +37,7 @@ if os.name == "nt":
     from ctypes import wintypes
 
 import state_root as purser_state_root
+import coder_config
 
 
 TOOL_SCHEMAS = [
@@ -586,7 +587,7 @@ class Server:
 
     @staticmethod
     def _configured_agent() -> str:
-        config = json.loads((Path(__file__).with_name("config.json")).read_text(encoding="utf-8"))
+        config = coder_config.load(Path(__file__).with_name("config.json"))
         selected = config.get("coder_agent", "codex")
         if selected not in ("codex", "opencode"):
             raise ValueError("coder_agent must be codex or opencode")
@@ -604,16 +605,9 @@ class Server:
             if isinstance(value, list) and value and all(isinstance(item, str) and item for item in value):
                 return value
             raise ValueError("invalid OpenCode binary override")
-        binary = shutil.which("opencode")
+        binary = coder_config.opencode_binary()
         if not binary:
             raise ValueError("OpenCode executable was not found")
-        launcher = Path(binary)
-        if os.name == "nt":
-            package = launcher.parent / "node_modules" / "opencode-ai"
-            for variant in ("opencode-windows-x64", "opencode-windows-x64-baseline"):
-                candidate = package / "node_modules" / variant / "bin" / "opencode.exe"
-                if candidate.is_file():
-                    return [str(candidate)]
         return [binary]
 
     def _signal_loop(self) -> None:
