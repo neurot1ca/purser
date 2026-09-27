@@ -49,6 +49,24 @@ def test_quota_newest_rate_limits_wins(quota_home):
     }
 
 
+def test_quota_weekly_window_without_primary_omits_5h(quota_home):
+    limits = {"secondary": {"used_percent": 38, "window_minutes": 10080, "resets_at": 1790611663}}
+    event = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "rate_limits": limits}})
+    rollout(quota_home, [event])
+
+    assert read_quota(THREAD, codex_home=quota_home) == {
+        "7d_used_pct": 38,
+        "7d_resets_at": "2026-09-28T16:07:43Z",
+    }
+
+
+def test_quota_no_windows_returns_none(quota_home):
+    event = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {}}})
+    rollout(quota_home, [event])
+
+    assert read_quota(THREAD, codex_home=quota_home) is None
+
+
 def test_quota_missing_file_returns_none(quota_home):
     assert read_quota(THREAD, codex_home=quota_home) is None
 
