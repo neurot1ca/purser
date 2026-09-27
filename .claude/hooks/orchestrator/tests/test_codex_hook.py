@@ -767,12 +767,15 @@ def test_dispatch_receipt_renders_english_in_approved_format(workspace, config, 
     repo, state = workspace
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:
         "Purser: typical Codex durations here (median/p90, n): normal 5/8 min (n=10).")
-    receipt = codex._append_dispatch_receipt({}, {
+    queued = []
+    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
+                        lambda event, repository, **kwargs: queued.append(kwargs))
+    codex._append_dispatch_receipt({}, {
         "task_id": "task-1", "label": "OpenCode and Codex reviewer adapters",
         "model": "gpt-6-luna", "effort": "high", "route": "normal",
         "project_key": "project", "repo_root": str(repo), "agent": "codex",
-    }, state)
-    assert receipt["systemMessage"] == (
+    }, state, event())
+    assert queued[0]["line"] == (
         "**New session · model: gpt-6-luna (high) · task: OpenCode and Codex reviewer adapters · "
         "estimated completion: 5 min**"
     )
@@ -781,12 +784,15 @@ def test_dispatch_receipt_renders_english_in_approved_format(workspace, config, 
 def test_dispatch_receipt_uses_continuing_session_wording(workspace, monkeypatch):
     repo, state = workspace
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
-    receipt = codex._append_dispatch_receipt({}, {
+    queued = []
+    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
+                        lambda event, repository, **kwargs: queued.append(kwargs))
+    codex._append_dispatch_receipt({}, {
         "task_id": "task-1", "label": "Keep working", "model": "gpt-6-luna",
         "effort": "high", "route": "normal", "project_key": "project",
         "repo_root": str(repo), "agent": "codex", "prior_thread_id": "thread-1",
-    }, state)
-    assert receipt["systemMessage"] == (
+    }, state, event())
+    assert queued[0]["line"] == (
         "**Continuing session · model: gpt-6-luna (high) · task: Keep working**"
     )
 
@@ -794,25 +800,33 @@ def test_dispatch_receipt_uses_continuing_session_wording(workspace, monkeypatch
 def test_dispatch_receipt_omits_estimate_without_duration_history(workspace, monkeypatch):
     repo, state = workspace
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
-    receipt = codex._append_dispatch_receipt({}, {
+    queued = []
+    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
+                        lambda event, repository, **kwargs: queued.append(kwargs))
+    codex._append_dispatch_receipt({}, {
         "task_id": "task-1", "label": "First run", "model": "gpt-6-luna",
         "effort": "high", "route": "normal", "project_key": "project",
         "repo_root": str(repo), "agent": "codex",
-    }, state)
-    assert receipt["systemMessage"] == "**New session · model: gpt-6-luna (high) · task: First run**"
+    }, state, event())
+    assert queued[0]["line"] == "**New session · model: gpt-6-luna (high) · task: First run**"
 
 
 def test_two_admitted_codex_starts_emit_two_dispatch_receipts(workspace, config, monkeypatch):
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:
         "Purser: typical Codex durations here (median/p90, n): normal 2/6 min (n=10).")
+    lines = []
+    original_queue = codex.compaction_advisor.queue_dispatch
+    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
+                        lambda event, repository, **kwargs: lines.append(kwargs["line"]) if kwargs.get("line") else None)
     first = _admitted_start_response(
         workspace, config, task_id="receipt-first", tool_use_id="receipt-first-start")[1]
     second = _admitted_start_response(
         workspace, config, task_id="receipt-second", tool_use_id="receipt-second-start")[1]
-    messages = [first.get("systemMessage", ""), second.get("systemMessage", "")]
-    assert sum(message.count("**New session · model: gpt-6-sol (medium) · task:") for message in messages) == 2
-    assert "task: receipt-first · estimated completion: 2 min**" in messages[0]
-    assert "task: receipt-second · estimated completion: 2 min**" in messages[1]
+    assert original_queue
+    assert "systemMessage" not in first and "systemMessage" not in second
+    assert len(lines) == 2
+    assert "task: receipt-first · estimated completion: 2 min**" in lines[0]
+    assert "task: receipt-second · estimated completion: 2 min**" in lines[1]
 
 
 def test_denied_codex_start_emits_no_dispatch_receipt(workspace, config):
@@ -1025,7 +1039,7 @@ def test_project_job_board_orders_attention_running_queued_and_applied(workspace
             "phase": "implementation", "apply": "codex_apply",
             "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
         }), encoding="utf-8")
-    message = codex._append_project_job_status({}, state, "project")["systemMessage"]
+    message = codex._project_job_board(state, "project")
     tasks = [line.strip("|").split("|")[0].strip() for line in message.splitlines()
              if line.startswith("| ") and not line.startswith("| Task |") and "---" not in line]
     assert tasks == ["failed", "conflict", "done", "running", "queued", "applied"]
@@ -1037,7 +1051,7 @@ def test_project_job_board_renders_overdue_and_unknown_eta(workspace, monkeypatc
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
     _board_job(state, "overdue", etaMinutes=2, acceptedAt=time.time() - 180)
     _board_job(state, "unknown", etaMinutes=None, acceptedAt=time.time() - 10)
-    message = codex._append_project_job_status({}, state, "project")["systemMessage"]
+    message = codex._project_job_board(state, "project")
     assert "| overdue | gpt-6-sol (medium) | running | overdue |" in message
     assert "| unknown | gpt-6-sol (medium) | running | — |" in message
 
@@ -1049,7 +1063,7 @@ def test_project_job_board_drops_applied_jobs_after_an_hour(workspace):
     _board_job(state, "old-failed", "FAILED", finishedAt=time.time() - 3601)
     _board_job(state, "active-one")
     _board_job(state, "active-two")
-    message = codex._append_project_job_status({}, state, "project")["systemMessage"]
+    message = codex._project_job_board(state, "project")
     assert "old-applied" not in message
     assert "old-failed" not in message
     assert "active-one" in message and "active-two" in message
@@ -1063,8 +1077,7 @@ def test_async_dispatch_receipt_is_followed_by_project_job_board(workspace):
         "label": "new work", "model": "gpt-6-sol", "effort": "medium",
         "route": "normal", "async_call": "call", "project_key": "project",
     }, state)
-    message = response["systemMessage"]
-    assert message.index("task: new work") < message.index("Purser jobs:")
+    assert response["systemMessage"] == "accepted"
 
 
 def test_async_result_response_appends_project_job_board(workspace, config, monkeypatch):
@@ -1088,8 +1101,7 @@ def test_async_result_response_appends_project_job_board(workspace, config, monk
                                    reviewer=lambda **kwargs: {
                                        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
                                        "provider": "agy"})
-    assert "| Task | Model | State | ETA | Review | Apply |" in response["systemMessage"]
-    assert "| result-2 | gpt-6-sol (medium) | running |" in response["systemMessage"]
+    assert "systemMessage" not in response
 
 
 def test_codex_apply_response_appends_project_job_board(workspace, config):
@@ -1101,8 +1113,7 @@ def test_codex_apply_response_appends_project_job_board(workspace, config):
                    "tool_input": {"jobId": job_id}}
     assert codex.pre_tool_use(event_value, config=config, state_root=state) == {}
     response = codex.post_tool_use(event_value, config=config, state_root=state)
-    assert "| Task | Model | State | ETA | Review | Apply |" in response["systemMessage"]
-    assert "| applied-job | gpt-6-sol (medium) | done | — | — | applied |" in response["systemMessage"]
+    assert "systemMessage" not in response
 
 
 def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace, config):

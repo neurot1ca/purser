@@ -322,6 +322,65 @@ def _queue_receipt(event, repo, model="gpt-6-sol", *, seven_day_pct=46, reset_at
     }})
 
 
+def _dispatch_state(repo):
+    return advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["dispatch_pending"]
+
+
+def test_dispatch_receipt_blocks_when_final_reply_lacks_line(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    line = "**New session · model: gpt-6-sol (high) · task: Repair · estimated completion: 3 min**"
+    advisor.queue_dispatch(event, repo, line=line)
+
+    result = advisor.stop({**event, "last_assistant_message": "Done."}, repo)
+
+    assert result["decision"] == "block"
+    assert "one bold line between `---` rules" in result["reason"]
+    assert line in result["reason"]
+
+
+def test_dispatch_receipt_passes_verbatim_and_clears(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    line = "**New session · model: gpt-6-sol (high) · task: Repair · estimated completion: 3 min**"
+    advisor.queue_dispatch(event, repo, line=line)
+
+    assert advisor.stop({**event, "last_assistant_message": f"---\n\n{line}\n\n---"}, repo) is None
+    assert _dispatch_state(repo) is None
+
+
+def test_two_dispatches_require_both_lines(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    first = "**New session · model: gpt-6-sol (high) · task: First**"
+    second = "**New session · model: gpt-6-sol (high) · task: Second**"
+    advisor.queue_dispatch(event, repo, line=first)
+    advisor.queue_dispatch(event, repo, line=second)
+
+    result = advisor.stop({**event, "last_assistant_message": first}, repo)
+
+    assert result["decision"] == "block"
+    assert second in result["reason"]
+    assert _dispatch_state(repo)["lines"] == [first, second]
+
+
+def test_dispatch_board_required_only_when_present_and_cleared_after_satisfaction(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    line = "**New session · model: gpt-6-sol (high) · task: Repair**"
+    advisor.queue_dispatch(event, repo, line=line)
+    assert advisor.stop({**event, "last_assistant_message": line}, repo) is None
+    assert _dispatch_state(repo) is None
+
+    board = "Purser jobs:\n| Task | Model | State | ETA | Review | Apply |\n| --- | --- | --- | --- | --- | --- |\n| A | gpt-6-sol (high) | running | ~2 min | — | — |"
+    advisor.queue_dispatch(event, repo, line=line, board=board)
+    result = advisor.stop({**event, "last_assistant_message": line}, repo)
+    assert result["decision"] == "block"
+    assert board in result["reason"]
+    assert advisor.stop({**event, "last_assistant_message": f"{line}\n\n{board}"}, repo) is None
+    assert _dispatch_state(repo) is None
+
+
 def _flow_records(*, tool_name="mcp__plugin_purser_codex-main__codex_result", is_error=False):
     return [
         {"type": "user", "message": {"role": "user", "content": "Continue the approved task."}},

@@ -399,6 +399,15 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             if not (isinstance(receipt, dict) and isinstance(receipt.get("model"), str)
                     and receipt["model"] and isinstance(receipt.get("effort"), str)):
                 receipt = None
+            dispatch = value.get("dispatch_pending")
+            if not isinstance(dispatch, dict):
+                dispatch = None
+            else:
+                lines = dispatch.get("lines")
+                board = dispatch.get("board")
+                dispatch = ({"lines": lines, "board": board, "blocked": dispatch.get("blocked") is True}
+                            if isinstance(lines, list) and all(isinstance(line, str) and line for line in lines)
+                            and (board is None or isinstance(board, str)) else None)
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
                 "reminder_messages": max(0, int(value.get("reminder_messages", 0))),
@@ -407,13 +416,15 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "session_id": session_id,
                 "notice_pending": pending,
                 "receipt_pending": receipt,
+                "dispatch_pending": dispatch,
                 "flow_blocked_user": value.get("flow_blocked_user") if type(value.get("flow_blocked_user")) is int else None,
             }
     except (OSError, ValueError, TypeError):
         pass
     return {"last_suggested_context": 0, "reminder_messages": 0, "reminder_wasted_tokens": 0,
             "last_task_id": None, "session_id": session_id,
-            "notice_pending": None, "receipt_pending": None, "flow_blocked_user": None}
+            "notice_pending": None, "receipt_pending": None, "dispatch_pending": None,
+            "flow_blocked_user": None}
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -547,6 +558,28 @@ def queue_receipt(payload: Mapping[str, Any], repository: Path | None,
         pass
 
 
+def queue_dispatch(payload: Mapping[str, Any], repository: Path | None, *,
+                   line: str | None = None, board: str | None = None) -> None:
+    """Require rendered dispatch text in the next user facing assistant reply."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return
+        path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(path, session_id)
+        pending = state["dispatch_pending"] or {"lines": [], "board": None, "blocked": False}
+        if isinstance(line, str) and line and line not in pending["lines"]:
+            pending["lines"].append(line)
+        if isinstance(board, str) and board:
+            pending["board"] = board
+        if line or board:
+            pending["blocked"] = False
+            state["dispatch_pending"] = pending
+            _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    except BaseException:
+        pass
+
+
 def _receipt_quota_current(receipt: Mapping[str, Any], now: datetime | None = None) -> bool:
     captured_at = receipt.get("snapshot_at")
     if isinstance(captured_at, str):
@@ -613,6 +646,14 @@ def _receipt_satisfied(receipt: Mapping[str, Any], message: str, now: datetime) 
     return True
 
 
+def _dispatch_advice(dispatch: Mapping[str, Any]) -> str:
+    lines = dispatch["lines"]
+    advice = ("Write one bold line between `---` rules with blank lines around it, in the user's language, "
+              "including every exact dispatch receipt line below verbatim:\n" + "\n".join(lines))
+    board = dispatch.get("board")
+    return advice + ("\nInclude this latest job board verbatim:\n" + board if isinstance(board, str) else "")
+
+
 def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] | None:
     """Ask for one retry when a pending notice is absent or flow stalls after Codex."""
     try:
@@ -623,6 +664,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         state = _read_state(state_path, session_id)
         notice = state["notice_pending"]
         receipt = state["receipt_pending"]
+        dispatch = state["dispatch_pending"]
         records = _read_transcript(payload.get("transcript_path"))
         flow_message = next((text for record in reversed(records)
                              if _record_type(record) == "assistant"
@@ -642,8 +684,13 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         if receipt is not None and _receipt_satisfied(receipt, message, clock):
             state["receipt_pending"] = None
             changed = True
+        if dispatch is not None and all(line in message for line in dispatch["lines"]):
+            if dispatch.get("board") is None or dispatch["board"] in message:
+                state["dispatch_pending"] = None
+                changed = True
         notice = state["notice_pending"]
         receipt = state["receipt_pending"]
+        dispatch = state["dispatch_pending"]
         if payload.get("stop_hook_active") is True:
             if changed:
                 _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
@@ -655,6 +702,9 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         if receipt is not None and not receipt.get("blocked"):
             receipt["blocked"] = True
             reasons.append(_receipt_advice(receipt))
+        if dispatch is not None and not dispatch.get("blocked"):
+            dispatch["blocked"] = True
+            reasons.append(_dispatch_advice(dispatch))
 
         if not reasons and flow_message.rstrip().endswith(("?", "؟", "？")):
             latest_user = max((i for i, record in enumerate(records) if _genuine_user(record)), default=-1)

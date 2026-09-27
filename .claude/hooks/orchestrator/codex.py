@@ -2002,9 +2002,8 @@ def _route_duration_median(pending: Mapping[str, Any], state_root: Path) -> int 
     return None
 
 
-def _append_project_job_status(response: dict[str, Any], root: Path,
-                               project_key: str) -> dict[str, Any]:
-    """Append the current project job board without polling any worker."""
+def _project_job_board(root: Path, project_key: str) -> str | None:
+    """Render the current project job board without polling any worker."""
     try:
         jobs = []
         now = time.time()
@@ -2034,7 +2033,7 @@ def _append_project_job_status(response: dict[str, Any], root: Path,
                 continue
             jobs.append((job, index))
         if len(jobs) < 2:
-            return response
+            return None
 
         def board_row(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple[int, int, float, str]:
             job, index = item
@@ -2101,15 +2100,23 @@ def _append_project_job_status(response: dict[str, Any], root: Path,
         lines = ["| Task | Model | State | ETA | Review | Apply |", "| --- | --- | --- | --- | --- | --- |"]
         lines.extend(row[3] for row in sorted(map(board_row, jobs), key=lambda row: row[:3]))
         block = "Purser jobs:\n" + "\n".join(lines)
-        prior = response.get("systemMessage")
-        response["systemMessage"] = f"{prior}\n{block}" if isinstance(prior, str) and prior else block
+        return block
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         pass  # Status is observational; it cannot disable enforcement.
+    return None
+
+
+def _append_project_job_status(response: dict[str, Any], root: Path,
+                               project_key: str, event: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    board = _project_job_board(root, project_key)
+    if board is not None and event is not None:
+        repository, _reason = project_root.resolve_project_root(event)
+        compaction_advisor.queue_dispatch(event, repository, board=board)
     return response
 
 
 def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any],
-                             state_root: Path) -> dict[str, Any]:
+                             state_root: Path, event: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Render one admitted-call receipt from the recorded route and local duration history."""
     label, model = pending.get("label"), pending.get("model")
     effort, route = pending.get("effort"), pending.get("route")
@@ -2122,10 +2129,11 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
     if median is not None:
         fields.append(f"estimated completion: {median} min")
     receipt = f"**{' · '.join(fields)}**"
-    prior = response.get("systemMessage")
-    response["systemMessage"] = f"{prior}\n\n{receipt}" if isinstance(prior, str) and prior else receipt
+    repository = Path(pending["repo_root"]) if isinstance(pending.get("repo_root"), str) else None
+    if event is not None:
+        compaction_advisor.queue_dispatch(event, repository, line=receipt)
     if pending.get("async_call") and isinstance(pending.get("project_key"), str):
-        _append_project_job_status(response, state_root, pending["project_key"])
+        _append_project_job_status(response, state_root, pending["project_key"], event)
     return response
 
 
@@ -2158,7 +2166,7 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
                    "; when it finishes, call codex_result with this jobId.")
         response = _replacement({"jobId": job_id, "state": value["state"], "next": command},
                                 _load_config(config))
-        return _append_dispatch_receipt(response, pending, root)
+        return _append_dispatch_receipt(response, pending, root, event)
     except Exception as error:
         failure = post_tool_use_failure({**event, "error": _safe_error(error)},
                                         state_root=state_root)
@@ -2427,7 +2435,7 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                                              "claude_review_mode": policy.FULL}, _load_config(config))
                 response["hookSpecificOutput"]["additionalContext"] = message
         if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES:
-            response = _append_project_job_status(response, root, index["project_key"])
+            response = _append_project_job_status(response, root, index["project_key"], event)
         if success and worktree_path:
             response = _append_worktree_apply_context(response, index["jobId"])
         index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
@@ -3136,7 +3144,7 @@ def post_tool_use(
                 job = _async_job(root, index)
                 if (isinstance(index, dict) and job is not None
                         and job.get("applyState") in {"applied", "conflict"}):
-                    return _append_project_job_status({}, root, index.get("project_key", ""))
+                    return _append_project_job_status({}, root, index.get("project_key", ""), event)
         except (OSError, ValueError, TypeError, KeyError):
             pass
         return {}
@@ -4054,7 +4062,7 @@ def post_tool_use(
         if pending.get("has_code_map") and bundle.get("changed_paths"):
             bundle["code_map"] = "STALE"
         response = _finalize_replacement(bundle, loaded_config, runtime_root, event, pending.get("repo_root"))
-        response = _append_dispatch_receipt(response, pending, runtime_root)
+        response = _append_dispatch_receipt(response, pending, runtime_root, event)
         if not pending.get("async_call"):
             _release_scope_lease(runtime_root, pending)
             _remove_pending(runtime_root, event)
