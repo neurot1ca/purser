@@ -1264,6 +1264,7 @@ def pre_tool_use(
             except Exception:
                 quota = None
             low_windows = []
+            five_hour_reset = quota.get("5h_resets_at") if isinstance(quota, Mapping) else None
             if isinstance(quota, Mapping):
                 for label in ("5h", "7d"):
                     used = quota.get(f"{label}_used_pct")
@@ -1277,7 +1278,10 @@ def pre_tool_use(
                     "Codex quota is nearly exhausted (" + "; ".join(low_windows) + "). "
                     "Tell the user before this task starts; the user may switch the coding agent "
                     "or wait. If the user chooses to proceed with Codex, resend the same call "
-                    "with reason=user_override in the ORCH line.",
+                    "with reason=user_override in the ORCH line."
+                    + (f" If the user chooses to wait, run a background sleep command until "
+                       f"the 5h reset at {five_hour_reset} UTC, then resend the call when it "
+                       "exits; waiting costs nothing." if isinstance(five_hour_reset, str) else ""),
                 )
 
         runtime_root = _state_root(state_root)
@@ -1963,10 +1967,9 @@ def _async_owned(root: Path, event: Mapping[str, Any], repo_root: str | os.PathL
     path = root / "async_jobs" / f"{job_id}.json"
     try:
         index = json.loads(path.read_text(encoding="utf-8"))
-        repository, _ = _repo_root(event, repo_root)
-        if (not isinstance(index, dict) or repository is None
+        if (not isinstance(index, dict)
                 or index.get("jobId") != job_id
-                or index.get("project_key") != project_root.project_key(repository)
+                or not isinstance(index.get("project_key"), str) or not index["project_key"]
                 or not re.fullmatch(r"[0-9a-f]{64}", str(index.get("call_key")))
                 or not isinstance(index.get("session_id"), str) or not index["session_id"]
                 or not isinstance(index.get("call"), str)
@@ -1986,6 +1989,9 @@ def _async_owned(root: Path, event: Mapping[str, Any], repo_root: str | os.PathL
                     or not isinstance(pending.get("baseline"), dict)):
                 raise WiringError("job and pending call do not match")
         if index["session_id"] != event.get("session_id"):
+            repository, _ = _repo_root(event, repo_root)
+            if repository is None or index["project_key"] != project_root.project_key(repository):
+                raise WiringError("job is not owned by this session/project")
             if event.get("tool_name") not in CODEX_RESULT_TOOL_NAMES:
                 raise WiringError("job is not owned by this session/project")
             if index.get("stage") != "CONSUMED" and _async_job(root, index) is None:
@@ -2159,7 +2165,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             synthetic.update(hook_event_name="PostToolUse", tool_response={"content": [
                 {"type": "text", "text": json_transport.dumps(value)}]})
             response = post_tool_use(synthetic, config=config, state_root=state_root,
-                                     repo_root=repo_root, reviewer=reviewer, micro_repair=micro_repair)
+                                     repo_root=pending.get("repo_root"), reviewer=reviewer,
+                                     micro_repair=micro_repair)
             artifact = (root / "bundle_artifacts" / f"{index['call_key']}.json").resolve()
             expected = str((root / "raw_tool_outputs" / f"{index['call_key']}.json").resolve())
             if not artifact.is_file() or not Path(expected).is_file():

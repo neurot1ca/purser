@@ -395,8 +395,6 @@ def test_async_unknown_and_foreign_jobs_are_denied(workspace, config, name):
     call["tool_input"]["jobId"] = job_id
     call["session_id"] = "other-session"
     assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecision"] == "deny"
-    call["session_id"] = start["session_id"]
-    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo.parent)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 START_TOOL = "mcp__plugin_purser_codex-main__codex_start"
@@ -424,6 +422,26 @@ def async_followup(name, job_id):
     call = event(name, tool_use_id=f"followup-{name}")
     call["tool_input"] = {"jobId": job_id}
     return call
+
+
+def test_async_result_uses_indexed_project_when_event_cwd_is_nested_repo(workspace, config, monkeypatch):
+    repo, state = workspace
+    _, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    nested = repo / ".tmp" / "nested-repo"
+    nested.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=nested, check=True, timeout=10)
+    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
+    followup = async_followup(RESULT_TOOL, job_id)
+    followup["cwd"] = str(nested)
+    assert codex.pre_tool_use(followup, config=config, state_root=state) == {}
+    post = {**followup, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
+    result = codex.post_tool_use(post, config=config, state_root=state,
+                                 reviewer=lambda **kwargs: {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                                                            "provider": "agy"})
+    assert response_bundle(result, config)["changed_paths"] == ["file0.py"]
+    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))["stage"] == "CONSUMED"
 
 
 @pytest.mark.parametrize("job_count", (1, 2, 6))
@@ -1669,6 +1687,9 @@ def test_low_codex_quota_denies_before_pending_record(workspace, config, monkeyp
     assert "5h" in reason and "92%" in reason and "2026-09-24T15:00:00Z" in reason
     assert "before this task starts" in reason
     assert "reason=user_override" in reason
+    assert "background sleep command" in reason
+    assert "until the 5h reset at 2026-09-24T15:00:00Z UTC" in reason
+    assert "waiting costs nothing" in reason
     assert not (state / "pending").exists() or list((state / "pending").glob("*.json")) == []
 
 
