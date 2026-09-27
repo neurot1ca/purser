@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.42 — 2026-09-27
+
+- A reply job takes a fresh snapshot of its reused worktree on first launch, so its patch carries only the reply's own changes and applies without conflicts.
 ## 0.1.41 — 2026-09-27
 
 - The job board shows one row per Codex thread, in-progress jobs plus the three most recently finished, and marks jobs without changes as `no change`; results and applies no longer re-demand the dispatch receipt.
