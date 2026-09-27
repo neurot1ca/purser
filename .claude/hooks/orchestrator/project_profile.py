@@ -63,7 +63,7 @@ def is_protected(path: str, patterns: Iterable[str]) -> bool:
 
 _USER_SECURITY = {
     "roles": {"orchestrator", "coder", "reviewer"},
-    "coding": {"coder_agent", "routes"},
+    "coding": {"coder_agent", "routes", "family"},
     "reviewer": {"executable"},
     "trust": {"paths"},
     "paths": {"protected"},
@@ -364,6 +364,8 @@ def _valid_security_value(section: str, key: str, value: Any) -> tuple[bool, str
     if section == "coding":
         if key == "coder_agent":
             valid = value in ("codex", "opencode", "agy")
+        elif key == "family":
+            valid = isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", value) is not None
         else:
             valid = isinstance(value, dict) and all(
                 isinstance(name, str) and (isinstance(model, str) or (

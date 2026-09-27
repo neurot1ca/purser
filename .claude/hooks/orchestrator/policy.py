@@ -592,6 +592,13 @@ def model_family(model: str) -> str | None:
     return None
 
 
+def vendor_family(family: str | None) -> str | None:
+    if not isinstance(family, str):
+        return None
+    vendor = family.split("-", 1)[0].lower()
+    return vendor or None
+
+
 def reviewer1_gate(
     phase: str,
     delta_files: int,

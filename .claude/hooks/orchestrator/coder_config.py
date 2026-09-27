@@ -11,6 +11,7 @@ import tomllib
 MODEL = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
 AGY_MODEL = re.compile(r"gemini-[A-Za-z0-9._-]+\Z")
 AGY_EFFORTS = frozenset(("low", "medium", "high", "max"))
+FAMILY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
 def agy_binary() -> str | None:
@@ -44,6 +45,11 @@ def load(config_path: Path) -> dict:
     agent = coding.get("coder_agent", "codex")
     if agent not in ("codex", "opencode", "agy"):
         raise ValueError("[coding] coder_agent is invalid")
+    family = coding.get("family")
+    if family is not None:
+        if agent not in ("opencode", "agy") or not isinstance(family, str) or not FAMILY.fullmatch(family):
+            raise ValueError("[coding] family is invalid")
+        config["coder_family"] = family
     role = user.get("roles", {}).get("coder", "codex")
     if agent in ("opencode", "agy"):
         routes = coding.get("routes")

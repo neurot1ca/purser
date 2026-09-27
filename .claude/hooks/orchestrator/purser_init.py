@@ -29,12 +29,12 @@ KEY = re.compile(r"^\s*([A-Za-z0-9_-]+)\s*=")
 MAXIMUM_MODELS = {"codex": "gpt-6-astra"}
 
 
-def _mode_routes(mode: str, coder: str, model: str | None, effort: str | None) -> dict:
+def _mode_routes(mode: str, coder: str, model: str | None, effort: str | None) -> tuple[dict, str | None]:
     shipped = json.loads(Path(__file__).with_name("config.json").read_text(encoding="utf-8"))
     if mode == "balanced":
         if coder != "codex":
             raise ValueError("balanced mode has no reviewed policy for this coder")
-        return deepcopy(shipped["routes"])
+        return deepcopy(shipped["routes"]), None
     if mode == "maximum":
         model = MAXIMUM_MODELS.get(coder)
         if model is None:
@@ -47,6 +47,7 @@ def _mode_routes(mode: str, coder: str, model: str | None, effort: str | None) -
     if not isinstance(model, str) or model not in choices:
         raise ValueError(f"model {model!r} is absent from the live {coder} listing")
     levels = choices[model]["efforts"]
+    family = _family(choices[model]) if coder in ("opencode", "agy") else None
     if mode == "maximum":
         if not levels:
             raise ValueError(f"{model} has no listed effort levels")
@@ -66,7 +67,25 @@ def _mode_routes(mode: str, coder: str, model: str | None, effort: str | None) -
         if not coder_config.AGY_MODEL.fullmatch(model) or effort not in coder_config.AGY_EFFORTS:
             raise ValueError("listed Antigravity model or effort is invalid for Purser routes")
     pair = {"model": model, "effort": effort} if effort is not None else model
-    return {route: deepcopy(pair) for route in shipped["required_routes"]}
+    return {route: deepcopy(pair) for route in shipped["required_routes"]}, family
+
+
+def _family(choice: dict) -> str | None:
+    family = choice.get("family")
+    if family is not None and (not isinstance(family, str) or not coder_config.FAMILY.fullmatch(family)):
+        raise ValueError("listed model family is invalid")
+    return family
+
+
+def _listed_family(coder: str, model: str) -> str | None:
+    catalog = model_catalog.load_catalog()
+    listing = model_listing.list_models(coder, catalog["providers"])
+    if listing["status"] != "available":
+        raise ValueError(f"{coder} model listing unavailable: {listing.get('reason', 'unknown reason')}")
+    choice = next((entry for entry in listing["models"] if entry["id"] == model), None)
+    if choice is None:
+        raise ValueError(f"model {model!r} is absent from the live {coder} listing")
+    return _family(choice)
 
 
 def _agent(name: str, executable: str | None = None) -> dict:
@@ -268,7 +287,7 @@ def _append_trust_path(text: str, path: str, newline: str) -> str:
 
 
 def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, project: Path,
-               model: str | None = None, routes: dict | None = None) -> bytes:
+               model: str | None = None, routes: dict | None = None, family: str | None = None) -> bytes:
     text = original.decode("utf-8") if original is not None else "schema_version = 1\n"
     before = tomllib.loads(text)
     newline = "\r\n" if "\r\n" in text else "\n"
@@ -283,12 +302,27 @@ def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, p
         coding = after.setdefault("coding", {})
         if not isinstance(coding, dict):
             raise ValueError("[coding] must be a table")
+        had_family = "family" in coding
         coding["coder_agent"] = coder if coder in ("opencode", "agy") else "codex"
         coding["routes"] = routes if routes is not None else ({name: ({"model": model, "effort": "medium"} if coder == "agy" else model)
                              for name in json.loads(
             (Path(__file__).with_name("config.json")).read_text(encoding="utf-8"))["required_routes"]}
             if coder in ("opencode", "agy") else {})
+        if coder in ("opencode", "agy") and family is not None:
+            coding["family"] = family
+        else:
+            coding.pop("family", None)
         text = _upsert(text, "coding", "coder_agent", coding["coder_agent"], newline)
+        if coder in ("opencode", "agy") and family is not None:
+            text = _upsert(text, "coding", "family", family, newline)
+        elif had_family:
+            lines = text.splitlines(keepends=True)
+            span = _span(lines, "coding")
+            if span:
+                start, end = span
+                lines = [line for index, line in enumerate(lines)
+                         if not (start < index < end and (match := KEY.match(line)) and match.group(1) == "family")]
+                text = "".join(lines)
         routes = coding["routes"]
         rendered = "routes = {" + ", ".join(
             f"{name} = {{ model = {json.dumps(value['model'])}, effort = {json.dumps(value['effort'])} }}"
@@ -414,7 +448,11 @@ def main(argv: list[str] | None = None) -> int:
             catalog = model_catalog.load_catalog()
             print(json.dumps(model_listing.list_models(args.coder, catalog["providers"]), indent=2))
             return 0
-        routes = _mode_routes(args.mode, args.coder, args.model, args.effort) if args.mode else None
+        family = None
+        if args.mode:
+            routes, family = _mode_routes(args.mode, args.coder, args.model, args.effort)
+        else:
+            routes = None
         if routes is not None:
             shipped = json.loads(Path(__file__).with_name("config.json").read_text(encoding="utf-8"))
             shipped["coder_agent"] = args.coder
@@ -429,9 +467,11 @@ def main(argv: list[str] | None = None) -> int:
             binary = coder_config.agy_binary()
             if not binary or not args.model or args.model not in _agy_models(binary):
                 raise ValueError("Antigravity is unavailable or selected model is absent from agy models")
+        if args.coder in ("opencode", "agy") and not args.mode:
+            family = _listed_family(args.coder, args.model)
         handoff = compaction_advisor.handoff_path(project)
         original = config.read_bytes() if config.exists() else None
-        changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model, routes)
+        changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model, routes, family)
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
         handoff_missing = not handoff.exists()
         python_original = python_file.read_bytes() if python_file.exists() else None

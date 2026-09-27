@@ -3228,7 +3228,7 @@ def post_tool_use(
                     config=reviewer_config,
                 )
             if gate.should_run:
-                implementer_family = policy.model_family(pending.get("model"))
+                implementer_family = policy.vendor_family(loaded_config.get("coder_family")) or policy.model_family(pending.get("model"))
                 reviewer_family = policy.model_family(loaded_config["reviewer1_model_requested"])
                 if not implementer_family or not reviewer_family or implementer_family == reviewer_family:
                     gate = policy.SkipReviewerDecision(

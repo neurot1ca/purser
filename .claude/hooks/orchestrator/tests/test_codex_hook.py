@@ -204,6 +204,71 @@ def test_unknown_model_family_skips_reviewer_and_forces_full(workspace, config):
     assert bundle["implementer"] == "opencode-main"
 
 
+@pytest.mark.parametrize("family", [None, "gemini"])
+def test_missing_or_matching_stored_family_skips_reviewer_and_forces_full(workspace, config, family):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    if family is not None:
+        config["coder_family"] = family
+    for entry in config["routes"].values():
+        entry.update(model="opencode/big-pickle", effort="none")
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    invoked = []
+    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+        {"structuredContent": {"threadId": "stored-family-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
+    bundle = response_bundle(result, config)
+    assert not invoked
+    assert bundle["reviewer1_result"] is None
+    assert bundle["reviewer1_skipped_reason"] == policy.REVIEWER_UNAVAILABLE
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
+def test_stored_gemini_subfamily_matches_gemini_reviewer(workspace, config):
+    repo, state = workspace
+    config["coder_agent"] = "agy"
+    config["coder_family"] = "gemini-flash"
+    for entry in config["routes"].values():
+        entry.update(model="gemini-3.8-flash", effort="medium")
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    invoked = []
+    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+        {"structuredContent": {"threadId": "gemini-subfamily-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
+    bundle = response_bundle(result, config)
+    assert not invoked
+    assert bundle["reviewer1_result"] is None
+    assert bundle["reviewer1_skipped_reason"] == policy.REVIEWER_UNAVAILABLE
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
+def test_different_stored_family_runs_reviewer(workspace, config):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    config["coder_family"] = "opencode"
+    for entry in config["routes"].values():
+        entry.update(model="opencode/big-pickle", effort="none")
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    invoked = []
+    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+        {"structuredContent": {"threadId": "different-family-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo,
+        reviewer=lambda **kw: invoked.append(kw) or {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                                                    "validation": "PASS", "findings": []})
+    bundle = response_bundle(result, config)
+    assert invoked
+    assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+
+
 @pytest.mark.parametrize(("phase", "route", "reason"), [
     ("operation", "operation", policy.PHASE_OPERATION),
     ("implementation", "normal", policy.NO_DELTA),

@@ -243,6 +243,9 @@ def test_agy_choice_persists_gemini_routes(site, monkeypatch):
     home, project = site
     monkeypatch.setattr(coder_config, "agy_binary", lambda: "agy-native")
     monkeypatch.setattr(purser_init, "_agy_models", lambda binary: ["gemini-3.8-flash-low"])
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {
+        "status": "available", "models": [{"id": "gemini-3.8-flash-low", "family": "gemini", "efforts": None}]})
     assert run("--apply", "--coder", "agy", "--model", "gemini-3.8-flash-low", "--reviewer", "agy") == 0
     loaded = coder_config.load(Path(__file__).parents[1] / "config.json")
     assert loaded["coder_agent"] == "agy"
@@ -250,6 +253,8 @@ def test_agy_choice_persists_gemini_routes(site, monkeypatch):
         ("gemini-3.8-flash-low", "medium")}
     saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
     assert saved["coding"]["routes"] == loaded["routes"]
+    assert saved["coding"]["family"] == "gemini"
+    assert loaded["coder_family"] == "gemini"
     assert project_profile.load_profile(project).user_status == "ok"
     assert codex_exec_mcp.Server._configured_agent() == "agy"
 
@@ -266,20 +271,32 @@ def test_opencode_choice_loads_same_model_on_all_routes(site, monkeypatch):
     home, _ = site
     monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode-native")
     monkeypatch.setattr(purser_init, "_opencode_models", lambda binary: ["opencode/big-pickle"])
+    listing = {"status": "available", "models": [{"id": "opencode/big-pickle", "family": "opencode", "efforts": None}]}
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: listing)
     assert run("--apply", "--coder", "opencode", "--model", "opencode/big-pickle", "--reviewer", "none") == 0
     loaded = coder_config.load(Path(__file__).parents[1] / "config.json")
     assert loaded["coder_agent"] == "opencode"
+    assert loaded["coder_family"] == "opencode"
     assert set(loaded["routes"]) == set(loaded["required_routes"])
     assert set((entry["model"], entry["effort"]) for entry in loaded["routes"].values()) == {
         ("opencode/big-pickle", "none")}
     assert codex._load_config(None)["routes"] == loaded["routes"]
     assert codex_exec_mcp.Server._configured_agent() == "opencode"
+    listing["models"][0].pop("family")
+    assert run("--apply", "--coder", "opencode", "--model", "opencode/big-pickle", "--reviewer", "none") == 0
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert "family" not in saved["coding"]
+    assert "coder_family" not in coder_config.load(Path(__file__).parents[1] / "config.json")
 
 
 def test_switch_from_opencode_to_claude_clears_routes(site, monkeypatch):
     home, _ = site
     monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode-native")
     monkeypatch.setattr(purser_init, "_opencode_models", lambda binary: ["opencode/big-pickle"])
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {
+        "status": "available", "models": [{"id": "opencode/big-pickle", "family": "opencode", "efforts": None}]})
     assert run("--apply", "--coder", "opencode", "--model", "opencode/big-pickle", "--reviewer", "none") == 0
     assert run("--apply", "--coder", "claude", "--reviewer", "none") == 0
     saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
