@@ -81,6 +81,7 @@ TOOL_SCHEMAS += [
     {"name": "codex_start", "description": "Start a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {**TOOL_SCHEMAS[0]["inputSchema"]["properties"],
             "call": {"type": "string"}, "mode": {"type": "string", "enum": ["new", "reply"]},
+            "worktree": {"type": "boolean"},
             "threadId": {"type": "string"}, "timeoutSeconds": {"type": "number"},
             "taskId": {"type": "string"}, "route": {"type": "string"},
             "etaMinutes": {"type": "integer"}},
@@ -91,6 +92,8 @@ TOOL_SCHEMAS += [
         "required": ["jobId"]}},
     {"name": "codex_cancel", "description": "Cancel a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {"jobId": {"type": "string"}, "reason": {"type": "string"}}, "required": ["jobId"]}},
+    {"name": "codex_apply", "description": "Apply a job worktree patch.", "inputSchema": {
+        "type": "object", "properties": {"jobId": {"type": "string"}}, "required": ["jobId"]}},
 ]
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS"}
@@ -896,6 +899,8 @@ class Server:
                     "CANCELLED": "Codex cancelled", "PROCESS_UNCONFIRMED": "Process termination unconfirmed",
                     "RECOVERY_RESUME_FAILED": "Interrupted Codex thread could not be resumed",
                     "ADMISSION_BASELINE_UNAVAILABLE": "Fresh admission baseline could not be bound; FULL review required",
+                    "WORKTREE_SNAPSHOT_FAILED": "Worktree snapshot could not be created",
+                    "WORKTREE_MISSING": "Job worktree is unavailable",
                 }[code])
             if result is not None:
                 output = self.job_dir / (job_id + ".output")
@@ -973,6 +978,8 @@ class Server:
                 _flatten_config(args.get("config", {}))
                 if args.get("sandbox") not in (None, "read-only", "workspace-write", "danger-full-access"):
                     raise ValueError("invalid sandbox")
+                if "worktree" in args and not isinstance(args["worktree"], bool):
+                    raise ValueError("invalid worktree")
                 if args.get("approval-policy") not in (None, "on-request", "never"):
                     raise ValueError("invalid approval-policy")
                 for field in ("developer-instructions", "base-instructions", "compact-prompt"):
@@ -992,13 +999,20 @@ class Server:
             if existing is not None:
                 pass
             else:
-                if mode == "reply" and (not isinstance(args.get("threadId"), str) or
-                                        _load_record(self.state_dir, args["threadId"]) is None):
-                    return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
+                reply_record = None
+                if mode == "reply":
+                    if not isinstance(args.get("threadId"), str):
+                        return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
+                    reply_record = _load_record(self.state_dir, args["threadId"])
+                    if reply_record is None:
+                        return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
                 now = time.time()
                 job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
                        "deadlineAt": now + timeout, "signalToken": uuid.uuid4().hex,
                        "generation": 1, "ownershipToken": uuid.uuid4().hex}
+                if reply_record is not None:
+                    job.update({key: reply_record[key] for key in
+                                ("worktreePath", "snapshot", "head", "repoRoot") if key in reply_record})
                 if args.get("leaseQueued") is True:
                     job["leaseQueued"] = True
                 for field in ("taskId", "route", "etaMinutes"):
@@ -1076,7 +1090,7 @@ class Server:
                 elif current and current.get("resumedAfterInterruption") and name == "codex-reply":
                     self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "RECOVERY_RESUME_FAILED")
                 else:
-                    self._finish_job(job_id, "FAILED", "CODEX_FAILED")
+                    self._finish_job(job_id, "FAILED", result.get("errorCode", "CODEX_FAILED"))
             else:
                 self._finish_job(job_id, "SUCCEEDED", result=value)
         except Exception as exc:
@@ -1114,7 +1128,40 @@ class Server:
                 value.update(state="FAILED", errorCode="OUTPUT_UNAVAILABLE", message="Job output is unavailable")
         elif state in TERMINAL:
             value.update(errorCode=job.get("errorCode", "PROCESS_UNCONFIRMED"), message=job.get("message", "Process state cannot be confirmed"))
+        if "worktreePath" in job:
+            value["worktreePath"] = job["worktreePath"]
         return _job_result(value)
+
+    def _apply_job(self, args: dict[str, Any]) -> dict[str, Any]:
+        job = self._read_job(args.get("jobId"))
+        if job is None:
+            return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
+        if not job.get("worktreePath"):
+            return _job_result({"state": "FAILED", "errorCode": "NOT_WORKTREE_JOB", "message": "Job has no worktree"})
+        if job.get("state") != "SUCCEEDED":
+            return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_READY", "message": "Job has not succeeded"})
+        import ledger
+        repo_root = Path(job["repoRoot"]).resolve()
+        lock_key = hashlib.sha256(os.fspath(repo_root).encode("utf-8")).hexdigest()
+        lock_path = purser_state_root.default_state_root() / "codex_exec_mcp" / "apply" / (lock_key + ".lock")
+        with ledger._lease_lock(lock_path):
+            job = self._read_job(job["jobId"])
+            if "applyResult" in job:
+                return _job_result(job["applyResult"])
+            if not Path(job["worktreePath"]).is_dir():
+                return _job_result({"state": "FAILED", "errorCode": "WORKTREE_MISSING", "message": "Job worktree is unavailable"})
+            patch = ledger.job_patch(job["worktreePath"], job["snapshot"])
+            paths = []
+            if patch:
+                raw_paths = ledger._run_git(repo_root, ["apply", "--numstat", "-z", "-"], 30.0,
+                                            "listing job patch paths", input_data=patch.encode("utf-8", "surrogateescape"))
+                paths = [ledger._decode_path(row.split(b"\t", 2)[2]) for row in raw_paths.split(b"\0") if row]
+            outcome = ledger.apply_job_patch(repo_root, patch)
+            value = ({"applied": True, "paths": paths} if outcome["applied"] else
+                     {"applied": False, "conflicts": outcome["conflicts"], "worktreePath": job["worktreePath"]})
+            job.update(applyState="applied" if outcome["applied"] else "conflict", applyResult=value)
+            self._write_job(job)
+            return _job_result(value)
 
     def _cancel_job(self, args: dict[str, Any]) -> dict[str, Any]:
         job = self._read_job(args.get("jobId"))
@@ -1248,7 +1295,14 @@ class Server:
                 return _tool_result(thread_id, error="thread is unknown to this server; a fresh codex call is required")
             if record.get("agent", "codex") != agent:
                 return _tool_result(thread_id, error="thread belongs to a different agent")
-            cwd = record["cwd"]
+            if record.get("worktreePath"):
+                if not Path(record["worktreePath"]).is_dir():
+                    result = _tool_result(thread_id, error="worktree is unavailable")
+                    result["errorCode"] = "WORKTREE_MISSING"
+                    return result
+                cwd = record["worktreePath"]
+            else:
+                cwd = record["cwd"]
             model = record.get("model")
             saved_sandbox = record.get("sandbox")
             # The resumed thread retains its original output-history budget.
@@ -1338,6 +1392,11 @@ class Server:
                             thread_config = {"cwd": cwd, "model": model,
                                              "config_args": config_args,
                                              "sandbox": sandbox, "agent": agent}
+                            current = self._read_job(request_id) if async_job else None
+                            if current is not None:
+                                thread_config.update({key: current[key] for key in
+                                                      ("worktreePath", "snapshot", "head", "repoRoot")
+                                                      if key in current})
                             with self.jobs_lock:
                                 current = self._read_job(request_id)
                                 if current is not None and current["state"] not in TERMINAL:
@@ -1434,8 +1493,14 @@ class Server:
                 if not last_message:
                     last_message = next((final for _, _, _, final in reversed(parsed) if final), "")
                 if name == "codex":
-                    _save_record(self.state_dir, {"thread_id": started, "cwd": cwd, "model": model,
-                                                          "config_args": config_args, "sandbox": sandbox, "agent": agent})
+                    thread_record = {"thread_id": started, "cwd": cwd, "model": model,
+                                     "config_args": config_args, "sandbox": sandbox, "agent": agent}
+                    current = self._read_job(request_id) if async_job else None
+                    if current is not None:
+                        thread_record.update({key: current[key] for key in
+                                              ("worktreePath", "snapshot", "head", "repoRoot")
+                                              if key in current})
+                    _save_record(self.state_dir, thread_record)
                 if async_job and forced_complete:
                     with self.jobs_lock:
                         job = self._read_job(request_id)
@@ -1460,6 +1525,8 @@ class Server:
                 result = self._result_job(arguments)
             elif name == "codex_cancel":
                 result = self._cancel_job(arguments)
+            elif name == "codex_apply":
+                result = self._apply_job(arguments)
             else:
                 result = self._run_tool(name, arguments, request_id)
             with self.jobs_lock:
@@ -1544,6 +1611,22 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
             job.update(hostPid=os.getpid(), hostCreatedAt=created,
                        hostContained=bool(containment), signalPort=server.listener.getsockname()[1])
             server._write_job(job)
+        if launch["name"] == "codex" and launch["args"].get("worktree") is True:
+            import ledger
+            repo_root = Path(launch["args"].get("cwd", os.getcwd())).resolve()
+            try:
+                repo_root = Path(os.fsdecode(ledger._run_git(
+                    repo_root, ["rev-parse", "--show-toplevel"], 30.0, "resolving job repository root")).strip()).resolve()
+                snapshot = ledger.create_job_worktree(
+                    repo_root, job_id, purser_state_root.default_state_root() / "wt")
+            except Exception:
+                server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_FAILED")
+                return
+            job = server._read_job(job_id)
+            job.update(worktreePath=snapshot["path"], snapshot=snapshot["snapshot"],
+                       head=snapshot["head"], repoRoot=os.fspath(repo_root))
+            server._write_job(job)
+            launch["args"] = {**launch["args"], "cwd": snapshot["path"]}
         server.codex_bin = launch["codexBin"]
         server.agent = launch.get("agent", "codex")
         server.claim_generation = generation

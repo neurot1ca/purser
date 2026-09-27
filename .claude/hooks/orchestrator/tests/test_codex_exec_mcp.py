@@ -25,6 +25,11 @@ import codex
 import codex_exec_mcp
 
 
+def _remove_readonly(function, path, _error):
+    os.chmod(path, 0o700)
+    function(path)
+
+
 def read_job_record(path):
     text = codex_exec_mcp.purser_state_root.retry_permission_error(
         lambda: path.read_text(encoding="utf-8"))
@@ -44,6 +49,8 @@ record = {"argv": args, "stdin_hex": prompt.hex(), "cwd": os.getcwd()}
 with open(os.environ["FAKE_RECORD"], "a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\n")
     stream.flush()
+if os.environ.get("FAKE_WRITE_FILE"):
+    Path(os.environ["FAKE_WRITE_FILE"]).write_text(os.environ.get("FAKE_WRITE_CONTENT", "job change"), encoding="utf-8")
 if os.environ.get("FAKE_SLOW") == "1":
     time.sleep(float(os.environ.get("FAKE_SLEEP_SECONDS", "2")))
 thread = os.environ.get("FAKE_THREAD", "thread-123")
@@ -138,7 +145,7 @@ def area():
         _stop_area_hosts(path)
         for attempt in range(20):
             try:
-                shutil.rmtree(path)
+                shutil.rmtree(path, onerror=_remove_readonly)
                 break
             except OSError:
                 if attempt == 19:
@@ -364,7 +371,7 @@ def test_initialize_and_list(client):
     }
     client.send(2, "tools/list")
     tools = client.receive()["result"]["tools"]
-    assert [tool["name"] for tool in tools] == ["codex", "codex-reply", "codex_start", "codex_result", "codex_cancel"]
+    assert [tool["name"] for tool in tools] == ["codex", "codex-reply", "codex_start", "codex_result", "codex_cancel", "codex_apply"]
     start = next(tool for tool in tools if tool["name"] == "codex_start")
     assert "call" not in start["inputSchema"]["required"]
     missing = call(client, 3, "codex_start", {"prompt": "work"})
@@ -625,6 +632,93 @@ def finish(client, job_id, wanted):
     pytest.fail(f"expected {wanted}, got {result}")
 
 
+def _git_repo(area):
+    repo = area / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    return repo
+
+
+def test_worktree_job_records_snapshot_and_reply_reuses_it(area):
+    repo = _git_repo(area)
+    client = Client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        worktree = result["worktreePath"]
+        assert result["threadId"] == "thread-123"
+        assert Path(worktree).is_dir() and Path(worktree).parent == area / "root" / "wt"
+        assert json.loads((area / "calls.jsonl").read_text(encoding="utf-8").splitlines()[0])["cwd"] == worktree
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
+        assert (job["worktreePath"], job["snapshot"], job["head"], job["repoRoot"]) == (
+            worktree, job["snapshot"], job["head"], str(repo.resolve()))
+        assert job["snapshot"] and job["head"]
+        thread = codex_exec_mcp._load_record(area / "state", "thread-123")
+        assert {key: thread[key] for key in ("worktreePath", "snapshot", "head", "repoRoot")} == {
+            key: job[key] for key in ("worktreePath", "snapshot", "head", "repoRoot")}
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                  "threadId": "thread-123", "prompt": "again"})
+        assert finish(client, reply["jobId"], "SUCCEEDED")["worktreePath"] == worktree
+        calls = [json.loads(line) for line in (area / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert [call["cwd"] for call in calls] == [worktree, worktree]
+        shutil.rmtree(worktree)
+        missing = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                    "threadId": "thread-123", "prompt": "missing"})
+        assert finish(client, missing["jobId"], "FAILED")["errorCode"] == "WORKTREE_MISSING"
+        assert len((area / "calls.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+    finally:
+        client.close()
+
+
+def test_worktree_snapshot_failure_does_not_launch_worker(area):
+    client = Client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "fail",
+                                                    "cwd": str(area / "not-a-repo"), "worktree": True})
+        result = finish(client, started["jobId"], "FAILED")
+        assert result["errorCode"] == "WORKTREE_SNAPSHOT_FAILED"
+        assert not (area / "calls.jsonl").exists()
+    finally:
+        client.close()
+
+
+def test_codex_apply_is_idempotent_and_reports_conflicts(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        first = job_call(client, "codex_apply", {"jobId": started["jobId"]})
+        second = job_call(client, "codex_apply", {"jobId": started["jobId"]})
+        assert first == {"applied": True, "paths": ["tracked.txt"]}
+        assert second == first
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
+        assert job["applyState"] == "applied"
+        assert Path(result["worktreePath"]).is_dir()
+        assert (repo / "tracked.txt").read_text(encoding="utf-8") == "job\n"
+
+        (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+        other = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                  "cwd": str(repo), "worktree": True})
+        other_result = finish(client, other["jobId"], "SUCCEEDED")
+        (repo / "tracked.txt").write_text("repo concurrent change\n", encoding="utf-8")
+        conflict = job_call(client, "codex_apply", {"jobId": other["jobId"]})
+        assert conflict == {"applied": False, "conflicts": ["tracked.txt"],
+                            "worktreePath": other_result["worktreePath"]}
+        conflict_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (other["jobId"] + ".json"))
+        assert conflict_job["applyState"] == "conflict"
+        assert Path(other_result["worktreePath"]).is_dir()
+    finally:
+        client.close()
+
+
 def kill_bridge_tree(client):
     if os.name == "nt":
         killed = subprocess.run(["taskkill", "/T", "/F", "/PID", str(client.process.pid)],
@@ -703,6 +797,7 @@ def test_async_start_result_idempotency_and_sync(area):
             assert signal_connection.recv(1) == b"1"
         result = finish(client, started["jobId"], "SUCCEEDED")
         assert (result["threadId"], result["content"]) == ("thread-123", "Reply from fake Codex")
+        assert "worktreePath" not in result
         assert len(client.calls()) == 1
         assert codex._extract_codex_result(call(client, 4, "codex", {"prompt": "sync"})) == ("thread-123", "Reply from fake Codex")
     finally:
