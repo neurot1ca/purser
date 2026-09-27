@@ -400,6 +400,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 receipt = None
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
+                "reminder_messages": max(0, int(value.get("reminder_messages", 0))),
+                "reminder_wasted_tokens": max(0, int(value.get("reminder_wasted_tokens", 0))),
                 "last_task_id": value.get("last_task_id") if isinstance(value.get("last_task_id"), str) else None,
                 "session_id": session_id,
                 "notice_pending": pending,
@@ -408,7 +410,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             }
     except (OSError, ValueError, TypeError):
         pass
-    return {"last_suggested_context": 0, "last_task_id": None, "session_id": session_id,
+    return {"last_suggested_context": 0, "reminder_messages": 0, "reminder_wasted_tokens": 0,
+            "last_task_id": None, "session_id": session_id,
             "notice_pending": None, "receipt_pending": None, "flow_blocked_user": None}
 
 
@@ -484,12 +487,13 @@ def _mechanical_state(repository: Path, context: int, triggers: list[str], calls
     return full
 
 
-def _blockquote(notice: Mapping[str, Any]) -> str:
+def _blockquote(notice: Mapping[str, Any], *, bold: bool = False) -> str:
+    emphasis = "**" if bold else "*"
     return (
         f"> ⚓ **Context passed {notice['context'] // 1000}K. Purser prepared your handoff.**\n"
-        f"> *Type `/compact` now to save **~{notice['percentage']}%** on every later message!*\n"
-        "> *The ship stays dry: decisions and the next step will be read from the handoff Purser prepared. Nothing is lost.*\n"
-        f"> *Handoff: `{notice['handoff']}`*"
+        f"> {emphasis}Type `/compact` now to save **~{notice['percentage']}%** on every later message!{emphasis}\n"
+        f"> {emphasis}The ship stays dry: decisions and the next step will be read from the handoff Purser prepared. Nothing is lost.{emphasis}\n"
+        f"> {emphasis}Handoff: `{notice['handoff']}`{emphasis}"
     )
 
 
@@ -502,6 +506,15 @@ def _notice_advice(notice: Mapping[str, Any], triggers: list[str]) -> str:
         + _blockquote(notice)
         + "\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself."
     )
+
+
+def _reminder_advice(notice: Mapping[str, Any], wasted_tokens: int, receipt_advice: str | None) -> str:
+    reminder = "".join(character + "\u0332" for character in "Reminder")
+    return "\n".join(part for part in (
+        "Translate this reminder into the user's language, keeping the markdown exactly and the underline on every character of the translated word (markdown has no underline). Put it as the very last text of the turn after a `---` line:",
+        f"> **{reminder}: Tokens are leaking; not compacting has cost ~{wasted_tokens // 1000}K tokens so far.**\n" + _blockquote(notice, bold=True),
+        receipt_advice,
+    ) if part)
 
 
 def _assistant_text(record: Mapping[str, Any]) -> str:
@@ -693,6 +706,10 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     directory = _state_directory(repository)
     state_path = directory / "compaction_advisor.json"
     state = _read_state(state_path, session_id)
+    if context < settings["threshold_tokens"]:
+        state["reminder_messages"] = 0
+        state["reminder_wasted_tokens"] = 0
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
     receipt = state["receipt_pending"]
     receipt_advice = _receipt_advice(receipt) if receipt is not None else None
     if receipt is not None:
@@ -711,18 +728,34 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
         state["last_suggested_context"] = 0
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return receipt_advice
+    last_suggested = state["last_suggested_context"]
+    reminder_due = False
+    if last_suggested:
+        state["reminder_messages"] += 1
+        state["reminder_wasted_tokens"] += max(0, context - POST_COMPACT_CONTEXT_TOKENS)
+        reminder_due = state["reminder_messages"] >= 15
+        if reminder_due:
+            state["reminder_messages"] = 0
     if not triggers:
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        if reminder_due:
+            pct = max(0, round(100 * (1 - POST_COMPACT_CONTEXT_TOKENS / context)))
+            reminder = {"context": context, "percentage": pct, "handoff": str(handoff_path(repository))}
+            return _reminder_advice(reminder, state["reminder_wasted_tokens"], receipt_advice)
         return receipt_advice
-    last_suggested = state["last_suggested_context"]
     if last_suggested and context < last_suggested + settings["regrow_tokens"]:
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        if reminder_due:
+            pct = max(0, round(100 * (1 - POST_COMPACT_CONTEXT_TOKENS / context)))
+            reminder = {"context": context, "percentage": pct, "handoff": str(handoff_path(repository))}
+            return _reminder_advice(reminder, state["reminder_wasted_tokens"], receipt_advice)
         return receipt_advice
 
     directory.mkdir(parents=True, exist_ok=True)
     handoff = handoff_path(repository)
     _replace_state_block(handoff, _mechanical_state(repository, context, triggers, calls), _recent_turns(records))
     state["last_suggested_context"] = context
+    state["reminder_messages"] = 0
     pct = max(0, round(100 * (1 - POST_COMPACT_CONTEXT_TOKENS / context)))
     state["notice_pending"] = {"context": context, "percentage": pct, "handoff": str(handoff), "triggers": triggers, "blocked": False}
     _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))

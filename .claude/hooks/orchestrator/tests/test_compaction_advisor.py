@@ -232,6 +232,81 @@ def test_dedupe_requires_regrow_or_drop_below_threshold(setup):
     assert advisor.advise(event, repo, now=NOW)
 
 
+def test_reminder_fires_on_fifteenth_message_after_notice(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit", context=260_000))
+    assert advisor.advise(event, repo, now=NOW)
+    advisor.clear_pending({"session_id": "session-1", "source": "compact"}, repo)
+
+    for _ in range(14):
+        assert advisor.advise(event, repo, now=NOW) is None
+    reminder = advisor.advise(event, repo, now=NOW)
+
+    assert reminder is not None
+    assert "Tokens are leaking; not compacting has cost ~2775K tokens so far." in reminder
+    assert "> **R̲e̲m̲i̲n̲d̲e̲r̲:" in reminder
+    assert "> ⚓ **Context passed 260K." in reminder
+    assert "**Type `/compact` now to save **~71%** on every later message!**" in reminder
+    assert "**Handoff: `" in reminder
+    assert "trigger(s):" not in reminder
+    state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")
+    assert state["reminder_messages"] == 0
+
+
+def test_reminder_counters_reset_below_threshold(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit", context=260_000))
+    assert advisor.advise(event, repo, now=NOW)
+    advisor.clear_pending({"session_id": "session-1", "source": "compact"}, repo)
+    for _ in range(3):
+        advisor.advise(event, repo, now=NOW)
+
+    event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 249_999))
+    assert advisor.advise(event, repo, now=NOW) is None
+    state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")
+
+    assert state["reminder_messages"] == 0
+    assert state["reminder_wasted_tokens"] == 0
+    assert state["last_suggested_context"] == 0
+
+
+def test_notice_wins_when_reminder_is_due(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit", context=260_000))
+    assert advisor.advise(event, repo, now=NOW)
+    advisor.clear_pending({"session_id": "session-1", "source": "compact"}, repo)
+    state_path = advisor._state_directory(repo) / "compaction_advisor.json"
+    state = advisor._read_state(state_path, "session-1")
+    state.update(reminder_messages=14, reminder_wasted_tokens=1_000)
+    advisor._atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 320_000))
+
+    result = advisor.advise(event, repo, now=NOW)
+    state = advisor._read_state(state_path, "session-1")
+
+    assert result and "trigger(s): commit" in result
+    assert "Tokens are leaking" not in result
+    assert state["notice_pending"] is not None
+    assert state["reminder_messages"] == 0
+    assert state["reminder_wasted_tokens"] == 246_000
+
+
+def test_reminder_wasted_tokens_accumulate(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit", context=260_000))
+    assert advisor.advise(event, repo, now=NOW)
+    advisor.clear_pending({"session_id": "session-1", "source": "compact"}, repo)
+    state_path = advisor._state_directory(repo) / "compaction_advisor.json"
+
+    advisor.advise(event, repo, now=NOW)
+    event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 280_000))
+    advisor.advise(event, repo, now=NOW)
+    state = advisor._read_state(state_path, "session-1")
+
+    assert state["reminder_messages"] == 2
+    assert state["reminder_wasted_tokens"] == (260_000 - advisor.POST_COMPACT_CONTEXT_TOKENS) + (280_000 - advisor.POST_COMPACT_CONTEXT_TOKENS)
+
+
 def _pending_state(repo):
     return advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["notice_pending"]
 
