@@ -119,7 +119,9 @@ def _usage_context(records: list[dict[str, Any]]) -> int:
 def _genuine_user(record: Mapping[str, Any]) -> bool:
     if _record_type(record) != "user" or record.get("isMeta") is True:
         return False
-    return not any(isinstance(block, Mapping) and block.get("type") == "tool_result" for block in _content(record))
+    if any(isinstance(block, Mapping) and block.get("type") == "tool_result" for block in _content(record)):
+        return False
+    return not _quoted_text(record).lstrip().startswith("<task-notification>")
 
 
 def _quoted_text(record: Mapping[str, Any]) -> str:
