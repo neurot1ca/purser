@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -409,16 +410,20 @@ def _run_git(
     arguments: Sequence[str],
     timeout: float,
     operation: str,
+    *,
+    input_data: bytes | None = None,
 ) -> bytes:
     try:
         completed = subprocess.run(
             ["git", *arguments],
             cwd=repo_root,
-            stdin=subprocess.DEVNULL,
+            stdin=None if input_data is not None else subprocess.DEVNULL,
+            input=input_data,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
         )
     except subprocess.TimeoutExpired as error:
         raise _InspectionError(
@@ -434,6 +439,110 @@ def _run_git(
             f"Git failed with exit code {completed.returncode} while {operation}.",
         )
     return completed.stdout
+
+
+def _copy_untracked(repo_root: Path, worktree: Path, timeout: float) -> None:
+    raw_paths = _run_git(
+        repo_root,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        timeout,
+        "listing untracked files",
+    )
+    for raw_path in raw_paths.split(b"\0"):
+        if not raw_path:
+            continue
+        relative = _decode_path(raw_path)
+        posix_path = PurePosixPath(relative)
+        if posix_path.is_absolute() or ".." in posix_path.parts:
+            raise _InspectionError("GIT_OUTPUT_INVALID", "Git returned an unsafe untracked path.")
+        source = repo_root.joinpath(*posix_path.parts)
+        target = worktree.joinpath(*posix_path.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        info = source.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            os.symlink(os.readlink(source), target)
+        elif stat.S_ISREG(info.st_mode):
+            shutil.copy2(source, target)
+        else:
+            raise _InspectionError("UNTRACKED_FILE_UNSUPPORTED", "An untracked path was not a regular file or symlink.")
+
+
+def create_job_worktree(
+    repo_root: str | os.PathLike[str], job_id: str, parent_dir: str | os.PathLike[str]
+) -> dict[str, str]:
+    """Create a detached worktree containing the caller's current non-ignored state."""
+    root = Path(repo_root).resolve()
+    parent = Path(parent_dir).resolve()
+    if not isinstance(job_id, str) or not job_id:
+        raise ValueError("job_id must be a non-empty string")
+    parent.mkdir(parents=True, exist_ok=True)
+    worktree = parent / job_id[:12]
+    if worktree.exists():
+        raise FileExistsError(worktree)
+    timeout = 30.0
+    try:
+        head = _decode_path(_run_git(root, ["rev-parse", "--verify", "HEAD"], timeout, "reading HEAD")).strip()
+        _run_git(root, ["worktree", "add", "--detach", os.fspath(worktree), head], timeout, "creating job worktree")
+        diff = _run_git(root, ["diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--"], timeout, "capturing repository changes")
+        if diff:
+            _run_git(worktree, ["apply", "--binary", "-"], timeout, "reproducing tracked changes", input_data=diff)
+        _copy_untracked(root, worktree, timeout)
+        _run_git(worktree, ["add", "-A"], timeout, "staging snapshot files")
+        snapshot = _decode_path(_run_git(worktree, ["write-tree"], timeout, "writing snapshot tree")).strip()
+        return {"path": os.fspath(worktree), "head": head, "snapshot": snapshot}
+    except BaseException:
+        try:
+            _run_git(root, ["worktree", "remove", "--force", os.fspath(worktree)], timeout,
+                     "removing failed job worktree")
+        except _InspectionError:
+            pass
+        shutil.rmtree(worktree, ignore_errors=True)
+        try:
+            _run_git(root, ["worktree", "prune"], timeout, "pruning failed job worktree")
+        except _InspectionError:
+            pass
+        raise
+
+
+def job_patch(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
+    """Return a binary patch from the immutable snapshot tree to current job state."""
+    worktree = Path(worktree_path).resolve()
+    _run_git(worktree, ["add", "-A"], 30.0, "staging job changes for patch generation")
+    raw = _run_git(
+        worktree,
+        ["diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", snapshot, "--"],
+        30.0,
+        "generating job patch",
+    )
+    return raw.decode("utf-8", "surrogateescape")
+
+
+def apply_job_patch(repo_root: str | os.PathLike[str], patch: str) -> dict[str, Any]:
+    """Atomically apply a job patch to the working tree without changing the index."""
+    root = Path(repo_root).resolve()
+    raw_patch = patch.encode("utf-8", "surrogateescape")
+    if not raw_patch:
+        return {"applied": True, "conflicts": []}
+
+    def patch_paths() -> list[str]:
+        try:
+            numstat = _run_git(root, ["apply", "--numstat", "-z", "-"], 30.0,
+                               "listing job patch paths", input_data=raw_patch)
+            return [_decode_path(row.split(b"\t", 2)[2]) for row in numstat.split(b"\0") if row]
+        except _InspectionError:
+            return []
+
+    try:
+        _run_git(root, ["apply", "--check", "--binary", "-"], 30.0,
+                 "checking job patch", input_data=raw_patch)
+    except _InspectionError:
+        return {"applied": False, "conflicts": patch_paths()}
+    try:
+        _run_git(root, ["apply", "--binary", "-"], 30.0,
+                 "applying job patch", input_data=raw_patch)
+        return {"applied": True, "conflicts": []}
+    except _InspectionError:
+        return {"applied": False, "conflicts": patch_paths()}
 
 
 def _decode_path(value: bytes) -> str:
@@ -1609,9 +1718,12 @@ __all__ = [
     "UNKNOWN",
     "UNKNOWN_CONCURRENT_WRITER",
     "build_session_record",
+    "apply_job_patch",
     "capture_baseline",
     "classify_concurrent_writers",
     "compute_delta",
+    "create_job_worktree",
     "detect_protected_paths",
     "is_transient_bytecode_cache",
+    "job_patch",
 ]

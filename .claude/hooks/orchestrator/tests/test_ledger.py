@@ -746,3 +746,78 @@ def test_plan_session_record_accepts_empty_scope_without_relaxing_phase_validati
         phase="implementation", scope=[],
     )
     assert store.save(invalid_implementation)["code"] == "LEDGER_RECORD_INVALID"
+
+
+def test_job_worktree_reproduces_mixed_staged_unstaged_and_untracked_state(repo, tmp_path):
+    (repo / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    git(repo, "add", "src/target.py")
+    (repo / "src" / "target.py").write_text("value = 3\n", encoding="utf-8")
+    git(repo, "rm", "src/helper.py")
+    binary = b"\x00\x01binary\xff"
+    (repo / "untracked.bin").write_bytes(binary)
+    executable = repo / "run.sh"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    git(repo, "add", "run.sh")
+    source_mode = git(repo, "ls-files", "--stage", "run.sh").stdout.split()[0]
+
+    result = ledger.create_job_worktree(repo, "a" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    assert result["head"] == git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert (worktree / "src" / "target.py").read_text(encoding="utf-8") == "value = 3\n"
+    assert not (worktree / "src" / "helper.py").exists()
+    assert (worktree / "untracked.bin").read_bytes() == binary
+    assert git(worktree, "ls-files", "--stage", "run.sh").stdout.split()[0] == source_mode
+    assert git(worktree, "write-tree").stdout.strip() == result["snapshot"]
+
+
+def test_job_patch_excludes_preexisting_user_changes_and_applies_to_dirty_tree(repo, tmp_path):
+    (repo / "notes.txt").write_text("user change\n", encoding="utf-8")
+    result = ledger.create_job_worktree(repo, "b" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 9\n", encoding="utf-8")
+    (worktree / "job-new.txt").write_text("job addition\n", encoding="utf-8")
+
+    patch = ledger.job_patch(worktree, result["snapshot"])
+    assert "src/target.py" in patch
+    assert "job-new.txt" in patch
+    assert "notes.txt" not in patch
+    before_index = git(repo, "diff", "--cached", "--binary").stdout
+    applied = ledger.apply_job_patch(repo, patch)
+    assert applied == {"applied": True, "conflicts": []}
+    assert (repo / "notes.txt").read_text(encoding="utf-8") == "user change\n"
+    assert (repo / "src" / "target.py").read_text(encoding="utf-8") == "value = 9\n"
+    assert (repo / "job-new.txt").read_text(encoding="utf-8") == "job addition\n"
+    assert git(repo, "diff", "--cached", "--binary").stdout == before_index
+
+
+def test_apply_job_patch_conflict_is_atomic_and_reports_path(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "c" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    patch = ledger.job_patch(worktree, result["snapshot"])
+
+    (repo / "src" / "target.py").write_text("value = user\n", encoding="utf-8")
+    before_tree = {path.relative_to(repo).as_posix(): path.read_bytes()
+                   for path in repo.rglob("*") if path.is_file() and ".git" not in path.parts}
+    before_index = git(repo, "diff", "--cached", "--binary").stdout
+    applied = ledger.apply_job_patch(repo, patch)
+    after_tree = {path.relative_to(repo).as_posix(): path.read_bytes()
+                  for path in repo.rglob("*") if path.is_file() and ".git" not in path.parts}
+    assert applied == {"applied": False, "conflicts": ["src/target.py"]}
+    assert after_tree == before_tree
+    assert git(repo, "diff", "--cached", "--binary").stdout == before_index
+
+
+def test_failed_job_snapshot_removes_partial_worktree(repo, tmp_path, monkeypatch):
+    parent = tmp_path / "worktrees"
+
+    def fail_copy(*args, **kwargs):
+        raise OSError("snapshot copy failed")
+
+    monkeypatch.setattr(ledger, "_copy_untracked", fail_copy)
+    with pytest.raises(OSError, match="snapshot copy failed"):
+        ledger.create_job_worktree(repo, "d" * 64, parent)
+    assert not (parent / ("d" * 12)).exists()
+    listed = git(repo, "worktree", "list", "--porcelain").stdout
+    assert str(parent / ("d" * 12)) not in listed
