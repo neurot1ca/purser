@@ -650,6 +650,40 @@ def filter_job_delta(repo_root: str | os.PathLike[str], delta: Mapping[str, Any]
     return result
 
 
+def compute_job_delta(
+    worktree_path: str | os.PathLike[str], snapshot: str, *, timeout: float = 10.0
+) -> dict[str, Any]:
+    """Compute changes made in a job worktree since its immutable snapshot tree."""
+    root = Path(worktree_path).resolve()
+    if not isinstance(snapshot, str) or not re.fullmatch(r"[0-9a-f]{40,64}", snapshot):
+        return _unknown("JOB_SNAPSHOT_INVALID", "The job snapshot tree is unavailable.",
+                        baseline_head=None, current_head=None)
+    try:
+        kind = _decode_path(_run_git(root, ["cat-file", "-t", snapshot], timeout,
+                                     "verifying job snapshot")).strip()
+        if kind != "tree":
+            raise _InspectionError("JOB_SNAPSHOT_INVALID", "The job snapshot is not a tree.")
+        _run_git(root, ["add", "-A"], timeout, "staging isolated job changes")
+        paths, counts = _diff_stats(root, [snapshot], timeout, "job snapshot delta")
+        current_head = _decode_path(_run_git(root, ["rev-parse", "--verify", "HEAD"], timeout,
+                                             "reading job HEAD")).strip()
+        ordered = sorted(paths)
+        sources = {name: {"paths": ordered if name == "staged" else [],
+                          "changed_line_count": sum(counts.values()) if name == "staged" else 0,
+                          "path_line_counts": counts if name == "staged" else {}}
+                   for name in ("committed", "staged", "unstaged", "scoped_manifest")}
+        return {"status": OK, "code": "DELTA_COMPUTED", "baseline_head": snapshot,
+                "current_head": current_head, "changed_paths": ordered,
+                "changed_file_count": len(ordered), "changed_line_count": sum(counts.values()),
+                "path_line_counts": counts, "sources": sources,
+                "preexisting_paths": [], "ambiguous_paths": [], "current_scoped_manifest": []}
+    except _InspectionError as error:
+        return _unknown(error.code, error.message, baseline_head=snapshot, current_head=None)
+    except OSError:
+        return _unknown("JOB_DELTA_INSPECTION_FAILED", "The job worktree could not be inspected.",
+                        baseline_head=snapshot, current_head=None)
+
+
 def apply_job_patch(repo_root: str | os.PathLike[str], patch: str) -> dict[str, Any]:
     """Atomically apply a job patch to the working tree without changing the index."""
     root = Path(repo_root).resolve()
@@ -1973,6 +2007,7 @@ __all__ = [
     "capture_baseline",
     "classify_concurrent_writers",
     "compute_delta",
+    "compute_job_delta",
     "create_job_worktree",
     "detect_protected_paths",
     "is_transient_bytecode_cache",

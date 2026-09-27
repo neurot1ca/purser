@@ -2298,7 +2298,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
         if worktree_path is None and job is not None and isinstance(job.get("worktreePath"), str):
             worktree_path = job["worktreePath"]
         if success and worktree_path:
-            pending = dict(pending, worktree_path=worktree_path)
+            pending = dict(pending, worktree_path=worktree_path,
+                           worktree_snapshot=job.get("snapshot"))
             _atomic_json_write(_pending_path(root, original), pending)
         if success and value.get("servedAgent") in {"codex", "opencode", "agy"} and isinstance(value.get("servedModel"), str):
             pending = dict(pending, agent=value["servedAgent"], model=value["servedModel"],
@@ -3269,6 +3270,9 @@ def post_tool_use(
                 "current_head": None,
                 "changed_paths": None,
             }
+        elif worktree_path:
+            delta = ledger.compute_job_delta(delta_repository, pending.get("worktree_snapshot"))
+            delta = ledger.filter_job_delta(delta_repository, delta)
         else:
             delta = ledger.compute_delta(
                 delta_repository,
@@ -3276,16 +3280,28 @@ def post_tool_use(
                 None if pending.get("phase") == "plan" else (scope if scope else None),
                 manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
             )
-            if worktree_path:
-                delta = ledger.filter_job_delta(delta_repository, delta)
+            if delta.get("status") == ledger.OK and pending.get("phase") != "plan" and (
+                delta.get("current_head") != delta.get("baseline_head")
+                or (pending.get("phase") == "operation" and delta["changed_paths"])
+            ):
+                delta = {"status": ledger.UNKNOWN, "code": "EXTERNAL_REPOSITORY_CHANGE",
+                         "message": "Repository source changed during the job; the external change cannot be attributed to the worker.",
+                         "baseline_head": delta.get("baseline_head"),
+                         "current_head": delta.get("current_head"), "changed_paths": None}
         bundle["baseline_head"] = delta.get("baseline_head")
         bundle["current_head"] = delta.get("current_head")
         force_full_review = delta.get("status") != ledger.OK
         out_of_scope_res = None
-        if (pending.get("phase") == "implementation" and scope and delta_repository is not None
-                and baseline.get("status") == ledger.OK):
-            out_of_scope_res = ledger.detect_out_of_scope_modifications(
-                delta_repository, baseline, scope)
+        if (delta.get("status") == ledger.OK and pending.get("phase") == "implementation" and scope
+                and delta_repository is not None and baseline.get("status") == ledger.OK):
+            if worktree_path:
+                out_of_scope_res = {"status": ledger.OK, "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+                                    "paths": [path for path in delta["changed_paths"]
+                                              if not any(path == item or path.startswith(item.rstrip("/") + "/")
+                                                         or item == "." for item in scope)]}
+            else:
+                out_of_scope_res = ledger.detect_out_of_scope_modifications(
+                    delta_repository, baseline, scope)
         bundle["whole_tree_anomaly"] = out_of_scope_res
         if delta.get("status") == ledger.OK and (pending.get("phase") == "plan" or
                                                   (pending.get("phase") == "implementation" and scope)):
@@ -3317,18 +3333,25 @@ def post_tool_use(
                 bundle["findings"].append(_finding(
                     "LEASE_HISTORY_UNAVAILABLE", "This call has no scope lease ownership record."))
 
+        if delta.get("status") == ledger.OK and pending.get("phase") == "plan" and (
+            delta["changed_paths"] or delta.get("current_head") != delta.get("baseline_head")
+        ):
+            if delta["changed_paths"]:
+                bundle["findings"].append(_finding(
+                    "PLAN_MUTATED_REPO",
+                    "Repository source changed during a read-only plan call; "
+                    "a concurrent writer may be the cause: " + ", ".join(delta["changed_paths"][:10]),
+                ))
+            delta = {"status": ledger.UNKNOWN, "code": "EXTERNAL_REPOSITORY_CHANGE",
+                     "message": "Repository changes could not be attributed to this plan job.",
+                     "baseline_head": delta.get("baseline_head"),
+                     "current_head": delta.get("current_head"), "changed_paths": None}
+            force_full_review = True
+
         if delta.get("status") == ledger.OK:
             bundle["changed_paths"] = delta["changed_paths"]
             bundle["delta_lines"] = delta["changed_line_count"]
             bundle["delta_files"] = delta["changed_file_count"]
-            if pending.get("phase") == "plan" and delta["changed_paths"]:
-                bundle["findings"].append(_finding(
-                    "PLAN_MUTATED_REPO",
-                    "Repository source changed during a read-only plan call; "
-                    "a concurrent writer may be the cause: "
-                    + ", ".join(delta["changed_paths"][:10]),
-                ))
-                force_full_review = True
             if scope:
                 classification = ledger.classify_concurrent_writers(
                     delta, scope, protected_paths=protected_paths
@@ -3608,12 +3631,14 @@ def post_tool_use(
                             timeout_seconds=actual_timeout,
                         )
                         # Universal delta recomputation (C19-1): always recompute after attempt
-                        re_delta = ledger.compute_delta(
-                            delta_repository,
-                            baseline,
-                            scope if scope else None,
-                            manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
-                        )
+                        re_delta = (ledger.compute_job_delta(
+                            delta_repository, pending.get("worktree_snapshot"))
+                                    if worktree_path else ledger.compute_delta(
+                                        delta_repository,
+                                        baseline,
+                                        scope if scope else None,
+                                        manifest_budget_seconds=loaded_config["manifest_budget_seconds"],
+                                    ))
                         if worktree_path:
                             re_delta = ledger.filter_job_delta(delta_repository, re_delta)
                         if re_delta.get("status") == ledger.OK:
@@ -3622,8 +3647,14 @@ def post_tool_use(
                                 "changed_file_count": re_delta["changed_file_count"],
                                 "changed_line_count": re_delta["changed_line_count"],
                             }
-                            re_anomaly = ledger.detect_out_of_scope_modifications(
-                                delta_repository, baseline, scope) if scope else None
+                            re_anomaly = (
+                                {"status": ledger.OK, "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+                                 "paths": [path for path in re_delta["changed_paths"]
+                                           if not any(path == item or path.startswith(item.rstrip("/") + "/")
+                                                      or item == "." for item in scope)]}
+                                if worktree_path and scope else
+                                ledger.detect_out_of_scope_modifications(delta_repository, baseline, scope)
+                                if scope else None)
                             bundle["whole_tree_anomaly"] = re_anomaly
                             if scope and isinstance(pending.get("lease_owner"), str):
                                 try:

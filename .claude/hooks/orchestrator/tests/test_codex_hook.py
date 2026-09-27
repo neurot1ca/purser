@@ -799,6 +799,67 @@ def test_async_worktree_delta_and_apply_use_only_job_changes(workspace, config):
     assert "codex_apply" in response["systemMessage"]
 
 
+def test_dirty_worktree_snapshot_reviews_only_worker_diff(workspace, config, monkeypatch):
+    repo, state = workspace
+    (repo / "file0.py").write_text("preexisting = True\n", encoding="utf-8")
+    start, job_id, job_path = async_started(
+        workspace, config, prompt=orch(task="dirty-snapshot", scope="file1.py") + "\nWork."
+    )
+    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
+    worktree = Path(snapshot["path"])
+    (worktree / "file1.py").write_text("worker = True\n", encoding="utf-8")
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
+               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo))
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
+    packets = []
+    def reviewer(**kwargs):
+        packets.append(reviewer_module._delegated_diff(kwargs["repo_root"], kwargs["delta"]))
+        return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"}
+    followup = async_followup(RESULT_TOOL, job_id)
+    response = codex.post_tool_use({**followup, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+                              "content": "done", "worktreePath": snapshot["path"]}}},
+        config=config, state_root=state, repo_root=repo, reviewer=reviewer)
+    bundle = response_bundle(response, config)
+    assert bundle["changed_paths"] == ["file1.py"]
+    assert bundle["delta_files"] == 1 and bundle["delta_lines"] == 2
+    assert packets and packets[0][0] == ["file1.py"]
+    assert "preexisting" not in packets[0][1]
+    assert not {"OUT_OF_SCOPE_MODIFICATION", "UNKNOWN_CONCURRENT_WRITER", "REVIEW_PACKET_INCOMPLETE"} & {
+        finding["code"] for finding in bundle["findings"]}
+
+
+def test_operation_concurrent_commit_is_not_worker_delta(workspace, config):
+    repo, state = workspace
+    call = event(prompt=orch(phase="operation", route="operation", scope=None) + "\nInspect.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("external = True\n", encoding="utf-8")
+    subprocess.run(["git", "add", "file0.py"], cwd=repo, check=True, timeout=10)
+    subprocess.run(["git", "commit", "-qm", "external"], cwd=repo, check=True, timeout=10)
+    response = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+        {"structuredContent": {"threadId": "operation-thread", "content": "done"}}},
+        config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(response, config)
+    assert bundle["changed_paths"] is None and bundle["delta_files"] is None
+    assert any(f["code"] == "EXTERNAL_REPOSITORY_CHANGE" for f in bundle["findings"])
+
+
+def test_clean_sync_implementation_delta_unchanged(workspace, config):
+    repo, state = workspace
+    call = event(prompt=orch(scope="file0.py") + "\nUpdate file0.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("worker = True\n", encoding="utf-8")
+    response = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+        {"structuredContent": {"threadId": "sync-thread", "content": "done"}}},
+        config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(response, config)
+    assert bundle["changed_paths"] == ["file0.py"]
+    assert bundle["delta_files"] == 1 and bundle["delta_lines"] == 2
+    assert not any(f["code"] == "EXTERNAL_REPOSITORY_CHANGE" for f in bundle["findings"])
+
+
 def test_async_worktree_reply_is_admitted_during_overlapping_job(workspace, config, monkeypatch):
     repo, state = workspace
     async_started(
