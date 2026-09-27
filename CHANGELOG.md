@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.34 — 2026-09-27
+
+- Codex ETA learning is per coding agent; every fifth compact measures estimate error and reports when it improves.
+- The unfinished-job reminder skips failed jobs whose waiter already reported them.
+- AGENTS.md adds a least-code rule and one test per failure direction.
+- A cached per-project code map (Python via ast, TypeScript/TSX via optional tree-sitter) is refreshed before planning and delegation; workers get its path and status only, and a mutating job marks it STALE.
 ## 0.1.33 — 2026-09-26
 
 - A Codex job that finished its work but whose process did not exit is completed after a 20-second grace instead of hanging as running.
