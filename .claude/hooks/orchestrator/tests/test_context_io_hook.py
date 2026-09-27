@@ -72,8 +72,11 @@ def test_session_start_appends_duration_hint_and_runs_cleanup(monkeypatch, tmp_p
     monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: tmp_path / "state")
     cleaned = []
     monkeypatch.setattr(context_io_hook.async_session_maintenance, "cleanup_jobs", lambda root: cleaned.append(root))
-    monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint",
-                        lambda root, key: "Purser: typical Codex durations here (median/p90, n): mechanical 2/6 min (n=41).")
+    hint_calls = []
+    def duration_hint(root, key, *, now=None, implementer=async_session_maintenance.IMPLEMENTER):
+        hint_calls.append((root, key, now, implementer))
+        return "Purser: typical Codex durations here (median/p90, n): mechanical 2/6 min (n=41)."
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint", duration_hint)
 
     assert context_io_hook.main() == 0
     result = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]
@@ -81,6 +84,7 @@ def test_session_start_appends_duration_hint_and_runs_cleanup(monkeypatch, tmp_p
         "restored context\nPurser: typical Codex durations here (median/p90, n): mechanical 2/6 min (n=41)."
     )
     assert cleaned == [tmp_path / "state"]
+    assert hint_calls == [(tmp_path / "state", "project-key", None, "codex-main")]
 
 
 def test_accuracy_runs_only_on_compact_and_preserves_context_on_failure(monkeypatch, tmp_path):

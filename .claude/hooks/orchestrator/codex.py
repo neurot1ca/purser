@@ -1223,7 +1223,7 @@ def pre_tool_use(
                 event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
             )
 
-        if (parsed.valid and new_call
+        if (loaded_config.get("coder_agent", "codex") == "codex" and parsed.valid and new_call
                 and parsed.reason != "user_override"):
             try:
                 quota = codex_quota.read_latest_quota()
@@ -1365,6 +1365,15 @@ def pre_tool_use(
                 event, route.code, route.message, state_root=state_root, task_id=parsed.task_id
             )
         requested = _requested_thread(parsed, route)
+        agent = loaded_config.get("coder_agent", "codex")
+        if new_call and agent == "opencode" and parsed.phase == "plan":
+            return _observed_denial(event, "OPENCODE_PLAN_UNISOLATED",
+                                    "OpenCode has no verified read-only sandbox for plan calls.",
+                                    state_root=state_root, task_id=parsed.task_id)
+        if reply_call and isinstance(live_thread, Mapping) and live_thread.get("agent", "codex") != agent:
+            return _observed_denial(event, "THREAD_AGENT_MISMATCH",
+                                    "thread belongs to a different coding agent; start a fresh thread.",
+                                    state_root=state_root, task_id=parsed.task_id, continuity=True)
         effective_reason = parsed.reason
         reason_source = "explicit" if parsed.reason is not None and not reply_without_orch else None
         if reply_without_orch and parsed.reason is not None:
@@ -1428,7 +1437,7 @@ def pre_tool_use(
 
         updated = dict(tool_input)
         updated["prompt"] = parsed.prompt
-        if parsed.phase == "plan" and new_call:
+        if parsed.phase == "plan" and new_call and agent == "codex":
             updated["sandbox"] = "read-only"
             updated["approval-policy"] = "never"
         if parsed.phase == "implementation":
@@ -1439,8 +1448,9 @@ def pre_tool_use(
             if not isinstance(original_codex_config, Mapping):
                 raise WiringError("tool_input.config must be an object when supplied")
             updated_config = dict(original_codex_config)
-            updated_config["model_reasoning_effort"] = route.effort
-            output_limit = loaded_config.get("tool_output_token_limit")
+            if route.effort != "none":
+                updated_config["model_reasoning_effort"] = route.effort
+            output_limit = loaded_config.get("tool_output_token_limit") if agent == "codex" else None
             if output_limit is not None:
                 if isinstance(output_limit, bool) or not isinstance(output_limit, int) or output_limit <= 0:
                     raise WiringError("tool_output_token_limit must be a positive integer")
@@ -1449,7 +1459,7 @@ def pre_tool_use(
                 for unsafe_key in ("sandbox_mode", "approval_policy", "sandbox_workspace_write"):
                     updated_config.pop(unsafe_key, None)
             updated["config"] = updated_config
-            if "developer-instructions" not in tool_input:
+            if agent == "codex" and "developer-instructions" not in tool_input:
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
         if is_start:
             updated["mode"] = mode
@@ -1510,6 +1520,7 @@ def pre_tool_use(
             "route": parsed.route,
             "model": route.model,
             "effort": route.effort,
+            "agent": agent,
             "scope": declared_scope,
             "repo_root": str(repository) if repository is not None else None,
             "project_root_reason": project_root_reason or None,
@@ -1602,6 +1613,7 @@ def pre_tool_use(
             parsed.route,
             route.model,
             route.effort,
+            agent=agent,
             phase=parsed.phase,
             scope=declared_scope,
             pending_call_baseline=baseline,
@@ -2296,6 +2308,9 @@ def _build_audit_receipt(bundle: Mapping[str, Any], task_id: str | None) -> dict
     task_label = task_id or "task"
     return {
         "verdict": "READY_FOR_ONE_TURN_ACCEPT",
+        "implementer": bundle.get("implementer"),
+        "model": bundle.get("model"),
+        "effort": bundle.get("effort"),
         "reviewer1_verdict": bundle.get("reviewer1_result") or bundle.get("reviewer1_skipped_reason"),
         "validation_summary": f"validation={bundle.get('validation')}, delta={bundle.get('delta_lines', 0)}L/{bundle.get('delta_files', 0)}F",
         "commit_command": f'git add {files_str} && git commit -m "feat({task_label}): implement changes"',
@@ -2469,6 +2484,9 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
     micro_repair = bundle.get("micro_repair")
     mandatory = {
         "task_id": bundle.get("task_id"),
+        "implementer": bundle.get("implementer"),
+        "model": bundle.get("model"),
+        "effort": bundle.get("effort"),
         "thread_id": bundle.get("thread_id"),
         "routing_enforced": bundle.get("routing_enforced"),
         "claude_review_mode": bundle.get("claude_review_mode"),
@@ -2625,6 +2643,7 @@ def _internal_post_response(
             pending = None
         if isinstance(pending, Mapping):
             bundle.update(
+                implementer=f"{pending.get('agent', 'codex')}-main",
                 task_id=pending.get("task_id"),
                 phase=pending.get("phase"),
                 route=pending.get("route"),
@@ -2845,6 +2864,7 @@ def post_tool_use(
         bundle = _base_bundle()
         bundle.update(
             {
+                "implementer": f"{pending.get('agent', 'codex')}-main",
                 "task_id": pending.get("task_id"),
                 "phase": pending.get("phase"),
                 "route": pending.get("route"),
@@ -2872,10 +2892,11 @@ def post_tool_use(
             bundle["implementer_report"] = report
             if pending.get("phase") == "plan":
                 _store_plan(runtime_root, event, pending.get("task_id"), report, bundle)
-            try:
-                bundle["codex_quota"] = codex_quota.read_quota(thread_id)
-            except Exception:
-                bundle["codex_quota"] = None
+            if pending.get("agent", "codex") == "codex":
+                try:
+                    bundle["codex_quota"] = codex_quota.read_quota(thread_id)
+                except Exception:
+                    bundle["codex_quota"] = None
             if pending.get("phase") != "plan":
                 worker_validation = _parse_worker_validation(report)
                 bundle["worker_validation"] = worker_validation
@@ -2907,6 +2928,7 @@ def post_tool_use(
                         pending["route"],
                         pending["model"],
                         pending["effort"],
+                        agent=pending.get("agent", "codex"),
                         phase=pending.get("phase"),
                         scope=pending.get("scope", []),
                         pending_call_baseline=None,
@@ -3164,6 +3186,14 @@ def post_tool_use(
                     config=reviewer_config,
                 )
             if gate.should_run:
+                implementer_family = policy.model_family(pending.get("model"))
+                reviewer_family = policy.model_family(loaded_config["reviewer1_model_requested"])
+                if not implementer_family or not reviewer_family or implementer_family == reviewer_family:
+                    gate = policy.SkipReviewerDecision(
+                        "skip reviewer", policy.REVIEWER_UNAVAILABLE,
+                        "Reviewer model family is unknown or matches the implementer; FULL review required.",
+                    )
+            if gate.should_run:
                 reviewer_started = True
                 _observe(
                     "emit",
@@ -3230,7 +3260,8 @@ def post_tool_use(
                 validation = reviewer_report.get("validation", "UNKNOWN") if isinstance(reviewer_report, Mapping) else "UNKNOWN"
 
                 # Priority 5: In-Hook Micro-Repair loop (1 bounded attempt with deadline & sandbox)
-                if loaded_config.get("micro_repair_enabled", True) and result == policy.CHANGES_REQUIRED and thread_id:
+                if (pending.get("agent", "codex") == "codex" and loaded_config.get("micro_repair_enabled", True)
+                        and result == policy.CHANGES_REQUIRED and thread_id):
                     configured_repair_timeout = int(loaded_config.get("micro_repair_timeout_seconds", 60))
                     elapsed = time.monotonic() - start_time
                     available_budget = max_total_hook_budget - elapsed - float(loaded_config.get("reviewer1_timeout_seconds", 90))
@@ -3517,6 +3548,7 @@ def post_tool_use(
             pending["route"],
             pending["model"],
             pending["effort"],
+            agent=pending.get("agent", "codex"),
             phase=pending.get("phase"),
             scope=pending.get("scope", []),
             pending_call_baseline=None,
@@ -3640,6 +3672,7 @@ def post_tool_use_failure(
                     pending["route"],
                     pending["model"],
                     pending["effort"],
+                    agent=pending.get("agent", "codex"),
                     phase=pending.get("phase"),
                     scope=pending.get("scope", []),
                     reason=pending.get("reason"),

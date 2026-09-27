@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+from pathlib import Path
 import re
 import sys
 import time
@@ -113,8 +114,10 @@ def main() -> int:
                     additional_context = compaction_advisor.restore(value, repository)
                     try:
                         if repository is not None:
+                            selected = json.loads((Path(__file__).with_name("config.json")).read_text(encoding="utf-8")).get("coder_agent", "codex")
                             hint = async_session_maintenance.duration_hint(
-                                state_root.default_state_root(), project_root.project_key(repository)
+                                state_root.default_state_root(), project_root.project_key(repository),
+                                implementer="opencode-main" if selected == "opencode" else "codex-main",
                             )
                             if hint:
                                 additional_context = "\n".join(

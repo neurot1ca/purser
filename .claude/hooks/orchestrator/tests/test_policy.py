@@ -16,6 +16,19 @@ def config():
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def test_opencode_route_requires_qualified_model_and_variant(config):
+    assert policy.model_family("opencode/big-pickle") is None
+    config["coder_agent"] = "opencode"
+    config.pop("sol_model")
+    for entry in config["routes"].values():
+        entry.update(model="opencode/big-pickle", effort="none")
+    assert policy.resolve_route("normal", config).pair == ("opencode/big-pickle", "none")
+    config["routes"]["normal"]["model"] = "big-pickle"
+    assert policy.resolve_route("normal", config).code == policy.CONFIG_INVALID
+    config["routes"]["normal"].update(model="opencode/big-pickle", effort="bad variant")
+    assert policy.resolve_route("normal", config).code == policy.CONFIG_INVALID
+
+
 def orch(**overrides):
     values = {
         "task": "task-1",

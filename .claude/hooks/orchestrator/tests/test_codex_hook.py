@@ -153,6 +153,65 @@ def response_bundle(response, config):
     return json.loads(output[0]["text"])
 
 
+def test_opencode_start_and_cross_agent_reply_denied(workspace, config):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    for entry in config["routes"].values():
+        entry.update(model="opencode/big-pickle", effort="none")
+    start = event(START_TOOL, tool_use_id="opencode-start")
+    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["model"] == "opencode/big-pickle"
+    assert updated["config"] == {}
+    assert "developer-instructions" not in updated
+    record = ledger.build_session_record("task-2", "foreign-thread", "normal", "gpt-6-sol", "medium",
+                                         phase="implementation", scope=["file0.py"], agent="codex")
+    assert ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).save(record)["status"] == ledger.OK
+    reply = event(codex.CODEX_REPLY_TOOL, prompt=orch(task="task-2", scope="file0.py") + "\nContinue.",
+                  threadId="foreign-thread", tool_use_id="foreign-reply")
+    denied = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "different coding agent" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_unknown_model_family_skips_reviewer_and_forces_full(workspace, config):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    for entry in config["routes"].values():
+        entry.update(model="unknown/mystery", effort="none")
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    invoked = []
+    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+        {"structuredContent": {"threadId": "mystery-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
+    bundle = response_bundle(result, config)
+    assert not invoked
+    assert bundle["reviewer1_skipped_reason"] == policy.REVIEWER_UNAVAILABLE
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["implementer"] == "opencode-main"
+
+
+@pytest.mark.parametrize(("phase", "route", "reason"), [
+    ("operation", "operation", policy.PHASE_OPERATION),
+    ("implementation", "normal", policy.NO_DELTA),
+])
+def test_unknown_family_keeps_original_reviewer_skip(workspace, config, phase, route, reason):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    for entry in config["routes"].values():
+        entry.update(model="unknown/mystery", effort="none")
+    call = event(prompt=orch(phase=phase, route=route, scope="file0.py") + "\nInspect.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
+        {"structuredContent": {"threadId": "unchanged-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo)
+    bundle = response_bundle(result, config)
+    assert bundle["reviewer1_skipped_reason"] == reason
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
 def test_plan_sync_read_only_artifact_and_mutation(workspace, config):
     repo, state = workspace
     call = event(prompt=orch(phase="plan", route="plan_standard", scope="file0.py") + "\nPlan this.",

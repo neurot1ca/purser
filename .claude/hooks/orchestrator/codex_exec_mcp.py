@@ -557,7 +557,8 @@ class Server:
     def __init__(self, codex_bin: str | None = None, *, host: bool = False,
                  job_dir: Path | None = None, agent: str | None = None) -> None:
         self.codex_bin = codex_bin
-        self.agent = agent or os.environ.get("PURSER_AGENT", "codex")
+        self._fixed_agent = agent is not None
+        self.agent = agent or os.environ.get("PURSER_AGENT") or self._configured_agent()
         self.state_dir = _state_dir()
         self.write_lock = threading.Lock()
         self.jobs_lock = threading.Lock()
@@ -582,6 +583,14 @@ class Server:
             if self.listener is not None:
                 self.listener.close()
             self.listener = None
+
+    @staticmethod
+    def _configured_agent() -> str:
+        config = json.loads((Path(__file__).with_name("config.json")).read_text(encoding="utf-8"))
+        selected = config.get("coder_agent", "codex")
+        if selected not in ("codex", "opencode"):
+            raise ValueError("coder_agent must be codex or opencode")
+        return selected
 
     def _agent_prefix(self) -> list[str]:
         if self.agent == "codex":
@@ -837,6 +846,11 @@ class Server:
                 event.set()
 
     def _start_job(self, args: dict[str, Any]) -> dict[str, Any]:
+        if not self._fixed_agent and not os.environ.get("PURSER_AGENT"):
+            try:
+                self.agent = self._configured_agent()
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                return _job_result({"state": "FAILED", "errorCode": "INVALID_CONFIG", "message": str(exc)})
         call = args.get("call")
         prompt = args.get("prompt")
         timeout = args.get("timeoutSeconds", 2700)

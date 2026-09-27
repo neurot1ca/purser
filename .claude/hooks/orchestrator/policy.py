@@ -92,7 +92,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "allowed_efforts",
         "required_routes",
         "routes",
-        "sol_model",
         "always_full_routes",
         "reviewer_gate",
         "manifest_budget_seconds",
@@ -109,6 +108,11 @@ def validate_config(config: Mapping[str, Any]) -> None:
     _string_list(config, "allowed_phases")
     _string_list(config, "allowed_reasons")
     allowed_efforts = set(_string_list(config, "allowed_efforts"))
+    agent = config.get("coder_agent", "codex")
+    if agent not in ("codex", "opencode"):
+        raise ConfigError("INVALID_CONFIG_FIELD", "coder_agent must be codex or opencode")
+    if agent == "codex" and "sol_model" not in config:
+        raise ConfigError("MISSING_CONFIG_FIELD", "config is missing required field(s): sol_model")
     required_routes = set(_string_list(config, "required_routes"))
 
     routes = config["routes"]
@@ -126,17 +130,21 @@ def validate_config(config: Mapping[str, Any]) -> None:
         effort = entry.get("effort")
         if not isinstance(model, str) or not model:
             raise ConfigError("INVALID_ROUTE_ENTRY", f"route {route!r} has no model")
-        if not isinstance(effort, str) or effort not in allowed_efforts:
+        if agent == "opencode" and not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", model):
+            raise ConfigError("INVALID_ROUTE_ENTRY", f"route {route!r} OpenCode model must be provider/model")
+        if (not isinstance(effort, str) or (agent == "codex" and effort not in allowed_efforts)
+                or (agent == "opencode" and effort != "none" and not re.fullmatch(r"[A-Za-z0-9._-]+", effort))):
             raise ConfigError(
                 "INVALID_ROUTE_EFFORT",
                 f"route {route!r} names unsupported effort {effort!r}",
             )
 
-    sol_model = config["sol_model"]
-    if not isinstance(sol_model, str) or not sol_model:
-        raise ConfigError("INVALID_CONFIG_FIELD", "sol_model must be a non-empty string")
-    if not any(entry["model"] == sol_model for entry in routes.values()):
-        raise ConfigError("INVALID_CONFIG_FIELD", "sol_model is absent from the route table")
+    if agent == "codex":
+        sol_model = config["sol_model"]
+        if not isinstance(sol_model, str) or not sol_model:
+            raise ConfigError("INVALID_CONFIG_FIELD", "sol_model must be a non-empty string")
+        if not any(entry["model"] == sol_model for entry in routes.values()):
+            raise ConfigError("INVALID_CONFIG_FIELD", "sol_model is absent from the route table")
 
     always_full_routes = set(_string_list(config, "always_full_routes"))
     if not always_full_routes.issubset(routes):
@@ -460,12 +468,17 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
     sol_routes = {"normal", "consequential", "escalated"}
     if values["route"] in sol_routes and not values.get("basis", "").strip():
         route = values["route"]
+        if config.get("coder_agent", "codex") == "opencode":
+            message = (f"route={route} requires basis=<the design choice left to the worker> "
+                       "(for escalated: the concrete miss).")
+        else:
+            message = (f"route={route} runs gpt-6-sol. Add basis=<the design choice left to the worker> "
+                       "(for escalated: the concrete miss). If the prompt already states the decisions, "
+                       "use route=subtle (gpt-6-luna) instead.")
         return _orch_failure(
             remainder,
             SOL_ROUTE_NEEDS_BASIS,
-            f"route={route} runs gpt-6-sol. Add basis=<the design choice left to the worker> "
-            "(for escalated: the concrete miss). If the prompt already states the decisions, "
-            "use route=subtle (gpt-6-luna) instead.",
+            message,
             values,
         )
 
@@ -572,6 +585,17 @@ def _run_reviewer(code: str, message: str) -> RunReviewerDecision:
 
 def _skip_reviewer(reason: str, message: str) -> SkipReviewerDecision:
     return SkipReviewerDecision("skip reviewer", reason, message)
+
+
+def model_family(model: str) -> str | None:
+    if not isinstance(model, str):
+        return None
+    name = model.split("/", 1)[-1].lower()
+    if name.startswith("gemini-"):
+        return "gemini"
+    if name.startswith("gpt-"):
+        return "gpt"
+    return None
 
 
 def reviewer1_gate(

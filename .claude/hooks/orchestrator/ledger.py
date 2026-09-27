@@ -1237,6 +1237,7 @@ def build_session_record(
     model: str,
     effort: str,
     *,
+    agent: str = "codex",
     phase: str | None = None,
     scope: Iterable[str | os.PathLike[str]] = (),
     pending_call_baseline: Mapping[str, Any] | None = None,
@@ -1261,6 +1262,8 @@ def build_session_record(
             "model": model,
             "effort": effort,
         }
+        if agent != "codex":
+            live_thread["agent"] = agent
         if reason is not None:
             live_thread["reason"] = reason
         if phase is not None:
@@ -1347,6 +1350,7 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
     thread_keys = set(thread)
     required_keys = {"task_id", "thread_id", "route", "model", "effort"}
     allowed_keys = required_keys | {
+        "agent",
         "phase",
         "scope",
         "task_objective",
@@ -1359,6 +1363,8 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
         "post_state",
     }
     if not required_keys.issubset(thread_keys) or not thread_keys.issubset(allowed_keys):
+        return False
+    if "agent" in thread and thread["agent"] not in ("codex", "opencode"):
         return False
     if thread.get("task_id") != task_id or any(
         not isinstance(thread.get(field), str) or not thread.get(field)
