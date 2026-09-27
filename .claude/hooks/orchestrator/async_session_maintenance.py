@@ -7,9 +7,11 @@ import hashlib
 import json
 from itertools import islice
 import math
+import os
 from pathlib import Path
 import re
 import statistics
+import subprocess
 import time
 from typing import Any
 
@@ -264,6 +266,94 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _listed_worktrees(repo_root: Path) -> tuple[Path, list[Path]] | None:
+    """Return a repository command root and its registered worktree paths."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", os.fspath(repo_root), "worktree", "list", "--porcelain"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
+        )
+        if completed.returncode:
+            return None
+        paths = [Path(line[9:]).resolve() for line in completed.stdout.splitlines()
+                 if line.startswith("worktree ")]
+        return (paths[0], paths) if paths else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _remove_worktree(state_root: Path, repo_root: Path, worktree_path: str | Path) -> bool:
+    """Remove only a registered worktree contained by this state's wt directory."""
+    try:
+        wt_root = (state_root / "wt").resolve()
+        target = Path(worktree_path).resolve()
+        target.relative_to(wt_root)
+    except (OSError, ValueError, TypeError):
+        return False
+    if target == wt_root:
+        return False
+    listing = _listed_worktrees(repo_root.resolve())
+    if listing is None:
+        return False
+    command_root, paths = listing
+    if os.path.normcase(os.fspath(target)) not in {os.path.normcase(os.fspath(path)) for path in paths}:
+        return False
+    try:
+        removed = subprocess.run(
+            ["git", "-C", os.fspath(command_root), "worktree", "remove", "--force", os.fspath(target)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=30, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
+        )
+        if removed.returncode:
+            return False
+        subprocess.run(
+            ["git", "-C", os.fspath(command_root), "worktree", "prune"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=30, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
+        )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _cleanup_orphan_worktrees(root: Path, jobs: Path, current: float) -> None:
+    """Prune old registered worktrees only when their job record is absent."""
+    wt_root = root / "wt"
+    try:
+        children = list(wt_root.iterdir())
+    except OSError:
+        return
+    for worktree in children:
+        if not worktree.is_dir():
+            continue
+        try:
+            worktree.resolve().relative_to(wt_root.resolve())
+        except (OSError, ValueError):
+            continue
+        if next(jobs.glob(f"{worktree.name}*.json"), None) is not None:
+            continue
+        try:
+            if current - worktree.stat().st_mtime <= RETENTION_SECONDS:
+                continue
+            common_dir = subprocess.run(
+                ["git", "-C", os.fspath(worktree), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
+            )
+            if common_dir.returncode:
+                continue
+            # Linked worktrees share <main-repo>/.git as their common directory.
+            repo_root = Path(common_dir.stdout.strip()).resolve().parent
+            _remove_worktree(root, repo_root, worktree)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+
+
 def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
     """Reconcile dead hosts and remove expired evidence with its ownership records."""
     try:
@@ -271,7 +361,8 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
         jobs = root / "codex_exec_mcp" / "jobs"
         bridge = codex_exec_mcp.Server(job_dir=jobs)
         current = time.time() if now is None else now
-        for path in islice(jobs.glob("*.json"), MAX_JOB_RECORDS):
+        records = list(islice(jobs.glob("*.json"), MAX_JOB_RECORDS))
+        for path in records:
             if not _JOB_ID.fullmatch(path.stem):
                 continue
             job = _read_json(path)
@@ -280,6 +371,16 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
             if job.get("state") not in TERMINAL:
                 bridge.recover_job(path.stem, now=current)
                 continue
+            state = job.get("state")
+            discard_without_patch = state in {"FAILED", "CANCELLED", "TIMED_OUT"} and "applyState" not in job
+            may_remove_worktree = (state != "UNKNOWN_OR_IN_PROGRESS"
+                                   and (job.get("applyState") == "applied" or discard_without_patch))
+            if job.get("worktreePath") and not may_remove_worktree:
+                continue
+            if job.get("worktreePath") and may_remove_worktree:
+                repo_root = job.get("repoRoot")
+                if isinstance(repo_root, str) and repo_root:
+                    _remove_worktree(root, Path(repo_root), job["worktreePath"])
             if job.get("state") != "UNKNOWN_OR_IN_PROGRESS":
                 (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
             finished = job.get("finishedAt")
@@ -332,6 +433,7 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
                         index_path.unlink(missing_ok=True)
             except OSError:
                 continue
+        _cleanup_orphan_worktrees(root, jobs, current)
     except BaseException:
         return None
 

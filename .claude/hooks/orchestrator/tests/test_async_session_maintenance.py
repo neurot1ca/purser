@@ -1,6 +1,7 @@
 import json
 import os
 import hashlib
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -283,6 +284,71 @@ def test_cleanup_removes_launch_payload_for_recent_terminal_job(tmp_path, monkey
     jobs = tmp_path / "codex_exec_mcp" / "jobs"
     assert (jobs / f"{job_id}.json").exists() and pending.exists()
     assert not (jobs / f"{job_id}.launch").exists()
+
+
+def _registered_job_worktree(root, state, *, apply_state=None, outside=False):
+    job_id, _, _ = _job_fixture(root, state, 1000)
+    repo = root / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    worktree = (root / "outside" / job_id[:12]) if outside else (root / "wt" / job_id[:12])
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(worktree), "HEAD"], check=True)
+    record = root / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    job = json.loads(record.read_text(encoding="utf-8"))
+    job.update(worktreePath=str(worktree), repoRoot=str(repo))
+    if apply_state is not None:
+        job["applyState"] = apply_state
+    record.write_text(json.dumps(job), encoding="utf-8")
+    return job_id, repo, worktree, record
+
+
+def test_cleanup_removes_applied_job_worktree(tmp_path, monkeypatch):
+    _, _, worktree, _ = _registered_job_worktree(tmp_path, "SUCCEEDED", apply_state="applied")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    assert not worktree.exists()
+
+
+def test_cleanup_keeps_review_pending_job_worktree(tmp_path, monkeypatch):
+    _, _, worktree, record = _registered_job_worktree(tmp_path, "SUCCEEDED")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+    assert worktree.is_dir() and record.exists()
+
+
+def test_cleanup_keeps_conflicted_job_worktree(tmp_path, monkeypatch):
+    _, _, worktree, record = _registered_job_worktree(tmp_path, "SUCCEEDED", apply_state="conflict")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+    assert worktree.is_dir() and record.exists()
+
+
+def test_cleanup_keeps_ambiguous_job_worktree(tmp_path, monkeypatch):
+    _, _, worktree, record = _registered_job_worktree(tmp_path, "UNKNOWN_OR_IN_PROGRESS")
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+    assert worktree.is_dir() and record.exists()
+
+
+def test_cleanup_removes_orphan_worktree_older_than_seven_days(tmp_path):
+    _, _, worktree, record = _registered_job_worktree(tmp_path, "SUCCEEDED", apply_state="conflict")
+    record.unlink()
+    old = 1000
+    os.utime(worktree, (old, old))
+    maintenance.cleanup_jobs(tmp_path, now=old + 8 * 86400)
+    assert not worktree.exists()
+
+
+def test_cleanup_never_removes_worktree_outside_state_wt(tmp_path, monkeypatch):
+    _, _, worktree, _ = _registered_job_worktree(tmp_path, "SUCCEEDED", apply_state="applied", outside=True)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    assert worktree.is_dir()
 
 
 def test_cleanup_preserves_finalizing_evidence_for_retry(tmp_path, monkeypatch):
