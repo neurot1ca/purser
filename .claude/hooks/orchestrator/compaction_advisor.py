@@ -121,7 +121,8 @@ def _genuine_user(record: Mapping[str, Any]) -> bool:
         return False
     if any(isinstance(block, Mapping) and block.get("type") == "tool_result" for block in _content(record)):
         return False
-    return not _quoted_text(record).lstrip().startswith("<task-notification>")
+    text = _quoted_text(record).lstrip()
+    return not text.startswith(("<task-notification>", "[SYSTEM NOTIFICATION - NOT USER INPUT]"))
 
 
 def _quoted_text(record: Mapping[str, Any]) -> str:

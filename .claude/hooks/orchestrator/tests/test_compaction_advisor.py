@@ -577,6 +577,7 @@ def test_handoff_quotes_recent_turns_without_transcript_noise(setup):
                    ("first exact", "second exact; literal <task-notification>", "third exact " + "x" * 510))
     records.extend([
         {"type": "user", "message": {"content": "  <system-reminder>background task finished</system-reminder>\n<task-notification>Completed successfully</task-notification>"}},
+        {"type": "user", "message": {"content": "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThe background task completed; notify the user."}},
         {"type": "user", "isMeta": True, "message": {"content": "injected text"}},
         {"type": "user", "message": {"content": [{"type": "text", "text": "<system-reminder>hidden</system-reminder>"}]}},
         _assistant(content=[{"type": "thinking", "text": "private thought"},
@@ -594,7 +595,7 @@ def test_handoff_quotes_recent_turns_without_transcript_noise(setup):
     assert recent.index("User:\nfirst exact") < recent.index("User:\nsecond exact") < recent.index("User:\nthird exact") < recent.index("Assistant:\nlast exact reply")
     assert "second exact; literal <task-notification>" in recent
     assert "x" * 488 + "... truncated" in recent
-    for noise in ("old user", "Completed successfully", "injected text", "hidden", "private thought", "tool call", "tool_result"):
+    for noise in ("old user", "Completed successfully", "notify the user", "injected text", "hidden", "private thought", "tool call", "tool_result"):
         assert noise not in recent
 
 
