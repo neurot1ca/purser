@@ -121,6 +121,9 @@ next one or to new work until the user has answered on the current one.
 
 ## Craft the prompt
 
+For implementation, plan, and investigation calls, run `python "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/code_map.py" --repo <project root>` outside the hook before delegation and paste its one `CODE_MAP=... STATUS=...` line into the worker prompt.
+Treat the map as navigation only; workers verify current source before acting.
+
 Label a precise objective and observable criteria `Objective:` and `Acceptance
 criteria:` (or corresponding `#` headings); missing labels force FULL review
 because the hook cannot ground the contract. Keep the ORCH line and bounded scope.

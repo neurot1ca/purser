@@ -767,6 +767,33 @@ def test_single_job_compact_bundle_omits_whole_tree_fields(workspace, config):
     assert artifact["known_concurrent_scopes"] == []
 
 
+def test_code_map_line_survives_worker_prompt(workspace, config):
+    repo, state = workspace
+    line = r"CODE_MAP=C:\Users\Example User\code-map\map.txt STATUS=FRESH"
+    call = event(prompt=orch() + "\nDo the work.\n" + line, tool_use_id="map-prompt")
+    pre = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert line in pre["hookSpecificOutput"]["updatedInput"]["prompt"].splitlines()
+
+
+def test_code_map_stale_after_mutating_job(workspace, config):
+    repo, state = workspace
+    call = _attribution_call("map-mutation", "file0.py", "map-mutation")
+    call["tool_input"]["prompt"] += "\nCODE_MAP=C:\\state\\code-map\\map.txt STATUS=FRESH"
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    bundle = _finish_attribution_call(call, workspace, config, [])
+    assert bundle["code_map"] == "STALE"
+
+
+def test_code_map_field_absent_without_map_line(workspace, config):
+    repo, state = workspace
+    call = _attribution_call("no-map", "file0.py", "no-map")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    bundle = _finish_attribution_call(call, workspace, config, [])
+    assert "code_map" not in bundle
+
+
 def test_known_concurrent_scope_summary_bounds_task_ids(config):
     bundle = codex._base_bundle()
     bundle["known_concurrent_scopes"] = [

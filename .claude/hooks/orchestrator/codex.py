@@ -1518,6 +1518,9 @@ def pre_tool_use(
             "task_objective": task_objective,
             "acceptance_criteria": acceptance_criteria,
             "task_contract_grounded": task_contract_grounded,
+            "has_code_map": bool(re.search(
+                r"(?m)^CODE_MAP=.+ STATUS=(?:FRESH|STALE|UNAVAILABLE)\r?$", updated["prompt"]
+            )),
             "reason": effective_reason,
             "eta_minutes": parsed.eta_minutes,
             "reason_source": reason_source,
@@ -2496,6 +2499,8 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
     }
     if "known_concurrent_scopes" in compact:
         mandatory["known_concurrent_scopes"] = compact["known_concurrent_scopes"]
+    if "code_map" in compact:
+        mandatory["code_map"] = compact["code_map"]
     return mandatory, _non_report_bytes(mandatory) > cap
 
 
@@ -3552,6 +3557,8 @@ def post_tool_use(
             bundle["audit_receipt"] = _build_audit_receipt(bundle, pending.get("task_id"))
         else:
             bundle["audit_receipt"] = None
+        if pending.get("has_code_map") and bundle.get("changed_paths"):
+            bundle["code_map"] = "STALE"
         response = _finalize_replacement(bundle, loaded_config, runtime_root, event, pending.get("repo_root"))
         if not pending.get("async_call"):
             _release_scope_lease(runtime_root, pending)
