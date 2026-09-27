@@ -47,9 +47,15 @@ def detect(config_path: Path, project: Path) -> dict:
     configured = reviewer.get("executable") if isinstance(reviewer, dict) else None
     trust = data.get("trust", {})
     roles = data.get("roles", {})
-    agy = _agent("agy", configured if isinstance(configured, str) else None)
+    agy = _agent("agy", configured if isinstance(configured, str) else coder_config.agy_binary())
     if not agy["available"] and configured:
         agy = _agent("agy")
+    agy["models"] = []
+    if agy["available"]:
+        try:
+            agy["models"] = _agy_models(agy["path"])
+        except (OSError, UnicodeError, ValueError):
+            pass
     binary = coder_config.opencode_binary()
     opencode = {"available": False, "path": None, "version": None, "models": []}
     if binary:
@@ -83,6 +89,20 @@ def _opencode_models(binary: str) -> list[str]:
     models = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if not models or any(coder_config.MODEL.fullmatch(model) is None for model in models):
         raise ValueError("opencode models returned an invalid list")
+    return models
+
+
+def _agy_models(binary: str) -> list[str]:
+    try:
+        result = subprocess.run([binary, "models"], capture_output=True, text=True, timeout=30, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("agy models timed out") from exc
+    if result.returncode:
+        raise ValueError("agy models failed")
+    models = [line.split("\t", 1)[0] for line in result.stdout.splitlines()
+              if "\t" in line and coder_config.AGY_MODEL.fullmatch(line.split("\t", 1)[0])]
+    if not models:
+        raise ValueError("agy models returned no Gemini models")
     return models
 
 
@@ -214,17 +234,21 @@ def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, p
     roles.update(orchestrator="claude-code", coder=coder, reviewer=reviewer)
     for key in ("orchestrator", "coder", "reviewer"):
         text = _upsert(text, "roles", key, roles[key], newline)
-    if coder == "opencode" or "coding" in after:
+    if coder in ("opencode", "agy") or "coding" in after:
         coding = after.setdefault("coding", {})
         if not isinstance(coding, dict):
             raise ValueError("[coding] must be a table")
-        coding["coder_agent"] = "opencode" if coder == "opencode" else "codex"
-        coding["routes"] = ({name: model for name in json.loads(
+        coding["coder_agent"] = coder if coder in ("opencode", "agy") else "codex"
+        coding["routes"] = ({name: ({"model": model, "effort": "medium"} if coder == "agy" else model)
+                             for name in json.loads(
             (Path(__file__).with_name("config.json")).read_text(encoding="utf-8"))["required_routes"]}
-            if coder == "opencode" else {})
+            if coder in ("opencode", "agy") else {})
         text = _upsert(text, "coding", "coder_agent", coding["coder_agent"], newline)
         routes = coding["routes"]
-        rendered = "routes = {" + ", ".join(f"{name} = {json.dumps(value)}" for name, value in routes.items()) + "}" + newline
+        rendered = "routes = {" + ", ".join(
+            f"{name} = {{ model = {json.dumps(value['model'])}, effort = {json.dumps(value['effort'])} }}"
+            if coder == "agy" else f"{name} = {json.dumps(value)}"
+            for name, value in routes.items()) + "}" + newline
         text = _upsert(text, "coding", "routes", routes, newline, rendered=rendered)
     if trust:
         table = after.setdefault("trust", {})
@@ -308,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--plan", action="store_true")
     modes.add_argument("--apply", action="store_true")
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--coder", choices=("codex", "claude", "opencode"))
+    parser.add_argument("--coder", choices=("codex", "claude", "opencode", "agy"))
     parser.add_argument("--model")
     parser.add_argument("--reviewer", choices=("agy", "none"))
     parser.add_argument("--trust", action="store_true")
@@ -319,8 +343,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--detect requires --json and no change options")
     elif args.json or args.coder is None or args.reviewer is None:
         parser.error("--plan and --apply require --coder and --reviewer, without --json")
-    if args.coder != "opencode" and args.model is not None:
-        parser.error("--model requires --coder opencode")
+    if args.coder not in ("opencode", "agy") and args.model is not None:
+        parser.error("--model requires --coder opencode or agy")
     project = Path.cwd().resolve()
     config = Path.home() / ".orchestrator" / "config.toml"
     python_file = config.with_name("python")
@@ -333,6 +357,10 @@ def main(argv: list[str] | None = None) -> int:
             binary = coder_config.opencode_binary()
             if not binary or not args.model or args.model not in _opencode_models(binary):
                 raise ValueError("OpenCode is unavailable or selected model is absent from opencode models")
+        if args.coder == "agy":
+            binary = coder_config.agy_binary()
+            if not binary or not args.model or args.model not in _agy_models(binary):
+                raise ValueError("Antigravity is unavailable or selected model is absent from agy models")
         handoff = compaction_advisor.handoff_path(project)
         original = config.read_bytes() if config.exists() else None
         changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model)

@@ -29,6 +29,20 @@ def test_opencode_route_requires_qualified_model_and_variant(config):
     assert policy.resolve_route("normal", config).code == policy.CONFIG_INVALID
 
 
+def test_agy_route_is_gemini_family(config):
+    config["coder_agent"] = "agy"
+    for entry in config["routes"].values():
+        entry.update(model="gemini-3.8-flash-low", effort="medium")
+    assert policy.resolve_route("normal", config).pair == ("gemini-3.8-flash-low", "medium")
+    assert policy.model_family(config["routes"]["normal"]["model"]) == "gemini"
+    config["routes"]["normal"]["effort"] = "none"
+    assert policy.resolve_route("normal", config).code == policy.CONFIG_INVALID
+    config["routes"]["normal"]["effort"] = "max"
+    assert policy.resolve_route("normal", config).pair == ("gemini-3.8-flash-low", "max")
+    config["routes"]["normal"]["model"] = "claude-sonnet-4-6"
+    assert policy.resolve_route("normal", config).code == policy.CONFIG_INVALID
+
+
 def orch(**overrides):
     values = {
         "task": "task-1",

@@ -13,6 +13,7 @@ import purser_init
 import coder_config
 import codex
 import codex_exec_mcp
+import project_profile
 
 
 @pytest.fixture
@@ -169,7 +170,7 @@ def test_append_preserves_existing_literal_entries(site):
     assert tomllib.loads(changed)["trust"]["paths"][-1] == str(project)
 
 
-@pytest.mark.parametrize("field,value", [("--coder", "agy"), ("--reviewer", "claude")])
+@pytest.mark.parametrize("field,value", [("--coder", "unknown"), ("--reviewer", "claude")])
 def test_invalid_value_no_write(site, field, value):
     home, _ = site
     args = ["--apply", "--coder", "codex", "--reviewer", "none", "--trust"]
@@ -228,6 +229,29 @@ def test_opencode_absent_is_unavailable(site, monkeypatch, capsys):
     assert run("--detect", "--json") == 0
     assert json.loads(capsys.readouterr().out)["agents"]["opencode"] == {
         "available": False, "path": None, "version": None, "models": []}
+
+
+def test_agy_absent_is_hidden_from_coder_options(site, monkeypatch, capsys):
+    original_which = shutil.which
+    monkeypatch.setattr(coder_config, "agy_binary", lambda: None)
+    monkeypatch.setattr(purser_init.shutil, "which", lambda name: None if name == "agy" else original_which(name))
+    assert run("--detect", "--json") == 0
+    assert json.loads(capsys.readouterr().out)["agents"]["agy"]["available"] is False
+
+
+def test_agy_choice_persists_gemini_routes(site, monkeypatch):
+    home, project = site
+    monkeypatch.setattr(coder_config, "agy_binary", lambda: "agy-native")
+    monkeypatch.setattr(purser_init, "_agy_models", lambda binary: ["gemini-3.8-flash-low"])
+    assert run("--apply", "--coder", "agy", "--model", "gemini-3.8-flash-low", "--reviewer", "agy") == 0
+    loaded = coder_config.load(Path(__file__).parents[1] / "config.json")
+    assert loaded["coder_agent"] == "agy"
+    assert set((entry["model"], entry["effort"]) for entry in loaded["routes"].values()) == {
+        ("gemini-3.8-flash-low", "medium")}
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert saved["coding"]["routes"] == loaded["routes"]
+    assert project_profile.load_profile(project).user_status == "ok"
+    assert codex_exec_mcp.Server._configured_agent() == "agy"
 
 
 def test_unknown_opencode_model_is_rejected_before_write(site, monkeypatch):

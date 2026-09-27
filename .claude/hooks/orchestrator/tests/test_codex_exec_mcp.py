@@ -954,6 +954,81 @@ def _opencode_client(area, **flags):
                   extra_env={"PURSER_AGENT": "opencode", **flags})
 
 
+FAKE_AGY = r'''
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+with open(os.environ["FAKE_RECORD"], "a", encoding="utf-8") as stream:
+    stream.write(json.dumps({"argv": args, "cwd": os.getcwd()}) + "\n")
+if os.environ.get("FAKE_AGY_MISSING") == "1":
+    print("{}")
+elif os.environ.get("FAKE_AGY_FAIL") == "1":
+    print(json.dumps({"conversation_id": "agy-thread", "status": "FAILED", "error": "quota denied"}))
+else:
+    session = "new-thread" if os.path.exists(os.path.join(os.getcwd(), "agy-new-id")) else "agy-thread"
+    print(json.dumps({"conversation_id": session, "status": "SUCCESS", "response": "DONE"}))
+'''
+
+
+def _agy_client(area, **flags):
+    fake = area / "fake_agy.py"
+    fake.write_text(FAKE_AGY, encoding="utf-8")
+    return Client(area, bin_override=json.dumps([sys.executable, str(fake)]),
+                  extra_env={"PURSER_AGENT": "agy", **flags})
+
+
+def test_agy_job_command_completion_and_resume(area):
+    client = _agy_client(area)
+    try:
+        first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+                                                 "cwd": str(area), "model": "gemini-3.8-flash-low",
+                                                 "config": {"model_reasoning_effort": "medium"}})
+        assert finish(client, first["jobId"], "SUCCEEDED")["threadId"] == "agy-thread"
+        second = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                  "threadId": "agy-thread", "prompt": "two"})
+        assert finish(client, second["jobId"], "SUCCEEDED")["content"] == "DONE"
+        calls = client.calls()
+        assert calls[0] == {"argv": ["--print", "one", "--output-format", "json", "--model",
+                                      "gemini-3.8-flash-low", "--mode", "accept-edits",
+                                      "--dangerously-skip-permissions", "--effort", "medium",
+                                      "--new-project", "--add-dir", str(area)], "cwd": str(area)}
+        assert calls[1]["argv"] == ["--print", "two", "--output-format", "json", "--model",
+                                     "gemini-3.8-flash-low", "--mode", "accept-edits",
+                                     "--dangerously-skip-permissions", "--effort", "medium",
+                                     "--conversation", "agy-thread"]
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("flag", ["FAKE_AGY_MISSING", "FAKE_AGY_FAIL"])
+def test_agy_missing_completion_or_failure_fails(area, flag):
+    client = _agy_client(area, **{flag: "1"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+                                                   "cwd": str(area), "model": "gemini-3.8-flash-low",
+                                                   "config": {"model_reasoning_effort": "medium"}})
+        assert finish(client, started["jobId"], "FAILED")["errorCode"] == "CODEX_FAILED"
+    finally:
+        client.close()
+
+
+def test_agy_reply_denied_when_cli_starts_new_conversation(area):
+    client = _agy_client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+                                                   "cwd": str(area), "model": "gemini-3.8-flash-low",
+                                                   "config": {"model_reasoning_effort": "medium"}})
+        assert finish(client, started["jobId"], "SUCCEEDED")["threadId"] == "agy-thread"
+        (area / "agy-new-id").touch()
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                 "threadId": "agy-thread", "prompt": "two"})
+        assert finish(client, reply["jobId"], "FAILED")["errorCode"] == "CODEX_FAILED"
+    finally:
+        client.close()
+
+
 def test_opencode_job_session_resume_and_command(area):
     client = _opencode_client(area)
     try:

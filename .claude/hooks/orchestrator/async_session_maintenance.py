@@ -29,7 +29,7 @@ MAX_TELEMETRY_LINES = 4096
 ACCURACY_WINDOW = 30
 IMPLEMENTER = "codex-main"
 ROUTES = ("mechanical", "subtle", "normal", "consequential", "escalated", "operation")
-AGENT_NAMES = {"codex-main": ("Codex", "in"), "opencode-main": ("OpenCode", "in"), "claude": ("Claude", "un")}
+AGENT_NAMES = {"codex-main": ("Codex", "in"), "opencode-main": ("OpenCode", "in"), "agy-main": ("Antigravity", "in"), "claude": ("Claude", "un")}
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED"}
 _JOB_ID = re.compile(r"[0-9a-f]{64}")
 

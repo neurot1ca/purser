@@ -363,17 +363,19 @@ def _authority_path(value: Any) -> str | None:
 def _valid_security_value(section: str, key: str, value: Any) -> tuple[bool, str]:
     if section == "coding":
         if key == "coder_agent":
-            valid = value in ("codex", "opencode")
+            valid = value in ("codex", "opencode", "agy")
         else:
             valid = isinstance(value, dict) and all(
-                isinstance(name, str) and isinstance(model, str)
+                isinstance(name, str) and (isinstance(model, str) or (
+                    isinstance(model, dict) and set(model) == {"model", "effort"}
+                    and isinstance(model["model"], str) and isinstance(model["effort"], str)))
                 for name, model in value.items()
             )
         return valid, "" if valid else f"[coding] {key} has an invalid value"
     if section == "roles":
         allowed = {
             "orchestrator": {"claude-code"},
-            "coder": {"codex", "claude", "opencode"},
+            "coder": {"codex", "claude", "opencode", "agy"},
             "reviewer": {"agy", "none"},
         }
         if isinstance(value, str) and value in allowed[key]:

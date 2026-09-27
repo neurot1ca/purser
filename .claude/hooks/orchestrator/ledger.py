@@ -1364,7 +1364,7 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
     }
     if not required_keys.issubset(thread_keys) or not thread_keys.issubset(allowed_keys):
         return False
-    if "agent" in thread and thread["agent"] not in ("codex", "opencode"):
+    if "agent" in thread and thread["agent"] not in ("codex", "opencode", "agy"):
         return False
     if thread.get("task_id") != task_id or any(
         not isinstance(thread.get(field), str) or not thread.get(field)

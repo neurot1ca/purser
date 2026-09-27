@@ -443,6 +443,21 @@ def _event_message(event: dict[str, Any]) -> str:
 def _agent_command(agent: str, prefix: list[str], name: str, cwd: str,
                    model: str | None, config_args: list[str], sandbox: str | None,
                    thread_id: str | None, output_path: Path, prompt: str) -> list[str]:
+    if agent == "agy":
+        if not isinstance(model, str) or not coder_config.AGY_MODEL.fullmatch(model):
+            raise ValueError("Antigravity model must be a Gemini model from agy models")
+        if sandbox is not None or len(config_args) != 1 or not config_args[0].startswith("model_reasoning_effort="):
+            raise ValueError("unsupported Antigravity sandbox or config")
+        effort = json.loads(config_args[0].split("=", 1)[1])
+        if not isinstance(effort, str) or effort not in coder_config.AGY_EFFORTS:
+            raise ValueError("Antigravity effort must be low, medium, high or max")
+        command = prefix + ["--print", prompt, "--output-format", "json", "--model", model,
+                            "--mode", "accept-edits", "--dangerously-skip-permissions", "--effort", effort]
+        if name == "codex-reply":
+            command += ["--conversation", thread_id]
+        else:
+            command += ["--new-project", "--add-dir", cwd]
+        return command
     if agent == "opencode":
         if not model or "/" not in model or model.startswith("/") or model.endswith("/"):
             raise ValueError("OpenCode model must be provider/model")
@@ -482,6 +497,15 @@ def _agent_command(agent: str, prefix: list[str], name: str, cwd: str,
 def _agent_event(agent: str, event: dict[str, Any]) -> tuple[str | None, bool, str | None, str | None]:
     """Return session identity, terminal marker, failure, and final text."""
     kind = event.get("type")
+    if agent == "agy":
+        session = event.get("conversation_id")
+        session = session if isinstance(session, str) and session else None
+        status = event.get("status")
+        success = isinstance(status, str) and status.casefold() == "success"
+        response = event.get("response")
+        failure = (None if success and isinstance(response, str) else
+                   str(event.get("error") or status or "Antigravity completion missing"))
+        return session, success, failure, response if isinstance(response, str) else None
     if agent == "opencode":
         session = event.get("sessionID")
         session = session if isinstance(session, str) and session else None
@@ -589,14 +613,14 @@ class Server:
     def _configured_agent() -> str:
         config = coder_config.load(Path(__file__).with_name("config.json"))
         selected = config.get("coder_agent", "codex")
-        if selected not in ("codex", "opencode"):
-            raise ValueError("coder_agent must be codex or opencode")
+        if selected not in ("codex", "opencode", "agy"):
+            raise ValueError("coder_agent must be codex, opencode or agy")
         return selected
 
     def _agent_prefix(self) -> list[str]:
         if self.agent == "codex":
             return _binary_prefix(self.codex_bin)
-        if self.agent != "opencode":
+        if self.agent not in ("opencode", "agy"):
             raise ValueError("unknown agent")
         if self.codex_bin:
             value = json.loads(self.codex_bin) if self.codex_bin.startswith("[") else self.codex_bin
@@ -604,10 +628,10 @@ class Server:
                 return [value]
             if isinstance(value, list) and value and all(isinstance(item, str) and item for item in value):
                 return value
-            raise ValueError("invalid OpenCode binary override")
-        binary = coder_config.opencode_binary()
+            raise ValueError("invalid agent binary override")
+        binary = coder_config.opencode_binary() if self.agent == "opencode" else coder_config.agy_binary()
         if not binary:
-            raise ValueError("OpenCode executable was not found")
+            raise ValueError(f"{self.agent} executable was not found")
         return [binary]
 
     def _signal_loop(self) -> None:
@@ -880,11 +904,11 @@ class Server:
                 for field in ("developer-instructions", "base-instructions", "compact-prompt"):
                     if field in args and not isinstance(args[field], str):
                         raise ValueError("invalid " + field)
-                if self.agent == "opencode":
+                if self.agent in ("opencode", "agy"):
                     if args.get("approval-policy") is not None or any(
                             field in args for field in ("developer-instructions", "base-instructions", "compact-prompt")):
                         raise ValueError("unsupported OpenCode option")
-                    _agent_command("opencode", [], name, args.get("cwd", os.getcwd()),
+                    _agent_command(self.agent, [], name, args.get("cwd", os.getcwd()),
                                    args.get("model"), _flatten_config(args.get("config", {})),
                                    args.get("sandbox"), None, Path("unused"), prompt)
         except (OSError, ValueError, TypeError):
@@ -1081,7 +1105,7 @@ class Server:
                 if sandbox is not None:
                     if sandbox not in ("read-only", "workspace-write", "danger-full-access"):
                         raise ValueError("invalid sandbox")
-                if self.agent == "opencode" and (arguments.get("approval-policy") is not None or any(
+                if self.agent in ("opencode", "agy") and (arguments.get("approval-policy") is not None or any(
                         field in arguments for field in ("developer-instructions", "base-instructions", "compact-prompt"))):
                     raise ValueError("unsupported OpenCode option")
             else:
@@ -1204,11 +1228,15 @@ class Server:
                 parsed = [_agent_event(self.agent, event) for event in events]
                 started = next((session for session, _, _, _ in parsed if session), None)
                 failures = [failure for _, _, failure, _ in parsed if failure]
+                if self.agent == "agy" and name == "codex-reply" and started != thread_id:
+                    failures.append("Antigravity did not resume the requested conversation; start a fresh call")
                 completed = any(event.get("type") == "step_finish" and isinstance(event.get("part"), dict)
                                 and event["part"].get("reason") == "stop" for event in events) if self.agent == "opencode" else any(
+                                    isinstance(event.get("status"), str) and event["status"].casefold() == "success"
+                                    for event in events) if self.agent == "agy" else any(
                                     event.get("type") == "turn.completed" for event in events)
                 forced_complete = exit_forced_after_terminal and completed and not failures
-                if (process.returncode != 0 and not forced_complete) or not started or failures or ((async_job or self.agent == "opencode") and not completed):
+                if (process.returncode != 0 and not forced_complete) or not started or failures or ((async_job or self.agent in ("opencode", "agy")) and not completed):
                     detail = ("\n".join(failures) if failures else
                               "turn completion event missing" if async_job and not completed else
                               stderr[-4000:] or f"exit code {process.returncode}")

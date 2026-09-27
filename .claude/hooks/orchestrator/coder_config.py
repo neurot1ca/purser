@@ -9,6 +9,12 @@ import tomllib
 
 
 MODEL = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
+AGY_MODEL = re.compile(r"gemini-[A-Za-z0-9._-]+\Z")
+AGY_EFFORTS = frozenset(("low", "medium", "high", "max"))
+
+
+def agy_binary() -> str | None:
+    return shutil.which("agy")
 
 
 def opencode_binary() -> str | None:
@@ -36,19 +42,30 @@ def load(config_path: Path) -> dict:
     if not isinstance(coding, dict):
         raise ValueError("[coding] must be a table")
     agent = coding.get("coder_agent", "codex")
-    if agent not in ("codex", "opencode"):
+    if agent not in ("codex", "opencode", "agy"):
         raise ValueError("[coding] coder_agent is invalid")
     role = user.get("roles", {}).get("coder", "codex")
-    if agent == "opencode":
+    if agent in ("opencode", "agy"):
         routes = coding.get("routes")
-        if role != "opencode" or not isinstance(routes, dict) or set(routes) != set(config["required_routes"]):
-            raise ValueError("[coding] OpenCode routes or role are invalid")
-        if not all(isinstance(model, str) and MODEL.fullmatch(model) for model in routes.values()):
-            raise ValueError("[coding] OpenCode route model is invalid")
-        if len(set(routes.values())) != 1:
-            raise ValueError("[coding] OpenCode routes must use one model")
-        config["routes"] = {name: {"model": model, "effort": "none"} for name, model in routes.items()}
-    elif role == "opencode" or coding.get("routes", {}) != {}:
+        if role != agent or not isinstance(routes, dict) or set(routes) != set(config["required_routes"]):
+            raise ValueError("[coding] coder routes or role are invalid")
+        pattern = MODEL if agent == "opencode" else AGY_MODEL
+        if agent == "agy":
+            if not all(isinstance(route, dict) and set(route) == {"model", "effort"}
+                       and isinstance(route["model"], str) and pattern.fullmatch(route["model"])
+                       and isinstance(route["effort"], str) and route["effort"] in AGY_EFFORTS
+                       for route in routes.values()):
+                raise ValueError("[coding] Antigravity route model or effort is invalid")
+            if len({route["model"] for route in routes.values()}) != 1:
+                raise ValueError("[coding] coder routes must use one model")
+            config["routes"] = routes
+        else:
+            if not all(isinstance(model, str) and pattern.fullmatch(model) for model in routes.values()):
+                raise ValueError("[coding] coder route model is invalid")
+            if len(set(routes.values())) != 1:
+                raise ValueError("[coding] coder routes must use one model")
+            config["routes"] = {name: {"model": model, "effort": "none"} for name, model in routes.items()}
+    elif role in ("opencode", "agy") or coding.get("routes", {}) != {}:
         raise ValueError("[coding] coder agent and routes disagree")
     config["coder_agent"] = agent
     return config

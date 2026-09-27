@@ -1367,9 +1367,10 @@ def pre_tool_use(
             )
         requested = _requested_thread(parsed, route)
         agent = loaded_config.get("coder_agent", "codex")
-        if new_call and agent == "opencode" and parsed.phase == "plan":
-            return _observed_denial(event, "OPENCODE_PLAN_UNISOLATED",
-                                    "OpenCode has no verified read-only sandbox for plan calls.",
+        if new_call and agent in ("opencode", "agy") and parsed.phase == "plan":
+            return _observed_denial(event, "OPENCODE_PLAN_UNISOLATED" if agent == "opencode" else "AGY_PLAN_UNISOLATED",
+                                    "OpenCode has no verified read-only sandbox for plan calls." if agent == "opencode"
+                                    else "Antigravity has no verified read-only sandbox for plan calls.",
                                     state_root=state_root, task_id=parsed.task_id)
         if reply_call and isinstance(live_thread, Mapping) and live_thread.get("agent", "codex") != agent:
             return _observed_denial(event, "THREAD_AGENT_MISMATCH",

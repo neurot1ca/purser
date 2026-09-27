@@ -109,8 +109,8 @@ def validate_config(config: Mapping[str, Any]) -> None:
     _string_list(config, "allowed_reasons")
     allowed_efforts = set(_string_list(config, "allowed_efforts"))
     agent = config.get("coder_agent", "codex")
-    if agent not in ("codex", "opencode"):
-        raise ConfigError("INVALID_CONFIG_FIELD", "coder_agent must be codex or opencode")
+    if agent not in ("codex", "opencode", "agy"):
+        raise ConfigError("INVALID_CONFIG_FIELD", "coder_agent must be codex, opencode or agy")
     if agent == "codex" and "sol_model" not in config:
         raise ConfigError("MISSING_CONFIG_FIELD", "config is missing required field(s): sol_model")
     required_routes = set(_string_list(config, "required_routes"))
@@ -132,8 +132,11 @@ def validate_config(config: Mapping[str, Any]) -> None:
             raise ConfigError("INVALID_ROUTE_ENTRY", f"route {route!r} has no model")
         if agent == "opencode" and not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", model):
             raise ConfigError("INVALID_ROUTE_ENTRY", f"route {route!r} OpenCode model must be provider/model")
+        if agent == "agy" and not re.fullmatch(r"gemini-[A-Za-z0-9._-]+", model):
+            raise ConfigError("INVALID_ROUTE_ENTRY", f"route {route!r} Antigravity model must be Gemini")
         if (not isinstance(effort, str) or (agent == "codex" and effort not in allowed_efforts)
-                or (agent == "opencode" and effort != "none" and not re.fullmatch(r"[A-Za-z0-9._-]+", effort))):
+                or (agent == "opencode" and effort != "none" and not re.fullmatch(r"[A-Za-z0-9._-]+", effort))
+                or (agent == "agy" and effort not in {"low", "medium", "high", "max"})):
             raise ConfigError(
                 "INVALID_ROUTE_EFFORT",
                 f"route {route!r} names unsupported effort {effort!r}",
@@ -468,7 +471,7 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
     sol_routes = {"normal", "consequential", "escalated"}
     if values["route"] in sol_routes and not values.get("basis", "").strip():
         route = values["route"]
-        if config.get("coder_agent", "codex") == "opencode":
+        if config.get("coder_agent", "codex") in ("opencode", "agy"):
             message = (f"route={route} requires basis=<the design choice left to the worker> "
                        "(for escalated: the concrete miss).")
         else:

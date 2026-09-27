@@ -173,6 +173,17 @@ def test_opencode_start_and_cross_agent_reply_denied(workspace, config):
     assert "different coding agent" in denied["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_agy_start_passes_route_effort_to_bridge(workspace, config):
+    repo, state = workspace
+    config["coder_agent"] = "agy"
+    for entry in config["routes"].values():
+        entry.update(model="gemini-3.8-flash", effort="medium")
+    start = event(START_TOOL, tool_use_id="agy-start")
+    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["model"] == "gemini-3.8-flash"
+    assert updated["config"] == {"model_reasoning_effort": "medium"}
+
+
 def test_unknown_model_family_skips_reviewer_and_forces_full(workspace, config):
     repo, state = workspace
     config["coder_agent"] = "opencode"
