@@ -122,4 +122,25 @@ def load(config_path: Path) -> dict:
                 raise ValueError("[coding] Codex route model or effort is invalid")
             config["routes"] = routes
     config["coder_agent"] = agent
+    fallback = user.get("fallback")
+    if fallback is not None:
+        if (not isinstance(fallback, dict) or set(fallback) != {"agent", "model", "family"}
+                or fallback.get("agent") not in ("codex", "opencode", "agy")
+                or not isinstance(fallback.get("model"), str)
+                or not isinstance(fallback.get("family"), str)
+                or not FAMILY.fullmatch(fallback["family"])):
+            raise ValueError("[fallback] agent, model, or family is invalid")
+        fallback_agent, fallback_model = fallback["agent"], fallback["model"]
+        model_pattern = (
+            MODEL if fallback_agent == "opencode" else
+            AGY_MODEL if fallback_agent == "agy" else
+            re.compile(r"[A-Za-z0-9._-]+\Z")
+        )
+        if not model_pattern.fullmatch(fallback_model):
+            raise ValueError("[fallback] model is invalid")
+        primary_route = config["routes"].get("normal", {})
+        primary_model = primary_route.get("model") if isinstance(primary_route, dict) else primary_route
+        if fallback_model == primary_model:
+            raise ValueError("[fallback] model must differ from the primary coder model")
+        config["fallback"] = dict(fallback)
     return config

@@ -88,6 +88,22 @@ def _listed_family(coder: str, model: str) -> str | None:
     return _family(choice)
 
 
+def _validate_fallback(agent: str, model: str, primary_model: str, config_path: Path,
+                       project: Path) -> dict:
+    if model == primary_model:
+        raise ValueError("fallback model must differ from the primary coder model")
+    detected = detect(config_path, project)
+    report = detected["agents"].get(agent, {})
+    available_models = {entry["id"] if isinstance(entry, dict) else entry
+                        for entry in report.get("models", [])}
+    if not report.get("available") or model not in available_models:
+        raise ValueError("fallback coder or model is not detected as working")
+    family = _listed_family(agent, model)
+    if family is None:
+        raise ValueError("fallback model family is unavailable")
+    return {"agent": agent, "model": model, "family": family}
+
+
 def _agent(name: str, executable: str | None = None) -> dict:
     path = executable or shutil.which(name)
     if not path:
@@ -423,7 +439,8 @@ def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, p
                model: str | None = None, routes: dict | None = None, family: str | None = None,
                reviewer_model: str | None = None,
                reviewer_executable: str | None = None,
-               opencode_mechanical: bool | None = None) -> bytes:
+               opencode_mechanical: bool | None = None,
+               fallback: dict | None = None) -> bytes:
     text = original.decode("utf-8") if original is not None else "schema_version = 1\n"
     before = tomllib.loads(text)
     newline = "\r\n" if "\r\n" in text else "\n"
@@ -453,6 +470,11 @@ def _candidate(original: bytes | None, coder: str, reviewer: str, trust: bool, p
             raise ValueError("[mechanical] must be a table")
         mechanical["opencode_enabled"] = opencode_mechanical
         text = _upsert(text, "mechanical", "opencode_enabled", opencode_mechanical, newline)
+    if fallback is not None:
+        after["fallback"] = fallback
+        text = _upsert(text, "fallback", "agent", fallback["agent"], newline)
+        text = _upsert(text, "fallback", "model", fallback["model"], newline)
+        text = _upsert(text, "fallback", "family", fallback["family"], newline)
     if routes is not None or coder in ("opencode", "agy") or "coding" in after:
         coding = after.setdefault("coding", {})
         if not isinstance(coding, dict):
@@ -571,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--coder", choices=("codex", "claude", "opencode", "agy"))
     parser.add_argument("--model")
+    parser.add_argument("--fallback-agent", choices=("codex", "opencode", "agy"))
+    parser.add_argument("--fallback-model")
     parser.add_argument("--mode", choices=("balanced", "maximum", "manual"))
     parser.add_argument("--effort")
     parser.add_argument("--reviewer", choices=("agy", "opencode", "codex", "none"))
@@ -581,15 +605,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scaffold-profile", action="store_true")
     args = parser.parse_args(argv)
     if args.detect:
-        if not args.json or args.mode or args.effort or args.reviewer or args.reviewer_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
+        if not args.json or args.mode or args.effort or args.reviewer or args.reviewer_model or args.fallback_agent or args.fallback_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
             parser.error("--detect requires --json and accepts only optional --coder and --model")
         if args.model and not args.coder:
             parser.error("--detect --model requires --coder")
     elif args.list_models:
-        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.mode or args.effort or args.reviewer or args.reviewer_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
+        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.mode or args.effort or args.reviewer or args.reviewer_model or args.fallback_agent or args.fallback_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
             parser.error("--list-models requires --json and --coder codex, opencode, or agy")
     elif args.json or args.coder is None or args.reviewer is None:
         parser.error("--plan and --apply require --coder and --reviewer, without --json")
+    if bool(args.fallback_agent) != bool(args.fallback_model):
+        parser.error("--fallback-agent and --fallback-model must be used together")
+    if args.fallback_agent and args.coder == "claude":
+        parser.error("fallback selection is not available when Claude is the primary coder")
     if args.mode == "manual" and not args.model:
         parser.error("--mode manual requires --model")
     if args.reviewer_model and args.reviewer == "none":
@@ -637,6 +665,16 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("Antigravity is unavailable or selected model is absent from agy models")
         if args.coder in ("opencode", "agy") and not args.mode:
             family = _listed_family(args.coder, args.model)
+        fallback = None
+        if args.fallback_agent:
+            if args.coder in ("agy", "opencode"):
+                primary_model = args.model
+            elif args.mode:
+                primary_model = routes["normal"]["model"] if isinstance(routes["normal"], dict) else routes["normal"]
+            else:
+                primary_model = json.loads(Path(__file__).with_name("config.json").read_text(encoding="utf-8"))["routes"]["normal"]["model"]
+            fallback = _validate_fallback(args.fallback_agent, args.fallback_model, primary_model,
+                                          config, project)
         handoff = compaction_advisor.handoff_path(project)
         original = config.read_bytes() if config.exists() else None
         reviewer_executable = None
@@ -645,7 +683,7 @@ def main(argv: list[str] | None = None) -> int:
             if not reviewer_executable:
                 raise ValueError(f"Reviewer-1 executable is unavailable for {args.reviewer}")
         changed = _candidate(original, args.coder, args.reviewer, args.trust, project, args.model, routes, family,
-                             args.reviewer_model, reviewer_executable, args.opencode_mechanical)
+                             args.reviewer_model, reviewer_executable, args.opencode_mechanical, fallback)
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
         handoff_missing = not handoff.exists()
         python_original = python_file.read_bytes() if python_file.exists() else None

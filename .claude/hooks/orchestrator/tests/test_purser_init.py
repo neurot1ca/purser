@@ -86,6 +86,50 @@ def test_python_path_is_planned_and_second_apply_is_noop(site, capsys):
     assert capsys.readouterr().out.startswith("No changes.\nHandoff: ")
 
 
+def test_fallback_selection_round_trips_through_plan_and_apply(site, monkeypatch, capsys):
+    home, _ = site
+    model = "deepseek/deepseek-flash"
+    monkeypatch.setattr(purser_init, "detect", lambda *_args, **_kwargs: {
+        "agents": {"opencode": {"available": True, "models": [model]}}})
+    monkeypatch.setattr(purser_init, "_listed_family", lambda *_args: "deepseek")
+    args = ("--coder", "codex", "--reviewer", "none", "--fallback-agent", "opencode",
+            "--fallback-model", model)
+    assert run("--plan", *args) == 0
+    assert f'model = "{model}"' in capsys.readouterr().out
+    assert not (home / ".orchestrator" / "config.toml").exists()
+    assert run("--apply", *args) == 0
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert saved["fallback"] == {"agent": "opencode", "model": model, "family": "deepseek"}
+    assert coder_config.load(Path(__file__).parents[1] / "config.json")["fallback"] == saved["fallback"]
+
+
+def test_yedek_yok_does_not_create_fallback_config(site):
+    home, _ = site
+    assert run("--apply", "--coder", "codex", "--reviewer", "none") == 0
+    saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
+    assert "fallback" not in saved
+    assert "fallback" not in coder_config.load(Path(__file__).parents[1] / "config.json")
+
+
+def test_fallback_same_as_primary_is_rejected_before_write(site, monkeypatch):
+    home, _ = site
+    model = "gpt-6-sol"
+    monkeypatch.setattr(purser_init, "detect", lambda *_args, **_kwargs: {
+        "agents": {"codex": {"available": True, "models": [model]}}})
+    assert run("--apply", "--coder", "codex", "--reviewer", "none", "--fallback-agent", "codex",
+               "--fallback-model", model) == 1
+    assert not (home / ".orchestrator" / "config.toml").exists()
+
+
+def test_coder_config_rejects_invalid_fallback_values(site):
+    home, _ = site
+    config = home / ".orchestrator" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[fallback]\nagent = "codex"\nmodel = "not a model"\nfamily = "openai"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match=r"\[fallback\] model is invalid"):
+        coder_config.load(Path(__file__).parents[1] / "config.json")
+
+
 def test_existing_different_python_path_appears_in_plan(site, capsys):
     home, _ = site
     locator = home / ".orchestrator" / "python"
