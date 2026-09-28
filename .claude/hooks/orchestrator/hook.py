@@ -15,7 +15,9 @@ def dispatch(event: Mapping[str, Any]) -> dict[str, Any]:
     hook_name = event.get("hook_event_name")
     if hook_name == "Stop":
         return codex.stop(event)
-    if event.get("tool_name") not in codex.CODEX_TOOLS:
+    if (event.get("tool_name") not in codex.CODEX_TOOLS
+            and not (hook_name == "PostToolUse"
+                     and event.get("tool_name") in codex.CODEX_APPLY_TOOL_NAMES)):
         return {}
     handler = {
         "PreToolUse": codex.pre_tool_use,
@@ -49,7 +51,8 @@ def main() -> int:
         elif (
             isinstance(value, Mapping)
             and value.get("hook_event_name") == "PostToolUse"
-            and value.get("tool_name") in codex.CODEX_TOOLS
+            and (value.get("tool_name") in codex.CODEX_TOOLS
+                 or value.get("tool_name") in codex.CODEX_APPLY_TOOL_NAMES)
         ):
             try:
                 response = codex.internal_post_error_response(value, error)

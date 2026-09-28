@@ -50,8 +50,9 @@ def _mechanical_leader_context(payload: Mapping[str, Any], repository: Path | No
             return None
         return (
             "On your next reply, render exactly one line in the user's language in this form: "
-            f"⚓ **Ücretsiz model sıralaması değişti:** `{model}` artık 1. sırada "
-            f"(son {sample_count} denemede {successes} başarı). Mekanik işler önce bu modele gidecek. "
+            f"⚓ **Ücretsiz model sıralaması değişti:** `{model}` son {sample_count} denemeden "
+            f"{successes} tanesinde başarılı oldu ve yarışta ilk sıraya yerleşti. "
+            "Mekanik işler önce bu modele gidecek. "
             f"Translate the line for other languages, keeping ⚓, `{model}`, and the numbers."
         )
     except BaseException:

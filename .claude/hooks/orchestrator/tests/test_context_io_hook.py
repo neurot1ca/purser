@@ -147,8 +147,8 @@ def test_mechanical_leader_context_is_cleared_and_recorded_by_stop(monkeypatch, 
     payload = {"session_id": "session-leader"}
 
     context = context_io_hook._plugin_update_context(payload, tmp_path)
-    assert "⚓ **Ücretsiz model sıralaması değişti:** `vendor/free-model` artık 1. sırada" in context
-    assert "(son 9 denemede 7 başarı). Mekanik işler önce bu modele gidecek." in context
+    assert ("⚓ **Ücretsiz model sıralaması değişti:** `vendor/free-model` son 9 denemeden "
+            "7 tanesinde başarılı oldu ve yarışta ilk sıraya yerleşti. Mekanik işler önce bu modele gidecek.") in context
     blocked = compaction_advisor.stop({**payload, "last_assistant_message": "Not announced."}, tmp_path)
     assert blocked["decision"] == "block"
     assert "⚓" in blocked["reason"] and "vendor/free-model" in blocked["reason"]

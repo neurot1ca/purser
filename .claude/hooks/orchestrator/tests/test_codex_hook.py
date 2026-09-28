@@ -1239,6 +1239,32 @@ def test_codex_apply_replaces_pending_board_with_applied_status(workspace, confi
     assert codex.compaction_advisor._read_state(advisor_path, "session-1")["dispatch_pending"] is None
 
 
+def test_hook_dispatch_refreshes_result_board_after_apply(workspace, monkeypatch):
+    repo, state = workspace
+    job_id, _ = _board_job(state, "applied-after-result", "SUCCEEDED", finishedAt=time.time())
+    _board_job(state, "other-job", "RUNNING")
+    advisor_state = repo / "advisor-state"
+    monkeypatch.setattr(codex, "_state_root", lambda _root: state)
+    monkeypatch.setattr(codex.compaction_advisor, "_state_directory", lambda _repo: advisor_state)
+
+    result_event = event("mcp__plugin_purser_codex-main__codex_result", cwd=str(repo))
+    codex._append_project_job_status({}, state, "project", result_event)
+    pending_path = advisor_state / "compaction_advisor.json"
+    pending = codex.compaction_advisor._read_state(pending_path, "session-1")["dispatch_pending"]
+    assert "| applied-after-result | gpt-6-sol (medium) | done | — | — | — |" in pending["board"]
+
+    job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(applyState="applied", appliedAt=time.time())
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    apply_event = event("mcp__plugin_purser_codex-main__codex_apply", cwd=str(repo), jobId=job_id)
+    apply_event.update(hook_event_name="PostToolUse")
+
+    assert hook.dispatch(apply_event) == {}
+    pending = codex.compaction_advisor._read_state(pending_path, "session-1")["dispatch_pending"]
+    assert "| applied-after-result | gpt-6-sol (medium) | done | — | — | applied |" in pending["board"]
+
+
 def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace, config):
     repo, state = workspace
     _, job_id, _ = async_started(workspace, config)
