@@ -262,6 +262,8 @@ def test_served_model_updates_ledger_and_finished_telemetry(workspace, config, m
     bundle = response_bundle(response, config)
     record = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]
     assert observed_pending[0]["model"] == "gpt-6-sol"
+    assert observed_pending[0]["mechanical_opencode"] is True
+    assert observed_pending[0]["shadow_prompt"] == updated["prompt"]
     assert record["live_thread"]["model"] == "gpt-6-sol"
     assert bundle["model"] == "gpt-6-sol"
     assert reviewed and reviewed[0]["model"] == "gpt-6-sol"

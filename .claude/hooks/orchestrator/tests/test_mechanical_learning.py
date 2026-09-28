@@ -42,21 +42,27 @@ def test_shadow_uses_only_unranked_or_under_sampled_candidate(tmp_path):
     assert mechanical_learning.shadow_candidate("vendor/served-free", root=tmp_path) == "vendor/learning-free"
 
 
-def test_shadow_obeys_opt_in_and_starts_for_accepted_mechanical_result(tmp_path, monkeypatch):
+def test_shadow_starts_for_accepted_mechanical_result_even_when_codex_served(tmp_path, monkeypatch):
     _inventory(tmp_path, "vendor/served-free", "vendor/shadow-free")
     starts = []
     monkeypatch.setattr(mechanical_learning, "start_shadow", lambda **kwargs: starts.append(kwargs) or True)
     pending = {"task_id": "task", "project_key": "0123456789abcdef", "repo_root": str(tmp_path),
-               "route": "mechanical", "model": "vendor/served-free", "agent": "opencode",
+               "route": "normal", "model": "gpt-6-sol", "agent": "codex",
                "mechanical_opencode": False, "shadow_prompt": "Do the task."}
     codex._post_observations({"session_id": "session"}, tmp_path, pending, _accepted_bundle())
     assert not starts
 
     pending["mechanical_opencode"] = True
-    pending["shadow_prompt"] = "Do the task."
+    pending["route"] = "mechanical"
     codex._post_observations({"session_id": "session"}, tmp_path, pending, _accepted_bundle())
     assert len(starts) == 1
-    assert starts[0]["served_model"] == "vendor/served-free"
+    assert starts[0]["served_model"] == ""
+    assert starts[0]["prompt"] == "Do the task."
+
+    pending.update(agent="opencode", model="vendor/served-free")
+    codex._post_observations({"session_id": "session"}, tmp_path, pending, _accepted_bundle())
+    assert len(starts) == 2
+    assert starts[1]["served_model"] == "vendor/served-free"
 
 
 def test_shadow_env_asks_for_all_confined_tools_and_uses_scratch(tmp_path, monkeypatch):

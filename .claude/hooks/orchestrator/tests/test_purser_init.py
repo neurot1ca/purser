@@ -302,6 +302,16 @@ def test_detect_lists_opencode_models_once(site, monkeypatch):
     assert calls == [["opencode", "models"]]
 
 
+def test_opencode_models_skips_invalid_ids_when_valid_ids_exist(monkeypatch):
+    import subprocess
+
+    output = "opencode/big-pickle\nopencode/nemotron-3-ultra-free\nmagnitude/qwen3.5-4b:gguf:q5\n"
+    monkeypatch.setattr(purser_init.subprocess, "run", lambda *_args, **_kwargs:
+                        subprocess.CompletedProcess([], 0, output, ""))
+    assert purser_init._opencode_models("opencode") == [
+        "opencode/big-pickle", "opencode/nemotron-3-ultra-free"]
+
+
 def test_opencode_free_options_collapse_and_deepseek_remains_separate():
     options = purser_init._model_options("opencode", [
         {"id": "opencode/alpha-free", "family": "opencode"},

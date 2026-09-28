@@ -176,8 +176,9 @@ def _opencode_models(binary: str) -> list[str]:
         raise ValueError("opencode models timed out") from exc
     if result.returncode:
         raise ValueError("opencode models failed")
-    models = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if not models or any(coder_config.MODEL.fullmatch(model) is None for model in models):
+    models = [line.strip() for line in result.stdout.splitlines()
+              if coder_config.MODEL.fullmatch(line.strip())]
+    if not models:
         raise ValueError("opencode models returned an invalid list")
     return models
 

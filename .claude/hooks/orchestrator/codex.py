@@ -1705,13 +1705,13 @@ def pre_tool_use(
             "agent": agent,
             "mechanical_opencode": (
                 parsed.route == "mechanical"
+                and parsed.phase == "implementation"
                 and loaded_config.get("mechanical_opencode_enabled", True)
-                and agent == "opencode"
             ),
             "shadow_prompt": updated["prompt"] if (
                 parsed.route == "mechanical"
+                and parsed.phase == "implementation"
                 and loaded_config.get("mechanical_opencode_enabled", True)
-                and agent == "opencode"
             ) else None,
             "scope": declared_scope,
             "repo_root": str(repository) if repository is not None else None,
@@ -3123,7 +3123,7 @@ def _post_observations(
     finished_payload.update({f"codex_{key}": value for key, value in codex_tokens.items()})
     _observe("emit", "IMPLEMENTER_FINISHED", task_id=task_id, **finished_payload)
 
-    if pending.get("mechanical_opencode") is True and pending.get("agent") == "opencode":
+    if pending.get("mechanical_opencode") is True:
         try:
             import mechanical_learning
             accepted = (
@@ -3135,31 +3135,33 @@ def _post_observations(
                     or bundle.get("reviewer1_skipped_reason") in {"NO_DELTA", "BELOW_THRESHOLD"}
                 )
             )
-            attempted_models = pending.get("attempted_models")
-            if isinstance(attempted_models, list):
-                for missing_model in attempted_models:
-                    if isinstance(missing_model, str) and missing_model != pending.get("model"):
-                        missed_positions = mechanical_learning.record_sample(
-                            missing_model, False, root=runtime_root
-                        )
-                        if missed_positions and missed_positions[0] != missed_positions[1]:
-                            _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
-                                     project_key=project_namespace, served_model=missing_model,
-                                     old_rank=missed_positions[0], new_rank=missed_positions[1])
-            positions = mechanical_learning.record_sample(
-                str(pending.get("model")), accepted, root=runtime_root
-            )
-            if positions and positions[0] != positions[1]:
-                _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
-                         project_key=project_namespace, served_model=pending.get("model"),
-                         old_rank=positions[0], new_rank=positions[1])
+            if pending.get("agent") == "opencode":
+                attempted_models = pending.get("attempted_models")
+                if isinstance(attempted_models, list):
+                    for missing_model in attempted_models:
+                        if isinstance(missing_model, str) and missing_model != pending.get("model"):
+                            missed_positions = mechanical_learning.record_sample(
+                                missing_model, False, root=runtime_root
+                            )
+                            if missed_positions and missed_positions[0] != missed_positions[1]:
+                                _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
+                                         project_key=project_namespace, served_model=missing_model,
+                                         old_rank=missed_positions[0], new_rank=missed_positions[1])
+                positions = mechanical_learning.record_sample(
+                    str(pending.get("model")), accepted, root=runtime_root
+                )
+                if positions and positions[0] != positions[1]:
+                    _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
+                             project_key=project_namespace, served_model=pending.get("model"),
+                             old_rank=positions[0], new_rank=positions[1])
             if accepted:
                 mechanical_learning.start_shadow(
                     project_key=str(project_namespace),
                     repository=str(pending.get("worktree_path") or pending.get("repo_root")),
                     prompt=str(pending.get("shadow_prompt", "")),
                     accepted_report=str(bundle.get("implementer_report", "")),
-                    served_model=str(pending.get("model", "")), state=runtime_root,
+                    served_model=(str(pending.get("model", ""))
+                                  if pending.get("agent") == "opencode" else ""), state=runtime_root,
                 )
         except BaseException:
             pass
