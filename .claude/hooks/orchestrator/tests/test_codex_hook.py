@@ -790,10 +790,11 @@ def test_dispatch_receipt_renders_english_in_approved_format(workspace, config, 
         "task_id": "task-1", "label": "OpenCode and Codex reviewer adapters",
         "model": "gpt-6-luna", "effort": "high", "route": "normal",
         "project_key": "project", "repo_root": str(repo), "agent": "codex",
+        "eta_minutes": 7,
     }, state, event())
     assert queued[0]["line"] == (
         "**New session · model: gpt-6-luna (high) · task: OpenCode and Codex reviewer adapters · "
-        "estimated completion: 5 min**"
+        "estimated completion: 7 min**"
     )
 
 
@@ -1227,6 +1228,13 @@ def test_codex_apply_replaces_pending_board_with_applied_status(workspace, confi
     assert pending["board"] is not None
     assert "| applied-job |" in pending["board"]
     assert "outdated board" not in pending["board"]
+
+    advisor_path = codex.compaction_advisor._state_directory(repo) / "compaction_advisor.json"
+    advisor_state = codex.compaction_advisor._read_state(advisor_path, "session-1")
+    advisor_state["dispatch_pending"] = None
+    codex.compaction_advisor._atomic_write(advisor_path, json.dumps(advisor_state).encode("utf-8"))
+    codex.post_tool_use(event_value, config=config, state_root=state)
+    assert codex.compaction_advisor._read_state(advisor_path, "session-1")["dispatch_pending"] is None
 
 
 def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace, config):

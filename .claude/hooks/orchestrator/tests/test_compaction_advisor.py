@@ -381,6 +381,21 @@ def test_dispatch_board_required_only_when_present_and_cleared_after_satisfactio
     assert _dispatch_state(repo) is None
 
 
+def test_board_only_dispatch_advice_omits_empty_receipt(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    board = "Purser jobs:\n| Task | Model | State | ETA | Review | Apply |"
+    advisor.queue_dispatch(event, repo, board=board)
+
+    result = advisor.stop({**event, "last_assistant_message": "Done."}, repo)
+
+    assert result["decision"] == "block"
+    assert board in result["reason"]
+    assert "receipt line" not in result["reason"]
+    assert "one bold line between `---` rules" not in result["reason"]
+    assert advisor._dispatch_advice({"lines": [], "board": None}) == ""
+
+
 def _flow_records(*, tool_name="mcp__plugin_purser_codex-main__codex_result", is_error=False):
     return [
         {"type": "user", "message": {"role": "user", "content": "Continue the approved task."}},

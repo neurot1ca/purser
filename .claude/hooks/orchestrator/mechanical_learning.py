@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any
 import uuid
 
@@ -20,6 +21,31 @@ MIN_SAMPLES = 5
 RECENT_SAMPLES = 20
 SHADOW_TIMEOUT_SECONDS = 45
 _TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def _shadow_lock_is_stale(lock: Path) -> bool:
+    try:
+        age = time.time() - lock.stat().st_mtime
+    except OSError:
+        return True
+    too_old = age > SHADOW_TIMEOUT_SECONDS + 600
+    if os.name == "nt":
+        return too_old
+    try:
+        pid = int(lock.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return True
+    if pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return too_old
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return too_old
+    return too_old
 
 
 def _inventory(root: Path) -> tuple[Path, dict[str, Any]]:
@@ -104,7 +130,18 @@ def start_shadow(*, project_key: str, repository: str, prompt: str, accepted_rep
     try:
         descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
-        return False
+        if not _shadow_lock_is_stale(lock):
+            return False
+        for stale_job in shadows.glob("*.json"):
+            stale_job.unlink(missing_ok=True)
+        for stale_scratch in shadows.glob("run-*"):
+            if stale_scratch.is_dir():
+                shutil.rmtree(stale_scratch, ignore_errors=True)
+        lock.unlink(missing_ok=True)
+        try:
+            descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            return False
     job = shadows / f"{uuid.uuid4().hex}.json"
     scratch = shadows / f"run-{uuid.uuid4().hex}"
     try:
@@ -115,10 +152,11 @@ def start_shadow(*, project_key: str, repository: str, prompt: str, accepted_rep
                                    "project_key": project_key, "state_root": str(root)},
                                    ensure_ascii=False), encoding="utf-8")
         flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--shadow", str(job)],
-                         cwd=str(Path(__file__).resolve().parent), stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         creationflags=flags, start_new_session=os.name != "nt")
+        launched = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--shadow", str(job)],
+                                     cwd=str(Path(__file__).resolve().parent), stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     creationflags=flags, start_new_session=os.name != "nt")
+        lock.write_text(str(launched.pid), encoding="utf-8")
         return True
     except Exception:
         job.unlink(missing_ok=True)

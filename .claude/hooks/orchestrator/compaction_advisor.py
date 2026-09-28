@@ -620,6 +620,23 @@ def queue_dispatch(payload: Mapping[str, Any], repository: Path | None, *,
         pass
 
 
+def refresh_dispatch_board(payload: Mapping[str, Any], repository: Path | None, board: str | None) -> None:
+    """Replace a board only when this session already has a pending dispatch."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return
+        path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(path, session_id)
+        pending = state["dispatch_pending"]
+        if isinstance(pending, dict):
+            pending["board"] = board
+            pending["blocked"] = False
+            _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    except BaseException:
+        pass
+
+
 def _receipt_quota_current(receipt: Mapping[str, Any], now: datetime | None = None) -> bool:
     captured_at = receipt.get("snapshot_at")
     if isinstance(captured_at, str):
@@ -688,9 +705,11 @@ def _receipt_satisfied(receipt: Mapping[str, Any], message: str, now: datetime) 
 
 def _dispatch_advice(dispatch: Mapping[str, Any]) -> str:
     lines = dispatch["lines"]
+    board = dispatch.get("board")
+    if not lines:
+        return "Include this latest job board verbatim:\n" + board if isinstance(board, str) else ""
     advice = ("Write one bold line between `---` rules with blank lines around it, in the user's language, "
               "including every exact dispatch receipt line below verbatim:\n" + "\n".join(lines))
-    board = dispatch.get("board")
     return advice + ("\nInclude this latest job board verbatim:\n" + board if isinstance(board, str) else "")
 
 
@@ -749,8 +768,10 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             receipt["blocked"] = True
             reasons.append(_receipt_advice(receipt))
         if dispatch is not None and not dispatch.get("blocked"):
-            dispatch["blocked"] = True
-            reasons.append(_dispatch_advice(dispatch))
+            advice = _dispatch_advice(dispatch)
+            if advice:
+                dispatch["blocked"] = True
+                reasons.append(advice)
         if version_pending is not None and not version_pending.get("blocked"):
             version_pending["blocked"] = True
             reasons.append(

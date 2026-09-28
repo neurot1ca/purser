@@ -1,6 +1,8 @@
 import json
+import os
 from pathlib import Path
 import subprocess
+import time
 
 import codex
 import coder_config
@@ -65,7 +67,7 @@ def test_shadow_env_asks_for_all_confined_tools_and_uses_scratch(tmp_path, monke
     captured = {}
 
     class Launched:
-        pid = 123
+        pid = os.getpid()
 
     def popen(args, **kwargs):
         captured["path"] = Path(args[-1])
@@ -99,6 +101,48 @@ def test_shadow_env_asks_for_all_confined_tools_and_uses_scratch(tmp_path, monke
     assert captured_run["cwd"] != str(source)
     assert not Path(job["scratch"]).exists()
     assert json.loads(path.read_text(encoding="utf-8"))["candidates"][1]["status"] == "unmeasured"
+
+
+def test_shadow_reclaims_dead_pid_lock_and_removes_stale_artifacts(tmp_path, monkeypatch):
+    _inventory(tmp_path, "vendor/served-free", "vendor/shadow-free")
+    source = tmp_path / "checkout"
+    source.mkdir()
+    shadows = tmp_path / "projects" / "0123456789abcdef" / "opencode_shadows"
+    shadows.mkdir(parents=True)
+    lock = shadows / "running.lock"
+    lock.write_text("999999999", encoding="utf-8")
+    stale_job = shadows / "stale.json"
+    stale_job.write_text("{}", encoding="utf-8")
+    stale_scratch = shadows / "run-stale"
+    stale_scratch.mkdir()
+    (stale_scratch / "partial.txt").write_text("partial", encoding="utf-8")
+    old_time = time.time() - mechanical_learning.SHADOW_TIMEOUT_SECONDS - 601
+    os.utime(lock, (old_time, old_time))
+    class Launched:
+        pid = os.getpid()
+
+    monkeypatch.setattr(mechanical_learning.subprocess, "Popen", lambda *args, **kwargs: Launched())
+
+    assert mechanical_learning.start_shadow(project_key="0123456789abcdef", repository=str(source),
+        prompt="Do the task.", accepted_report="same report", served_model="vendor/served-free", state=tmp_path)
+    assert not stale_job.exists()
+    assert not stale_scratch.exists()
+    assert lock.exists()
+
+
+def test_windows_shadow_lock_staleness_uses_age_without_killing_pid(tmp_path, monkeypatch):
+    lock = tmp_path / "running.lock"
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+    def unexpected_kill(*args):
+        raise AssertionError("os.kill must not run on Windows")
+
+    monkeypatch.setattr(mechanical_learning.os, "name", "nt")
+    monkeypatch.setattr(mechanical_learning.os, "kill", unexpected_kill)
+
+    assert not mechanical_learning._shadow_lock_is_stale(lock)
+    old_time = time.time() - mechanical_learning.SHADOW_TIMEOUT_SECONDS - 601
+    os.utime(lock, (old_time, old_time))
+    assert mechanical_learning._shadow_lock_is_stale(lock)
 
 
 def test_shadow_scoring_failures_and_matching_report(tmp_path, monkeypatch):

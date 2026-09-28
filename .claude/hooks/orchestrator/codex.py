@@ -2180,11 +2180,15 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
 
 
 def _append_project_job_status(response: dict[str, Any], root: Path,
-                               project_key: str, event: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                               project_key: str, event: Mapping[str, Any] | None = None,
+                               *, pending_only: bool = False) -> dict[str, Any]:
     board = _project_job_board(root, project_key)
-    if board is not None and event is not None:
+    if event is not None and (board is not None or pending_only):
         repository, _reason = project_root.resolve_project_root(event)
-        compaction_advisor.queue_dispatch(event, repository, board=board)
+        if pending_only:
+            compaction_advisor.refresh_dispatch_board(event, repository, board)
+        elif board is not None:
+            compaction_advisor.queue_dispatch(event, repository, board=board)
     return response
 
 
@@ -2195,7 +2199,9 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
     effort, route = pending.get("effort"), pending.get("route")
     if not all(isinstance(value, str) and value for value in (label, model, effort, route)):
         return response
-    median = _route_duration_median(pending, state_root)
+    median = pending.get("eta_minutes")
+    if isinstance(median, bool) or not isinstance(median, int):
+        median = _route_duration_median(pending, state_root)
     prior_thread_id = pending.get("prior_thread_id")
     continuity = "Continuing session" if isinstance(prior_thread_id, str) and prior_thread_id else "New session"
     fields = [f"{continuity} · model: {model} ({effort}) · task: {label}"]
@@ -3259,7 +3265,8 @@ def post_tool_use(
                 job = _async_job(root, index)
                 if (isinstance(index, dict) and job is not None
                         and job.get("applyState") in {"applied", "conflict"}):
-                    return _append_project_job_status({}, root, index.get("project_key", ""), event)
+                    return _append_project_job_status({}, root, index.get("project_key", ""), event,
+                                                      pending_only=True)
         except (OSError, ValueError, TypeError, KeyError):
             pass
         return {}
