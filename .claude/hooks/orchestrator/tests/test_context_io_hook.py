@@ -134,6 +134,44 @@ def test_plugin_update_context_is_silent_without_plugin_root(monkeypatch, tmp_pa
     assert context_io_hook._plugin_update_context({"session_id": "session-update"}, tmp_path) is None
 
 
+def test_mechanical_leader_context_is_cleared_and_recorded_by_stop(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    state_root = tmp_path / "state"
+    leader_path = state_root / "opencode" / "leader.json"
+    leader_path.parent.mkdir(parents=True)
+    leader_path.write_text(json.dumps({"model": "vendor/free-model", "successes": 7,
+                                       "sample_count": 9, "announced": False}), encoding="utf-8")
+    monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: state_root)
+    advisor_state = tmp_path / "advisor-state"
+    monkeypatch.setattr(compaction_advisor, "_state_directory", lambda _repo: advisor_state)
+    payload = {"session_id": "session-leader"}
+
+    context = context_io_hook._plugin_update_context(payload, tmp_path)
+    assert "⚓ **Ücretsiz model sıralaması değişti:** `vendor/free-model` artık 1. sırada" in context
+    assert "(son 9 denemede 7 başarı). Mekanik işler önce bu modele gidecek." in context
+    blocked = compaction_advisor.stop({**payload, "last_assistant_message": "Not announced."}, tmp_path)
+    assert blocked["decision"] == "block"
+    assert "⚓" in blocked["reason"] and "vendor/free-model" in blocked["reason"]
+    assert compaction_advisor.stop({**payload, "last_assistant_message": "Still missing."}, tmp_path) is None
+    assert compaction_advisor.stop({**payload, "last_assistant_message": "⚓ `vendor/free-model`"}, tmp_path) is None
+    state = compaction_advisor._read_state(advisor_state / "compaction_advisor.json", "session-leader")
+    assert state["leader_pending"] is None
+    assert json.loads(leader_path.read_text(encoding="utf-8"))["announced"] is True
+    assert context_io_hook._plugin_update_context(payload, tmp_path) is None
+
+
+def test_mechanical_leader_context_is_silent_when_already_announced(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    state_root = tmp_path / "state"
+    leader_path = state_root / "opencode" / "leader.json"
+    leader_path.parent.mkdir(parents=True)
+    leader_path.write_text(json.dumps({"model": "vendor/free-model", "successes": 7,
+                                       "sample_count": 9, "announced": True}), encoding="utf-8")
+    monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: state_root)
+
+    assert context_io_hook._plugin_update_context({"session_id": "session-leader"}, tmp_path) is None
+
+
 def test_accuracy_runs_only_on_compact_and_preserves_context_on_failure(monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))

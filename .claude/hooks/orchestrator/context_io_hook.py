@@ -33,7 +33,32 @@ def _plugin_root() -> Path | None:
     return Path(root) if root else None
 
 
-def _plugin_update_context(payload: Mapping[str, Any], repository: Path | None) -> str | None:
+def _mechanical_leader_context(payload: Mapping[str, Any], repository: Path | None) -> str | None:
+    try:
+        path = state_root.default_state_root() / "opencode" / "leader.json"
+        leader = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(leader, dict) or leader.get("announced") is not False
+                or not isinstance(leader.get("model"), str)
+                or type(leader.get("successes")) is not int
+                or type(leader.get("sample_count")) is not int):
+            return None
+        model = leader["model"]
+        successes = leader["successes"]
+        sample_count = leader["sample_count"]
+        if not compaction_advisor.queue_leader_announcement(
+                payload, repository, model, successes, sample_count):
+            return None
+        return (
+            "On your next reply, render exactly one line in the user's language in this form: "
+            f"⚓ **Ücretsiz model sıralaması değişti:** `{model}` artık 1. sırada "
+            f"(son {sample_count} denemede {successes} başarı). Mekanik işler önce bu modele gidecek. "
+            f"Translate the line for other languages, keeping ⚓, `{model}`, and the numbers."
+        )
+    except BaseException:
+        return None
+
+
+def _plugin_version_context(payload: Mapping[str, Any], repository: Path | None) -> str | None:
     try:
         root = _plugin_root()
         if root is None:
@@ -63,6 +88,15 @@ def _plugin_update_context(payload: Mapping[str, Any], repository: Path | None) 
             f"Translate the bold lead for other languages, keeping ⚓ and {version}. "
             "Source bullets (summarize them in one short sentence):\n" + "\n".join(bullets)
         )
+    except BaseException:
+        return None
+
+
+def _plugin_update_context(payload: Mapping[str, Any], repository: Path | None) -> str | None:
+    try:
+        leader_context = _mechanical_leader_context(payload, repository)
+        version_context = _plugin_version_context(payload, repository)
+        return "\n".join(part for part in (leader_context, version_context) if part) or None
     except BaseException:
         return None
 

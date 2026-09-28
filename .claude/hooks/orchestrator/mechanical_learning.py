@@ -84,6 +84,8 @@ def record_sample(model: str, success: bool, *, root: Path | None = None) -> tup
             return None
         path, value = _inventory(state)
         before = [item.get("id") for item in value["candidates"] if isinstance(item, dict)]
+        old_leader = next((item.get("id") for item in value["candidates"]
+                           if isinstance(item, dict) and item.get("status") == "measured"), None)
         found = None
         for candidate in value["candidates"]:
             if isinstance(candidate, dict) and candidate.get("id") == model:
@@ -101,6 +103,21 @@ def record_sample(model: str, success: bool, *, root: Path | None = None) -> tup
         value["candidates"] = ranked_candidates(value["candidates"])
         model_listing._atomic_write(path, value)
         after = [item.get("id") for item in value["candidates"] if isinstance(item, dict)]
+        new_leader = next((item for item in value["candidates"]
+                           if isinstance(item, dict) and item.get("status") == "measured"), None)
+        if new_leader is not None and new_leader.get("id") != old_leader:
+            try:
+                samples = new_leader.get("mechanical_samples", [])
+                if isinstance(samples, list) and all(type(sample) is bool for sample in samples):
+                    leader_path = state / "opencode" / "leader.json"
+                    model_listing._atomic_write(leader_path, {
+                        "model": new_leader["id"],
+                        "successes": sum(sample is True for sample in samples),
+                        "sample_count": len(samples),
+                        "announced": False,
+                    })
+            except BaseException:
+                pass
         return (before.index(model) + 1, after.index(model) + 1) if model in before and model in after else None
 
 

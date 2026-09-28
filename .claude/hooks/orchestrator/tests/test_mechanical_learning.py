@@ -200,6 +200,34 @@ def test_ranking_waits_for_minimum_then_reorders(tmp_path):
     assert value["candidates"][0]["status"] == "measured"
 
 
+def test_rank_one_change_writes_mechanical_leader(tmp_path):
+    path = _inventory(tmp_path, "vendor/old-free", "vendor/new-free")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["candidates"][0]["mechanical_samples"] = [False] * mechanical_learning.MIN_SAMPLES
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    for _ in range(mechanical_learning.MIN_SAMPLES):
+        mechanical_learning.record_sample("vendor/new-free", True, root=tmp_path)
+
+    leader_path = tmp_path / "opencode" / "leader.json"
+    assert json.loads(leader_path.read_text(encoding="utf-8")) == {
+        "model": "vendor/new-free", "successes": mechanical_learning.MIN_SAMPLES,
+        "sample_count": mechanical_learning.MIN_SAMPLES, "announced": False,
+    }
+
+
+def test_lower_rank_move_does_not_write_mechanical_leader(tmp_path):
+    path = _inventory(tmp_path, "vendor/leader-free", "vendor/lower-free")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["candidates"][0]["mechanical_samples"] = [True] * mechanical_learning.MIN_SAMPLES
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    for _ in range(mechanical_learning.MIN_SAMPLES):
+        mechanical_learning.record_sample("vendor/lower-free", False, root=tmp_path)
+
+    assert not (tmp_path / "opencode" / "leader.json").exists()
+
+
 def test_served_mechanical_telemetry_feeds_rank_samples(tmp_path, monkeypatch):
     path = _inventory(tmp_path, "vendor/served-free", "vendor/shadow-free")
     for _ in range(mechanical_learning.MIN_SAMPLES - 1):

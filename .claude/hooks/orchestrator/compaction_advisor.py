@@ -415,6 +415,15 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 version_pending = None
             elif version_pending is not None:
                 version_pending = {"version": version_pending["version"], "blocked": version_pending.get("blocked") is True}
+            leader_pending = value.get("leader_pending")
+            if not (isinstance(leader_pending, dict) and isinstance(leader_pending.get("model"), str)
+                    and leader_pending["model"] and type(leader_pending.get("successes")) is int
+                    and type(leader_pending.get("sample_count")) is int):
+                leader_pending = None
+            elif leader_pending is not None:
+                leader_pending = {"model": leader_pending["model"], "successes": leader_pending["successes"],
+                                  "sample_count": leader_pending["sample_count"],
+                                  "blocked": leader_pending.get("blocked") is True}
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
                 "reminder_messages": max(0, int(value.get("reminder_messages", 0))),
@@ -425,6 +434,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "receipt_pending": receipt,
                 "dispatch_pending": dispatch,
                 "version_pending": version_pending,
+                "leader_pending": leader_pending,
                 "flow_blocked_user": value.get("flow_blocked_user") if type(value.get("flow_blocked_user")) is int else None,
             }
     except (OSError, ValueError, TypeError):
@@ -433,6 +443,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             "last_task_id": None, "session_id": session_id,
             "notice_pending": None, "receipt_pending": None, "dispatch_pending": None,
             "version_pending": None,
+            "leader_pending": None,
             "flow_blocked_user": None}
 
 
@@ -465,6 +476,34 @@ def queue_version_announcement(payload: Mapping[str, Any], repository: Path | No
         return True
     except BaseException:
         return False
+
+
+def queue_leader_announcement(payload: Mapping[str, Any], repository: Path | None,
+                               model: str, successes: int, sample_count: int) -> bool:
+    try:
+        session_id = payload.get("session_id")
+        if (repository is None or not isinstance(session_id, str) or not session_id
+                or not model or type(successes) is not int or type(sample_count) is not int):
+            return False
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        state["leader_pending"] = {"model": model, "successes": successes,
+                                   "sample_count": sample_count, "blocked": False}
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        return True
+    except BaseException:
+        return False
+
+
+def record_announced_mechanical_leader(model: str) -> None:
+    try:
+        path = state_root.default_state_root() / "opencode" / "leader.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(value, dict) and value.get("model") == model:
+            value["announced"] = True
+            _atomic_write(path, json.dumps(value, sort_keys=True).encode("utf-8"))
+    except BaseException:
+        pass
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -725,6 +764,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         receipt = state["receipt_pending"]
         dispatch = state["dispatch_pending"]
         version_pending = state["version_pending"]
+        leader_pending = state["leader_pending"]
         records = _read_transcript(payload.get("transcript_path"))
         flow_message = next((text for record in reversed(records)
                              if _record_type(record) == "assistant"
@@ -752,10 +792,16 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             state["version_pending"] = None
             changed = True
             record_announced_plugin_version(version_pending["version"])
+        if leader_pending is not None and any(
+                "⚓" in line and leader_pending["model"] in line for line in message.splitlines()):
+            state["leader_pending"] = None
+            changed = True
+            record_announced_mechanical_leader(leader_pending["model"])
         notice = state["notice_pending"]
         receipt = state["receipt_pending"]
         dispatch = state["dispatch_pending"]
         version_pending = state["version_pending"]
+        leader_pending = state["leader_pending"]
         if payload.get("stop_hook_active") is True:
             if changed:
                 _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
@@ -776,6 +822,11 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             version_pending["blocked"] = True
             reasons.append(
                 f"Include one visible line containing both `⚓` and `{version_pending['version']}` to announce the Purser update."
+            )
+        if leader_pending is not None and not leader_pending.get("blocked"):
+            leader_pending["blocked"] = True
+            reasons.append(
+                f"Include one visible line containing both `⚓` and `{leader_pending['model']}` to announce the new free mechanical model leader."
             )
 
         if not reasons and flow_message.rstrip().endswith(("?", "؟", "？")):
