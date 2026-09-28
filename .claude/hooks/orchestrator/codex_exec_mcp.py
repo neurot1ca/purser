@@ -1077,6 +1077,8 @@ class Server:
                         job.update(attemptedModels=result["attemptedModels"],
                                    servedAgent=result.get("servedAgent"),
                                    servedModel=result.get("servedModel"))
+            if job["state"] in TERMINAL:
+                job.setdefault("boardDisplayCount", 0)
             self._write_job(job)
             if job.get("leaseQueued") and "startedAt" not in job and state in {"CANCELLED", "TIMED_OUT"}:
                 try:

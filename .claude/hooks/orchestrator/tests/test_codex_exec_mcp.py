@@ -1150,15 +1150,21 @@ def test_async_failure_timeout_cancel(area):
         job = job_call(failed, "codex_start", {"call": str(uuid.uuid4()), "prompt": "fail"})
         result = finish(failed, job["jobId"], "FAILED")
         assert result["errorCode"] == "CODEX_FAILED" and len(result["message"]) <= 200
+        assert read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json"))[
+            "boardDisplayCount"] == 0
     finally:
         failed.close()
     slow = Client(area, extra_env={"FAKE_SLOW": "1"})
     try:
         job = job_call(slow, "codex_start", {"call": str(uuid.uuid4()), "prompt": "timeout", "timeoutSeconds": 0.1})
         assert finish(slow, job["jobId"], "TIMED_OUT")["errorCode"] == "DEADLINE_EXCEEDED"
+        assert read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json"))[
+            "boardDisplayCount"] == 0
         job = job_call(slow, "codex_start", {"call": str(uuid.uuid4()), "prompt": "cancel"})
         assert job_call(slow, "codex_cancel", {"jobId": job["jobId"]})["state"] == "CANCELLED"
         assert finish(slow, job["jobId"], "CANCELLED")["errorCode"] == "CANCELLED"
+        assert read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json"))[
+            "boardDisplayCount"] == 0
     finally:
         slow.close()
 
@@ -1565,6 +1571,7 @@ def test_opencode_final_stop_triggers_existing_exit_grace(area, monkeypatch):
     server._job_worker(job_id, "codex", {"prompt": "one", "cwd": str(area), "model": "opencode/test"})
     record = server._read_job(job_id)
     assert record["state"] == "SUCCEEDED"
+    assert record["boardDisplayCount"] == 0
     assert record["exitForcedAfterComplete"] is True
 
 
