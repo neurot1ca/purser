@@ -816,7 +816,8 @@ def test_dispatch_receipt_uses_continuing_session_wording(workspace, monkeypatch
     )
 
 
-def test_dispatch_receipt_omits_estimate_without_duration_history(workspace, monkeypatch):
+@pytest.mark.parametrize(("route", "expected"), (("mechanical", 3), ("plan_standard", 8)))
+def test_dispatch_receipt_uses_route_default_without_duration_history(workspace, monkeypatch, route, expected):
     repo, state = workspace
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
     queued = []
@@ -824,10 +825,13 @@ def test_dispatch_receipt_omits_estimate_without_duration_history(workspace, mon
                         lambda event, repository, **kwargs: queued.append(kwargs))
     codex._append_dispatch_receipt({}, {
         "task_id": "task-1", "label": "First run", "model": "gpt-6-luna",
-        "effort": "high", "route": "normal", "project_key": "project",
+        "effort": "high", "route": route, "project_key": "project",
         "repo_root": str(repo), "agent": "codex",
     }, state, event())
-    assert queued[0]["line"] == "**New session · model: gpt-6-luna (high) · task: First run**"
+    assert queued[0]["line"] == (
+        f"**New session · model: gpt-6-luna (high) · task: First run · "
+        f"estimated completion: {expected} min**"
+    )
 
 
 def test_two_admitted_codex_starts_emit_two_dispatch_receipts(workspace, config, monkeypatch):
@@ -846,6 +850,20 @@ def test_two_admitted_codex_starts_emit_two_dispatch_receipts(workspace, config,
     assert len(lines) == 2
     assert "task: receipt-first · estimated completion: 2 min**" in lines[0]
     assert "task: receipt-second · estimated completion: 2 min**" in lines[1]
+
+
+def test_async_start_records_default_eta_for_job(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
+    start = event(START_TOOL, prompt=orch(task="mechanical-eta", route="mechanical", scope="file0.py")
+                  + "\nMake the small change.", tool_use_id="mechanical-eta")
+
+    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]
+    pending = codex._read_pending(state, start)
+
+    assert updated["etaMinutes"] == 3
+    assert pending["eta_minutes"] == updated["etaMinutes"]
 
 
 def test_denied_codex_start_emits_no_dispatch_receipt(workspace, config):
@@ -1080,14 +1098,16 @@ def test_project_job_board_keeps_all_in_progress_and_three_newest_finished(works
     assert tasks == ["running", "finished-0", "finished-1", "finished-2"]
 
 
-def test_project_job_board_renders_overdue_and_unknown_eta(workspace, monkeypatch):
+def test_project_job_board_uses_route_default_without_history(workspace, monkeypatch):
     _, state = workspace
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
     _board_job(state, "overdue", etaMinutes=2, acceptedAt=time.time() - 180)
     _board_job(state, "unknown", etaMinutes=None, acceptedAt=time.time() - 10)
+    _board_job(state, "mechanical", route="mechanical", acceptedAt=time.time())
     message = codex._project_job_board(state, "project")
     assert "| overdue | gpt-6-sol (medium) | running | overdue |" in message
-    assert "| unknown | gpt-6-sol (medium) | running | — |" in message
+    assert "| unknown | gpt-6-sol (medium) | running | ~5 min |" in message
+    assert "| mechanical | gpt-6-sol (medium) | running | ~3 min |" in message
 
 
 def test_project_job_board_drops_applied_jobs_after_an_hour(workspace):

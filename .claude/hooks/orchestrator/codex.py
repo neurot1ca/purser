@@ -1640,7 +1640,12 @@ def pre_tool_use(
             updated["config"] = updated_config
             if agent == "codex" and "developer-instructions" not in tool_input:
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
+        eta_minutes = parsed.eta_minutes
         if is_start:
+            eta_minutes = _route_eta_minutes({
+                "eta_minutes": parsed.eta_minutes, "route": parsed.route,
+                "project_key": project_namespace, "agent": agent,
+            }, runtime_root)
             updated["mode"] = mode
             updated["call"] = call_uuid
             updated["taskId"] = parsed.task_id
@@ -1649,8 +1654,8 @@ def pre_tool_use(
             updated["jobEffort"] = effort
             updated["jobLabel"] = task_label
             updated["jobPhase"] = parsed.phase
-            if parsed.eta_minutes is not None:
-                updated["etaMinutes"] = parsed.eta_minutes
+            if eta_minutes is not None:
+                updated["etaMinutes"] = eta_minutes
 
         protected_paths = (
             resolved_profile.protected_paths
@@ -1725,7 +1730,7 @@ def pre_tool_use(
                 r"(?m)^CODE_MAP=.+ STATUS=(?:FRESH|STALE|UNAVAILABLE)\r?$", updated["prompt"]
             )),
             "reason": effective_reason,
-            "eta_minutes": parsed.eta_minutes,
+            "eta_minutes": eta_minutes,
             "reason_source": reason_source,
             "previous_route": previous_route if route_changed else None,
             "new_route": parsed.route if route_changed else None,
@@ -2027,6 +2032,17 @@ def _job_host_classification(job: Mapping[str, Any]) -> str:
     return codex_exec_mcp.Server._classify_host(None, job)
 
 
+_ROUTE_DURATION_DEFAULTS = {
+    "mechanical": 3,
+    "subtle": 5,
+    "normal": 5,
+    "consequential": 8,
+    "escalated": 12,
+    "operation": 3,
+    "plan_standard": 8,
+}
+
+
 def _route_duration_median(pending: Mapping[str, Any], state_root: Path) -> int | None:
     try:
         import async_session_maintenance
@@ -2044,6 +2060,17 @@ def _route_duration_median(pending: Mapping[str, Any], state_root: Path) -> int 
     except BaseException:
         pass
     return None
+
+
+def _route_eta_minutes(pending: Mapping[str, Any], state_root: Path) -> int | None:
+    eta = pending.get("eta_minutes")
+    if isinstance(eta, int) and not isinstance(eta, bool):
+        return eta
+    median = _route_duration_median(pending, state_root)
+    if median is not None:
+        return median
+    route = pending.get("route")
+    return _ROUTE_DURATION_DEFAULTS.get(route) if isinstance(route, str) else None
 
 
 def _project_job_board(root: Path, project_key: str) -> str | None:
@@ -2152,8 +2179,8 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
                 elapsed = max(0.0, (now - started) / 60) if isinstance(started, (int, float)) else None
                 expected = job.get("etaMinutes")
                 if isinstance(expected, bool) or not isinstance(expected, int):
-                    expected = _route_duration_median({"route": job.get("route"), "project_key": project_key,
-                                                       "agent": job.get("agent", "codex")}, root)
+                    expected = _route_eta_minutes({"route": job.get("route"), "project_key": project_key,
+                                                   "agent": job.get("agent", "codex")}, root)
                 if elapsed is not None and expected is not None:
                     eta_label = "overdue" if elapsed > expected else f"~{max(0, math.ceil(expected - elapsed))} min"
             label = str(job.get("label", "—")).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
@@ -2199,9 +2226,7 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
     effort, route = pending.get("effort"), pending.get("route")
     if not all(isinstance(value, str) and value for value in (label, model, effort, route)):
         return response
-    median = pending.get("eta_minutes")
-    if isinstance(median, bool) or not isinstance(median, int):
-        median = _route_duration_median(pending, state_root)
+    median = _route_eta_minutes(pending, state_root)
     prior_thread_id = pending.get("prior_thread_id")
     continuity = "Continuing session" if isinstance(prior_thread_id, str) and prior_thread_id else "New session"
     fields = [f"{continuity} · model: {model} ({effort}) · task: {label}"]
