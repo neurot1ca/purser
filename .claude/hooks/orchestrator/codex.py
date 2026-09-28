@@ -1263,6 +1263,11 @@ def pre_tool_use(
         mode = tool_input.get("mode", "new") if is_start else None
         if is_start and mode not in ("new", "reply"):
             return _deny("INVALID_ASYNC_MODE", "codex_start mode must be new or reply.")
+        if is_start and "etaMinutes" in tool_input:
+            supplied_eta = tool_input["etaMinutes"]
+            if (isinstance(supplied_eta, bool) or not isinstance(supplied_eta, int)
+                    or not 1 <= supplied_eta <= 600):
+                return _deny("INVALID_ETA_MINUTES", "codex_start etaMinutes must be an integer from 1..600.")
         new_call = tool_name in CODEX_TOOL_NAMES or (is_start and mode == "new")
         reply_call = tool_name in CODEX_REPLY_TOOL_NAMES or (is_start and mode == "reply")
         task_label = None
@@ -1639,10 +1644,10 @@ def pre_tool_use(
             updated["config"] = updated_config
             if agent == "codex" and "developer-instructions" not in tool_input:
                 updated["developer-instructions"] = INDEPENDENCE_INSTRUCTIONS
-        eta_minutes = parsed.eta_minutes
+        eta_minutes = tool_input.get("etaMinutes", parsed.eta_minutes) if is_start else parsed.eta_minutes
         if is_start:
             eta_minutes = _route_eta_minutes({
-                "eta_minutes": parsed.eta_minutes, "route": parsed.route,
+                "eta_minutes": eta_minutes, "route": parsed.route,
                 "project_key": project_namespace, "agent": agent,
             }, runtime_root)
             updated["mode"] = mode
@@ -2122,11 +2127,9 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             if not isinstance(finished, (int, float)):
                 finished = job.get("finishedAt")
             if state not in {"QUEUED", "RUNNING"}:
-                if "boardDisplayCount" in job:
-                    if type(job["boardDisplayCount"]) is int and job["boardDisplayCount"] >= 2:
-                        continue
-                elif (isinstance(finished, (int, float)) and not isinstance(finished, bool)
-                      and now - finished > 3600):
+                if "boardDisplayCount" not in job:
+                    continue
+                if type(job["boardDisplayCount"]) is int and job["boardDisplayCount"] >= 2:
                     continue
             item = (job, index)
             if state in {"QUEUED", "RUNNING"}:

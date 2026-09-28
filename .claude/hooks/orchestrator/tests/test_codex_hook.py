@@ -868,6 +868,21 @@ def test_async_start_records_default_eta_for_job(workspace, config, monkeypatch)
     assert pending["eta_minutes"] == updated["etaMinutes"]
 
 
+def test_async_start_preserves_explicit_eta_minutes(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:
+        "Purser: typical Codex durations here (median/p90, n): subtle 5/20 min (n=31).")
+    start = event(START_TOOL, prompt=orch(task="subtle-eta", route="subtle", scope="file0.py")
+                  + "\nMake the change.", tool_use_id="subtle-eta", etaMinutes=12)
+
+    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]
+    pending = codex._read_pending(state, start)
+
+    assert updated["etaMinutes"] == 12
+    assert pending["eta_minutes"] == 12
+
+
 def test_denied_codex_start_emits_no_dispatch_receipt(workspace, config):
     repo, state = workspace
     start = event(START_TOOL, prompt=orch(scope="file0.py") + "\nWork.",
@@ -1180,18 +1195,24 @@ def test_project_job_board_keeps_counted_terminal_jobs_until_two_displays(worksp
     assert "active-one" in message and "active-two" in message
 
 
-def test_project_job_board_hides_old_legacy_finished_but_shows_recent(workspace):
+def test_project_job_board_requires_two_display_count_for_finished_jobs(workspace):
     _, state = workspace
     now = time.time()
     _board_job(state, "legacy-old", "SUCCEEDED", finishedAt=now - 3601)
     _board_job(state, "legacy-recent", "FAILED", finishedAt=now - 60)
+    _board_job(state, "count-zero", "SUCCEEDED", finishedAt=now - 7200, boardDisplayCount=0)
+    _board_job(state, "count-one", "CANCELLED", finishedAt=now - 7200, boardDisplayCount=1)
+    _board_job(state, "count-two", "SUCCEEDED", finishedAt=now, boardDisplayCount=2)
     _board_job(state, "active-one")
     _board_job(state, "active-two")
 
     message = codex._project_job_board(state, "project")
 
     assert "legacy-old" not in message
-    assert "| legacy-recent |" in message
+    assert "legacy-recent" not in message
+    assert "| count-zero |" in message
+    assert "| count-one |" in message
+    assert "count-two" not in message
 
 
 def test_project_job_board_hides_unlabelled_jobs(workspace):
