@@ -51,6 +51,10 @@ with open(os.environ["FAKE_RECORD"], "a", encoding="utf-8") as stream:
     stream.flush()
 if os.environ.get("FAKE_WRITE_FILE"):
     Path(os.environ["FAKE_WRITE_FILE"]).write_text(os.environ.get("FAKE_WRITE_CONTENT", "job change"), encoding="utf-8")
+if os.environ.get("FAKE_HTTP_402") == "1":
+    # Assumed provider text; the Codex JSON error envelope follows the bridge parser.
+    print(json.dumps({"type": "error", "message": "HTTP 402: You exceeded your current quota; check billing details."}), flush=True)
+    sys.exit(1)
 if os.environ.get("FAKE_SLOW") == "1":
     time.sleep(float(os.environ.get("FAKE_SLEEP_SECONDS", "2")))
 thread = os.environ.get("FAKE_THREAD", "thread-123")
@@ -1559,3 +1563,164 @@ def test_opencode_final_stop_triggers_existing_exit_grace(area, monkeypatch):
     record = server._read_job(job_id)
     assert record["state"] == "SUCCEEDED"
     assert record["exitForcedAfterComplete"] is True
+
+
+def test_http_402_error_event_is_recorded_as_credit_exhausted(area):
+    client = Client(area, extra_env={"FAKE_HTTP_402": "1"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "probe"})
+        assert finish(client, started["jobId"], "FAILED")["errorCode"] == "CODEX_FAILED"
+        record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
+        assert record["launchFailureEvidence"]["type"] == "CREDIT_EXHAUSTED"
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(("message", "retry_after"), [
+    ("HTTP 429 Too Many Requests; rate limit exceeded. Retry-After: 17", 17.0),
+    ("HTTP 429 Too Many Requests; rate limit exceeded.", None),
+])
+def test_rate_limit_evidence_keeps_optional_wait(message, retry_after):
+    # Assumed OpenCode ProviderError text; the error/data/message envelope is parser-compatible.
+    event = {"type": "error", "error": {"name": "ProviderError", "data": {"message": message}}}
+    evidence = codex_exec_mcp._launch_failure_evidence("opencode", [event], stdout_had_output=True)
+    assert evidence == {"type": "RATE_LIMITED", "retryAfterSeconds": retry_after, "noWorkProof": False}
+
+
+def test_codex_lifecycle_before_402_is_credit_but_item_output_is_ambiguous():
+    events = [
+        {"type": "thread.started", "thread_id": "thread-123"},
+        {"type": "turn.started"},
+        {"type": "turn.failed", "error": {"message": "HTTP 402: insufficient balance; billing required"}},
+    ]
+    assert codex_exec_mcp._launch_failure_evidence("codex", events)["type"] == "CREDIT_EXHAUSTED"
+    events.insert(2, {"type": "item.completed", "item": {"type": "agent_message", "text": "partial"}})
+    assert codex_exec_mcp._launch_failure_evidence("codex", events)["type"] == "AMBIGUOUS"
+
+
+def test_opencode_step_start_before_402_is_credit_but_text_is_ambiguous():
+    events = [
+        {"type": "step_start", "sessionID": "session-123"},
+        {"type": "error", "error": {"name": "ProviderError", "data": {
+            "message": "HTTP 402: insufficient balance; billing required"}}},
+    ]
+    assert codex_exec_mcp._launch_failure_evidence("opencode", events)["type"] == "CREDIT_EXHAUSTED"
+    events.insert(1, {"type": "text", "sessionID": "session-123", "part": {"text": "partial"}})
+    assert codex_exec_mcp._launch_failure_evidence("opencode", events)["type"] == "AMBIGUOUS"
+
+
+def test_no_response_retries_five_times_at_fixed_offsets():
+    now = [100.0]
+    calls = []
+
+    def run():
+        calls.append(now[0] - 100.0)
+        return {"typedEvidence": {"type": "NO_RESPONSE", "noWorkProof": True,
+                                  "proof": "NO_EVENTS_OR_OUTPUT"}}
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = codex_exec_mcp._run_with_responsiveness_retries(run, clock=lambda: now[0], sleep=sleep)
+    assert calls == [0.0, 30.0, 60.0, 120.0, 240.0]
+    assert result["responsivenessAttempts"] == 5
+
+
+def test_ambiguous_event_never_retries():
+    calls = []
+
+    def run():
+        calls.append(1)
+        return {"typedEvidence": {"type": "AMBIGUOUS", "noWorkProof": False}}
+
+    result = codex_exec_mcp._run_with_responsiveness_retries(run, clock=lambda: 0.0,
+                                                              sleep=lambda _seconds: pytest.fail("unexpected retry"))
+    assert calls == [1]
+    assert result["responsivenessAttempts"] == 1
+
+
+def test_no_response_then_success_does_not_record_failure_evidence(area, monkeypatch):
+    jobs = area / "jobs"
+    jobs.mkdir()
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    job_id = uuid.uuid4().hex
+    server._write_job({"jobId": job_id, "state": "QUEUED", "deadlineAt": time.time() + 60})
+    attempts = []
+
+    def run_tool(*_args, **_kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            return {"isError": True, "typedEvidence": {"type": "NO_RESPONSE", "noWorkProof": True}}
+        return codex_exec_mcp._tool_result("probe-thread", content="OK")
+
+    monkeypatch.setattr(server, "_run_tool", run_tool)
+    run_retries = codex_exec_mcp._run_with_responsiveness_retries
+    now = [50.0]
+
+    def fast_retries(run):
+        return run_retries(run, clock=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    monkeypatch.setattr(codex_exec_mcp, "_run_with_responsiveness_retries", fast_retries)
+    server._job_worker(job_id, "codex", {"prompt": "probe", "cwd": str(area)})
+    record = server._read_job(job_id)
+    assert len(attempts) == 2
+    assert record["state"] == "SUCCEEDED"
+    assert "launchFailureEvidence" not in record
+
+
+@pytest.mark.parametrize(("agent", "model"), [("codex", "gpt-probe"), ("opencode", "deepseek/probe")])
+def test_api_primary_probe_uses_agent_cli_in_temporary_directory(area, monkeypatch, agent, model):
+    fake = area / "probe_cli.py"
+    fake.write_text(r'''
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+prompt = ""
+if args[0] == "run":
+    events = [
+        {"type": "step_start", "sessionID": "probe-session"},
+        {"type": "text", "sessionID": "probe-session", "part": {"text": "OK"}},
+        {"type": "step_finish", "sessionID": "probe-session", "part": {"reason": "stop"}},
+    ]
+else:
+    prompt = sys.stdin.buffer.read().decode("utf-8")
+    events = [
+        {"type": "thread.started", "thread_id": "probe-thread"},
+        {"type": "turn.completed"},
+    ]
+Path(os.environ["FAKE_PROBE_RECORD"]).write_text(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt}))
+for event in events:
+    print(json.dumps(event), flush=True)
+''', encoding="utf-8")
+    record_path = area / "probe.json"
+    monkeypatch.setenv("FAKE_PROBE_RECORD", str(record_path))
+    result = codex_exec_mcp.probe_api_primary(
+        agent, model, codex_bin=json.dumps([sys.executable, str(fake)]), timeout=2)
+    assert result == {"ok": True}, (result, record_path.read_text(encoding="utf-8") if record_path.exists() else "CLI did not record invocation")
+    invocation = json.loads(record_path.read_text(encoding="utf-8"))
+    assert Path(invocation["cwd"]) != area
+    assert model in invocation["args"]
+    assert "Reply with OK." in invocation["args"] or invocation["prompt"] == "Reply with OK."
+    if agent == "codex":
+        assert invocation["args"][invocation["args"].index("-s") + 1] == "read-only"
+
+
+def test_api_primary_probe_timeout_is_not_healthy(area):
+    fake = area / "slow_probe.py"
+    fake.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+    result = codex_exec_mcp.probe_api_primary(
+        "codex", "gpt-probe", codex_bin=json.dumps([sys.executable, str(fake)]), timeout=0.05)
+    assert result["ok"] is False
+    assert result["failure"]["type"] == "NO_RESPONSE"
+
+
+def test_anthropic_spend_cap_is_credit_exhaustion():
+    # Assumed Anthropic error event wrapper; this structured spend-cap code is the classifier contract.
+    event = {"type": "error", "error": {"type": "rate_limit_error", "details": {
+        "error_code": "enforced_spend_limit_reached"}, "message": "Access resumes at midnight."}}
+    evidence = codex_exec_mcp._launch_failure_evidence("opencode", [event])
+    assert evidence == {"type": "CREDIT_EXHAUSTED", "retryAfterSeconds": None,
+                        "noWorkProof": False}

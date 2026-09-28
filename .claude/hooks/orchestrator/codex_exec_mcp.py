@@ -24,6 +24,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any
@@ -107,6 +108,7 @@ CONTINUATION_PROMPT = ("The previous execution was interrupted. Inspect the work
 RETENTION_SECONDS = 7 * 24 * 60 * 60
 # Allow codex exec to exit normally after its terminal stdout event before stopping a hung tree.
 CODEX_TERMINAL_GRACE_SECONDS = 20
+RESPONSIVENESS_ATTEMPTS = (0, 30, 60, 120, 240)
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
 WINDOWS_DETACHED_PROCESS = 0x00000008
@@ -534,6 +536,143 @@ def _agent_event(agent: str, event: dict[str, Any]) -> tuple[str | None, bool, s
     return session, kind in ("turn.completed", "turn.failed", "error"), failure, final if isinstance(final, str) else None
 
 
+def _retry_after_seconds(value: Any) -> float | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key.casefold().replace("_", "-") == "retry-after":
+                try:
+                    seconds = float(item)
+                    if math.isfinite(seconds) and seconds >= 0:
+                        return seconds
+                except (TypeError, ValueError):
+                    pass
+            found = _retry_after_seconds(item)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _retry_after_seconds(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _launch_failure_evidence(agent: str, events: list[dict[str, Any]], *, stderr: str = "",
+                             stdout_had_output: bool = False, output_had_data: bool = False,
+                             process_started: bool = True) -> dict[str, Any]:
+    """Classify failed launches; only empty, pre-work evidence is retryable."""
+    body = stderr + "\n" + "\n".join(json.dumps(event, ensure_ascii=False) for event in events)
+    retry_after = _retry_after_seconds(events)
+    if retry_after is None:
+        match = re.search(r"\bretry[- ]after\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(?:seconds?|s)?\b", body, re.I)
+        if match:
+            retry_after = float(match.group(1))
+    if agent == "codex":
+        work_started = any(str(event.get("type", "")).startswith("item.") for event in events)
+    elif agent == "opencode":
+        work_started = _opencode_has_work(events)
+    else:
+        work_started = any(event.get("type") != "error" for event in events)
+
+    # Assumed provider message variants: these text/status spellings are not
+    # guaranteed by either JSON event protocol; keep the match narrow.
+    if not work_started and re.search(r"\b(?:HTTP\s*)?402\b|enforced_spend_limit_reached|insufficient (?:account )?balance|quota[- ]exceeded|billing.{0,40}(?:quota|credit)|(?:quota|credit).{0,40}billing", body, re.I):
+        return {"type": "CREDIT_EXHAUSTED", "retryAfterSeconds": None, "noWorkProof": False}
+    if not work_started and re.search(r"\b429\b|rate[- ]limit(?:ed)?", body, re.I):
+        return {"type": "RATE_LIMITED", "retryAfterSeconds": retry_after, "noWorkProof": False}
+
+    if not process_started:
+        return {"type": "NO_RESPONSE", "retryAfterSeconds": None,
+                "noWorkProof": True, "proof": "PROCESS_NOT_STARTED"}
+    if not events and not stdout_had_output and not output_had_data and not stderr.strip():
+        return {"type": "NO_RESPONSE", "retryAfterSeconds": None,
+                "noWorkProof": True, "proof": "NO_EVENTS_OR_OUTPUT"}
+    # Verified locally: the bridge parses Codex `turn.failed` / `error` and
+    # OpenCode `error` envelopes. Their provider-specific billing text is assumed.
+    return {"type": "AMBIGUOUS", "retryAfterSeconds": None, "noWorkProof": False}
+
+
+def _run_with_responsiveness_retries(run_attempt, *, clock=time.monotonic,
+                                     sleep=time.sleep) -> dict[str, Any]:
+    """Run at the fixed offsets, repeating only a proven no-response launch."""
+    started = clock()
+    for index, offset in enumerate(RESPONSIVENESS_ATTEMPTS, 1):
+        delay = max(0.0, started + offset - clock())
+        if delay:
+            sleep(delay)
+        result = run_attempt()
+        evidence = result.get("typedEvidence") if isinstance(result, dict) else None
+        if not (isinstance(evidence, dict) and evidence.get("type") == "NO_RESPONSE"
+                and evidence.get("noWorkProof") is True):
+            if isinstance(result, dict):
+                result["responsivenessAttempts"] = index
+            return result
+    result["responsivenessAttempts"] = len(RESPONSIVENESS_ATTEMPTS)
+    return result
+
+
+def probe_api_primary(agent: str, model: str, *, codex_bin: str | None = None,
+                      timeout: float = 60.0) -> dict[str, Any]:
+    """Probe the configured CLI in an empty temporary cwd, outside any worktree."""
+    process_started = False
+    temp = None
+    try:
+        if agent not in ("codex", "opencode"):
+            raise ValueError("API probe supports Codex and OpenCode CLI agents")
+        server = Server(codex_bin=codex_bin, agent=agent)
+        temp = tempfile.mkdtemp(prefix="purser-api-probe-")
+        cwd = Path(temp)
+        output_path = cwd / "last-message.txt"
+        sandbox = "read-only" if agent == "codex" else None
+        command = _agent_command(agent, server._agent_prefix(agent), "codex", str(cwd),
+                                 model, [], sandbox, None, output_path, "Reply with OK.")
+        process = subprocess.Popen(command, cwd=cwd,
+                                   stdin=subprocess.PIPE if agent == "codex" else subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   **_process_creation_options())
+        process_started = True
+        timed_out = False
+        try:
+            stdout, stderr = process.communicate(
+                input=b"Reply with OK." if agent == "codex" else None, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _stop_process(process)
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = b"", b""
+        events = []
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        parsed = [_agent_event(agent, event) for event in events]
+        failures = [failure for _, _, failure, _ in parsed if failure]
+        if timed_out:
+            return {"ok": False, "failure": {"type": "NO_RESPONSE", "retryAfterSeconds": None,
+                                                "noWorkProof": False}}
+        completed = any(event.get("type") == "step_finish" and isinstance(event.get("part"), dict)
+                        and event["part"].get("reason") == "stop" for event in events) if agent == "opencode" else any(
+                            event.get("type") == "turn.completed" for event in events)
+        if process.returncode == 0 and completed and not failures:
+            return {"ok": True}
+        evidence = _launch_failure_evidence(
+            agent, events, stderr=stderr.decode("utf-8", errors="replace"),
+            stdout_had_output=bool(stdout.strip()),
+            output_had_data=output_path.is_file() and output_path.stat().st_size > 0)
+        return {"ok": False, "failure": evidence}
+    except (OSError, ValueError, TypeError) as exc:
+        evidence = _launch_failure_evidence(agent, [], stderr=str(exc), process_started=process_started)
+        return {"ok": False, "failure": evidence}
+    finally:
+        if temp is not None:
+            shutil.rmtree(temp, ignore_errors=True)
+
+
 def _opencode_missing_model(event: dict[str, Any], model: str) -> bool:
     """Accept only a structured model-not-found error naming the requested model."""
     error = event.get("error")
@@ -554,7 +693,9 @@ def _opencode_has_work(events: list[dict[str, Any]]) -> bool:
         kind = event.get("type")
         part = event.get("part")
         tool = part.get("tool") if isinstance(part, dict) else None
-        if kind == "tool_use" or (isinstance(kind, str) and "edit" in kind.casefold()) or tool in {"edit", "write", "patch"}:
+        if (kind == "tool_use" or kind == "text"
+                or (isinstance(kind, str) and "edit" in kind.casefold())
+                or tool in {"edit", "write", "patch"}):
             return True
     return False
 
@@ -1095,7 +1236,16 @@ class Server:
                     return
                 job.update(state="RUNNING", startedAt=time.time())
                 self._write_job(job)
-            result = self._run_tool(name, args, job_id, async_job=True)
+            result = _run_with_responsiveness_retries(
+                lambda: self._run_tool(name, args, job_id, async_job=True))
+            evidence = result.get("typedEvidence") if isinstance(result, dict) else None
+            current = self._read_job(job_id)
+            if current is not None:
+                if isinstance(evidence, dict):
+                    current["launchFailureEvidence"] = evidence
+                if isinstance(result, dict) and isinstance(result.get("responsivenessAttempts"), int):
+                    current["responsivenessAttempts"] = result["responsivenessAttempts"]
+                self._write_job(current)
             value = result.get("structuredContent")
             if result.get("isError") or not isinstance(value, dict):
                 current = self._read_job(job_id)
@@ -1310,6 +1460,8 @@ class Server:
 
     def _run_tool_once(self, name: str, arguments: dict[str, Any], request_id: Any,
                        async_job: bool = False) -> dict[str, Any]:
+        launch_attempted = False
+        process_started = False
         if name not in ("codex", "codex-reply"):
             return _tool_result(None, error=f"unknown tool: {name}")
         agent = arguments.get("agent", self.agent)
@@ -1393,10 +1545,12 @@ class Server:
                         return _tool_result(None, error="cancelled")
                     if async_job and time.time() >= self._read_job(request_id)["deadlineAt"]:
                         return _tool_result(None, error="deadline exceeded")
+                    launch_attempted = True
                     process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE if agent == "codex" else subprocess.DEVNULL,
                                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                                creationflags=creation.get("creationflags", 0),
                                                start_new_session=creation.get("start_new_session", False))
+                    process_started = True
                     self.jobs[request_id] = process
                     if async_job:
                         self.job_processes[request_id] = process
@@ -1404,6 +1558,7 @@ class Server:
                         job["pid"] = process.pid
                         self._write_job(job)
                 events: list[dict[str, Any]] = []
+                stdout_had_output: list[bool] = []
                 stderr_chunks: list[bytes] = []
                 terminal_event = threading.Event()
                 exit_forced_after_terminal = False
@@ -1411,6 +1566,8 @@ class Server:
                 def read_stdout() -> None:
                     recorded_session = False
                     for line in process.stdout:
+                        if line.strip():
+                            stdout_had_output.append(True)
                         try:
                             event = json.loads(line)
                         except (ValueError, UnicodeError):
@@ -1519,6 +1676,10 @@ class Server:
                               "turn completion event missing" if async_job and not completed else
                               stderr[-4000:] or f"exit code {process.returncode}")
                     failed_result = _tool_result(started, error=detail)
+                    failed_result["typedEvidence"] = _launch_failure_evidence(
+                        agent, events, stderr=stderr,
+                        stdout_had_output=bool(stdout_had_output),
+                        output_had_data=output_path.is_file() and output_path.stat().st_size > 0)
                     if (agent == "opencode" and async_job and not _opencode_has_work(events)
                             and any(_opencode_missing_model(event, model) for event in events)):
                         failed_result["retryableModelMissing"] = True
@@ -1545,7 +1706,12 @@ class Server:
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
         except (OSError, ValueError, TypeError) as exc:
-            return _tool_result(None, error=str(exc))
+            result = _tool_result(None, error=str(exc))
+            if launch_attempted:
+                result["typedEvidence"] = _launch_failure_evidence(
+                    agent if "agent" in locals() else self.agent, [],
+                    process_started=process_started, stderr="" if not process_started else str(exc))
+            return result
 
     def _worker(self, request_id: Any, params: dict[str, Any]) -> None:
         try:
