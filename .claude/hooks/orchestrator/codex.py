@@ -3126,14 +3126,20 @@ def _post_observations(
     if pending.get("mechanical_opencode") is True:
         try:
             import mechanical_learning
+            reviewer_skipped = bundle.get("reviewer1_skipped_reason") in {"NO_DELTA", "BELOW_THRESHOLD"}
+            review_passed = (
+                (bundle.get("worker_validation") or {}).get("status") == "PASS"
+                if reviewer_skipped
+                else (
+                    bundle.get("reviewer1_skipped_reason") is None
+                    and bundle.get("validation") == "PASS"
+                    and bundle.get("reviewer1_result") == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+                )
+            )
             accepted = (
-                bundle.get("validation") == "PASS"
+                review_passed
                 and bundle.get("micro_repair") is None
                 and bundle.get("micro_repair_cleared_review") is not True
-                and (
-                    bundle.get("reviewer1_result") == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
-                    or bundle.get("reviewer1_skipped_reason") in {"NO_DELTA", "BELOW_THRESHOLD"}
-                )
             )
             if pending.get("agent") == "opencode":
                 attempted_models = pending.get("attempted_models")

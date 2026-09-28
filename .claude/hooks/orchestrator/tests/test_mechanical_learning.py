@@ -65,6 +65,26 @@ def test_shadow_starts_for_accepted_mechanical_result_even_when_codex_served(tmp
     assert starts[1]["served_model"] == "vendor/served-free"
 
 
+def test_skipped_reviewer_uses_worker_validation_for_shadow_acceptance(tmp_path, monkeypatch):
+    _inventory(tmp_path, "vendor/served-free", "vendor/shadow-free")
+    starts = []
+    monkeypatch.setattr(mechanical_learning, "start_shadow", lambda **kwargs: starts.append(kwargs) or True)
+    pending = {"task_id": "task", "project_key": "0123456789abcdef", "repo_root": str(tmp_path),
+               "route": "mechanical", "model": "vendor/served-free", "agent": "opencode",
+               "mechanical_opencode": True, "shadow_prompt": "Do the task."}
+
+    skipped_bundle = _accepted_bundle()
+    skipped_bundle.update(validation="UNKNOWN", reviewer1_result=None, reviewer1_skipped_reason="NO_DELTA",
+                          worker_validation={"status": "PASS"})
+    codex._post_observations({"session_id": "session"}, tmp_path, pending, skipped_bundle)
+    assert len(starts) == 1
+
+    for status in ("FAIL", "UNKNOWN"):
+        rejected_bundle = dict(skipped_bundle, worker_validation={"status": status})
+        codex._post_observations({"session_id": "session"}, tmp_path, pending, rejected_bundle)
+    assert len(starts) == 1
+
+
 def test_shadow_env_asks_for_all_confined_tools_and_uses_scratch(tmp_path, monkeypatch):
     path = _inventory(tmp_path, "vendor/served-free", "vendor/shadow-free")
     source = tmp_path / "checkout"
