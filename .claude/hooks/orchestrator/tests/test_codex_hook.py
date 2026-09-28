@@ -1064,6 +1064,8 @@ def _board_job(state_root, name, status="RUNNING", **values):
            "label": name, "model": "gpt-6-sol", "effort": "medium", "route": "normal",
            "repoRoot": str(state_root.parent / "repo"),
            **values}
+    if status in ("SUCCEEDED", "FAILED", "CANCELLED"):
+        job.setdefault("boardDisplayCount", 0)
     (state_root / "async_jobs").mkdir(parents=True, exist_ok=True)
     (state_root / "codex_exec_mcp" / "jobs").mkdir(parents=True, exist_ok=True)
     (state_root / "async_jobs" / f"{job_id}.json").write_text(json.dumps(index), encoding="utf-8")
@@ -1154,6 +1156,7 @@ def test_queued_and_refreshed_job_board_does_not_count_until_shown(workspace, mo
     monkeypatch.setenv("PURSER_STATE_DIR", str(state))
     finished_id, _ = _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time(),
                                 applyState="conflict", applyResult={"applied": False})
+    job_path = state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json"
     _board_job(state, "running-one", "RUNNING")
     _board_job(state, "running-two", "RUNNING")
     payload = {"session_id": "board-refresh-session"}
@@ -1161,8 +1164,7 @@ def test_queued_and_refreshed_job_board_does_not_count_until_shown(workspace, mo
     compaction_advisor.queue_dispatch(payload, repo, board=board, board_job_ids=job_ids)
     compaction_advisor.refresh_dispatch_board(payload, repo, board, board_job_ids=job_ids)
 
-    job_path = state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json"
-    assert "boardDisplayCount" not in json.loads(job_path.read_text(encoding="utf-8"))
+    assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == 0
     shown = {**payload, "last_assistant_message": board}
     assert compaction_advisor.stop(shown, repo) is None
     updated = json.loads(job_path.read_text(encoding="utf-8"))
@@ -1199,8 +1201,13 @@ def test_project_job_board_keeps_counted_terminal_jobs_until_two_displays(worksp
 def test_project_job_board_requires_two_display_count_for_finished_jobs(workspace):
     _, state = workspace
     now = time.time()
-    _board_job(state, "legacy-old", "SUCCEEDED", finishedAt=now - 3601)
-    _board_job(state, "legacy-recent", "FAILED", finishedAt=now - 60)
+    legacy_old, _ = _board_job(state, "legacy-old", "SUCCEEDED", finishedAt=now - 3601)
+    legacy_recent, _ = _board_job(state, "legacy-recent", "FAILED", finishedAt=now - 60)
+    for job_id in (legacy_old, legacy_recent):
+        path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+        job = json.loads(path.read_text(encoding="utf-8"))
+        job.pop("boardDisplayCount")
+        path.write_text(json.dumps(job), encoding="utf-8")
     _board_job(state, "count-zero", "SUCCEEDED", finishedAt=now - 7200, boardDisplayCount=0)
     _board_job(state, "count-one", "CANCELLED", finishedAt=now - 7200, boardDisplayCount=1)
     _board_job(state, "count-two", "SUCCEEDED", finishedAt=now, boardDisplayCount=2)
@@ -1269,7 +1276,7 @@ def test_project_job_board_shows_no_change_and_pending_apply(workspace):
     assert "| changed | gpt-6-sol (medium) | done | — | — | — |" in message
 
 
-def test_project_job_board_retains_recent_and_active_jobs(workspace):
+def test_project_job_board_retains_undisplayed_terminal_and_active_jobs(workspace):
     _, state = workspace
     _board_job(state, "terminal-61m", "SUCCEEDED", finishedAt=time.time() - 61 * 60)
     _board_job(state, "terminal-59m", "CANCELLED", finishedAt=time.time() - 59 * 60)
@@ -1279,7 +1286,7 @@ def test_project_job_board_retains_recent_and_active_jobs(workspace):
     message = codex._project_job_board(state, "project")
 
     assert message is not None
-    assert "terminal-61m" not in message
+    assert "| terminal-61m |" in message
     assert "| terminal-59m |" in message
     assert "| running-over-hour |" in message
     assert "| queued-over-hour |" in message
@@ -1307,6 +1314,8 @@ def test_async_result_response_appends_project_job_board(workspace, config, monk
         record = json.loads(path.read_text(encoding="utf-8"))
         record.update(label=f"result-{number}", model="gpt-6-sol", effort="medium",
                       route="normal", etaMinutes=5, finishedAt=time.time())
+        if job_state in ("SUCCEEDED", "FAILED", "CANCELLED"):
+            record["boardDisplayCount"] = 0
         path.write_text(json.dumps(record), encoding="utf-8")
         jobs.append(job_id)
     queued_dispatches = []
@@ -6598,6 +6607,27 @@ def test_reply_stays_pinned_to_recorded_thread_after_fallback_switch(workspace, 
     assert "permissionDecision" not in result["hookSpecificOutput"]
     assert updated.get("agent", "codex") == "codex"
     assert "model" not in updated
+
+
+def test_reply_to_fallback_thread_stays_pinned_to_fallback_agent_and_model(workspace, config):
+    repo, state = workspace
+    config = _fallback_config(config)
+    fallback_model = config["fallback"]["model"]
+    record = ledger.build_session_record(
+        "task-1", "fallback-thread", "normal", fallback_model, "none",
+        phase="implementation", scope=["file0.py"], label="test task", agent="opencode",
+    )
+    ledger.SessionLedger(codex._project_state_root(state, project_root.project_key(repo.resolve()))).save(record)
+
+    reply = event(codex.CODEX_REPLY_TOOL, prompt=orch() + "\nContinue.", threadId="fallback-thread")
+    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+
+    assert "permissionDecision" not in result["hookSpecificOutput"]
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    assert updated["agent"] == "opencode"
+    assert "model" not in updated
+    pending = codex._read_pending(state, reply)
+    assert pending["agent"] == "opencode" and pending["model"] == fallback_model
 
 
 def test_reviewer_uses_configured_fallback_family(workspace, config, monkeypatch):

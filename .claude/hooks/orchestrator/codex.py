@@ -1617,6 +1617,22 @@ def pre_tool_use(
                                and active_coder.get("active_coder") == "fallback"
                                and isinstance(loaded_config.get("fallback"), Mapping))
         if reply_call and isinstance(live_thread, Mapping):
+            thread_agent = live_thread.get("agent", "codex")
+            fallback = loaded_config.get("fallback")
+            allowed_agents = {agent}
+            if isinstance(fallback, Mapping) and isinstance(fallback.get("agent"), str):
+                allowed_agents.add(fallback["agent"])
+            mechanical_candidate_thread = (
+                thread_agent == "opencode"
+                and live_thread.get("route") == "mechanical"
+                and live_thread.get("phase") == "implementation"
+                and loaded_config.get("mechanical_opencode_enabled", True)
+            )
+            if thread_agent not in allowed_agents and not mechanical_candidate_thread:
+                return _observed_denial(event, "THREAD_AGENT_MISMATCH",
+                                        "thread belongs to a different coding agent; start a fresh thread.",
+                                        state_root=state_root, task_id=parsed.task_id, continuity=True)
+        if reply_call and isinstance(live_thread, Mapping):
             agent = live_thread.get("agent", "codex")
             stored_model = live_thread.get("model")
             if isinstance(stored_model, str):
@@ -1648,10 +1664,6 @@ def pre_tool_use(
                                     "OpenCode has no verified read-only sandbox for plan calls." if agent == "opencode"
                                     else "Antigravity has no verified read-only sandbox for plan calls.",
                                     state_root=state_root, task_id=parsed.task_id)
-        if reply_call and isinstance(live_thread, Mapping) and live_thread.get("agent", "codex") != agent:
-            return _observed_denial(event, "THREAD_AGENT_MISMATCH",
-                                    "thread belongs to a different coding agent; start a fresh thread.",
-                                    state_root=state_root, task_id=parsed.task_id, continuity=True)
         effective_reason = parsed.reason
         reason_source = "explicit" if parsed.reason is not None and not reply_without_orch else None
         if reply_without_orch and parsed.reason is not None:
