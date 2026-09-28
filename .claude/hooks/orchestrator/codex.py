@@ -1703,6 +1703,16 @@ def pre_tool_use(
             "effort": effort,
             "label": task_label,
             "agent": agent,
+            "mechanical_opencode": (
+                parsed.route == "mechanical"
+                and loaded_config.get("mechanical_opencode_enabled", True)
+                and agent == "opencode"
+            ),
+            "shadow_prompt": updated["prompt"] if (
+                parsed.route == "mechanical"
+                and loaded_config.get("mechanical_opencode_enabled", True)
+                and agent == "opencode"
+            ) else None,
             "scope": declared_scope,
             "repo_root": str(repository) if repository is not None else None,
             "project_root_reason": project_root_reason or None,
@@ -3107,6 +3117,47 @@ def _post_observations(
     finished_payload.update({f"codex_{key}": value for key, value in codex_tokens.items()})
     _observe("emit", "IMPLEMENTER_FINISHED", task_id=task_id, **finished_payload)
 
+    if pending.get("mechanical_opencode") is True and pending.get("agent") == "opencode":
+        try:
+            import mechanical_learning
+            accepted = (
+                bundle.get("validation") == "PASS"
+                and bundle.get("micro_repair") is None
+                and bundle.get("micro_repair_cleared_review") is not True
+                and (
+                    bundle.get("reviewer1_result") == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+                    or bundle.get("reviewer1_skipped_reason") in {"NO_DELTA", "BELOW_THRESHOLD"}
+                )
+            )
+            attempted_models = pending.get("attempted_models")
+            if isinstance(attempted_models, list):
+                for missing_model in attempted_models:
+                    if isinstance(missing_model, str) and missing_model != pending.get("model"):
+                        missed_positions = mechanical_learning.record_sample(
+                            missing_model, False, root=runtime_root
+                        )
+                        if missed_positions and missed_positions[0] != missed_positions[1]:
+                            _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
+                                     project_key=project_namespace, served_model=missing_model,
+                                     old_rank=missed_positions[0], new_rank=missed_positions[1])
+            positions = mechanical_learning.record_sample(
+                str(pending.get("model")), accepted, root=runtime_root
+            )
+            if positions and positions[0] != positions[1]:
+                _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
+                         project_key=project_namespace, served_model=pending.get("model"),
+                         old_rank=positions[0], new_rank=positions[1])
+            if accepted:
+                mechanical_learning.start_shadow(
+                    project_key=str(project_namespace),
+                    repository=str(pending.get("worktree_path") or pending.get("repo_root")),
+                    prompt=str(pending.get("shadow_prompt", "")),
+                    accepted_report=str(bundle.get("implementer_report", "")),
+                    served_model=str(pending.get("model", "")), state=runtime_root,
+                )
+        except BaseException:
+            pass
+
     model_requested = bundle.get("reviewer1_model_requested")
     if reviewer_started:
         usage = dict(getattr(reviewer_report, "usage", ()))
@@ -4221,6 +4272,18 @@ def post_tool_use_failure(
                 raise WiringError(saved.get("message", "ambiguous failure could not be recorded"))
         elif routing_enforced:
             raise WiringError("normal pending call identity is incomplete")
+        if pending.get("mechanical_opencode") is True and pending.get("agent") == "opencode":
+            try:
+                import mechanical_learning
+                positions = mechanical_learning.record_sample(
+                    str(pending.get("model")), False, root=runtime_root
+                )
+                if positions and positions[0] != positions[1]:
+                    _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
+                             project_key=project_namespace, served_model=pending.get("model"),
+                             old_rank=positions[0], new_rank=positions[1])
+            except BaseException:
+                pass
         if not pending.get("async_call"):
             _release_scope_lease(runtime_root, pending)
             _remove_pending(runtime_root, event)

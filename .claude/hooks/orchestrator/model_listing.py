@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import coder_config
@@ -125,7 +127,7 @@ def stale(max_age_hours=24, *, root=None) -> bool:
         return True
 
 
-def refresh_candidates(providers: dict, *, model_ids: list[str] | None = None, root=None) -> bool:
+def _refresh_candidates_unlocked(providers: dict, *, model_ids: list[str] | None = None, root=None) -> bool:
     """Refresh the local eligible-free OpenCode inventory; leave it intact on failure."""
     path = _candidates_path(root)
     try:
@@ -192,7 +194,55 @@ def _atomic_write(path: Path, value: dict) -> None:
                 pass
 
 
-def mark_candidate_failed(model_id: str, *, root=None) -> bool:
+@contextmanager
+def _candidate_lock(path: Path):
+    """Serialize measured-list updates without making observational contention fatal."""
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+b")
+    if handle.tell() == 0:
+        handle.write(b"\0")
+        handle.flush()
+    deadline = time.monotonic() + 0.1
+    acquired = False
+    try:
+        while not acquired:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.005)
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
+def refresh_candidates(providers: dict, *, model_ids: list[str] | None = None, root=None) -> bool:
+    path = _candidates_path(root)
+    with _candidate_lock(path) as acquired:
+        return acquired and _refresh_candidates_unlocked(providers, model_ids=model_ids, root=root)
+
+
+def _mark_candidate_failed_unlocked(model_id: str, *, root=None) -> bool:
     """Atomically retire one candidate while preserving the rest of the inventory."""
     path = _candidates_path(root)
     try:
@@ -212,3 +262,9 @@ def mark_candidate_failed(model_id: str, *, root=None) -> bool:
         return True
     except (OSError, ValueError, TypeError):
         return False
+
+
+def mark_candidate_failed(model_id: str, *, root=None) -> bool:
+    path = _candidates_path(root)
+    with _candidate_lock(path) as acquired:
+        return acquired and _mark_candidate_failed_unlocked(model_id, root=root)

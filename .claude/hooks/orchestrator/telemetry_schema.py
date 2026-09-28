@@ -18,6 +18,7 @@ EVENT_TYPES = frozenset(
         "IMPLEMENTER_STARTED",
         "IMPLEMENTER_FINISHED",
         "IMPLEMENTER_FAILED",
+        "MECHANICAL_MODEL_RANK_CHANGED",
         "REVIEWER1_STARTED",
         "REVIEWER1_FINISHED",
         "REVIEWER1_SKIPPED",
@@ -236,6 +237,7 @@ _PAYLOAD_FIELDS = {
         | _CALL_CONTEXT_FIELDS
         | CLAUDE_USAGE_PAYLOAD_FIELDS
     ),
+    "MECHANICAL_MODEL_RANK_CHANGED": frozenset({"served_model", "old_rank", "new_rank"}),
     "REVIEWER1_STARTED": frozenset({"reviewer1_provider", "reviewer1_model_requested"}),
     "REVIEWER1_FINISHED": frozenset(
         {
@@ -349,6 +351,8 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name in {
         "changed_paths_count",
+        "old_rank",
+        "new_rank",
         "halt_path_count",
         "claude_task_input_tokens",
         "claude_task_output_tokens",
