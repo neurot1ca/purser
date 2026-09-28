@@ -168,7 +168,7 @@ def start_shadow(*, project_key: str, repository: str, prompt: str, accepted_rep
                                    "accepted_report": accepted_report, "scratch": str(scratch),
                                    "project_key": project_key, "state_root": str(root)},
                                    ensure_ascii=False), encoding="utf-8")
-        flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0
+        flags = 0x08000000 | 0x00000200 if os.name == "nt" else 0
         launched = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--shadow", str(job)],
                                      cwd=str(Path(__file__).resolve().parent), stdin=subprocess.DEVNULL,
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -243,7 +243,9 @@ def run_shadow(job_path: Path) -> bool:
         environment = {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps(config, separators=(",", ":"))}
         result = subprocess.run(command, cwd=scratch, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=SHADOW_TIMEOUT_SECONDS,
-                                check=False, env=environment)
+                                check=False, env=environment,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                if os.name == "nt" else 0)
         report = _final_report(result.stdout) if result.returncode == 0 else ""
         success = bool(report and reports_agree(report, job["accepted_report"]))
     except Exception:

@@ -199,7 +199,9 @@ def _inventory(repo: Path, deadline: float) -> list[str]:
     _check(deadline)
     result = subprocess.run(["git", "ls-files", "-co", "--exclude-standard", "-z"],
                             cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            timeout=max(0.01, deadline - time.monotonic()), check=True)
+                            timeout=max(0.01, deadline - time.monotonic()), check=True,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                            if os.name == "nt" else 0)
     paths = sorted(set(os.fsdecode(name) for name in result.stdout.split(b"\0") if name))
     if len(paths) > MAX_FILES:
         raise MapLimit("file count")
@@ -333,7 +335,9 @@ def main() -> int:
     repo = args.repo.resolve()
     try:
         result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=repo,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=2, check=True)
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=2, check=True,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                if os.name == "nt" else 0)
         repo = Path(os.fsdecode(result.stdout.strip())).resolve()
     except (OSError, subprocess.SubprocessError):
         import project_root

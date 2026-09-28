@@ -97,7 +97,8 @@ def _agent(name: str, executable: str | None = None) -> dict:
         return {"available": False, "path": path, "version": None}
     version = None
     try:
-        result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5, check=False)
+        result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)
         if result.returncode == 0:
             version = (result.stdout or result.stderr).strip() or None
     except (OSError, subprocess.TimeoutExpired):
@@ -171,7 +172,8 @@ def detect(config_path: Path, project: Path, coder: str | None = None, model: st
 
 def _opencode_models(binary: str) -> list[str]:
     try:
-        result = subprocess.run([binary, "models"], capture_output=True, text=True, timeout=30, check=False)
+        result = subprocess.run([binary, "models"], capture_output=True, text=True, timeout=30, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)
     except subprocess.TimeoutExpired as exc:
         raise ValueError("opencode models timed out") from exc
     if result.returncode:
@@ -288,7 +290,8 @@ def _reviewer_executable(agent: str, model: str) -> str | None:
 
 def _agy_models(binary: str) -> list[str]:
     try:
-        result = subprocess.run([binary, "models"], capture_output=True, text=True, timeout=30, check=False)
+        result = subprocess.run([binary, "models"], capture_output=True, text=True, timeout=30, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)
     except subprocess.TimeoutExpired as exc:
         raise ValueError("agy models timed out") from exc
     if result.returncode:
@@ -546,7 +549,9 @@ def _python_to_store() -> tuple[Path, bool]:
                 continue
             seen.add(key)
             result = subprocess.run([str(resolved), "--version"], capture_output=True,
-                                    text=True, timeout=5, check=False)
+                                    text=True, timeout=5, check=False,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                    if os.name == "nt" else 0)
             version = (result.stdout or result.stderr).strip()
             match = re.search(r"Python\s+(\d+)\.(\d+)", version)
             if result.returncode == 0 and match and (int(match.group(1)), int(match.group(2))) >= (3, 11):

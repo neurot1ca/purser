@@ -104,6 +104,8 @@ def main() -> int:
                 errors="replace",
                 timeout=config["reviewer1_timeout_seconds"],
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                if os.name == "nt" else 0,
             )
             if completed.returncode == 0:
                 parsed = _parse(completed.stdout)

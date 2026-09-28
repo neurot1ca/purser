@@ -529,8 +529,9 @@ def _run_worktree_setup(worktree: Path, setup: project_profile.WorktreeSetup) ->
     }
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    creationflags = kwargs.pop("creationflags", 0)
     try:
-        completed = subprocess.run(setup.setup, **kwargs)
+        completed = subprocess.run(setup.setup, creationflags=creationflags, **kwargs)
     except subprocess.TimeoutExpired as exc:
         output = exc.stdout or ""
         if isinstance(output, bytes):

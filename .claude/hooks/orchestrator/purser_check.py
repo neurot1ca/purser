@@ -42,7 +42,8 @@ def _check_python() -> dict:
 def _check_python_locator() -> dict:
     locator = ROOT / "bin" / "python-locator.js"
     try:
-        result = subprocess.run(["node", str(locator), "--resolve-json"], capture_output=True, text=True, timeout=20, check=False)
+        result = subprocess.run(["node", str(locator), "--resolve-json"], capture_output=True, text=True, timeout=20, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _row("Python locator", "FAIL", f"Locator could not run: {exc}", "Install Node.js and run `/purser:check` again.")
     selected = json.loads(result.stdout)
@@ -127,7 +128,8 @@ def _check_codex() -> dict:
     if not executable:
         return _row("Codex CLI", "FAIL", "`codex` was not found on PATH.", "Install the Codex CLI and ensure `codex` resolves on PATH.")
     try:
-        result = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=10, check=False)
+        result = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=10, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)
         output = (result.stdout or result.stderr).strip()
         if result.returncode != 0:
             return _row("Codex CLI", "WARN", f"`{executable} --version` exited {result.returncode}: {output or 'no version output'}.", "Verify the Codex CLI installation and that it can run `codex --version`.")

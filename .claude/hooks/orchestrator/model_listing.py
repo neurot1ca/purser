@@ -98,7 +98,9 @@ def list_models(agent: str, providers: dict) -> dict:
         return {"status": "unavailable", "models": [], "source": source, "reason": "binary not found"}
     try:
         result = subprocess.run([binary, *args], capture_output=True, text=True, encoding="utf-8",
-                                errors="replace", timeout=30, check=False)
+                                errors="replace", timeout=30, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                if os.name == "nt" else 0)
         if result.returncode:
             raise ValueError(f"listing exited {result.returncode}")
         models = parser(result.stdout)

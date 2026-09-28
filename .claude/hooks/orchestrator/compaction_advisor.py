@@ -560,14 +560,16 @@ def _mechanical_state(repository: Path, context: int, triggers: list[str], calls
             f"claude_review_mode={call.get('claude_review_mode') or 'unknown'}"
         )
     try:
-        commits = subprocess.run(["git", "log", "--oneline", "-5"], cwd=repository, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3, check=False)
+        commits = subprocess.run(["git", "log", "--oneline", "-5"], cwd=repository, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3, check=False,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)
         if commits.returncode == 0:
             lines.append("Last commits:")
             lines.extend(f"- {line}" for line in commits.stdout.splitlines()[:5])
     except (OSError, subprocess.SubprocessError):
         pass
     try:
-        status = subprocess.run(["git", "status", "--porcelain"], cwd=repository, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3, check=False)
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=repository, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)
         if status.returncode == 0:
             lines.append(f"Uncommitted changed paths: {sum(bool(line.strip()) for line in status.stdout.splitlines())}")
     except (OSError, subprocess.SubprocessError):

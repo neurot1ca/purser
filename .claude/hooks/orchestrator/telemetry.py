@@ -973,6 +973,8 @@ def _refresh_batching_snapshot(
                 text=True,
                 timeout=BATCHING_REFRESH_TIMEOUT_SECONDS,
                 shell=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                if os.name == "nt" else 0,
             )
             if completed.returncode != 0:
                 return snapshot_path

@@ -127,7 +127,8 @@ def _launch_host(job_dir: Path, job_id: str, generation: int = 1,
                "--ownership-token", ownership_token]
     if os.name != "nt":
         subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+                         stderr=subprocess.DEVNULL, creationflags=0,
+                         start_new_session=True, close_fds=True)
         return
     # A detached process group alone still has the bridge as its recorded
     # parent, and taskkill /T can follow that ancestry. Give the host the
@@ -1393,7 +1394,9 @@ class Server:
                     if async_job and time.time() >= self._read_job(request_id)["deadlineAt"]:
                         return _tool_result(None, error="deadline exceeded")
                     process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE if agent == "codex" else subprocess.DEVNULL,
-                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, **creation)
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                               creationflags=creation.get("creationflags", 0),
+                                               start_new_session=creation.get("start_new_session", False))
                     self.jobs[request_id] = process
                     if async_job:
                         self.job_processes[request_id] = process
