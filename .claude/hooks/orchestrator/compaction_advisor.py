@@ -15,6 +15,7 @@ import tomllib
 from typing import Any
 
 import project_root
+import state_root
 import telemetry
 
 
@@ -408,6 +409,12 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 dispatch = ({"lines": lines, "board": board, "blocked": dispatch.get("blocked") is True}
                             if isinstance(lines, list) and all(isinstance(line, str) and line for line in lines)
                             and (board is None or isinstance(board, str)) else None)
+            version_pending = value.get("version_pending")
+            if not (isinstance(version_pending, dict) and isinstance(version_pending.get("version"), str)
+                    and version_pending["version"]):
+                version_pending = None
+            elif version_pending is not None:
+                version_pending = {"version": version_pending["version"], "blocked": version_pending.get("blocked") is True}
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
                 "reminder_messages": max(0, int(value.get("reminder_messages", 0))),
@@ -417,6 +424,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "notice_pending": pending,
                 "receipt_pending": receipt,
                 "dispatch_pending": dispatch,
+                "version_pending": version_pending,
                 "flow_blocked_user": value.get("flow_blocked_user") if type(value.get("flow_blocked_user")) is int else None,
             }
     except (OSError, ValueError, TypeError):
@@ -424,7 +432,39 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
     return {"last_suggested_context": 0, "reminder_messages": 0, "reminder_wasted_tokens": 0,
             "last_task_id": None, "session_id": session_id,
             "notice_pending": None, "receipt_pending": None, "dispatch_pending": None,
+            "version_pending": None,
             "flow_blocked_user": None}
+
+
+def plugin_version_state_path() -> Path:
+    return state_root.default_state_root() / "plugin-version.json"
+
+
+def announced_plugin_version() -> str | None:
+    try:
+        value = json.loads(plugin_version_state_path().read_text(encoding="utf-8"))
+        version = value.get("announced_version") if isinstance(value, dict) else None
+        return version if isinstance(version, str) and version else None
+    except BaseException:
+        return None
+
+
+def record_announced_plugin_version(version: str) -> None:
+    _atomic_write(plugin_version_state_path(), json.dumps({"announced_version": version}, sort_keys=True).encode("utf-8"))
+
+
+def queue_version_announcement(payload: Mapping[str, Any], repository: Path | None, version: str) -> bool:
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return False
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        state["version_pending"] = {"version": version, "blocked": False}
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        return True
+    except BaseException:
+        return False
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -665,6 +705,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         notice = state["notice_pending"]
         receipt = state["receipt_pending"]
         dispatch = state["dispatch_pending"]
+        version_pending = state["version_pending"]
         records = _read_transcript(payload.get("transcript_path"))
         flow_message = next((text for record in reversed(records)
                              if _record_type(record) == "assistant"
@@ -688,9 +729,14 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             if dispatch.get("board") is None or dispatch["board"] in message:
                 state["dispatch_pending"] = None
                 changed = True
+        if version_pending is not None and "⚓" in message and version_pending["version"] in message:
+            state["version_pending"] = None
+            changed = True
+            record_announced_plugin_version(version_pending["version"])
         notice = state["notice_pending"]
         receipt = state["receipt_pending"]
         dispatch = state["dispatch_pending"]
+        version_pending = state["version_pending"]
         if payload.get("stop_hook_active") is True:
             if changed:
                 _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
@@ -705,6 +751,11 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         if dispatch is not None and not dispatch.get("blocked"):
             dispatch["blocked"] = True
             reasons.append(_dispatch_advice(dispatch))
+        if version_pending is not None and not version_pending.get("blocked"):
+            version_pending["blocked"] = True
+            reasons.append(
+                f"Include one visible line containing both `⚓` and `{version_pending['version']}` to announce the Purser update."
+            )
 
         if not reasons and flow_message.rstrip().endswith(("?", "؟", "？")):
             latest_user = max((i for i, record in enumerate(records) if _genuine_user(record)), default=-1)
@@ -726,6 +777,8 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                     reasons.append("Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question.")
         if changed or reasons:
             _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        if version_pending is not None and version_pending.get("blocked") and reasons:
+            record_announced_plugin_version(version_pending["version"])
         return {"decision": "block", "reason": "\n\n".join(reasons)} if reasons else None
     except BaseException:
         return None

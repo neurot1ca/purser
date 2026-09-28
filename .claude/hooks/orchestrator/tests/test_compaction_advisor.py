@@ -568,6 +568,31 @@ def test_stop_hook_active_does_not_block(setup):
     assert _pending_state(repo)["blocked"] is False
 
 
+def test_version_announcement_stop_blocks_once_and_records_version(setup):
+    repo, _local, _scratch = setup
+    event = {"session_id": "session-version"}
+    assert advisor.queue_version_announcement(event, repo, "0.1.42")
+
+    result = advisor.stop({**event, "last_assistant_message": "Updated."}, repo)
+    assert result["decision"] == "block"
+    assert "⚓" in result["reason"] and "0.1.42" in result["reason"]
+    assert advisor.announced_plugin_version() == "0.1.42"
+    state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-version")
+    assert state["version_pending"] == {"version": "0.1.42", "blocked": True}
+    assert advisor.stop({**event, "last_assistant_message": "Still missing."}, repo) is None
+
+
+def test_version_announcement_stop_clears_when_marker_and_version_present(setup):
+    repo, _local, _scratch = setup
+    event = {"session_id": "session-version"}
+    assert advisor.queue_version_announcement(event, repo, "0.1.42")
+
+    assert advisor.stop({**event, "last_assistant_message": "⚓ **Purser 0.1.42 updated:** Improvements."}, repo) is None
+    assert advisor.announced_plugin_version() == "0.1.42"
+    state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-version")
+    assert state["version_pending"] is None
+
+
 def test_pending_reissued_on_next_prompt_below_threshold(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit"))

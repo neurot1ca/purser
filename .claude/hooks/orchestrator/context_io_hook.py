@@ -24,6 +24,43 @@ _PLANNING_WORD = re.compile(
     re.IGNORECASE,
 )
 _PLAN_COMMAND = re.compile(r"^\s*/purser:plan(?:\s|$)", re.IGNORECASE)
+_CHANGELOG_ENTRY = re.compile(r"^##\s+(\S+)\s+—\s+\d{4}-\d{2}-\d{2}\s*$", re.MULTILINE)
+
+
+def _plugin_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _plugin_update_context(payload: Mapping[str, Any], repository: Path | None) -> str | None:
+    try:
+        root = _plugin_root()
+        manifest = json.loads((root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        version = manifest.get("version") if isinstance(manifest, dict) else None
+        if not isinstance(version, str) or not version:
+            return None
+        announced = compaction_advisor.announced_plugin_version()
+        if announced is None:
+            compaction_advisor.record_announced_plugin_version(version)
+            return None
+        if announced == version:
+            return None
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        match = next((entry for entry in _CHANGELOG_ENTRY.finditer(changelog) if entry.group(1) == version), None)
+        if match is None:
+            return None
+        end = changelog.find("\n## ", match.end())
+        section = changelog[match.end():] if end < 0 else changelog[match.end():end]
+        bullets = [line.strip() for line in section.splitlines() if re.match(r"^\s*[-*+]\s+", line)]
+        if not bullets or not compaction_advisor.queue_version_announcement(payload, repository, version):
+            return None
+        return (
+            f"On your next reply, render exactly one line in the user's language in this form: "
+            f"`⚓ **Purser {version} sürümüne yükseltildi:** <one short sentence summarizing the bullets>`. "
+            f"Translate the bold lead for other languages, keeping ⚓ and {version}. "
+            "Source bullets (summarize them in one short sentence):\n" + "\n".join(bullets)
+        )
+    except BaseException:
+        return None
 
 
 def _planning_hint(prompt: Any) -> bool:
@@ -113,6 +150,9 @@ def main() -> int:
                     except BaseException:
                         pass
                     additional_context = compaction_advisor.restore(value, repository)
+                    update_context = _plugin_update_context(value, repository)
+                    if update_context:
+                        additional_context = "\n".join(part for part in (additional_context, update_context) if part)
                     try:
                         if repository is not None:
                             selected = coder_config.load(Path(__file__).with_name("config.json")).get("coder_agent", "codex")

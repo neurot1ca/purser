@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 import context_io_hook
 import async_session_maintenance
 import codex_exec_mcp
+import compaction_advisor
 
 
 def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None, advice=None, unreadable=False):
@@ -85,6 +86,47 @@ def test_session_start_appends_duration_hint_and_runs_cleanup(monkeypatch, tmp_p
     )
     assert cleaned == [tmp_path / "state"]
     assert hint_calls == [(tmp_path / "state", "project-key", None, "codex-main")]
+
+
+def test_plugin_version_upgrade_context_and_first_install(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plugin = tmp_path / "plugin"
+    (plugin / ".claude-plugin").mkdir(parents=True)
+    (plugin / ".claude-plugin" / "plugin.json").write_text('{"version":"2.0.0"}', encoding="utf-8")
+    (plugin / "CHANGELOG.md").write_text(
+        "## 2.0.0 — 2026-09-28\n\n- First change.\n- Second change.\n## 1.9.0 — 2026-09-20\n- Old change.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(context_io_hook, "_plugin_root", lambda: plugin)
+    payload = {"session_id": "session-update"}
+    version_path = compaction_advisor.plugin_version_state_path()
+
+    # An initial install records its version without showing a note.
+    assert context_io_hook._plugin_update_context(payload, repo) is None
+    assert json.loads(version_path.read_text(encoding="utf-8")) == {"announced_version": "2.0.0"}
+    assert compaction_advisor._read_state(compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-update")["version_pending"] is None
+
+    version_path.write_text('{"announced_version":"2.0.0"}', encoding="utf-8")
+    assert context_io_hook._plugin_update_context(payload, repo) is None  # Same currently installed version.
+    version_path.write_text('{"announced_version":"1.8.0"}', encoding="utf-8")
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (repo, "test"))
+    monkeypatch.setattr(context_io_hook.project_root, "project_key", lambda _root: "project-key")
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "cleanup_jobs", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "followup_hints", lambda *_args: None)
+    input_raw, output_raw = io.BytesIO(json.dumps({
+        "hook_event_name": "SessionStart", "source": "startup", "cwd": str(repo), "session_id": "session-update"
+    }).encode("utf-8")), io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
+    assert context_io_hook.main() == 0
+    context = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"]
+    assert context and "Purser 2.0.0" in context
+    assert "First change." in context and "Second change." in context and "Old change." not in context
+    assert compaction_advisor._read_state(compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-update")["version_pending"]["version"] == "2.0.0"
 
 
 def test_accuracy_runs_only_on_compact_and_preserves_context_on_failure(monkeypatch, tmp_path):
