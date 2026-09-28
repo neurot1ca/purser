@@ -1083,7 +1083,7 @@ def test_project_job_board_orders_attention_running_queued_and_applied(workspace
     message = codex._project_job_board(state, "project")
     tasks = [line.strip("|").split("|")[0].strip() for line in message.splitlines()
              if line.startswith("| ") and not line.startswith("| Task |") and "---" not in line]
-    assert tasks == ["running", "queued", "applied", "done", "conflict"]
+    assert tasks == ["running", "queued", "applied", "done", "conflict", "failed"]
     assert "| Task | Model | State | ETA | Review | Apply |" in message
 
 

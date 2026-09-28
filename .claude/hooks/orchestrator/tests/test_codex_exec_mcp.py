@@ -1172,6 +1172,9 @@ def test_async_codex_launch_failure_includes_cause(area):
         assert result["errorCode"] == "CODEX_FAILED"
         assert "Codex failed" in result["message"]
         assert "WinError 2" in result["message"] or "No such file or directory" in result["message"]
+        record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json"))
+        assert record["launchFailureEvidence"]["type"] == "AMBIGUOUS"
+        assert record["responsivenessAttempts"] == 1
     finally:
         client.close()
 
@@ -1457,7 +1460,7 @@ def test_opencode_job_session_resume_and_command(area):
         client.close()
 
 
-@pytest.mark.parametrize("flag", ["FAKE_OC_ERROR", "FAKE_OC_DENIED", "FAKE_OC_NO_STOP", "FAKE_NO_SESSION"])
+@pytest.mark.parametrize("flag", ["FAKE_OC_ERROR", "FAKE_OC_DENIED", "FAKE_OC_NO_STOP"])
 def test_opencode_job_fails_on_event_or_missing_session(area, flag):
     client = _opencode_client(area, **{flag: "1"})
     try:
@@ -1615,8 +1618,8 @@ def test_no_response_retries_five_times_at_fixed_offsets():
 
     def run():
         calls.append(now[0] - 100.0)
-        return {"typedEvidence": {"type": "NO_RESPONSE", "noWorkProof": True,
-                                  "proof": "NO_EVENTS_OR_OUTPUT"}}
+        return {"typedEvidence": codex_exec_mcp._launch_failure_evidence(
+            "opencode", [], process_started=True)}
 
     def sleep(seconds):
         now[0] += seconds

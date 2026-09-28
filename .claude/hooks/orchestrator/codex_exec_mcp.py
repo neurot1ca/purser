@@ -561,6 +561,9 @@ def _launch_failure_evidence(agent: str, events: list[dict[str, Any]], *, stderr
                              stdout_had_output: bool = False, output_had_data: bool = False,
                              process_started: bool = True) -> dict[str, Any]:
     """Classify failed launches; only empty, pre-work evidence is retryable."""
+    if not process_started:
+        return {"type": "AMBIGUOUS", "retryAfterSeconds": None,
+                "noWorkProof": False, "proof": "PROCESS_NOT_STARTED"}
     body = stderr + "\n" + "\n".join(json.dumps(event, ensure_ascii=False) for event in events)
     retry_after = _retry_after_seconds(events)
     if retry_after is None:
@@ -581,9 +584,6 @@ def _launch_failure_evidence(agent: str, events: list[dict[str, Any]], *, stderr
     if not work_started and re.search(r"\b429\b|rate[- ]limit(?:ed)?", body, re.I):
         return {"type": "RATE_LIMITED", "retryAfterSeconds": retry_after, "noWorkProof": False}
 
-    if not process_started:
-        return {"type": "NO_RESPONSE", "retryAfterSeconds": None,
-                "noWorkProof": True, "proof": "PROCESS_NOT_STARTED"}
     if not events and not stdout_had_output and not output_had_data and not stderr.strip():
         return {"type": "NO_RESPONSE", "retryAfterSeconds": None,
                 "noWorkProof": True, "proof": "NO_EVENTS_OR_OUTPUT"}
@@ -626,10 +626,12 @@ def probe_api_primary(agent: str, model: str, *, codex_bin: str | None = None,
         sandbox = "read-only" if agent == "codex" else None
         command = _agent_command(agent, server._agent_prefix(agent), "codex", str(cwd),
                                  model, [], sandbox, None, output_path, "Reply with OK.")
+        creation_options = _process_creation_options()
         process = subprocess.Popen(command, cwd=cwd,
                                    stdin=subprocess.PIPE if agent == "codex" else subprocess.DEVNULL,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   **_process_creation_options())
+                                   creationflags=creation_options.pop("creationflags", 0),
+                                   **creation_options)
         process_started = True
         timed_out = False
         try:
