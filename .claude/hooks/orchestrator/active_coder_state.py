@@ -68,36 +68,102 @@ def _lock(path: Path):
         handle.close()
 
 
+def _read_unlocked(path: Path) -> dict:
+    if not path.exists():
+        return {"active_coder": "primary", "triggering_evidence": None,
+                "reset_cycle_marker": None, "last_probe_time": None}
+    return _validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _write_unlocked(path: Path, value: dict) -> None:
+    content = json.dumps(_validate(value), sort_keys=True, ensure_ascii=False,
+                         separators=(",", ":")).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", prefix=path.name + ".", suffix=".tmp",
+                                         dir=path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
 def read(project: str | os.PathLike[str], root: Path | None = None) -> dict:
     path = state_path(project, root)
     with _lock(path):
-        if not path.exists():
-            return {"active_coder": "primary", "triggering_evidence": None,
-                    "reset_cycle_marker": None, "last_probe_time": None}
-        return _validate(json.loads(path.read_text(encoding="utf-8")))
+        return _read_unlocked(path)
 
 
 def write(project: str | os.PathLike[str], value: dict, root: Path | None = None) -> None:
     path = state_path(project, root)
-    content = json.dumps(_validate(value), sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
     with _lock(path):
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(mode="wb", prefix=path.name + ".", suffix=".tmp",
-                                             dir=path.parent, delete=False) as handle:
-                temporary = Path(handle.name)
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            temporary = None
-        finally:
-            if temporary is not None:
-                try:
-                    temporary.unlink()
-                except OSError:
-                    pass
+        _write_unlocked(path, value)
+
+
+def update(project: str | os.PathLike[str], change, root: Path | None = None) -> dict:
+    path = state_path(project, root)
+    with _lock(path):
+        value = _read_unlocked(path)
+        change(value)
+        _write_unlocked(path, value)
+        return value
+
+
+def record_fallback_question(project: str | os.PathLike[str], evidence: dict,
+                             session_id: str, root: Path | None = None) -> bool:
+    created = False
+    def change(value):
+        nonlocal created
+        current = value.get("triggering_evidence")
+        if (value["active_coder"] == "primary"
+                and not (isinstance(current, dict) and "question_session" in current)):
+            value["triggering_evidence"] = {
+                **evidence, "question_session": session_id,
+                "question_shown": False, "answerable": False,
+            }
+            created = True
+    update(project, change, root)
+    return created
+
+
+def update_fallback_question(project: str | os.PathLike[str], session_id: str,
+                              *, shown: bool = False, answerable: bool = False,
+                              root: Path | None = None) -> None:
+    def change(value):
+        evidence = value.get("triggering_evidence")
+        if isinstance(evidence, dict) and evidence.get("question_session") == session_id:
+            if shown:
+                evidence["question_shown"] = True
+            if answerable and evidence.get("question_shown") is True:
+                evidence["answerable"] = True
+    update(project, change, root)
+
+
+def approve_fallback(project: str | os.PathLike[str], session_id: str,
+                    root: Path | None = None) -> bool:
+    approved = False
+    def change(value):
+        nonlocal approved
+        evidence = value.get("triggering_evidence")
+        if (value["active_coder"] == "primary" and isinstance(evidence, dict)
+                and evidence.get("question_session") == session_id
+                and evidence.get("question_shown") is True
+                and evidence.get("answerable") is True):
+            value["active_coder"] = "fallback"
+            for key in ("question", "question_session", "question_shown", "answerable"):
+                evidence.pop(key, None)
+            approved = True
+    update(project, change, root)
+    return approved
 
 
 __all__ = ["read", "state_path", "write"]

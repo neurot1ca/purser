@@ -22,6 +22,7 @@ import uuid
 from typing import Any
 
 import json_transport
+import active_coder_state
 import coder_config
 import compaction_advisor
 import codex_quota
@@ -767,6 +768,63 @@ def _repo_root(
     return project_root.resolve_project_root(event, root)
 
 
+def _last_launch_failure(root: Path, project_key: str) -> dict[str, Any] | None:
+    jobs = root / "codex_exec_mcp" / "jobs"
+    indexes = root / "async_jobs"
+    latest: tuple[float, dict[str, Any], str] | None = None
+    try:
+        for index_path in indexes.glob("*.json"):
+            try:
+                index = json.loads(index_path.read_text(encoding="utf-8"))
+                job_id = index.get("jobId")
+                if (not isinstance(index, dict) or index.get("project_key") != project_key
+                        or not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{64}", job_id)):
+                    continue
+                job = json.loads((jobs / f"{job_id}.json").read_text(encoding="utf-8"))
+                evidence = job.get("launchFailureEvidence")
+                stamp = job.get("finishedAt")
+                if (job.get("jobId") != job_id
+                        or job.get("phase", job.get("jobPhase")) != "implementation"
+                        or not isinstance(stamp, (int, float)) or isinstance(stamp, bool)
+                        or not math.isfinite(stamp)):
+                    continue
+                candidate = (float(stamp), job, job_id)
+                if latest is None or candidate[0] > latest[0]:
+                    latest = candidate
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+    except OSError:
+        return None
+    if latest is None or latest[1].get("state") not in {"FAILED", "TIMED_OUT"}:
+        return None
+    evidence = latest[1].get("launchFailureEvidence")
+    if (not isinstance(evidence, dict)
+            or evidence.get("type") not in {"CREDIT_EXHAUSTED", "RATE_LIMITED", "NO_RESPONSE"}):
+        return None
+    return {**evidence, "job_id": latest[2], "trigger_id": latest[2]}
+
+
+def _fallback_question(evidence: Mapping[str, Any], fallback: Mapping[str, Any],
+                       quota: Mapping[str, Any] | None = None) -> tuple[str, str]:
+    model = str(fallback["model"])
+    kind = evidence.get("type")
+    if kind == "QUOTA":
+        reset = quota.get("5h_resets_at") if isinstance(quota, Mapping) else None
+        try:
+            minutes = max(1, math.ceil((datetime.fromisoformat(reset.replace("Z", "+00:00"))
+                                       - datetime.now(timezone.utc)).total_seconds() / 60))
+        except (AttributeError, TypeError, ValueError):
+            minutes = 5
+        return "quota", f"⚓ Kotan dolmak üzere, sıradaki iş yarım kalabilir. Yenilenmesini ({minutes} dakika) bekleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?"
+    if kind == "CREDIT_EXHAUSTED":
+        return "credit", f"⚓ API kredin bitti, sıradaki iş başlayamaz. Kredi yükleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?"
+    if kind == "RATE_LIMITED":
+        seconds = evidence.get("retryAfterSeconds")
+        minutes = max(1, math.ceil(seconds / 60)) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else 5
+        return "rate_limit", f"⚓ API hız sınırına takıldın. Açılmasını ({minutes} dakika) bekleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?"
+    return "unresponsive", f"⚓ Codex 5 denemede yanıt vermedi. Biraz sonra yeniden denensin mi, yoksa yedek kodlayıcıya ({model}) geçilsin mi?"
+
+
 def _pending_project_key(pending: Mapping[str, Any]) -> str:
     """Return the call's namespace; derive it from the stored root for older pending records."""
 
@@ -1321,15 +1379,69 @@ def pre_tool_use(
                 event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
             )
 
-        if (loaded_config.get("coder_agent", "codex") == "codex" and parsed.valid and new_call
-                and parsed.reason != "user_override"):
+        if (loaded_config.get("coder_agent", "codex") == "codex" and parsed.valid and new_call):
             try:
                 quota = codex_quota.read_latest_quota()
             except Exception:
                 quota = None
+            fallback = loaded_config.get("fallback")
+            repository_for_fallback, _ = _repo_root(event, repo_root)
+            active = (active_coder_state.read(repository_for_fallback, _state_root(state_root))
+                      if repository_for_fallback is not None else None)
+            evidence = active.get("triggering_evidence") if isinstance(active, Mapping) else None
+            consent = evidence if isinstance(evidence, Mapping) and "question_session" in evidence else None
+            if isinstance(fallback, Mapping) and active is not None and active["active_coder"] == "primary":
+                if parsed.reason == "user_override":
+                    if (consent is None or consent.get("question_session") != event.get("session_id")
+                            or consent.get("question_shown") is not True
+                            or consent.get("answerable") is not True):
+                        return _deny("FALLBACK_CONSENT_REQUIRED",
+                                     "reason=user_override requires a shown fallback question and a later user prompt.")
+                    if not active_coder_state.approve_fallback(
+                            repository_for_fallback, event["session_id"], _state_root(state_root)):
+                        return _deny("FALLBACK_CONSENT_REQUIRED", "The fallback approval is no longer current.")
+                elif consent is not None and consent.get("question_session") == event.get("session_id") and consent.get("answerable") is True:
+                    declined_evidence = {
+                        "declined": True, "trigger_id": consent.get("trigger_id"),
+                        "type": consent.get("type"),
+                    }
+                    active_coder_state.update(
+                        repository_for_fallback,
+                        lambda value: value.update(triggering_evidence=declined_evidence),
+                        _state_root(state_root),
+                    )
+                elif consent is not None:
+                    return _deny("FALLBACK_CONSENT_REQUIRED",
+                                 "Wait for the fallback question to be shown and answered before dispatch.")
+                else:
+                    trigger = None
+                    five_hour_used = quota.get("5h_used_pct") if isinstance(quota, Mapping) else None
+                    if (parsed.phase == "implementation"
+                            and isinstance(five_hour_used, (int, float)) and not isinstance(five_hour_used, bool)
+                            and five_hour_used >= 95 and isinstance(quota.get("5h_resets_at"), str)):
+                        trigger = {"type": "QUOTA", "trigger_id": quota["5h_resets_at"]}
+                    if trigger is None:
+                        trigger = _last_launch_failure(
+                            _state_root(state_root), project_root.project_key(repository_for_fallback)
+                        )
+                    declined = (evidence.get("declined") is True if isinstance(evidence, Mapping) else False)
+                    if (parsed.phase == "implementation" and trigger is not None
+                            and consent is None and not (declined and evidence.get("trigger_id") == trigger.get("trigger_id"))
+                            and event.get("session_id")):
+                        kind, question = _fallback_question(trigger, fallback, quota)
+                        recorded = active_coder_state.record_fallback_question(
+                            repository_for_fallback,
+                            {**trigger, "kind": kind, "question": question},
+                            event["session_id"], _state_root(state_root)
+                        )
+                        if recorded:
+                            compaction_advisor.queue_fallback_question(
+                                event, repository_for_fallback, question, fallback["model"]
+                            )
+                        return _deny("FALLBACK_CONSENT_REQUIRED", "A fallback question must be shown before another implementation dispatch.")
             low_windows = []
             five_hour_reset = quota.get("5h_resets_at") if isinstance(quota, Mapping) else None
-            if isinstance(quota, Mapping):
+            if isinstance(quota, Mapping) and (active is None or active.get("active_coder") == "primary") and parsed.reason != "user_override":
                 for label in ("5h", "7d"):
                     used = quota.get(f"{label}_used_pct")
                     reset = quota.get(f"{label}_resets_at")
@@ -1500,7 +1612,11 @@ def pre_tool_use(
         model = route.model
         effort = route.effort
         mechanical_candidate = False
-        if reply_call and parsed.route == "mechanical" and isinstance(live_thread, Mapping):
+        active_coder = active_coder_state.read(repository, runtime_root) if repository is not None else None
+        fallback_active = bool(new_call and isinstance(active_coder, Mapping)
+                               and active_coder.get("active_coder") == "fallback"
+                               and isinstance(loaded_config.get("fallback"), Mapping))
+        if reply_call and isinstance(live_thread, Mapping):
             agent = live_thread.get("agent", "codex")
             stored_model = live_thread.get("model")
             if isinstance(stored_model, str):
@@ -1517,6 +1633,16 @@ def pre_tool_use(
                     raise WiringError("mechanical OpenCode candidate model is invalid")
                 agent, model = "opencode", candidate
                 mechanical_candidate = True
+        if fallback_active:
+            fallback = loaded_config["fallback"]
+            agent, model = fallback["agent"], fallback["model"]
+            effort = "medium" if agent == "agy" else "none" if agent == "opencode" else effort
+            requested["model"] = model
+            requested["effort"] = effort
+            mechanical_candidate = False
+        fallback_serving = (isinstance(loaded_config.get("fallback"), Mapping)
+                            and agent == loaded_config["fallback"]["agent"]
+                            and model == loaded_config["fallback"]["model"])
         if new_call and agent in ("opencode", "agy") and parsed.phase == "plan":
             return _observed_denial(event, "OPENCODE_PLAN_UNISOLATED" if agent == "opencode" else "AGY_PLAN_UNISOLATED",
                                     "OpenCode has no verified read-only sandbox for plan calls." if agent == "opencode"
@@ -1712,6 +1838,7 @@ def pre_tool_use(
             "effort": effort,
             "label": task_label,
             "agent": agent,
+            "fallback_family": (loaded_config["fallback"]["family"] if fallback_serving else None),
             "mechanical_opencode": (
                 parsed.route == "mechanical"
                 and parsed.phase == "implementation"
@@ -3761,12 +3888,12 @@ def post_tool_use(
                     and (accepts_kwargs or "authority_sources" in params)
                 ):
                     reviewer_kwargs["authority_sources"] = profile_authority_sources
-                implementer_family = (
-                    policy.vendor_family(policy.model_family(pending.get("model")))
-                    if pending.get("attempted_models") else
-                    policy.vendor_family(loaded_config.get("coder_family"))
-                    or policy.vendor_family(policy.model_family(pending.get("model")))
-                )
+                implementer_family = policy.vendor_family(pending.get("fallback_family"))
+                if not implementer_family and pending.get("attempted_models"):
+                    implementer_family = policy.vendor_family(policy.model_family(pending.get("model")))
+                if not implementer_family:
+                    implementer_family = (policy.vendor_family(loaded_config.get("coder_family"))
+                                          or policy.vendor_family(policy.model_family(pending.get("model"))))
                 reviewer_attempts: list[dict[str, str]] = []
                 reviewer_report = None
                 reviewer_invoked = False

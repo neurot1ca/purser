@@ -16,6 +16,7 @@ import tomllib
 from typing import Any
 
 import ledger
+import active_coder_state
 import project_root
 import state_root
 import telemetry
@@ -430,6 +431,17 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 leader_pending = {"model": leader_pending["model"], "successes": leader_pending["successes"],
                                   "sample_count": leader_pending["sample_count"],
                                   "blocked": leader_pending.get("blocked") is True}
+            fallback_pending = value.get("fallback_pending")
+            if (not isinstance(fallback_pending, dict)
+                    or not isinstance(fallback_pending.get("line"), str)
+                    or not isinstance(fallback_pending.get("project"), str)
+                    or not isinstance(fallback_pending.get("model"), str)):
+                fallback_pending = None
+            else:
+                fallback_pending = {"line": fallback_pending["line"],
+                                    "project": fallback_pending["project"],
+                                    "model": fallback_pending["model"],
+                                    "blocked": fallback_pending.get("blocked") is True}
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
                 "reminder_messages": max(0, int(value.get("reminder_messages", 0))),
@@ -441,6 +453,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "dispatch_pending": dispatch,
                 "version_pending": version_pending,
                 "leader_pending": leader_pending,
+                "fallback_pending": fallback_pending,
                 "flow_blocked_user": value.get("flow_blocked_user") if type(value.get("flow_blocked_user")) is int else None,
             }
     except (OSError, ValueError, TypeError):
@@ -450,6 +463,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             "notice_pending": None, "receipt_pending": None, "dispatch_pending": None,
             "version_pending": None,
             "leader_pending": None,
+            "fallback_pending": None,
             "flow_blocked_user": None}
 
 
@@ -669,6 +683,22 @@ def queue_dispatch(payload: Mapping[str, Any], repository: Path | None, *,
         pass
 
 
+def queue_fallback_question(payload: Mapping[str, Any], repository: Path | None,
+                            line: str, model: str) -> bool:
+    session_id = payload.get("session_id")
+    if repository is None or not isinstance(session_id, str) or not session_id:
+        return False
+    try:
+        path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(path, session_id)
+        state["fallback_pending"] = {"line": line, "project": str(repository),
+                                      "model": model, "blocked": False}
+        _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        return True
+    except BaseException:
+        return False
+
+
 def refresh_dispatch_board(payload: Mapping[str, Any], repository: Path | None, board: str | None,
                            *, board_job_ids: list[str] | None = None) -> None:
     """Replace a board only when this session already has a pending dispatch."""
@@ -777,6 +807,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         dispatch = state["dispatch_pending"]
         version_pending = state["version_pending"]
         leader_pending = state["leader_pending"]
+        fallback_pending = state["fallback_pending"]
         records = _read_transcript(payload.get("transcript_path"))
         flow_message = next((text for record in reversed(records)
                              if _record_type(record) == "assistant"
@@ -835,11 +866,20 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             state["leader_pending"] = None
             changed = True
             record_announced_mechanical_leader(leader_pending["model"])
+        question_lines = re.findall(r"^\*\*⚓ .+\*\*$", message, re.MULTILINE)
+        if (fallback_pending is not None and len(question_lines) == 1
+                and fallback_pending["model"] in question_lines[0]):
+            active_coder_state.update_fallback_question(
+                fallback_pending["project"], session_id, shown=True
+            )
+            state["fallback_pending"] = None
+            changed = True
         notice = state["notice_pending"]
         receipt = state["receipt_pending"]
         dispatch = state["dispatch_pending"]
         version_pending = state["version_pending"]
         leader_pending = state["leader_pending"]
+        fallback_pending = state["fallback_pending"]
         if payload.get("stop_hook_active") is True:
             if changed:
                 _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
@@ -865,6 +905,13 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             leader_pending["blocked"] = True
             reasons.append(
                 f"Include one visible line containing both `⚓` and `{leader_pending['model']}` to announce the new free mechanical model leader."
+            )
+        if fallback_pending is not None and not fallback_pending.get("blocked"):
+            fallback_pending["blocked"] = True
+            reasons.append(
+                "On your next reply, render exactly one bold question line in the user's language. "
+                "Translate the line below while keeping ⚓ and the model name; include no other question line.\n\n"
+                + fallback_pending["line"]
             )
 
         if not reasons and flow_message.rstrip().endswith(("?", "؟", "？")):
@@ -912,8 +959,6 @@ def clear_pending(payload: Mapping[str, Any], repository: Path | None) -> None:
 def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: datetime | None = None) -> str | None:
     """Return UserPromptSubmit additionalContext or None, without model calls."""
     settings = _settings()
-    if not settings["enabled"]:
-        return None
     if repository is None:
         repository, _reason = project_root.resolve_project_root(payload)
     if repository is None:
@@ -932,6 +977,12 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     directory = _state_directory(repository)
     state_path = directory / "compaction_advisor.json"
     state = _read_state(state_path, session_id)
+    try:
+        active_coder_state.update_fallback_question(repository, session_id, answerable=True)
+    except BaseException:
+        pass
+    if not settings["enabled"]:
+        return None
     if context < settings["threshold_tokens"]:
         state["reminder_messages"] = 0
         state["reminder_wasted_tokens"] = 0

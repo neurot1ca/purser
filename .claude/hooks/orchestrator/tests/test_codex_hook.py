@@ -16,6 +16,7 @@ import uuid
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
+import active_coder_state
 import codex
 import async_session_maintenance
 import codex_exec_mcp
@@ -6460,3 +6461,168 @@ def test_hook_main_writes_non_ascii_response_as_utf8_with_cp1254(monkeypatch):
 
     assert hook.main() == 0
     assert json.loads(output_raw.getvalue().decode("utf-8")) == {"marker": "❯"}
+
+
+def _fallback_config(config):
+    config["fallback"] = {"agent": "opencode", "model": "anthropic/claude-sonnet",
+                          "family": "anthropic"}
+    return config
+
+
+def _fallback_state(workspace):
+    repo, root = workspace
+    return active_coder_state.read(repo, root)
+
+
+def test_approved_fallback_routes_same_and_later_session(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    monkeypatch.setattr(active_coder_state.state_root, "default_state_root", lambda: state)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: {
+        "5h_used_pct": 96, "5h_resets_at": "2099-01-01T00:00:00Z"})
+    call = event(prompt=orch(scope="file0.py") + "\nDo the work.")
+    denied = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    pending_path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
+    pending = compaction_advisor._read_state(pending_path, "session-1")["fallback_pending"]
+    assert "anthropic/claude-sonnet" in pending["line"]
+    shown = compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
+    assert shown["decision"] == "block" and "exactly one bold question line" in shown["reason"]
+    line = "**" + pending["line"] + "**"
+    assert compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": line}, repo) is None
+    compaction_advisor.advise({"session_id": "session-1"}, repo)
+    evidence = _fallback_state(workspace)["triggering_evidence"]
+    assert evidence["question_shown"] is True and evidence["answerable"] is True
+    approved = codex.pre_tool_use(
+        event(prompt=orch(reason="user_override", scope="file0.py") + "\nSwitch to fallback."),
+        config=config, state_root=state, repo_root=repo)
+    routed = approved["hookSpecificOutput"]["updatedInput"]
+    assert routed["agent"] == "opencode" and routed["model"] == "anthropic/claude-sonnet"
+    next_session = event(prompt=orch(task="task-2") + "\nDo another task.", tool_use_id="session-2")
+    next_session["tool_input"]["prompt"] = orch(task="task-2", scope="file1.py") + "\nDo another task."
+    next_session["session_id"] = "session-2"
+    later = codex.pre_tool_use(next_session, config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in later["hookSpecificOutput"], later
+    assert later["hookSpecificOutput"]["updatedInput"]["model"] == "anthropic/claude-sonnet"
+    receipts = []
+    monkeypatch.setattr(compaction_advisor, "queue_dispatch",
+                        lambda _event, _repo, **values: receipts.append(values["line"]))
+    codex._append_dispatch_receipt({}, {"label": "test task", "model": routed["model"],
+                                        "effort": "none", "route": "normal"}, state, event())
+    assert "anthropic/claude-sonnet" in receipts[0]
+
+
+def test_ambiguous_launch_evidence_does_not_trigger_fallback(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    project = project_root.project_key(repo.resolve())
+    job_id = "a" * 64
+    (state / "async_jobs").mkdir(parents=True)
+    jobs = state / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    (state / "async_jobs" / f"{job_id}.json").write_text(
+        json.dumps({"jobId": job_id, "project_key": project}), encoding="utf-8")
+    (jobs / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "state": "FAILED", "phase": "implementation", "finishedAt": time.time(),
+        "launchFailureEvidence": {"type": "AMBIGUOUS"}}), encoding="utf-8")
+    result = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in result["hookSpecificOutput"]
+    assert _fallback_state(workspace)["triggering_evidence"] is None
+    (jobs / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "state": "FAILED", "phase": "implementation", "finishedAt": time.time(),
+        "launchFailureEvidence": {"type": "CREDIT_EXHAUSTED"}}), encoding="utf-8")
+    triggered = codex.pre_tool_use(event(tool_use_id="typed-credit"), config=config,
+                                   state_root=state, repo_root=repo)
+    assert triggered["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_unconfigured_fallback_does_not_add_transition_prompt(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    result = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in result["hookSpecificOutput"]
+    assert not (compaction_advisor._state_directory(repo) / "compaction_advisor.json").exists()
+
+
+def test_user_override_without_later_prompt_is_refused(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    result = codex.pre_tool_use(event(prompt=orch(reason="user_override") + "\nProceed."),
+                                config=config, state_root=state, repo_root=repo)
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "FALLBACK_CONSENT_REQUIRED" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_later_success_clears_prior_typed_failure(workspace, config, monkeypatch):
+    repo, state = workspace
+    _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    project = project_root.project_key(repo.resolve())
+    indexes = state / "async_jobs"
+    jobs = state / "codex_exec_mcp" / "jobs"
+    indexes.mkdir(parents=True)
+    jobs.mkdir(parents=True)
+    for char, status, finished, evidence in (
+            ("a", "FAILED", 10, {"type": "CREDIT_EXHAUSTED"}),
+            ("b", "SUCCEEDED", 20, None)):
+        job_id = char * 64
+        (indexes / f"{job_id}.json").write_text(json.dumps(
+            {"jobId": job_id, "project_key": project}), encoding="utf-8")
+        job = {"jobId": job_id, "state": status, "phase": "implementation", "finishedAt": finished}
+        if evidence is not None:
+            job["launchFailureEvidence"] = evidence
+        (jobs / f"{job_id}.json").write_text(json.dumps(job), encoding="utf-8")
+    assert codex._last_launch_failure(state, project) is None
+    result = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in result["hookSpecificOutput"]
+    assert _fallback_state(workspace)["triggering_evidence"] is None
+
+
+def test_reply_stays_pinned_to_recorded_thread_after_fallback_switch(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    active = _fallback_state(workspace)
+    active["active_coder"] = "fallback"
+    active_coder_state.write(repo, active, state)
+    route = policy.resolve_route("normal", config)
+    record = ledger.build_session_record("task-1", "thread-1", "normal", route.model, route.effort,
+                                         phase="implementation", scope=["file0.py"],
+                                         reason="new_task", label="test task", agent="codex")
+    ledger.SessionLedger(codex._project_state_root(state, project_root.project_key(repo.resolve()))).save(record)
+    reply = event(codex.CODEX_REPLY_TOOL, prompt=orch() + "\nContinue.", threadId="thread-1")
+    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    assert "permissionDecision" not in result["hookSpecificOutput"]
+    assert updated.get("agent", "codex") == "codex"
+    assert "model" not in updated
+
+
+def test_reviewer_uses_configured_fallback_family(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    config["fallback"]["family"] = "google"
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    active = _fallback_state(workspace)
+    active["active_coder"] = "fallback"
+    active_coder_state.write(repo, active, state)
+    call = event()
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    pending_path = codex._pending_path(state, call)
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending["reviewer_candidates"] = [{"agent": "agy", "model": "gemini-3.8-flash"}]
+    codex._atomic_json_write(pending_path, pending)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    invoked = []
+    result = codex.post_tool_use(
+        {**call, "hook_event_name": "PostToolUse", "tool_response":
+         {"structuredContent": {"threadId": "fallback-family-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo,
+        reviewer=lambda **values: invoked.append(values),
+    )
+    bundle = response_bundle(result, config)
+    assert not invoked
+    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
