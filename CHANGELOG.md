@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.43 — 2026-09-28
+
+- The first session after a plugin update announces the new version once, summarized from its changelog entry.
+- Free OpenCode models for mechanical work are measured in the background: accepted runs and one detached shadow run per project record per-model results, and the ranking reorders after five samples.
+
 ## 0.1.42 — 2026-09-27
 
 - A reply job takes a fresh snapshot of its reused worktree on first launch, so its patch carries only the reply's own changes and applies without conflicts.
