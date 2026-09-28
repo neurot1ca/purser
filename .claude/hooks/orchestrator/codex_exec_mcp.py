@@ -1339,6 +1339,22 @@ class Server:
                 raw_paths = ledger._run_git(repo_root, ["apply", "--numstat", "-z", "-"], 30.0,
                                             "listing job patch paths", input_data=patch.encode("utf-8", "surrogateescape"))
                 paths = [ledger._decode_path(row.split(b"\t", 2)[2]) for row in raw_paths.split(b"\0") if row]
+            def same_content(path: str) -> bool:
+                worktree_file = Path(job["worktreePath"]) / path
+                repo_file = repo_root / path
+                if worktree_file.is_symlink() or repo_file.is_symlink():
+                    return (worktree_file.is_symlink() and repo_file.is_symlink()
+                            and os.readlink(worktree_file) == os.readlink(repo_file))
+                if not worktree_file.exists() or not repo_file.exists():
+                    return not worktree_file.exists() and not repo_file.exists()
+                return (worktree_file.is_file() and repo_file.is_file()
+                        and worktree_file.read_bytes() == repo_file.read_bytes())
+
+            if paths and all(same_content(path) for path in paths):
+                value = {"applied": True, "paths": paths}
+                job.update(applyState="applied", applyResult=value, appliedAt=time.time())
+                self._write_job(job)
+                return _job_result(value)
             outcome = ledger.apply_job_patch(repo_root, patch)
             value = ({"applied": True, "paths": paths} if outcome["applied"] else
                      {"applied": False, "conflicts": outcome["conflicts"],

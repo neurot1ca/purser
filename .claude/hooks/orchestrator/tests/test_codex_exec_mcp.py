@@ -927,6 +927,34 @@ def test_codex_apply_is_idempotent_and_reports_conflicts(area):
         client.close()
 
 
+def test_reply_apply_marks_delta_already_in_repository_as_applied(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "first\n"})
+    try:
+        first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                   "cwd": str(repo), "worktree": True})
+        finish(client, first["jobId"], "SUCCEEDED")
+        first_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                    (first["jobId"] + ".json"))
+
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                   "threadId": "thread-123", "prompt": "continue"})
+        finish(client, reply["jobId"], "SUCCEEDED")
+        worktree = Path(first_job["worktreePath"])
+        (worktree / "tracked.txt").write_text("reply delta\n", encoding="utf-8")
+
+        assert job_call(client, "codex_apply", {"jobId": first["jobId"]}) == {
+            "applied": True, "paths": ["tracked.txt"]}
+        assert job_call(client, "codex_apply", {"jobId": reply["jobId"]}) == {
+            "applied": True, "paths": ["tracked.txt"]}
+        reply_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                    (reply["jobId"] + ".json"))
+        assert reply_job["applyState"] == "applied"
+        assert (repo / "tracked.txt").read_text(encoding="utf-8") == "reply delta\n"
+    finally:
+        client.close()
+
+
 def kill_bridge_tree(client):
     if os.name == "nt":
         killed = subprocess.run(["taskkill", "/T", "/F", "/PID", str(client.process.pid)],

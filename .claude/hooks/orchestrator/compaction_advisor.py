@@ -819,17 +819,25 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             message = next((text for record in reversed(records)
                             if _record_type(record) == "assistant"
                             if (text := _assistant_text(record))), "")
+        latest_user = max((i for i, record in enumerate(records) if _genuine_user(record)), default=-1)
+        turn_message = "\n".join(
+            text for record in records[latest_user + 1:]
+            if _record_type(record) == "assistant"
+            if (text := _assistant_text(record))
+        )
+        if message and message not in turn_message:
+            turn_message = f"{turn_message}\n{message}"
         changed = False
-        if notice is not None and any(line.startswith("> ⚓") for line in message.splitlines()):
+        if notice is not None and any(line.startswith("> ⚓") for line in turn_message.splitlines()):
             state["notice_pending"] = None
             changed = True
         clock = datetime.now(timezone.utc)
-        if receipt is not None and _receipt_satisfied(receipt, message, clock):
+        if receipt is not None and _receipt_satisfied(receipt, turn_message, clock):
             state["receipt_pending"] = None
             changed = True
-        if dispatch is not None and all(line in message for line in dispatch["lines"]):
-            if dispatch.get("board") is None or dispatch["board"] in message:
-                if isinstance(dispatch.get("board"), str) and dispatch["board"] in message:
+        if dispatch is not None and all(line in turn_message for line in dispatch["lines"]):
+            if dispatch.get("board") is None or dispatch["board"] in turn_message:
+                if isinstance(dispatch.get("board"), str) and dispatch["board"] in turn_message:
                     jobs_directory = state_root.default_state_root() / "codex_exec_mcp" / "jobs"
                     for job_id in dispatch.get("board_job_ids", []):
                         if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{64}", job_id):
@@ -857,16 +865,16 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                             continue
                 state["dispatch_pending"] = None
                 changed = True
-        if version_pending is not None and "⚓" in message and version_pending["version"] in message:
+        if version_pending is not None and "⚓" in turn_message and version_pending["version"] in turn_message:
             state["version_pending"] = None
             changed = True
             record_announced_plugin_version(version_pending["version"])
         if leader_pending is not None and any(
-                "⚓" in line and leader_pending["model"] in line for line in message.splitlines()):
+                "⚓" in line and leader_pending["model"] in line for line in turn_message.splitlines()):
             state["leader_pending"] = None
             changed = True
             record_announced_mechanical_leader(leader_pending["model"])
-        question_lines = re.findall(r"^\*\*⚓ .+\*\*$", message, re.MULTILINE)
+        question_lines = re.findall(r"^\*\*⚓ .+\*\*$", turn_message, re.MULTILINE)
         if (fallback_pending is not None and len(question_lines) == 1
                 and fallback_pending["model"] in question_lines[0]):
             active_coder_state.update_fallback_question(

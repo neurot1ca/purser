@@ -608,6 +608,23 @@ def test_version_announcement_stop_clears_when_marker_and_version_present(setup)
     assert state["version_pending"] is None
 
 
+def test_stop_accepts_pending_announcement_written_earlier_in_turn(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, [
+        {"type": "user", "message": {"role": "user", "content": "Please finish this."}},
+        _assistant(content=[{"type": "text", "text": "⚓ **Purser 0.1.42 updated:** Improvements."}]),
+        _assistant(content=[{"type": "tool_use", "id": "tool-1", "name": "Bash"}]),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tool-1", "content": "done"}]}},
+        _assistant(content=[{"type": "text", "text": "Done."}]),
+    ], session="session-version")
+    advisor.queue_version_announcement(event, repo, "0.1.42")
+
+    assert advisor.stop({**event, "last_assistant_message": "Done."}, repo) is None
+    state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-version")
+    assert state["version_pending"] is None
+
+
 def test_pending_reissued_on_next_prompt_below_threshold(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit"))
