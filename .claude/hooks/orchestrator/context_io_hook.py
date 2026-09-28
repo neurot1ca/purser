@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -27,13 +28,16 @@ _PLAN_COMMAND = re.compile(r"^\s*/purser:plan(?:\s|$)", re.IGNORECASE)
 _CHANGELOG_ENTRY = re.compile(r"^##\s+(\S+)\s+—\s+\d{4}-\d{2}-\d{2}\s*$", re.MULTILINE)
 
 
-def _plugin_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+def _plugin_root() -> Path | None:
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    return Path(root) if root else None
 
 
 def _plugin_update_context(payload: Mapping[str, Any], repository: Path | None) -> str | None:
     try:
         root = _plugin_root()
+        if root is None:
+            return None
         manifest = json.loads((root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         version = manifest.get("version") if isinstance(manifest, dict) else None
         if not isinstance(version, str) or not version:

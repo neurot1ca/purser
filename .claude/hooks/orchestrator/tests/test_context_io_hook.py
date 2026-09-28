@@ -98,7 +98,7 @@ def test_plugin_version_upgrade_context_and_first_install(monkeypatch, tmp_path)
         "## 2.0.0 — 2026-09-28\n\n- First change.\n- Second change.\n## 1.9.0 — 2026-09-20\n- Old change.\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(context_io_hook, "_plugin_root", lambda: plugin)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
     payload = {"session_id": "session-update"}
     version_path = compaction_advisor.plugin_version_state_path()
 
@@ -127,6 +127,11 @@ def test_plugin_version_upgrade_context_and_first_install(monkeypatch, tmp_path)
     assert context and "Purser 2.0.0" in context
     assert "First change." in context and "Second change." in context and "Old change." not in context
     assert compaction_advisor._read_state(compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-update")["version_pending"]["version"] == "2.0.0"
+
+
+def test_plugin_update_context_is_silent_without_plugin_root(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    assert context_io_hook._plugin_update_context({"session_id": "session-update"}, tmp_path) is None
 
 
 def test_accuracy_runs_only_on_compact_and_preserves_context_on_failure(monkeypatch, tmp_path):
