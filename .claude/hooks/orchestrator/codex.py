@@ -47,7 +47,6 @@ CHANGED_PATH_PREVIEW_LIMIT = 10
 GIT_HEAD_READ_LIMIT = 4096
 PENDING_MAX_AGE_SECONDS = 24 * 60 * 60
 PENDING_CLEANUP_LIMIT = 32
-PROJECT_JOB_BOARD_FINISHED_LIMIT = 3
 INDEPENDENCE_INSTRUCTIONS = (
     "Codex must not blindly accept Claude's proposed solution. It should "
     "independently verify the relevant repository state and project rules, "
@@ -2073,8 +2072,8 @@ def _route_eta_minutes(pending: Mapping[str, Any], state_root: Path) -> int | No
     return _ROUTE_DURATION_DEFAULTS.get(route) if isinstance(route, str) else None
 
 
-def _project_job_board(root: Path, project_key: str) -> str | None:
-    """Render the current project job board without polling any worker."""
+def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None, list[str]]:
+    """Render the current project job board and identify its displayed jobs."""
     try:
         jobs = []
         now = time.time()
@@ -2122,9 +2121,13 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
             finished = job.get("appliedAt") if job.get("applyState") == "applied" else None
             if not isinstance(finished, (int, float)):
                 finished = job.get("finishedAt")
-            if (state not in {"QUEUED", "RUNNING"}
-                    and isinstance(finished, (int, float)) and now - finished > 3600):
-                continue
+            if state not in {"QUEUED", "RUNNING"}:
+                if "boardDisplayCount" in job:
+                    if type(job["boardDisplayCount"]) is int and job["boardDisplayCount"] >= 2:
+                        continue
+                elif (isinstance(finished, (int, float)) and not isinstance(finished, bool)
+                      and now - finished > 3600):
+                    continue
             item = (job, index)
             if state in {"QUEUED", "RUNNING"}:
                 in_progress.append(item)
@@ -2132,9 +2135,9 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
                 finished_jobs.append((finished if isinstance(finished, (int, float)) else 0, item))
         jobs = in_progress + [item for _finished, item in sorted(
             finished_jobs, key=lambda entry: entry[0], reverse=True
-        )[:PROJECT_JOB_BOARD_FINISHED_LIMIT]]
+        )]
         if len(jobs) < 2:
-            return None
+            return None, []
 
         def board_row(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple[int, int, float, str]:
             job, index = item
@@ -2200,22 +2203,29 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
         lines = ["| Task | Model | State | ETA | Review | Apply |", "| --- | --- | --- | --- | --- | --- |"]
         lines.extend(row[3] for row in sorted(map(board_row, jobs), key=lambda row: row[:3]))
         block = "Purser jobs:\n" + "\n".join(lines)
-        return block
+        return block, [job["jobId"] for job, _index in jobs]
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         pass  # Status is observational; it cannot disable enforcement.
-    return None
+    return None, []
+
+
+def _project_job_board(root: Path, project_key: str) -> str | None:
+    """Render the current project job board without polling any worker."""
+    return _project_job_board_details(root, project_key)[0]
 
 
 def _append_project_job_status(response: dict[str, Any], root: Path,
                                project_key: str, event: Mapping[str, Any] | None = None,
                                *, pending_only: bool = False) -> dict[str, Any]:
-    board = _project_job_board(root, project_key)
+    board, board_job_ids = _project_job_board_details(root, project_key)
     if event is not None and (board is not None or pending_only):
         repository, _reason = project_root.resolve_project_root(event)
         if pending_only:
-            compaction_advisor.refresh_dispatch_board(event, repository, board)
+            compaction_advisor.refresh_dispatch_board(event, repository, board,
+                                                      board_job_ids=board_job_ids)
         elif board is not None:
-            compaction_advisor.queue_dispatch(event, repository, board=board)
+            compaction_advisor.queue_dispatch(event, repository, board=board,
+                                              board_job_ids=board_job_ids)
     return response
 
 

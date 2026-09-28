@@ -30,6 +30,7 @@ import policy
 import project_root
 import reviewer as reviewer_module
 import telemetry
+import compaction_advisor
 
 
 CONFIG_PATH = Path(__file__).parents[1] / "config.json"
@@ -812,7 +813,8 @@ def test_dispatch_receipt_uses_continuing_session_wording(workspace, monkeypatch
         "repo_root": str(repo), "agent": "codex", "prior_thread_id": "thread-1",
     }, state, event())
     assert queued[0]["line"] == (
-        "**Continuing session · model: gpt-6-luna (high) · task: Keep working**"
+        "**Continuing session · model: gpt-6-luna (high) · task: Keep working · "
+        "estimated completion: 5 min**"
     )
 
 
@@ -1044,6 +1046,7 @@ def _board_job(state_root, name, status="RUNNING", **values):
              "project_key": "project", "session_id": "session"}
     job = {"jobId": job_id, "call": name, "state": status, "acceptedAt": time.time(),
            "label": name, "model": "gpt-6-sol", "effort": "medium", "route": "normal",
+           "repoRoot": str(state_root.parent / "repo"),
            **values}
     (state_root / "async_jobs").mkdir(parents=True, exist_ok=True)
     (state_root / "codex_exec_mcp" / "jobs").mkdir(parents=True, exist_ok=True)
@@ -1084,7 +1087,7 @@ def test_project_job_board_orders_attention_running_queued_and_applied(workspace
     assert "| Task | Model | State | ETA | Review | Apply |" in message
 
 
-def test_project_job_board_keeps_all_in_progress_and_three_newest_finished(workspace):
+def test_project_job_board_keeps_all_in_progress_and_finished_jobs(workspace):
     _, state = workspace
     now = time.time()
     for offset in range(5):
@@ -1095,7 +1098,60 @@ def test_project_job_board_keeps_all_in_progress_and_three_newest_finished(works
 
     tasks = [line.strip("|").split("|")[0].strip() for line in message.splitlines()
              if line.startswith("| ") and not line.startswith("| Task |") and "---" not in line]
-    assert tasks == ["running", "finished-0", "finished-1", "finished-2"]
+    assert tasks == ["running", "finished-0", "finished-1", "finished-2", "finished-3", "finished-4"]
+
+
+def _show_project_board(repo, state, session_id="board-display-session"):
+    board, job_ids = codex._project_job_board_details(state, "project")
+    assert board is not None
+    payload = {"session_id": session_id, "last_assistant_message": board}
+    compaction_advisor.queue_dispatch(payload, repo, board=board, board_job_ids=job_ids)
+    assert compaction_advisor.stop(payload, repo) is None
+    return board
+
+
+def test_finished_job_is_removed_after_two_displayed_boards(workspace, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    finished_id, _ = _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time())
+    running_ids = [_board_job(state, name, "RUNNING")[0]
+                   for name in ("running-one", "running-two")]
+    for job_id in running_ids:
+        job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        job["boardDisplayCount"] = 2
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+
+    assert "| finished |" in _show_project_board(repo, state)
+    assert json.loads((state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json").read_text())[
+        "boardDisplayCount"] == 1
+    assert "| finished |" in _show_project_board(repo, state)
+    finished = json.loads((state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json").read_text())
+    assert finished["boardDisplayCount"] == 2
+    third = _show_project_board(repo, state)
+    assert "finished" not in third
+    assert "running-one" in third and "running-two" in third
+
+
+def test_queued_and_refreshed_job_board_does_not_count_until_shown(workspace, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    finished_id, _ = _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time(),
+                                applyState="conflict", applyResult={"applied": False})
+    _board_job(state, "running-one", "RUNNING")
+    _board_job(state, "running-two", "RUNNING")
+    payload = {"session_id": "board-refresh-session"}
+    board, job_ids = codex._project_job_board_details(state, "project")
+    compaction_advisor.queue_dispatch(payload, repo, board=board, board_job_ids=job_ids)
+    compaction_advisor.refresh_dispatch_board(payload, repo, board, board_job_ids=job_ids)
+
+    job_path = state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json"
+    assert "boardDisplayCount" not in json.loads(job_path.read_text(encoding="utf-8"))
+    shown = {**payload, "last_assistant_message": board}
+    assert compaction_advisor.stop(shown, repo) is None
+    updated = json.loads(job_path.read_text(encoding="utf-8"))
+    assert updated["boardDisplayCount"] == 1
+    assert updated["applyState"] == "conflict" and updated["applyResult"] == {"applied": False}
 
 
 def test_project_job_board_uses_route_default_without_history(workspace, monkeypatch):
@@ -1110,17 +1166,32 @@ def test_project_job_board_uses_route_default_without_history(workspace, monkeyp
     assert "| mechanical | gpt-6-sol (medium) | running | ~3 min |" in message
 
 
-def test_project_job_board_drops_applied_jobs_after_an_hour(workspace):
+def test_project_job_board_keeps_counted_terminal_jobs_until_two_displays(workspace):
     _, state = workspace
     _board_job(state, "old-applied", "SUCCEEDED", applyState="applied",
-               appliedAt=time.time() - 3601)
-    _board_job(state, "old-failed", "FAILED", finishedAt=time.time() - 3601)
+               appliedAt=time.time() - 3601, boardDisplayCount=0)
+    _board_job(state, "old-failed", "FAILED", finishedAt=time.time() - 3601,
+               boardDisplayCount=0)
     _board_job(state, "active-one")
     _board_job(state, "active-two")
     message = codex._project_job_board(state, "project")
-    assert "old-applied" not in message
-    assert "old-failed" not in message
+    assert "old-applied" in message
+    assert "old-failed" in message
     assert "active-one" in message and "active-two" in message
+
+
+def test_project_job_board_hides_old_legacy_finished_but_shows_recent(workspace):
+    _, state = workspace
+    now = time.time()
+    _board_job(state, "legacy-old", "SUCCEEDED", finishedAt=now - 3601)
+    _board_job(state, "legacy-recent", "FAILED", finishedAt=now - 60)
+    _board_job(state, "active-one")
+    _board_job(state, "active-two")
+
+    message = codex._project_job_board(state, "project")
+
+    assert "legacy-old" not in message
+    assert "| legacy-recent |" in message
 
 
 def test_project_job_board_hides_unlabelled_jobs(workspace):

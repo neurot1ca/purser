@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import time
 import tomllib
 from typing import Any
 
+import ledger
 import project_root
 import state_root
 import telemetry
@@ -406,9 +408,13 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             else:
                 lines = dispatch.get("lines")
                 board = dispatch.get("board")
-                dispatch = ({"lines": lines, "board": board, "blocked": dispatch.get("blocked") is True}
+                board_job_ids = dispatch.get("board_job_ids", [])
+                dispatch = ({"lines": lines, "board": board, "board_job_ids": board_job_ids,
+                             "blocked": dispatch.get("blocked") is True}
                             if isinstance(lines, list) and all(isinstance(line, str) and line for line in lines)
-                            and (board is None or isinstance(board, str)) else None)
+                            and (board is None or isinstance(board, str))
+                            and isinstance(board_job_ids, list)
+                            and all(isinstance(job_id, str) for job_id in board_job_ids) else None)
             version_pending = value.get("version_pending")
             if not (isinstance(version_pending, dict) and isinstance(version_pending.get("version"), str)
                     and version_pending["version"]):
@@ -640,7 +646,8 @@ def queue_receipt(payload: Mapping[str, Any], repository: Path | None,
 
 
 def queue_dispatch(payload: Mapping[str, Any], repository: Path | None, *,
-                   line: str | None = None, board: str | None = None) -> None:
+                   line: str | None = None, board: str | None = None,
+                   board_job_ids: list[str] | None = None) -> None:
     """Require rendered dispatch text in the next user facing assistant reply."""
     try:
         session_id = payload.get("session_id")
@@ -653,6 +660,7 @@ def queue_dispatch(payload: Mapping[str, Any], repository: Path | None, *,
             pending["lines"].append(line)
         if isinstance(board, str) and board:
             pending["board"] = board
+            pending["board_job_ids"] = board_job_ids if isinstance(board_job_ids, list) else []
         if line or board:
             pending["blocked"] = False
             state["dispatch_pending"] = pending
@@ -661,7 +669,8 @@ def queue_dispatch(payload: Mapping[str, Any], repository: Path | None, *,
         pass
 
 
-def refresh_dispatch_board(payload: Mapping[str, Any], repository: Path | None, board: str | None) -> None:
+def refresh_dispatch_board(payload: Mapping[str, Any], repository: Path | None, board: str | None,
+                           *, board_job_ids: list[str] | None = None) -> None:
     """Replace a board only when this session already has a pending dispatch."""
     try:
         session_id = payload.get("session_id")
@@ -672,6 +681,7 @@ def refresh_dispatch_board(payload: Mapping[str, Any], repository: Path | None, 
         pending = state["dispatch_pending"]
         if isinstance(pending, dict):
             pending["board"] = board
+            pending["board_job_ids"] = board_job_ids if isinstance(board_job_ids, list) else []
             pending["blocked"] = False
             _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
     except BaseException:
@@ -788,6 +798,32 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             changed = True
         if dispatch is not None and all(line in message for line in dispatch["lines"]):
             if dispatch.get("board") is None or dispatch["board"] in message:
+                if isinstance(dispatch.get("board"), str) and dispatch["board"] in message:
+                    jobs_directory = state_root.default_state_root() / "codex_exec_mcp" / "jobs"
+                    for job_id in dispatch.get("board_job_ids", []):
+                        if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{64}", job_id):
+                            continue
+                        job_path = jobs_directory / f"{job_id}.json"
+                        try:
+                            job = json.loads(job_path.read_text(encoding="utf-8"))
+                            if (not isinstance(job, dict) or job.get("jobId") != job_id
+                                    or not isinstance(job.get("repoRoot"), str)):
+                                continue
+                            repo_root = Path(job["repoRoot"]).resolve()
+                            lock_key = hashlib.sha256(os.fspath(repo_root).encode("utf-8")).hexdigest()
+                            lock_path = jobs_directory.parent / "apply" / (lock_key + ".lock")
+                            with ledger._lease_lock(lock_path):
+                                job = json.loads(job_path.read_text(encoding="utf-8"))
+                                if (not isinstance(job, dict) or job.get("jobId") != job_id
+                                        or job.get("state") in {"QUEUED", "RUNNING"}):
+                                    continue
+                                count = job.get("boardDisplayCount", 0)
+                                if type(count) is not int or count < 0:
+                                    count = 0
+                                job["boardDisplayCount"] = count + 1
+                                _atomic_write(job_path, json.dumps(job, sort_keys=True).encode("utf-8"))
+                        except (OSError, ValueError, TypeError):
+                            continue
                 state["dispatch_pending"] = None
                 changed = True
         if version_pending is not None and "⚓" in message and version_pending["version"] in message:
