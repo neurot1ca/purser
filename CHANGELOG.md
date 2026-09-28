@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.44 — 2026-09-28
+
+- Free OpenCode models now start measuring: detection skips non-standard model ids, and accepted Codex mechanical runs also launch shadow runs.
+- Stop advice without receipt lines asks only for the job board, codex_apply refreshes a pending board, the receipt ETA follows the job ETA, and a stale shadow lock is reclaimed.
+
 ## 0.1.43 — 2026-09-28
 
 - The first session after a plugin update announces the new version once, summarized from its changelog entry.
