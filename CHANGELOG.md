@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.45 — 2026-09-28
+
+- A new leader among measured free mechanical models is announced once at the next session start, and the job board shown after codex_apply marks the job as applied.
+
 ## 0.1.44 — 2026-09-28
 
 - Free OpenCode models now start measuring: detection skips non-standard model ids, and accepted Codex mechanical runs also launch shadow runs.
