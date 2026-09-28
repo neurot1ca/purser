@@ -762,10 +762,20 @@ def test_worktree_job_keeps_existing_relative_cwd(area):
     client = Client(area)
     try:
         started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
-                                                    "cwd": str(requested_cwd), "worktree": True})
+                                                    "cwd": str(requested_cwd), "worktree": True,
+                                                    "config": {"sandbox_workspace_write": {
+                                                        "writable_roots": [str(repo.parent)]}}})
         result = finish(client, started["jobId"], "SUCCEEDED")
         job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
-        assert client.calls()[0]["cwd"] == str(Path(result["worktreePath"]) / "nested")
+        call_record = client.calls()[0]
+        worktree = Path(result["worktreePath"]).resolve()
+        assert call_record["cwd"] == str(worktree / "nested")
+        argv = call_record["argv"]
+        assert argv[argv.index("-C") + 1] == str(worktree / "nested")
+        config_args = [argv[index + 1] for index, value in enumerate(argv[:-1]) if value == "-c"]
+        assert (f"sandbox_workspace_write.writable_roots="
+                f"{codex_exec_mcp._toml([str(worktree)])}") in config_args
+        assert all(str(repo.parent) not in value for value in config_args)
         assert "cwdFallback" not in job
     finally:
         client.close()

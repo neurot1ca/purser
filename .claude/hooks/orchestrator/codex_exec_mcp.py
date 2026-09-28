@@ -1705,6 +1705,16 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                 job["cwdFallback"] = os.fspath(mapped_cwd.relative_to(worktree_path))
                 server._write_job(job)
                 launch["args"] = {**launch["args"], "cwd": os.fspath(worktree_path)}
+            if launch.get("agent", "codex") == "codex":
+                args = dict(launch["args"])
+                config = dict(args.get("config", {}))
+                config = {key: value for key, value in config.items()
+                          if key != "sandbox_workspace_write"
+                          and not key.startswith("sandbox_workspace_write.")}
+                config["sandbox_workspace_write"] = {
+                    "writable_roots": [os.fspath(worktree_path.resolve())]}
+                args["config"] = config
+                launch["args"] = args
         server.codex_bin = launch["codexBin"]
         server.agent = launch.get("agent", "codex")
         server.claim_generation = generation
