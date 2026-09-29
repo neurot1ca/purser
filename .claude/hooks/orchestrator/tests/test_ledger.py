@@ -25,6 +25,25 @@ def test_expired_queued_job_releases_scope_before_new_acquire(tmp_path, monkeypa
     assert store.acquire("new", "new-task", ["src"])["status"] == ledger.OK
 
 
+def test_hot_conflict_selectively_queues_and_expires(tmp_path, monkeypatch):
+    store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
+    now = [1_000.0]
+    monkeypatch.setattr(ledger.time, "time", lambda: now[0])
+    store.record_conflicts(["src/hot.py"])
+    assert store.acquire("owner", "owner-task", ["src"], job_id="a" * 64)["status"] == ledger.OK
+    assert store.acquire("hot", "hot-task", ["src/hot.py"], job_id="b" * 64,
+                         allow_overlap=True, hot_path_queue=True)["code"] == "LEASE_QUEUED"
+    assert store.acquire("disjoint", "disjoint-task", ["docs"], job_id="c" * 64,
+                         allow_overlap=True, hot_path_queue=True)["code"] == "LEASE_ACQUIRED"
+    monkeypatch.setattr(store, "_job_state", lambda _job_id: "RUNNING")
+    now[0] += ledger.CONFLICT_PATH_RETENTION_SECONDS + 1
+    assert store.owner_state("hot") == "ACTIVE"
+    assert store._read()["owners"]["hot"]["acquired_at"] == now[0]
+    assert store.acquire("expired", "expired-task", ["src/hot.py"], job_id="d" * 64,
+                         allow_overlap=True, hot_path_queue=True)["code"] == "LEASE_ACQUIRED"
+    assert store._read()["conflicts"] == []
+
+
 @pytest.fixture()
 def tmp_path():
     root = (

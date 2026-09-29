@@ -44,6 +44,8 @@ LEASE_TIMEOUT_MARGIN_SECONDS = 60
 ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS = 2700
 JOB_RETENTION_SECONDS = 7 * 24 * 60 * 60
 RELEASED_LEASE_RETENTION_SECONDS = 7 * 24 * 60 * 60
+CONFLICT_PATH_RETENTION_SECONDS = 7 * 24 * 60 * 60
+MAX_CONFLICT_PATHS = 50
 
 
 class WorktreeSetupError(RuntimeError):
@@ -100,6 +102,14 @@ def _scopes_overlap(left_scope: Sequence[str], right_scope: Sequence[str]) -> bo
     return False
 
 
+def _scope_covers(scope: Sequence[str], path: str) -> bool:
+    for entry in scope:
+        left, right = (entry.casefold(), path.casefold()) if os.name == "nt" else (entry, path)
+        if right == left or right.startswith(left.rstrip("/") + "/"):
+            return True
+    return False
+
+
 class ScopeLeases:
     """Durable per-repository ownership; uncertain owners stay active."""
 
@@ -117,6 +127,12 @@ class ScopeLeases:
         if (not isinstance(value, dict) or value.get("version") != 1
                 or not isinstance(value.get("owners"), dict)):
             raise ValueError("scope lease record is invalid")
+        conflicts = value.get("conflicts", [])
+        if (not isinstance(conflicts, list) or any(
+                not isinstance(item, dict) or not isinstance(item.get("path"), str)
+                or not item["path"] or not isinstance(item.get("recorded_at"), (int, float))
+                for item in conflicts)):
+            raise ValueError("scope lease conflicts are invalid")
         for key, owner in value["owners"].items():
             if (not isinstance(key, str) or not isinstance(owner, dict)
                     or owner.get("state") not in {"ACTIVE", "QUEUED", "RELEASED"}
@@ -132,7 +148,13 @@ class ScopeLeases:
         return value
 
     def _write(self, value: dict[str, Any]) -> None:
-        cutoff = time.time() - RELEASED_LEASE_RETENTION_SECONDS
+        now = time.time()
+        cutoff = now - RELEASED_LEASE_RETENTION_SECONDS
+        value["conflicts"] = sorted(
+            (item for item in value.get("conflicts", [])
+             if item["recorded_at"] >= now - CONFLICT_PATH_RETENTION_SECONDS),
+            key=lambda item: item["recorded_at"], reverse=True,
+        )[:MAX_CONFLICT_PATHS]
         active_starts = [owner.get("acquired_at") for owner in value["owners"].values()
                          if owner["state"] == "ACTIVE"]
         value["owners"] = {
@@ -206,25 +228,30 @@ class ScopeLeases:
         for owner in value["owners"].values():
             if owner["state"] != "QUEUED":
                 continue
-            if any(other["state"] == "ACTIVE" and _scopes_overlap(owner["scope"], other["scope"])
-                   for other in value["owners"].values()):
+            if owner.get("hot_path_queue"):
+                blocked = self._hot_path_overlap(value, owner["scope"], now)
+            else:
+                blocked = any(other["state"] == "ACTIVE" and _scopes_overlap(owner["scope"], other["scope"])
+                              for other in value["owners"].values())
+            if blocked:
                 continue
             owner.update(state="ACTIVE", acquired_at=now)
+            owner.pop("hot_path_queue", None)
             changed = True
         return changed
 
     def acquire(self, owner_key: str, task_id: str, scope: Sequence[str],
                 *, job_id: str | None = None, timeout_seconds: float | None = None,
                 read_only: bool = False, queue_conflict: bool = False,
-                allow_overlap: bool = False) -> dict[str, Any]:
+                allow_overlap: bool = False, hot_path_queue: bool = False) -> dict[str, Any]:
         if not owner_key or not task_id or (not scope and not read_only) or (scope and read_only):
             return {"status": UNKNOWN, "code": "LEASE_INVALID"}
         try:
             with _lease_lock(self.lock_path):
                 value = self._read()
                 now = time.time()
-                if self._reconcile(value, now):
-                    self._promote(value, now)
+                changed = self._reconcile(value, now)
+                if self._promote(value, now) or changed:
                     self._write(value)
                 prior = value["owners"].get(owner_key)
                 if prior is not None:
@@ -232,6 +259,15 @@ class ScopeLeases:
                             if prior["state"] in {"ACTIVE", "QUEUED"} and prior["task_id"] == task_id
                             and prior["scope"] == list(scope) else
                             {"status": UNKNOWN, "code": "LEASE_OWNER_CONFLICT"})
+                hot_conflict = hot_path_queue and not read_only and job_id is not None and any(
+                    other_key != owner_key and other.get("job_id") != job_id
+                    and other["state"] in {"ACTIVE", "QUEUED"}
+                    and any(item["recorded_at"] >= now - CONFLICT_PATH_RETENTION_SECONDS
+                            and _scope_covers(scope, item["path"])
+                            and _scope_covers(other["scope"], item["path"])
+                            for item in value.get("conflicts", []))
+                    for other_key, other in value["owners"].items()
+                )
                 conflict = None
                 for other in value["owners"].values():
                     if other["state"] not in {"ACTIVE", "QUEUED"}:
@@ -244,11 +280,13 @@ class ScopeLeases:
                             "task_id": conflict["task_id"]}
                 owner = {
                     "task_id": task_id, "scope": list(scope),
-                    "state": "QUEUED" if conflict is not None and not allow_overlap else "ACTIVE",
+                    "state": "QUEUED" if hot_conflict or (conflict is not None and not allow_overlap) else "ACTIVE",
                     "job_id": job_id, "queued_at": now,
                 }
-                if conflict is None or allow_overlap:
+                if owner["state"] == "ACTIVE":
                     owner["acquired_at"] = now
+                elif hot_conflict:
+                    owner["hot_path_queue"] = True
                 if read_only:
                     owner["read_only"] = True
                 if job_id is None:
@@ -269,6 +307,32 @@ class ScopeLeases:
                 return {"status": OK, "code": "LEASE_QUEUED" if owner["state"] == "QUEUED" else "LEASE_ACQUIRED"}
         except (OSError, ValueError, TypeError):
             return {"status": UNKNOWN, "code": "LEASE_ADMISSION_UNCERTAIN"}
+
+    def _hot_path_overlap(self, value: dict[str, Any], scope: Sequence[str], now: float) -> bool:
+        return any(
+            other["state"] == "ACTIVE"
+            and any(item["recorded_at"] >= now - CONFLICT_PATH_RETENTION_SECONDS
+                    and _scope_covers(scope, item["path"])
+                    and _scope_covers(other["scope"], item["path"])
+                    for item in value.get("conflicts", []))
+            for other in value["owners"].values()
+        )
+
+    def record_conflicts(self, paths: Sequence[str]) -> None:
+        """Remember bounded, recent repository paths with unresolved apply conflicts."""
+        clean = {path for path in paths if isinstance(path, str) and path and
+                 not PurePosixPath(path).is_absolute() and ".." not in PurePosixPath(path).parts}
+        if not clean:
+            return
+        with _lease_lock(self.lock_path):
+            value = self._read()
+            now = time.time()
+            recent = {item["path"]: item for item in value.get("conflicts", [])
+                      if item["recorded_at"] >= now - CONFLICT_PATH_RETENTION_SECONDS}
+            for path in clean:
+                recent[path] = {"path": path, "recorded_at": now}
+            value["conflicts"] = list(recent.values())
+            self._write(value)
 
     def release(self, owner_key: str) -> dict[str, Any]:
         try:
@@ -305,8 +369,8 @@ class ScopeLeases:
         with _lease_lock(self.lock_path):
             value = self._read()
             now = time.time()
-            if self._reconcile(value, now):
-                self._promote(value, now)
+            changed = self._reconcile(value, now)
+            if self._promote(value, now) or changed:
                 self._write(value)
             return [
                 {"task_id": owner["task_id"], "scope": list(owner["scope"]),
@@ -319,8 +383,8 @@ class ScopeLeases:
         with _lease_lock(self.lock_path):
             value = self._read()
             now = time.time()
-            if self._reconcile(value, now):
-                self._promote(value, now)
+            changed = self._reconcile(value, now)
+            if self._promote(value, now) or changed:
                 self._write(value)
             return value["owners"].get(owner_key, {}).get("state", "MISSING")
 
@@ -329,8 +393,8 @@ class ScopeLeases:
         with _lease_lock(self.lock_path):
             value = self._read()
             now = time.time()
-            if self._reconcile(value, now):
-                self._promote(value, now)
+            changed = self._reconcile(value, now)
+            if self._promote(value, now) or changed:
                 self._write(value)
             own = value["owners"].get(owner_key)
             if own is None or not isinstance(own.get("acquired_at"), (int, float)):

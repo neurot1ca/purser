@@ -2083,6 +2083,7 @@ def pre_tool_use(
                 job_id=job_id, read_only=parsed.phase == "plan",
                 timeout_seconds=updated.get("timeoutSeconds") if is_start else None,
                 allow_overlap=worktree_start or worktree_reply,
+                hot_path_queue=worktree_start,
             )
             if admitted["status"] != ledger.OK:
                 return _observed_denial(

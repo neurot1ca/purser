@@ -41,6 +41,7 @@ if os.name == "nt":
 import state_root as purser_state_root
 import coder_config
 import model_listing
+import project_root
 
 
 TOOL_SCHEMAS = [
@@ -1391,6 +1392,14 @@ class Server:
                 self._write_job(job)
                 return _job_result(value)
             outcome = ledger.apply_job_patch(repo_root, patch)
+            if not outcome["applied"]:
+                try:
+                    project_key = project_root.project_key(repo_root)
+                    ledger.ScopeLeases(
+                        purser_state_root.default_state_root() / "projects" / project_key
+                    ).record_conflicts(outcome["conflicts"])
+                except (OSError, ValueError, TypeError) as exc:
+                    print(f"Conflict learning unavailable: {exc}", file=sys.stderr, flush=True)
             value = ({"applied": True, "paths": paths} if outcome["applied"] else
                      {"applied": False, "conflicts": outcome["conflicts"],
                       "applicable": outcome["applicable"], "worktreePath": job["worktreePath"]})

@@ -1012,6 +1012,7 @@ def test_async_worktree_reply_is_admitted_during_overlapping_job(workspace, conf
                                     route.effort, phase="implementation", scope=["tests/"],
                                     reason="new_task"))
     assert saved["status"] == ledger.OK
+    _lease_state(workspace).record_conflicts(["tests/hot.py"])
     reply = event(START_TOOL, prompt=orch(task="worktree-reply", scope="tests/") + "\nContinue.",
                   tool_use_id="worktree-reply-start", mode="reply", threadId="worktree-thread")
     result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
@@ -2183,6 +2184,35 @@ def test_overlapping_worktree_admission_keeps_baseline_without_waiting(workspace
     assert "leaseQueued" not in job
     pending = codex._read_pending(state, second)
     assert isinstance(pending["baseline"]["status_entries"], list)
+
+
+def test_hot_path_queues_only_matching_worktree_start(workspace, config):
+    repo, state = workspace
+    store = _lease_state(workspace)
+    store.record_conflicts(["file0.py"])
+    owner = _lease_call("hot-owner", "file0.py", "hot-owner", tool_name=START_TOOL)
+    hot = _lease_call("hot-waiter", "file0.py", "hot-waiter", tool_name=START_TOOL)
+    disjoint = _lease_call("cold-start", "file1.py", "cold-start", tool_name=START_TOOL)
+    codex.pre_tool_use(owner, config=config, state_root=state, repo_root=repo)
+    hot_input = codex.pre_tool_use(hot, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]
+    cold_input = codex.pre_tool_use(disjoint, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]
+    assert hot_input["leaseQueued"] is True
+    pending = codex._read_pending(state, hot)
+    assert pending["baseline"]["code"] == "QUEUED"
+    assert "leaseQueued" not in cold_input
+    job_id = hashlib.sha256(hot_input["call"].encode()).hexdigest()
+    pending["job_id"] = job_id
+    codex._atomic_json_write(codex._pending_path(state, hot), pending)
+    index = {"jobId": job_id, "call": pending["async_call"],
+             "project_key": pending["project_key"], "call_key": pending["lease_owner"]}
+    async_index = state / "async_jobs" / f"{job_id}.json"
+    async_index.parent.mkdir(parents=True, exist_ok=True)
+    async_index.write_text(json.dumps(index), encoding="utf-8")
+    assert store.release(codex._call_key(owner))["status"] == ledger.OK
+    assert codex.bind_queued_baseline(state, job_id) is True
+    assert codex._read_pending(state, hot)["baseline"]["status"] == ledger.OK
 
 
 def test_sync_finalize_releases_scope_lease(workspace, config):

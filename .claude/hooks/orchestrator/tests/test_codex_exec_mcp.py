@@ -924,6 +924,11 @@ def test_codex_apply_is_idempotent_and_reports_conflicts(area):
                             "worktreePath": other_result["worktreePath"]}
         conflict_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (other["jobId"] + ".json"))
         assert conflict_job["applyState"] == "conflict"
+        lease_path = (area / "root" / "projects" /
+                      codex_exec_mcp.project_root.project_key(repo.resolve()) / "scope_leases.json")
+        learned = json.loads(lease_path.read_text(encoding="utf-8"))["conflicts"]
+        assert [item["path"] for item in learned] == ["tracked.txt"]
+        assert isinstance(learned[0]["recorded_at"], (int, float))
         assert Path(other_result["worktreePath"]).is_dir()
     finally:
         client.close()
