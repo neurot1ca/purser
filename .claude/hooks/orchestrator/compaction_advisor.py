@@ -441,7 +441,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 fallback_pending = {"line": fallback_pending["line"],
                                     "project": fallback_pending["project"],
                                     "model": fallback_pending["model"],
-                                    "blocked": fallback_pending.get("blocked") is True}
+                                    "blocked": fallback_pending.get("blocked") is True,
+                                    "notice": fallback_pending.get("notice") is True}
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
                 "reminder_messages": max(0, int(value.get("reminder_messages", 0))),
@@ -684,7 +685,7 @@ def queue_dispatch(payload: Mapping[str, Any], repository: Path | None, *,
 
 
 def queue_fallback_question(payload: Mapping[str, Any], repository: Path | None,
-                            line: str, model: str) -> bool:
+                            line: str, model: str, *, notice: bool = False) -> bool:
     session_id = payload.get("session_id")
     if repository is None or not isinstance(session_id, str) or not session_id:
         return False
@@ -692,7 +693,7 @@ def queue_fallback_question(payload: Mapping[str, Any], repository: Path | None,
         path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(path, session_id)
         state["fallback_pending"] = {"line": line, "project": str(repository),
-                                      "model": model, "blocked": False}
+                                      "model": model, "blocked": False, "notice": notice}
         _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return True
     except BaseException:
@@ -874,9 +875,9 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             state["leader_pending"] = None
             changed = True
             record_announced_mechanical_leader(leader_pending["model"])
-        question_lines = re.findall(r"^\*\*⚓ .+\*\*$", turn_message, re.MULTILINE)
-        if (fallback_pending is not None and len(question_lines) == 1
-                and fallback_pending["model"] in question_lines[0]):
+        anchored_lines = re.findall(r"^\*\*⚓ .+\*\*$", turn_message, re.MULTILINE)
+        if (fallback_pending is not None and len(anchored_lines) == 1
+                and fallback_pending["model"] in anchored_lines[0]):
             active_coder_state.update_fallback_question(
                 fallback_pending["project"], session_id, shown=True
             )
@@ -914,13 +915,21 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             reasons.append(
                 f"Include one visible line containing both `⚓` and `{leader_pending['model']}` to announce the new free mechanical model leader."
             )
-        if fallback_pending is not None and not fallback_pending.get("blocked"):
+        if (fallback_pending is not None
+                and (fallback_pending.get("notice") or not fallback_pending.get("blocked"))):
             fallback_pending["blocked"] = True
-            reasons.append(
-                "On your next reply, render exactly one bold question line in the user's language. "
-                "Translate the line below while keeping ⚓ and the model name; include no other question line.\n\n"
-                + fallback_pending["line"]
-            )
+            if fallback_pending.get("notice"):
+                reasons.append(
+                    "On your next reply, render exactly one bold line in the user's language. "
+                    "Translate the line below while keeping ⚓ and the model name; do not add another notice line.\n\n"
+                    + fallback_pending["line"]
+                )
+            else:
+                reasons.append(
+                    "On your next reply, render exactly one bold question line in the user's language. "
+                    "Translate the line below while keeping ⚓ and the model name; include no other question line.\n\n"
+                    + fallback_pending["line"]
+                )
 
         if not reasons and flow_message.rstrip().endswith(("?", "؟", "？")):
             latest_user = max((i for i, record in enumerate(records) if _genuine_user(record)), default=-1)

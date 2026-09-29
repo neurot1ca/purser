@@ -149,7 +149,8 @@ def update_fallback_question(project: str | os.PathLike[str], session_id: str,
 
 
 def approve_fallback(project: str | os.PathLike[str], session_id: str,
-                    root: Path | None = None) -> bool:
+                    root: Path | None = None, *, reset_cycle_marker: str | None = None,
+                    switched_at: float | None = None) -> bool:
     approved = False
     def change(value):
         nonlocal approved
@@ -159,6 +160,10 @@ def approve_fallback(project: str | os.PathLike[str], session_id: str,
                 and evidence.get("question_shown") is True
                 and evidence.get("answerable") is True):
             value["active_coder"] = "fallback"
+            value["reset_cycle_marker"] = reset_cycle_marker
+            if switched_at is not None:
+                evidence["switched_at"] = switched_at
+            value["last_probe_time"] = None
             for key in ("question", "question_session", "question_shown", "answerable"):
                 evidence.pop(key, None)
             approved = True

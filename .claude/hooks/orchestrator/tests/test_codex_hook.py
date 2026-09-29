@@ -6520,6 +6520,9 @@ def test_approved_fallback_routes_same_and_later_session(workspace, config, monk
         config=config, state_root=state, repo_root=repo)
     routed = approved["hookSpecificOutput"]["updatedInput"]
     assert routed["agent"] == "opencode" and routed["model"] == "anthropic/claude-sonnet"
+    switched = _fallback_state(workspace)
+    assert switched["reset_cycle_marker"] == "2099-01-01T00:00:00Z"
+    assert isinstance(switched["triggering_evidence"]["switched_at"], float)
     next_session = event(prompt=orch(task="task-2") + "\nDo another task.", tool_use_id="session-2")
     next_session["tool_input"]["prompt"] = orch(task="task-2", scope="file1.py") + "\nDo another task."
     next_session["session_id"] = "session-2"
@@ -6669,3 +6672,185 @@ def test_reviewer_uses_configured_fallback_family(workspace, config, monkeypatch
     bundle = response_bundle(result, config)
     assert not invoked
     assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
+
+
+def _activate_fallback(workspace, kind, **evidence):
+    repo, root = workspace
+    state = active_coder_state.read(repo, root)
+    state.update(active_coder="fallback", triggering_evidence={"type": kind, **evidence})
+    active_coder_state.write(repo, state, root)
+    return repo, root
+
+
+def test_credit_return_probes_once_and_notifies_on_success(workspace, config, monkeypatch):
+    repo, state = _activate_fallback(
+        workspace, "CREDIT_EXHAUSTED", trigger_id="job", switched_at=1000)
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    monkeypatch.setattr(codex.time, "time", lambda: 2000)
+    monkeypatch.setattr(active_coder_state.state_root, "default_state_root", lambda: state)
+    probes = []
+    monkeypatch.setattr(codex.codex_exec_mcp, "probe_api_primary",
+                        lambda agent, model, **kwargs:
+                        probes.append((agent, model, kwargs.get("timeout"))) or {"ok": True})
+
+    result = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+
+    assert probes == [("codex", config["sol_model"], 25)]
+    assert _fallback_state(workspace)["active_coder"] == "primary"
+    assert "permissionDecision" not in result["hookSpecificOutput"]
+    queued = compaction_advisor._read_state(
+        compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1")
+    pending = queued["fallback_pending"]
+    assert pending is not None
+    assert pending["notice"] is True
+    stop = compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
+    assert "bold line in the user's language" in stop["reason"]
+    retry = compaction_advisor.stop(
+        {"session_id": "session-1", "last_assistant_message": "No notice yet."}, repo)
+    assert "bold line in the user's language" in retry["reason"]
+    localized = f"**⚓ {config['sol_model']} credit is available; primary coder restored.**"
+    assert compaction_advisor.stop(
+        {"session_id": "session-1", "last_assistant_message": localized}, repo) is None
+    assert compaction_advisor._read_state(
+        compaction_advisor._state_directory(repo) / "compaction_advisor.json",
+        "session-1")["fallback_pending"] is None
+    assert compaction_advisor.stop(
+        {"session_id": "session-1", "last_assistant_message": localized}, repo) is None
+
+
+def test_credit_probe_failure_throttle_keeps_fallback(workspace, config, monkeypatch):
+    repo, state = _activate_fallback(
+        workspace, "CREDIT_EXHAUSTED", trigger_id="job", switched_at=1000)
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    monkeypatch.setattr(codex.time, "time", lambda: 2000)
+    probes = []
+    monkeypatch.setattr(codex.codex_exec_mcp, "probe_api_primary",
+                        lambda agent, model, **kwargs:
+                        probes.append((agent, model, kwargs.get("timeout"))) or {"ok": False})
+
+    first = event()
+    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
+    _lease_state(workspace).release_task("task-1")
+    second = event(prompt=orch(task="throttled") + "\nContinue.", tool_use_id="throttled")
+    codex.pre_tool_use(
+        second,
+        config=config, state_root=state, repo_root=repo)
+
+    assert len(probes) == 1
+    assert _fallback_state(workspace)["active_coder"] == "fallback"
+
+
+def test_no_response_probe_success_is_silent_and_throttled(workspace, config, monkeypatch):
+    repo, state = _activate_fallback(
+        workspace, "NO_RESPONSE", trigger_id="job", switched_at=1000)
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    monkeypatch.setattr(codex.time, "time", lambda: 2000)
+    probes = []
+    monkeypatch.setattr(codex.codex_exec_mcp, "probe_api_primary",
+                        lambda agent, model, **kwargs:
+                        probes.append((agent, model, kwargs.get("timeout"))) or {"ok": False})
+
+    result = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    _lease_state(workspace).release_task("task-1")
+    throttled = event(prompt=orch(task="silent-throttled") + "\nContinue.",
+                      tool_use_id="silent-throttled")
+    codex.pre_tool_use(throttled, config=config,
+                       state_root=state, repo_root=repo)
+    _lease_state(workspace).release_task("silent-throttled")
+    now = [2300]
+    monkeypatch.setattr(codex.time, "time", lambda: now[0])
+    monkeypatch.setattr(codex.codex_exec_mcp, "probe_api_primary",
+                        lambda agent, model, **kwargs:
+                        probes.append((agent, model, kwargs.get("timeout"))) or {"ok": True})
+    returned = codex.pre_tool_use(event(prompt=orch(task="silent-return") + "\nContinue.",
+                                        tool_use_id="silent-return"), config=config,
+                                  state_root=state, repo_root=repo)
+
+    assert len(probes) == 2
+    assert _fallback_state(workspace)["active_coder"] == "primary"
+    assert "permissionDecision" not in returned["hookSpecificOutput"]
+    assert result["hookSpecificOutput"]["updatedInput"]["agent"] == "opencode"
+    advisor_state = compaction_advisor._read_state(
+        compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1")
+    assert advisor_state["dispatch_pending"] is None
+
+
+def test_rate_limit_wait_suppresses_then_returns_without_probe(workspace, config, monkeypatch):
+    repo, state = _activate_fallback(
+        workspace, "RATE_LIMITED", trigger_id="job", retryAfterSeconds=30, switched_at=1000)
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    now = [1029]
+    monkeypatch.setattr(codex.time, "time", lambda: now[0])
+    probes = []
+    monkeypatch.setattr(codex.codex_exec_mcp, "probe_api_primary",
+                        lambda *args: probes.append(args) or {"ok": True})
+
+    early = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert _fallback_state(workspace)["active_coder"] == "fallback"
+    assert early["hookSpecificOutput"]["updatedInput"]["agent"] == "opencode"
+    _lease_state(workspace).release_task("task-1")
+    now[0] = 1030
+    returned = codex.pre_tool_use(
+        event(prompt=orch(task="rate-ready") + "\nContinue.", tool_use_id="rate-ready"),
+        config=config, state_root=state, repo_root=repo)
+    assert _fallback_state(workspace)["active_coder"] == "primary"
+    assert "permissionDecision" not in returned["hookSpecificOutput"], returned
+    assert probes == []
+
+
+def test_quota_return_question_decline_is_remembered_per_reset(workspace, config, monkeypatch):
+    repo, state = _activate_fallback(
+        workspace, "QUOTA", trigger_id="2099-01-01T00:00:00Z")
+    active_coder_state.update(
+        repo, lambda value: value.update(reset_cycle_marker="2099-01-01T00:00:00Z"), state)
+    config = _fallback_config(config)
+    quota = {"5h_resets_at": "2099-01-01T05:00:00Z"}
+    monkeypatch.setattr(active_coder_state.state_root, "default_state_root", lambda: state)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: quota)
+
+    asked = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert asked["hookSpecificOutput"]["permissionDecision"] == "deny"
+    pending_path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
+    pending = compaction_advisor._read_state(pending_path, "session-1")["fallback_pending"]
+    assert pending["line"] == f"⚓ {config['sol_model']} kotası yenilendi. Ana kodlayıcıya geri dönülsün mü?"
+    compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
+    compaction_advisor.stop(
+        {"session_id": "session-1", "last_assistant_message": f"**{pending['line']}**"}, repo)
+    compaction_advisor.advise({"session_id": "session-1"}, repo)
+    evidence = _fallback_state(workspace)["triggering_evidence"]
+    assert evidence["question_shown"] is True and evidence["answerable"] is True, evidence
+    declined = codex.pre_tool_use(
+        event(prompt=orch(scope="file0.py") + "\nStay with fallback.", tool_use_id="decline"),
+        config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in declined["hookSpecificOutput"]
+    assert _fallback_state(workspace)["triggering_evidence"]["declined_reset_cycle_marker"] == quota["5h_resets_at"]
+    _lease_state(workspace).release_task("task-1")
+    later = codex.pre_tool_use(
+        event(prompt=orch(task="later", scope="file0.py") + "\nContinue.", tool_use_id="later"),
+        config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in later["hookSpecificOutput"]
+    assert _fallback_state(workspace)["active_coder"] == "fallback"
+    _lease_state(workspace).release_task("later")
+    quota["5h_resets_at"] = "2099-01-01T10:00:00Z"
+    new_cycle_call = event(prompt=orch(task="new-cycle", scope="file0.py") + "\nContinue.",
+                           tool_use_id="new-cycle")
+    new_cycle_call["session_id"] = "session-2"
+    new_cycle = codex.pre_tool_use(
+        new_cycle_call, config=config, state_root=state, repo_root=repo)
+    assert new_cycle["hookSpecificOutput"]["permissionDecision"] == "deny"
+    pending = compaction_advisor._read_state(pending_path, "session-2")["fallback_pending"]
+    compaction_advisor.stop({"session_id": "session-2", "last_assistant_message": ""}, repo)
+    compaction_advisor.stop(
+        {"session_id": "session-2", "last_assistant_message": f"**{pending['line']}**"}, repo)
+    compaction_advisor.advise({"session_id": "session-2"}, repo)
+    return_call = event(prompt=orch(reason="user_override") + "\nReturn to primary.",
+                        tool_use_id="accept-return")
+    return_call["session_id"] = "session-2"
+    returned = codex.pre_tool_use(
+        return_call, config=config, state_root=state, repo_root=repo)
+    assert _fallback_state(workspace)["active_coder"] == "primary"
+    assert "permissionDecision" not in returned["hookSpecificOutput"]

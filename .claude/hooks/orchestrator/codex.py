@@ -1397,8 +1397,13 @@ def pre_tool_use(
                             or consent.get("answerable") is not True):
                         return _deny("FALLBACK_CONSENT_REQUIRED",
                                      "reason=user_override requires a shown fallback question and a later user prompt.")
+                    reset_marker = quota.get("5h_resets_at") if isinstance(quota, Mapping) else None
+                    if not isinstance(reset_marker, str) and consent.get("type") == "QUOTA":
+                        reset_marker = consent.get("trigger_id")
                     if not active_coder_state.approve_fallback(
-                            repository_for_fallback, event["session_id"], _state_root(state_root)):
+                            repository_for_fallback, event["session_id"], _state_root(state_root),
+                            reset_cycle_marker=reset_marker if isinstance(reset_marker, str) else None,
+                            switched_at=time.time()):
                         return _deny("FALLBACK_CONSENT_REQUIRED", "The fallback approval is no longer current.")
                 elif consent is not None and consent.get("question_session") == event.get("session_id") and consent.get("answerable") is True:
                     declined_evidence = {
@@ -1439,6 +1444,140 @@ def pre_tool_use(
                                 event, repository_for_fallback, question, fallback["model"]
                             )
                         return _deny("FALLBACK_CONSENT_REQUIRED", "A fallback question must be shown before another implementation dispatch.")
+            elif (isinstance(fallback, Mapping) and active is not None
+                  and active.get("active_coder") == "fallback"
+                  and parsed.phase == "implementation"):
+                evidence = evidence if isinstance(evidence, Mapping) else {}
+                def return_to_primary():
+                    returned = False
+                    def change(value):
+                        nonlocal returned
+                        current = value.get("triggering_evidence")
+                        if (value.get("active_coder") == "fallback"
+                                and isinstance(current, Mapping)
+                                and current.get("trigger_id") == evidence.get("trigger_id")
+                                and current.get("type") == evidence.get("type")):
+                            value.update(active_coder="primary", triggering_evidence=None,
+                                         reset_cycle_marker=None, last_probe_time=None)
+                            returned = True
+                    active_coder_state.update(repository_for_fallback, change, _state_root(state_root))
+                    return returned
+                return_session = evidence.get("question_session")
+                if return_session is not None:
+                    if (return_session == event.get("session_id")
+                            and evidence.get("question_shown") is True
+                            and evidence.get("answerable") is True):
+                        if parsed.reason == "user_override":
+                            if not return_to_primary():
+                                return _deny("PRIMARY_RETURN_CONSENT_REQUIRED",
+                                             "The fallback state changed before return approval could be applied.")
+                        else:
+                            marker = evidence.get("question_reset_marker")
+                            active_coder_state.update(
+                                repository_for_fallback,
+                                lambda value: value.update(triggering_evidence={
+                                    **{key: item for key, item in evidence.items()
+                                       if key not in {"question_session", "question_shown", "answerable",
+                                                      "question", "question_reset_marker"}},
+                                    "declined_reset_cycle_marker": marker,
+                                }),
+                                _state_root(state_root),
+                            )
+                    else:
+                        return _deny("PRIMARY_RETURN_CONSENT_REQUIRED",
+                                     "Wait for the return question to be shown and answered before dispatch.")
+                elif parsed.reason == "user_override":
+                    return _deny("PRIMARY_RETURN_CONSENT_REQUIRED",
+                                 "reason=user_override requires a shown return question and a later user prompt.")
+                else:
+                    kind = evidence.get("type")
+                    if kind == "QUOTA":
+                        marker = active.get("reset_cycle_marker")
+                        reset = quota.get("5h_resets_at") if isinstance(quota, Mapping) else None
+                        try:
+                            marker_time = datetime.fromisoformat(marker.replace("Z", "+00:00"))
+                            reset_time = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+                            reset_ready = (marker_time.tzinfo is not None and reset_time.tzinfo is not None
+                                           and reset_time > marker_time)
+                        except (AttributeError, TypeError, ValueError):
+                            reset_ready = False
+                        declined = evidence.get("declined_reset_cycle_marker") == reset
+                        if reset_ready and not declined and event.get("session_id"):
+                            primary_route = policy.resolve_route(parsed.route, loaded_config)
+                            if not primary_route.valid:
+                                return _deny("PRIMARY_RETURN_ROUTE_INVALID", primary_route.message)
+                            primary_model = primary_route.model
+                            line = f"⚓ {primary_model} kotası yenilendi. Ana kodlayıcıya geri dönülsün mü?"
+                            recorded = False
+                            def record_return_question(value):
+                                nonlocal recorded
+                                current = value.get("triggering_evidence")
+                                if value.get("active_coder") == "fallback" and not (
+                                        isinstance(current, Mapping) and current.get("question_session")):
+                                    value["triggering_evidence"] = {
+                                        **dict(evidence), "question": line,
+                                        "question_session": event["session_id"],
+                                        "question_reset_marker": reset,
+                                        "question_shown": False, "answerable": False,
+                                    }
+                                    recorded = True
+                            active_coder_state.update(
+                                repository_for_fallback, record_return_question, _state_root(state_root))
+                            if recorded:
+                                compaction_advisor.queue_fallback_question(
+                                    event, repository_for_fallback, line, primary_model)
+                            return _deny("PRIMARY_RETURN_CONSENT_REQUIRED",
+                                         "A return-to-primary question must be shown before another implementation dispatch.")
+                    elif kind in {"CREDIT_EXHAUSTED", "NO_RESPONSE"}:
+                        now = time.time()
+                        interval = 15 * 60 if kind == "CREDIT_EXHAUSTED" else 5 * 60
+                        probe_claimed = False
+                        def claim_probe(value):
+                            nonlocal probe_claimed
+                            current = value.get("triggering_evidence")
+                            if (value.get("active_coder") != "fallback"
+                                    or not isinstance(current, Mapping)
+                                    or current.get("type") != kind
+                                    or current.get("trigger_id") != evidence.get("trigger_id")):
+                                return
+                            last_probe = value.get("last_probe_time")
+                            try:
+                                elapsed = now - float(last_probe) if last_probe is not None else interval
+                            except (TypeError, ValueError):
+                                elapsed = 0
+                            if elapsed >= interval:
+                                value["last_probe_time"] = str(now)
+                                probe_claimed = True
+                        active_coder_state.update(
+                            repository_for_fallback, claim_probe, _state_root(state_root))
+                        if probe_claimed:
+                            primary_route = policy.resolve_route(parsed.route, loaded_config)
+                            primary_agent = loaded_config.get("coder_agent", "codex")
+                            primary_model = primary_route.model
+                            try:
+                                probe = (codex_exec_mcp.probe_api_primary(primary_agent, primary_model,
+                                                                         timeout=25)
+                                         if primary_route.valid else {"ok": False})
+                            except Exception:
+                                probe = {"ok": False}
+                            if isinstance(probe, Mapping) and probe.get("ok") is True:
+                                returned = return_to_primary()
+                                if returned and kind == "CREDIT_EXHAUSTED" and primary_route.valid:
+                                    compaction_advisor.queue_fallback_question(
+                                        event, repository_for_fallback,
+                                        f"⚓ {primary_model} kredisi yüklendi, ana kodlayıcıya geri dönüldü.",
+                                        primary_model, notice=True,
+                                    )
+                    elif kind == "RATE_LIMITED":
+                        delay = evidence.get("retryAfterSeconds")
+                        if not isinstance(delay, (int, float)) or isinstance(delay, bool) or delay < 0:
+                            delay = 5 * 60
+                        switched_at = evidence.get("switched_at")
+                        try:
+                            if time.time() >= float(switched_at) + delay:
+                                return_to_primary()
+                        except (TypeError, ValueError):
+                            pass
             low_windows = []
             five_hour_reset = quota.get("5h_resets_at") if isinstance(quota, Mapping) else None
             if isinstance(quota, Mapping) and (active is None or active.get("active_coder") == "primary") and parsed.reason != "user_override":
