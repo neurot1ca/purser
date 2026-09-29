@@ -1014,6 +1014,8 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return receipt_advice
     last_suggested = state["last_suggested_context"]
+    if last_suggested == 0 and not triggers:
+        triggers.append("threshold")
     reminder_due = False
     if last_suggested:
         state["reminder_messages"] += 1

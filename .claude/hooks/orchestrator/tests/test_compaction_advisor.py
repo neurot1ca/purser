@@ -119,10 +119,15 @@ def test_does_not_fire_below_threshold(setup):
     assert advisor.advise(event, repo, now=NOW) is None
 
 
-def test_does_not_fire_without_trigger(setup):
+def test_threshold_crossing_without_other_trigger_writes_handoff(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("none", age_minutes=2))
-    assert advisor.advise(event, repo, now=NOW) is None
+    result = advisor.advise(event, repo, now=NOW)
+
+    assert result and "trigger(s): threshold" in result
+    handoff = advisor.handoff_path(repo)
+    assert handoff.exists()
+    assert advisor.STATE_START in handoff.read_text(encoding="utf-8")
 
 
 def test_handoff_template_and_advice_preserve_user_language(setup):
@@ -139,6 +144,9 @@ def test_handoff_template_and_advice_preserve_user_language(setup):
 def test_failed_git_commit_is_not_a_boundary(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit", failed=True))
+    state_dir = advisor._state_directory(repo)
+    state_dir.mkdir(parents=True)
+    (state_dir / "compaction_advisor.json").write_text(json.dumps({"last_suggested_context": 260_000, "session_id": "session-1"}), encoding="utf-8")
     assert advisor.advise(event, repo, now=NOW) is None
 
 
@@ -146,7 +154,7 @@ def test_task_end_requires_new_task_id(setup):
     repo, local, scratch = setup
     state_dir = advisor._state_directory(repo)
     state_dir.mkdir(parents=True)
-    (state_dir / "compaction_advisor.json").write_text(json.dumps({"last_suggested_context": 0, "last_task_id": "task-a", "session_id": "session-1"}), encoding="utf-8")
+    (state_dir / "compaction_advisor.json").write_text(json.dumps({"last_suggested_context": 260_000, "last_task_id": "task-a", "session_id": "session-1"}), encoding="utf-8")
     event = _event(scratch, repo, local, _records("task", task_id="task-a"))
     assert advisor.advise(event, repo, now=NOW) is None
 
@@ -209,7 +217,7 @@ def test_codex_reply_same_task_does_not_look_like_new_task_for_task_end(setup):
     event = _event(scratch, repo, local, records)
     state_dir = advisor._state_directory(repo)
     state_dir.mkdir(parents=True)
-    (state_dir / "compaction_advisor.json").write_text(json.dumps({"last_suggested_context": 0, "last_task_id": "t1", "session_id": "session-1"}), encoding="utf-8")
+    (state_dir / "compaction_advisor.json").write_text(json.dumps({"last_suggested_context": 260_000, "last_task_id": "t1", "session_id": "session-1"}), encoding="utf-8")
 
     assert advisor._transcript_facts_all(records)[1] == "t1"
     assert advisor.advise(event, repo, now=NOW) is None
