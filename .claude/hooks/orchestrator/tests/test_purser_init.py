@@ -14,6 +14,7 @@ import coder_config
 import codex
 import codex_exec_mcp
 import project_profile
+import mechanical_learning
 
 
 @pytest.fixture
@@ -316,9 +317,24 @@ def test_detect_refreshes_candidates_for_installed_opencode(site, monkeypatch):
     monkeypatch.setattr(purser_init, "_opencode_models", lambda _binary: ["vendor/model-free"])
     monkeypatch.setattr(purser_init, "_agent", lambda *_args: {"available": True, "path": "opencode"})
     monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {"opencode": {}}})
-    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda providers, **_kwargs: calls.append(providers))
+    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates",
+                        lambda providers, **_kwargs: calls.append(providers) or True)
+    monkeypatch.setattr(mechanical_learning, "start_benchmark", lambda **_kwargs: calls.append("benchmark"))
     purser_init.detect(Path("missing-config"), Path.cwd())
-    assert calls == [{"opencode": {}}]
+    assert calls == [{"opencode": {}}, "benchmark"]
+
+
+def test_opencode_list_models_refreshes_and_starts_benchmark(site, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(purser_init.model_catalog, "load_catalog", lambda: {"providers": {"opencode": {}}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_: {
+        "status": "available", "models": [{"id": "vendor/new-free"}]})
+    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates",
+                        lambda providers, **kwargs: calls.append((providers, kwargs)) or True)
+    monkeypatch.setattr(mechanical_learning, "start_benchmark", lambda **_kwargs: calls.append("benchmark"))
+    assert run("--list-models", "--json", "--coder", "opencode") == 0
+    capsys.readouterr()
+    assert calls == [({"opencode": {}}, {"model_ids": ["vendor/new-free"]}), "benchmark"]
 
 
 def test_detect_lists_opencode_models_once(site, monkeypatch):

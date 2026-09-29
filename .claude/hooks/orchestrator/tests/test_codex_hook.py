@@ -227,6 +227,23 @@ def test_mechanical_candidate_binds_opencode_per_job(workspace, config, monkeypa
     assert (stored["agent"], stored["model"]) == ("opencode", "provider/model-candidate")
 
 
+@pytest.mark.parametrize("passed,selected", [(5, True), (4, False)])
+def test_seeded_benchmark_score_controls_next_mechanical_job(workspace, config, monkeypatch, passed, selected):
+    repo, state = workspace
+    candidate = "vendor/seeded-free"
+    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
+    inventory = state / "opencode" / "candidates.json"
+    inventory.parent.mkdir(parents=True, exist_ok=True)
+    inventory.write_text(json.dumps({"candidates": [{
+        "id": candidate, "status": "unmeasured", "added_at": "now",
+        "benchmarks": {"1": {"passed_count": passed, "total": 6}},
+    }]}), encoding="utf-8")
+    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the small change.")
+    updated = codex.pre_tool_use(call, config=config, state_root=state,
+                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert (updated.get("agent") == "opencode" and updated["model"] == candidate) is selected
+
+
 def test_mechanical_opencode_opt_out_keeps_configured_coder(workspace, config, monkeypatch):
     repo, state = workspace
     config["mechanical_opencode_enabled"] = False

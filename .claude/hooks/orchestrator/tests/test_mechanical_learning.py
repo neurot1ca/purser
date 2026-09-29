@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import codex
 import coder_config
@@ -384,6 +385,42 @@ def test_benchmark_unscored_candidates_skips_saved_and_records_missing(tmp_path,
     record = saved["benchmarks"][mechanical_learning.MECHANICAL_SUITE_VERSION]
     assert record["passed_count"] == 5 and record["total"] == 6
     assert isinstance(record["recorded_at"], str) and record["recorded_at"]
+
+
+def test_benchmark_unscored_candidates_caps_candidates_per_run(tmp_path, monkeypatch):
+    path = _inventory(tmp_path, "vendor/one-free", "vendor/two-free", "vendor/three-free")
+    calls = []
+
+    def benchmark(model, **_kwargs):
+        calls.append(model)
+        return {"suite_version": mechanical_learning.MECHANICAL_SUITE_VERSION,
+                "model": model, "passed_count": 5, "total": 6, "chores": []}
+
+    monkeypatch.setattr(mechanical_learning, "run_mechanical_benchmark", benchmark)
+    mechanical_learning.benchmark_unscored_candidates(root=tmp_path)
+    assert calls == ["vendor/one-free", "vendor/two-free"]
+
+
+def test_start_benchmark_launch_is_single_flight(tmp_path, monkeypatch):
+    _inventory(tmp_path, "vendor/new-free")
+    launches = []
+
+    def popen(args, **kwargs):
+        launches.append((args, kwargs))
+        return type("Process", (), {"pid": 1234})()
+
+    monkeypatch.setattr(mechanical_learning.subprocess, "Popen", popen)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: mechanical_learning.start_benchmark(root=tmp_path), range(2)))
+    assert sorted(results) == [False, True]
+    assert len(launches) == 1
+    args, kwargs = launches[0]
+    assert args[1:3] == [str(Path(mechanical_learning.__file__).resolve()), "--benchmark"]
+    assert args[3] == str(tmp_path)
+    assert kwargs["stdin"] == mechanical_learning.subprocess.DEVNULL
+    assert kwargs["stdout"] == mechanical_learning.subprocess.DEVNULL
+    assert kwargs["stderr"] == mechanical_learning.subprocess.DEVNULL
+    assert kwargs["creationflags"] == (0x08000000 | 0x00000200 if os.name == "nt" else 0)
 
 
 def test_interrupted_benchmark_leaves_candidate_unscored_and_ineligible(tmp_path, monkeypatch):

@@ -21,6 +21,7 @@ import state_root
 
 MIN_SAMPLES = 5
 BENCHMARK_MIN_PASSED = 5
+MAX_BENCHMARK_CANDIDATES = 2
 RECENT_SAMPLES = 20
 SHADOW_TIMEOUT_SECONDS = 45
 MECHANICAL_SUITE_VERSION = "1"
@@ -134,7 +135,7 @@ def benchmark_unscored_candidates(*, root: Path | None = None, runner: Any = Non
         _, value = _inventory(state)
         models = [item["id"] for item in value["candidates"]
                   if isinstance(item, dict) and isinstance(item.get("id"), str)
-                  and not _has_current_benchmark(item)]
+                  and not _has_current_benchmark(item)][:MAX_BENCHMARK_CANDIDATES]
     results = []
     for model in models:
         result = run_mechanical_benchmark(model, runner=runner)
@@ -262,6 +263,49 @@ def start_shadow(*, project_key: str, repository: str, prompt: str, accepted_rep
         shutil.rmtree(scratch, ignore_errors=True)
         lock.unlink(missing_ok=True)
         return False
+
+
+def start_benchmark(*, root: Path | None = None) -> bool:
+    """Launch at most one detached, bounded inventory benchmark at a time."""
+    state = root or state_root.default_state_root()
+    try:
+        _, value = _inventory(state)
+        if not any(isinstance(item, dict) and isinstance(item.get("id"), str)
+                   and not _has_current_benchmark(item) for item in value["candidates"]):
+            return False
+    except (OSError, ValueError, TypeError):
+        return False
+    lock = state / "opencode" / "benchmark.running.lock"
+    try:
+        descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        if not _shadow_lock_is_stale(lock):
+            return False
+        lock.unlink(missing_ok=True)
+        try:
+            descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            return False
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+        flags = 0x08000000 | 0x00000200 if os.name == "nt" else 0
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--benchmark", str(state)],
+                         cwd=str(Path(__file__).resolve().parent), stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=flags, start_new_session=os.name != "nt")
+        return True
+    except Exception:
+        lock.unlink(missing_ok=True)
+        return False
+
+
+def run_benchmarks(state: Path) -> None:
+    lock = state / "opencode" / "benchmark.running.lock"
+    try:
+        benchmark_unscored_candidates(root=state)
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def reports_agree(candidate: str, accepted: str) -> bool:
@@ -401,3 +445,5 @@ def run_shadow(job_path: Path) -> bool:
 
 if __name__ == "__main__" and len(sys.argv) == 3 and sys.argv[1] == "--shadow":
     run_shadow(Path(sys.argv[2]))
+elif __name__ == "__main__" and len(sys.argv) == 3 and sys.argv[1] == "--benchmark":
+    run_benchmarks(Path(sys.argv[2]))

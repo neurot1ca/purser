@@ -20,6 +20,7 @@ import compaction_advisor
 import coder_config
 import model_catalog
 import model_listing
+import mechanical_learning
 import policy
 
 
@@ -148,9 +149,7 @@ def detect(config_path: Path, project: Path, coder: str | None = None, model: st
         opencode["models"] = models
         opencode["options"] = _model_options("opencode", models)
         try:
-            model_listing.refresh_candidates(
-                model_catalog.load_cached_catalog()["providers"], model_ids=models
-            )
+            _refresh_opencode_candidates(models, model_catalog.load_cached_catalog()["providers"])
         except (OSError, UnicodeError, ValueError, KeyError, TypeError):
             pass
     codex = _agent("codex")
@@ -184,6 +183,14 @@ def detect(config_path: Path, project: Path, coder: str | None = None, model: st
         "trusted": str(project) in trust.get("paths", []) if isinstance(trust, dict) else False,
         "profile_exists": (project / ".orchestrator" / "profile.toml").exists(),
     }
+
+
+def _refresh_opencode_candidates(models: list[str], providers: dict) -> None:
+    if model_listing.refresh_candidates(providers, model_ids=models):
+        try:
+            mechanical_learning.start_benchmark()
+        except Exception:
+            pass
 
 
 def _opencode_models(binary: str) -> list[str]:
@@ -642,7 +649,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.list_models:
             catalog = model_catalog.load_catalog()
-            print(json.dumps(model_listing.list_models(args.coder, catalog["providers"]), indent=2))
+            listing = model_listing.list_models(args.coder, catalog["providers"])
+            if args.coder == "opencode" and listing.get("status") == "available":
+                _refresh_opencode_candidates([entry["id"] for entry in listing["models"]
+                                              if isinstance(entry, dict) and isinstance(entry.get("id"), str)],
+                                            catalog["providers"])
+            print(json.dumps(listing, indent=2))
             return 0
         family = None
         if args.mode:
@@ -659,6 +671,12 @@ def main(argv: list[str] | None = None) -> int:
             working = _working_opencode(args.model)
             if not working:
                 raise ValueError("OpenCode is unavailable or selected model is absent from opencode models")
+            try:
+                _refresh_opencode_candidates(
+                    working[1], model_catalog.load_cached_catalog()["providers"]
+                )
+            except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+                pass
         if args.coder == "agy" and not args.mode:
             binary = coder_config.agy_binary()
             if not binary or not args.model or args.model not in _agy_models(binary):
