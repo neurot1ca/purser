@@ -348,6 +348,7 @@ def test_detect_lists_opencode_models_once(site, monkeypatch):
     })
     monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {"opencode": {}}})
     monkeypatch.setattr(purser_init.model_listing.state_root, "default_state_root", lambda: site[0] / "state")
+    monkeypatch.setattr(mechanical_learning, "start_benchmark", lambda **_kwargs: None)
 
     def run(args, **_kwargs):
         if args[1:] == ["models"]:
