@@ -245,7 +245,8 @@ def test_existing_profile_never_overwritten(site):
     assert profile.read_bytes() == b"existing content\n"
 
 
-def test_detect_without_config(site, capsys):
+def test_detect_without_config(site, monkeypatch, capsys):
+    monkeypatch.setattr(mechanical_learning, "start_benchmark", lambda **_kwargs: None)
     assert run("--detect", "--json") == 0
     report = json.loads(capsys.readouterr().out)
     assert report["roles"] == {}
@@ -451,6 +452,7 @@ def test_mechanical_opencode_opt_in_and_opt_out(site, enabled):
 
 
 def test_agy_absent_is_hidden_from_coder_options(site, monkeypatch, capsys):
+    monkeypatch.setattr(mechanical_learning, "start_benchmark", lambda **_kwargs: None)
     original_which = shutil.which
     monkeypatch.setattr(coder_config, "agy_binary", lambda: None)
     monkeypatch.setattr(purser_init.shutil, "which", lambda name: None if name == "agy" else original_which(name))

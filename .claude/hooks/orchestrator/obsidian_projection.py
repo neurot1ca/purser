@@ -340,7 +340,9 @@ def _prepare_aggregate(aggregate: Mapping[str, Any]) -> dict[str, Any]:
             else:
                 prepared_context[key] = _number(key, value, integer=True) if value is not None else None
 
-    acceptance = aggregate.get("claude_acceptance", {})
+    acceptance = aggregate.get("claude_acceptance", {
+        "outcome": "unknown", "send_backs": 0, "applied_as_is": False, "sources": [],
+    })
     if (not isinstance(acceptance, Mapping)
             or set(acceptance) != {"outcome", "send_backs", "applied_as_is", "sources"}
             or acceptance.get("outcome") not in {"accepted", "rejected", "unknown"}

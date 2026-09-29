@@ -29,6 +29,7 @@ HOOK_SPECS: tuple[tuple[str, str | None, int], ...] = (
 CONTEXT_IO_HOOK_SPECS: tuple[tuple[str, str | None, int], ...] = (
     ("UserPromptSubmit", None, 60),
     ("PreToolUse", r"^Read$", 60),
+    ("PreCompact", None, 60),
     ("Stop", None, 60),
 )
 

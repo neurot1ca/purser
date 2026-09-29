@@ -66,7 +66,7 @@ def test_plugin_manifest_paths_and_registration():
     # Plugin commands are auto-discovered from the conventional commands/ directory.
     assert (ROOT / "commands/check.md").is_file()
     assert set(hooks["hooks"]) == {
-        "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "UserPromptSubmit", "SessionStart"
+        "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "UserPromptSubmit", "SessionStart", "PreCompact"
     }
     session_start, = hooks["hooks"]["SessionStart"]
     assert "matcher" not in session_start
