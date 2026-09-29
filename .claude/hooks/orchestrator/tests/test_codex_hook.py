@@ -2251,14 +2251,21 @@ def test_async_lease_waits_for_finalize_or_expired_job_record(workspace, monkeyp
     path.parent.mkdir(parents=True)
     job = {"jobId": job_id, "call": call, "state": "RUNNING"}
     path.write_text(json.dumps(job), encoding="utf-8")
-    monkeypatch.setattr(ledger.time, "time", lambda: 1000 + 100 + ledger.JOB_RETENTION_SECONDS + 1)
+    retention_after = 1000 + 100 + ledger.JOB_RETENTION_SECONDS
+    monkeypatch.setattr(ledger.time, "time", lambda: retention_after + 1)
     assert store.acquire("next", "next-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
     job.update(state="SUCCEEDED")
     path.write_text(json.dumps(job), encoding="utf-8")
+    monkeypatch.setattr(ledger.time, "time", lambda: retention_after - 1)
     assert store.acquire("next", "next-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
+    monkeypatch.setattr(ledger.time, "time", lambda: retention_after + 1)
+    assert store.acquire("next", "next-task", ["file0.py"])["status"] == ledger.OK
+    assert store.release("next")["status"] == ledger.OK
+    assert store.acquire("expired-owner", "expired-task", ["file0.py"],
+                         job_id=job_id, timeout_seconds=100)["status"] == ledger.OK
     job.update(state="EXPIRED", errorCode="JOB_EXPIRED")
     path.write_text(json.dumps(job), encoding="utf-8")
-    assert store.acquire("next", "next-task", ["file0.py"])["status"] == ledger.OK
+    assert store.acquire("after-expired", "after-expired-task", ["file0.py"])["status"] == ledger.OK
 
 
 def test_async_missing_job_record_requires_retention_cutoff(workspace, monkeypatch):
