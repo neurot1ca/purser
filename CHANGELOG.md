@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.48 — 2026-09-29
+
+- Purser returns from the fallback coder to the primary by approved rules, Stop accepts required lines written anywhere in the turn, the /compact suggestion appears as soon as the context threshold is crossed, a job is marked overdue only after the route p90, and reply jobs already applied with their thread no longer show as conflicts.
+
 ## 0.1.47 — 2026-09-28
 
 - When the primary coder is near its quota or fails with a typed error, Purser asks once to switch to the fallback coder and keeps later new jobs on it; an explicit codex_start ETA is kept; only jobs finished after this release appear on the board, each for two displays.
