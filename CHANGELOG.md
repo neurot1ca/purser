@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.49 — 2026-09-29
+
+- Parallel worktree jobs conflict less: conflict-prone paths are remembered and serialize overlapping jobs, a finished job is replayed onto the current checkout before review with one in-thread conflict resolution, codex_apply refuses a drifted reviewed diff and re-prepares it, applied or unapplied-for-two-hours jobs release their leases, and resolved:true records a hand-resolved conflict; free OpenCode models are scored by a bundled mechanical benchmark on candidate refresh, and a failed free job with proof of no work is taken over once by Codex; fallback cycles are tested end to end.
+
 ## 0.1.48 — 2026-09-29
 
 - Purser returns from the fallback coder to the primary by approved rules, Stop accepts required lines written anywhere in the turn, the /compact suggestion appears as soon as the context threshold is crossed, a job is marked overdue only after the route p90, and reply jobs already applied with their thread no longer show as conflicts.
