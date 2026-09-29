@@ -7,7 +7,7 @@ caller cannot accidentally interpret a failed inspection as an empty change.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 import hashlib
 import hmac
@@ -675,6 +675,138 @@ def job_patch(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
     return raw.decode("utf-8", "surrogateescape")
 
 
+def prepare_job_replay(
+    repo_root: str | os.PathLike[str], worktree_path: str | os.PathLike[str],
+    snapshot: str, recovery_path: str | os.PathLike[str], *, timeout: float = 30.0,
+    resolver: Callable[[Sequence[str], str], bool] | None = None,
+) -> dict[str, Any]:
+    """Replay a job delta onto the current checkout without writing to its index."""
+    root, worktree, recovery = (Path(repo_root).resolve(), Path(worktree_path).resolve(),
+                               Path(recovery_path).resolve())
+    state_path = recovery / "state.json"
+    def save_state(value: Mapping[str, Any]) -> None:
+        temporary = state_path.with_name(f".{state_path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+        with temporary.open("x", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, state_path)
+
+    def restore_worker_tree(base: str) -> None:
+        _run_git(worktree, ["read-tree", "--reset", base], timeout, "restoring worker index")
+        _run_git(worktree, ["clean", "-fdx"], timeout, "clearing replay worktree")
+        _run_git(worktree, ["checkout-index", "--all", "--force"], timeout,
+                 "restoring worker baseline")
+        shutil.copytree(recovery / "worker-tree", worktree, dirs_exist_ok=True, symlinks=True)
+
+    prior = None
+    if recovery.exists():
+        try:
+            prior = json.loads((recovery / "state.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"status": "uncertain", "snapshot": snapshot, "paths": []}
+        if prior.get("state") == "PREPARED":
+            return {"status": "prepared", "snapshot": prior["snapshot"],
+                    "paths": prior.get("paths", []),
+                    "resolved_conflicts": prior.get("resolved_conflicts", [])}
+        if prior.get("state") in {"CONFLICT", "BLOCKED"}:
+            return {"status": "conflict", "snapshot": snapshot,
+                    "paths": prior.get("conflicts", [])}
+        if prior.get("state") == "RESOLVING":
+            restore_worker_tree(prior.get("snapshot", snapshot))
+            conflicts = prior.get("conflicts", prior.get("paths", []))
+            save_state({**prior, "state": "BLOCKED", "conflicts": conflicts})
+            return {"status": "conflict", "snapshot": snapshot, "paths": conflicts}
+        if prior.get("state") != "PREPARING":
+            return {"status": "uncertain", "snapshot": snapshot, "paths": []}
+        original = (recovery / "worker.patch").read_bytes().decode("utf-8", "surrogateescape")
+        paths = prior.get("paths", [])
+    else:
+        original = job_patch(worktree, snapshot)
+        paths = None
+    git_dir = Path(_decode_path(_run_git(root, ["rev-parse", "--absolute-git-dir"], timeout,
+                                         "locating replay index directory")).strip())
+    index_path = git_dir / f"purser-replay-{os.getpid()}-{time.time_ns()}.index"
+    env = {"GIT_INDEX_FILE": os.fspath(index_path)}
+    try:
+        _run_git(root, ["read-tree", "HEAD"], timeout, "initializing replay snapshot index", env=env)
+        _run_git(root, ["add", "-A"], timeout, "capturing current checkout state", env=env)
+        current = _decode_path(_run_git(root, ["write-tree"], timeout,
+                                        "writing current checkout snapshot", env=env)).strip()
+    finally:
+        index_path.unlink(missing_ok=True)
+        Path(os.fspath(index_path) + ".lock").unlink(missing_ok=True)
+    if current == snapshot and prior is None:
+        return {"status": "unchanged", "snapshot": snapshot, "paths": []}
+    raw = original.encode("utf-8", "surrogateescape")
+    if paths is None and raw:
+        names = _run_git(worktree, ["apply", "--numstat", "-z", "-"], timeout,
+                         "listing replay paths", input_data=raw)
+        paths = [_decode_path(row.split(b"\t", 2)[2]) for row in names.split(b"\0") if row]
+    if paths is None:
+        paths = []
+    if prior is not None:
+        _run_git(worktree, ["read-tree", "--reset", snapshot], timeout, "restoring interrupted replay index")
+        _run_git(worktree, ["clean", "-fdx"], timeout, "clearing interrupted replay")
+        _run_git(worktree, ["checkout-index", "--all", "--force"], timeout,
+                 "restoring interrupted replay baseline")
+        shutil.copytree(recovery / "worker-tree", worktree, dirs_exist_ok=True, symlinks=True)
+    else:
+        recovery.mkdir(parents=True)
+        shutil.copytree(worktree, recovery / "worker-tree", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(".git"), symlinks=True)
+        patch_path = recovery / "worker.patch"
+        with patch_path.open("xb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    save_state({"state": "PREPARING", "snapshot": snapshot,
+                "target": current, "paths": paths})
+    _run_git(worktree, ["read-tree", "--reset", current], timeout, "resetting replay index")
+    _run_git(worktree, ["clean", "-fdx"], timeout, "clearing replay worktree")
+    _run_git(worktree, ["checkout-index", "--all", "--force"], timeout,
+             "restoring current checkout snapshot")
+    if raw:
+        merge_conflicts: list[str] = []
+        try:
+            merged = _try_three_way_job_patch(
+                root, paths, raw, conflict_destination=worktree,
+                conflict_paths=merge_conflicts,
+            )
+        except _InspectionError:
+            restore_worker_tree(snapshot)
+            conflicts = merge_conflicts or list(paths)
+            save_state({"state": "BLOCKED", "snapshot": snapshot,
+                        "target": current, "paths": paths, "conflicts": conflicts})
+            return {"status": "conflict", "snapshot": snapshot, "paths": conflicts}
+        if merged is None:
+            conflicts = merge_conflicts or list(paths)
+            if resolver is not None:
+                save_state({"state": "RESOLVING", "snapshot": snapshot,
+                            "target": current, "paths": paths, "conflicts": conflicts})
+                try:
+                    resolved = resolver(conflicts, current) is True
+                    resolved = resolved and not any(
+                        _has_conflict_markers(worktree / path) for path in conflicts
+                    )
+                except Exception:
+                    resolved = False
+                if resolved:
+                    save_state({"state": "PREPARED", "snapshot": current, "paths": paths,
+                                "resolved_conflicts": conflicts})
+                    return {"status": "prepared", "snapshot": current, "paths": paths,
+                            "resolved_conflicts": conflicts}
+            restore_worker_tree(snapshot)
+            save_state({"state": "BLOCKED", "snapshot": snapshot,
+                        "target": current, "paths": paths, "conflicts": conflicts})
+            return {"status": "conflict", "snapshot": snapshot, "paths": conflicts}
+        if merged:
+            _run_git(worktree, ["apply", "--binary", "-"], timeout,
+                     "applying replay result", input_data=merged)
+    save_state({"state": "PREPARED", "snapshot": current, "paths": paths})
+    return {"status": "prepared", "snapshot": current, "paths": paths}
+
+
 def _is_job_cache_path(path: str) -> bool:
     parts = path.replace("\\", "/").split("/")
     return any(part in {".pytest_cache", "__pycache__", "node_modules"} for part in parts) or path.endswith(".pyc")
@@ -824,7 +956,10 @@ def apply_job_patch(repo_root: str | os.PathLike[str], patch: str) -> dict[str, 
         return {"applied": False, "conflicts": conflicts, "applicable": applicable}
 
 
-def _try_three_way_job_patch(root: Path, paths: Sequence[str], patch: bytes) -> bytes | None:
+def _try_three_way_job_patch(
+    root: Path, paths: Sequence[str], patch: bytes, *,
+    conflict_destination: Path | None = None, conflict_paths: list[str] | None = None,
+) -> bytes | None:
     """Merge a failed patch in an isolated scratch tree; return only its merge delta."""
     scratch_parent = root / ".tmp"
     scratch_parent.mkdir(exist_ok=True)
@@ -866,12 +1001,35 @@ def _try_three_way_job_patch(root: Path, paths: Sequence[str], patch: bytes) -> 
                  "staging current job target paths", env=env)
         before = _decode_path(_run_git(worktree, ["write-tree"], 30.0,
                                        "saving isolated merge base", env=env)).strip()
-        _run_git(worktree, ["apply", "--3way", "--index", "-"], 30.0,
-                 "merging job patch", input_data=patch, env=env)
-        unmerged = _run_git(worktree, ["ls-files", "-u", "-z", "--", *pathspecs], 30.0,
+        apply_error = None
+        try:
+            _run_git(worktree, ["apply", "--3way", "--index", "-"], 30.0,
+                     "merging job patch", input_data=patch, env=env)
+        except _InspectionError as error:
+            apply_error = error  # A conflicted apply leaves stages and markers for inspection.
+        unmerged = _run_git(worktree, ["diff", "--name-only", "--diff-filter=U", "-z"], 30.0,
                             "checking isolated merge conflicts", env=env)
-        if unmerged or any(_has_conflict_markers(worktree / path) for path in paths):
+        conflicts = {_decode_path(path) for path in unmerged.split(b"\0") if path}
+        conflicts.update(path for path in paths if _has_conflict_markers(worktree / path))
+        if conflicts:
+            if conflict_paths is not None:
+                conflict_paths.extend(sorted(conflicts))
+            if conflict_destination is not None:
+                for name in paths:
+                    source, target = worktree / name, conflict_destination / name
+                    if not target.parent.resolve().is_relative_to(conflict_destination):
+                        raise _InspectionError("GIT_FAILED", "Replay path traverses a worktree symlink.")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if source.is_symlink():
+                        target.unlink(missing_ok=True)
+                        target.symlink_to(os.readlink(source), target_is_directory=source.is_dir())
+                    elif source.is_file():
+                        shutil.copy2(source, target)
+                    elif target.exists() or target.is_symlink():
+                        target.unlink()
             return None
+        if apply_error is not None:
+            raise apply_error
         after = _decode_path(_run_git(worktree, ["write-tree"], 30.0,
                                       "saving merged job tree", env=env)).strip()
         return _run_git(worktree, ["diff", "--binary", "--no-ext-diff", "--no-textconv",

@@ -965,6 +965,116 @@ def test_dirty_worktree_snapshot_reviews_only_worker_diff(workspace, config, mon
         finding["code"] for finding in bundle["findings"]}
 
 
+def test_async_worktree_replay_conflict_blocks_reviewer_and_forces_full(workspace, config):
+    repo, state = workspace
+    _, job_id, job_path = async_started(
+        workspace, config, prompt=orch(task="worktree-replay-conflict", scope="file1.py") + "\nWork."
+    )
+    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
+    worktree = Path(snapshot["path"])
+    (worktree / "file1.py").write_text("worker = True\n", encoding="utf-8")
+    (repo / "file1.py").write_text("checkout = True\n", encoding="utf-8")
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
+               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo))
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    reviewer_calls = []
+    response = codex.post_tool_use({**async_followup(RESULT_TOOL, job_id),
+        "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+            "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+            "content": "done", "worktreePath": snapshot["path"],
+            "servedAgent": "opencode", "servedModel": "test-model"}}},
+        config=config, state_root=state, repo_root=repo,
+        reviewer=lambda **kwargs: reviewer_calls.append(kwargs),
+        micro_repair=lambda *_args, **_kwargs: pytest.fail("non-Codex resolver called"))
+    bundle = response_bundle(response, config)
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert reviewer_calls == []
+    learned = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))._read()["conflicts"]
+    assert any(item["path"] == "file1.py" for item in learned)
+
+
+def test_async_worktree_replay_resolves_same_codex_thread_before_review(workspace, config, monkeypatch):
+    repo, state = workspace
+    _, job_id, job_path = async_started(
+        workspace, config, prompt=orch(task="worktree-replay-resolver", scope="file1.py") + "\nWork."
+    )
+    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
+    worktree = Path(snapshot["path"])
+    (worktree / "file1.py").write_text("worker = True\n", encoding="utf-8")
+    (repo / "file1.py").write_text("checkout = True\n", encoding="utf-8")
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
+               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo))
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    monkeypatch.setattr(policy, "reviewer1_gate",
+                        lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
+    resolver_calls, reviewer_calls = [], []
+
+    def resolve(thread_id, _findings, root, **kwargs):
+        resolver_calls.append((thread_id, kwargs))
+        assert Path(root) == worktree
+        (worktree / "file1.py").write_text("worker = True\ncheckout = True\n", encoding="utf-8")
+        return {"repaired": True}
+
+    response = codex.post_tool_use({**async_followup(RESULT_TOOL, job_id),
+        "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+            "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+            "content": "done", "worktreePath": snapshot["path"]}}},
+        config=config, state_root=state, repo_root=repo,
+        reviewer=lambda **kwargs: reviewer_calls.append(kwargs) or {
+            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"},
+        micro_repair=resolve)
+    bundle = response_bundle(response, config)
+    assert resolver_calls and resolver_calls[0][0] == "async-thread"
+    assert "file1.py" in resolver_calls[0][1]["prompt"]
+    prepared_state = json.loads((state / "preparations" / job_id / "state.json").read_text(encoding="utf-8"))
+    assert prepared_state["snapshot"] in resolver_calls[0][1]["prompt"]
+    assert reviewer_calls
+    assert bundle["changed_paths"] == ["file1.py"]
+    learned = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))._read()["conflicts"]
+    assert any(item["path"] == "file1.py" for item in learned)
+
+
+def test_job_conflict_resolver_skips_missing_thread_id():
+    calls = []
+    assert not codex._resolve_job_conflicts(
+        None, ["file1.py"], "snapshot-id", Path.cwd(),
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    assert calls == []
+
+
+def test_async_worktree_replay_resolver_timeout_blocks_and_restores_worker(workspace, config):
+    repo, state = workspace
+    _, job_id, job_path = async_started(
+        workspace, config, prompt=orch(task="worktree-replay-timeout", scope="file1.py") + "\nWork."
+    )
+    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
+    worktree = Path(snapshot["path"])
+    (worktree / "file1.py").write_text("worker = True\n", encoding="utf-8")
+    original_patch = ledger.job_patch(worktree, snapshot["snapshot"])
+    (repo / "file1.py").write_text("checkout = True\n", encoding="utf-8")
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
+               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo))
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    reviewer_calls = []
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired("codex-reply", 60)
+
+    response = codex.post_tool_use({**async_followup(RESULT_TOOL, job_id),
+        "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
+            "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
+            "content": "done", "worktreePath": snapshot["path"]}}},
+        config=config, state_root=state, repo_root=repo,
+        reviewer=lambda **kwargs: reviewer_calls.append(kwargs), micro_repair=timeout)
+    assert response_bundle(response, config)["claude_review_mode"] == policy.FULL
+    assert reviewer_calls == []
+    assert ledger.job_patch(worktree, snapshot["snapshot"]) == original_patch
+
+
 def test_operation_concurrent_commit_is_not_worker_delta(workspace, config):
     repo, state = workspace
     call = event(prompt=orch(phase="operation", route="operation", scope=None) + "\nInspect.")

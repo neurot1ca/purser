@@ -895,6 +895,139 @@ def test_job_patch_excludes_preexisting_user_changes_and_applies_to_dirty_tree(r
     assert git(repo, "diff", "--cached", "--binary").stdout == before_index
 
 
+def test_prepare_job_replay_uses_checkout_snapshot_without_touching_checkout(repo, tmp_path):
+    (repo / "notes.txt").write_text("staged checkout\n", encoding="utf-8")
+    git(repo, "add", "notes.txt")
+    result = ledger.create_job_worktree(repo, "9" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 9\n", encoding="utf-8")
+    (repo / "notes.txt").write_text("checkout edit\n", encoding="utf-8")
+    (repo / "local.txt").write_text("untracked checkout file\n", encoding="utf-8")
+    before_index = git(repo, "diff", "--cached", "--binary").stdout
+    before_files = ((repo / "notes.txt").read_bytes(), (repo / "local.txt").read_bytes())
+    assert before_index
+
+    outcome = ledger.prepare_job_replay(repo, worktree, result["snapshot"], tmp_path / "recovery")
+
+    assert outcome["status"] == "prepared"
+    assert (worktree / "notes.txt").read_text(encoding="utf-8") == "checkout edit\n"
+    assert (worktree / "local.txt").read_text(encoding="utf-8") == "untracked checkout file\n"
+    prepared_patch = ledger.job_patch(worktree, outcome["snapshot"])
+    assert prepared_patch.count("diff --git") == 1
+    assert "notes.txt" not in prepared_patch
+    assert git(repo, "diff", "--cached", "--binary").stdout == before_index
+    assert ((repo / "notes.txt").read_bytes(), (repo / "local.txt").read_bytes()) == before_files
+    assert (tmp_path / "recovery" / "worker-tree" / "src" / "target.py").read_text(encoding="utf-8") == "value = 9\n"
+
+
+def test_prepare_job_replay_skips_unchanged_checkout(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "c" * 64, tmp_path / "worktrees")
+    outcome = ledger.prepare_job_replay(
+        repo, result["path"], result["snapshot"], tmp_path / "recovery"
+    )
+    assert outcome == {"status": "unchanged", "snapshot": result["snapshot"], "paths": []}
+    assert not (tmp_path / "recovery").exists()
+
+
+def test_prepare_job_replay_blocks_conflict_and_preserves_worker_tree(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "a" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    original_patch = ledger.job_patch(worktree, result["snapshot"])
+    (repo / "src" / "target.py").write_text("value = 3\n", encoding="utf-8")
+    before_index = git(repo, "diff", "--cached", "--binary").stdout
+
+    outcome = ledger.prepare_job_replay(repo, worktree, result["snapshot"], tmp_path / "recovery")
+
+    assert outcome == {"status": "conflict", "snapshot": result["snapshot"],
+                       "paths": ["src/target.py"]}
+    assert ledger.job_patch(worktree, result["snapshot"]) == original_patch
+    assert (tmp_path / "recovery" / "worker-tree" / "src" / "target.py").read_text(encoding="utf-8") == "value = 2\n"
+    assert (repo / "src" / "target.py").read_text(encoding="utf-8") == "value = 3\n"
+    assert git(repo, "diff", "--cached", "--binary").stdout == before_index
+
+
+def test_prepare_job_replay_recovers_interrupted_preparation(repo, tmp_path, monkeypatch):
+    result = ledger.create_job_worktree(repo, "b" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 9\n", encoding="utf-8")
+    (repo / "notes.txt").write_text("checkout edit\n", encoding="utf-8")
+    recovery = tmp_path / "recovery"
+    original = ledger._try_three_way_job_patch
+
+    def interrupted(*_args, **_kwargs):
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr(ledger, "_try_three_way_job_patch", interrupted)
+    with pytest.raises(OSError, match="simulated interruption"):
+        ledger.prepare_job_replay(repo, worktree, result["snapshot"], recovery)
+    assert json.loads((recovery / "state.json").read_text(encoding="utf-8"))["state"] == "PREPARING"
+    assert (recovery / "worker-tree" / "src" / "target.py").read_text(encoding="utf-8") == "value = 9\n"
+
+    monkeypatch.setattr(ledger, "_try_three_way_job_patch", original)
+    resumed = ledger.prepare_job_replay(repo, worktree, result["snapshot"], recovery)
+    assert resumed["status"] == "prepared"
+    assert "notes.txt" not in ledger.job_patch(worktree, resumed["snapshot"])
+
+
+def test_prepare_job_replay_accepts_resolved_conflict(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "d" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    (worktree / "src" / "helper.py").write_text("helper = 2\n", encoding="utf-8")
+    (repo / "src" / "target.py").write_text("value = 3\n", encoding="utf-8")
+    calls = []
+
+    def resolve(paths, target):
+        calls.append((paths, target))
+        assert (worktree / paths[0]).read_text(encoding="utf-8").count("<<<<<<<") == 1
+        (worktree / paths[0]).write_text("value = 2\ncheckout = True\n", encoding="utf-8")
+        return True
+
+    outcome = ledger.prepare_job_replay(
+        repo, worktree, result["snapshot"], tmp_path / "recovery", resolver=resolve
+    )
+    assert outcome["status"] == "prepared"
+    assert outcome["resolved_conflicts"] == ["src/target.py"]
+    assert calls and calls[0][0] == ["src/target.py"]
+    assert calls[0][1] == outcome["snapshot"]
+    prepared_patch = ledger.job_patch(worktree, outcome["snapshot"])
+    assert "src/helper.py" in prepared_patch
+    assert "helper = 2" in prepared_patch
+
+
+def test_prepare_job_replay_rejects_resolver_markers(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "e" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    original_patch = ledger.job_patch(worktree, result["snapshot"])
+    (repo / "src" / "target.py").write_text("value = 3\n", encoding="utf-8")
+
+    outcome = ledger.prepare_job_replay(
+        repo, worktree, result["snapshot"], tmp_path / "recovery",
+        resolver=lambda _paths, _target: True,
+    )
+    assert outcome["status"] == "conflict"
+    assert ledger.job_patch(worktree, result["snapshot"]) == original_patch
+
+
+def test_prepare_job_replay_restores_after_resolver_timeout(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "f" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    original_patch = ledger.job_patch(worktree, result["snapshot"])
+    (repo / "src" / "target.py").write_text("value = 3\n", encoding="utf-8")
+
+    def timeout(_paths, _target):
+        raise subprocess.TimeoutExpired("codex-reply", 60)
+
+    outcome = ledger.prepare_job_replay(
+        repo, worktree, result["snapshot"], tmp_path / "recovery", resolver=timeout
+    )
+    assert outcome["status"] == "conflict"
+    assert ledger.job_patch(worktree, result["snapshot"]) == original_patch
+
+
 def test_apply_job_patch_conflict_is_atomic_and_reports_path(repo, tmp_path):
     result = ledger.create_job_worktree(repo, "c" * 64, tmp_path / "worktrees")
     worktree = Path(result["path"])

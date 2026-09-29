@@ -526,9 +526,10 @@ def _attempt_in_hook_micro_repair(
     repo_root: Path,
     scope: Sequence[str] | None = None,
     timeout_seconds: int = 60,
+    prompt: str | None = None,
 ) -> dict[str, Any]:
     """Attempt 1 bounded micro-repair via codex exec resume with workspace sandbox."""
-    if not thread_id or not findings:
+    if not thread_id or (not findings and not prompt):
         return {"repaired": False, "reason": "NO_THREAD_OR_FINDINGS"}
     bullet_points = "\n".join(
         f"- {f.get('code')}: {f.get('message')}"
@@ -536,7 +537,7 @@ def _attempt_in_hook_micro_repair(
         if isinstance(f, Mapping) and f.get("code")
     )[:500]
     scope_text = f"\nYou are strictly restricted to modifying files within scope: {', '.join(scope)}." if scope else ""
-    repair_prompt = (
+    repair_prompt = prompt or (
         "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n"
         f"{bullet_points}{scope_text}\n"
         "Please fix these issues directly in the worktree and ensure tests pass."
@@ -552,7 +553,7 @@ def _attempt_in_hook_micro_repair(
     ]
     try:
         sys.stderr.write(
-            f"[orchestrator] Reviewer-1 requested changes; entering in-hook micro-repair with Codex (timeout={timeout_seconds}s)...\n"
+            f"[orchestrator] Entering same-thread Codex repair (timeout={timeout_seconds}s)...\n"
         )
         sys.stderr.flush()
         proc = subprocess.run(
@@ -583,6 +584,18 @@ def _attempt_in_hook_micro_repair(
 
 
 MICRO_REPAIR: Callable[..., Mapping[str, Any]] = _attempt_in_hook_micro_repair
+
+
+def _resolve_job_conflicts(
+    thread_id: Any, paths: Sequence[str], target: str, worktree: Path,
+    resume: Callable[..., Mapping[str, Any]],
+) -> bool:
+    if not isinstance(thread_id, str) or not thread_id:
+        return False
+    prompt = (f"Resolve Git conflicts in {', '.join(paths)} against checkout snapshot {target}. "
+              "Keep the job changes; do not commit.")
+    result = resume(thread_id, [], worktree, timeout_seconds=60, prompt=prompt)
+    return isinstance(result, Mapping) and result.get("repaired") is True
 
 
 class WiringError(RuntimeError):
@@ -2824,6 +2837,51 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                            attempted_models=value.get("attemptedModels", []))
             _atomic_json_write(_pending_path(root, original), pending)
         synthetic = dict(original, duration_ms=duration)
+        preparation_error = None
+        if success and worktree_path:
+            resolver = None
+            if pending.get("agent", "codex") == "codex":
+                def resolve_conflicts(paths: Sequence[str], target: str) -> bool:
+                    return _resolve_job_conflicts(
+                        value.get("threadId"), paths, target, Path(worktree_path),
+                        micro_repair or MICRO_REPAIR,
+                    )
+                resolver = resolve_conflicts
+            try:
+                prepared = ledger.prepare_job_replay(
+                    job["repoRoot"], worktree_path, job["snapshot"],
+                    root / "preparations" / index["jobId"],
+                    resolver=resolver,
+                )
+                if prepared["status"] == "prepared":
+                    job["snapshot"] = prepared["snapshot"]
+                    _atomic_json_write(root / "codex_exec_mcp" / "jobs" / f"{index['jobId']}.json", job)
+                    pending = dict(pending, worktree_snapshot=prepared["snapshot"])
+                    _atomic_json_write(_pending_path(root, original), pending)
+                    resolved_paths = prepared.get("resolved_conflicts", [])
+                    if resolved_paths:
+                        try:
+                            ledger.ScopeLeases(root / "projects" / index["project_key"]).record_conflicts(
+                                resolved_paths
+                            )
+                        except (OSError, ValueError, TypeError):
+                            pass
+                elif prepared["status"] == "conflict":
+                    preparation_error = "Worker replay conflict paths: " + ", ".join(prepared["paths"])
+                    try:
+                        ledger.ScopeLeases(root / "projects" / index["project_key"]).record_conflicts(
+                            prepared["paths"]
+                        )
+                    except (OSError, ValueError, TypeError):
+                        pass
+                elif prepared["status"] != "unchanged":
+                    preparation_error = "Worker replay state is uncertain; FULL review required."
+            except Exception as error:
+                preparation_error = f"Worker replay preparation failed ({type(error).__name__}); FULL review required."
+        if preparation_error:
+            success = False
+            value = {"errorCode": "JOB_REPLAY_PREPARATION_FAILED"}
+            synthetic["error"] = preparation_error
         if success:
             synthetic.update(hook_event_name="PostToolUse", tool_response={"content": [
                 {"type": "text", "text": json_transport.dumps(value)}]})
@@ -2840,7 +2898,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                                                     _load_config(config), success=True)
         else:
             synthetic.update(hook_event_name="PostToolUseFailure",
-                             error=event.get("error") or value.get("errorCode") or "ASYNC_TERMINAL_FAILURE")
+                             error=preparation_error or event.get("error")
+                             or value.get("errorCode") or "ASYNC_TERMINAL_FAILURE")
             response = post_tool_use_failure(synthetic, state_root=state_root)
             artifact = (root / "raw_tool_outputs" / f"{index['call_key']}-failure.json").resolve()
             if not artifact.is_file():
