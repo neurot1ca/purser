@@ -32,6 +32,7 @@ EVENT_TYPES = frozenset(
         "CONTEXT_IO_TURN_RECORDED",
         "CODEX_RESULT_UNFETCHED",
         "CLAUDE_DECISION_RECORDED",
+        "MECHANICAL_EDIT_OBSERVED",
     }
 )
 
@@ -279,6 +280,9 @@ _PAYLOAD_FIELDS = {
     "CONTEXT_IO_TURN_RECORDED": CONTEXT_IO_PAYLOAD_FIELDS,
     "CODEX_RESULT_UNFETCHED": frozenset({"route", "code"}),
     "CLAUDE_DECISION_RECORDED": frozenset({"decision", "task_type", "source"}),
+    "MECHANICAL_EDIT_OBSERVED": frozenset(
+        {"thread_id", "classification", "fingerprint", "changed_file_count", "hunk_count"}
+    ),
 }
 
 
@@ -328,6 +332,12 @@ def _project_key(value: Any, *, required: bool) -> str | None:
 def _payload_value(name: str, value: Any) -> Any:
     if name == "decision" and isinstance(value, str) and value in {"accepted", "send_back", "rejected"}:
         return value
+    if name == "classification" and value in {"rename", "unclassified"}:
+        return value
+    if name == "fingerprint":
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError("mechanical fingerprint is invalid")
+        return value
     if name == "task_type" and isinstance(value, str) and value in CLAUDE_TASK_TYPES:
         return value
     if name == "source":
@@ -366,6 +376,8 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name in {
         "changed_paths_count",
+        "changed_file_count",
+        "hunk_count",
         "old_rank",
         "new_rank",
         "halt_path_count",

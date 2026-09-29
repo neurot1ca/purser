@@ -4132,6 +4132,13 @@ def post_tool_use(
                     "delta": delta,
                     "classification": classification,
                 }
+                for name, value in (
+                    ("thread_id", thread_id),
+                    ("project_key", project_namespace),
+                    ("state_root", runtime_root),
+                ):
+                    if value is not None and (accepts_kwargs or name in params):
+                        reviewer_kwargs[name] = value
                 if (accepts_kwargs or "task_objective" in params) and pending.get("task_objective"):
                     reviewer_kwargs["task_objective"] = pending["task_objective"]
                 if (accepts_kwargs or "acceptance_criteria" in params) and pending.get("acceptance_criteria"):

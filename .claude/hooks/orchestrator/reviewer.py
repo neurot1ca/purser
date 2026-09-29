@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ import uuid
 
 import ledger
 import policy
+import telemetry
 
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -74,6 +76,98 @@ _BUILD_SPEC_HEADINGS = (
     "Hard constraints",
 )
 _DIFF_REDACTION_MARKER = "[[REDACTED: PRE-EXISTING OR REMOVED SENSITIVE SPAN]]"
+_IDENTIFIER_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _identifier_replacement(old_line: str, new_line: str) -> tuple[str, str] | None:
+    old_tokens = list(_IDENTIFIER_TOKEN.finditer(old_line))
+    new_tokens = list(_IDENTIFIER_TOKEN.finditer(new_line))
+    if len(old_tokens) != len(new_tokens):
+        return None
+    changed: tuple[str, str] | None = None
+    old_end = new_end = 0
+    for old_token, new_token in zip(old_tokens, new_tokens):
+        if old_line[old_end:old_token.start()] != new_line[new_end:new_token.start()]:
+            return None
+        if old_token.group() != new_token.group():
+            if changed is not None:
+                return None
+            changed = (old_token.group(), new_token.group())
+        old_end, new_end = old_token.end(), new_token.end()
+    if old_line[old_end:] != new_line[new_end:]:
+        return None
+    return changed
+
+
+def _mechanical_fingerprint(
+    diff: str, changed_paths: Sequence[str] | None = None
+) -> dict[str, Any]:
+    """Fingerprint only consistent one-token identifier renames; retain no diff text."""
+
+    file_paths: list[str] = []
+    removed: list[str] = []
+    added: list[str] = []
+    pairs: list[tuple[str, str]] = []
+    hunk_count = 0
+    in_hunk = False
+
+    def finish_hunk() -> None:
+        nonlocal removed, added, in_hunk
+        if not in_hunk:
+            return
+        if len(removed) != len(added) or not removed:
+            pairs.append(("", ""))
+        else:
+            pairs.extend(zip(removed, added))
+        removed, added, in_hunk = [], [], False
+
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            finish_hunk()
+            continue
+        if not in_hunk and line.startswith("+++ "):
+            path = line[4:].strip()
+            if path != "/dev/null":
+                file_paths.append(path[2:] if path.startswith(("a/", "b/")) else path)
+            continue
+        if line.startswith("@@"):
+            finish_hunk()
+            hunk_count += 1
+            in_hunk = True
+            continue
+        if not in_hunk:
+            continue
+        if line.startswith("\\"):
+            continue
+        if line.startswith("-"):
+            removed.append(line[1:])
+        elif line.startswith("+"):
+            added.append(line[1:])
+        elif not line.startswith(" "):
+            pairs.append(("", ""))
+    finish_hunk()
+
+    paths = list(changed_paths) if changed_paths is not None else file_paths
+    paths = sorted(set(path.replace("\\", "/") for path in paths))
+    extensions = sorted(PurePosixPath(path).suffix for path in paths)
+    rename: tuple[str, str] | None = None
+    classified = bool(pairs) and bool(paths) and hunk_count > 0
+    for old_line, new_line in pairs:
+        pair = _identifier_replacement(old_line, new_line)
+        if pair is None or (rename is not None and pair != rename):
+            classified = False
+            break
+        rename = pair
+    fingerprint = None
+    if classified and rename is not None:
+        encoded = f"rename:{rename[0]}->{rename[1]}:{','.join(extensions)}"
+        fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return {
+        "classification": "rename" if fingerprint is not None else "unclassified",
+        "fingerprint": fingerprint,
+        "changed_file_count": len(paths),
+        "hunk_count": hunk_count,
+    }
 
 
 class _AgyAdapter:
@@ -1720,6 +1814,9 @@ def _seam_materials(
 def review(
     *,
     task_id: str,
+    thread_id: str | None = None,
+    project_key: str | None = None,
+    state_root: str | os.PathLike[str] | None = None,
     phase: str,
     route: str,
     model: str,
@@ -1762,6 +1859,21 @@ def review(
             acceptance_criteria=acceptance_criteria,
             authority_sources=authority_sources,
         )
+        try:
+            mechanical = _mechanical_fingerprint(
+                materials["delegated_diff"], delta.get("changed_paths")
+            )
+            telemetry.emit(
+                "MECHANICAL_EDIT_OBSERVED",
+                task_id=task_id,
+                project_key=project_key,
+                state_root=state_root,
+                **({"thread_id": thread_id} if thread_id else {}),
+                **mechanical,
+            )
+        except BaseException:
+            # Fingerprinting and telemetry are observational and never gate review.
+            pass
         return review_materials(
             materials, config=config, repo_root=repo_root,
             reviewer_agent=reviewer_agent, reviewer_model=reviewer_model,

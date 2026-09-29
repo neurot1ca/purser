@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -1105,6 +1106,103 @@ def test_reviewer_delegated_diff_with_valid_delta(baseline_repo):
     rev_paths, diff = reviewer._delegated_diff(repo, delta)  # noqa: SLF001
     assert rev_paths == ["existing.py"]
     assert "modified = True" in diff
+
+
+@pytest.mark.parametrize("diff", [
+    "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n-old_name = 1\n-old_name = 2\n+new_name = 1\n+other_name = 2\n",
+    "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old_name = 1\n+new_name = 2\n",
+])
+def test_mechanical_fingerprint_rejects_rename_near_matches(diff):
+    result = reviewer._mechanical_fingerprint(diff)  # noqa: SLF001
+    assert result["classification"] == "unclassified"
+    assert result["fingerprint"] is None
+
+
+def test_mechanical_fingerprint_classifies_consistent_identifier_rename():
+    diff = (
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+        "@@ -1 +1 @@\n-old_name = 1\n+new_name = 1\n"
+    )
+    result = reviewer._mechanical_fingerprint(diff)  # noqa: SLF001
+    assert result["classification"] == "rename"
+    assert result["fingerprint"] == hashlib.sha256(
+        b"rename:old_name->new_name:.py"
+    ).hexdigest()
+    assert (result["changed_file_count"], result["hunk_count"]) == (1, 1)
+
+
+def test_fingerprint_failure_does_not_change_review_result(monkeypatch, config):
+    expected = reviewer.CompletedReview(
+        result=policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+        validation="PASS",
+        findings=(),
+        conversation_id="conversation",
+        reviewer1_model_requested=reviewer.PINNED_MODEL,
+    )
+    monkeypatch.setattr(reviewer, "_load_config", lambda _value: config)
+    monkeypatch.setattr(reviewer, "_seam_materials", lambda *args, **kwargs: materials())
+    monkeypatch.setattr(reviewer, "review_materials", lambda *args, **kwargs: expected)
+    monkeypatch.setattr(
+        reviewer, "_mechanical_fingerprint",
+        lambda _diff, _paths=None: (_ for _ in ()).throw(RuntimeError("fingerprint failed")),
+        raising=False,
+    )
+    result = reviewer.review(
+        task_id="task",
+        thread_id="thread",
+        phase="implementation",
+        route="normal",
+        model="coder",
+        effort="medium",
+        repo_root=Path.cwd(),
+        delta={},
+        classification=None,
+    )
+    assert result is expected
+
+
+def test_reviewer_emits_only_mechanical_metadata(tmp_path, monkeypatch, config):
+    expected = reviewer.CompletedReview(
+        result=policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+        validation="PASS",
+        findings=(),
+        conversation_id="conversation",
+        reviewer1_model_requested=reviewer.PINNED_MODEL,
+    )
+    diff = (
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+        "@@ -1 +1 @@\n-old_name = 1\n+new_name = 1\n"
+    )
+    monkeypatch.setattr(reviewer, "_load_config", lambda _value: config)
+    monkeypatch.setattr(reviewer, "_seam_materials", lambda *args, **kwargs: {**materials(), "delegated_diff": diff})
+    monkeypatch.setattr(reviewer, "review_materials", lambda *args, **kwargs: expected)
+    result = reviewer.review(
+        task_id="task",
+        thread_id="thread",
+        project_key="0123456789abcdef",
+        state_root=tmp_path,
+        phase="implementation",
+        route="normal",
+        model="coder",
+        effort="medium",
+        repo_root=Path.cwd(),
+        delta={"changed_paths": ["a.py"]},
+        classification=None,
+    )
+    event_path = (
+        tmp_path / "telemetry" / "events" / "by_task" / "task.jsonl"
+    )
+    event, = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+    assert result is expected
+    assert event["event_type"] == "MECHANICAL_EDIT_OBSERVED"
+    assert event["payload"] == {
+        "thread_id": "thread",
+        "classification": "rename",
+        "fingerprint": hashlib.sha256(b"rename:old_name->new_name:.py").hexdigest(),
+        "changed_file_count": 1,
+        "hunk_count": 1,
+    }
+    assert "old_name = 1" not in event_path.read_text(encoding="utf-8")
 
 
 def test_seam_materials_incorporates_objective_and_criteria(baseline_repo):
