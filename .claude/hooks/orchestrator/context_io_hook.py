@@ -129,7 +129,12 @@ def main() -> int:
                 protected_paths=protected_paths,
                 hook_started_ns=started,
             )
-            if value.get("hook_event_name") == "Stop":
+            if value.get("hook_event_name") == "PreCompact":
+                try:
+                    compaction_advisor.refresh_handoff(value, repository)
+                except BaseException:
+                    pass
+            elif value.get("hook_event_name") == "Stop":
                 try:
                     response = compaction_advisor.stop(value, repository)
                     if response:

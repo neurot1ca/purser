@@ -671,6 +671,65 @@ def test_context_io_stop_and_session_start_wire_notice(setup, monkeypatch):
     assert _pending_state(repo) is None
 
 
+def _run_precompact_hook(monkeypatch, event, repo):
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (repo, "test"))
+    input_raw = io.BytesIO(json.dumps({**event, "hook_event_name": "PreCompact"}).encode("utf-8"))
+    output_raw = io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="utf-8"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="utf-8"))
+    assert context_io_hook.main() == 0
+    return output_raw.getvalue()
+
+
+def test_precompact_refreshes_only_existing_handoff_state(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit", context=260_000))
+    assert advisor.advise(event, repo, now=NOW)
+    path = advisor.handoff_path(repo)
+    before = path.read_text(encoding="utf-8")
+    event["transcript_path"] = str(_rewrite_context(scratch, event["transcript_path"], 211_337))
+
+    _run_precompact_hook(monkeypatch, event, repo)
+
+    after = path.read_text(encoding="utf-8")
+    old_state = before.split(advisor.STATE_START, 1)[1].split(advisor.STATE_END, 1)[0]
+    new_state = after.split(advisor.STATE_START, 1)[1].split(advisor.STATE_END, 1)[0]
+    assert "Context tokens: 211337" in new_state
+    assert old_state != new_state
+    assert before.split(advisor.STATE_START, 1)[0] == after.split(advisor.STATE_START, 1)[0]
+    assert before.split(advisor.STATE_END, 1)[1] == after.split(advisor.STATE_END, 1)[1]
+    hooks = json.loads((Path(__file__).parents[4] / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    entries = hooks["hooks"]["PreCompact"]
+    assert any(hook["command"] == "node" and hook["args"][-1].endswith("context_io_hook.py")
+               for entry in entries for hook in entry["hooks"])
+
+
+def test_precompact_without_handoff_does_not_create_one(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    path = advisor.handoff_path(repo)
+    assert not path.exists()
+
+    _run_precompact_hook(monkeypatch, event, repo)
+
+    assert not path.exists()
+
+
+def test_precompact_refresh_error_leaves_handoff_unchanged_and_succeeds(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    path = advisor.handoff_path(repo)
+    before = path.read_bytes()
+    monkeypatch.setattr(advisor, "_mechanical_state", lambda *_args: (_ for _ in ()).throw(OSError("git unavailable")))
+
+    output = _run_precompact_hook(monkeypatch, event, repo)
+
+    assert path.read_bytes() == before
+    assert output == b""
+
+
 def test_stop_state_write_error_fails_open(setup, monkeypatch):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit"))

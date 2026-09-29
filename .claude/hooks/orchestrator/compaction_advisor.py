@@ -547,7 +547,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
                 pass
 
 
-def _replace_state_block(path: Path, body: str, recent: str = "") -> None:
+def _replace_state_block(path: Path, body: str, recent: str | None = "") -> None:
     if len(body) > 1500:
         body = body[:1486].rstrip() + "\n... truncated"
     if not path.exists():
@@ -560,12 +560,13 @@ def _replace_state_block(path: Path, body: str, recent: str = "") -> None:
         content = content[:start] + "\n" + body + "\n" + content[end:]
     else:
         content = content.rstrip() + f"\n{STATE_START}\n{body}\n{STATE_END}\n"
-    if RECENT_START in content and RECENT_END in content and content.index(RECENT_START) < content.index(RECENT_END):
-        start = content.index(RECENT_START)
-        end = content.index(RECENT_END) + len(RECENT_END)
-        content = content[:start] + content[end:]
-    if recent:
-        content = content.rstrip() + f"\n{RECENT_START}\n{recent}\n{RECENT_END}\n"
+    if recent is not None:
+        if RECENT_START in content and RECENT_END in content and content.index(RECENT_START) < content.index(RECENT_END):
+            start = content.index(RECENT_START)
+            end = content.index(RECENT_END) + len(RECENT_END)
+            content = content[:start] + content[end:]
+        if recent:
+            content = content.rstrip() + f"\n{RECENT_START}\n{recent}\n{RECENT_END}\n"
     _atomic_write(path, content.encode("utf-8"))
 
 
@@ -600,6 +601,31 @@ def _mechanical_state(repository: Path, context: int, triggers: list[str], calls
     if len(full) > 1500:
         full = full[:1486].rstrip() + "\n... truncated"
     return full
+
+
+def refresh_handoff(payload: Mapping[str, Any], repository: Path | None = None) -> None:
+    """Refresh only an existing handoff's mechanical state before compaction."""
+    try:
+        if repository is None:
+            repository, _reason = project_root.resolve_project_root(payload)
+        if repository is None:
+            return
+        path = handoff_path(repository)
+        if not path.is_file():
+            return
+        content = path.read_text(encoding="utf-8")
+        if not (STATE_START in content and STATE_END in content
+                and content.index(STATE_START) < content.index(STATE_END)):
+            return
+        records = _read_transcript(payload.get("transcript_path"))
+        settings = _settings()
+        triggers, _task_id, _completed = _transcript_facts(
+            records, datetime.now(timezone.utc), settings["idle_minutes"]
+        )
+        _unused_triggers, _latest_task_id, calls = _transcript_facts_all(records)
+        _replace_state_block(path, _mechanical_state(repository, _usage_context(records), triggers, calls), None)
+    except BaseException:
+        pass
 
 
 def _blockquote(notice: Mapping[str, Any], *, bold: bool = False) -> str:
@@ -1061,4 +1087,4 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     return "\n".join(part for part in (_notice_advice(state["notice_pending"], triggers), receipt_advice) if part)
 
 
-__all__ = ["advise"]
+__all__ = ["advise", "refresh_handoff"]
