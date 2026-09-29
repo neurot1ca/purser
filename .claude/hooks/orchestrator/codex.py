@@ -2502,8 +2502,8 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                     and changed_paths == []):
                 apply = "no change"
             eta_label = "—"
-            if state in {"queued", "running"}:
-                started = job.get("acceptedAt")
+            if state == "running":
+                started = job.get("startedAt", job.get("acceptedAt"))
                 elapsed = max(0.0, (now - started) / 60) if isinstance(started, (int, float)) else None
                 estimates = _route_duration_percentiles(
                     {"route": job.get("route"), "project_key": project_key,

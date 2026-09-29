@@ -1447,6 +1447,26 @@ def test_project_job_board_uses_route_default_without_history(workspace, monkeyp
     assert "| mechanical | gpt-6-sol (medium) | running | ~3 min |" in message
 
 
+def test_project_job_board_queued_job_eta_ignores_time_waiting_for_lease(workspace):
+    _, state = workspace
+    _board_job(state, "queued-old", "QUEUED", etaMinutes=5, acceptedAt=time.time() - 3600)
+
+    board = codex._project_job_board(state, "project")
+
+    assert "| queued-old | gpt-6-sol (medium) | queued | — |" in board
+    assert "| queued-old | gpt-6-sol (medium) | queued | overdue |" not in board
+
+
+def test_project_job_board_running_eta_uses_started_at_when_present(workspace):
+    _, state = workspace
+    _board_job(state, "running-recent", "RUNNING", etaMinutes=5,
+               acceptedAt=time.time() - 3600, startedAt=time.time() - 30)
+
+    board = codex._project_job_board(state, "project")
+
+    assert "| running-recent | gpt-6-sol (medium) | running | ~5 min |" in board
+
+
 def test_project_job_board_waits_for_route_p90_before_overdue(workspace, monkeypatch):
     _, state = workspace
     now = time.time()
