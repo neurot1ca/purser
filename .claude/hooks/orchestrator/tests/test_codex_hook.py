@@ -1336,6 +1336,50 @@ def test_finished_job_is_removed_after_two_displayed_boards(workspace, monkeypat
     assert "running-one" in third and "running-two" in third
 
 
+def test_finished_operation_job_without_repo_root_counts_board_display(workspace, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    job_id, _ = _board_job(state, "operation", "SUCCEEDED", phase="operation")
+    job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.pop("repoRoot")
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    _board_job(state, "running-one", "RUNNING")
+    _board_job(state, "running-two", "RUNNING")
+
+    assert "| operation |" in _show_project_board(repo, state)
+
+    assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == 1
+
+
+def test_operation_without_reviewer_result_shows_skipped_review(workspace):
+    _, state = workspace
+    _, call_key = _board_job(state, "operation-review", "SUCCEEDED", phase="operation")
+    _board_job(state, "running-one", "RUNNING")
+    (state / "bundle_artifacts").mkdir(exist_ok=True)
+    (state / "bundle_artifacts" / f"{call_key}.json").write_text(json.dumps({
+        "phase": "operation", "claude_review_mode": policy.FULL,
+        "findings": [{"code": "EXTERNAL_REPOSITORY_CHANGE"}],
+    }), encoding="utf-8")
+
+    message = codex._project_job_board(state, "project")
+
+    assert "| operation-review | gpt-6-sol (medium) | done | — | skipped | n/a |" in message
+
+
+def test_reply_job_shows_applied_status_from_earlier_thread_job(workspace):
+    _, state = workspace
+    _board_job(state, "continued-applied", "SUCCEEDED", label="continued",
+               threadId="thread-board", applyState="applied", appliedAt=time.time())
+    _board_job(state, "continued-reply", "SUCCEEDED", label="continued",
+               threadId="thread-board", acceptedAt=time.time() + 1)
+    _board_job(state, "independent", "RUNNING")
+
+    message = codex._project_job_board(state, "project")
+
+    assert "| continued | gpt-6-sol (medium) | done | — | — | applied |" in message
+
+
 def test_queued_and_refreshed_job_board_does_not_count_until_shown(workspace, monkeypatch):
     repo, state = workspace
     monkeypatch.setenv("PURSER_STATE_DIR", str(state))

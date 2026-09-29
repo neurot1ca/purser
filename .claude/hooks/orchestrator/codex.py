@@ -2413,6 +2413,7 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                 continue
             jobs.append((job, index))
 
+        all_jobs = jobs
         newest_by_thread: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         for item in jobs:
             job, _index = item
@@ -2473,6 +2474,8 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                     review = "failed" if bundle.get("reviewer1_result") == policy.REVIEWER1_UNAVAILABLE else "reviewed"
                 elif bundle.get("reviewer1_skipped_reason"):
                     review = "failed" if bundle.get("reviewer1_skipped_reason") == "REVIEWER1_UNAVAILABLE" else "skipped"
+                elif job.get("phase", bundle.get("phase")) in {"operation", "plan"}:
+                    review = "skipped"
                 elif bundle.get("claude_review_mode") in {policy.FULL, policy.AUDIT}:
                     review = "failed"
                 elif raw_state in {"FAILED", "TIMED_OUT"}:
@@ -2480,6 +2483,10 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             apply = "—"
             if job.get("applyState") in {"applied", "conflict"}:
                 apply = job["applyState"]
+            elif (isinstance(job.get("threadId"), str)
+                  and any(other.get("threadId") == job["threadId"] and other.get("applyState") == "applied"
+                          for other, _other_index in all_jobs)):
+                apply = "applied"
             elif isinstance(bundle, dict) and bundle:
                 if job.get("phase", bundle.get("phase")) in {"operation", "plan"} or bundle.get("apply") != "codex_apply":
                     apply = "n/a"

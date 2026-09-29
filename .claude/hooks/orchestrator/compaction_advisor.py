@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -846,13 +847,15 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                         job_path = jobs_directory / f"{job_id}.json"
                         try:
                             job = json.loads(job_path.read_text(encoding="utf-8"))
-                            if (not isinstance(job, dict) or job.get("jobId") != job_id
-                                    or not isinstance(job.get("repoRoot"), str)):
+                            if not isinstance(job, dict) or job.get("jobId") != job_id:
                                 continue
-                            repo_root = Path(job["repoRoot"]).resolve()
-                            lock_key = hashlib.sha256(os.fspath(repo_root).encode("utf-8")).hexdigest()
-                            lock_path = jobs_directory.parent / "apply" / (lock_key + ".lock")
-                            with ledger._lease_lock(lock_path):
+                            lock = nullcontext()
+                            if isinstance(job.get("repoRoot"), str):
+                                repo_root = Path(job["repoRoot"]).resolve()
+                                lock_key = hashlib.sha256(os.fspath(repo_root).encode("utf-8")).hexdigest()
+                                lock_path = jobs_directory.parent / "apply" / (lock_key + ".lock")
+                                lock = ledger._lease_lock(lock_path)
+                            with lock:
                                 job = json.loads(job_path.read_text(encoding="utf-8"))
                                 if (not isinstance(job, dict) or job.get("jobId") != job_id
                                         or job.get("state") in {"QUEUED", "RUNNING"}):
