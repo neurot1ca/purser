@@ -2173,7 +2173,7 @@ def pre_tool_use(
             **_telemetry_envelope(event, repository, project_namespace),
         }
         _observe("emit", "TASK_ROUTE_SELECTED", **observation)
-        _observe("emit", "IMPLEMENTER_STARTED", **observation)
+        _observe("emit", "IMPLEMENTER_STARTED", implementer=agent, **observation)
         if is_start:
             pending["async_ready"] = True
             _atomic_json_write(_pending_path(runtime_root, event), pending)

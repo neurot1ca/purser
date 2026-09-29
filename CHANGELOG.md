@@ -5,6 +5,8 @@ before it is published.
 
 ## Unreleased
 
+- An on-demand route outcome report groups tasks by route, model, effort and task type with acceptance, send-backs and separate worker and Claude token distributions.
+- An on-demand report measures eligible Codex code-map reads and marks other providers without traces as unobservable.
 - Task projections record Purser-derived task types and Claude acceptance decisions with source provenance.
 
 ## 0.1.49 — 2026-09-29
