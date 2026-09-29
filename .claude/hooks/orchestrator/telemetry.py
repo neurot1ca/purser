@@ -1495,10 +1495,16 @@ def _build_task(
             aggregate["usage"] = usage
         else:
             aggregate["usage"] = _usage_defaults()
+    ordered_events = sorted(events, key=lambda item: (str(item["ts_utc"]), str(item["event_id"])))
     decision_conflict = False
-    for event in sorted(events, key=lambda item: (str(item["ts_utc"]), str(item["event_id"]))):
+    decision_warning_exists = any(
+        event["event_type"] == "TELEMETRY_WARNING"
+        and event["payload"].get("warning_code") == "CLAUDE_DECISION_CONFLICT"
+        for event in ordered_events
+    )
+    for event in ordered_events:
         decision_conflict = _fold_event(aggregate, event) or decision_conflict
-    if decision_conflict:
+    if decision_conflict and not decision_warning_exists:
         emit("TELEMETRY_WARNING", task_id=task_id, project_key=project_key,
              state_root=root.parent, warning_code="CLAUDE_DECISION_CONFLICT")
     verdict = _verdict(root, task_id, project_key)

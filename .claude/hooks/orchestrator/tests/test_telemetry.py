@@ -237,13 +237,14 @@ def test_claude_send_back_then_acceptance_projects_applied_as_is_false(tmp_path)
 def test_conflicting_claude_terminal_decisions_project_unknown_and_warning(tmp_path):
     _decision(tmp_path, "accepted", {"kind": "apply", "job_id": "apply-1"})
     _decision(tmp_path, "rejected", {"kind": "discard", "job_id": "discard-1"})
-    telemetry.update_task("decision-task", state_root=tmp_path)
+    telemetry.rebuild(state_root=tmp_path)
+    telemetry.rebuild(state_root=tmp_path)
     aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
                             "tasks" / "decision-task.json").read_text(encoding="utf-8"))
     assert aggregate["claude_acceptance"]["outcome"] == "unknown"
-    assert any(event["event_type"] == "TELEMETRY_WARNING" and
+    assert sum(event["event_type"] == "TELEMETRY_WARNING" and
                event["payload"]["warning_code"] == "CLAUDE_DECISION_CONFLICT"
-               for event in _events(tmp_path))
+               for event in _events(tmp_path)) == 1
 
 
 def test_task_without_claude_decisions_projects_unknown(tmp_path):
