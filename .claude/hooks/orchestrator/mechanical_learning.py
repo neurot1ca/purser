@@ -102,6 +102,10 @@ def record_benchmark(result: dict[str, Any], *, root: Path | None = None) -> boo
             or type(passed) is not int or type(total) is not int
             or total != len(MECHANICAL_CHORES) or not 0 <= passed <= total):
         return False
+    chores = result.get("chores")
+    if isinstance(chores, list) and any(
+            isinstance(chore, dict) and chore.get("reason") == "infrastructure" for chore in chores):
+        return False
     state = root or state_root.default_state_root()
     path = state / "opencode" / "candidates.json"
     with model_listing._candidate_lock(path) as acquired:
@@ -348,9 +352,11 @@ def _copy_scratch(source: Path, scratch: Path) -> None:
 
 
 def _run_opencode(model: str, prompt: str, scratch: Path, timeout: int,
-                  runner: Any = None) -> subprocess.CompletedProcess[str]:
+                  runner: Any = None, *, benchmark: bool = False) -> subprocess.CompletedProcess[str]:
     import reviewer
     permissions = dict(reviewer._OPENCODE_CONFINED_PERMISSIONS)
+    if benchmark:
+        permissions["edit"] = permissions["write"] = "allow"
     config = {"permission": permissions,
               "agent": {"purser-shadow": {"mode": "primary", "permission": permissions}}}
     import coder_config
@@ -384,11 +390,31 @@ def run_mechanical_benchmark(model: str, *, timeout_seconds: int = SHADOW_TIMEOU
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text(content, encoding="utf-8")
                 try:
-                    result = _run_opencode(model, chore["prompt"], scratch, timeout_seconds, runner)
+                    result = _run_opencode(model, chore["prompt"], scratch, timeout_seconds, runner,
+                                           benchmark=True)
                 except subprocess.TimeoutExpired:
                     reason = "timeout"
                 else:
-                    if result.returncode != 0:
+                    stdout = result.stdout or ""
+                    output = f"{stdout}\n{result.stderr or ''}".casefold()
+                    provider_error = any(marker in output for marker in (
+                        "upstream request failed", "endpoint unavailable", "endpoint is unavailable", "provider error"))
+                    model_output = False
+                    for line in stdout.splitlines():
+                        if not line.strip():
+                            continue
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        part = event.get("part") if isinstance(event, dict) else None
+                        if (isinstance(part, dict) and event.get("type") == "text"
+                                and isinstance(part.get("text"), str) and part["text"].strip()):
+                            model_output = True
+                            break
+                    if provider_error or (result.returncode != 0 and not model_output):
+                        reason = "infrastructure"
+                    elif result.returncode != 0:
                         reason = "runner_error"
                     else:
                         actual = {}

@@ -314,6 +314,29 @@ def test_mechanical_benchmark_all_chores_pass(tmp_path, monkeypatch):
     assert all(item["passed"] for item in result["chores"])
 
 
+def test_mechanical_benchmark_allows_edits_without_changing_reviewer_policy(tmp_path, monkeypatch):
+    import reviewer
+
+    _use_benchmark_scratch(tmp_path, monkeypatch)
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    chores = mechanical_learning.MECHANICAL_CHORES
+
+    def runner(command, **kwargs):
+        config = json.loads(kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+        assert config["permission"]["edit"] == config["permission"]["write"] == "allow"
+        assert all(config["permission"][key] == "ask"
+                   for key in ("bash", "webfetch", "task", "external_directory"))
+        assert config["agent"]["purser-shadow"]["permission"]["edit"] == "allow"
+        assert config["agent"]["purser-shadow"]["permission"]["write"] == "allow"
+        return _benchmark_fake_runner(chores)(command, **kwargs)
+
+    result = mechanical_learning.run_mechanical_benchmark("vendor/test-free", runner=runner)
+
+    assert result["passed_count"] == len(chores)
+    assert reviewer._OPENCODE_CONFINED_PERMISSIONS["edit"] == "ask"
+    assert reviewer._OPENCODE_CONFINED_PERMISSIONS["write"] == "ask"
+
+
 def test_mechanical_benchmark_rejects_out_of_scope_edit(tmp_path, monkeypatch):
     chores = mechanical_learning.MECHANICAL_CHORES
     _use_benchmark_scratch(tmp_path, monkeypatch)
@@ -385,6 +408,51 @@ def test_benchmark_unscored_candidates_skips_saved_and_records_missing(tmp_path,
     record = saved["benchmarks"][mechanical_learning.MECHANICAL_SUITE_VERSION]
     assert record["passed_count"] == 5 and record["total"] == 6
     assert isinstance(record["recorded_at"], str) and record["recorded_at"]
+
+
+def test_benchmark_infrastructure_failure_is_unscored_and_retried(tmp_path, monkeypatch):
+    path = _inventory(tmp_path, "vendor/unavailable-free")
+    _use_benchmark_scratch(tmp_path / "scratch", monkeypatch)
+    chores = mechanical_learning.MECHANICAL_CHORES
+    failed_attempts = set()
+
+    def runner(command, **kwargs):
+        prompt = command[-1]
+        chore = next(item for item in chores if item["prompt"] == prompt)
+        if chore["id"] == chores[0]["id"] and chore["id"] not in failed_attempts:
+            failed_attempts.add(chore["id"])
+            return subprocess.CompletedProcess(command, 1, "", "Upstream request failed: Endpoint is unavailable.")
+        if chore["id"] == chores[1]["id"] and chore["id"] not in failed_attempts:
+            failed_attempts.add(chore["id"])
+            return subprocess.CompletedProcess(command, 1, "", "")
+        for relative, content in chore["expected_files"].items():
+            (Path(kwargs["cwd"]) / relative).write_text(content, encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    result = mechanical_learning.run_mechanical_benchmark("vendor/unavailable-free", runner=runner)
+    assert result["chores"][0]["reason"] == "infrastructure"
+    assert result["chores"][1]["reason"] == "infrastructure"
+    assert not mechanical_learning.record_benchmark(result, root=tmp_path)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    candidate = value["candidates"][0]
+    assert "benchmarks" not in candidate
+    assert mechanical_learning.benchmark_unscored_candidates(root=tmp_path, runner=runner)[0]["passed_count"] == 6
+    assert mechanical_learning.benchmark_unscored_candidates(root=tmp_path, runner=runner) == []
+
+
+def test_benchmark_normal_model_failure_is_recorded(tmp_path, monkeypatch):
+    path = _inventory(tmp_path, "vendor/model-failure-free")
+    chores = mechanical_learning.MECHANICAL_CHORES
+    _use_benchmark_scratch(tmp_path / "scratch", monkeypatch)
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+
+    result = mechanical_learning.benchmark_unscored_candidates(
+        root=tmp_path, runner=_benchmark_fake_runner(chores, fail=chores[0]["id"]))[0]
+    assert result["passed_count"] == 5
+    assert result["chores"][0]["reason"] == "out_of_scope_edit"
+    candidate = json.loads(path.read_text(encoding="utf-8"))["candidates"][0]
+    assert candidate["benchmarks"][mechanical_learning.MECHANICAL_SUITE_VERSION]["passed_count"] == 5
 
 
 def test_benchmark_unscored_candidates_caps_candidates_per_run(tmp_path, monkeypatch):
