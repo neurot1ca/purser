@@ -43,6 +43,7 @@ SYNC_LEASE_FALLBACK_SECONDS = 2 * 60 * 60
 LEASE_TIMEOUT_MARGIN_SECONDS = 60
 ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS = 2700
 JOB_RETENTION_SECONDS = 7 * 24 * 60 * 60
+UNAPPLIED_WORKTREE_LEASE_SECONDS = 2 * 60 * 60
 RELEASED_LEASE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 CONFLICT_PATH_RETENTION_SECONDS = 7 * 24 * 60 * 60
 MAX_CONFLICT_PATHS = 50
@@ -213,8 +214,8 @@ class ScopeLeases:
                 state = self._job_state(job_id)
                 cutoff = owner.get("retention_after")
                 expired = (state == "JOB_EXPIRED" or
-                           (state == "MISSING" and isinstance(cutoff, (int, float))
-                            and now >= cutoff))
+                           (state not in {"UNREADABLE", "QUEUED", "RUNNING"}
+                            and isinstance(cutoff, (int, float)) and now >= cutoff))
             else:
                 expired = False
             if expired:
@@ -364,6 +365,21 @@ class ScopeLeases:
                 return {"status": OK, "code": "LEASE_EXTENDED"}
         except (OSError, ValueError, TypeError):
             return {"status": UNKNOWN, "code": "LEASE_EXTENSION_UNCERTAIN"}
+
+    def set_retention_after(self, owner_key: str, deadline: float) -> dict[str, Any]:
+        """Set a completed worktree job's bounded unapplied lease deadline."""
+        try:
+            with _lease_lock(self.lock_path):
+                value = self._read()
+                owner = value["owners"].get(owner_key)
+                if (owner is None or owner["state"] not in {"ACTIVE", "QUEUED"}
+                        or not isinstance(deadline, (int, float)) or not math.isfinite(deadline)):
+                    return {"status": UNKNOWN, "code": "LEASE_OWNER_MISSING"}
+                owner["retention_after"] = deadline
+                self._write(value)
+                return {"status": OK, "code": "LEASE_RETENTION_SET"}
+        except (OSError, ValueError, TypeError):
+            return {"status": UNKNOWN, "code": "LEASE_RETENTION_UNCERTAIN"}
 
     def active(self) -> list[dict[str, Any]]:
         with _lease_lock(self.lock_path):
@@ -675,6 +691,36 @@ def job_patch(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
     return raw.decode("utf-8", "surrogateescape")
 
 
+def checkout_snapshot(repo_root: str | os.PathLike[str], *, timeout: float = 30.0) -> str:
+    """Capture tracked and untracked checkout state without touching its index."""
+    root = Path(repo_root).resolve()
+    git_dir = Path(_decode_path(_run_git(root, ["rev-parse", "--absolute-git-dir"], timeout,
+                                         "locating checkout snapshot index")).strip())
+    index_path = git_dir / f"purser-replay-{os.getpid()}-{time.time_ns()}.index"
+    env = {"GIT_INDEX_FILE": os.fspath(index_path)}
+    try:
+        _run_git(root, ["read-tree", "HEAD"], timeout, "initializing checkout snapshot index", env=env)
+        _run_git(root, ["add", "-A"], timeout, "capturing current checkout state", env=env)
+        return _decode_path(_run_git(root, ["write-tree"], timeout,
+                                     "writing current checkout snapshot", env=env)).strip()
+    finally:
+        index_path.unlink(missing_ok=True)
+        Path(os.fspath(index_path) + ".lock").unlink(missing_ok=True)
+
+
+def snapshot_drift_paths(repo_root: str | os.PathLike[str], snapshot: str,
+                         paths: Sequence[str], *, timeout: float = 30.0) -> list[str]:
+    """Return job paths whose checkout content differs from the reviewed snapshot."""
+    if not paths:
+        return []
+    root = Path(repo_root).resolve()
+    current = checkout_snapshot(root, timeout=timeout)
+    changed = _run_git(root, ["diff", "--name-only", "-z", "--no-renames", snapshot,
+                              current, "--", *[f":(literal){path}" for path in paths]],
+                       timeout, "checking reviewed checkout drift")
+    return [_decode_path(path) for path in changed.split(b"\0") if path]
+
+
 def prepare_job_replay(
     repo_root: str | os.PathLike[str], worktree_path: str | os.PathLike[str],
     snapshot: str, recovery_path: str | os.PathLike[str], *, timeout: float = 30.0,
@@ -724,18 +770,7 @@ def prepare_job_replay(
     else:
         original = job_patch(worktree, snapshot)
         paths = None
-    git_dir = Path(_decode_path(_run_git(root, ["rev-parse", "--absolute-git-dir"], timeout,
-                                         "locating replay index directory")).strip())
-    index_path = git_dir / f"purser-replay-{os.getpid()}-{time.time_ns()}.index"
-    env = {"GIT_INDEX_FILE": os.fspath(index_path)}
-    try:
-        _run_git(root, ["read-tree", "HEAD"], timeout, "initializing replay snapshot index", env=env)
-        _run_git(root, ["add", "-A"], timeout, "capturing current checkout state", env=env)
-        current = _decode_path(_run_git(root, ["write-tree"], timeout,
-                                        "writing current checkout snapshot", env=env)).strip()
-    finally:
-        index_path.unlink(missing_ok=True)
-        Path(os.fspath(index_path) + ".lock").unlink(missing_ok=True)
+    current = checkout_snapshot(root, timeout=timeout)
     if current == snapshot and prior is None:
         return {"status": "unchanged", "snapshot": snapshot, "paths": []}
     raw = original.encode("utf-8", "surrogateescape")

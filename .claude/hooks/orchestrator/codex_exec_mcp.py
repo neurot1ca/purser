@@ -1334,6 +1334,9 @@ class Server:
         lock_path = purser_state_root.default_state_root() / "codex_exec_mcp" / "apply" / (lock_key + ".lock")
         with ledger._lease_lock(lock_path):
             job = self._read_job(job["jobId"])
+            if job.get("applyState") == "applied" and isinstance(job.get("applyResult"), dict):
+                self._release_applied_job_lease(job)
+                return _job_result(job["applyResult"])
             if args.get("resolved") is True:
                 if job.get("applyState") != "conflict":
                     return _job_result({"applied": False,
@@ -1364,6 +1367,7 @@ class Server:
                 value = {"applied": True, "resolvedByHand": True, "paths": paths}
                 job.update(applyState="applied", applyResult=value, appliedAt=time.time())
                 self._write_job(job)
+                self._release_applied_job_lease(job)
                 return _job_result(value)
             if "applyResult" in job:
                 return _job_result(job["applyResult"])
@@ -1390,7 +1394,30 @@ class Server:
                 value = {"applied": True, "paths": paths}
                 job.update(applyState="applied", applyResult=value, appliedAt=time.time())
                 self._write_job(job)
+                self._release_applied_job_lease(job)
                 return _job_result(value)
+            reviewed = job.get("reviewedSnapshot")
+            if isinstance(reviewed, str):
+                drift = ledger.snapshot_drift_paths(repo_root, reviewed, paths)
+                if drift:
+                    revision = int(job.get("snapshotRevision", 0)) + 1
+                    job.update(snapshotRevision=revision, reviewRefreshPending=True)
+                    job.pop("reviewedSnapshot", None)
+                    self._write_job(job)
+                    try:
+                        root = purser_state_root.default_state_root()
+                        index_path = root / "async_jobs" / f"{job['jobId']}.json"
+                        index = json.loads(index_path.read_text(encoding="utf-8"))
+                        index["stage"] = "REVIEW_REFRESH"
+                        temporary = index_path.with_suffix(".tmp")
+                        temporary.write_text(json.dumps(index, separators=(",", ":")), encoding="utf-8")
+                        os.replace(temporary, index_path)
+                    except (OSError, ValueError, TypeError):
+                        return _job_result({"applied": False, "errorCode": "REVIEW_REFRESH_UNAVAILABLE",
+                                            "message": "Job was re-prepared but review refresh could not be scheduled."})
+                    return _job_result({"applied": False, "errorCode": "REVIEW_STALE_REPREPARE_REQUIRED",
+                                        "message": "Checkout changed in the reviewed job paths. Call codex_result to re-prepare and review the diff before applying.",
+                                        "paths": drift})
             outcome = ledger.apply_job_patch(repo_root, patch)
             if not outcome["applied"]:
                 try:
@@ -1407,13 +1434,48 @@ class Server:
             if outcome["applied"]:
                 job["appliedAt"] = time.time()
             self._write_job(job)
+            if outcome["applied"]:
+                self._release_applied_job_lease(job)
             return _job_result(value)
+
+    @staticmethod
+    def _release_applied_job_lease(job: dict[str, Any]) -> bool:
+        try:
+            root = purser_state_root.default_state_root()
+            target = Path(job["worktreePath"]).resolve()
+            for job_path in (root / "codex_exec_mcp" / "jobs").glob("*.json"):
+                try:
+                    bound = json.loads(job_path.read_text(encoding="utf-8"))
+                    if (not isinstance(bound, dict) or not isinstance(bound.get("jobId"), str)
+                            or Path(bound.get("worktreePath", "")).resolve() != target):
+                        continue
+                    if Server._release_job_scope_lease(root, bound["jobId"]):
+                        index = json.loads((root / "async_jobs" / f"{bound['jobId']}.json").read_text(encoding="utf-8"))
+                        (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
+                except (OSError, ValueError, TypeError, KeyError):
+                    continue
+            return True
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            print(f"Applied job scope lease release unavailable: {exc}", file=sys.stderr, flush=True)
+            return False
+
+    @staticmethod
+    def _release_job_scope_lease(root: Path, job_id: str) -> bool:
+        import ledger
+        try:
+            index = json.loads((root / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+            result = ledger.ScopeLeases(root / "projects" / index["project_key"]).release(index["call_key"])
+            return result["status"] == ledger.OK or result["code"] == "LEASE_OWNER_MISSING"
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
 
     def _cancel_job(self, args: dict[str, Any]) -> dict[str, Any]:
         job = self._read_job(args.get("jobId"))
         if job is None:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
+        if job["state"] in TERMINAL and job.get("worktreePath") and job.get("applyState") != "applied":
+            self._release_job_scope_lease(purser_state_root.default_state_root(), job_id)
         if job.get("leaseQueued") and job["state"] == "QUEUED":
             with _ownership_lock(self.job_dir, job_id):
                 current = self._read_job(job_id)

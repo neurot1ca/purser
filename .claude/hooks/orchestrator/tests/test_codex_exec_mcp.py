@@ -934,6 +934,110 @@ def test_codex_apply_is_idempotent_and_reports_conflicts(area):
         client.close()
 
 
+def test_codex_apply_refuses_stale_delta_and_reprepares_for_review(area):
+    repo = _git_repo(area)
+    (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "two lines"], check=True)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt",
+                                     "FAKE_WRITE_CONTENT": "one\ntwo\njob\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        finish(client, started["jobId"], "SUCCEEDED")
+        path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
+        job = read_job_record(path)
+        reviewed_snapshot = job["snapshot"]
+        job["reviewedSnapshot"] = job["snapshot"]
+        codex_exec_mcp.Server(host=True, job_dir=path.parent)._write_job(job)
+        (area / "root" / "async_jobs").mkdir(parents=True, exist_ok=True)
+        (area / "root" / "async_jobs" / f"{started['jobId']}.json").write_text(json.dumps({
+            "jobId": started["jobId"], "call_key": "lease-owner", "project_key": "sample",
+            "stage": "CONSUMED",
+        }), encoding="utf-8")
+        (repo / "tracked.txt").write_text("one\ncheckout\ntwo\n", encoding="utf-8")
+
+        refused = job_call(client, "codex_apply", {"jobId": started["jobId"]})
+
+        assert refused["errorCode"] == "REVIEW_STALE_REPREPARE_REQUIRED"
+        updated = read_job_record(path)
+        assert updated["snapshot"] == reviewed_snapshot
+        assert updated["reviewRefreshPending"] is True
+        assert updated["snapshotRevision"] == 1
+        index = json.loads((area / "root" / "async_jobs" / f"{started['jobId']}.json").read_text())
+        assert index["stage"] == "REVIEW_REFRESH"
+        assert job_call(client, "codex_result", {"jobId": started["jobId"]})["state"] == "SUCCEEDED"
+    finally:
+        client.close()
+
+
+def test_codex_apply_allows_drift_outside_job_delta(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        finish(client, started["jobId"], "SUCCEEDED")
+        path = area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json")
+        job = read_job_record(path)
+        job["reviewedSnapshot"] = job["snapshot"]
+        codex_exec_mcp.Server(host=True, job_dir=path.parent)._write_job(job)
+        import ledger
+        lease = ledger.ScopeLeases(area / "root" / "projects" / "sample")
+        lease.acquire("lease-owner", "task", ["tracked.txt"], job_id=started["jobId"], allow_overlap=True)
+        (area / "root" / "async_jobs").mkdir(parents=True, exist_ok=True)
+        (area / "root" / "codex_exec_mcp" / "jobs").mkdir(parents=True, exist_ok=True)
+        (area / "root" / "async_jobs" / f"{started['jobId']}.json").write_text(json.dumps({
+            "jobId": started["jobId"], "call_key": "lease-owner", "project_key": "sample",
+            "stage": "CONSUMED",
+        }), encoding="utf-8")
+        reply_id = "b" * 64
+        reply_owner = "reply-lease"
+        lease.acquire(reply_owner, "reply", ["tracked.txt"], job_id=reply_id, allow_overlap=True)
+        (area / "root" / "codex_exec_mcp" / "jobs" / f"{reply_id}.json").write_text(json.dumps({
+            "jobId": reply_id, "worktreePath": job["worktreePath"],
+        }), encoding="utf-8")
+        (area / "root" / "async_jobs" / f"{reply_id}.json").write_text(json.dumps({
+            "jobId": reply_id, "call_key": reply_owner, "project_key": "sample",
+            "stage": "CONSUMED",
+        }), encoding="utf-8")
+        (repo / "unrelated.txt").write_text("outside delta\n", encoding="utf-8")
+
+        applied = job_call(client, "codex_apply", {"jobId": started["jobId"]})
+
+        assert applied == {"applied": True, "paths": ["tracked.txt"]}
+        assert (repo / "tracked.txt").read_text(encoding="utf-8") == "job\n"
+        assert lease.owner_state("lease-owner") == "RELEASED"
+        assert lease.owner_state(reply_owner) == "RELEASED"
+    finally:
+        client.close()
+
+
+def test_codex_cancel_releases_unapplied_finished_worktree_lease(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        finish(client, started["jobId"], "SUCCEEDED")
+        project = codex_exec_mcp.project_root.project_key(repo.resolve())
+        lease = __import__("ledger").ScopeLeases(area / "root" / "projects" / project)
+        owner = "cancel-owner"
+        lease.acquire(owner, "task", ["tracked.txt"], job_id=started["jobId"], allow_overlap=True)
+        (area / "root" / "async_jobs").mkdir(parents=True, exist_ok=True)
+        (area / "root" / "async_jobs" / f"{started['jobId']}.json").write_text(json.dumps({
+            "jobId": started["jobId"], "call_key": owner, "project_key": project,
+            "stage": "CONSUMED",
+        }), encoding="utf-8")
+
+        cancelled = job_call(client, "codex_cancel", {"jobId": started["jobId"]})
+
+        assert cancelled["state"] == "SUCCEEDED"
+        assert lease.owner_state(owner) == "RELEASED"
+    finally:
+        client.close()
+
+
 def test_codex_apply_records_hand_resolved_conflict(area):
     repo = _git_repo(area)
     client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
@@ -949,6 +1053,7 @@ def test_codex_apply_records_hand_resolved_conflict(area):
         subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
         subprocess.run(["git", "-C", str(repo), "commit", "-qm", "resolve job conflict"], check=True)
         resolved = job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True})
+        assert job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True}) == resolved
 
         assert resolved == {"applied": True, "resolvedByHand": True, "paths": ["tracked.txt"]}
         job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /

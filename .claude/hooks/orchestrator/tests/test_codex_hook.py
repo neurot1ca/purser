@@ -965,6 +965,61 @@ def test_dirty_worktree_snapshot_reviews_only_worker_diff(workspace, config, mon
         finding["code"] for finding in bundle["findings"]}
 
 
+def test_stale_apply_reprepares_on_next_result_and_reviews_new_snapshot(workspace, config, monkeypatch):
+    repo, state = workspace
+    (repo / "file1.py").write_text("first = 1\nmiddle = 1\nlast = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "file1.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "--amend", "-qm", "three lines"], cwd=repo, check=True)
+    _, job_id, job_path = async_started(
+        workspace, config, prompt=orch(task="stale-review-refresh", scope="file1.py") + "\nWork."
+    )
+    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
+    worktree = Path(snapshot["path"])
+    (worktree / "file1.py").write_text(
+        "first = 1\nmiddle = 1\nlast = 1\njob = True\n", encoding="utf-8")
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
+               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo),
+               finishedAt=time.time())
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    monkeypatch.setattr(policy, "reviewer1_gate",
+                        lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
+    reviewer_calls = []
+    reviewer = lambda **kwargs: reviewer_calls.append(kwargs) or {
+        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"}
+    tool_response = {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED",
+                     "threadId": "async-thread", "content": "done", "worktreePath": snapshot["path"]}}
+    codex.post_tool_use({**async_followup(RESULT_TOOL, job_id), "hook_event_name": "PostToolUse",
+                         "tool_response": tool_response}, config=config, state_root=state,
+                        repo_root=repo, reviewer=reviewer)
+    reviewed_job = json.loads(job_path.read_text(encoding="utf-8"))
+    reviewed = reviewed_job["reviewedSnapshot"]
+    index = json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+    leases = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))
+    assert leases._read()["owners"][index["call_key"]]["retention_after"] == (
+        reviewed_job["finishedAt"] + ledger.UNAPPLIED_WORKTREE_LEASE_SECONDS)
+    (repo / "file1.py").write_text(
+        "first = 1\ncheckout = True\nmiddle = 1\nlast = 1\n", encoding="utf-8")
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: state)
+    apply_server = codex_exec_mcp.Server(host=True, job_dir=job_path.parent)
+
+    refused = apply_server._apply_job({"jobId": job_id})
+    second = codex.post_tool_use({**async_followup(RESULT_TOOL, job_id), "hook_event_name": "PostToolUse",
+                                  "tool_response": tool_response}, config=config, state_root=state,
+                                 repo_root=repo, reviewer=reviewer)
+
+    refreshed = json.loads(job_path.read_text(encoding="utf-8"))
+    bundle = response_bundle(second, config)
+    assert json.loads(refused["content"][0]["text"])["errorCode"] == "REVIEW_STALE_REPREPARE_REQUIRED"
+    assert refreshed["snapshot"] != reviewed
+    assert refreshed["reviewedSnapshot"] == refreshed["snapshot"]
+    assert (worktree / "file1.py").read_text(encoding="utf-8") == (
+        "first = 1\ncheckout = True\nmiddle = 1\nlast = 1\njob = True\n")
+    assert len(reviewer_calls) == 2
+    assert bundle["changed_paths"] == ["file1.py"]
+    assert "codex_apply" in second["systemMessage"]
+
+
 def test_async_worktree_replay_conflict_blocks_reviewer_and_forces_full(workspace, config):
     repo, state = workspace
     _, job_id, job_path = async_started(

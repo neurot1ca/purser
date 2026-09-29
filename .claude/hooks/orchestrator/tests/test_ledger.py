@@ -25,6 +25,33 @@ def test_expired_queued_job_releases_scope_before_new_acquire(tmp_path, monkeypa
     assert store.acquire("new", "new-task", ["src"])["status"] == ledger.OK
 
 
+def test_protective_job_lease_expires_at_bounded_retention(tmp_path, monkeypatch):
+    store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
+    now = [1_000.0]
+    monkeypatch.setattr(ledger.time, "time", lambda: now[0])
+    monkeypatch.setattr(ledger, "JOB_RETENTION_SECONDS", 10)
+    monkeypatch.setattr(store, "_job_state", lambda _job_id: "SUCCEEDED")
+    assert store.acquire("protective", "task", ["src"], job_id="a" * 64,
+                         timeout_seconds=1)["status"] == ledger.OK
+    now[0] += 12
+    assert store.owner_state("protective") == "RELEASED"
+
+
+def test_finished_worktree_lease_expires_two_hours_after_finish(tmp_path, monkeypatch):
+    store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
+    now = [1_000.0]
+    monkeypatch.setattr(ledger.time, "time", lambda: now[0])
+    store.acquire("finished", "task", ["src"], job_id="a" * 64,
+                  timeout_seconds=1)
+
+    store.set_retention_after("finished", 2_000.0 + ledger.UNAPPLIED_WORKTREE_LEASE_SECONDS)
+
+    now[0] = 2_000.0 + ledger.UNAPPLIED_WORKTREE_LEASE_SECONDS - 1
+    assert store.owner_state("finished") == "ACTIVE"
+    now[0] += 1
+    assert store.owner_state("finished") == "RELEASED"
+
+
 def test_hot_conflict_selectively_queues_and_expires(tmp_path, monkeypatch):
     store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
     now = [1_000.0]

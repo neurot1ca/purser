@@ -2787,8 +2787,10 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
         claimed = True
         path, index, pending, original = _async_owned(root, event, repo_root)
         if index.get("stage") == "CONSUMED":
-            _release_async_lease(root, index, pending)
-            (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
+            job = _async_job(root, index)
+            if not (job and job.get("worktreePath") and job.get("applyState") != "applied"):
+                _release_async_lease(root, index, pending)
+                (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
             return index.get("response") or interrupted()
         if index.get("stage") == "FINALIZING":
             artifact = root / "bundle_artifacts" / f"{index['call_key']}.json"
@@ -2807,8 +2809,9 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                         response = _append_worktree_apply_context(response, index["jobId"])
                     index.update(stage="CONSUMED", bundle_path=str(artifact.resolve()), response=response)
                     _atomic_json_write(path, index)
-                    _release_async_lease(root, index, pending)
-                    _remove_pending(root, original)
+                    if not (job and job.get("worktreePath") and job.get("applyState") != "applied"):
+                        _release_async_lease(root, index, pending)
+                        _remove_pending(root, original)
                     return response
         index["stage"] = "FINALIZING"
         _atomic_json_write(path, index)
@@ -2832,6 +2835,14 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             pending = dict(pending, worktree_path=worktree_path,
                            worktree_snapshot=job.get("snapshot"))
             _atomic_json_write(_pending_path(root, original), pending)
+            owner = pending.get("lease_owner")
+            if isinstance(owner, str):
+                finished_at = job.get("finishedAt", time.time())
+                result = ledger.ScopeLeases(
+                    _project_state_root(root, _pending_project_key(pending))
+                ).set_retention_after(owner, finished_at + ledger.UNAPPLIED_WORKTREE_LEASE_SECONDS)
+                if result["status"] != ledger.OK and result["code"] != "LEASE_OWNER_MISSING":
+                    raise WiringError(result["code"])
         if success and value.get("servedAgent") in {"codex", "opencode", "agy"} and isinstance(value.get("servedModel"), str):
             pending = dict(pending, agent=value["servedAgent"], model=value["servedModel"],
                            attempted_models=value.get("attemptedModels", []))
@@ -2850,7 +2861,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             try:
                 prepared = ledger.prepare_job_replay(
                     job["repoRoot"], worktree_path, job["snapshot"],
-                    root / "preparations" / index["jobId"],
+                    (root / "preparations" / index["jobId"] / f"revision-{job['snapshotRevision']}"
+                     if job.get("snapshotRevision") else root / "preparations" / index["jobId"]),
                     resolver=resolver,
                 )
                 if prepared["status"] == "prepared":
@@ -2889,6 +2901,10 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                                      repo_root=pending.get("repo_root"), reviewer=reviewer,
                                      micro_repair=micro_repair)
             artifact = (root / "bundle_artifacts" / f"{index['call_key']}.json").resolve()
+            if worktree_path:
+                job["reviewedSnapshot"] = job["snapshot"]
+                job.pop("reviewRefreshPending", None)
+                _atomic_json_write(root / "codex_exec_mcp" / "jobs" / f"{index['jobId']}.json", job)
             expected = str((root / "raw_tool_outputs" / f"{index['call_key']}.json").resolve())
             if not artifact.is_file() or not Path(expected).is_file():
                 raise WiringError("successful finalization was not durably recorded")
@@ -2920,9 +2936,11 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             response = _append_worktree_apply_context(response, index["jobId"])
         index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
         _atomic_json_write(path, index)
-        _release_async_lease(root, index, pending)
+        if not (success and worktree_path):
+            _release_async_lease(root, index, pending)
         try:
-            _remove_pending(root, original)
+            if not (success and worktree_path):
+                _remove_pending(root, original)
         except OSError:
             pass  # CONSUMED is durable; the next read finishes cleanup.
         return response
