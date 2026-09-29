@@ -163,7 +163,9 @@ def approve_fallback(project: str | os.PathLike[str], session_id: str,
             value["reset_cycle_marker"] = reset_cycle_marker
             if switched_at is not None:
                 evidence["switched_at"] = switched_at
-            value["last_probe_time"] = None
+                value["last_probe_time"] = str(switched_at)
+            else:
+                value["last_probe_time"] = None
             for key in ("question", "question_session", "question_shown", "answerable"):
                 evidence.pop(key, None)
             approved = True

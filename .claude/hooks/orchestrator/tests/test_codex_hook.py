@@ -6534,6 +6534,50 @@ def _fallback_state(workspace):
     return active_coder_state.read(repo, root)
 
 
+def _record_launch_failure(workspace, kind, *, retry_after=None):
+    repo, state = workspace
+    project = project_root.project_key(repo.resolve())
+    job_id = uuid.uuid4().hex + uuid.uuid4().hex
+    indexes = state / "async_jobs"
+    jobs = state / "codex_exec_mcp" / "jobs"
+    indexes.mkdir(parents=True, exist_ok=True)
+    jobs.mkdir(parents=True, exist_ok=True)
+    (indexes / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "project_key": project,
+    }), encoding="utf-8")
+    evidence = {"type": kind}
+    if retry_after is not None:
+        evidence["retryAfterSeconds"] = retry_after
+    (jobs / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "state": "FAILED", "phase": "implementation",
+        "finishedAt": time.time(), "launchFailureEvidence": evidence,
+    }), encoding="utf-8")
+    return job_id
+
+
+def _show_fallback_question(repo, state_root, session_id):
+    path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
+    pending = compaction_advisor._read_state(path, session_id)["fallback_pending"]
+    assert pending is not None
+    blocked = compaction_advisor.stop({"session_id": session_id, "last_assistant_message": ""}, repo)
+    assert blocked and "exactly one bold question line" in blocked["reason"]
+    rendered = compaction_advisor.stop(
+        {"session_id": session_id, "last_assistant_message": f"**{pending['line']}**"}, repo)
+    assert rendered is None
+    compaction_advisor.advise({"session_id": session_id}, repo)
+    evidence = active_coder_state.read(repo, state_root)["triggering_evidence"]
+    assert evidence["question_shown"] is True and evidence["answerable"] is True
+    return pending
+
+
+def _approve_fallback(workspace, config, state, *, session_id="session-1", tool_use_id="approve"):
+    repo, _ = workspace
+    prompt = event(prompt=orch(reason="user_override", scope="file0.py") + "\nSwitch to fallback.",
+                   tool_use_id=tool_use_id)
+    prompt["session_id"] = session_id
+    return codex.pre_tool_use(prompt, config=config, state_root=state, repo_root=repo)
+
+
 def test_approved_fallback_routes_same_and_later_session(workspace, config, monkeypatch):
     repo, state = workspace
     config = _fallback_config(config)
@@ -6606,6 +6650,25 @@ def test_unconfigured_fallback_does_not_add_transition_prompt(workspace, config,
     result = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
     assert "updatedInput" in result["hookSpecificOutput"]
     assert not (compaction_advisor._state_directory(repo) / "compaction_advisor.json").exists()
+    active_path = active_coder_state.state_path(repo, state)
+    assert not active_path.exists() and not active_path.with_name(active_path.name + ".lock").exists()
+    actual_bundle = response_bundle(
+        codex._finalize_replacement(codex._base_bundle(), config, state,
+                                    event(tool_use_id="normal-no-fallback")), config)
+    configured = _fallback_config(dict(config))
+    control = codex._finalize_replacement(codex._base_bundle(), configured, state,
+                                          event(tool_use_id="normal-no-fallback"))
+    assert actual_bundle == response_bundle(control, configured)
+    assert not any("fallback" in key for key in actual_bundle)
+    active_path = active_coder_state.state_path(repo, state)
+    assert not active_path.exists() and not active_path.with_name(active_path.name + ".lock").exists()
+    actual_bundle = response_bundle(
+        codex._finalize_replacement(codex._base_bundle(), config, state,
+                                    event(tool_use_id="normal-no-fallback")), config)
+    control = codex._finalize_replacement(codex._base_bundle(), config, state,
+                                          event(tool_use_id="normal-no-fallback"))
+    assert actual_bundle == response_bundle(control, config)
+    assert not any("fallback" in key for key in actual_bundle)
 
 
 def test_user_override_without_later_prompt_is_refused(workspace, config, monkeypatch):
@@ -6892,3 +6955,186 @@ def test_quota_return_question_decline_is_remembered_per_reset(workspace, config
         return_call, config=config, state_root=state, repo_root=repo)
     assert _fallback_state(workspace)["active_coder"] == "primary"
     assert "permissionDecision" not in returned["hookSpecificOutput"]
+
+
+def test_integrated_credit_exhaustion_switch_receipt_persistence_and_return(workspace, config, monkeypatch):
+    repo, state = workspace
+    _record_launch_failure(workspace, "CREDIT_EXHAUSTED")
+    config = _fallback_config(config)
+    now = [1000]
+    probes = []
+    monkeypatch.setattr(codex.time, "time", lambda: now[0])
+    monkeypatch.setattr(active_coder_state.state_root, "default_state_root", lambda: state)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    monkeypatch.setattr(codex.codex_exec_mcp, "probe_api_primary", lambda agent, model, **kwargs:
+                        probes.append((agent, model, kwargs["timeout"])) or {"ok": True})
+
+    denied = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    question = _show_fallback_question(repo, state, "session-1")
+
+    start = event(START_TOOL, prompt=orch(reason="user_override", scope="file0.py") + "\nSwitch.",
+                  tool_use_id="fallback-start")
+    approved = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)
+    routed = approved["hookSpecificOutput"]["updatedInput"]
+    assert (routed["agent"], routed["model"]) == ("opencode", "anthropic/claude-sonnet")
+    assert active_coder_state.read(repo, state)["active_coder"] == "fallback"
+
+    started = codex.post_tool_use({**start, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"jobId": hashlib.sha256(routed["call"].encode()).hexdigest(),
+                              "state": "QUEUED"}}}, config=config, state_root=state, repo_root=repo)
+    assert started["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
+    receipt = compaction_advisor._read_state(
+        compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1")
+    assert any("anthropic/claude-sonnet" in line for line in receipt["dispatch_pending"]["lines"])
+
+    later = event(prompt=orch(task="later-session", scope="file1.py") + "\nContinue.",
+                  tool_use_id="later-session")
+    later["session_id"] = "session-2"
+    resumed = codex.pre_tool_use(later, config=config, state_root=state, repo_root=repo)
+    assert resumed["hookSpecificOutput"]["updatedInput"]["model"] == "anthropic/claude-sonnet"
+    assert probes == []
+
+    now[0] = 1900
+    returned = codex.pre_tool_use(event(prompt=orch(task="probe-return", scope="file2.py") + "\nContinue.",
+                                        tool_use_id="probe-return"),
+                                  config=config, state_root=state, repo_root=repo)
+    assert probes == [("codex", config["sol_model"], 25)]
+    assert active_coder_state.read(repo, state)["active_coder"] == "primary"
+    assert returned["hookSpecificOutput"]["updatedInput"].get("agent", "codex") == "codex"
+    path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
+    notice = compaction_advisor._read_state(path, "session-1")["fallback_pending"]
+    assert notice and notice["notice"] is True
+    expected = f"**⚓ {config['sol_model']} credit is available; primary coder restored.**"
+    assert compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
+    assert compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": expected}, repo) is None
+    assert compaction_advisor._read_state(path, "session-1")["fallback_pending"] is None
+    assert compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": expected}, repo) is None
+    assert question["model"] == "anthropic/claude-sonnet"
+
+
+def test_integrated_high_quota_decline_dispatches_primary_once_per_reset(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    quota = {"5h_used_pct": 96, "5h_resets_at": "2099-01-01T05:00:00Z"}
+    monkeypatch.setattr(active_coder_state.state_root, "default_state_root", lambda: state)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: quota)
+
+    blocked = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert blocked["hookSpecificOutput"]["permissionDecision"] == "deny"
+    _show_fallback_question(repo, state, "session-1")
+    declined = codex.pre_tool_use(
+        event(prompt=orch(scope="file0.py") + "\nKeep primary.", tool_use_id="decline-primary"),
+        config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in declined["hookSpecificOutput"]
+    assert declined["hookSpecificOutput"]["updatedInput"].get("agent", "codex") == "codex"
+    assert active_coder_state.read(repo, state)["active_coder"] == "primary"
+
+    again = codex.pre_tool_use(
+        event(prompt=orch(task="same-reset", scope="file1.py") + "\nContinue.", tool_use_id="same-reset"),
+        config=config, state_root=state, repo_root=repo)
+    reason = again["hookSpecificOutput"].get("permissionDecisionReason", "")
+    assert "FALLBACK_CONSENT_REQUIRED" not in reason
+    assert compaction_advisor._read_state(
+        compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["fallback_pending"] is None
+
+
+def test_integrated_rate_limit_switch_returns_silently_after_wait(workspace, config, monkeypatch):
+    repo, state = workspace
+    _record_launch_failure(workspace, "RATE_LIMITED", retry_after=30)
+    config = _fallback_config(config)
+    now = [1000]
+    monkeypatch.setattr(codex.time, "time", lambda: now[0])
+    monkeypatch.setattr(active_coder_state.state_root, "default_state_root", lambda: state)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    denied = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    _show_fallback_question(repo, state, "session-1")
+    approved = _approve_fallback(workspace, config, state)
+    assert active_coder_state.read(repo, state)["active_coder"] == "fallback"
+    assert approved["hookSpecificOutput"]["updatedInput"].get("model") == config["fallback"]["model"]
+
+    now[0] += 29
+    waiting = codex.pre_tool_use(event(prompt=orch(task="rate-wait", scope="file1.py") + "\nContinue.",
+                                       tool_use_id="rate-wait"),
+                                 config=config, state_root=state, repo_root=repo)
+    assert waiting["hookSpecificOutput"]["updatedInput"]["model"] == "anthropic/claude-sonnet"
+    assert active_coder_state.read(repo, state)["active_coder"] == "fallback"
+    now[0] += 1
+    returned = codex.pre_tool_use(event(prompt=orch(task="rate-return", scope="file2.py") + "\nContinue.",
+                                         tool_use_id="rate-return"),
+                                  config=config, state_root=state, repo_root=repo)
+    assert "permissionDecision" not in returned["hookSpecificOutput"]
+    assert active_coder_state.read(repo, state)["active_coder"] == "primary"
+    pending = compaction_advisor._read_state(
+        compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1")
+    assert pending["fallback_pending"] is None
+
+
+def test_fallback_active_sync_async_reply_and_reviewer_attribution(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    config["fallback"]["family"] = "google"
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    probes = []
+    monkeypatch.setattr(codex.time, "time", lambda: 1000)
+    monkeypatch.setattr(codex.codex_exec_mcp, "probe_api_primary",
+                        lambda *args, **kwargs: probes.append(args) or {"ok": False})
+    active = active_coder_state.read(repo, state)
+    active.update(active_coder="fallback", triggering_evidence={"type": "CREDIT_EXHAUSTED"})
+    active_coder_state.write(repo, active, state)
+
+    sync_call = event(prompt=orch(scope="file0.py") + "\nWork.", tool_use_id="fallback-sync")
+    sync = codex.pre_tool_use(sync_call, config=config, state_root=state, repo_root=repo)
+    sync_input = sync["hookSpecificOutput"]["updatedInput"]
+    assert (sync_input["agent"], sync_input["model"]) == ("opencode", "anthropic/claude-sonnet")
+    _lease_state(workspace).release_task("task-1")
+    async_call = event(START_TOOL, prompt=orch(task="fallback-async", scope="file1.py") + "\nWork.",
+                       tool_use_id="fallback-async")
+    async_input = codex.pre_tool_use(async_call, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]
+    assert (async_input["agent"], async_input["model"]) == ("opencode", "anthropic/claude-sonnet")
+    assert probes == [("codex", config["sol_model"])]
+    _lease_state(workspace).release_task("fallback-async")
+
+    primary_thread = ledger.build_session_record(
+        "pinned-primary", "primary-thread", "normal", config["sol_model"], "high",
+        phase="implementation", scope=["file2.py"], label="primary thread", agent="codex")
+    ledger.SessionLedger(codex._project_state_root(state, project_root.project_key(repo.resolve()))).save(primary_thread)
+    fallback_thread = ledger.build_session_record(
+        "pinned-fallback", "fallback-thread", "normal", config["fallback"]["model"], "none",
+        phase="implementation", scope=["file2.py"], label="fallback thread", agent="opencode")
+    ledger.SessionLedger(codex._project_state_root(state, project_root.project_key(repo.resolve()))).save(fallback_thread)
+    for thread, expected_agent, expected_model, task_id in (
+            ("primary-thread", "codex", config["sol_model"], "pinned-primary"),
+            ("fallback-thread", "opencode", config["fallback"]["model"], "pinned-fallback")):
+        for tool_name, mode in ((codex.CODEX_REPLY_TOOL, None), (START_TOOL, "reply")):
+            reply = event(tool_name, prompt=orch(task=task_id, scope="file2.py") + "\nContinue.",
+                          tool_use_id=f"reply-{expected_agent}-{mode or 'sync'}", threadId=thread,
+                          **({"mode": mode} if mode else {}))
+            if mode:
+                reply["tool_input"].pop("label", None)
+            reply_result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+            assert "updatedInput" in reply_result["hookSpecificOutput"], reply_result
+            pending = codex._read_pending(state, reply)
+            assert reply_result["hookSpecificOutput"]["updatedInput"].get("agent", "codex") == expected_agent
+            assert pending["agent"] == expected_agent and pending["model"] == expected_model
+            _lease_state(workspace).release_task(task_id)
+
+    call = event(tool_use_id="reviewer-family")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    pending_path = codex._pending_path(state, call)
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending["reviewer_candidates"] = [{"agent": "agy", "model": "gemini-3.8-flash"}]
+    codex._atomic_json_write(pending_path, pending)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    invoked = []
+    post = codex.post_tool_use(
+        {**call, "hook_event_name": "PostToolUse", "tool_response":
+         {"structuredContent": {"threadId": "reviewer-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo,
+        reviewer=lambda **values: invoked.append(values))
+    bundle = response_bundle(post, config)
+    assert not invoked
+    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"

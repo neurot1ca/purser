@@ -1393,7 +1393,8 @@ def pre_tool_use(
             fallback = loaded_config.get("fallback")
             repository_for_fallback, _ = _repo_root(event, repo_root)
             active = (active_coder_state.read(repository_for_fallback, _state_root(state_root))
-                      if repository_for_fallback is not None else None)
+                      if (isinstance(fallback, Mapping) and repository_for_fallback is not None)
+                      else None)
             evidence = active.get("triggering_evidence") if isinstance(active, Mapping) else None
             consent = evidence if isinstance(evidence, Mapping) and "question_session" in evidence else None
             if isinstance(fallback, Mapping) and active is not None and active["active_coder"] == "primary":
@@ -1421,6 +1422,8 @@ def pre_tool_use(
                         lambda value: value.update(triggering_evidence=declined_evidence),
                         _state_root(state_root),
                     )
+                    evidence = declined_evidence
+                    active = {**active, "triggering_evidence": declined_evidence}
                 elif consent is not None:
                     return _deny("FALLBACK_CONSENT_REQUIRED",
                                  "Wait for the fallback question to be shown and answered before dispatch.")
@@ -1587,11 +1590,19 @@ def pre_tool_use(
             low_windows = []
             five_hour_reset = quota.get("5h_resets_at") if isinstance(quota, Mapping) else None
             if isinstance(quota, Mapping) and (active is None or active.get("active_coder") == "primary") and parsed.reason != "user_override":
+                declined_quota_cycle = (
+                    isinstance(active, Mapping)
+                    and isinstance(active.get("triggering_evidence"), Mapping)
+                    and active["triggering_evidence"].get("declined") is True
+                    and active["triggering_evidence"].get("type") == "QUOTA"
+                    and active["triggering_evidence"].get("trigger_id") == five_hour_reset
+                )
                 for label in ("5h", "7d"):
                     used = quota.get(f"{label}_used_pct")
                     reset = quota.get(f"{label}_resets_at")
                     if (isinstance(used, (int, float)) and not isinstance(used, bool)
-                            and used >= LOW_QUOTA_USED_PCT and isinstance(reset, str)):
+                            and used >= LOW_QUOTA_USED_PCT and isinstance(reset, str)
+                            and not (label == "5h" and declined_quota_cycle)):
                         low_windows.append(f"{label}: {used:g}% used, resets at {reset}")
             if low_windows:
                 return _deny(
@@ -1757,7 +1768,9 @@ def pre_tool_use(
         model = route.model
         effort = route.effort
         mechanical_candidate = False
-        active_coder = active_coder_state.read(repository, runtime_root) if repository is not None else None
+        active_coder = (active_coder_state.read(repository, runtime_root)
+                        if (repository is not None and isinstance(loaded_config.get("fallback"), Mapping))
+                        else None)
         fallback_active = bool(new_call and isinstance(active_coder, Mapping)
                                and active_coder.get("active_coder") == "fallback"
                                and isinstance(loaded_config.get("fallback"), Mapping))
