@@ -747,9 +747,12 @@ def refresh_dispatch_board(payload: Mapping[str, Any], repository: Path | None, 
         state = _read_state(path, session_id)
         pending = state["dispatch_pending"]
         if isinstance(pending, dict):
-            pending["board"] = board
-            pending["board_job_ids"] = board_job_ids if isinstance(board_job_ids, list) else []
-            pending["blocked"] = False
+            if board is None and not pending["lines"]:
+                state["dispatch_pending"] = None
+            else:
+                pending["board"] = board
+                pending["board_job_ids"] = board_job_ids if isinstance(board_job_ids, list) else []
+                pending["blocked"] = False
             _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
     except BaseException:
         pass

@@ -2444,6 +2444,9 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                     continue
                 if type(job["boardDisplayCount"]) is int and job["boardDisplayCount"] >= 2:
                     continue
+                if (isinstance(finished, (int, float)) and not isinstance(finished, bool)
+                        and now - finished > 3600):
+                    continue
             item = (job, index)
             if state in {"QUEUED", "RUNNING"}:
                 in_progress.append(item)
@@ -2452,7 +2455,7 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
         jobs = in_progress + [item for _finished, item in sorted(
             finished_jobs, key=lambda entry: entry[0], reverse=True
         )]
-        if len(jobs) < 2:
+        if not in_progress and not any(job.get("boardDisplayCount") == 0 for _finished, (job, _index) in finished_jobs):
             return None, []
 
         def board_row(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple[int, int, float, str]:
@@ -2544,9 +2547,9 @@ def _append_project_job_status(response: dict[str, Any], root: Path,
                                project_key: str, event: Mapping[str, Any] | None = None,
                                *, pending_only: bool = False) -> dict[str, Any]:
     board, board_job_ids = _project_job_board_details(root, project_key)
-    if event is not None and (board is not None or pending_only):
+    if event is not None:
         repository, _reason = project_root.resolve_project_root(event)
-        if pending_only:
+        if pending_only or board is None:
             compaction_advisor.refresh_dispatch_board(event, repository, board,
                                                       board_job_ids=board_job_ids)
         elif board is not None:

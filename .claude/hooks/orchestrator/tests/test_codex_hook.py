@@ -1261,8 +1261,24 @@ def _board_job(state_root, name, status="RUNNING", **values):
 def test_project_job_board_is_omitted_with_one_job(workspace):
     _, state = workspace
     _board_job(state, "only")
-    response = codex._append_project_job_status({}, state, "project")
-    assert "systemMessage" not in response
+    assert "| only |" in codex._project_job_board(state, "project")
+
+
+def test_project_job_board_stops_demanding_when_only_seen_terminal_remains(workspace, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time())
+    event_value = {"session_id": "board-idle", "cwd": str(repo)}
+    codex._append_project_job_status({}, state, "project", event_value)
+    pending_path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
+    pending = compaction_advisor._read_state(pending_path, "board-idle")["dispatch_pending"]
+    assert "| finished |" in pending["board"]
+    assert compaction_advisor.stop({**event_value, "last_assistant_message": pending["board"]}, repo) is None
+    assert codex._project_job_board(state, "project") is None
+    compaction_advisor.queue_dispatch(event_value, repo, board="stale board")
+    codex._append_project_job_status({}, state, "project", event_value)
+    assert compaction_advisor._read_state(pending_path, "board-idle")["dispatch_pending"] is None
+    assert compaction_advisor.stop({**event_value, "last_assistant_message": "Done."}, repo) is None
 
 
 def test_project_job_board_orders_attention_running_queued_and_applied(workspace):
@@ -1334,6 +1350,24 @@ def test_finished_job_is_removed_after_two_displayed_boards(workspace, monkeypat
     third = _show_project_board(repo, state)
     assert "finished" not in third
     assert "running-one" in third and "running-two" in third
+
+
+def test_board_only_stop_demand_counts_each_terminal_display(workspace, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    job_id, _ = _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time())
+    _board_job(state, "running", "RUNNING")
+    job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    event_value = {"session_id": "board-only", "cwd": str(repo)}
+    for count in (1, 2):
+        codex._append_project_job_status({}, state, "project", event_value)
+        pending = compaction_advisor._read_state(
+            compaction_advisor._state_directory(repo) / "compaction_advisor.json", "board-only"
+        )["dispatch_pending"]
+        assert "| finished |" in pending["board"]
+        assert compaction_advisor.stop({**event_value, "last_assistant_message": pending["board"]}, repo) is None
+        assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == count
+    assert "finished" not in codex._project_job_board(state, "project")
 
 
 def test_finished_operation_job_without_repo_root_counts_board_display(workspace, monkeypatch):
@@ -1426,7 +1460,7 @@ def test_project_job_board_waits_for_route_p90_before_overdue(workspace, monkeyp
     assert receipt["etaMinutes"] == 5
 
 
-def test_project_job_board_keeps_counted_terminal_jobs_until_two_displays(workspace):
+def test_project_job_board_expires_terminal_jobs_after_one_hour(workspace):
     _, state = workspace
     _board_job(state, "old-applied", "SUCCEEDED", applyState="applied",
                appliedAt=time.time() - 3601, boardDisplayCount=0)
@@ -1435,8 +1469,8 @@ def test_project_job_board_keeps_counted_terminal_jobs_until_two_displays(worksp
     _board_job(state, "active-one")
     _board_job(state, "active-two")
     message = codex._project_job_board(state, "project")
-    assert "old-applied" in message
-    assert "old-failed" in message
+    assert "old-applied" not in message
+    assert "old-failed" not in message
     assert "active-one" in message and "active-two" in message
 
 
@@ -1450,8 +1484,8 @@ def test_project_job_board_requires_two_display_count_for_finished_jobs(workspac
         job = json.loads(path.read_text(encoding="utf-8"))
         job.pop("boardDisplayCount")
         path.write_text(json.dumps(job), encoding="utf-8")
-    _board_job(state, "count-zero", "SUCCEEDED", finishedAt=now - 7200, boardDisplayCount=0)
-    _board_job(state, "count-one", "CANCELLED", finishedAt=now - 7200, boardDisplayCount=1)
+    _board_job(state, "count-zero", "SUCCEEDED", finishedAt=now - 120, boardDisplayCount=0)
+    _board_job(state, "count-one", "CANCELLED", finishedAt=now - 120, boardDisplayCount=1)
     _board_job(state, "count-two", "SUCCEEDED", finishedAt=now, boardDisplayCount=2)
     _board_job(state, "active-one")
     _board_job(state, "active-two")
@@ -1536,7 +1570,7 @@ def test_project_job_board_retains_undisplayed_terminal_and_active_jobs(workspac
     message = codex._project_job_board(state, "project")
 
     assert message is not None
-    assert "| terminal-61m |" in message
+    assert "| terminal-61m |" not in message
     assert "| terminal-59m |" in message
     assert "| running-over-hour |" in message
     assert "| queued-over-hour |" in message
