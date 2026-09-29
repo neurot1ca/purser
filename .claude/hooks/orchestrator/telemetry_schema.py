@@ -31,6 +31,7 @@ EVENT_TYPES = frozenset(
         "CLAUDE_TASK_USAGE_RECORDED",
         "CONTEXT_IO_TURN_RECORDED",
         "CODEX_RESULT_UNFETCHED",
+        "CLAUDE_DECISION_RECORDED",
     }
 )
 
@@ -147,6 +148,7 @@ _WINDOWS_RESERVED = frozenset(
 )
 _ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard"})
 _PHASES = frozenset({"implementation", "operation", "plan"})
+CLAUDE_TASK_TYPES = frozenset({"implementation", "operation", "plan", "unknown"})
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 _VALIDATIONS = frozenset({"PASS", "FAIL", "UNKNOWN"})
 _REVIEW_RESULTS = frozenset(
@@ -168,7 +170,7 @@ _FAILURE_CODES = frozenset(
         "REVIEWER1_INCOMPLETE",
     }
 )
-_WARNING_CODES = frozenset({"MALFORMED_VERDICT", "MALFORMED_SPOOL_EVENT"})
+_WARNING_CODES = frozenset({"MALFORMED_VERDICT", "MALFORMED_SPOOL_EVENT", "CLAUDE_DECISION_CONFLICT"})
 _VIOLATION_CODES = frozenset(
     {
         "MALFORMED_TOOL_INPUT",
@@ -274,6 +276,7 @@ _PAYLOAD_FIELDS = {
     "CLAUDE_TASK_USAGE_RECORDED": CLAUDE_TASK_USAGE_PAYLOAD_FIELDS,
     "CONTEXT_IO_TURN_RECORDED": CONTEXT_IO_PAYLOAD_FIELDS,
     "CODEX_RESULT_UNFETCHED": frozenset({"route", "code"}),
+    "CLAUDE_DECISION_RECORDED": frozenset({"decision", "task_type", "source"}),
 }
 
 
@@ -321,6 +324,16 @@ def _project_key(value: Any, *, required: bool) -> str | None:
 
 
 def _payload_value(name: str, value: Any) -> Any:
+    if name == "decision" and isinstance(value, str) and value in {"accepted", "send_back", "rejected"}:
+        return value
+    if name == "task_type" and isinstance(value, str) and value in CLAUDE_TASK_TYPES:
+        return value
+    if name == "source":
+        if (not isinstance(value, Mapping) or set(value) != {"kind", "job_id"}
+                or not isinstance(value.get("kind"), str)
+                or value["kind"] not in {"apply", "reply", "discard"}):
+            raise ValueError("telemetry decision source is invalid")
+        return {"kind": value["kind"], "job_id": _identifier(value["job_id"])}
     if name == "known_concurrent_scopes":
         if not isinstance(value, list) or any(
             not isinstance(item, dict) or set(item) != {"path", "task_id"}

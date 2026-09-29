@@ -44,6 +44,39 @@ import model_listing
 import project_root
 
 
+def _record_claude_decision(job: dict[str, Any], decision: str, kind: str, source_job_id: str) -> None:
+    task_id = job.get("taskId")
+    if not isinstance(task_id, str) or not task_id:
+        return
+    phase = job.get("jobPhase", job.get("phase"))
+    task_type = phase if phase in {"implementation", "operation", "plan"} else "unknown"
+    try:
+        import telemetry
+        repo = job.get("repoRoot")
+        key = project_root.project_key(Path(repo).resolve()) if isinstance(repo, str) else None
+        telemetry.emit("CLAUDE_DECISION_RECORDED", task_id=task_id, project_key=key,
+                       decision=decision, task_type=task_type,
+                       source={"kind": kind, "job_id": source_job_id})
+    except BaseException:
+        pass
+
+
+def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | None:
+    try:
+        for path in sorted(job_dir.glob("*.json")):
+            try:
+                job = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if (isinstance(job, dict) and job.get("threadId") == thread_id
+                    and job.get("state") == "SUCCEEDED" and job.get("applyState") != "applied"
+                    and job.get("worktreePath")):
+                return job
+    except OSError:
+        pass
+    return None
+
+
 TOOL_SCHEMAS = [
     {
         "name": "codex",
@@ -1167,6 +1200,7 @@ class Server:
                                    args.get("sandbox"), None, Path("unused"), prompt)
         except (OSError, ValueError, TypeError):
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "Invalid Codex launch arguments"})
+        send_back_from = None
         with self.jobs_lock:
             existing = self._read_job(job_id)
             if existing is not None:
@@ -1179,6 +1213,7 @@ class Server:
                     reply_record = _load_record(self.state_dir, args["threadId"])
                     if reply_record is None:
                         return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
+                    send_back_from = _unapplied_thread_job(self.job_dir, args["threadId"])
                 now = time.time()
                 job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
                        "deadlineAt": now + timeout, "signalToken": uuid.uuid4().hex,
@@ -1219,6 +1254,8 @@ class Server:
                         print(f"Codex host launch failed: {exc}", file=sys.stderr, flush=True)
                         return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
                                             "errorCode": "PROCESS_UNCONFIRMED", "message": "Host launch unconfirmed"})
+                    if send_back_from is not None:
+                        _record_claude_decision(send_back_from, "send_back", "reply", job_id)
         return self._await_host(job_id)
 
     def _job_worker(self, job_id: str, name: str, args: dict[str, Any]) -> None:
@@ -1379,6 +1416,7 @@ class Server:
                 value = {"applied": True, "resolvedByHand": True, "paths": paths}
                 job.update(applyState="applied", applyResult=value, appliedAt=time.time())
                 self._write_job(job)
+                _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
                 return _job_result(value)
             if "applyResult" in job:
@@ -1406,6 +1444,7 @@ class Server:
                 value = {"applied": True, "paths": paths}
                 job.update(applyState="applied", applyResult=value, appliedAt=time.time())
                 self._write_job(job)
+                _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
                 return _job_result(value)
             reviewed = job.get("reviewedSnapshot")
@@ -1447,6 +1486,7 @@ class Server:
                 job["appliedAt"] = time.time()
             self._write_job(job)
             if outcome["applied"]:
+                _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
             return _job_result(value)
 
@@ -1487,6 +1527,7 @@ class Server:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
         if job["state"] in TERMINAL and job.get("worktreePath") and job.get("applyState") != "applied":
+            _record_claude_decision(job, "rejected", "discard", job_id)
             self._release_job_scope_lease(purser_state_root.default_state_root(), job_id)
         if job.get("leaseQueued") and job["state"] == "QUEUED":
             with _ownership_lock(self.job_dir, job_id):

@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## Unreleased
+
+- Task projections record Purser-derived task types and Claude acceptance decisions with source provenance.
+
 ## 0.1.49 — 2026-09-29
 
 - Parallel worktree jobs conflict less: conflict-prone paths are remembered and serialize overlapping jobs, a finished job is replayed onto the current checkout before review with one in-thread conflict resolution, codex_apply refuses a drifted reviewed diff and re-prepares it, applied or unapplied-for-two-hours jobs release their leases, and resolved:true records a hand-resolved conflict; free OpenCode models are scored by a bundled mechanical benchmark on candidate refresh, and a failed free job with proof of no work is taken over once by Codex; fallback cycles are tested end to end.

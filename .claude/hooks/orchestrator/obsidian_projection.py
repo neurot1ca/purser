@@ -60,6 +60,7 @@ _SAFE_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
 _ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated", "operation"})
 _PHASES = frozenset({"implementation", "operation"})
+_TASK_TYPES = schema.CLAUDE_TASK_TYPES
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 _VALIDATIONS = frozenset({"PASS", "FAIL", "UNKNOWN"})
 _CLAUDE_MODES = frozenset({"AUDIT", "FULL"})
@@ -302,6 +303,7 @@ def _prepare_aggregate(aggregate: Mapping[str, Any]) -> dict[str, Any]:
 
     status = _enum("status", aggregate.get("status"), schema.TASK_STATUSES)
     phase = _enum("phase", aggregate.get("phase"), _PHASES)
+    task_type = _enum("task_type", aggregate.get("task_type", "unknown"), _TASK_TYPES)
     route = _enum("route", aggregate.get("route"), _ROUTES)
     effort = _enum("effort", aggregate.get("effort"), _EFFORTS)
     validation = _enum("validation", aggregate.get("validation"), _VALIDATIONS)
@@ -338,6 +340,32 @@ def _prepare_aggregate(aggregate: Mapping[str, Any]) -> dict[str, Any]:
             else:
                 prepared_context[key] = _number(key, value, integer=True) if value is not None else None
 
+    acceptance = aggregate.get("claude_acceptance", {})
+    if (not isinstance(acceptance, Mapping)
+            or set(acceptance) != {"outcome", "send_backs", "applied_as_is", "sources"}
+            or acceptance.get("outcome") not in {"accepted", "rejected", "unknown"}
+            or not isinstance(acceptance.get("sources"), list)):
+        raise ProjectionError("claude_acceptance is invalid")
+    prepared_acceptance = {
+        "outcome": acceptance["outcome"],
+        "send_backs": _number("send_backs", acceptance.get("send_backs"), integer=True),
+        "applied_as_is": _boolean("applied_as_is", acceptance.get("applied_as_is")),
+        "sources": [],
+    }
+    for source in acceptance["sources"]:
+        if (not isinstance(source, Mapping)
+                or set(source) != {"kind", "job_id", "decision", "task_type", "ts_utc"}
+                or source.get("kind") not in {"apply", "reply", "discard"}
+                or source.get("decision") not in {"accepted", "send_back", "rejected"}):
+            raise ProjectionError("claude_acceptance source is invalid")
+        timestamp, _ = _utc_timestamp("claude_acceptance source ts_utc", source.get("ts_utc"), nullable=False)
+        prepared_acceptance["sources"].append({
+            "kind": source["kind"], "job_id": _identifier("claude_acceptance job_id", source.get("job_id")),
+            "decision": source["decision"],
+            "task_type": _enum("claude_acceptance task_type", source.get("task_type"), _TASK_TYPES),
+            "ts_utc": timestamp,
+        })
+
     prepared: dict[str, Any] = {
         "type": "orch-run",
         "schema_version": 1,
@@ -352,6 +380,8 @@ def _prepare_aggregate(aggregate: Mapping[str, Any]) -> dict[str, Any]:
         "ended_at_utc": ended_at,
         "status": status,
         "phase": phase,
+        "task_type": task_type,
+        "claude_acceptance": prepared_acceptance,
         "route": route,
         "model": _identifier("model", aggregate.get("model")),
         "effort": effort,

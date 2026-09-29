@@ -160,6 +160,7 @@ def test_legacy_call_event_without_reason_fields_still_parses():
     )
 
     assert schema.valid_event(legacy)
+    assert "eta_minutes" not in legacy["payload"]
     assert legacy["payload"].get("reason", "unknown") == "unknown"
 
 
@@ -179,7 +180,80 @@ def test_legacy_call_event_without_eta_minutes_still_parses():
     )
 
     assert schema.valid_event(legacy)
-    assert "eta_minutes" not in legacy["payload"]
+
+
+def _decision(state_root, decision, source, *, task_id="decision-task", task_type="implementation"):
+    telemetry.emit(
+        "CLAUDE_DECISION_RECORDED", task_id=task_id, project_key="unresolved",
+        state_root=state_root, decision=decision, task_type=task_type, source=source,
+    )
+
+
+def test_claude_decision_schema_rejects_invalid_decision_and_source_kind():
+    payload = {"decision": "accepted", "task_type": "implementation",
+               "source": {"kind": "apply", "job_id": "job-1"}}
+    assert schema.valid_event(schema.build_event("CLAUDE_DECISION_RECORDED",
+                                                  task_id="decision-task", payload=payload))
+    for invalid in ({**payload, "decision": "maybe"},
+                    {**payload, "source": {"kind": "manual", "job_id": "job-1"}}):
+        with pytest.raises(ValueError):
+            schema.build_event("CLAUDE_DECISION_RECORDED", task_id="decision-task", payload=invalid)
+
+
+def test_claude_decision_duplicate_source_counts_once(tmp_path):
+    pointer = {"kind": "reply", "job_id": "reply-1"}
+    _decision(tmp_path, "send_back", pointer)
+    _decision(tmp_path, "send_back", pointer)
+    telemetry.update_task("decision-task", state_root=tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "decision-task.json").read_text(encoding="utf-8"))
+    assert aggregate["claude_acceptance"]["send_backs"] == 1
+    assert len(aggregate["claude_acceptance"]["sources"]) == 1
+
+    _decision(tmp_path, "accepted", {"kind": "apply", "job_id": "apply-as-is"}, task_id="as-is")
+    telemetry.update_task("as-is", state_root=tmp_path)
+    as_is = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                        "tasks" / "as-is.json").read_text(encoding="utf-8"))
+    assert as_is["claude_acceptance"]["applied_as_is"] is True
+    projected = telemetry.obsidian_projection._prepare_aggregate(as_is)
+    assert projected["task_type"] == "implementation"
+    assert projected["claude_acceptance"]["sources"][0]["ts_utc"]
+
+
+def test_claude_send_back_then_acceptance_projects_applied_as_is_false(tmp_path):
+    _decision(tmp_path, "send_back", {"kind": "reply", "job_id": "reply-1"})
+    _decision(tmp_path, "accepted", {"kind": "apply", "job_id": "apply-1"})
+    telemetry.update_task("decision-task", state_root=tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "decision-task.json").read_text(encoding="utf-8"))
+    assert aggregate["task_type"] == "implementation"
+    assert aggregate["claude_acceptance"] == {
+        "outcome": "accepted", "send_backs": 1, "applied_as_is": False,
+        "sources": aggregate["claude_acceptance"]["sources"],
+    }
+    assert [source["ts_utc"] for source in aggregate["claude_acceptance"]["sources"]]
+
+
+def test_conflicting_claude_terminal_decisions_project_unknown_and_warning(tmp_path):
+    _decision(tmp_path, "accepted", {"kind": "apply", "job_id": "apply-1"})
+    _decision(tmp_path, "rejected", {"kind": "discard", "job_id": "discard-1"})
+    telemetry.update_task("decision-task", state_root=tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "decision-task.json").read_text(encoding="utf-8"))
+    assert aggregate["claude_acceptance"]["outcome"] == "unknown"
+    assert any(event["event_type"] == "TELEMETRY_WARNING" and
+               event["payload"]["warning_code"] == "CLAUDE_DECISION_CONFLICT"
+               for event in _events(tmp_path))
+
+
+def test_task_without_claude_decisions_projects_unknown(tmp_path):
+    _emit_task(tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "task-1.json").read_text(encoding="utf-8"))
+    assert aggregate["task_type"] == "unknown"
+    assert aggregate["claude_acceptance"] == {
+        "outcome": "unknown", "send_backs": 0, "applied_as_is": False, "sources": []
+    }
 
 
 def _run_task_process(state_root, action, task_id):

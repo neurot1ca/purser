@@ -641,6 +641,13 @@ def finish(client, job_id, wanted, *, timeout=30):
     pytest.fail(f"expected {wanted}, got {result}")
 
 
+def decision_events(area):
+    events = []
+    for path in (area / "root" / "telemetry" / "events").glob("????-??/session_*.jsonl"):
+        events.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    return [event for event in events if event["event_type"] == "CLAUDE_DECISION_RECORDED"]
+
+
 def wait_for_path(path, exists, description, timeout=30):
     deadline = time.monotonic() + timeout
     while path.exists() != exists and time.monotonic() < deadline:
@@ -933,6 +940,80 @@ def test_codex_apply_is_idempotent_and_reports_conflicts(area):
         assert [item["path"] for item in learned] == ["tracked.txt"]
         assert isinstance(learned[0]["recorded_at"], (int, float))
         assert Path(other_result["worktreePath"]).is_dir()
+    finally:
+        client.close()
+
+
+def test_apply_and_reply_emit_decisions_but_conflict_does_not(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "work", "cwd": str(repo), "worktree": True,
+            "taskId": "telemetry-task", "jobPhase": "implementation",
+        })
+        finished = finish(client, started["jobId"], "SUCCEEDED")
+        reply = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "repair", "mode": "reply",
+            "threadId": finished["threadId"], "taskId": "telemetry-task",
+            "jobPhase": "implementation",
+        })
+        events = decision_events(area)
+        assert [(event["payload"]["decision"], event["payload"]["source"])
+                for event in events] == [("send_back", {"kind": "reply", "job_id": reply["jobId"]})]
+
+        finish(client, reply["jobId"], "SUCCEEDED")
+        applied = job_call(client, "codex_apply", {"jobId": reply["jobId"]})
+        assert applied["applied"] is True
+        accepted = decision_events(area)
+        assert [(event["payload"]["decision"], event["payload"]["source"])
+                for event in accepted] == [
+                    ("send_back", {"kind": "reply", "job_id": reply["jobId"]}),
+                    ("accepted", {"kind": "apply", "job_id": reply["jobId"]}),
+                ]
+
+        (repo / "tracked.txt").write_text("concurrent\n", encoding="utf-8")
+        conflict = job_call(client, "codex_apply", {"jobId": started["jobId"]})
+        assert conflict["applied"] is False
+        assert len(decision_events(area)) == 2
+    finally:
+        client.close()
+
+
+def test_terminal_unapplied_cancel_emits_rejected(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "work", "cwd": str(repo), "worktree": True,
+            "taskId": "cancel-task", "jobPhase": "operation",
+        })
+        finish(client, started["jobId"], "SUCCEEDED")
+        job_call(client, "codex_cancel", {"jobId": started["jobId"]})
+        event, = decision_events(area)
+        assert event["payload"]["decision"] == "rejected"
+        assert event["payload"]["task_type"] == "operation"
+        assert event["payload"]["source"] == {"kind": "discard", "job_id": started["jobId"]}
+    finally:
+        client.close()
+
+
+def test_apply_telemetry_failure_does_not_break_apply(area, monkeypatch):
+    import telemetry
+
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "work", "cwd": str(repo), "worktree": True,
+            "taskId": "fail-open-task", "jobPhase": "implementation",
+        })
+        finish(client, started["jobId"], "SUCCEEDED")
+        monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: area / "root")
+        monkeypatch.setattr(telemetry, "emit", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("telemetry down")))
+        server = codex_exec_mcp.Server(job_dir=area / "root" / "codex_exec_mcp" / "jobs")
+        result = server._apply_job({"jobId": started["jobId"]})
+        assert result["structuredContent"]["applied"] is True
     finally:
         client.close()
 

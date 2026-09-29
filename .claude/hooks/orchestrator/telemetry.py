@@ -1056,6 +1056,10 @@ def _new_aggregate(
         "ended_at": None,
         "duration_ms": None,
         "phase": None,
+        "task_type": "unknown",
+        "claude_acceptance": {
+            "outcome": "unknown", "send_backs": 0, "applied_as_is": False, "sources": []
+        },
         "route": None,
         "model": None,
         "effort": None,
@@ -1166,7 +1170,7 @@ def _fold_claude_usage(aggregate: dict[str, Any], payload: Mapping[str, Any], en
     _recompute_claude_delta(usage)
 
 
-def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
+def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
     event_type = event["event_type"]
     payload = event["payload"]
     for field in ("repo", "branch"):
@@ -1235,6 +1239,28 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
         aggregate["thread_continuity_violations"] += 1
     elif event_type == "UNKNOWN_CONCURRENT_WRITER":
         aggregate["concurrent_writer"] = True
+    elif event_type == "CLAUDE_DECISION_RECORDED":
+        acceptance = aggregate["claude_acceptance"]
+        source = payload["source"]
+        pointer = (source["kind"], source["job_id"])
+        sources = acceptance["sources"]
+        if any((item["kind"], item["job_id"]) == pointer for item in sources):
+            return False
+        terminals_before = {item["decision"] for item in sources
+                            if item["decision"] in {"accepted", "rejected"}}
+        sources.append({**source, "decision": payload["decision"],
+                        "task_type": payload["task_type"], "ts_utc": event["ts_utc"]})
+        if aggregate["task_type"] == "unknown" and payload["task_type"] != "unknown":
+            aggregate["task_type"] = payload["task_type"]
+        if payload["decision"] == "send_back":
+            acceptance["send_backs"] += 1
+        terminals = {item["decision"] for item in sources
+                     if item["decision"] in {"accepted", "rejected"}}
+        acceptance["outcome"] = next(iter(terminals)) if len(terminals) == 1 else "unknown"
+        acceptance["applied_as_is"] = (
+            acceptance["outcome"] == "accepted" and acceptance["send_backs"] == 0
+        )
+        return len(terminals) > 1 and len(terminals_before) <= 1
     elif event_type == "CLAUDE_TASK_USAGE_RECORDED":
         usage = aggregate["usage"]
         current_reason = usage.get("claude_task_usage_unknown_reason")
@@ -1286,6 +1312,7 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> None:
                     usage[token_field] = val
     elif event_type == "CONTEXT_IO_TURN_RECORDED":
         aggregate["context_io"] = dict(payload)
+    return False
 
 
 def _raw_events(root: Path) -> Iterable[dict[str, Any]]:
@@ -1468,8 +1495,12 @@ def _build_task(
             aggregate["usage"] = usage
         else:
             aggregate["usage"] = _usage_defaults()
+    decision_conflict = False
     for event in sorted(events, key=lambda item: (str(item["ts_utc"]), str(item["event_id"]))):
-        _fold_event(aggregate, event)
+        decision_conflict = _fold_event(aggregate, event) or decision_conflict
+    if decision_conflict:
+        emit("TELEMETRY_WARNING", task_id=task_id, project_key=project_key,
+             state_root=root.parent, warning_code="CLAUDE_DECISION_CONFLICT")
     verdict = _verdict(root, task_id, project_key)
     if verdict is not None:
         aggregate["status"], aggregate["ended_at"] = verdict
