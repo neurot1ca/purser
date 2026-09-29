@@ -562,7 +562,7 @@ def _retry_after_seconds(value: Any) -> float | None:
 
 def _launch_failure_evidence(agent: str, events: list[dict[str, Any]], *, stderr: str = "",
                              stdout_had_output: bool = False, output_had_data: bool = False,
-                             process_started: bool = True) -> dict[str, Any]:
+                             process_started: bool = True, process_returncode: int | None = None) -> dict[str, Any]:
     """Classify failed launches; only empty, pre-work evidence is retryable."""
     if not process_started:
         return {"type": "AMBIGUOUS", "retryAfterSeconds": None,
@@ -586,6 +586,18 @@ def _launch_failure_evidence(agent: str, events: list[dict[str, Any]], *, stderr
         return {"type": "CREDIT_EXHAUSTED", "retryAfterSeconds": None, "noWorkProof": False}
     if not work_started and re.search(r"\b429\b|rate[- ]limit(?:ed)?", body, re.I):
         return {"type": "RATE_LIMITED", "retryAfterSeconds": retry_after, "noWorkProof": False}
+
+    if agent == "opencode" and not work_started:
+        provider_error = any(
+            event.get("type") == "error"
+            and isinstance(event.get("error"), dict)
+            and event["error"].get("name") in {"ProviderError", "ModelNotFoundError"}
+            for event in events
+        )
+        if provider_error:
+            return {"type": "PROVIDER_ERROR", "retryAfterSeconds": None, "noWorkProof": True}
+        if process_returncode not in (None, 0):
+            return {"type": "NONZERO_EXIT", "retryAfterSeconds": None, "noWorkProof": True}
 
     if not events and not stdout_had_output and not output_had_data and not stderr.strip():
         return {"type": "NO_RESPONSE", "retryAfterSeconds": None,
@@ -1546,21 +1558,41 @@ class Server:
         while True:
             model = current.get("model")
             agent = current.get("agent", "opencode")
-            if agent == "opencode":
-                attempted.append(model)
+            attempted.append(model)
             result = self._run_tool_once(name, current, request_id, async_job)
-            if result.get("isError"):
-                if result.get("retryableModelMissing") is not True:
+            if not result.get("isError"):
+                value = result.get("structuredContent")
+                if isinstance(value, dict):
+                    value.update(attemptedModels=attempted, servedAgent=agent, servedModel=model)
+                return result
+            if agent != "opencode" or current.get("mechanicalFallback") is not True:
+                result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
+                return result
+
+            missing_model = result.get("retryableModelMissing") is True
+            evidence = result.get("typedEvidence")
+            safe_failure = (missing_model
+                            or isinstance(evidence, dict) and evidence.get("noWorkProof") is True)
+            with self.jobs_lock:
+                if request_id in self.cancelled:
+                    return _tool_result(None, error="cancelled") | {
+                        "attemptedModels": attempted, "servedAgent": None, "servedModel": None}
+                current_job = self._read_job(request_id)
+                if current_job is None or time.time() >= current_job["deadlineAt"]:
                     result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
                     return result
-                with self.jobs_lock:
-                    if request_id in self.cancelled:
-                        return _tool_result(None, error="cancelled") | {
-                            "attemptedModels": attempted, "servedAgent": None, "servedModel": None}
-                    current_job = self._read_job(request_id)
-                    if current_job is None or time.time() >= current_job["deadlineAt"]:
-                        return _tool_result(None, error="deadline exceeded") | {
-                            "attemptedModels": attempted, "servedAgent": None, "servedModel": None}
+            if safe_failure:
+                try:
+                    import ledger
+                    delta = ledger.compute_job_delta(current_job["worktreePath"], current_job["snapshot"])
+                    safe_failure = delta.get("status") == ledger.OK and delta.get("changed_paths") == []
+                except Exception:
+                    safe_failure = False
+            if not safe_failure:
+                result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
+                return result
+
+            if missing_model:
                 if not model_listing.mark_candidate_failed(model):
                     result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
                     return result
@@ -1568,21 +1600,35 @@ class Server:
                 if candidates:
                     current = dict(arguments, agent="opencode", model=candidates[0])
                     continue
-                config = dict(arguments.get("config", {}))
-                if fallback_agent in ("codex", "agy") and fallback_effort != "none":
-                    config["model_reasoning_effort"] = fallback_effort
-                current = dict(arguments, agent=fallback_agent, model=fallback_model, config=config)
-                current.pop("mechanicalFallback", None)
-                agent, model = fallback_agent, fallback_model
-                attempted.append(model)
-                result = self._run_tool_once(name, current, request_id, async_job)
-                if result.get("isError"):
+                if fallback_agent != "codex":
+                    config = dict(arguments.get("config", {}))
+                    if fallback_agent == "agy" and fallback_effort != "none":
+                        config["model_reasoning_effort"] = fallback_effort
+                    current = dict(arguments, agent=fallback_agent, model=fallback_model, config=config)
+                    current.pop("mechanicalFallback", None)
+                    continue
+            elif fallback_agent != "codex":
+                result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
+                return result
+
+            with self.jobs_lock:
+                if request_id in self.cancelled:
+                    return _tool_result(None, error="cancelled") | {
+                        "attemptedModels": attempted, "servedAgent": None, "servedModel": None}
+                current_job = self._read_job(request_id)
+                if current_job is None or time.time() >= current_job["deadlineAt"]:
                     result.update(attemptedModels=attempted, servedAgent=None, servedModel=None)
                     return result
-            value = result.get("structuredContent")
-            if isinstance(value, dict):
-                value.update(attemptedModels=attempted, servedAgent=agent, servedModel=model)
-            return result
+            config = dict(arguments.get("config", {}))
+            if fallback_effort != "none":
+                config["model_reasoning_effort"] = fallback_effort
+            current = dict(arguments, agent="codex", model=fallback_model, config=config)
+            current.pop("mechanicalFallback", None)
+            try:
+                import mechanical_learning
+                mechanical_learning.record_sample(model, False)
+            except BaseException:
+                pass
 
     def _run_tool_once(self, name: str, arguments: dict[str, Any], request_id: Any,
                        async_job: bool = False) -> dict[str, Any]:
@@ -1805,7 +1851,8 @@ class Server:
                     failed_result["typedEvidence"] = _launch_failure_evidence(
                         agent, events, stderr=stderr,
                         stdout_had_output=bool(stdout_had_output),
-                        output_had_data=output_path.is_file() and output_path.stat().st_size > 0)
+                        output_had_data=output_path.is_file() and output_path.stat().st_size > 0,
+                        process_returncode=process.returncode)
                     if (agent == "opencode" and async_job and not _opencode_has_work(events)
                             and any(_opencode_missing_model(event, model) for event in events)):
                         failed_result["retryableModelMissing"] = True

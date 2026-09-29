@@ -105,6 +105,9 @@ def emit(kind, **data):
     print(json.dumps({"type": kind, "timestamp": 1, "sessionID": session, **data}), flush=True)
 if os.environ.get("FAKE_NO_SESSION") == "1":
     sys.exit(0)
+if os.environ.get("FAKE_OC_HANG_BEFORE_EVENTS") == "1":
+    import time
+    time.sleep(60)
 model = args[args.index("--model") + 1]
 if model in os.environ.get("FAKE_OC_MISSING_MODELS", "").split(","):
     emit("error", error={"name": "ModelNotFoundError", "data": {
@@ -1733,10 +1736,11 @@ def test_mechanical_first_measured_opencode_candidate_serves(area):
 def test_mechanical_missing_model_retries_next_measured_candidate(area):
     first, second = "vendor/missing-free", "vendor/second-free"
     path = _candidate_inventory(area, first, second)
+    repo = _git_repo(area)
     client = _opencode_client(area, FAKE_OC_MISSING_MODELS=first)
     try:
         started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
-            "cwd": str(area), "agent": "opencode", "model": first, "mechanicalFallback": True,
+            "cwd": str(repo), "worktree": True, "agent": "opencode", "model": first, "mechanicalFallback": True,
             "fallbackAgent": "opencode", "fallbackModel": "configured/model", "fallbackEffort": "none"})
         result = finish(client, started["jobId"], "SUCCEEDED")
         inventory = json.loads(path.read_text(encoding="utf-8"))["candidates"]
@@ -1747,13 +1751,47 @@ def test_mechanical_missing_model_retries_next_measured_candidate(area):
         client.close()
 
 
+def test_mechanical_missing_model_with_codex_fallback_tries_next_candidate_first(area):
+    first, second = "vendor/missing-free", "vendor/second-free"
+    _candidate_inventory(area, first, second)
+    repo = _git_repo(area)
+    client = _opencode_client(area, FAKE_OC_MISSING_MODELS=first)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+            "cwd": str(repo), "worktree": True, "agent": "opencode", "model": first, "mechanicalFallback": True,
+            "fallbackAgent": "codex", "fallbackModel": "gpt-6-sol", "fallbackEffort": "medium"})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+
+        assert result["attemptedModels"] == [first, second]
+        assert (result["servedAgent"], result["servedModel"]) == ("opencode", second)
+        assert [call["argv"][call["argv"].index("--model") + 1] for call in client.calls()] == [first, second]
+    finally:
+        client.close()
+
+
+def test_mechanical_timeout_finishes_timed_out_without_takeover(area):
+    client = _opencode_client(area, FAKE_OC_HANG_BEFORE_EVENTS="1")
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+            "cwd": str(area), "timeoutSeconds": 1, "agent": "opencode", "model": "vendor/free",
+            "mechanicalFallback": True, "fallbackAgent": "codex", "fallbackModel": "gpt-6-sol",
+            "fallbackEffort": "medium"})
+        result = finish(client, started["jobId"], "TIMED_OUT", timeout=20)
+
+        assert result["errorCode"] == "DEADLINE_EXCEEDED"
+        assert len(client.calls()) == 1
+    finally:
+        client.close()
+
+
 def test_mechanical_all_missing_uses_configured_fallback_binding(area):
     first, second, fallback = "vendor/missing-a", "vendor/missing-b", "configured/model"
     _candidate_inventory(area, first, second)
+    repo = _git_repo(area)
     client = _opencode_client(area, FAKE_OC_MISSING_MODELS=f"{first},{second}")
     try:
         started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
-            "cwd": str(area), "agent": "opencode", "model": first, "mechanicalFallback": True,
+            "cwd": str(repo), "worktree": True, "agent": "opencode", "model": first, "mechanicalFallback": True,
             "fallbackAgent": "opencode", "fallbackModel": fallback, "fallbackEffort": "none"})
         result = finish(client, started["jobId"], "SUCCEEDED")
         assert result["attemptedModels"] == [first, second, fallback]
@@ -1780,6 +1818,79 @@ def test_ambiguous_opencode_error_does_not_retry(area):
         client.close()
 
 
+def _mechanical_bridge(area, monkeypatch, *, changed=False, codex_fails=False):
+    repo = _git_repo(area)
+    snapshot = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"],
+                              check=True, capture_output=True, text=True).stdout.strip()
+    state = area / "root"
+    _candidate_inventory(area, "vendor/free")
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: state)
+    jobs = state / "codex_exec_mcp" / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    server.state_dir = area / "state"
+    job_id = uuid.uuid4().hex
+    server._write_job({"jobId": job_id, "state": "RUNNING", "deadlineAt": time.time() + 30,
+                       "worktreePath": str(repo), "snapshot": snapshot})
+    if changed:
+        (repo / "worker-edit.txt").write_text("partial edit\n", encoding="utf-8")
+    calls = []
+
+    def run_once(_name, arguments, _request_id, _async_job):
+        calls.append(dict(arguments))
+        if arguments.get("agent") == "opencode":
+            return {"isError": True, "errorCode": "CODEX_FAILED", "typedEvidence": {
+                "type": "PROVIDER_ERROR", "noWorkProof": True}}
+        if codex_fails:
+            return {"isError": True, "errorCode": "CODEX_FAILED", "typedEvidence": {
+                "type": "AMBIGUOUS", "noWorkProof": False}}
+        return codex_exec_mcp._tool_result("codex-thread", content="DONE")
+
+    monkeypatch.setattr(server, "_run_tool_once", run_once)
+    return server, job_id, calls
+
+
+def test_mechanical_empty_delta_takes_over_on_codex_once_and_attributes_result(area, monkeypatch):
+    server, job_id, calls = _mechanical_bridge(area, monkeypatch)
+    arguments = {"prompt": "same prompt", "cwd": str(area), "worktree": True,
+                 "agent": "opencode", "model": "vendor/free", "mechanicalFallback": True,
+                 "fallbackAgent": "codex", "fallbackModel": "gpt-6-sol", "fallbackEffort": "medium"}
+
+    result = server._run_tool("codex", arguments, job_id, async_job=True)
+
+    assert len(calls) == 2
+    assert calls[0]["agent"] == "opencode" and calls[1]["agent"] == "codex"
+    assert calls[0]["prompt"] == calls[1]["prompt"]
+    assert calls[0]["cwd"] == calls[1]["cwd"]
+    value = result["structuredContent"]
+    assert (value["servedAgent"], value["servedModel"]) == ("codex", "gpt-6-sol")
+    inventory = json.loads((area / "root" / "opencode" / "candidates.json").read_text(encoding="utf-8"))
+    assert inventory["candidates"][0]["mechanical_samples"] == [False]
+
+
+def test_mechanical_failure_with_edits_is_not_retried(area, monkeypatch):
+    server, job_id, calls = _mechanical_bridge(area, monkeypatch, changed=True)
+    arguments = {"prompt": "same prompt", "cwd": str(area), "worktree": True,
+                 "agent": "opencode", "model": "vendor/free", "mechanicalFallback": True,
+                 "fallbackAgent": "codex", "fallbackModel": "gpt-6-sol", "fallbackEffort": "medium"}
+
+    result = server._run_tool("codex", arguments, job_id, async_job=True)
+
+    assert len(calls) == 1
+    assert result["isError"] is True
+
+
+def test_mechanical_takeover_is_limited_to_one_codex_retry(area, monkeypatch):
+    server, job_id, calls = _mechanical_bridge(area, monkeypatch, codex_fails=True)
+    arguments = {"prompt": "same prompt", "cwd": str(area), "worktree": True,
+                 "agent": "opencode", "model": "vendor/free", "mechanicalFallback": True,
+                 "fallbackAgent": "codex", "fallbackModel": "gpt-6-sol", "fallbackEffort": "medium"}
+
+    result = server._run_tool("codex", arguments, job_id, async_job=True)
+
+    assert len(calls) == 2
+    assert result["isError"] is True
+
+
 def test_opencode_rejects_unmapped_launch_options(area):
     client = _opencode_client(area)
     try:
@@ -1790,6 +1901,17 @@ def test_opencode_rejects_unmapped_launch_options(area):
         assert client.calls() == []
     finally:
         client.close()
+
+
+@pytest.mark.parametrize(("events", "kwargs", "failure_type"), [
+    ([{"type": "error", "error": {"name": "ProviderError"}}], {"process_returncode": 1}, "PROVIDER_ERROR"),
+    ([{"type": "step_start"}], {"process_returncode": 2}, "NONZERO_EXIT"),
+])
+def test_opencode_failure_classification_proves_no_work(events, kwargs, failure_type):
+    evidence = codex_exec_mcp._launch_failure_evidence("opencode", events, **kwargs)
+
+    assert evidence["type"] == failure_type
+    assert evidence["noWorkProof"] is True
 
 
 def test_opencode_final_stop_triggers_existing_exit_grace(area, monkeypatch):

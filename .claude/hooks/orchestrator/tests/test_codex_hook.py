@@ -286,6 +286,8 @@ def test_served_model_updates_ledger_and_finished_telemetry(workspace, config, m
     assert record["live_thread"]["model"] == "gpt-6-sol"
     assert bundle["model"] == "gpt-6-sol"
     assert reviewed and reviewed[0]["model"] == "gpt-6-sol"
+    assert policy.vendor_family(policy.model_family(reviewed[0]["reviewer_model"])) != \
+        policy.vendor_family(policy.model_family(bundle["model"]))
     finished = [item["payload"] for item in _all_telemetry_events(state)
                 if item["event_type"] == "IMPLEMENTER_FINISHED"]
     assert finished[-1]["served_model"] == "gpt-6-sol"
@@ -4898,6 +4900,28 @@ def test_posttool_failure_never_calls_reviewer_and_preserves_ambiguity(workspace
     assert outcome["ambiguous_outcome"] is True
     assert outcome["work_performed"] == "UNKNOWN"
     assert Path(outcome["evidence_path"]).is_file()
+
+
+def test_mechanical_opencode_failure_with_edits_keeps_full_review(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(coder_config, "opencode_candidates", lambda: ["vendor/mechanical-free"])
+    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the change.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("partial worker edit\n", encoding="utf-8")
+    invoked = []
+
+    result = codex.post_tool_use_failure(
+        {**call, "hook_event_name": "PostToolUseFailure", "error": "provider failed after editing"},
+        config=config, state_root=state, repo_root=repo,
+        reviewer=lambda **kwargs: invoked.append(kwargs),
+    )
+
+    assert invoked == []
+    assert "FULL Claude review is required" in result["hookSpecificOutput"]["additionalContext"]
+    outcome = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")["record"]["last_outcome"]
+    assert outcome["claude_review_mode"] == policy.FULL
 
 
 def test_entry_point_writes_exactly_one_json_object(monkeypatch):
