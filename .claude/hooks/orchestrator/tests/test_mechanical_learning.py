@@ -8,6 +8,7 @@ import time
 import codex
 import coder_config
 import mechanical_learning
+import state_root
 import telemetry_schema
 
 
@@ -353,3 +354,56 @@ def test_mechanical_benchmark_runner_error_fails_and_removes_scratch(tmp_path, m
     assert result["chores"][0]["reason"] == "runner_error"
     assert result["passed_count"] == 5
     assert all(not path.exists() for path in paths)
+
+
+def test_benchmark_unscored_candidates_skips_saved_and_records_missing(tmp_path, monkeypatch):
+    path = _inventory(tmp_path, "vendor/scored-free", "vendor/missing-free")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["candidates"][1]["mechanical_samples"] = [True, False]
+    value["candidates"][0]["benchmarks"] = {
+        mechanical_learning.MECHANICAL_SUITE_VERSION: {
+            "passed_count": 4, "total": 6, "recorded_at": "earlier"}}
+    path.write_text(json.dumps(value), encoding="utf-8")
+    calls = []
+
+    def benchmark(model, **_kwargs):
+        calls.append(model)
+        return {"suite_version": mechanical_learning.MECHANICAL_SUITE_VERSION,
+                "model": model, "passed_count": 5, "total": 6, "chores": []}
+
+    monkeypatch.setattr(mechanical_learning, "run_mechanical_benchmark", benchmark)
+    results = mechanical_learning.benchmark_unscored_candidates(root=tmp_path)
+
+    assert calls == ["vendor/missing-free"]
+    assert len(results) == 1
+    assert mechanical_learning.benchmark_unscored_candidates(root=tmp_path) == []
+    assert calls == ["vendor/missing-free"]
+    value = json.loads(path.read_text(encoding="utf-8"))
+    saved = next(item for item in value["candidates"] if item["id"] == "vendor/missing-free")
+    assert saved["mechanical_samples"] == [True, False]
+    record = saved["benchmarks"][mechanical_learning.MECHANICAL_SUITE_VERSION]
+    assert record["passed_count"] == 5 and record["total"] == 6
+    assert isinstance(record["recorded_at"], str) and record["recorded_at"]
+
+
+def test_interrupted_benchmark_leaves_candidate_unscored_and_ineligible(tmp_path, monkeypatch):
+    path = _inventory(tmp_path, "vendor/interrupted-free")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["candidates"][0]["status"] = "unmeasured"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    monkeypatch.setattr(state_root, "default_state_root", lambda: tmp_path)
+
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(mechanical_learning, "run_mechanical_benchmark", interrupt)
+    try:
+        mechanical_learning.benchmark_unscored_candidates(root=tmp_path)
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("benchmark interruption should propagate")
+
+    candidate = json.loads(path.read_text(encoding="utf-8"))["candidates"][0]
+    assert "benchmarks" not in candidate
+    assert coder_config.opencode_candidates() == []

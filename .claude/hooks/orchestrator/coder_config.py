@@ -16,17 +16,31 @@ FAMILY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
 def opencode_candidates() -> list[str]:
-    """Return measured OpenCode candidates from the local inventory, without probing."""
+    """Return measured candidates followed by benchmark-qualified seed candidates."""
     try:
         import state_root
+        import mechanical_learning
         path = state_root.default_state_root() / "opencode" / "candidates.json"
         value = json.loads(path.read_text(encoding="utf-8"))
         candidates = value.get("candidates") if isinstance(value, dict) else None
         if not isinstance(candidates, list):
             return []
-        return [item["id"] for item in candidates
-                if isinstance(item, dict) and item.get("status") == "measured"
-                and isinstance(item.get("id"), str) and MODEL.fullmatch(item["id"])]
+        measured, seeded = [], []
+        for item in candidates:
+            if (not isinstance(item, dict) or item.get("status") == "failed"
+                    or not isinstance(item.get("id"), str) or not MODEL.fullmatch(item["id"])):
+                continue
+            if item.get("status") == "measured":
+                measured.append(item["id"])
+                continue
+            benchmarks = item.get("benchmarks")
+            result = benchmarks.get(mechanical_learning.MECHANICAL_SUITE_VERSION) if isinstance(benchmarks, dict) else None
+            if (isinstance(result, dict) and type(result.get("passed_count")) is int
+                    and type(result.get("total")) is int
+                    and result["total"] == len(mechanical_learning.MECHANICAL_CHORES)
+                    and mechanical_learning.BENCHMARK_MIN_PASSED <= result["passed_count"] <= result["total"]):
+                seeded.append(item["id"])
+        return measured + seeded
     except (OSError, ValueError, TypeError, AttributeError):
         return []
 

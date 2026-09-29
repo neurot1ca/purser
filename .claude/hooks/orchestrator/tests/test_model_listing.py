@@ -57,7 +57,8 @@ def test_refresh_candidates_filters_free_and_preserves_order_status(monkeypatch,
     path = tmp_path / "opencode" / "candidates.json"
     path.parent.mkdir()
     path.write_text(json.dumps({"refreshed_at": "old", "candidates": [
-        {"id": "vendor/model-free", "status": "measured", "added_at": "first"},
+        {"id": "vendor/model-free", "status": "measured", "added_at": "first",
+         "benchmarks": {"1": {"passed_count": 6, "total": 6, "recorded_at": "then"}}},
         {"id": "opencode/catalog-free", "status": "failed", "added_at": "second"},
         {"id": "opencode/removed-free", "status": "failed", "added_at": "second"},
     ]}), encoding="utf-8")
@@ -67,6 +68,7 @@ def test_refresh_candidates_filters_free_and_preserves_order_status(monkeypatch,
     assert [item["id"] for item in value["candidates"]] == [
         "vendor/model-free", "opencode/catalog-free", "another/model-free"]
     assert value["candidates"][0]["status"] == "measured"
+    assert value["candidates"][0]["benchmarks"]["1"]["passed_count"] == 6
     assert value["candidates"][1]["status"] == "failed"
     assert value["candidates"][2]["status"] == "unmeasured"
     assert value["refreshed_at"].endswith("Z")
@@ -107,3 +109,19 @@ def test_opencode_candidates_reads_only_measured_inventory_ids(monkeypatch, tmp_
     assert coder_config.opencode_candidates() == ["first/model-free"]
     path.write_text("not json", encoding="utf-8")
     assert coder_config.opencode_candidates() == []
+
+
+def test_opencode_candidates_ranks_current_benchmark_passes_after_measured(monkeypatch, tmp_path):
+    path = tmp_path / "opencode" / "candidates.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"candidates": [
+        {"id": "seed/pass-free", "status": "unmeasured",
+         "benchmarks": {"1": {"passed_count": 5, "total": 6}}},
+        {"id": "real/measured-free", "status": "measured"},
+        {"id": "seed/fail-free", "status": "unmeasured",
+         "benchmarks": {"1": {"passed_count": 4, "total": 6}}},
+        {"id": "seed/old-free", "status": "unmeasured",
+         "benchmarks": {"0": {"passed_count": 6, "total": 6}}},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(state_root, "default_state_root", lambda: tmp_path)
+    assert coder_config.opencode_candidates() == ["real/measured-free", "seed/pass-free"]

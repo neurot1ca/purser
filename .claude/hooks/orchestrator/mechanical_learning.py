@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import shutil
@@ -19,6 +20,7 @@ import state_root
 
 
 MIN_SAMPLES = 5
+BENCHMARK_MIN_PASSED = 5
 RECENT_SAMPLES = 20
 SHADOW_TIMEOUT_SECONDS = 45
 MECHANICAL_SUITE_VERSION = "1"
@@ -83,6 +85,62 @@ def _inventory(root: Path) -> tuple[Path, dict[str, Any]]:
 def sample_count(candidate: dict[str, Any]) -> int:
     samples = candidate.get("mechanical_samples", [])
     return len(samples) if isinstance(samples, list) else 0
+
+
+def _has_current_benchmark(candidate: dict[str, Any]) -> bool:
+    benchmarks = candidate.get("benchmarks")
+    return isinstance(benchmarks, dict) and MECHANICAL_SUITE_VERSION in benchmarks
+
+
+def record_benchmark(result: dict[str, Any], *, root: Path | None = None) -> bool:
+    """Persist one complete suite result without changing real-job samples."""
+    model = result.get("model")
+    suite_version = result.get("suite_version")
+    passed, total = result.get("passed_count"), result.get("total")
+    if (not isinstance(model, str) or suite_version != MECHANICAL_SUITE_VERSION
+            or type(passed) is not int or type(total) is not int
+            or total != len(MECHANICAL_CHORES) or not 0 <= passed <= total):
+        return False
+    state = root or state_root.default_state_root()
+    path = state / "opencode" / "candidates.json"
+    with model_listing._candidate_lock(path) as acquired:
+        if not acquired:
+            return False
+        path, value = _inventory(state)
+        candidate = next((item for item in value["candidates"]
+                          if isinstance(item, dict) and item.get("id") == model), None)
+        if candidate is None:
+            return False
+        benchmarks = candidate.get("benchmarks")
+        if not isinstance(benchmarks, dict):
+            benchmarks = {}
+        benchmarks[MECHANICAL_SUITE_VERSION] = {
+            "passed_count": passed,
+            "total": total,
+            "recorded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        candidate["benchmarks"] = benchmarks
+        model_listing._atomic_write(path, value)
+        return True
+
+
+def benchmark_unscored_candidates(*, root: Path | None = None, runner: Any = None) -> list[dict[str, Any]]:
+    """Benchmark candidates missing this suite's result; completed results are never repeated."""
+    state = root or state_root.default_state_root()
+    path = state / "opencode" / "candidates.json"
+    with model_listing._candidate_lock(path) as acquired:
+        if not acquired:
+            return []
+        _, value = _inventory(state)
+        models = [item["id"] for item in value["candidates"]
+                  if isinstance(item, dict) and isinstance(item.get("id"), str)
+                  and not _has_current_benchmark(item)]
+    results = []
+    for model in models:
+        result = run_mechanical_benchmark(model, runner=runner)
+        if record_benchmark(result, root=state):
+            results.append(result)
+    return results
 
 
 def ranked_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
