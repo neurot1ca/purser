@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 
@@ -266,3 +267,89 @@ def test_rank_change_telemetry_schema_is_valid():
     event = telemetry_schema.build_event("MECHANICAL_MODEL_RANK_CHANGED", project_key="0123456789abcdef",
         payload={"served_model": "vendor/model-free", "old_rank": 2, "new_rank": 1})
     assert telemetry_schema.valid_event(event)
+
+
+def _benchmark_fake_runner(chore_prompts, *, fail=None, timeout=None, paths=None):
+    def runner(command, **kwargs):
+        scratch = Path(kwargs["cwd"])
+        if paths is not None:
+            paths.append(scratch)
+        prompt = command[-1]
+        chore = next(item for item in chore_prompts if item["prompt"] == prompt)
+        if chore["id"] == timeout:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        for relative, content in chore["expected_files"].items():
+            (scratch / relative).write_text(content, encoding="utf-8")
+        if chore["id"] == fail:
+            (scratch / "unexpected.txt").write_text("outside scope", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+    return runner
+
+
+def _use_benchmark_scratch(tmp_path, monkeypatch):
+    class Scratch:
+        def __enter__(self):
+            self.path = tmp_path
+            self.path.mkdir(exist_ok=True)
+            return str(self.path)
+
+        def __exit__(self, *_):
+            shutil.rmtree(self.path, ignore_errors=True)
+
+    monkeypatch.setattr(mechanical_learning.tempfile, "TemporaryDirectory", lambda **_: Scratch())
+
+
+def test_mechanical_benchmark_all_chores_pass(tmp_path, monkeypatch):
+    chores = mechanical_learning.MECHANICAL_CHORES
+    _use_benchmark_scratch(tmp_path, monkeypatch)
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    result = mechanical_learning.run_mechanical_benchmark(
+        "vendor/test-free", runner=_benchmark_fake_runner(chores))
+
+    assert result["suite_version"] == mechanical_learning.MECHANICAL_SUITE_VERSION
+    assert result["model"] == "vendor/test-free"
+    assert result["passed_count"] == result["total"] == 6
+    assert all(item["passed"] for item in result["chores"])
+
+
+def test_mechanical_benchmark_rejects_out_of_scope_edit(tmp_path, monkeypatch):
+    chores = mechanical_learning.MECHANICAL_CHORES
+    _use_benchmark_scratch(tmp_path, monkeypatch)
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    result = mechanical_learning.run_mechanical_benchmark(
+        "vendor/test-free", runner=_benchmark_fake_runner(chores, fail=chores[0]["id"]))
+
+    assert result["passed_count"] == 5
+    assert result["chores"][0] == {"id": chores[0]["id"], "passed": False, "reason": "out_of_scope_edit"}
+
+
+def test_mechanical_benchmark_timeout_fails_and_removes_scratch(tmp_path, monkeypatch):
+    chores = mechanical_learning.MECHANICAL_CHORES
+    paths = []
+    _use_benchmark_scratch(tmp_path, monkeypatch)
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    result = mechanical_learning.run_mechanical_benchmark(
+        "vendor/test-free", runner=_benchmark_fake_runner(chores, timeout=chores[0]["id"], paths=paths))
+
+    assert result["chores"][0]["reason"] == "timeout"
+    assert result["passed_count"] == 5
+    assert all(not path.exists() for path in paths)
+
+
+def test_mechanical_benchmark_runner_error_fails_and_removes_scratch(tmp_path, monkeypatch):
+    chores = mechanical_learning.MECHANICAL_CHORES
+    paths = []
+    _use_benchmark_scratch(tmp_path, monkeypatch)
+
+    def runner(command, **kwargs):
+        paths.append(Path(kwargs["cwd"]))
+        if command[-1] == chores[0]["prompt"]:
+            raise RuntimeError("runner failed")
+        return _benchmark_fake_runner(chores)(command, **kwargs)
+
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
+    result = mechanical_learning.run_mechanical_benchmark("vendor/test-free", runner=runner)
+
+    assert result["chores"][0]["reason"] == "runner_error"
+    assert result["passed_count"] == 5
+    assert all(not path.exists() for path in paths)

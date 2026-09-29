@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 import uuid
@@ -20,6 +21,29 @@ import state_root
 MIN_SAMPLES = 5
 RECENT_SAMPLES = 20
 SHADOW_TIMEOUT_SECONDS = 45
+MECHANICAL_SUITE_VERSION = "1"
+MECHANICAL_CHORES = (
+    {"id": "rename_symbol", "prompt": "Rename old_total to new_total in both files.",
+     "initial_files": {"main.py": "from helpers import old_total\nprint(old_total([1, 2]))\n",
+                       "helpers.py": "def old_total(values):\n    return sum(values)\n"},
+     "expected_files": {"main.py": "from helpers import new_total\nprint(new_total([1, 2]))\n",
+                        "helpers.py": "def new_total(values):\n    return sum(values)\n"}},
+    {"id": "add_import", "prompt": "Add the standard-library math import used by rounded_down.",
+     "initial_files": {"calc.py": "def rounded_down(value):\n    return math.floor(value)\n"},
+     "expected_files": {"calc.py": "import math\n\ndef rounded_down(value):\n    return math.floor(value)\n"}},
+    {"id": "fix_string_typo", "prompt": "Fix the typo in the user-facing message.",
+     "initial_files": {"messages.py": "MESSAGE = \"Please recieve a receipt.\"\n"},
+     "expected_files": {"messages.py": "MESSAGE = \"Please receive a receipt.\"\n"}},
+    {"id": "update_config", "prompt": "Change the retry count from 2 to 3.",
+     "initial_files": {"settings.json": "{\n  \"retries\": 2\n}\n"},
+     "expected_files": {"settings.json": "{\n  \"retries\": 3\n}\n"}},
+    {"id": "append_list_entry", "prompt": "Append green to the colors list.",
+     "initial_files": {"colors.py": "COLORS = [\"red\", \"blue\"]\n"},
+     "expected_files": {"colors.py": "COLORS = [\"red\", \"blue\", \"green\"]\n"}},
+    {"id": "delete_dead_function", "prompt": "Delete only the unused dead_function definition.",
+     "initial_files": {"utils.py": "def live_function():\n    return 1\n\n\ndef dead_function():\n    return 0\n"},
+     "expected_files": {"utils.py": "def live_function():\n    return 1\n"}},
+)
 _TOKEN = re.compile(r"[a-z0-9]+")
 
 
@@ -221,6 +245,71 @@ def _copy_scratch(source: Path, scratch: Path) -> None:
     shutil.copytree(source, scratch, ignore=safe_entries)
 
 
+def _run_opencode(model: str, prompt: str, scratch: Path, timeout: int,
+                  runner: Any = None) -> subprocess.CompletedProcess[str]:
+    import reviewer
+    permissions = dict(reviewer._OPENCODE_CONFINED_PERMISSIONS)
+    config = {"permission": permissions,
+              "agent": {"purser-shadow": {"mode": "primary", "permission": permissions}}}
+    import coder_config
+    executable = coder_config.opencode_binary()
+    if not executable:
+        raise FileNotFoundError("OpenCode executable is unavailable")
+    command = [executable, "run", "--format", "json", "--model", model,
+               "--agent", "purser-shadow", "--dir", str(scratch), prompt]
+    environment = {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps(config, separators=(",", ":"))}
+    return (runner or subprocess.run)(command, cwd=scratch, capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace", timeout=timeout,
+                                      check=False, env=environment,
+                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                      if os.name == "nt" else 0)
+
+
+def _normalize_chore_text(value: str) -> str:
+    return "\n".join(line.rstrip() for line in value.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+
+
+def run_mechanical_benchmark(model: str, *, timeout_seconds: int = SHADOW_TIMEOUT_SECONDS,
+                             runner: Any = None) -> dict[str, Any]:
+    results = []
+    for chore in MECHANICAL_CHORES:
+        reason = "matched"
+        try:
+            with tempfile.TemporaryDirectory(prefix="purser-mechanical-") as directory:
+                scratch = Path(directory)
+                for name, content in chore["initial_files"].items():
+                    path = scratch / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content, encoding="utf-8")
+                try:
+                    result = _run_opencode(model, chore["prompt"], scratch, timeout_seconds, runner)
+                except subprocess.TimeoutExpired:
+                    reason = "timeout"
+                else:
+                    if result.returncode != 0:
+                        reason = "runner_error"
+                    else:
+                        actual = {}
+                        for path in scratch.rglob("*"):
+                            if path.is_symlink():
+                                reason = "out_of_scope_edit"
+                                break
+                            if path.is_file():
+                                actual[path.relative_to(scratch).as_posix()] = path.read_text(encoding="utf-8")
+                        if reason == "matched" and set(actual) != set(chore["expected_files"]):
+                            reason = "out_of_scope_edit"
+                        elif reason == "matched" and any(
+                                _normalize_chore_text(actual[name]) != _normalize_chore_text(expected)
+                                for name, expected in chore["expected_files"].items()):
+                            reason = "mismatch"
+        except Exception:
+            reason = "runner_error"
+        results.append({"id": chore["id"], "passed": reason == "matched", "reason": reason})
+    passed = sum(result["passed"] for result in results)
+    return {"suite_version": MECHANICAL_SUITE_VERSION, "model": model,
+            "passed_count": passed, "total": len(MECHANICAL_CHORES), "chores": results}
+
+
 def run_shadow(job_path: Path) -> bool:
     job = json.loads(job_path.read_text(encoding="utf-8"))
     scratch = Path(job["scratch"])
@@ -230,22 +319,7 @@ def run_shadow(job_path: Path) -> bool:
         lock.write_text(str(os.getpid()), encoding="utf-8")
         source = Path(job["repository"]).resolve()
         _copy_scratch(source, scratch)
-        import reviewer
-        permissions = dict(reviewer._OPENCODE_CONFINED_PERMISSIONS)
-        config = {"permission": permissions,
-                  "agent": {"purser-shadow": {"mode": "primary", "permission": permissions}}}
-        import coder_config
-        executable = coder_config.opencode_binary()
-        if not executable:
-            raise FileNotFoundError("OpenCode executable is unavailable")
-        command = [executable, "run", "--format", "json", "--model", job["model"],
-                   "--agent", "purser-shadow", "--dir", str(scratch), job["prompt"]]
-        environment = {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps(config, separators=(",", ":"))}
-        result = subprocess.run(command, cwd=scratch, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=SHADOW_TIMEOUT_SECONDS,
-                                check=False, env=environment,
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-                                if os.name == "nt" else 0)
+        result = _run_opencode(job["model"], job["prompt"], scratch, SHADOW_TIMEOUT_SECONDS)
         report = _final_report(result.stdout) if result.returncode == 0 else ""
         success = bool(report and reports_agree(report, job["accepted_report"]))
     except Exception:
