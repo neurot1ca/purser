@@ -96,9 +96,40 @@ def test_reviewer_launches_and_git_calls_hide_windows_console(monkeypatch):
     reviewer._new_file_diff(repo, "reviewer.py")
 
     assert len(launch_calls) == 3
-    assert all(call["creationflags"] & 0x08000000 for call in launch_calls)
+    assert all(call["creationflags"] & 0x08000000 for call in launch_calls[1:])
     assert len(git_calls) == 2
     assert all(call["creationflags"] & 0x08000000 for call in git_calls)
+
+
+def test_agy_windows_launch_uses_hidden_new_console(monkeypatch):
+    class StartupInfo:
+        dwFlags = 0
+        wShowWindow = 0
+
+    monkeypatch.setattr(reviewer, "os", SimpleNamespace(
+        name="nt", path=os.path, devnull=os.devnull, environ=os.environ,
+    ))
+    monkeypatch.setattr(reviewer.subprocess, "STARTUPINFO", StartupInfo, raising=False)
+    monkeypatch.setattr(reviewer.subprocess, "STARTF_USESHOWWINDOW", 1, raising=False)
+    monkeypatch.setattr(reviewer.subprocess, "SW_HIDE", 0, raising=False)
+    launch_calls = []
+
+    def popen(command, **kwargs):
+        launch_calls.append(kwargs)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(reviewer.subprocess, "Popen", popen)
+    reviewer.AGY_ADAPTER.invoke(
+        ["agy"], runner=reviewer.subprocess.Popen, cwd=Path.cwd(), timeout=1
+    )
+
+    assert len(launch_calls) == 1
+    launch = launch_calls[0]
+    assert launch["creationflags"] == 0x00000010  # CREATE_NEW_CONSOLE
+    assert isinstance(launch["startupinfo"], StartupInfo)
+    assert launch["startupinfo"].dwFlags & 1  # STARTF_USESHOWWINDOW
+    assert launch["startupinfo"].wShowWindow == 0  # SW_HIDE
+    assert launch["capture_output"] is True
 
 
 def diff_for(path, *lines, new_file=False):

@@ -138,8 +138,7 @@ class _AgyAdapter:
             "timeout": timeout,
             "check": False,
         }
-        if os.name == "nt":
-            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+        kwargs.update(_agy_launch_options())
         return runner(
             command,
             **kwargs,
@@ -156,6 +155,18 @@ class _AgyAdapter:
 
 AGY_ADAPTER = _AgyAdapter()
 PINNED_MODEL = AGY_ADAPTER.allowed_model
+
+
+def _agy_launch_options() -> dict[str, Any]:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "creationflags": subprocess.CREATE_NEW_CONSOLE,
+        "startupinfo": startupinfo,
+    }
 
 
 _OPENCODE_CONFINED_PERMISSIONS = {
