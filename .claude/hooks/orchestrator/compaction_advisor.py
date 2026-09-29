@@ -444,6 +444,13 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                                     "model": fallback_pending["model"],
                                     "blocked": fallback_pending.get("blocked") is True,
                                     "notice": fallback_pending.get("notice") is True}
+            codex_retry_pending = value.get("codex_retry_pending")
+            if isinstance(codex_retry_pending, str) and codex_retry_pending.strip():
+                codex_retry_pending = re.sub(
+                    r"[0-9a-f]{64}", "job", codex_retry_pending.strip(), flags=re.IGNORECASE
+                )[:300]
+            elif type(codex_retry_pending) is not bool:
+                codex_retry_pending = False
             return {
                 "last_suggested_context": max(0, int(value.get("last_suggested_context", 0))),
                 "reminder_messages": max(0, int(value.get("reminder_messages", 0))),
@@ -457,6 +464,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "leader_pending": leader_pending,
                 "fallback_pending": fallback_pending,
                 "flow_blocked_user": value.get("flow_blocked_user") if type(value.get("flow_blocked_user")) is int else None,
+                "codex_retry_count": min(2, max(0, int(value.get("codex_retry_count", 0)))),
+                "codex_retry_pending": codex_retry_pending,
             }
     except (OSError, ValueError, TypeError):
         pass
@@ -466,7 +475,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             "version_pending": None,
             "leader_pending": None,
             "fallback_pending": None,
-            "flow_blocked_user": None}
+            "flow_blocked_user": None, "codex_retry_count": 0, "codex_retry_pending": False}
 
 
 def plugin_version_state_path() -> Path:
@@ -822,6 +831,91 @@ def _dispatch_advice(dispatch: Mapping[str, Any]) -> str:
     return advice + ("\nInclude this latest job board verbatim:\n" + board if isinstance(board, str) else "")
 
 
+def _codex_retry_reason(records: list[dict[str, Any]], latest_user: int,
+                        repository: Path) -> str | None:
+    """Find a finished uncollected job or a classifier-denied Codex call in this turn."""
+    segment = records[latest_user + 1:]
+    uses: dict[str, tuple[str, Mapping[str, Any]]] = {}
+    results: dict[str, Mapping[str, Any]] = {}
+    for record in segment:
+        for block in _content(record):
+            if not isinstance(block, Mapping):
+                continue
+            if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+                params = block.get("input")
+                uses[block["id"]] = (str(block.get("name", "")), params if isinstance(params, Mapping) else {})
+            elif block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                results[block["tool_use_id"]] = block
+
+    root = state_root.default_state_root()
+    project = project_root.project_key(repository)
+    for tool_id, (name, _params) in uses.items():
+        short_name = name.rsplit("__", 1)[-1]
+        if short_name != "codex_start":
+            continue
+        result = results.get(tool_id)
+        if result is None:
+            continue
+        data = _extract_json(_result_text(result))
+        job_id = data.get("jobId")
+        if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{64}", job_id):
+            continue
+        try:
+            index = json.loads((root / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+            if (not isinstance(index, dict) or index.get("jobId") != job_id
+                    or index.get("project_key") != project or index.get("stage") == "CONSUMED"):
+                continue
+            import codex
+            job = codex._async_job(root, index)
+        except Exception:
+            continue
+        if (isinstance(job, Mapping)
+                and job.get("state") in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED"}
+                and isinstance(job.get("label"), str) and job["label"].strip()):
+            label = re.sub(r"[0-9a-f]{64}", "job", job["label"].strip(), flags=re.IGNORECASE)
+            label = label.replace("\r", " ").replace("\n", " ")
+            return f"Retry: call codex_result for the finished job {label}."
+
+    denial = re.compile(
+        r"(?:classifier.{0,60}(?:no verdict|den(?:y|ied))|"
+        r"(?:permission|policy).{0,60}den(?:y|ied)|"
+        r"den(?:y|ied).{0,60}(?:permission|classifier|policy))",
+        re.IGNORECASE | re.DOTALL,
+    )
+    latest_calls: dict[str, tuple[Mapping[str, Any] | None, str]] = {}
+    for tool_id, (name, _params) in uses.items():
+        short_name = name.rsplit("__", 1)[-1]
+        if short_name not in {"codex_start", "codex_result", "codex_apply"}:
+            continue
+        result = results.get(tool_id)
+        latest_calls[short_name] = (result, short_name)
+    for result, short_name in latest_calls.values():
+        if result is not None and result.get("is_error") is True and denial.search(_result_text(result)):
+            return f"Retry the denied {short_name} call."
+    return None
+
+
+def prompt_retry_context(payload: Mapping[str, Any], repository: Path | None) -> str | None:
+    """Reset Stop retry bounds for the new turn and consume its one-shot reminder."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return None
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        pending = state["codex_retry_pending"]
+        state["codex_retry_count"] = 0
+        state["codex_retry_pending"] = False
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        if isinstance(pending, str) and pending:
+            return f"Previous turn ended with an unfinished Purser step: {pending}"
+        if pending is True:  # State written before retry reasons were persisted.
+            return "Resume the uncollected Purser job first by calling codex_result."
+        return None
+    except BaseException:
+        return None
+
+
 def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] | None:
     """Ask for one retry when a pending notice is absent or flow stalls after Codex."""
     try:
@@ -923,6 +1017,16 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                 _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
             return None
         reasons = []
+        retry_reason = _codex_retry_reason(records, latest_user, repository) if latest_user >= 0 else None
+        if retry_reason:
+            if state["codex_retry_count"] < 2:
+                state["codex_retry_count"] += 1
+                reasons.append(retry_reason)
+            else:
+                state["codex_retry_pending"] = re.sub(
+                    r"[0-9a-f]{64}", "job", retry_reason, flags=re.IGNORECASE
+                )[:300]
+                changed = True
         if notice is not None and not notice.get("blocked"):
             notice["blocked"] = True
             reasons.append("End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n" + _blockquote(notice))

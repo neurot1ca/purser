@@ -591,6 +591,162 @@ def test_stop_hook_active_does_not_block(setup):
     assert _pending_state(repo)["blocked"] is False
 
 
+def _retry_job_event(repo, scratch, *, consumed=False, session="retry-session"):
+    from project_root import project_key
+
+    job_id = "a" * 64
+    root = Path(os.environ["PURSER_STATE_DIR"])
+    (root / "async_jobs").mkdir(parents=True, exist_ok=True)
+    (root / "codex_exec_mcp" / "jobs").mkdir(parents=True, exist_ok=True)
+    (root / "async_jobs" / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "call": "call-1", "project_key": project_key(repo),
+        "stage": "CONSUMED" if consumed else "PENDING",
+    }), encoding="utf-8")
+    (root / "codex_exec_mcp" / "jobs" / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "call": "call-1", "state": "SUCCEEDED", "label": "finished-report",
+    }), encoding="utf-8")
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "Please finish this."}},
+        _assistant(content=[{"type": "tool_use", "id": "start-1", "name": "mcp__plugin_purser_codex-main__codex_start", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "start-1",
+            "content": json.dumps({"jobId": job_id, "state": "SUCCEEDED"}),
+        }]}},
+        _assistant(content=[{"type": "text", "text": "Done."}]),
+    ]
+    return _event(scratch, repo, scratch, records, session=session)
+
+
+def test_stop_retries_finished_unfetched_job_without_exposing_job_id(setup):
+    repo, _local, scratch = setup
+    event = _retry_job_event(repo, scratch)
+
+    result = advisor.stop(event, repo)
+
+    assert result and result["decision"] == "block"
+    assert "codex_result" in result["reason"] and "finished-report" in result["reason"]
+    assert "a" * 64 not in result["reason"]
+
+
+def test_stop_does_not_retry_fetched_job(setup):
+    repo, _local, scratch = setup
+    event = _retry_job_event(repo, scratch, consumed=True)
+
+    assert advisor.stop(event, repo) is None
+
+
+def test_stop_retries_denied_codex_start(setup):
+    repo, _local, scratch = setup
+    event = _event(scratch, repo, scratch, [
+        {"type": "user", "message": {"role": "user", "content": "Start a job."}},
+        _assistant(content=[{"type": "tool_use", "id": "start-1", "name": "mcp__plugin_purser_codex-main__codex_start", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "start-1", "is_error": True,
+            "content": "classifier gave no verdict",
+        }]}},
+        _assistant(content=[{"type": "text", "text": "I could not start it."}]),
+    ], session="denied-session")
+
+    result = advisor.stop(event, repo)
+
+    assert result and "Retry the denied codex_start call" in result["reason"]
+
+
+def test_stop_retry_bound_sets_prompt_context_then_resets(setup):
+    repo, _local, scratch = setup
+    event = _retry_job_event(repo, scratch, session="bounded-session")
+    assert advisor.stop(event, repo)
+    assert advisor.stop(event, repo)
+    assert advisor.stop(event, repo) is None
+
+    retry_context = advisor.prompt_retry_context(event, repo)
+    assert retry_context.startswith("Previous turn ended with an unfinished Purser step:")
+    assert "codex_result" in retry_context
+    assert advisor.prompt_retry_context(event, repo) is None
+    state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "bounded-session")
+    assert state["codex_retry_count"] == 0
+
+
+def test_stop_retry_detection_fails_open_on_state_error(setup, monkeypatch):
+    repo, _local, scratch = setup
+    event = _retry_job_event(repo, scratch)
+    monkeypatch.setattr(advisor, "_read_transcript", lambda _path: (_ for _ in ()).throw(OSError("bad transcript")))
+
+    assert advisor.stop(event, repo) is None
+
+
+def test_retry_job_import_failure_does_not_hide_denied_call(setup, monkeypatch):
+    import builtins
+
+    repo, _local, scratch = setup
+    event = _retry_job_event(repo, scratch)
+    records = advisor._read_transcript(event["transcript_path"])
+    records.extend([
+        _assistant(content=[{"type": "tool_use", "id": "apply-1", "name": "mcp__plugin_purser_codex-main__codex_apply", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "apply-1", "is_error": True,
+            "content": "permission denied by classifier",
+        }]}},
+    ])
+    Path(event["transcript_path"]).write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    original_import = builtins.__import__
+
+    def fail_codex_import(name, *args, **kwargs):
+        if name == "codex":
+            raise RuntimeError("simulated sibling import failure")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_codex_import)
+
+    result = advisor.stop(event, repo)
+
+    assert result and "Retry the denied codex_apply call" in result["reason"]
+
+
+def test_successful_later_call_supersedes_denied_call_of_same_name(setup):
+    repo, _local, scratch = setup
+    event = _event(scratch, repo, scratch, [
+        {"type": "user", "message": {"role": "user", "content": "Apply the change."}},
+        _assistant(content=[{"type": "tool_use", "id": "apply-1", "name": "mcp__plugin_purser_codex-main__codex_apply", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "apply-1", "is_error": True,
+            "content": "permission denied by classifier",
+        }]}},
+        _assistant(content=[{"type": "tool_use", "id": "apply-2", "name": "mcp__plugin_purser_codex-main__codex_apply", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "apply-2", "content": "applied",
+        }]}},
+        _assistant(content=[{"type": "text", "text": "Applied."}]),
+    ], session="latest-call-session")
+
+    assert advisor.stop(event, repo) is None
+
+
+def test_pending_retry_context_matches_cause_and_reads_legacy_bool(setup):
+    repo, _local, scratch = setup
+    event = _event(scratch, repo, scratch, [
+        {"type": "user", "message": {"role": "user", "content": "Apply this."}},
+        _assistant(content=[{"type": "tool_use", "id": "apply-1", "name": "mcp__plugin_purser_codex-main__codex_apply", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "apply-1", "is_error": True,
+            "content": "permission denied by classifier",
+        }]}},
+        _assistant(content=[{"type": "text", "text": "Could not apply."}]),
+    ], session="pending-reason-session")
+    state_path = advisor._state_directory(repo) / "compaction_advisor.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"session_id": "pending-reason-session", "codex_retry_count": 2}), encoding="utf-8")
+
+    assert advisor.stop(event, repo) is None
+    prompt_context = advisor.prompt_retry_context(event, repo)
+    assert prompt_context.startswith("Previous turn ended with an unfinished Purser step:")
+    assert "codex_apply" in prompt_context and "codex_result" not in prompt_context
+
+    state_path.write_text(json.dumps({"session_id": "pending-reason-session", "codex_retry_pending": True}), encoding="utf-8")
+    legacy_context = advisor.prompt_retry_context(event, repo)
+    assert legacy_context and "codex_result" in legacy_context
+
+
 def test_version_announcement_stop_blocks_once_and_records_version(setup):
     repo, _local, _scratch = setup
     event = {"session_id": "session-version"}

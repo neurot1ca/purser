@@ -161,6 +161,10 @@ def main() -> int:
                     except BaseException:
                         compaction_advice = None
                     try:
+                        retry_context = compaction_advisor.prompt_retry_context(value, repository)
+                    except BaseException:
+                        retry_context = None
+                    try:
                         plan_hint = (
                             "The user mentioned planning; offer /purser:plan once in this session if you have not already."
                             if _planning_hint(value.get("prompt"))
@@ -169,7 +173,7 @@ def main() -> int:
                     except BaseException:
                         plan_hint = ""
                     additional_context = "\n".join(
-                        part for part in (language_instruction, compaction_advice, plan_hint) if part
+                        part for part in (language_instruction, compaction_advice, retry_context, plan_hint) if part
                     )
                     if additional_context:
                         output = {
