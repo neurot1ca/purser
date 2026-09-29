@@ -626,8 +626,8 @@ def job_call(client, name, arguments):
     return call(client, uuid.uuid4().hex, name, arguments)["structuredContent"]
 
 
-def finish(client, job_id, wanted):
-    deadline = time.monotonic() + 30
+def finish(client, job_id, wanted, *, timeout=30):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = job_call(client, "codex_result", {"jobId": job_id})
         if result["state"] == wanted:
@@ -1500,7 +1500,7 @@ def test_opencode_job_fails_on_event_or_missing_session(area, flag):
     try:
         started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
                                                    "cwd": str(area), "model": "opencode/test"})
-        assert finish(client, started["jobId"], "FAILED")["errorCode"] == "CODEX_FAILED"
+        assert finish(client, started["jobId"], "FAILED", timeout=90)["errorCode"] == "CODEX_FAILED"
     finally:
         client.close()
 

@@ -244,7 +244,7 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
                 message = (None if same_session else
                            f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
                            "uygulama kapalıyken çalışmaya devam ediyor, bitince haber vereceğim.")
-                instruction = ("Start purser_wait.py for this jobId in the background; call codex_result when it finishes, without adopt or asking the user."
+                instruction = ("Start purser_wait.py for this jobId in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user."
                                if same_session else
                                "When it finishes, ask for the user's agreement before calling codex_result with adopt: true.")
             else:

@@ -2186,7 +2186,7 @@ _ROUTE_DURATION_DEFAULTS = {
 }
 
 
-def _route_duration_median(pending: Mapping[str, Any], state_root: Path) -> int | None:
+def _route_duration_percentiles(pending: Mapping[str, Any], state_root: Path) -> tuple[int, int] | None:
     try:
         import async_session_maintenance
 
@@ -2199,19 +2199,20 @@ def _route_duration_median(pending: Mapping[str, Any], state_root: Path) -> int 
         if isinstance(hint, str) and isinstance(route, str):
             match = re.search(rf"(?:^|: |, )({re.escape(route)}) (\d+)/(\d+) min \(n=\d+\)", hint)
             if match:
-                return int(match.group(2))
+                return int(match.group(2)), int(match.group(3))
     except BaseException:
         pass
     return None
 
 
-def _route_eta_minutes(pending: Mapping[str, Any], state_root: Path) -> int | None:
+def _route_eta_minutes(pending: Mapping[str, Any], state_root: Path,
+                       estimates: tuple[int, int] | None = None) -> int | None:
     eta = pending.get("eta_minutes")
     if isinstance(eta, int) and not isinstance(eta, bool):
         return eta
-    median = _route_duration_median(pending, state_root)
-    if median is not None:
-        return median
+    estimates = estimates if estimates is not None else _route_duration_percentiles(pending, state_root)
+    if estimates is not None:
+        return estimates[0]
     route = pending.get("route")
     return _ROUTE_DURATION_DEFAULTS.get(route) if isinstance(route, str) else None
 
@@ -2322,12 +2323,16 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             if state in {"queued", "running"}:
                 started = job.get("acceptedAt")
                 elapsed = max(0.0, (now - started) / 60) if isinstance(started, (int, float)) else None
+                estimates = _route_duration_percentiles(
+                    {"route": job.get("route"), "project_key": project_key,
+                     "agent": job.get("agent", "codex")}, root)
                 expected = job.get("etaMinutes")
                 if isinstance(expected, bool) or not isinstance(expected, int):
                     expected = _route_eta_minutes({"route": job.get("route"), "project_key": project_key,
-                                                   "agent": job.get("agent", "codex")}, root)
+                                                   "agent": job.get("agent", "codex")}, root, estimates)
                 if elapsed is not None and expected is not None:
-                    eta_label = "overdue" if elapsed > expected else f"~{max(0, math.ceil(expected - elapsed))} min"
+                    overdue_after = estimates[1] if estimates is not None else 2 * expected
+                    eta_label = "overdue" if elapsed > overdue_after else f"~{max(0, math.ceil(expected - elapsed))} min"
             label = str(job.get("label", "—")).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
             model, effort = job.get("model"), job.get("effort")
             model_label = (f"{model} ({effort})".replace("|", "\\|")
@@ -2419,7 +2424,7 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
             "session_id": pending.get("session_id"), "project_key": pending.get("project_key"),
         })
         waiter = Path(__file__).resolve().parent / "purser_wait.py"
-        command = (f'Run in the background: "{sys.executable}" "{waiter}" {job_id} '
+        command = (f'Run in the background (use the PowerShell tool on Windows): "{sys.executable}" "{waiter}" {job_id} '
                    "; when it finishes, call codex_result with this jobId.")
         response = _replacement({"jobId": job_id, "state": value["state"], "next": command},
                                 _load_config(config))

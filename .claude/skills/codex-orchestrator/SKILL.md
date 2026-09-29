@@ -106,7 +106,7 @@ Use the SessionStart duration hint for `eta` when present. Dispatch every call
 with `codex_start`; for continuation use `mode=reply`, `threadId`, the same ORCH
 `task`, and no `cwd`. Use `codex`/`codex-reply` only if `codex_start` is
 unavailable. Run the exact command returned by start with the shell background
-option, end the turn, and keep talking with the user. Once the waiter finishes,
+option (use the PowerShell tool on Windows), end the turn, and keep talking with the user. Once the waiter finishes,
 call `codex_result` once with `jobId` and review as synchronous output. Never
 call it before the waiter finishes; use `codex_cancel` only at user request.
 

@@ -294,7 +294,7 @@ def test_resumed_hint_uses_approved_wording_and_ambiguous_job_is_skipped(tmp_pat
     hint = async_session_maintenance.followup_hints(state, "project-key", "new-session")
     assert "⚓ Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." in hint
     own = async_session_maintenance.followup_hints(state, "project-key", "old-session")
-    assert "Start purser_wait.py" in own and "without adopt" in own
+    assert "Start purser_wait.py" in own and "PowerShell tool on Windows" in own and "without adopt" in own
     assert "⚓ Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." in own
     assert "uygulama kapalıyken" not in own
     job["state"] = "SUCCEEDED"

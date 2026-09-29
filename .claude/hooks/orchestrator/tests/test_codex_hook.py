@@ -1175,13 +1175,26 @@ def test_queued_and_refreshed_job_board_does_not_count_until_shown(workspace, mo
 def test_project_job_board_uses_route_default_without_history(workspace, monkeypatch):
     _, state = workspace
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
-    _board_job(state, "overdue", etaMinutes=2, acceptedAt=time.time() - 180)
+    _board_job(state, "overdue", etaMinutes=2, acceptedAt=time.time() - 300)
     _board_job(state, "unknown", etaMinutes=None, acceptedAt=time.time() - 10)
     _board_job(state, "mechanical", route="mechanical", acceptedAt=time.time())
     message = codex._project_job_board(state, "project")
     assert "| overdue | gpt-6-sol (medium) | running | overdue |" in message
     assert "| unknown | gpt-6-sol (medium) | running | ~5 min |" in message
     assert "| mechanical | gpt-6-sol (medium) | running | ~3 min |" in message
+
+
+def test_project_job_board_waits_for_route_p90_before_overdue(workspace, monkeypatch):
+    _, state = workspace
+    now = time.time()
+    monkeypatch.setattr(async_session_maintenance, "duration_hint",
+                        lambda *args, **kwargs: "Purser: typical Codex durations here (median/p90, n): normal 5/12 min (n=10).")
+    job_id, _ = _board_job(state, "within-p90", route="normal", etaMinutes=5, acceptedAt=now - 7 * 60)
+    _board_job(state, "second-running")
+    board = codex._project_job_board(state, "project")
+    assert "| within-p90 | gpt-6-sol (medium) | running | ~0 min |" in board
+    receipt = json.loads((state / "codex_exec_mcp" / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+    assert receipt["etaMinutes"] == 5
 
 
 def test_project_job_board_keeps_counted_terminal_jobs_until_two_displays(workspace):
@@ -2289,7 +2302,7 @@ def test_async_start_post_stores_only_job_id_without_finalizing(workspace, confi
     result = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
                                  reviewer=lambda **kwargs: pytest.fail("reviewer ran at start"))
     next_text = response_bundle(result, config)["next"]
-    assert next_text == (f'Run in the background: "{sys.executable}" '
+    assert next_text == (f'Run in the background (use the PowerShell tool on Windows): "{sys.executable}" '
                          f'"{Path(codex.__file__).resolve().parent / "purser_wait.py"}" '
                          f'{job_id} ; when it finishes, call codex_result with this jobId.')
     assert response_bundle(result, config)["jobId"] == job_id
