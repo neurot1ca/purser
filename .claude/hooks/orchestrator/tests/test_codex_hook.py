@@ -1253,7 +1253,7 @@ def test_project_job_board_keeps_newest_job_for_thread(workspace):
     _, state = workspace
     _, old_call_key = _board_job(state, "continued-old", "RUNNING", label="continued",
                                  threadId="thread-board", acceptedAt=time.time() - 60)
-    _, new_call_key = _board_job(
+    new_job_id, new_call_key = _board_job(
         state, "continued-new", "SUCCEEDED", label="continued", threadId="thread-board", applyState="conflict",
         finishedAt=time.time(), acceptedAt=time.time(),
     )
@@ -1271,6 +1271,14 @@ def test_project_job_board_keeps_newest_job_for_thread(workspace):
 
     assert message.count("| continued |") == 1
     assert "| continued | gpt-6-sol (medium) | done | — | reviewed | conflict |" in message
+
+    job_path = state / "codex_exec_mcp" / "jobs" / f"{new_job_id}.json"
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(applyState="applied", applyResult={"applied": True, "resolvedByHand": True,
+                                                    "paths": ["file.py"]}, appliedAt=time.time())
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    message = codex._project_job_board(state, "project")
+    assert "| continued | gpt-6-sol (medium) | done | — | reviewed | applied |" in message
 
 
 def test_project_job_board_shows_no_change_and_pending_apply(workspace):
@@ -1354,7 +1362,7 @@ def test_codex_apply_replaces_pending_board_with_applied_status(workspace, confi
                            appliedAt=time.time())
     _board_job(state, "still-running")
     event_value = event("mcp__plugin_purser_codex-main__codex_apply", jobId=job_id,
-                        cwd=str(repo))
+                        cwd=str(repo), resolved=True)
     assert codex.pre_tool_use(event_value, config=config, state_root=state) == {}
     codex.compaction_advisor.queue_dispatch(event_value, repo, board="outdated board")
     response = codex.post_tool_use(event_value, config=config, state_root=state)

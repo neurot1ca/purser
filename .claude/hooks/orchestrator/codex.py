@@ -1297,6 +1297,12 @@ def pre_tool_use(
 ) -> dict[str, Any]:
     """Validate routing, capture a baseline, and rewrite a Codex MCP input."""
 
+    if event.get("tool_name") in CODEX_APPLY_TOOL_NAMES:
+        tool_input = event.get("tool_input")
+        if (not isinstance(tool_input, Mapping)
+                or ("resolved" in tool_input and not isinstance(tool_input["resolved"], bool))):
+            return _deny("INVALID_CODEX_APPLY_INPUT", "codex_apply resolved must be a boolean.")
+        return {}
     if event.get("tool_name") not in CODEX_TOOLS:
         return {}
     if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES | CODEX_CANCEL_TOOL_NAMES:
@@ -3588,6 +3594,7 @@ def post_tool_use(
         try:
             root = _state_root(state_root)
             tool_input = event.get("tool_input")
+            # codex_apply also accepts the optional boolean resolved flag.
             job_id = tool_input.get("jobId") if isinstance(tool_input, Mapping) else None
             if isinstance(job_id, str):
                 index = json.loads((root / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))

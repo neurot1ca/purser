@@ -98,7 +98,9 @@ TOOL_SCHEMAS += [
     {"name": "codex_cancel", "description": "Cancel a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {"jobId": {"type": "string"}, "reason": {"type": "string"}}, "required": ["jobId"]}},
     {"name": "codex_apply", "description": "Apply a job worktree patch.", "inputSchema": {
-        "type": "object", "properties": {"jobId": {"type": "string"}}, "required": ["jobId"]}},
+        "type": "object", "properties": {"jobId": {"type": "string"},
+            "resolved": {"type": "boolean", "description": "Record a hand-resolved conflict after verifying the repository."}},
+        "required": ["jobId"]}},
 ]
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS"}
@@ -1316,6 +1318,8 @@ class Server:
         return _job_result(value)
 
     def _apply_job(self, args: dict[str, Any]) -> dict[str, Any]:
+        if "resolved" in args and not isinstance(args["resolved"], bool):
+            return _job_result({"applied": False, "reason": "resolved must be a boolean."})
         job = self._read_job(args.get("jobId"))
         if job is None:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
@@ -1329,6 +1333,37 @@ class Server:
         lock_path = purser_state_root.default_state_root() / "codex_exec_mcp" / "apply" / (lock_key + ".lock")
         with ledger._lease_lock(lock_path):
             job = self._read_job(job["jobId"])
+            if args.get("resolved") is True:
+                if job.get("applyState") != "conflict":
+                    return _job_result({"applied": False,
+                                        "reason": "Job is not in conflict state."})
+                patch = ledger.job_patch(job["worktreePath"], job["snapshot"])
+                raw_paths = ledger._run_git(repo_root, ["apply", "--numstat", "-z", "-"], 30.0,
+                                            "listing job patch paths",
+                                            input_data=patch.encode("utf-8", "surrogateescape")) if patch else b""
+                paths = [ledger._decode_path(row.split(b"\t", 2)[2])
+                         for row in raw_paths.split(b"\0") if row]
+                if not paths:
+                    return _job_result({"applied": False, "reason": "Job has no changed paths."})
+                unmerged = ledger._run_git(repo_root, ["diff", "--name-only", "--diff-filter=U", "-z"],
+                                           30.0, "checking repository merge conflicts")
+                if unmerged:
+                    return _job_result({"applied": False, "reason": "Repository has unmerged paths."})
+                for path in paths:
+                    relative = Path(path)
+                    target = repo_root / relative
+                    if (relative.is_absolute() or ".." in relative.parts
+                            or not target.resolve().is_relative_to(repo_root)):
+                        return _job_result({"applied": False, "reason": "Job contains an unsafe path."})
+                    if target.is_file() and not target.is_symlink():
+                        if any(line.startswith((b"<<<<<<<", b">>>>>>>"))
+                               for line in target.read_bytes().splitlines()):
+                            return _job_result({"applied": False,
+                                                "reason": f"Conflict markers remain in {path}."})
+                value = {"applied": True, "resolvedByHand": True, "paths": paths}
+                job.update(applyState="applied", applyResult=value, appliedAt=time.time())
+                self._write_job(job)
+                return _job_result(value)
             if "applyResult" in job:
                 return _job_result(job["applyResult"])
             if not Path(job["worktreePath"]).is_dir():

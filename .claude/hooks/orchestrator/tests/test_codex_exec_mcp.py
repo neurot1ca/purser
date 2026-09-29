@@ -378,6 +378,8 @@ def test_initialize_and_list(client):
     assert [tool["name"] for tool in tools] == ["codex", "codex-reply", "codex_start", "codex_result", "codex_cancel", "codex_apply"]
     start = next(tool for tool in tools if tool["name"] == "codex_start")
     assert "call" not in start["inputSchema"]["required"]
+    apply = next(tool for tool in tools if tool["name"] == "codex_apply")
+    assert apply["inputSchema"]["properties"]["resolved"]["type"] == "boolean"
     missing = call(client, 3, "codex_start", {"prompt": "work"})
     assert missing["structuredContent"]["errorCode"] == "INVALID_ARGUMENT"
 
@@ -923,6 +925,104 @@ def test_codex_apply_is_idempotent_and_reports_conflicts(area):
         conflict_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (other["jobId"] + ".json"))
         assert conflict_job["applyState"] == "conflict"
         assert Path(other_result["worktreePath"]).is_dir()
+    finally:
+        client.close()
+
+
+def test_codex_apply_records_hand_resolved_conflict(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        finish(client, started["jobId"], "SUCCEEDED")
+        (repo / "tracked.txt").write_text("repository change\n", encoding="utf-8")
+        conflict = job_call(client, "codex_apply", {"jobId": started["jobId"]})
+        assert conflict["applied"] is False
+
+        (repo / "tracked.txt").write_text("hand merged result\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "resolve job conflict"], check=True)
+        resolved = job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True})
+
+        assert resolved == {"applied": True, "resolvedByHand": True, "paths": ["tracked.txt"]}
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                              (started["jobId"] + ".json"))
+        assert job["applyState"] == "applied"
+        assert job["applyResult"] == resolved
+        assert isinstance(job["appliedAt"], (int, float))
+    finally:
+        client.close()
+
+
+def test_codex_apply_refuses_hand_resolution_with_conflict_markers(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        finish(client, started["jobId"], "SUCCEEDED")
+        (repo / "tracked.txt").write_text("repository change\n", encoding="utf-8")
+        assert job_call(client, "codex_apply", {"jobId": started["jobId"]})["applied"] is False
+        (repo / "tracked.txt").write_text("<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n",
+                                           encoding="utf-8")
+
+        result = job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True})
+
+        assert result["applied"] is False
+        assert "Conflict markers remain" in result["reason"]
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                              (started["jobId"] + ".json"))
+        assert job["applyState"] == "conflict"
+    finally:
+        client.close()
+
+
+def test_codex_apply_refuses_hand_resolution_with_unmerged_paths(area):
+    repo = _git_repo(area)
+    main_branch = subprocess.run(["git", "-C", str(repo), "branch", "--show-current"],
+                                 capture_output=True, check=True, text=True).stdout.strip()
+    subprocess.run(["git", "-C", str(repo), "checkout", "-qb", "side"], check=True)
+    (repo / "tracked.txt").write_text("theirs\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "side change"], check=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", main_branch], check=True)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        finish(client, started["jobId"], "SUCCEEDED")
+        (repo / "tracked.txt").write_text("repository change\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "repository change"], check=True)
+        assert job_call(client, "codex_apply", {"jobId": started["jobId"]})["applied"] is False
+        merge = subprocess.run(["git", "-C", str(repo), "merge", "side"],
+                               capture_output=True, check=False)
+        assert merge.returncode != 0
+        result = job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True})
+
+        assert result == {"applied": False, "reason": "Repository has unmerged paths."}
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                              (started["jobId"] + ".json"))
+        assert job["applyState"] == "conflict"
+    finally:
+        client.close()
+
+
+def test_codex_apply_refuses_hand_resolution_outside_conflict_state(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        finish(client, started["jobId"], "SUCCEEDED")
+
+        result = job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True})
+
+        assert result == {"applied": False, "reason": "Job is not in conflict state."}
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                              (started["jobId"] + ".json"))
+        assert "applyState" not in job
     finally:
         client.close()
 
