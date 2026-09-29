@@ -3,12 +3,17 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
-## Unreleased
+## 0.1.50 — 2026-09-29
 
+- On Windows Reviewer-1 starts agy in a hidden new console, so console grandchildren no longer flash a window.
+- The job board retires finished jobs without a worktree after two displays, shows research and plan rows as review skipped, and marks a reply row applied when its thread was applied.
+- A PreCompact hook refreshes the handoff's state block before compaction.
+- The Stop hook retries a finished uncollected job or a denied Codex call at most twice per turn, then the next prompt carries the unfinished step.
+- The OpenCode mechanical benchmark lets the model edit its scratch files, and provider outages are not recorded as scores.
+- Task projections record Purser-derived task types and Claude acceptance decisions with source provenance.
 - An on-demand route outcome report groups tasks by route, model, effort and task type with acceptance, send-backs and separate worker and Claude token distributions.
 - An on-demand report measures eligible Codex code-map reads and marks other providers without traces as unobservable.
 - Reviewer-1 records a fingerprint for consistent identifier renames (no raw diff) and an on-demand report lists repeated mechanical edits.
-- Task projections record Purser-derived task types and Claude acceptance decisions with source provenance.
 
 ## 0.1.49 — 2026-09-29
 
