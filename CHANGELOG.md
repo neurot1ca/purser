@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.51 — 2026-09-29
+
+- The job board shows only while a job is active or newly finished, finished rows leave after one hour, a queued job shows no ETA, and a running job's ETA counts from its real start.
+- Claude adds the code map line only when the task or planning goal lacks file or symbol locations.
+- The code map use report counts map reads in shell commands nested inside functions.exec.
+
 ## 0.1.50 — 2026-09-29
 
 - On Windows Reviewer-1 starts agy in a hidden new console, so console grandchildren no longer flash a window.
