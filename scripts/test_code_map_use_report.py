@@ -84,3 +84,45 @@ def test_report_distinguishes_whole_scoped_absent_and_unobservable_traces():
     assert result["providers"]["agy"]["unobservable_jobs"] == 1
     assert result["providers"]["agy"]["eligible_jobs"] is None
     assert "unobservable" in reporter.markdown(result).lower()
+
+
+def test_nested_functions_exec_read_counts_map_open():
+    map_path = r"C:\workspace\.claude\hooks\orchestrator\code_map.py"
+    values = worker_trace("nested", map_path)
+    values.extend([
+        {"type": "response_item", "payload": {"type": "function_call", "call_id": "nested-read",
+         "arguments": {"script": f'const result = await tools.exec_command({{cmd: {json.dumps("Get-Content " + map_path)}}});'}}},
+        {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "nested-read",
+         "output": [{"type": "input_text", "text": "map contents"}]}},
+    ])
+
+    root = Path(__file__).parents[1] / ".tmp" / ("nested-read-" + uuid.uuid4().hex)
+    path = root / "rollout-nested.jsonl"
+    try:
+        write(path, values)
+        observation = reporter.trace(path)
+    finally:
+        shutil.rmtree(root)
+
+    assert observation["operations"] == [{"kind": "whole", "bytes": len("map contents".encode())}]
+
+
+def test_nested_functions_exec_without_read_verb_does_not_count_map_open():
+    map_path = r"C:\workspace\.claude\hooks\orchestrator\code_map.py"
+    values = worker_trace("nested-no-read", map_path)
+    values.extend([
+        {"type": "response_item", "payload": {"type": "function_call", "call_id": "nested-no-read",
+         "arguments": {"script": f'await tools.exec_command({{cmd: {json.dumps("echo " + map_path)}}});'}}},
+        {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "nested-no-read",
+         "output": [{"type": "input_text", "text": "printed path"}]}},
+    ])
+
+    root = Path(__file__).parents[1] / ".tmp" / ("nested-no-read-" + uuid.uuid4().hex)
+    path = root / "rollout-nested-no-read.jsonl"
+    try:
+        write(path, values)
+        observation = reporter.trace(path)
+    finally:
+        shutil.rmtree(root)
+
+    assert observation["operations"] == []

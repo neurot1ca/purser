@@ -14,6 +14,7 @@ import re
 MAP_LINE = re.compile(r"(?m)^CODE_MAP=(.+?)\s+STATUS=(?:FRESH|STALE|UNAVAILABLE)\s*$")
 READ_COMMAND = re.compile(r"\b(?:cat|type|more|gc|get-content|read_file|sed|grep|rg|select-string|head|tail)\b", re.I)
 TARGETED_COMMAND = re.compile(r"\b(?:rg|grep|select-string)\b|\bsed\b[^\r\n]*(?:-n|\d+(?:,\d+)?[pP])|\b(?:get-content|gc)\b[^\r\n]*(?:-totalcount|-tail|-first|-skip)|\bselect-object\b[^\r\n]*(?:-first|-skip)|\b(?:head|tail)\b", re.I)
+EXEC_COMMAND = re.compile(r'\bexec_command\s*\(\s*\{\s*cmd\s*:\s*("(?:\\.|[^"\\])*")', re.S)
 
 
 def timestamp(value: str) -> datetime:
@@ -46,16 +47,28 @@ def text_content(value) -> str:
     return ""
 
 
-def command_text(payload: dict) -> str:
+def command_text(payload: dict) -> list[str]:
     value = payload.get("arguments", payload.get("input", ""))
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except json.JSONDecodeError:
-            return value
+            value = {"script": value}
     if isinstance(value, dict):
-        return "\n".join(str(value[key]) for key in ("command", "cmd", "script") if key in value)
-    return str(value)
+        texts = [str(value[key]) for key in ("command", "cmd", "script") if key in value]
+    else:
+        texts = [str(value)]
+    commands = []
+    for text in texts:
+        nested = []
+        for match in EXEC_COMMAND.finditer(text):
+            literal = re.sub(r'(?<!\\)\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', match.group(1))
+            try:
+                nested.append(json.loads(literal))
+            except json.JSONDecodeError:
+                continue
+        commands.extend(nested or [text])
+    return commands
 
 
 def trace(path: Path) -> dict | None:
@@ -89,7 +102,8 @@ def trace(path: Path) -> dict | None:
                 elif item.get("type") == "response_item" and kind in ("function_call", "custom_tool_call"):
                     calls[payload.get("call_id")] = command_text(payload)
                 elif item.get("type") == "response_item" and kind in ("function_call_output", "custom_tool_call_output"):
-                    operations.append((calls.get(payload.get("call_id"), ""), text_content(payload.get("output"))))
+                    output = text_content(payload.get("output"))
+                    operations.extend((command, output) for command in calls.get(payload.get("call_id"), []))
     except (OSError, UnicodeError):
         return None
     if not valid_rows or not isinstance(meta, dict) or meta.get("originator") != "codex_exec":
