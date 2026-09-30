@@ -6998,6 +6998,26 @@ def test_user_override_without_later_prompt_is_refused(workspace, config, monkey
     assert "FALLBACK_CONSENT_REQUIRED" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_user_override_with_stale_fallback_consent_is_refused(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    active = _fallback_state(workspace)
+    active["triggering_evidence"] = {
+        "type": "CREDIT_EXHAUSTED", "trigger_id": "failure-1",
+        "question_session": "earlier-session", "question_shown": True, "answerable": True,
+    }
+    active_coder_state.write(repo, active, state)
+
+    result = codex.pre_tool_use(
+        event(prompt=orch(reason="user_override") + "\nSwitch to fallback."),
+        config=config, state_root=state, repo_root=repo)
+
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "FALLBACK_CONSENT_REQUIRED" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _fallback_state(workspace)["active_coder"] == "primary"
+
+
 def test_later_success_clears_prior_typed_failure(workspace, config, monkeypatch):
     repo, state = workspace
     _fallback_config(config)
