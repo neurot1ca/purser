@@ -29,6 +29,7 @@ DEFAULT_REGROW_TOKENS = 60_000
 POST_COMPACT_CONTEXT_TOKENS = 75_000
 MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024
 MAX_HANDOFF_CONTEXT_CHARS = 6_000
+LANGUAGE_REMINDER_INTERVAL = 20
 HANDOFF_MAX_AGE_SECONDS = 12 * 60 * 60
 STATE_START = "<!-- PURSER:STATE:START -->"
 STATE_END = "<!-- PURSER:STATE:END -->"
@@ -368,7 +369,10 @@ def restore(payload: Mapping[str, Any], repository: Path | None) -> str | None:
         "verify against git and files before acting; do not re-run commands from it; skip any listed file already present in context):"
     )
     language = _user_language(content)
-    language_instruction = f"Reply to the user in {language}; everything else stays as the project rules say.\n" if language else ""
+    language_instruction = (
+        f"Reply to the user in {language}; everything else stays as the project rules say.\n"
+        if language and language.casefold() != "english" else ""
+    )
     footer = f"Full file: {path}"
     full = f"{header}\n{language_instruction}{content.rstrip()}\n{footer}"
     if len(full) <= MAX_HANDOFF_CONTEXT_CHARS:
@@ -479,6 +483,11 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "flow_blocked_user": value.get("flow_blocked_user") if type(value.get("flow_blocked_user")) is int else None,
                 "codex_retry_count": min(2, max(0, int(value.get("codex_retry_count", 0)))),
                 "codex_retry_pending": codex_retry_pending,
+                "context_prompt_count": max(0, int(value.get("context_prompt_count", 0))),
+                "language_injections": max(0, int(value.get("language_injections", 0))),
+                "planning_injections": max(0, int(value.get("planning_injections", 0))),
+                "last_context_language": value.get("last_context_language") if isinstance(value.get("last_context_language"), str) else None,
+                "language_after_reset": value.get("language_after_reset") is True,
             }
     except (OSError, ValueError, TypeError):
         pass
@@ -489,7 +498,51 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             "leader_pending": None,
             "fallback_pending": None,
             "maintenance_pending": None,
-            "flow_blocked_user": None, "codex_retry_count": 0, "codex_retry_pending": False}
+            "flow_blocked_user": None, "codex_retry_count": 0, "codex_retry_pending": False,
+            "context_prompt_count": 0, "language_injections": 0, "planning_injections": 0,
+            "last_context_language": None, "language_after_reset": False}
+
+
+def context_injections(payload: Mapping[str, Any], repository: Path | None, language: str | None,
+                       *, planning: bool = False) -> tuple[str | None, bool]:
+    """Track language and planning reminders in the existing per-session state."""
+    instruction = (
+        None if language is not None and language.casefold() == "english"
+        else "Reply in the language the user writes in." if language is None
+        else f"Reply to the user in {language}."
+    )
+    session_id = payload.get("session_id")
+    if repository is None or not isinstance(session_id, str) or not session_id:
+        return instruction, planning
+    try:
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        if payload.get("hook_event_name") == "SessionStart":
+            if payload.get("source") in {"compact", "clear"}:
+                state["language_after_reset"] = True
+            state["last_context_language"] = language
+            if instruction is not None:
+                state["language_injections"] += 1
+            _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+            return instruction, False
+        state["context_prompt_count"] += 1
+        current = language.casefold() if language else None
+        previous = state["last_context_language"].casefold() if state["last_context_language"] else None
+        inject_language = instruction is not None and (
+            state["language_after_reset"] or current != previous
+            or state["context_prompt_count"] % LANGUAGE_REMINDER_INTERVAL == 0
+        )
+        state["language_after_reset"] = False
+        state["last_context_language"] = language
+        if inject_language:
+            state["language_injections"] += 1
+        inject_planning = planning and state["planning_injections"] == 0
+        if inject_planning:
+            state["planning_injections"] += 1
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        return instruction if inject_language else None, inject_planning
+    except BaseException:
+        return instruction, False
 
 
 def plugin_version_state_path() -> Path:

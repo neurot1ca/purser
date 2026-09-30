@@ -216,12 +216,6 @@ def main() -> int:
                         language = compaction_advisor.recorded_user_language(repository)
                     except BaseException:
                         language = None
-                    if language is None:
-                        language_instruction = "Reply in the language the user writes in."
-                    elif language.casefold() == "english":
-                        language_instruction = ""
-                    else:
-                        language_instruction = f"Reply to the user in {language}."
                     try:
                         compaction_advice = compaction_advisor.advise(value, repository)
                     except BaseException:
@@ -237,6 +231,11 @@ def main() -> int:
                             else ""
                         )
                     except BaseException:
+                        plan_hint = ""
+                    language_instruction, inject_plan = compaction_advisor.context_injections(
+                        value, repository, language, planning=bool(plan_hint)
+                    )
+                    if not inject_plan:
                         plan_hint = ""
                     additional_context = "\n".join(
                         part for part in (language_instruction, compaction_advice, retry_context, plan_hint) if part
@@ -267,10 +266,26 @@ def main() -> int:
                 try:
                     compaction_advisor.clear_pending(value, repository)
                     try:
+                        language = compaction_advisor.recorded_user_language(repository)
+                    except BaseException:
+                        language = None
+                    language_instruction, _inject_plan = compaction_advisor.context_injections(
+                        value, repository, language
+                    )
+                    if not isinstance(value.get("session_id"), str) or not value.get("session_id"):
+                        language_instruction = None
+                    try:
                         async_session_maintenance.cleanup_jobs(state_root.default_state_root())
                     except BaseException:
                         pass
                     additional_context = compaction_advisor.restore(value, repository)
+                    if (additional_context and language_instruction
+                            and language_instruction.removesuffix(".") + ";" in additional_context):
+                        language_instruction = None
+                    if language_instruction:
+                        additional_context = "\n".join(
+                            part for part in (language_instruction, additional_context) if part
+                        )
                     try:
                         _queue_maintenance_notice(value, repository, state_root.default_state_root())
                     except BaseException:

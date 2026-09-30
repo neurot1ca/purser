@@ -16,15 +16,30 @@ import compaction_advisor
 import model_version_notice
 
 
-def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None, advice=None, unreadable=False):
-    payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(repo), "prompt": prompt}
+def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None, advice=None, unreadable=False,
+                          event="UserPromptSubmit", source="startup", session_id="test-session"):
+    payload = {"hook_event_name": event, "cwd": str(repo), "prompt": prompt,
+               "source": source, "session_id": session_id}
     input_raw = io.BytesIO(json.dumps(payload).encode("utf-8"))
     output_raw = io.BytesIO()
     monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(input_raw, encoding="cp1254"))
     monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
     monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (repo, "test"))
+    monkeypatch.setattr(context_io_hook.project_root, "project_key", lambda _repo: "test-project")
     monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(context_io_hook.compaction_advisor, "advise", lambda *_args: advice)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "_state_directory", lambda _repo: repo / ".state")
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "clear_pending", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook, "_queue_maintenance_notice", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: repo / ".runtime")
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "cleanup_jobs", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "followup_hints", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "compact_accuracy_hint", lambda *_args: None)
+    import maintenance_reports
+    monkeypatch.setattr(maintenance_reports, "record_activity", lambda *_args: None)
+    monkeypatch.setattr(maintenance_reports, "wake_background_check", lambda *_args: None)
     handoff = repo / "purser-handoff.md"
     monkeypatch.setattr(context_io_hook.compaction_advisor, "handoff_path", lambda _repo: handoff)
     if language_handoff is not None:
@@ -334,11 +349,12 @@ def test_session_start_reminds_unconsumed_jobs_and_caps_at_five(monkeypatch, tmp
     monkeypatch.setattr(codex_exec_mcp, "_windows_process_identity", lambda _pid: ("ALIVE", 456))
     assert context_io_hook.main() == 0
     lines = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"].splitlines()
-    assert len(lines) == 5
-    assert "finished-task" in lines[0] and "bitince haber" not in lines[0]
-    assert "running-task" in lines[1] and "bitince haber" in lines[1]
+    assert len(lines) == 6
+    assert lines[0] == "Reply in the language the user writes in."
+    assert "finished-task" in lines[1] and "bitince haber" not in lines[1]
+    assert "running-task" in lines[2] and "bitince haber" in lines[2]
     assert "own-task" not in "\n".join(lines)  # The five older hints fill the cap.
-    assert all("jobId=" in line for line in lines)
+    assert all("jobId=" in line for line in lines[1:])
     for path in (state / "async_jobs").glob("*.json"):
         if json.loads(path.read_text(encoding="utf-8"))["session_id"] != "current-session":
             path.unlink()
@@ -407,7 +423,7 @@ def test_user_prompt_adds_recorded_non_english_reply_language(monkeypatch, tmp_p
 
 @pytest.mark.parametrize("language_handoff", [None, "## Goal\nContinue\n"])
 def test_user_prompt_without_recorded_language_adds_generic_reminder(monkeypatch, tmp_path, language_handoff):
-    actual = _run_user_prompt_hook(monkeypatch, tmp_path, language_handoff=language_handoff)
+    actual = _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart", language_handoff=language_handoff)
 
     assert actual == "Reply in the language the user writes in."
 
@@ -416,6 +432,15 @@ def test_user_prompt_omits_reminder_for_english(monkeypatch, tmp_path):
     actual = _run_user_prompt_hook(
         monkeypatch, tmp_path,
         language_handoff="## Goal\nUser language: eNgLiSh\n",
+    )
+
+    assert actual is None
+
+
+def test_session_start_omits_reminder_for_english(monkeypatch, tmp_path):
+    actual = _run_user_prompt_hook(
+        monkeypatch, tmp_path, event="SessionStart",
+        language_handoff="## Goal\nUser language: English\n",
     )
 
     assert actual is None
@@ -432,7 +457,7 @@ def test_user_prompt_puts_language_before_compaction_advice(monkeypatch, tmp_pat
 
 
 def test_user_prompt_unreadable_handoff_falls_back_to_generic(monkeypatch, tmp_path):
-    actual = _run_user_prompt_hook(monkeypatch, tmp_path, unreadable=True)
+    actual = _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart", unreadable=True)
 
     assert actual == "Reply in the language the user writes in."
 
@@ -446,25 +471,25 @@ def test_user_prompt_unreadable_handoff_falls_back_to_generic(monkeypatch, tmp_p
     "Planı gözden geçir, planın kapsamı nedir?",
 ])
 def test_user_prompt_offers_plan_for_english_and_turkish_planning_words(monkeypatch, tmp_path, prompt):
+    _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart")
     actual = _run_user_prompt_hook(monkeypatch, tmp_path, prompt=prompt)
 
-    assert actual == (
-        "Reply in the language the user writes in.\n"
-        "The user mentioned planning; offer /purser:plan once in this session if you have not already."
-    )
+    assert actual == "The user mentioned planning; offer /purser:plan once in this session if you have not already."
 
 
 @pytest.mark.parametrize("prompt", ["planet", "explanation", "airplane"])
 def test_user_prompt_does_not_offer_plan_for_unrelated_words(monkeypatch, tmp_path, prompt):
+    _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart")
     actual = _run_user_prompt_hook(monkeypatch, tmp_path, prompt=prompt)
 
-    assert actual == "Reply in the language the user writes in."
+    assert actual is None
 
 
 def test_user_prompt_does_not_offer_plan_when_command_is_invoked(monkeypatch, tmp_path):
+    _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart")
     actual = _run_user_prompt_hook(monkeypatch, tmp_path, prompt="/purser:plan design the migration")
 
-    assert actual == "Reply in the language the user writes in."
+    assert actual is None
 
 
 def test_plan_hint_matcher_failure_preserves_existing_context(monkeypatch, tmp_path):
@@ -476,3 +501,49 @@ def test_plan_hint_matcher_failure_preserves_existing_context(monkeypatch, tmp_p
     )
 
     assert actual == "Reply to the user in Turkish.\ncompact notice"
+
+
+def test_planning_hint_appears_once_per_session(monkeypatch, tmp_path):
+    first = _run_user_prompt_hook(monkeypatch, tmp_path, prompt="plan this",
+                                  language_handoff="## Goal\nUser language: Turkish\n")
+    second = _run_user_prompt_hook(monkeypatch, tmp_path, prompt="plan the next step",
+                                   language_handoff="## Goal\nUser language: Turkish\n")
+
+    assert first.count("offer /purser:plan") == 1
+    assert second is None or "offer /purser:plan" not in second
+    state = compaction_advisor._read_state(tmp_path / ".state" / "compaction_advisor.json", "test-session")
+    assert state["planning_injections"] == 1
+
+
+def test_language_reminder_session_start_reset_change_and_repeats(monkeypatch, tmp_path):
+    handoff = "## Goal\nUser language: Turkish\n"
+    started = _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart", language_handoff=handoff)
+    assert started == "Reply to the user in Turkish."
+    assert _run_user_prompt_hook(monkeypatch, tmp_path, language_handoff=handoff) is None
+    assert _run_user_prompt_hook(monkeypatch, tmp_path, language_handoff=handoff) is None
+
+    compacted = _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart", source="compact",
+                                      language_handoff=handoff)
+    assert compacted == "Reply to the user in Turkish."
+    assert _run_user_prompt_hook(monkeypatch, tmp_path, language_handoff=handoff) == "Reply to the user in Turkish."
+    changed = _run_user_prompt_hook(monkeypatch, tmp_path,
+                                    language_handoff="## Goal\nUser language: German\n")
+    assert changed == "Reply to the user in German."
+
+    cleared = _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart", source="clear",
+                                    language_handoff="## Goal\nUser language: German\n")
+    assert cleared == "Reply to the user in German."
+    assert _run_user_prompt_hook(monkeypatch, tmp_path,
+                                 language_handoff="## Goal\nUser language: German\n") == "Reply to the user in German."
+    state = compaction_advisor._read_state(tmp_path / ".state" / "compaction_advisor.json", "test-session")
+    assert state["language_injections"] == 6
+
+
+def test_language_reminder_fallback_every_twenty_prompts(monkeypatch, tmp_path):
+    handoff = "## Goal\nUser language: Turkish\n"
+    _run_user_prompt_hook(monkeypatch, tmp_path, event="SessionStart", language_handoff=handoff)
+    results = [_run_user_prompt_hook(monkeypatch, tmp_path, language_handoff=handoff) for _ in range(20)]
+
+    assert results[0] is None
+    assert results[18] is None
+    assert results[19] == "Reply to the user in Turkish."

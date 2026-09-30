@@ -1114,7 +1114,7 @@ def test_restore_includes_user_language_instruction(setup):
     assert "Reply to the user in Turkish; everything else stays as the project rules say." in restored
 
 
-@pytest.mark.parametrize("language_line", ["User language: <the language the user writes in>", ""])
+@pytest.mark.parametrize("language_line", ["User language: <the language the user writes in>", "", "User language: English"])
 def test_restore_omits_user_language_instruction_for_placeholder_or_missing_line(setup, language_line):
     repo, _local, _scratch = setup
     path = advisor.handoff_path(repo)
