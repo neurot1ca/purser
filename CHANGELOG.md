@@ -3,6 +3,18 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.56 — 2026-09-30
+
+- **Added:** An opted-in project can run a read-only Codex cleanup report by hand or automatically when idle (quiet period, no user job, weekly cadence, one global slot); findings are ranked and one notice offers a 'temizle' handoff that lands the cleanup as one revertible commit.
+- **Added:** Maintenance uses the 5h or weekly quota window, asks API-billed users before scanning, shows the report table at 70% and again at 30% remaining quota per window unless skipped, and can be turned off or run from /purser:optimize.
+- **Added:** At most once a day SessionStart offers a newer same-family version of a pinned route model and switches only on the user's yes.
+- **Added:** Each finished job's task record carries has_code_map so the code map saving can be measured.
+- **Changed:** /purser:optimize renders a Purser-style quoted table with each source's status and last-seen date, lists already stopped sources on one line, and is shown in the user's language.
+- **Changed:** The planning nudge shows once per session and the language line only at session start, after compaction or clear, on a language change, or every 20 prompts.
+- **Changed:** The orchestrator skill dispatches overlapping worktree jobs immediately; Purser queues hot-path conflicts and runs the rest in parallel worktrees.
+- **Fixed:** Replay applies a worker delta directly whenever it applies cleanly to the current checkout, so unrelated main changes no longer fail good jobs as conflicts.
+- **Fixed:** Reviewer-1 telemetry falls back to the measured elapsed time when the report's elapsed_seconds is missing or invalid.
+
 ## 0.1.55 — 2026-09-30
 
 - **Changed:** Purser messages, dispatch and done receipts and the jobs board render as a grey quote with an anchored bold first line; the stop hook accepts both the quoted and the legacy form.
