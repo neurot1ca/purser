@@ -808,19 +808,32 @@ def prepare_job_replay(
              "restoring current checkout snapshot")
     if raw:
         merge_conflicts: list[str] = []
+        new_paths: set[str] = set()
         try:
-            merged = _try_three_way_job_patch(
-                root, paths, raw, conflict_destination=worktree,
-                conflict_paths=merge_conflicts,
-            )
+            new_paths = {
+                path for path in paths
+                if not _run_git(root, ["ls-tree", "-z", snapshot, "--", f":(literal){path}"], timeout,
+                                "checking replay source path")
+                and not _run_git(root, ["ls-tree", "-z", current, "--", f":(literal){path}"], timeout,
+                                 "checking replay target path")
+            }
+            if paths and set(paths) <= new_paths:
+                _run_git(worktree, ["apply", "--check", "--binary", "-"], timeout,
+                         "checking direct replay", input_data=raw)
+                merged = raw
+            else:
+                merged = _try_three_way_job_patch(
+                    root, paths, raw, conflict_destination=worktree,
+                    conflict_paths=merge_conflicts,
+                )
         except _InspectionError:
             restore_worker_tree(snapshot)
-            conflicts = merge_conflicts or list(paths)
+            conflicts = [path for path in (merge_conflicts or paths) if path not in new_paths]
             save_state({"state": "BLOCKED", "snapshot": snapshot,
                         "target": current, "paths": paths, "conflicts": conflicts})
             return {"status": "conflict", "snapshot": snapshot, "paths": conflicts}
         if merged is None:
-            conflicts = merge_conflicts or list(paths)
+            conflicts = [path for path in (merge_conflicts or paths) if path not in new_paths]
             if resolver is not None:
                 save_state({"state": "RESOLVING", "snapshot": snapshot,
                             "target": current, "paths": paths, "conflicts": conflicts})

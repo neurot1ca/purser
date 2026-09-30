@@ -1009,10 +1009,25 @@ def test_prepare_job_replay_skips_unchanged_checkout(repo, tmp_path):
     assert not (tmp_path / "recovery").exists()
 
 
+def test_prepare_job_replay_new_file_with_moved_checkout(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "a" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "new.py").write_text("new = True\n", encoding="utf-8")
+    (repo / "notes.txt").write_text("checkout edit\n", encoding="utf-8")
+
+    outcome = ledger.prepare_job_replay(repo, worktree, result["snapshot"], tmp_path / "recovery")
+
+    assert outcome["status"] == "prepared"
+    assert outcome["paths"] == ["src/new.py"]
+    assert (worktree / "src" / "new.py").read_text(encoding="utf-8") == "new = True\n"
+    assert "src/new.py" in ledger.job_patch(worktree, outcome["snapshot"])
+
+
 def test_prepare_job_replay_blocks_conflict_and_preserves_worker_tree(repo, tmp_path):
     result = ledger.create_job_worktree(repo, "a" * 64, tmp_path / "worktrees")
     worktree = Path(result["path"])
     (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    (worktree / "src" / "new.py").write_text("new = True\n", encoding="utf-8")
     original_patch = ledger.job_patch(worktree, result["snapshot"])
     (repo / "src" / "target.py").write_text("value = 3\n", encoding="utf-8")
     before_index = git(repo, "diff", "--cached", "--binary").stdout

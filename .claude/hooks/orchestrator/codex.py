@@ -2900,6 +2900,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             success = False
             value = {"errorCode": "JOB_REPLAY_PREPARATION_FAILED"}
             synthetic["error"] = preparation_error
+            synthetic["error_code"] = value["errorCode"]
+            synthetic["replay_thread_id"] = job.get("threadId")
         if success:
             synthetic.update(hook_event_name="PostToolUse", tool_response={"content": [
                 {"type": "text", "text": json_transport.dumps(value)}]})
@@ -4702,7 +4704,8 @@ def post_tool_use_failure(
             saved = ledger.SessionLedger(project_runtime_root).save(
                 ledger.build_session_record(
                     pending["task_id"],
-                    pending.get("prior_thread_id"),
+                    (event.get("replay_thread_id") if event.get("error_code") == "JOB_REPLAY_PREPARATION_FAILED"
+                     else pending.get("prior_thread_id")),
                     pending["route"],
                     pending["model"],
                     pending["effort"],

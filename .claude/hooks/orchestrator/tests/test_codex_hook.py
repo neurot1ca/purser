@@ -1147,6 +1147,10 @@ def test_async_worktree_replay_resolver_timeout_blocks_and_restores_worker(works
     assert response_bundle(response, config)["claude_review_mode"] == policy.FULL
     assert reviewer_calls == []
     assert ledger.job_patch(worktree, snapshot["snapshot"]) == original_patch
+    reply = event(codex.CODEX_REPLY_TOOL, prompt="Resolve the replay conflict.",
+                  threadId="async-thread", tool_use_id="retry-replay-conflict")
+    admitted = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in admitted["hookSpecificOutput"]
 
 
 def test_operation_concurrent_commit_is_not_worker_delta(workspace, config):
