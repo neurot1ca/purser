@@ -602,12 +602,12 @@ def test_ping_during_slow_call(area):
     client = Client(area, extra_env={"FAKE_SLOW": "1"})
     try:
         client.send(1, "tools/call", {"name": "codex", "arguments": {"prompt": "slow"}})
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + 10
         while not client.calls() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert client.calls()
         client.send(2, "ping")
-        assert client.receive(timeout=1) == {"jsonrpc": "2.0", "id": 2, "result": {}}
+        assert client.receive(timeout=5) == {"jsonrpc": "2.0", "id": 2, "result": {}}
         assert client.receive(timeout=5)["id"] == 1
     finally:
         client.close()

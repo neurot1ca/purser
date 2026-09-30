@@ -1023,6 +1023,49 @@ def test_prepare_job_replay_new_file_with_moved_checkout(repo, tmp_path):
     assert "src/new.py" in ledger.job_patch(worktree, outcome["snapshot"])
 
 
+def test_prepare_job_replay_allows_unrelated_dirty_checkout_paths(repo, tmp_path, monkeypatch):
+    result = ledger.create_job_worktree(repo, "1" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "notes.txt").write_text("unrelated checkout edit\n", encoding="utf-8")
+    monkeypatch.setattr(ledger, "_try_three_way_job_patch", lambda *_args, **_kwargs:
+                        pytest.fail("directly applicable patch should not need a three-way merge"))
+
+    outcome = ledger.prepare_job_replay(repo, worktree, result["snapshot"], tmp_path / "recovery")
+
+    assert outcome["status"] == "prepared"
+    assert (worktree / "src" / "target.py").read_text(encoding="utf-8") == "value = 2\n"
+    assert (worktree / "notes.txt").read_text(encoding="utf-8") == "unrelated checkout edit\n"
+
+
+def test_prepare_job_replay_allows_reply_on_unapplied_thread_delta(repo, tmp_path, monkeypatch):
+    result = ledger.create_job_worktree(repo, "2" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text(
+        "value = 1\nthread_change = True\nreply_change = True\n", encoding="utf-8")
+    (repo / "notes.txt").write_text("unrelated checkout edit\n", encoding="utf-8")
+    monkeypatch.setattr(ledger, "_try_three_way_job_patch", lambda *_args, **_kwargs:
+                        pytest.fail("the thread's applicable unapplied delta is not a conflict"))
+
+    outcome = ledger.prepare_job_replay(repo, worktree, result["snapshot"], tmp_path / "recovery")
+
+    assert outcome["status"] == "prepared"
+    assert (worktree / "src" / "target.py").read_text(encoding="utf-8") == (
+        "value = 1\nthread_change = True\nreply_change = True\n")
+
+
+def test_prepare_job_replay_still_reports_overlapping_checkout_change(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "3" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "src" / "target.py").write_text("value = 3\n", encoding="utf-8")
+
+    outcome = ledger.prepare_job_replay(repo, worktree, result["snapshot"], tmp_path / "recovery")
+
+    assert outcome == {"status": "conflict", "snapshot": result["snapshot"],
+                       "paths": ["src/target.py"]}
+
+
 def test_prepare_job_replay_blocks_conflict_and_preserves_worker_tree(repo, tmp_path):
     result = ledger.create_job_worktree(repo, "a" * 64, tmp_path / "worktrees")
     worktree = Path(result["path"])
@@ -1049,10 +1092,17 @@ def test_prepare_job_replay_recovers_interrupted_preparation(repo, tmp_path, mon
     (repo / "notes.txt").write_text("checkout edit\n", encoding="utf-8")
     recovery = tmp_path / "recovery"
     original = ledger._try_three_way_job_patch
+    original_run_git = ledger._run_git
+
+    def require_three_way(*args, **kwargs):
+        if args[1][0:2] == ["apply", "--check"]:
+            raise ledger._InspectionError("GIT_FAILED", "simulated direct apply failure")
+        return original_run_git(*args, **kwargs)
 
     def interrupted(*_args, **_kwargs):
         raise OSError("simulated interruption")
 
+    monkeypatch.setattr(ledger, "_run_git", require_three_way)
     monkeypatch.setattr(ledger, "_try_three_way_job_patch", interrupted)
     with pytest.raises(OSError, match="simulated interruption"):
         ledger.prepare_job_replay(repo, worktree, result["snapshot"], recovery)

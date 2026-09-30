@@ -817,11 +817,11 @@ def prepare_job_replay(
                 and not _run_git(root, ["ls-tree", "-z", current, "--", f":(literal){path}"], timeout,
                                  "checking replay target path")
             }
-            if paths and set(paths) <= new_paths:
+            try:
                 _run_git(worktree, ["apply", "--check", "--binary", "-"], timeout,
                          "checking direct replay", input_data=raw)
                 merged = raw
-            else:
+            except _InspectionError:
                 merged = _try_three_way_job_patch(
                     root, paths, raw, conflict_destination=worktree,
                     conflict_paths=merge_conflicts,
