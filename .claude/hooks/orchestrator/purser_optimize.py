@@ -403,6 +403,98 @@ def _compact_tokens(value: float) -> str:
     return _format_number(value).replace(".0K", "K").replace(".0M", "M")
 
 
+def _date_seen(session: dict[str, Any]) -> str:
+    timestamp = session.get("timestamp")
+    try:
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date().isoformat()
+    except (AttributeError, ValueError):
+        return datetime.fromtimestamp(session["mtime"]).date().isoformat()
+
+
+def _plugin_enabled(name: str, home: Path, project_root: Path | None) -> bool | None:
+    paths = [home / ".claude" / "settings.json"]
+    if project_root:
+        paths.extend((project_root / ".claude" / "settings.json",
+                      project_root / ".claude" / "settings.local.json"))
+    state = None
+    for path in paths:
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            continue
+        enabled = settings.get("enabledPlugins") if isinstance(settings, dict) else None
+        if not isinstance(enabled, dict):
+            continue
+        matches = [value for key, value in enabled.items()
+                   if key == name or key.startswith(name + "@") or name.startswith(key.split("@", 1)[0] + "@")]
+        if matches:
+            state = matches[-1] if isinstance(matches[-1], bool) else None
+    return state
+
+
+def _plugin_present(name: str, session: dict[str, Any]) -> bool:
+    def matches(source: str) -> bool:
+        return (source == name or source.startswith(name + ":")
+                or source.startswith("plugin:" + name + ":"))
+
+    if any(matches(source) for source in session["loaded_names"]):
+        return True
+    if any(event["kind"] in ("skill", "command", "mcp") and matches(event["name"])
+           for event in session["usage"]):
+        return True
+    return any(tool["name"].startswith("plugin:" + name + ":")
+               or ((server := _server_name(tool["name"])) is not None
+                   and server.startswith("plugin:" + name + ":"))
+               for request in session["requests"] for tool in request["tools"])
+
+
+def _installed_plugin_matches(prompt: str, home: Path) -> list[str]:
+    """Match prompt vocabulary against installed plugin names and descriptions."""
+    path = home / ".claude" / "plugins" / "installed_plugins.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return []
+    plugins = data.get("plugins", {}) if isinstance(data, dict) else {}
+    prompt_words = set(re.findall(r"[a-z0-9]{4,}", prompt.lower()))
+    prompt_tokens = re.findall(r"[a-z0-9]+", prompt.lower())
+    prompt_pairs = set(zip(prompt_tokens, prompt_tokens[1:]))
+    ignored = {"this", "that", "with", "from", "into", "for", "code", "review", "please", "run"}
+    prompt_words -= ignored
+    scores = []
+    if not isinstance(plugins, dict):
+        return []
+    for plugin, installs in plugins.items():
+        if not isinstance(plugin, str) or not isinstance(installs, list) or not installs:
+            continue
+        terms = set(re.findall(r"[a-z0-9]{4,}", plugin.lower()))
+        install_path = installs[-1].get("installPath") if isinstance(installs[-1], dict) else None
+        if isinstance(install_path, str):
+            root = Path(install_path)
+            try:
+                for source in [root / ".claude-plugin" / "plugin.json", root / "README.md"]:
+                    terms.update(re.findall(r"[a-z0-9]{4,}", source.read_text(encoding="utf-8", errors="replace").lower()))
+            except OSError:
+                pass
+        score = len(prompt_words & terms)
+        source_text = plugin.lower().replace("-", " ")
+        if isinstance(install_path, str):
+            for source in (Path(install_path) / ".claude-plugin" / "plugin.json",
+                           Path(install_path) / "README.md"):
+                try:
+                    source_text += " " + source.read_text(encoding="utf-8", errors="replace").lower()
+                except OSError:
+                    pass
+        source_tokens = re.findall(r"[a-z0-9]+", source_text)
+        pair_score = len(prompt_pairs & set(zip(source_tokens, source_tokens[1:])))
+        if score >= 2 or pair_score:
+            scores.append((score + pair_score * 2, plugin))
+    if not scores:
+        return []
+    best = max(score for score, _ in scores)
+    return sorted(plugin for score, plugin in scores if score == best)
+
+
 def analyze(projects_root: Path, days: int, home: Path | None = None,
             project_root: Path | None = None) -> dict[str, Any]:
     now = datetime.now().timestamp()
@@ -418,6 +510,7 @@ def analyze(projects_root: Path, days: int, home: Path | None = None,
     total_weight = sum(r["weight"] for r in requests)
     all_entry = defaultdict(float)
     prompt_cost = defaultdict(lambda: defaultdict(float))
+    prompt_seen = defaultdict(dict)
     interactive_entries = {"claude-desktop", "cli"}
     interactive_entries.update(entry for s in sessions if s["typed"] for entry in s["entrypoints"])
     interactive_sessions = [s for s in sessions if not s["sidechain"] and
@@ -456,6 +549,7 @@ def analyze(projects_root: Path, days: int, home: Path | None = None,
         if ep not in interactive_entries:
             prompt = next(iter(s["first_prompts"].values()), "(no first prompt recorded)")
             prompt_cost[ep][prompt] += weight
+            prompt_seen[ep][prompt] = max(prompt_seen[ep].get(prompt, ""), _date_seen(s))
 
     startup_items = []
     duplicate_sources: dict[str, set[str]] = defaultdict(set)
@@ -519,15 +613,58 @@ def analyze(projects_root: Path, days: int, home: Path | None = None,
     shown = _select_sequences(_sequence_candidates(sessions))
 
     settings = compaction_advisor._settings()
+    latest_session = max(sessions, key=lambda s: s["mtime"], default=None)
+
+    def source_seen(matches) -> str | None:
+        found = [_date_seen(session) for session in sessions if matches(session)]
+        return max(found) if found else None
+
+    for item in startup_items:
+        name = item["name"]
+        if item["kind"] == "plugin":
+            plugin = name.removeprefix("plugin:")
+            enabled = _plugin_enabled(plugin, home, project_root)
+            present = bool(latest_session and _plugin_present(plugin, latest_session))
+            item["status"] = "active" if present or enabled is True else "stopped" if enabled is False else "unknown"
+            item["last_seen"] = source_seen(lambda session: (
+                _plugin_present(plugin, session)
+                or any(plugin in _installed_plugin_matches(prompt, home)
+                       for prompt in session["first_prompts"].values())))
+        else:
+            loaded_name = name.split(":", 1)[1]
+            if latest_session is None:
+                item["status"] = "unknown"
+            else:
+                is_loaded = any(_same_server(loaded_name.removeprefix("MCP:"), loaded)
+                                or loaded == loaded_name for loaded in latest_session["loaded_names"])
+                item["status"] = "active" if is_loaded else "stopped"
+            item["last_seen"] = source_seen(lambda session: any(
+                _same_server(loaded_name, loaded) or loaded == loaded_name
+                for loaded in session["loaded_names"]))
+
+    hidden_rows = []
+    for ep, value in sorted(all_entry.items(), key=lambda x: -x[1]):
+        if ep in interactive_entries or value <= 0:
+            continue
+        hidden_sessions = [session for session in sessions if session["entrypoint"] == ep]
+        prompts = []
+        for prompt, cost in sorted(prompt_cost[ep].items(), key=lambda x: -x[1])[:3]:
+            matches = _installed_plugin_matches(prompt, home)
+            source = matches[0] if len(matches) == 1 else None
+            enabled = _plugin_enabled(source, home, project_root) if source else None
+            prompts.append({"signature": prompt, "share": cost / total_weight if total_weight else 0,
+                            "source": source, "status": "active" if enabled is True else
+                            "stopped" if enabled is False else "unknown",
+                            "last_seen": prompt_seen[ep].get(prompt)})
+        hidden_rows.append({"entrypoint": ep, "share": value / total_weight if total_weight else 0,
+                            "weighted_tokens": value, "sessions": len(hidden_sessions),
+                            "last_seen": max((_date_seen(session) for session in hidden_sessions), default=None),
+                            "source": prompts[0]["source"] if prompts else None,
+                            "status": prompts[0]["status"] if prompts else "unknown",
+                            "prompts": prompts})
+
     return {"startup": startup_items, "startup_note": "System prompt and eager tool schemas are not recorded in transcripts and cannot be attributed.",
-            "hidden": [{"entrypoint": ep, "share": value / total_weight if total_weight else 0,
-                        "weighted_tokens": value,
-                        "sessions": sum(1 for session in sessions if session["entrypoint"] == ep),
-                        "prompts": [{"signature": prompt, "share": cost / total_weight if total_weight else 0}
-                                    for prompt, cost in sorted(prompts.items(), key=lambda x: -x[1])[:3]]}
-                       for ep, value in sorted(all_entry.items(), key=lambda x: -x[1])
-                       if ep not in interactive_entries and value > 0
-                       for prompts in [prompt_cost[ep]]],
+            "hidden": hidden_rows,
             "duplicate_skills": duplicates, "median_reply_chars": median_reply,
             "reply_rule_present": has_reply_rule, "reply_count": len(replies), "sequences": shown,
             "compaction": {"enabled": settings["enabled"], "threshold_tokens": settings["threshold_tokens"]},
@@ -605,22 +742,6 @@ def _display_name(value: str) -> str:
     return re.sub(r"[-_]+", " ", value).strip()
 
 
-def _hidden_prompt_line(row: dict[str, Any]) -> str:
-    prompt = row.get("prompts", [{}])[0].get("signature") if row.get("prompts") else None
-    excerpt = _prompt_excerpt(prompt) if prompt else "an unrecorded prompt"
-    return f"They start with “{excerpt}”. Look at the plugin that launches them."
-
-
-def _prompt_excerpt(prompt: str, limit: int = 60) -> str:
-    prompt = " ".join(prompt.split())
-    sentence = re.search(r"[.!?](?=\s|$)", prompt)
-    end = min(sentence.end(), limit) if sentence else min(len(prompt), limit)
-    excerpt = prompt[:end].rstrip()
-    if end < len(prompt):
-        excerpt += "…"
-    return excerpt
-
-
 def _startup_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
     rows = [item for item in report.get("startup", []) if item.get("flagged")]
     doc_skills = []
@@ -648,9 +769,14 @@ def _startup_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
         candidates.append(item)
     if doc_skills:
+        statuses = {item.get("status", "unknown") for item in doc_skills}
         candidates.append({"kind": "document_skills", "items": doc_skills,
                            "total_tokens": sum(i["total_tokens"] for i in doc_skills),
-                           "tokens_per_request": sum(i["tokens_per_request"] for i in doc_skills)})
+                           "tokens_per_request": sum(i["tokens_per_request"] for i in doc_skills),
+                           "status": "stopped" if statuses == {"stopped"} else
+                           "active" if "active" in statuses else "unknown",
+                           "last_seen": max((item["last_seen"] for item in doc_skills if item.get("last_seen")),
+                                            default=None)})
     return candidates
 
 
@@ -660,47 +786,92 @@ def render(report: dict[str, Any]) -> str:
     for item in _startup_candidates(report):
         kind = item["kind"]
         per_500 = item["tokens_per_request"] * 500
-        cost = f"~{_compact_tokens(per_500)} tokens per 500 messages"
+        cost = f"~{_compact_tokens(per_500)} / 500 msg"
+        status = _status_text(item.get("status", "unknown"), item.get("last_seen"),
+                              "plugin disabled" if kind == "plugin" and item.get("status") == "stopped" else
+                              "not loaded" if item.get("status") == "stopped" else None)
+        action = "—" if item.get("status") == "stopped" else ""
         if kind == "MCP":
             name = item["name"].removeprefix("mcp:")
             if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}", name):
-                sentence = f"An unnamed claude.ai connector costs {cost} and had 0 uses in {item['requests_loaded']} requests."
+                finding = "unnamed claude.ai connector"
             else:
-                sentence = f"{_display_name(name)} connector costs {cost} and had 0 uses in {item['requests_loaded']} requests."
-            entries.append((per_500, "🔌", sentence, "Remove the connector."))
+                finding = f"{_display_name(name)} connector"
+            action = action or "Remove connector"
+            entries.append((item.get("status", "unknown"), per_500, finding, cost, status, action))
         elif kind == "plugin":
             name = item["name"].removeprefix("plugin:")
-            entries.append((per_500, "🧩", f"{_display_name(name)} plugin costs {cost} and had 0 uses in {item['requests_loaded']} requests.", "Disable the plugin."))
+            finding = f"{_display_name(name)} plugin"
+            action = action or "Disable plugin"
+            entries.append((item.get("status", "unknown"), per_500, finding, cost, status, action))
         elif kind == "document_skills":
             names = ", ".join(i["name"].split(":")[-1] for i in item["items"])
-            entries.append((per_500, "📚", f"Unused document skills ({names}) cost {cost}.", "Remove the unused skills."))
+            finding = f"Unused document skills ({names})"
+            status = item.get("status", "unknown")
+            status_text = _status_text(status, item.get("last_seen"),
+                                       "not loaded" if status == "stopped" else None)
+            entries.append((status, per_500, finding, cost, status_text,
+                            "—" if status == "stopped" else "Remove skills"))
         else:
             name = item["name"].removeprefix("skill:").split(":")[-1]
-            entries.append((per_500, "📚", f"Unused {_display_name(name)} skill costs {cost}.", "Remove the unused skills."))
+            finding = f"Unused {_display_name(name)} skill"
+            action = action or "Remove skill"
+            entries.append((item.get("status", "unknown"), per_500, finding, cost, status, action))
     for item in report.get("sequences", []):
         seq = " → ".join(" + ".join(step) for step in item["sequence"])
-        saving = f"~{_compact_tokens(item['weighted_saving'])} tokens over the last {days} days"
-        entries.append((item["weighted_saving"], "🔁", f"Repeated Bash work ({seq}) could have saved {saving}.", "Turn this sequence into one script."))
+        finding = f"Repeated Bash work: {seq}"
+        cost = f"~{_compact_tokens(item['weighted_saving'])} / {days} days"
+        entries.append(("active", item["weighted_saving"], finding, cost,
+                        _status_text("active", None), "Make one script"))
     for row in report.get("hidden", []):
-        source = _hidden_prompt_line(row)
-        sentence = (f"{row.get('sessions', 0)} hidden sessions used "
-                    f"~{_compact_tokens(row.get('weighted_tokens', 0))} tokens "
-                    f"in {days} days.")
-        entries.append((row.get("weighted_tokens", 0), "👀", sentence,
-                        source))
+        plugin = row.get("source")
+        launcher = _display_name(plugin.split("@", 1)[0]) if plugin else "unknown launcher"
+        finding = f"{launcher}: {row.get('sessions', 0)} hidden sessions"
+        cost = f"~{_compact_tokens(row.get('weighted_tokens', 0))} / {days} days"
+        status = _status_text(row.get("status", "unknown"), row.get("last_seen"),
+                              "plugin disabled" if row.get("status") == "stopped" and plugin else None)
+        action = "—" if row.get("status") == "stopped" else "Review launcher"
+        entries.append((row.get("status", "unknown"), row.get("weighted_tokens", 0),
+                        finding, cost, status, action))
     if report.get("median_reply_chars", 0) > 800 and not report.get("reply_rule_present", False):
-        reply_rule = "# Replies\nLead with the answer.\nKeep replies short, at most 5 lines unless asked for detail.\nNo tables unless asked."
-        entries.append((report["median_reply_chars"], "📝",
+        entries.append(("active", report["median_reply_chars"],
                         f"Your replies average ~{round(report['median_reply_chars'])} characters.",
-                        f"Add a short-reply rule to ~/.claude/CLAUDE.md:\n{reply_rule}"))
-    entries.sort(key=lambda entry: -entry[0])
-    lines = ["**⚓ Purser optimize**", "", "Biggest token drains"]
-    for index, (_, emoji, sentence, action) in enumerate(entries[:7], 1):
-        lines.append(f"{index}. {emoji} **{sentence}** {action}")
+                        f"~{round(report['median_reply_chars'])} chars/reply",
+                        _status_text("active", None), "Add reply rule to CLAUDE.md"))
+    entries.sort(key=lambda entry: ({"active": 0, "unknown": 1, "stopped": 2}.get(entry[0], 1), -entry[1]))
+    lines = ["> ⚓ **Purser optimize**", "> ", "> *Biggest token drains*", "> ",
+             "> | # | Finding | Cost | Status | Action |",
+             "> | --- | --- | --- | --- | --- |"]
+    for index, (_, _, finding, cost, status, action) in enumerate(entries[:7], 1):
+        cells = [finding, cost, status, action]
+        cells = [str(cell).replace("|", "\\|").replace("\n", " ") for cell in cells]
+        lines.append(f"> | {index} | " + " | ".join(cells) + " |")
+    stopped = [entry for entry in entries if entry[0] == "stopped"]
+    if stopped:
+        summaries = []
+        for _, _, finding, cost, status, _ in stopped:
+            label = finding
+            if " hidden sessions" in finding:
+                label = finding.split(":", 1)[0] + " hidden reviews"
+            amount = cost.split(" /", 1)[0]
+            seen = status.rsplit("last seen ", 1)[-1]
+            date = f", last seen {seen}" if "last seen " in status else ""
+            summaries.append(f"{label} ({amount} tokens{date})")
+        lines.extend(["> ", "> *Already stopped: " + "; ".join(summaries) + ".*"])
     if not entries:
-        lines.append("✨ No clear token waste found in your recent sessions.")
-    lines.extend(["", "🧠 Purser learns as it works in this project: it measures how long its work really takes, sharpens its estimates, and points out where tokens and time can be saved."])
+        lines.extend(["> ", "> *No clear token waste found in your recent sessions.*"])
+    lines.extend(["> ", "> *🧠 Purser learns as it works in this project: it measures how long its work really takes, sharpens its estimates, and points out where tokens and time can be saved.*"])
     return "\n".join(lines)
+
+
+def _status_text(status: str, last_seen: str | None, reason: str | None = None) -> str:
+    if status == "stopped":
+        label = f"stopped: {reason or 'not loaded'}"
+    elif status == "active":
+        label = "active"
+    else:
+        label = "status unknown"
+    return f"{label} · last seen {last_seen or 'unknown'}"
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -134,7 +134,7 @@ def test_reply_rule_boundary(tmp_path, monkeypatch, length, expected):
     assert (report["median_reply_chars"] > 800) is expected
     output = optimize.render(report)
     assert ("Your replies average ~801 characters." in output) is expected
-    assert "# Replies\nLead with the answer.\nKeep replies short, at most 5 lines unless asked for detail.\nNo tables unless asked." in output if expected else "# Replies" not in output
+    assert "Add reply rule to CLAUDE.md" in output if expected else "Add reply rule" not in output
 
 
 def test_reply_heading_already_present(tmp_path, monkeypatch):
@@ -247,7 +247,7 @@ def test_plain_output_reconfigures_cp1254_stdout_and_is_ascii(tmp_path, monkeypa
     assert optimize.main(["--projects-root", str(tmp_path / "projects")]) == 0
     stream.flush()
     assert stream.encoding.lower() == "utf-8"
-    assert "**⚓ Purser optimize**" in output.getvalue().decode("utf-8")
+    assert "> ⚓ **Purser optimize**" in output.getvalue().decode("utf-8")
 
 
 def test_latest_interactive_startup_is_deduped_but_usage_spans_window(tmp_path):
@@ -364,8 +364,8 @@ def test_contained_sequence_keeps_higher_saving_and_large_values_use_m(tmp_path)
     report["sequences"] = [{"sequence": short, "occurrences": 3, "sessions": 3,
                             "weighted_saving": 18_022_000}]
     rendered = optimize.render(report)
-    assert "18M tokens over the last 30 days" in rendered
-    assert "**⚓ Purser optimize**" in rendered
+    assert "~18M / 30 days" in rendered
+    assert "> ⚓ **Purser optimize**" in rendered
 
 
 def _render_report(*, startup=(), hidden=(), sequences=(), days=30):
@@ -377,30 +377,31 @@ def test_render_costs_scale_to_500_messages():
     output = _render_report(startup=[{"name": "plugin:design-tool", "kind": "plugin",
                                       "tokens_per_request": 530.6, "requests_loaded": 14,
                                       "uses": 0, "flagged": True}])
-    assert "~265.3K tokens per 500 messages" in output
-    assert "Disable the plugin." in output
+    assert "~265.3K / 500 msg" in output
+    assert "Disable plugin" in output
 
 
 def test_render_repeated_sequence_keeps_window_total_unscaled():
     output = _render_report(sequences=[{"sequence": (("Bash git add",), ("Bash git commit",)),
                                        "weighted_saving": 480_000, "occurrences": 4,
                                        "sessions": 3}], days=30)
-    assert "could have saved ~480K tokens over the last 30 days" in output
-    assert "per 500 messages" not in output
-    assert "Turn this sequence into one script." in output
+    assert "~480K / 30 days" in output
+    assert "/ 500 msg" not in output
+    assert "Make one script" in output
 
 
-def test_hidden_sessions_use_absolute_count_without_weighted_label():
+def test_hidden_sessions_use_absolute_count_and_unknown_status():
     output = _render_report(hidden=[{"entrypoint": "sdk-py", "sessions": 174,
                                     "weighted_tokens": 21_000_000,
                                     "share": .04,
                                     "prompts": [{"signature": "Run security-review for sdk-py",
                                                  "share": .04}]}])
-    assert "**174 hidden sessions used ~21M tokens in 30 days.**" in output
-    assert "They start with “Run security-review for sdk-py”. Look at the plugin that launches them." in output
+    assert "unknown launcher: 174 hidden sessions" in output
+    assert "~21M / 30 days" in output
+    assert "status unknown" in output
     assert "weighted" not in output
     assert "%" not in output
-    assert output.endswith("\n\n" + _LEARNING_FOOTER)
+    assert output.endswith("\n> \n> *" + _LEARNING_FOOTER + "*")
 
 
 def test_hidden_prompt_is_cut_at_sentence_end_or_60_chars_with_ellipsis():
@@ -409,7 +410,8 @@ def test_hidden_prompt_is_cut_at_sentence_end_or_60_chars_with_ellipsis():
                                     "weighted_tokens": 500,
                                     "prompts": [{"signature": prompt}]}])
     excerpt = prompt[:60] + "…"
-    assert f"They start with “{excerpt}”. Look at the plugin that launches them." in output
+    assert "unknown launcher" in output
+    assert excerpt not in output
 
 
 def test_raw_mcp_uuid_is_never_rendered():
@@ -427,7 +429,7 @@ def test_anthropic_document_skills_are_grouped():
               for name in ("pptx", "xlsx", "docx", "pdf")]
     output = _render_report(startup=skills)
     assert "Unused document skills (pptx, xlsx, docx, pdf)" in output
-    assert output.count("Remove the unused skills.") == 1
+    assert output.count("Remove skills") == 1
 
 
 def test_dropped_report_sections_and_notes_are_absent():
@@ -440,12 +442,115 @@ def test_dropped_report_sections_and_notes_are_absent():
         assert removed not in output
 
 
+def test_disabled_plugin_is_stopped_with_no_action(tmp_path):
+    home = tmp_path / "home"
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"enabledPlugins": {"security-guidance@official": False}}), encoding="utf-8")
+    projects = tmp_path / "projects"
+    records = [skill_listing(("security-guidance:unused", "x" * 2400)), rec_user(), rec_assistant("a")]
+    write_session(projects, "s", records, age_days=5)
+    hidden = [rec_user("background job", "sdk-py", promptSource="sdk"),
+              rec_assistant("background", entrypoint="sdk-py")]
+    write_session(projects, "latest", hidden)
+    report = analyze(projects, home)
+    row = next(item for item in report["startup"] if item["name"] == "plugin:security-guidance")
+    assert row["status"] == "stopped"
+    assert row["last_seen"] is not None
+    output = optimize.render(report)
+    assert "stopped: plugin disabled" in output
+    assert "Disable plugin" not in output
+
+
+def test_hidden_prompt_matches_installed_plugin_and_reports_last_seen(tmp_path):
+    home = tmp_path / "home"
+    plugins = home / ".claude" / "plugins"
+    install = plugins / "cache" / "official" / "security-guidance" / "1.0"
+    install.mkdir(parents=True)
+    (install / "README.md").write_text("Automated security review for changes.", encoding="utf-8")
+    (plugins / "installed_plugins.json").write_text(json.dumps({"plugins": {
+        "security-guidance@official": [{"installPath": str(install)}]}}), encoding="utf-8")
+    settings = home / ".claude" / "settings.json"
+    settings.write_text(json.dumps({"enabledPlugins": {"security-guidance@official": False}}), encoding="utf-8")
+    projects = tmp_path / "projects"
+    prompt = rec_user("Run security-review for sdk-py", "sdk-py", promptSource="sdk")
+    write_session(projects, "hidden", [prompt, rec_assistant("a", entrypoint="sdk-py")], age_days=5)
+    report = analyze(projects, home)
+    row = report["hidden"][0]
+    assert row["source"] == "security-guidance@official"
+    assert row["status"] == "stopped"
+    assert row["last_seen"] is not None
+    output = optimize.render(report)
+    assert "security guidance: 1 hidden sessions" in output
+    assert "stopped: plugin disabled" in output
+    assert "Review launcher" not in output
+
+
+def test_enabled_plugin_keeps_its_action(tmp_path):
+    home = tmp_path / "home"
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"enabledPlugins": {"design@official": True}}), encoding="utf-8")
+    projects = tmp_path / "projects"
+    records = [skill_listing(("design:unused", "x" * 2400)), rec_user(), rec_assistant("a")]
+    report = analyze(write_session(projects, "s", records), home)
+    output = optimize.render(report)
+    assert "active" in output
+    assert "Disable plugin" in output
+
+
+def test_current_session_plugin_tool_presence_overrides_disabled_setting(tmp_path):
+    home = tmp_path / "home"
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"enabledPlugins": {"design@official": False}}), encoding="utf-8")
+    projects = tmp_path / "projects"
+    records = [skill_listing(("design:unused", "x" * 2400)), rec_user(),
+               rec_assistant("a", tools=[tool("mcp__plugin:design:server__query"),
+                                           tool("plugin:design:other")])]
+    report = analyze(write_session(projects, "s", records), home)
+    row = next(item for item in report["startup"] if item["name"] == "plugin:design")
+    assert row["status"] == "active"
+    assert row["last_seen"] is not None
+
+
+def test_stopped_hidden_sources_are_summarized_after_table():
+    output = _render_report(hidden=[{"entrypoint": "sdk-py", "sessions": 174,
+                                    "weighted_tokens": 21_200_000, "status": "stopped",
+                                    "source": "security-guidance@official",
+                                    "last_seen": "2026-09-25"}])
+    table_end = output.index("| 1 |")
+    summary = "> *Already stopped: security guidance hidden reviews (~21.2M tokens, last seen 2026-09-25).*"
+    assert output.index(summary) > table_end
+    assert output.count("Already stopped:") == 1
+
+
+def test_unknown_status_quote_table_and_active_ranking():
+    output = _render_report(startup=[
+        {"name": "plugin:stopped", "kind": "plugin", "tokens_per_request": 100,
+         "requests_loaded": 10, "uses": 0, "flagged": True, "status": "stopped",
+         "last_seen": "2026-09-25"},
+        {"name": "plugin:active", "kind": "plugin", "tokens_per_request": 100,
+         "requests_loaded": 10, "uses": 0, "flagged": True, "status": "active",
+         "last_seen": "2026-09-30"},
+        {"name": "plugin:mystery", "kind": "plugin", "tokens_per_request": 100,
+         "requests_loaded": 10, "uses": 0, "flagged": True, "status": "unknown"},
+    ])
+    lines = output.splitlines()
+    assert lines[0] == "> ⚓ **Purser optimize**"
+    assert "> | # | Finding | Cost | Status | Action |" in lines
+    assert all(line.startswith("> ") for line in lines)
+    assert output.index("active plugin") < output.index("mystery plugin") < output.index("stopped plugin")
+    assert "status unknown" in output
+    assert "stopped: plugin disabled · last seen 2026-09-25" in output
+
+
 _LEARNING_FOOTER = ("🧠 Purser learns as it works in this project: it measures how long its work really takes, "
                     "sharpens its estimates, and points out where tokens and time can be saved.")
 
 
 def test_empty_state_line_and_learning_footer_when_no_actionable_costs():
     output = _render_report()
-    assert "✨ No clear token waste found in your recent sessions." in output
+    assert "*No clear token waste found in your recent sessions.*" in output
     assert "1." not in output
-    assert output.endswith("\n\n" + _LEARNING_FOOTER)
+    assert output.endswith("\n> \n> *" + _LEARNING_FOOTER + "*")
