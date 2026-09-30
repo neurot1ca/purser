@@ -512,6 +512,8 @@ class CompletedReview(_ResultMapping):
     usage: tuple[tuple[str, int | float], ...] = ()
     provider: str = AGY_ADAPTER.provider
     served_model_attestation: str = "UNAVAILABLE"
+    retry_count: int = 0
+    retry_recovered: bool = False
 
     def __post_init__(self) -> None:
         if self.result not in _COMPLETED_RESULTS:
@@ -547,6 +549,8 @@ class UnavailableReview(_ResultMapping):
     elapsed_seconds: float | None = None
     stderr_tail: str | None = None
     provider: str = AGY_ADAPTER.provider
+    retry_count: int = 0
+    retry_recovered: bool = False
 
     def _values(self) -> dict[str, Any]:
         return {
@@ -609,6 +613,7 @@ def _completed(
     *,
     provider: str = AGY_ADAPTER.provider,
     served_model_attestation: str = "UNAVAILABLE",
+    retry_count: int = 0,
 ) -> CompletedReview:
     return CompletedReview(
         result=result,
@@ -620,6 +625,8 @@ def _completed(
         usage=tuple(sorted((usage or {}).items())),
         provider=provider,
         served_model_attestation=served_model_attestation,
+        retry_count=retry_count,
+        retry_recovered=retry_count > 0,
     )
 
 
@@ -1278,6 +1285,7 @@ def invoke_packet(
                     elapsed_seconds=elapsed_total,
                     stderr_tail=_stderr_tail(error.stderr),
                     provider=reviewer_agent,
+                    retry_count=int(retried),
                 )
             elapsed = max(0.0, time.monotonic() - started)
             elapsed_total += elapsed
@@ -1307,6 +1315,7 @@ def invoke_packet(
                 elapsed_seconds=elapsed_total,
                 stderr_tail=stderr_tail,
                 provider=reviewer_agent,
+                retry_count=int(retried),
             )
         try:
             parsed = adapter.parse(stdout, include_metadata=True)
@@ -1325,6 +1334,7 @@ def invoke_packet(
                 decoder_detail=str(error)[:200],
                 elapsed_seconds=elapsed_total,
                 provider=reviewer_agent,
+                retry_count=int(retried),
             )
         if response["result"] == policy.REVIEWER1_UNAVAILABLE:
             return UnavailableReview(
@@ -1336,6 +1346,7 @@ def invoke_packet(
                 tuple(sorted(usage.items())),
                 elapsed_seconds=elapsed_total,
                 provider=reviewer_agent,
+                retry_count=int(retried),
             )
         result = response["result"]
         findings = response["findings"]
@@ -1365,6 +1376,7 @@ def invoke_packet(
             usage,
             provider=adapter.provider,
             served_model_attestation=served_model,
+            retry_count=int(retried),
         )
     except FileNotFoundError:
         return UnavailableReview(
@@ -1373,6 +1385,7 @@ def invoke_packet(
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
             provider=reviewer_agent,
+            retry_count=int(retried),
         )
     except (json.JSONDecodeError, TypeError, ValueError, OSError) as error:
         return UnavailableReview(
@@ -1381,6 +1394,7 @@ def invoke_packet(
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
             provider=reviewer_agent,
+            retry_count=int(retried),
         )
     except Exception as error:
         return UnavailableReview(
@@ -1389,6 +1403,7 @@ def invoke_packet(
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
             provider=adapter.provider,
+            retry_count=int(retried),
         )
     finally:
         if packet_path is not None:

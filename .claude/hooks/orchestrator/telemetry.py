@@ -1056,6 +1056,13 @@ def _new_aggregate(
         "duration_ms": None,
         "phase": None,
         "task_type": "unknown",
+        "selected_agent": None,
+        "selected_provider": None,
+        "selected_model": None,
+        "served_agent": None,
+        "served_provider": None,
+        "served_model": None,
+        "claude_decision": None,
         "claude_acceptance": {
             "outcome": "unknown", "send_backs": 0, "applied_as_is": False, "sources": []
         },
@@ -1179,6 +1186,14 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
         for field in ("phase", "route", "model", "effort", "routing_enforced"):
             if field in payload:
                 aggregate[field] = payload[field]
+        if "task_type" in payload:
+            aggregate["task_type"] = payload["task_type"]
+        for payload_field, aggregate_field in (
+            ("agent", "selected_agent"), ("provider", "selected_provider"),
+            ("model", "selected_model"),
+        ):
+            if payload_field in payload:
+                aggregate[aggregate_field] = payload[payload_field]
     elif event_type == "IMPLEMENTER_STARTED":
         aggregate["status"] = "IN_PROGRESS"
         aggregate["started_at"] = aggregate["started_at"] or event["ts_utc"]
@@ -1192,13 +1207,17 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
         aggregate["usage"]["codex_duration_ms"] = _add_duration(
             aggregate["usage"]["codex_duration_ms"], payload.get("duration_ms")
         )
-        for field in ("changed_paths_count", "thread_id", "claude_review_mode", "routing_enforced"):
+        for field in ("changed_paths_count", "thread_id", "claude_review_mode", "routing_enforced",
+                      "served_agent", "served_provider", "served_model"):
             if field in payload:
                 aggregate[field] = payload[field]
         if aggregate["validation"] is None and payload.get("validation") is not None:
             aggregate["validation"] = payload["validation"]
-        if payload.get("codex_usage_known") is True:
-            aggregate["usage"]["codex_usage_known"] = True
+        known = payload.get("codex_usage_known") is True
+        aggregate["usage"]["codex_usage_known"] = (
+            known if aggregate["usage"]["codex_call_count"] <= 1
+            else aggregate["usage"]["codex_usage_known"] and known
+        )
         for field in schema.TOKEN_FIELDS:
             key = f"codex_{field}"
             if key in payload:
@@ -1249,6 +1268,10 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
                             if item["decision"] in {"accepted", "rejected"}}
         sources.append({**source, "decision": payload["decision"],
                         "task_type": payload["task_type"], "ts_utc": event["ts_utc"]})
+        aggregate["claude_decision"] = {
+            "decision": payload["decision"], "task_type": payload["task_type"],
+            "source": source, "ts_utc": event["ts_utc"],
+        }
         if aggregate["task_type"] == "unknown" and payload["task_type"] != "unknown":
             aggregate["task_type"] = payload["task_type"]
         if payload["decision"] == "send_back":

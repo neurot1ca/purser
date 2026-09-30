@@ -234,6 +234,70 @@ def test_claude_send_back_then_acceptance_projects_applied_as_is_false(tmp_path)
     assert [source["ts_utc"] for source in aggregate["claude_acceptance"]["sources"]]
 
 
+def test_task_fold_preserves_selected_and_served_identity_after_fallback(tmp_path):
+    common = {"task_id": "fallback-task", "state_root": tmp_path,
+              "session_id": "session-1", "repo": "repo", "branch": "main",
+              "agent_id": "call-1", "agent_type": "codex-main"}
+    telemetry.emit("TASK_ROUTE_SELECTED", **common, phase="implementation", route="mechanical",
+                   model="open-code/candidate", agent="opencode", provider="open-code",
+                   effort="low", routing_enforced=True, task_type="counting_status")
+    telemetry.emit("IMPLEMENTER_FINISHED", **common, duration_ms=1, implementer="codex-main",
+                   served_model="gpt-6-sol", served_agent="codex", served_provider="openai",
+                   codex_usage_known=False)
+    telemetry.update_task("fallback-task", state_root=tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "fallback-task.json").read_text(encoding="utf-8"))
+    assert (aggregate["selected_agent"], aggregate["selected_provider"], aggregate["selected_model"]) == (
+        "opencode", "open-code", "open-code/candidate")
+    assert (aggregate["served_agent"], aggregate["served_provider"], aggregate["served_model"]) == (
+        "codex", "openai", "gpt-6-sol")
+
+
+def test_reply_usage_is_summed_once_per_finished_call(tmp_path):
+    common = {"task_id": "usage-task", "state_root": tmp_path,
+              "session_id": "session-1", "repo": "repo", "branch": "main",
+              "agent_id": "call-1", "agent_type": "codex-main"}
+    for index, tokens in enumerate((10, 5)):
+        telemetry.emit("IMPLEMENTER_STARTED", **common, phase="implementation", route="normal",
+                       model="gpt-6-sol", effort="medium", routing_enforced=True,
+                       fresh_thread=index == 0, reply_call=index > 0)
+        telemetry.emit("IMPLEMENTER_FINISHED", **common, duration_ms=1, implementer="codex-main",
+                       served_model="gpt-6-sol", codex_usage_known=True,
+                       codex_input_tokens=tokens)
+    telemetry.update_task("usage-task", state_root=tmp_path)
+    telemetry.update_task("usage-task", state_root=tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "usage-task.json").read_text(encoding="utf-8"))
+    assert aggregate["usage"]["codex_input_tokens"] == 15
+    assert aggregate["usage"]["codex_call_count"] == 2
+
+
+def test_missing_codex_usage_remains_null_and_unknown(tmp_path):
+    _emit_task(tmp_path, "no-usage")
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "no-usage.json").read_text(encoding="utf-8"))
+    assert aggregate["usage"]["codex_usage_known"] is False
+    assert aggregate["usage"]["codex_input_tokens"] is None
+
+
+def test_task_fold_keeps_routed_type_and_latest_claude_decision(tmp_path):
+    common = {"task_id": "decision-latest", "state_root": tmp_path,
+              "session_id": "session-1", "repo": "repo", "branch": "main",
+              "agent_id": "call-1", "agent_type": "codex-main"}
+    telemetry.emit("TASK_ROUTE_SELECTED", **common, phase="operation", route="operation",
+                   model="gpt-6-sol", effort="medium", routing_enforced=True,
+                   task_type="counting_status")
+    _decision(tmp_path, "send_back", {"kind": "reply", "job_id": "reply-1"},
+              task_id="decision-latest", task_type="operation")
+    _decision(tmp_path, "accepted", {"kind": "apply", "job_id": "apply-1"},
+              task_id="decision-latest", task_type="operation")
+    telemetry.update_task("decision-latest", state_root=tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "decision-latest.json").read_text(encoding="utf-8"))
+    assert aggregate["task_type"] == "counting_status"
+    assert aggregate["claude_decision"]["decision"] == "accepted"
+
+
 def test_conflicting_claude_terminal_decisions_project_unknown_and_warning(tmp_path):
     _decision(tmp_path, "accepted", {"kind": "apply", "job_id": "apply-1"})
     _decision(tmp_path, "rejected", {"kind": "discard", "job_id": "discard-1"})

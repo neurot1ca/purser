@@ -592,6 +592,8 @@ def test_fast_process_failure_retries_once_with_remaining_timeout(config, monkey
     assert isinstance(result, reviewer.CompletedReview)
     assert len(runner.calls) == 2
     assert runner.calls[1][1]["timeout"] == config["reviewer1_timeout_seconds"] - 2.0
+    assert result.retry_count == 1
+    assert result.retry_recovered is True
 
 
 def test_fast_process_failure_twice_reports_retry_and_second_stderr(config, monkeypatch):
@@ -614,6 +616,8 @@ def test_fast_process_failure_twice_reports_retry_and_second_stderr(config, monk
     assert result.stderr_tail == "stderr-2"
     assert result.elapsed_seconds == 4.0
     assert len(runner.calls) == 2
+    assert result.retry_count == 1
+    assert result.retry_recovered is False
 
 
 def test_slow_process_failure_does_not_retry(config, monkeypatch):

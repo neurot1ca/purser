@@ -208,7 +208,7 @@ _COMMON_CALL_FIELDS = frozenset(
     {
         "phase", "route", "model", "effort", "routing_enforced", "fresh_thread", "reply_call",
         "reason", "reason_source", "previous_route", "new_route", "eta_minutes",
-        "task_type", "suspected_route_mismatch",
+        "task_type", "suspected_route_mismatch", "agent", "provider",
     }
 )
 _CALL_CONTEXT_FIELDS = frozenset({"reason", "reason_source", "previous_route", "new_route", "eta_minutes"})
@@ -225,6 +225,8 @@ _PAYLOAD_FIELDS = {
             "duration_ms",
             "implementer",
             "served_model",
+            "served_agent",
+            "served_provider",
             "route",
             "phase",
             "task_type",
@@ -256,6 +258,8 @@ _PAYLOAD_FIELDS = {
             "reviewer1_result",
             "duration_ms",
             "gemini_usage_known",
+            "reviewer1_retry_count",
+            "reviewer1_retry_recovered",
             *(f"gemini_{name}" for name in TOKEN_FIELDS),
         }
     ),
@@ -266,6 +270,8 @@ _PAYLOAD_FIELDS = {
         {
             "failure_code",
             "reviewer1_error_code",
+            "reviewer1_retry_count",
+            "reviewer1_retry_recovered",
             "reviewer1_provider",
             "reviewer1_model_requested",
             "served_model_attestation",
@@ -370,12 +376,17 @@ def _payload_value(name: str, value: Any) -> Any:
         if value is None or (isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 600):
             return value
         raise ValueError("telemetry eta_minutes is invalid")
+    if name == "reviewer1_retry_count":
+        if isinstance(value, int) and not isinstance(value, bool) and value in (0, 1):
+            return value
+        raise ValueError("telemetry reviewer retry count is invalid")
     if name in {
         "routing_enforced",
         "fresh_thread",
         "reply_call",
         "codex_usage_known",
         "gemini_usage_known",
+        "reviewer1_retry_recovered",
         "claude_usage_known",
         "concurrent_writer",
         "claude_task_usage_known",
@@ -480,9 +491,10 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name == "served_model_attestation" and value == "UNAVAILABLE":
         return value
-    if name in {"model", "thread_id", "implementer", "reviewer1_provider", "reviewer1_model_requested"}:
+    if name in {"thread_id", "implementer", "reviewer1_provider", "reviewer1_model_requested",
+                "agent", "provider", "served_agent", "served_provider"}:
         return _identifier(value)
-    if name == "served_model" and isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", value):
+    if name in {"model", "served_model"} and isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", value):
         return value
     raise ValueError("telemetry enum is invalid")
 

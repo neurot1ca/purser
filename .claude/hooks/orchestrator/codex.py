@@ -701,11 +701,21 @@ def _numeric_duration_ms(value: Any) -> int | float | None:
     return None
 
 
+def _implementer_provider(agent: Any, model: Any) -> str | None:
+    if isinstance(model, str) and "/" in model:
+        return model.split("/", 1)[0]
+    return {"codex": "openai", "agy": "google"}.get(agent)
+
+
 def _codex_usage(tool_response: Any) -> dict[str, int | float]:
     candidates: list[Any] = [tool_response]
     if isinstance(tool_response, Mapping):
-        candidates.append(tool_response.get("usage"))
-        candidates.append(tool_response.get("content"))
+        candidates.append(tool_response.get("structuredContent"))
+        usage_value = tool_response.get("usage")
+        if isinstance(usage_value, Mapping):
+            candidates.append({"usage": usage_value})
+        content = tool_response.get("content")
+        candidates.extend(content if isinstance(content, list) else [content])
     if isinstance(tool_response, list):
         candidates.extend(tool_response)
     usage: Mapping[str, Any] | None = None
@@ -2185,6 +2195,8 @@ def pre_tool_use(
             "task_type": task_type,
             "suspected_route_mismatch": suspected_route_mismatch,
             "model": model,
+            "agent": agent,
+            "provider": _implementer_provider(agent, model),
             "effort": effort,
             "routing_enforced": True,
             "fresh_thread": new_call,
@@ -3562,6 +3574,7 @@ def _post_observations(
     classification: Mapping[str, Any] | None = None,
     reviewer_report: Mapping[str, Any] | None = None,
     reviewer_started: bool = False,
+    reviewer_elapsed_seconds: float | None = None,
 ) -> None:
     task_id = pending.get("task_id")
     project_namespace = _pending_project_key(pending)
@@ -3580,6 +3593,8 @@ def _post_observations(
         "duration_ms": _numeric_duration_ms(event.get("duration_ms")),
         "implementer": implementer,
         "served_model": pending.get("model"),
+        "served_agent": pending.get("agent"),
+        "served_provider": _implementer_provider(pending.get("agent"), pending.get("model")),
         "route": pending.get("route"),
         "phase": pending.get("phase"),
         "task_type": pending.get("task_type", "unknown"),
@@ -3657,12 +3672,18 @@ def _post_observations(
     if reviewer_started:
         usage = dict(getattr(reviewer_report, "usage", ()))
         duration_seconds = getattr(reviewer_report, "duration_seconds", None)
+        elapsed_seconds = getattr(reviewer_report, "elapsed_seconds", None)
+        if isinstance(reviewer_report, Mapping):
+            elapsed_seconds = reviewer_report.get(
+                "elapsed_seconds", elapsed_seconds if elapsed_seconds is not None else reviewer_elapsed_seconds
+            )
+        elif elapsed_seconds is None:
+            elapsed_seconds = reviewer_elapsed_seconds
         duration_ms = (
             duration_seconds * 1000
             if isinstance(duration_seconds, (int, float)) and not isinstance(duration_seconds, bool)
             else None
         )
-        elapsed_seconds = getattr(reviewer_report, "elapsed_seconds", None)
         if duration_ms is None and isinstance(elapsed_seconds, (int, float)) and not isinstance(elapsed_seconds, bool):
             duration_ms = elapsed_seconds * 1000
         review_payload: dict[str, Any] = {
@@ -3674,6 +3695,14 @@ def _post_observations(
             "reviewer1_result": bundle.get("reviewer1_result"),
             "duration_ms": duration_ms,
             "gemini_usage_known": bool(usage),
+            "reviewer1_retry_count": (
+                reviewer_report.get("retry_count", getattr(reviewer_report, "retry_count", 0))
+                if isinstance(reviewer_report, Mapping) else getattr(reviewer_report, "retry_count", 0)
+            ),
+            "reviewer1_retry_recovered": (
+                reviewer_report.get("retry_recovered", getattr(reviewer_report, "retry_recovered", False)) is True
+                if isinstance(reviewer_report, Mapping) else getattr(reviewer_report, "retry_recovered", False) is True
+            ),
         }
         review_payload.update({f"gemini_{key}": value for key, value in usage.items()})
         review_status = reviewer_report.get("review_status") if isinstance(reviewer_report, Mapping) else None
@@ -3685,8 +3714,18 @@ def _post_observations(
         else:
             event_type = "REVIEWER1_FAILED"
             reviewer_error_code = reviewer_report.get("error_code") if isinstance(reviewer_report, Mapping) else None
-            if reviewer_error_code is not None:
-                review_payload["reviewer1_error_code"] = reviewer_error_code
+            if not isinstance(reviewer_error_code, str):
+                findings = reviewer_report.get("findings") if isinstance(reviewer_report, Mapping) else None
+                reviewer_error_code = (
+                    findings[0].get("code") if isinstance(findings, list) and findings
+                    and isinstance(findings[0], Mapping) else None
+                )
+            review_payload["reviewer1_error_code"] = (
+                reviewer_error_code if isinstance(reviewer_error_code, str)
+                else "REVIEWER1_UNAVAILABLE"
+                if bundle.get("reviewer1_result") == policy.REVIEWER1_UNAVAILABLE
+                else "REVIEWER1_INCOMPLETE"
+            )
             review_payload["failure_code"] = (
                 "REVIEWER1_UNAVAILABLE"
                 if bundle.get("reviewer1_result") == policy.REVIEWER1_UNAVAILABLE
@@ -3808,6 +3847,7 @@ def post_tool_use(
         classification: Mapping[str, Any] | None = None
         reviewer_report: Mapping[str, Any] | None = None
         reviewer_started = False
+        reviewer_elapsed_seconds: float | None = None
         worker_validation: dict[str, Any] = {
             "source": "WORKER_REPORTED",
             "status": "UNKNOWN",
@@ -4270,7 +4310,9 @@ def post_tool_use(
                     reviewer_started = True
                     reviewer_invoked = True
                     reviewer_kwargs = candidate_kwargs
+                    reviewer_call_started = time.monotonic()
                     attempted_report = reviewer_callable(**candidate_kwargs)
+                    reviewer_elapsed_seconds = max(0.0, time.monotonic() - reviewer_call_started)
                     unavailable = (
                         isinstance(attempted_report, Mapping)
                         and (
@@ -4714,6 +4756,7 @@ def post_tool_use(
                 classification=classification,
                 reviewer_report=reviewer_report,
                 reviewer_started=reviewer_started,
+                reviewer_elapsed_seconds=reviewer_elapsed_seconds,
             )
         except BaseException:
             _observe(

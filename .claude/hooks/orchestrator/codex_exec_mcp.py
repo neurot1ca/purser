@@ -468,12 +468,30 @@ def _binary_prefix(argument: str | None) -> list[str]:
     return prefix
 
 
-def _tool_result(thread_id: str | None, *, content: str | None = None, error: str | None = None) -> dict[str, Any]:
+def _tool_result(thread_id: str | None, *, content: str | None = None, error: str | None = None,
+                 usage: dict[str, Any] | None = None) -> dict[str, Any]:
     value = {"threadId": thread_id, "error": error} if error is not None else {"threadId": thread_id, "content": content}
+    if error is None and usage:
+        value["usage"] = usage
     result: dict[str, Any] = {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}], "isError": error is not None}
     if error is None:
         result["structuredContent"] = value
     return result
+
+
+def _codex_turn_usage(events: list[dict[str, Any]]) -> dict[str, int | float]:
+    fields = {"input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens",
+              "cached_tokens", "cache_read_tokens", "cache_write_tokens", "thinking_tokens"}
+    for event in reversed(events):
+        usage = event.get("usage")
+        if event.get("type") != "turn.completed" or not isinstance(usage, dict):
+            continue
+        return {
+            key: value for key, value in usage.items()
+            if key in fields and isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and value >= 0
+        }
+    return {}
 
 
 def _event_message(event: dict[str, Any]) -> str:
@@ -1964,7 +1982,10 @@ class Server:
                         if job is not None and job["state"] not in TERMINAL:
                             job["exitForcedAfterComplete"] = True
                             self._write_job(job)
-                return _tool_result(started, content=last_message)
+                return _tool_result(
+                    started, content=last_message,
+                    usage=_codex_turn_usage(events) if agent == "codex" else None,
+                )
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
         except (OSError, ValueError, TypeError) as exc:

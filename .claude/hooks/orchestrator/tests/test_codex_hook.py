@@ -7347,6 +7347,30 @@ def test_implementation_count_wording_stays_unknown_and_unflagged(workspace, con
     assert route_event["suspected_route_mismatch"] is None
 
 
+def test_reviewer_incomplete_telemetry_has_error_elapsed_and_retry_outcome(workspace, monkeypatch):
+    _repo, state = workspace
+    observed = []
+    monkeypatch.setattr(codex, "_observe", lambda *args, **kwargs: observed.append((args, kwargs)))
+    event_value = event(tool_use_id="review-incomplete")
+    codex._post_observations(
+        event_value, state,
+        {"task_id": "review-incomplete", "agent": "codex", "model": "gpt-6-sol",
+         "phase": "implementation", "route": "normal"},
+        {"reviewer1_result": policy.UNCERTAIN, "reviewer1_provider": "agy",
+         "reviewer1_model_requested": "gemini-test", "reviewer1_attempts": []},
+        reviewer_report={"review_status": "NOT_RUN_INCOMPLETE_PACKET",
+                         "error_code": "REVIEW_PACKET_INCOMPLETE",
+                         "elapsed_seconds": 2.5, "retry_count": 1,
+                         "retry_recovered": False},
+        reviewer_started=True,
+    )
+    failure = next(kwargs for args, kwargs in observed if args[1] == "REVIEWER1_FAILED")
+    assert failure["reviewer1_error_code"] == "REVIEW_PACKET_INCOMPLETE"
+    assert failure["duration_ms"] == 2500
+    assert failure["reviewer1_retry_count"] == 1
+    assert failure["reviewer1_retry_recovered"] is False
+
+
 def _activate_fallback(workspace, kind, **evidence):
     repo, root = workspace
     state = active_coder_state.read(repo, root)

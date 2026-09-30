@@ -2267,6 +2267,18 @@ def test_api_primary_probe_timeout_is_not_healthy(area):
     assert result["failure"]["type"] == "NO_RESPONSE"
 
 
+def test_codex_bridge_extracts_usage_from_completed_turn():
+    usage = codex_exec_mcp._codex_turn_usage([
+        {"type": "turn.completed", "usage": {
+            "input_tokens": 23, "output_tokens": 7, "total_tokens": 30,
+            "private_field": "ignored",
+        }},
+    ])
+    assert usage == {"input_tokens": 23, "output_tokens": 7, "total_tokens": 30}
+    response = codex_exec_mcp._tool_result("thread-1", content="Done", usage=usage)
+    assert codex._codex_usage(response) == usage
+
+
 def test_anthropic_spend_cap_is_credit_exhaustion():
     # Assumed Anthropic error event wrapper; this structured spend-cap code is the classifier contract.
     event = {"type": "error", "error": {"type": "rate_limit_error", "details": {
