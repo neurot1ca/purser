@@ -150,11 +150,19 @@ def _model_version_context(repository: Path | None) -> str | None:
 
 
 def _queue_maintenance_notice(payload: Mapping[str, Any], repository: Path | None,
-                             state: Path) -> None:
+                             state: Path, *, allow_consent: bool = False,
+                             allow_no_window: bool = True) -> None:
     import maintenance_reports
     if repository is None:
         return
-    notice = maintenance_reports.notice_context(repository, state=state)
+    if allow_consent:
+        notice = maintenance_reports.consent_context(repository, state=state)
+        if notice is not None:
+            compaction_advisor.queue_maintenance_notice(
+                payload, repository, notice["notice_file"], maintenance_reports.format_notice(notice),
+                evidence=notice.get("confirmation_evidence", []))
+            return
+    notice = maintenance_reports.notice_context(repository, state=state, allow_no_window=allow_no_window)
     if notice is None:
         return
     compaction_advisor.queue_maintenance_notice(
@@ -209,6 +217,8 @@ def main() -> int:
                     import maintenance_reports
                     if repository is not None:
                         maintenance_reports.record_activity(repository)
+                        _queue_maintenance_notice(
+                            value, repository, state_root.default_state_root(), allow_no_window=False)
                 except BaseException:
                     pass
                 try:
@@ -287,7 +297,8 @@ def main() -> int:
                             part for part in (language_instruction, additional_context) if part
                         )
                     try:
-                        _queue_maintenance_notice(value, repository, state_root.default_state_root())
+                        _queue_maintenance_notice(value, repository, state_root.default_state_root(),
+                                                  allow_consent=True)
                     except BaseException:
                         pass
                     update_context = _plugin_update_context(value, repository)

@@ -32,10 +32,10 @@ def rollout(tmp_path, lines):
     )
 
 
-def record(used, *, secondary=True, primary_reset=1790173742):
+def record(used, *, secondary=True, primary_reset=1790173742, secondary_reset=1790611663):
     limits = {"primary": {"used_percent": used, "window_minutes": 300, "resets_at": primary_reset}}
     if secondary:
-        limits["secondary"] = {"used_percent": 38, "window_minutes": 10080, "resets_at": 1790611663}
+        limits["secondary"] = {"used_percent": 38, "window_minutes": 10080, "resets_at": secondary_reset}
     return json.dumps({"type": "event_msg", "payload": {"type": "token_count", "rate_limits": limits}})
 
 
@@ -69,10 +69,11 @@ def test_quota_weekly_window_without_primary_omits_5h(quota_home):
 
 
 def test_quota_no_windows_returns_none(quota_home):
-    event = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {}}})
+    event = json.dumps({"type": "event_msg", "timestamp": "2026-09-23T12:00:00Z",
+                        "payload": {"type": "token_count", "rate_limits": {}}})
     rollout(quota_home, [event])
 
-    assert read_quota(THREAD, codex_home=quota_home) is None
+    assert read_quota(THREAD, codex_home=quota_home) == {"snapshot_at": "2026-09-23T12:00:00Z"}
 
 
 def test_quota_missing_file_returns_none(quota_home):
@@ -108,6 +109,7 @@ def test_latest_quota_chooses_most_recent_mtime_across_today_and_yesterday(quota
         "5h_resets_at": "2026-09-24T15:29:02Z",
         "7d_used_pct": 38,
         "7d_resets_at": "2026-09-28T16:07:43Z",
+        "windows_seen": True,
     }
 
 
@@ -117,6 +119,27 @@ def test_latest_quota_drops_expired_windows(quota_home):
     assert read_latest_quota(codex_home=quota_home, now=now) == {
         "7d_used_pct": 38,
         "7d_resets_at": "2026-09-28T16:07:43Z",
+        "windows_seen": True,
+    }
+
+
+def test_latest_quota_preserves_expired_windows_as_distinct_from_api(quota_home):
+    now = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    _dated_rollout(quota_home, now.date(), "rollout-expired.jsonl",
+                   record(92, primary_reset=now.timestamp() - 10,
+                          secondary_reset=now.timestamp() - 20), 100)
+    result = read_latest_quota(codex_home=quota_home, now=now)
+    assert result["windows_seen"] is True
+    assert "5h_used_pct" not in result and "7d_used_pct" not in result
+
+
+def test_latest_quota_marks_explicit_no_window_event(quota_home):
+    now = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    event = json.dumps({"type": "event_msg", "timestamp": now.isoformat(),
+                        "payload": {"type": "token_count", "rate_limits": {}}})
+    _dated_rollout(quota_home, now.date(), "rollout-api.jsonl", event, 100)
+    assert read_latest_quota(codex_home=quota_home, now=now) == {
+        "snapshot_at": now.isoformat(), "windows_seen": False,
     }
 
 

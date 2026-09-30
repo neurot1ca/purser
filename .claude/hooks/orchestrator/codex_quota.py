@@ -68,9 +68,12 @@ def _read_quota_path(path: Path) -> dict | None:
             if window is not None:
                 result[f"{label}_used_pct"] = window[0]
                 result[f"{label}_resets_at"] = window[1]
+        result["windows_seen"] = bool(result)
         if isinstance(event.get("timestamp"), str):
             result["snapshot_at"] = event["timestamp"]
-        return result or None
+        # Preserve a timestamped rate-limit event with no windows so callers
+        # can distinguish API billing from a missing or stale snapshot.
+        return result if isinstance(event.get("timestamp"), str) else (result or None)
     return None
 
 
@@ -83,7 +86,10 @@ def read_quota(thread_id: str, *, codex_home=None) -> dict | None:
         path = _rollout(home / "sessions", thread_id)
         if path is None:
             return None
-        return _read_quota_path(path)
+        result = _read_quota_path(path)
+        if result is not None:
+            result.pop("windows_seen", None)
+        return result
     except (OSError, ValueError, TypeError):
         return None
 

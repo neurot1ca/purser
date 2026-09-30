@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -1188,15 +1189,32 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             reasons.append("End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n" + _blockquote(notice))
         if maintenance_pending is not None and not maintenance_pending.get("blocked"):
             import maintenance_reports
+            maintenance_cli = f'"{sys.executable}" "{Path(maintenance_reports.__file__).resolve()}"'
             maintenance_pending["blocked"] = True
-            reasons.append(
-                "Render the completed maintenance notice below in the user's language, keeping ⚓, the count, paths, and table. "
-                "If the user answers `temizle`, dispatch one ordinary Codex implementation job routed as subtle. "
-                "That job must re-verify every listed item against current HEAD first and remove exactly the still-unused listed items; "
-                "skip each item that is no longer unused and explain why. Do not invent items or edit unlisted code. "
-                + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
-                + maintenance_pending["text"]
-            )
+            if maintenance_pending["notice_file"].endswith("consent.json"):
+                instruction = (
+                    "Render the maintenance API-cost consent question below in the user's language, preserving ⚓ and bold. "
+                    f"If the user says yes, run `{maintenance_cli} consent yes --repo \"<repository-root>\"`; "
+                    f"if no, run `{maintenance_cli} consent no --repo \"<repository-root>\"`. Do not infer consent.\n"
+                )
+            else:
+                notice_file = maintenance_pending["notice_file"]
+                skip_command = (f'{maintenance_cli} skip-second-show --repo "<repository-root>" '
+                                f'--report "{notice_file}"')
+                done_command = (f'{maintenance_cli} mark-done --repo "<repository-root>" '
+                                f'--report "{notice_file}"')
+                instruction = (
+                    "Render the completed maintenance notice below in the user's language, keeping ⚓, count, paths, and table. "
+                    f"If the user wants the module off (`kapat`), run `{maintenance_cli} opt-out --repo \"<repository-root>\"`. "
+                    f"If the user says not to show it again this cycle, run `{skip_command}`. "
+                    "If they answer `temizle`, dispatch one ordinary Codex implementation job routed as subtle. "
+                    "Re-verify every listed item against current HEAD and remove exactly the still-unused listed items; "
+                    "skip each item that is no longer unused and explain why. After successful cleanup, run "
+                    + f"`{done_command}`. "
+                    "Do not invent items or edit unlisted code. "
+                    + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
+                )
+            reasons.append(instruction + maintenance_pending["text"])
         if receipt is not None and not receipt.get("blocked"):
             receipt["blocked"] = True
             reasons.append(_receipt_advice(receipt))

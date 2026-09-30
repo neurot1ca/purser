@@ -1,4 +1,5 @@
 import json
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -172,6 +173,22 @@ def _eligible_project(project, state):
     return directory
 
 
+def _report_notice(project, state, *, shown=False):
+    directory = (state / "projects" / maintenance_reports.project_root.project_key(project.resolve())
+                 / "maintenance" / "reports" / "cleanup")
+    directory.mkdir(parents=True, exist_ok=True)
+    report = directory / "report.md"
+    report.write_text("report", encoding="utf-8")
+    notice_path = report.with_suffix(".notice.json")
+    notice_path.write_text(json.dumps({"report_path": str(report), "findings": [],
+                                       "finding_count": 0, "shown": shown}), encoding="utf-8")
+    return notice_path
+
+
+def _quota(label, used, cycle):
+    return {f"{label}_used_pct": used, f"{label}_resets_at": cycle}
+
+
 def test_global_slot_race_admits_exactly_one_project(project):
     state = _state(project)
     slot = state / "maintenance" / "active.json"
@@ -231,7 +248,8 @@ def test_idle_check_requires_quiet_period(project, monkeypatch):
     state = _state(project)
     directory = _eligible_project(project, state)
     (directory / "last-activity.json").write_text(json.dumps({"at": __import__("time").time()}), encoding="utf-8")
-    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"5h_used_pct": 1})
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        "5h_used_pct": 1, "5h_resets_at": "cycle-a"})
     assert not maintenance_reports.eligible(project, state=state)
 
 
@@ -239,7 +257,158 @@ def test_idle_check_rejects_quota_above_named_threshold(project, monkeypatch):
     state = _state(project)
     _eligible_project(project, state)
     monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
-        "5h_used_pct": maintenance_reports.FIVE_HOUR_QUOTA_MAX_PERCENT + 1})
+        "5h_used_pct": maintenance_reports.QUOTA_MAX_USED_PERCENT + 1, "5h_resets_at": "cycle-a"})
+    assert not maintenance_reports.eligible(project, state=state)
+
+
+def test_idle_gate_prefers_present_five_hour_window(project, monkeypatch):
+    state = _state(project)
+    _eligible_project(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        **_quota("5h", 40, "five"), **_quota("7d", 99, "week")})
+    assert maintenance_reports.eligible(project, state=state)
+
+
+def test_idle_gate_uses_weekly_only_window(project, monkeypatch):
+    state = _state(project)
+    _eligible_project(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("7d", 50, "week"))
+    assert maintenance_reports.eligible(project, state=state)
+
+
+@pytest.mark.parametrize("decision,expected", [("yes", True), ("no", False)])
+def test_no_window_requires_and_records_consent(project, monkeypatch, decision, expected):
+    state = _state(project)
+    directory = _eligible_project(project, state)
+    (directory / "consent.json").unlink()
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"snapshot_at": "fresh"})
+    assert not maintenance_reports.eligible(project, state=state)
+    maintenance_reports.record_consent(project, decision, state=state)
+    assert maintenance_reports.eligible(project, state=state) is expected
+
+
+def test_no_window_consent_notice_is_shown_once(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    key = maintenance_reports.project_root.project_key(project.resolve())
+    (state / "projects" / key / "maintenance" / "consent.json").unlink()
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        "snapshot_at": "fresh", "windows_seen": False})
+    notice = maintenance_reports.consent_context(project, state=state)
+    assert notice["kind"] == "consent"
+    assert "API hesabından ücretlendirilir" in maintenance_reports.format_notice(notice)
+    assert maintenance_reports.consent_context(project, state=state) is None
+
+
+def test_expired_quota_windows_do_not_trigger_api_consent(project, monkeypatch):
+    state = _state(project)
+    directory = _eligible_project(project, state)
+    (directory / "consent.json").unlink()
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        "snapshot_at": "fresh", "windows_seen": True})
+    assert maintenance_reports.consent_context(project, state=state) is None
+
+
+def test_notice_context_skips_quota_read_without_candidate_reports(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota",
+                        lambda *_args, **_kwargs: pytest.fail("no candidate report; skip quota read"))
+    assert maintenance_reports.notice_context(project, state=state) is None
+
+
+def test_report_first_show_at_seventy_percent_remaining(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    path = _report_notice(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("5h", 30, "cycle-a"))
+    first = maintenance_reports.notice_context(project, state=state)
+    assert first["notice_file"] == str(path)
+    assert "Bu döngüde bir daha gösterilmesin mi?" in maintenance_reports.format_notice(first)
+
+
+def test_report_first_show_is_immediate_when_session_starts_at_sixty_remaining(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    _report_notice(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("5h", 40, "cycle-a"))
+    assert maintenance_reports.notice_context(project, state=state) is not None
+
+
+def test_report_shows_second_time_at_thirty_remaining(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    path = _report_notice(project, state)
+    quota = {"value": _quota("5h", 30, "cycle-a")}
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: quota["value"])
+    first = maintenance_reports.notice_context(project, state=state)
+    assert first["pending_skip_second"] is False
+    assert "Bu döngüde bir daha gösterilmesin mi?" in maintenance_reports.format_notice(first)
+    maintenance_reports.confirm_notice(first["notice_file"])
+    assert maintenance_reports.notice_context(project, state=state) is None
+    quota["value"] = _quota("5h", 70, "cycle-a")
+    second = maintenance_reports.notice_context(project, state=state)
+    assert second["notice_file"] == str(path)
+    assert "Bu döngüde bir daha gösterilmesin mi?" not in maintenance_reports.format_notice(second)
+    maintenance_reports.confirm_notice(second["notice_file"])
+    assert maintenance_reports.notice_context(project, state=state) is None
+
+
+def test_skip_second_show_applies_only_to_current_cycle(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    path = _report_notice(project, state)
+    quota = {"value": _quota("5h", 30, "cycle-a")}
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: quota["value"])
+    first = maintenance_reports.notice_context(project, state=state)
+    assert "Bu döngüde bir daha gösterilmesin mi?" in maintenance_reports.format_notice(first)
+    maintenance_reports.confirm_notice(first["notice_file"])
+    maintenance_reports.skip_second_show(project, first["notice_file"], state=state)
+    quota["value"] = _quota("5h", 70, "cycle-a")
+    assert maintenance_reports.notice_context(project, state=state) is None
+    quota["value"] = _quota("5h", 30, "cycle-b")
+    assert maintenance_reports.notice_context(project, state=state)["notice_file"] == str(path)
+
+
+def test_report_start_below_thirty_remaining_shows_once_per_cycle(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    _report_notice(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("7d", 75, "cycle-a"))
+    first = maintenance_reports.notice_context(project, state=state)
+    assert first["pending_skip_second"] is True
+    assert "Bu döngüde bir daha gösterilmesin mi?" not in maintenance_reports.format_notice(first)
+    maintenance_reports.confirm_notice(first["notice_file"])
+    assert maintenance_reports.notice_context(project, state=state) is None
+
+
+def test_no_window_report_has_no_second_show_question(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    _report_notice(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        "snapshot_at": "fresh", "windows_seen": False})
+    notice = maintenance_reports.notice_context(project, state=state)
+    assert notice["pending_cycle"] == "no-window"
+    assert "Bu döngüde bir daha gösterilmesin mi?" not in maintenance_reports.format_notice(notice)
+
+
+def test_completed_cleanup_marks_report_done_permanently(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    path = _report_notice(project, state)
+    maintenance_reports.mark_report_done(project, str(path), state=state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("5h", 0, "cycle-a"))
+    assert maintenance_reports.notice_context(project, state=state) is None
+    assert json.loads(path.read_text(encoding="utf-8"))["done"] is True
+
+
+def test_opt_out_stops_automatic_runs(project, monkeypatch):
+    state = _state(project)
+    _eligible_project(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("5h", 1, "cycle-a"))
+    assert maintenance_reports.eligible(project, state=state)
+    maintenance_reports.opt_out(project, state=state)
     assert not maintenance_reports.eligible(project, state=state)
 
 
@@ -260,7 +429,8 @@ def test_idle_check_skips_active_user_job(project, monkeypatch):
     jobs = state / "codex_exec_mcp" / "jobs"
     jobs.mkdir(parents=True)
     (jobs / ("c" * 64 + ".json")).write_text(json.dumps({"state": "RUNNING"}), encoding="utf-8")
-    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"5h_used_pct": 1})
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        "5h_used_pct": 1, "5h_resets_at": "cycle-a"})
     assert not maintenance_reports.eligible(project, state=state)
 
 
@@ -268,11 +438,12 @@ def test_idle_check_respects_seven_day_cadence(project, monkeypatch):
     state = _state(project)
     directory = _eligible_project(project, state)
     (directory / "last-run.json").write_text(json.dumps({"completed_at": __import__("time").time()}), encoding="utf-8")
-    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"5h_used_pct": 1})
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        "5h_used_pct": 1, "5h_resets_at": "cycle-a"})
     assert not maintenance_reports.eligible(project, state=state)
 
 
-def test_notice_formats_all_findings_up_to_five_and_claims_once(project):
+def test_notice_formats_all_findings_up_to_five_and_claims_once(project, monkeypatch):
     state = _state(project)
     maintenance_reports.opt_in(project, state=state)
     reports = state / "projects" / maintenance_reports.project_root.project_key(project.resolve()) / "maintenance" / "reports" / "cleanup"
@@ -284,6 +455,7 @@ def test_notice_formats_all_findings_up_to_five_and_claims_once(project):
     notice_path = path.with_suffix(".notice.json")
     notice_path.write_text(json.dumps({"report_path": str(path), "findings": findings,
                                        "finding_count": 5, "shown": False}), encoding="utf-8")
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"snapshot_at": "fresh"})
     notice = maintenance_reports.notice_context(project, state=state)
     text = maintenance_reports.format_notice(notice)
     assert text.count("| m") == 5 and "5 bulgu var" in text

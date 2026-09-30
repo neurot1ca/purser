@@ -22,7 +22,9 @@ import state_root
 JOB_TIMEOUT_SECONDS = 2700
 QUIET_PERIOD_SECONDS = 900
 MAINTENANCE_CADENCE_SECONDS = 7 * 24 * 60 * 60
-FIVE_HOUR_QUOTA_MAX_PERCENT = 50
+QUOTA_MAX_USED_PERCENT = 50
+FIRST_SHOW_REMAINING_PCT = 70
+SECOND_SHOW_REMAINING_PCT = 30
 QUOTA_MAX_AGE_SECONDS = 30 * 60
 BACKGROUND_CHECK_DELAY_SECONDS = QUIET_PERIOD_SECONDS
 BACKGROUND_CHECK_TIMEOUT_SECONDS = QUIET_PERIOD_SECONDS + JOB_TIMEOUT_SECONDS
@@ -59,7 +61,61 @@ def opt_in(repo: str | os.PathLike[str], *, state: Path | None = None) -> Path:
         os.replace(temporary, marker)
     finally:
         temporary.unlink(missing_ok=True)
+    consent = directory / "consent.json"
+    try:
+        value = json.loads(consent.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        value = {}
+    value.update(project_root=str(root), decision="yes", source="manual-opt-in")
+    import codex_exec_mcp
+    codex_exec_mcp._atomic_json(consent, value)
     return marker
+
+
+def opt_out(repo: str | os.PathLike[str], *, state: Path | None = None) -> Path:
+    root = _canonical_root(repo)
+    directory = _maintenance_dir(root, state or state_root.default_state_root())
+    marker = directory / "opt-in.json"
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        value = {"project_root": str(root)}
+    value.update(project_root=str(root), enabled=False)
+    import codex_exec_mcp
+    codex_exec_mcp._atomic_json(marker, value)
+    return marker
+
+
+def record_consent(repo: str | os.PathLike[str], decision: str, *, state: Path | None = None) -> Path:
+    if decision not in {"yes", "no"}:
+        raise ValueError("consent decision must be yes or no")
+    root = _canonical_root(repo)
+    directory = _maintenance_dir(root, state or state_root.default_state_root())
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "consent.json"
+    import codex_exec_mcp
+    codex_exec_mcp._atomic_json(path, {"project_root": str(root), "decision": decision})
+    marker = directory / "opt-in.json"
+    codex_exec_mcp._atomic_json(marker, {"project_root": str(root), "enabled": decision == "yes"})
+    return path
+
+
+def skip_second_show(repo: str | os.PathLike[str], report: str, *, state: Path | None = None) -> None:
+    root = _canonical_root(repo)
+    expected_dir = _maintenance_dir(root, state or state_root.default_state_root()) / "reports" / "cleanup"
+    path = Path(report).resolve()
+    if path.parent != expected_dir.resolve() or path.suffix != ".json" or not path.name.endswith(".notice.json"):
+        raise ValueError("report notice must belong to this project")
+    notice = json.loads(path.read_text(encoding="utf-8"))
+    cycle = notice.get("pending_cycle") or notice.get("last_shown_cycle")
+    if not isinstance(cycle, str) or cycle == "no-window":
+        raise ValueError("no quota cycle is pending")
+    notice.setdefault("cycles", {}).setdefault(cycle, {})["skip_second"] = True
+    notice["pending"] = False
+    notice.pop("pending_cycle", None)
+    notice.pop("pending_show", None)
+    import codex_exec_mcp
+    codex_exec_mcp._atomic_json(path, notice)
 
 
 def _tool_info() -> tuple[str, str]:
@@ -223,7 +279,7 @@ def _job_ids(state: Path) -> set[str] | None:
 def _fresh_quota(now: float | None = None) -> dict | None:
     import codex_quota
     snapshot = codex_quota.read_latest_quota()
-    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("5h_used_pct"), (int, float)):
+    if not isinstance(snapshot, dict):
         return None
     try:
         stamp = datetime.fromisoformat(snapshot["snapshot_at"].replace("Z", "+00:00")).timestamp()
@@ -232,7 +288,20 @@ def _fresh_quota(now: float | None = None) -> dict | None:
     current = time.time() if now is None else now
     if stamp > current or current - stamp > QUOTA_MAX_AGE_SECONDS:
         return None
+    if (_active_quota_window(snapshot) is None
+            and (snapshot.get("windows_seen") is True
+                 or any(key in snapshot for key in ("5h_used_pct", "7d_used_pct")))):
+        return None
     return snapshot
+
+
+def _active_quota_window(snapshot: dict) -> tuple[str, float, str] | None:
+    for label in ("5h", "7d"):
+        used, resets_at = snapshot.get(f"{label}_used_pct"), snapshot.get(f"{label}_resets_at")
+        if (isinstance(used, (int, float)) and not isinstance(used, bool)
+                and isinstance(resets_at, str) and resets_at):
+            return label, used, resets_at
+    return None
 
 
 def record_activity(repo: Path, *, state: Path | None = None) -> None:
@@ -282,7 +351,18 @@ def eligible(repo: Path, *, state: Path, now: float | None = None) -> bool:
     if not _cadence_due(directory, now):
         return False
     quota = _fresh_quota(now)
-    if quota is None or quota["5h_used_pct"] > FIVE_HOUR_QUOTA_MAX_PERCENT:
+    if quota is None:
+        return False
+    window = _active_quota_window(quota)
+    if window is None:
+        consent = {}
+        try:
+            consent = json.loads((directory / "consent.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        if consent.get("decision") != "yes" or consent.get("project_root") != str(root):
+            return False
+    elif window[1] > QUOTA_MAX_USED_PERCENT:
         return False
     return _active_user_jobs(state) is False
 
@@ -477,22 +557,22 @@ machine-readable list, using one object per finding and an empty list for no fin
                 findings = parse_findings(body) if isinstance(body, str) else None
                 after_quota = _fresh_quota()
                 concurrent = _active_user_jobs(state)
-                before_reset = (before_quota or {}).get("5h_resets_at")
-                after_reset = (after_quota or {}).get("5h_resets_at")
+                before_window = _active_quota_window(before_quota or {})
+                after_window = _active_quota_window(after_quota or {})
                 jobs_after = _job_ids(state)
                 concurrent_job = (jobs_before is None or jobs_after is None
                                   or bool((jobs_after - jobs_before) - {job_id}))
                 quota_change = "unknown"
-                if (before_quota and after_quota and isinstance(before_reset, str)
-                        and before_reset == after_reset and concurrent is False and not concurrent_job):
-                    quota_change = round(after_quota["5h_used_pct"] - before_quota["5h_used_pct"], 3)
+                if (before_window and after_window and before_window[2] == after_window[2]
+                        and concurrent is False and not concurrent_job):
+                    quota_change = round(after_window[1] - before_window[1], 3)
                 usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
                 tokens = usage or result.get("tokens", result.get("totalTokens"))
                 cost = {"tokens": tokens if tokens else "unknown",
                         "elapsed_seconds": round(time.monotonic() - started_clock, 3),
                         "quota_before": before_quota or "unknown",
                         "quota_after": after_quota or "unknown",
-                        "quota_change_5h_pct": quota_change}
+                        "quota_change_active_window_pct": quota_change}
                 _write_report(report_path, body if isinstance(body, str) else "", commit=commit,
                               timestamp=timestamp, versions=versions, limitations=limitations,
                               findings=findings, cost=cost)
@@ -513,7 +593,7 @@ machine-readable list, using one object per finding and an empty list for no fin
             "state": "FAILED", "error": str(exc),
             "cost": {"tokens": "unknown", "elapsed_seconds": round(time.monotonic() - started_clock, 3),
                      "quota_before": before_quota or "unknown", "quota_after": _fresh_quota() or "unknown",
-                     "quota_change_5h_pct": "unknown"},
+                     "quota_change_active_window_pct": "unknown"},
         })
         raise
     finally:
@@ -522,15 +602,77 @@ machine-readable list, using one object per finding and an empty list for no fin
             slot_context.__exit__(None, None, None)
 
 
-def notice_context(repo: Path, *, state: Path) -> dict | None:
-    """Return and claim the oldest completed report notice for a later session."""
-    directory = _maintenance_dir(_canonical_root(repo), state) / "reports" / "cleanup"
+def consent_context(repo: Path, *, state: Path) -> dict | None:
+    """Ask once before allowing automatic maintenance with an explicit no-window snapshot."""
+    root = _canonical_root(repo)
+    maintenance = _maintenance_dir(root, state)
+    if not _is_opted_in(root, maintenance):
+        return None
+    quota = _fresh_quota()
+    if quota is None or _active_quota_window(quota) is not None or quota.get("windows_seen") is True:
+        return None
+    consent_path = maintenance / "consent.json"
+    try:
+        consent = json.loads(consent_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        consent = {}
+    if (consent.get("project_root") != str(root)
+            or consent.get("decision") not in {"yes", "no"}) and not consent.get("prompted"):
+        consent.update(project_root=str(root), prompted=True)
+        import codex_exec_mcp
+        codex_exec_mcp._atomic_json(consent_path, consent)
+        return {"kind": "consent", "notice_file": str(consent_path),
+                "confirmation_evidence": ["API hesabından ücretlendirilir"]}
+    return None
+
+
+def notice_context(repo: Path, *, state: Path, allow_no_window: bool = True) -> dict | None:
+    """Return and claim an unfinished report when its quota display threshold is met."""
+    root = _canonical_root(repo)
+    maintenance = _maintenance_dir(root, state)
+    if not _is_opted_in(root, maintenance):
+        return None
+    directory = maintenance / "reports" / "cleanup"
+    candidates = []
     for notice_path in sorted(directory.glob("*.notice.json")):
         try:
             notice = json.loads(notice_path.read_text(encoding="utf-8"))
-            if notice.get("shown") is True or notice.get("pending") is True:
-                continue
+            if notice.get("done") is not True and notice.get("pending") is not True:
+                candidates.append((notice_path, notice))
+        except (OSError, ValueError, AttributeError):
+            continue
+    if not candidates:
+        return None
+    quota = _fresh_quota()
+    if quota is None:
+        return None
+    window = _active_quota_window(quota)
+    if window is None and (quota.get("windows_seen") is True or not allow_no_window):
+        return None
+    for notice_path, notice in candidates:
+        try:
+            if window is None:
+                if notice.get("shown") is True:
+                    continue
+                show_number = 1
+                resets_at = "no-window"
+            else:
+                label, used, resets_at = window
+                remaining = 100 - used
+                cycles = notice.setdefault("cycles", {})
+                cycle = cycles.get(resets_at, {})
+                if cycle.get("skip_second") or cycle.get("shows", 0) >= 2:
+                    continue
+                if cycle.get("shows", 0) == 0 and remaining > FIRST_SHOW_REMAINING_PCT:
+                    continue
+                if cycle.get("shows", 0) == 1 and remaining > SECOND_SHOW_REMAINING_PCT:
+                    continue
+                show_number = cycle.get("shows", 0) + 1
+                notice["pending_skip_second"] = show_number == 1 and remaining <= SECOND_SHOW_REMAINING_PCT
+                notice["quota_window"] = label
             notice["pending"] = True
+            notice["pending_cycle"] = resets_at
+            notice["pending_show"] = show_number
             import codex_exec_mcp
             codex_exec_mcp._atomic_json(notice_path, notice)
             evidence = []
@@ -553,13 +695,26 @@ def confirm_notice(notice_file: str) -> None:
         import codex_exec_mcp
         path = Path(notice_file)
         notice = json.loads(path.read_text(encoding="utf-8"))
-        notice.update(pending=False, shown=True)
+        cycle, show_number = notice.pop("pending_cycle", "no-window"), notice.pop("pending_show", 1)
+        skip_second = notice.pop("pending_skip_second", False)
+        notice["pending"] = False
+        if cycle == "no-window":
+            notice["shown"] = True
+        else:
+            state = notice.setdefault("cycles", {}).setdefault(cycle, {})
+            state["shows"] = max(state.get("shows", 0), show_number)
+            notice["last_shown_cycle"] = cycle
+            if skip_second:
+                state["skip_second"] = True
         codex_exec_mcp._atomic_json(path, notice)
     except (OSError, ValueError, TypeError):
         pass
 
 
 def format_notice(notice: dict) -> str:
+    if notice.get("kind") == "consent":
+        return ("> ⚓ **Purser sen çalışırken arka planda projeni proaktif temizlik modülüyle tarayabilir. "
+                "Bu tarama API hesabından ücretlendirilir. Taransın mı?**")
     path = notice.get("report_path", "unknown")
     count = notice.get("finding_count")
     findings = notice.get("findings")
@@ -579,7 +734,24 @@ def format_notice(notice: dict) -> str:
         candidate = f"{item.get('path_line', '?')} {item.get('symbol', '?')}"
         evidence = " ".join(str(item.get("evidence", "")).split())[:48]
         rows.append(f"> | {candidate[:48]} | {evidence} |")
-    return "\n".join([f"> {intro}", f"> *{instruction}*", *rows])
+    lines = [f"> {intro}", f"> *{instruction}*", *rows]
+    if (notice.get("pending_cycle") not in {None, "no-window"}
+            and notice.get("pending_show") == 1 and not notice.get("pending_skip_second")):
+        lines.append("> *Bu döngüde bir daha gösterilmesin mi?*")
+    lines.append("> *Modülü istediğin zaman kapatabilir, /purser:optimize ile istediğin zaman çalıştırabilirsin.*")
+    return "\n".join(lines)
+
+
+def mark_report_done(repo: str | os.PathLike[str], report: str, *, state: Path | None = None) -> None:
+    root = _canonical_root(repo)
+    expected_dir = _maintenance_dir(root, state or state_root.default_state_root()) / "reports" / "cleanup"
+    path = Path(report).resolve()
+    if path.parent != expected_dir.resolve() or not path.name.endswith(".notice.json"):
+        raise ValueError("report notice must belong to this project")
+    notice = json.loads(path.read_text(encoding="utf-8"))
+    notice.update(done=True, pending=False, shown=True)
+    import codex_exec_mcp
+    codex_exec_mcp._atomic_json(path, notice)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -587,6 +759,17 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     enable = commands.add_parser("opt-in", help="explicitly enable reports for one project")
     enable.add_argument("--repo", required=True)
+    disable = commands.add_parser("opt-out", help="disable reports for one project")
+    disable.add_argument("--repo", required=True)
+    consent = commands.add_parser("consent", help="record API maintenance consent or decline")
+    consent.add_argument("decision", choices=("yes", "no"))
+    consent.add_argument("--repo", required=True)
+    skip = commands.add_parser("skip-second-show", help="skip a report's second show this quota cycle")
+    skip.add_argument("--repo", required=True)
+    skip.add_argument("--report", required=True)
+    done = commands.add_parser("mark-done", help="mark a completed cleanup report as done")
+    done.add_argument("--repo", required=True)
+    done.add_argument("--report", required=True)
     run = commands.add_parser("run", help="run a maintenance report")
     run.add_argument("report_type", choices=("cleanup",))
     run.add_argument("--repo", required=True)
@@ -596,6 +779,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "opt-in":
             print(opt_in(args.repo))
+        elif args.command == "opt-out":
+            print(opt_out(args.repo))
+        elif args.command == "consent":
+            print(record_consent(args.repo, args.decision))
+        elif args.command == "skip-second-show":
+            skip_second_show(args.repo, args.report)
+        elif args.command == "mark-done":
+            mark_report_done(args.repo, args.report)
         elif args.command == "run":
             print(run_cleanup(args.repo))
         else:

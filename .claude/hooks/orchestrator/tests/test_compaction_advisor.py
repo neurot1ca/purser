@@ -363,10 +363,29 @@ def test_maintenance_notice_requires_its_own_evidence_and_commit_rule(setup, mon
     blocked = advisor.stop({**event, "last_assistant_message": receipt}, repo)
     assert blocked["decision"] == "block" and text in blocked["reason"]
     assert maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE in blocked["reason"]
+    assert "opt-out --repo" in blocked["reason"]
+    assert "skip-second-show --repo" in blocked["reason"]
+    assert "mark-done --repo" in blocked["reason"]
+    command = (f'"{sys.executable}" "{Path(maintenance_reports.__file__).resolve()}" '
+               'skip-second-show --repo "<repository-root>" '
+               '--report "C:/reports/report.md.notice.json"')
+    assert f"`{command}`" in blocked["reason"]
     assert not confirmed
     assert advisor.stop({**event, "last_assistant_message": "Reviewed src/dead.py:4."}, repo) is None
     assert confirmed == ["C:/reports/report.md.notice.json"]
     assert advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["maintenance_pending"] is None
+
+
+def test_maintenance_api_consent_notice_records_yes_or_no(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    assert advisor.queue_maintenance_notice(
+        event, repo, "C:/state/consent.json", "> ⚓ **API scan consent?**",
+        evidence=["API scan consent?"],
+    )
+    blocked = advisor.stop({**event, "last_assistant_message": "> ⚓ **Codex: task complete.**"}, repo)
+    assert "consent yes --repo" in blocked["reason"]
+    assert "consent no --repo" in blocked["reason"]
 
 
 def test_dispatch_receipt_passes_verbatim_and_clears(setup):

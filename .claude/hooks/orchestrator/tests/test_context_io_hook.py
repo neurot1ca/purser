@@ -17,7 +17,8 @@ import model_version_notice
 
 
 def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None, advice=None, unreadable=False,
-                          event="UserPromptSubmit", source="startup", session_id="test-session"):
+                          event="UserPromptSubmit", source="startup", session_id="test-session",
+                          maintenance_calls=None):
     payload = {"hook_event_name": event, "cwd": str(repo), "prompt": prompt,
                "source": source, "session_id": session_id}
     input_raw = io.BytesIO(json.dumps(payload).encode("utf-8"))
@@ -31,7 +32,9 @@ def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None
     monkeypatch.setattr(context_io_hook.compaction_advisor, "_state_directory", lambda _repo: repo / ".state")
     monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: None)
     monkeypatch.setattr(context_io_hook.compaction_advisor, "clear_pending", lambda *_args: None)
-    monkeypatch.setattr(context_io_hook, "_queue_maintenance_notice", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook, "_queue_maintenance_notice",
+                        lambda *args, **kwargs: maintenance_calls.append((args, kwargs))
+                        if maintenance_calls is not None else None)
     monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: repo / ".runtime")
     monkeypatch.setattr(context_io_hook.async_session_maintenance, "cleanup_jobs", lambda *_args: None)
     monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint", lambda *_args, **_kwargs: None)
@@ -58,6 +61,14 @@ def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None
     if not output_raw.getvalue():
         return None
     return json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"]
+
+
+def test_user_prompt_submit_checks_maintenance_notice_thresholds(monkeypatch, tmp_path):
+    calls = []
+    _run_user_prompt_hook(monkeypatch, tmp_path, maintenance_calls=calls)
+    assert len(calls) == 1
+    assert calls[0][0][1] == tmp_path
+    assert calls[0][1]["allow_no_window"] is False
 
 
 def test_context_io_hook_reads_utf8_with_cp1254_wrapper(monkeypatch):
