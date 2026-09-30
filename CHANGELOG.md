@@ -3,6 +3,15 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.52 — 2026-09-30
+
+- A job lease whose job file is gone is released after ten minutes, so it no longer blocks the queue.
+- Seven dead symbols are removed, and context I/O telemetry reuses telemetry's atomic JSON writer.
+- A test covers a fallback override whose consent came from an earlier session.
+- A benchmark that makes a free OpenCode model the first candidate announces it as the mechanical leader.
+- The OpenCode benchmark worker scores every candidate in one run, resumes at startup, logs each run, and holds a heartbeat lock.
+- A blocked Stop tells Claude to write only the missing lines instead of repeating its reply.
+
 ## 0.1.51 — 2026-09-29
 
 - The job board shows only while a job is active or newly finished, finished rows leave after one hour, a queued job shows no ETA, and a running job's ETA counts from its real start.
