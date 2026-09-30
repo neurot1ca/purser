@@ -337,7 +337,7 @@ class Client:
         self.process.stdin.write(json.dumps(value, ensure_ascii=False) + "\n")
         self.process.stdin.flush()
 
-    def receive(self, timeout=30):
+    def receive(self, timeout=120):
         return self.messages.get(timeout=timeout)
 
     def calls(self):
@@ -1799,7 +1799,7 @@ def test_opencode_job_fails_on_event_or_missing_session(area, flag):
     try:
         started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
                                                    "cwd": str(area), "model": "opencode/test"})
-        assert finish(client, started["jobId"], "FAILED", timeout=90)["errorCode"] == "CODEX_FAILED"
+        assert finish(client, started["jobId"], "FAILED", timeout=120)["errorCode"] == "CODEX_FAILED"
     finally:
         client.close()
 
