@@ -1482,7 +1482,12 @@ def test_async_failure_timeout_cancel(area):
         assert finish(slow, job["jobId"], "TIMED_OUT")["errorCode"] == "DEADLINE_EXCEEDED"
         assert read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json"))[
             "boardDisplayCount"] == 0
+        calls_before_cancel = len(slow.calls())
         job = job_call(slow, "codex_start", {"call": str(uuid.uuid4()), "prompt": "cancel"})
+        deadline = time.monotonic() + 5
+        while len(slow.calls()) == calls_before_cancel and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert len(slow.calls()) > calls_before_cancel, "fake Codex did not start before cancellation"
         assert job_call(slow, "codex_cancel", {"jobId": job["jobId"]})["state"] == "CANCELLED"
         assert finish(slow, job["jobId"], "CANCELLED")["errorCode"] == "CANCELLED"
         assert read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json"))[

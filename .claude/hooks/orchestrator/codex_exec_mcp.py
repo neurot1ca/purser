@@ -1295,21 +1295,24 @@ class Server:
             result = _run_with_responsiveness_retries(
                 lambda: self._run_tool(name, args, job_id, async_job=True))
             evidence = result.get("typedEvidence") if isinstance(result, dict) else None
-            current = self._read_job(job_id)
-            if current is not None:
-                if isinstance(evidence, dict):
-                    current["launchFailureEvidence"] = evidence
-                if isinstance(result, dict) and isinstance(result.get("responsivenessAttempts"), int):
-                    current["responsivenessAttempts"] = result["responsivenessAttempts"]
-                self._write_job(current)
+            with self.jobs_lock:
+                current = self._read_job(job_id)
+                if current is not None and current["state"] not in TERMINAL:
+                    if isinstance(evidence, dict):
+                        current["launchFailureEvidence"] = evidence
+                    if isinstance(result, dict) and isinstance(result.get("responsivenessAttempts"), int):
+                        current["responsivenessAttempts"] = result["responsivenessAttempts"]
+                    self._write_job(current)
             value = result.get("structuredContent")
             if result.get("isError") or not isinstance(value, dict):
-                current = self._read_job(job_id)
-                if current is not None and isinstance(result.get("attemptedModels"), list):
-                    current.update(attemptedModels=result["attemptedModels"],
-                                   servedAgent=result.get("servedAgent"),
-                                   servedModel=result.get("servedModel"))
-                    self._write_job(current)
+                with self.jobs_lock:
+                    current = self._read_job(job_id)
+                    if (current is not None and current["state"] not in TERMINAL
+                            and isinstance(result.get("attemptedModels"), list)):
+                        current.update(attemptedModels=result["attemptedModels"],
+                                       servedAgent=result.get("servedAgent"),
+                                       servedModel=result.get("servedModel"))
+                        self._write_job(current)
                 if (current is not None and "pid" not in current
                         and time.time() >= current["deadlineAt"]):
                     self._finish_job(job_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
