@@ -22,7 +22,6 @@ import obsidian_projection
 import state_root as purser_state_root
 
 
-LOCK_TIMEOUT_SECONDS = 0.05
 SPOOL_MERGE_LIMIT = 16
 ATOMIC_REPLACE_MAX_ATTEMPTS = 4
 ATOMIC_REPLACE_MAX_WAIT_SECONDS = 0.03

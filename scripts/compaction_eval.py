@@ -106,7 +106,6 @@ def analyze_session(path: str | os.PathLike[str], window: int = 20) -> dict[str,
     boundaries: list[dict[str, Any]] = []
     request_keys: dict[str, int] = {}
     tool_uses: dict[str, dict[str, Any]] = {}
-    seen_files: set[str] = set()
     events: list[dict[str, Any]] = []
 
     for line_no, record in enumerate(records):

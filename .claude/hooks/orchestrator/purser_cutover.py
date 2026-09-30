@@ -178,8 +178,8 @@ def run(mode: str, home: Path, repo_root: Path) -> int:
         return 0
 
     try:
-        settings, settings_raw = _load(settings_path)
-        claude, claude_raw = _load(claude_path)
+        settings, _ = _load(settings_path)
+        claude, _ = _load(claude_path)
     except CutoverError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

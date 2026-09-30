@@ -258,10 +258,6 @@ class OrchParseResult:
     eta_minutes: int | None = None
 
     @property
-    def clean_prompt(self) -> str:
-        return self.prompt
-
-    @property
     def error_code(self) -> str:
         return self.code
 
@@ -784,11 +780,6 @@ class ThreadCompatibilityDecision:
     compatible: bool
     code: str
     message: str
-
-    @property
-    def reuse_via_codex_reply(self) -> bool:
-        return self.compatible
-
 
 @dataclass(frozen=True)
 class FreshCodexDecision:

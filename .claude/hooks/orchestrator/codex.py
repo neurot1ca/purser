@@ -2343,10 +2343,6 @@ def _start_job_terminal_or_absent(root: Path, pending: Mapping[str, Any]) -> boo
             and job.get("state") in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"})
 
 
-def _job_host_classification(job: Mapping[str, Any]) -> str:
-    return codex_exec_mcp.Server._classify_host(None, job)
-
-
 _ROUTE_DURATION_DEFAULTS = {
     "mechanical": 3,
     "subtle": 5,

@@ -15,13 +15,13 @@ import json
 import os
 from pathlib import Path
 import stat
-import tempfile
 import time
 from typing import Any, Iterator
 import uuid
 
 import project_profile
 import state_root as purser_state_root
+import telemetry
 
 
 SCHEMA_VERSION = 1
@@ -35,8 +35,8 @@ MAX_LINES_SCANNED_PER_READ = 501
 MAX_LINES_SCANNED_PER_TURN = 8 * MAX_LINES_SCANNED_PER_READ
 READ_CHUNK_BYTES = 64 * 1024
 LOCK_WAIT_SECONDS = 0.05
-ATOMIC_REPLACE_MAX_ATTEMPTS = 4
-ATOMIC_REPLACE_MAX_WAIT_SECONDS = 0.03
+ATOMIC_REPLACE_MAX_ATTEMPTS = telemetry.ATOMIC_REPLACE_MAX_ATTEMPTS
+ATOMIC_REPLACE_MAX_WAIT_SECONDS = telemetry.ATOMIC_REPLACE_MAX_WAIT_SECONDS
 THRESHOLDS = (200, 350, 500)
 
 _UNKNOWN_REASONS = frozenset(
@@ -141,39 +141,7 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     if len(encoded) > MAX_JOURNAL_BYTES:
         raise ValueError("journal bound exceeded")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb", prefix=path.name + ".", suffix=".tmp", dir=path.parent, delete=False
-        ) as handle:
-            temporary = Path(handle.name)
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _replace_with_retry(temporary, path)
-        temporary = None
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink()
-            except OSError:
-                pass
-
-
-def _replace_with_retry(source: Path, destination: Path) -> None:
-    deadline = time.monotonic() + ATOMIC_REPLACE_MAX_WAIT_SECONDS
-    for attempt in range(ATOMIC_REPLACE_MAX_ATTEMPTS):
-        try:
-            os.replace(source, destination)
-            return
-        except PermissionError:
-            if attempt + 1 >= ATOMIC_REPLACE_MAX_ATTEMPTS:
-                raise
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise
-            time.sleep(min(0.005 * (2**attempt), remaining))
+    telemetry._atomic_json(path, value)
 
 
 def _write_turn(
