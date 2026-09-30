@@ -3,6 +3,17 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.53 — 2026-09-30
+
+- A replay whose paths are all new files is not a conflict, and a replay conflict keeps the job's thread replyable.
+- A reply job shows applied on the board when its thread's apply covered every path of its delta.
+- Job durations start when the job starts, not when it is queued, and codex and codex-main history pool together for ETAs.
+- The handoff's mechanical state carries an as-of stamp and source tags, and Claude ends each State and Decisions line with its source.
+- A job worker no longer rewrites a job's metadata after it was cancelled.
+- When Reviewer-1 saw only part of a delta, Claude's bundle lists reviewed and omitted paths and forces FULL review.
+- Plan milestone jobs use a `<plan>-m<N>of<T>` task id, and the handoff shows one line of milestone progress and the next step.
+- The test guard also blocks detached shadow runs, and two timing-dependent tests are deterministic.
+
 ## 0.1.52 — 2026-09-30
 
 - A job lease whose job file is gone is released after ten minutes, so it no longer blocks the queue.
