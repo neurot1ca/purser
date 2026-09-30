@@ -337,31 +337,31 @@ def _dispatch_state(repo):
 def test_dispatch_receipt_blocks_when_final_reply_lacks_line(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))
-    line = "**New session · model: gpt-6-sol (high) · task: Repair · estimated completion: 3 min**"
+    line = "> ⚓ **Codex: New session · model: gpt-6-sol (high) · task: Repair · estimated completion: 3 min**"
     advisor.queue_dispatch(event, repo, line=line)
 
     result = advisor.stop({**event, "last_assistant_message": "Done."}, repo)
 
     assert result["decision"] == "block"
-    assert "one bold line between `---` rules" in result["reason"]
+    assert "Codex: ..." in result["reason"]
     assert line in result["reason"]
 
 
 def test_dispatch_receipt_passes_verbatim_and_clears(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))
-    line = "**New session · model: gpt-6-sol (high) · task: Repair · estimated completion: 3 min**"
+    line = "> ⚓ **Codex: New session · model: gpt-6-sol (high) · task: Repair · estimated completion: 3 min**"
     advisor.queue_dispatch(event, repo, line=line)
 
-    assert advisor.stop({**event, "last_assistant_message": f"---\n\n{line}\n\n---"}, repo) is None
+    assert advisor.stop({**event, "last_assistant_message": line}, repo) is None
     assert _dispatch_state(repo) is None
 
 
 def test_two_dispatches_require_both_lines(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))
-    first = "**New session · model: gpt-6-sol (high) · task: First**"
-    second = "**New session · model: gpt-6-sol (high) · task: Second**"
+    first = "> ⚓ **Codex: New session · model: gpt-6-sol (high) · task: First**"
+    second = "> ⚓ **Codex: New session · model: gpt-6-sol (high) · task: Second**"
     advisor.queue_dispatch(event, repo, line=first)
     advisor.queue_dispatch(event, repo, line=second)
 
@@ -375,12 +375,12 @@ def test_two_dispatches_require_both_lines(setup):
 def test_dispatch_board_required_only_when_present_and_cleared_after_satisfaction(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))
-    line = "**New session · model: gpt-6-sol (high) · task: Repair**"
+    line = "> ⚓ **Codex: New session · model: gpt-6-sol (high) · task: Repair**"
     advisor.queue_dispatch(event, repo, line=line)
     assert advisor.stop({**event, "last_assistant_message": line}, repo) is None
     assert _dispatch_state(repo) is None
 
-    board = "Purser jobs:\n| Task | Model | State | ETA | Review | Apply |\n| --- | --- | --- | --- | --- | --- |\n| A | gpt-6-sol (high) | running | ~2 min | — | — |"
+    board = "Purser jobs:\n> | ⚓ Task | Model | State | ETA | Review | Apply |\n> | --- | --- | --- | --- | --- | --- |\n> | A | gpt-6-sol (high) | running | ~2 min | — | — |"
     advisor.queue_dispatch(event, repo, line=line, board=board)
     result = advisor.stop({**event, "last_assistant_message": line}, repo)
     assert result["decision"] == "block"
@@ -392,7 +392,7 @@ def test_dispatch_board_required_only_when_present_and_cleared_after_satisfactio
 def test_board_only_dispatch_advice_omits_empty_receipt(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))
-    board = "Purser jobs:\n| Task | Model | State | ETA | Review | Apply |"
+    board = "Purser jobs:\n> | ⚓ Task | Model | State | ETA | Review | Apply |"
     advisor.queue_dispatch(event, repo, board=board)
 
     result = advisor.stop({**event, "last_assistant_message": "Done."}, repo)
@@ -400,7 +400,7 @@ def test_board_only_dispatch_advice_omits_empty_receipt(setup):
     assert result["decision"] == "block"
     assert board in result["reason"]
     assert "receipt line" not in result["reason"]
-    assert "one bold line between `---` rules" not in result["reason"]
+    assert "Codex: ..." not in result["reason"]
     assert advisor._dispatch_advice({"lines": [], "board": None}) == ""
 
 
@@ -769,7 +769,7 @@ def test_version_announcement_stop_clears_when_marker_and_version_present(setup)
     event = {"session_id": "session-version"}
     assert advisor.queue_version_announcement(event, repo, "0.1.42")
 
-    assert advisor.stop({**event, "last_assistant_message": "⚓ **Purser 0.1.42 updated:** Improvements."}, repo) is None
+    assert advisor.stop({**event, "last_assistant_message": "> ⚓ **Purser 0.1.42 updated:** Improvements."}, repo) is None
     assert advisor.announced_plugin_version() == "0.1.42"
     state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-version")
     assert state["version_pending"] is None
@@ -779,7 +779,7 @@ def test_stop_accepts_pending_announcement_written_earlier_in_turn(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, [
         {"type": "user", "message": {"role": "user", "content": "Please finish this."}},
-        _assistant(content=[{"type": "text", "text": "⚓ **Purser 0.1.42 updated:** Improvements."}]),
+        _assistant(content=[{"type": "text", "text": "> ⚓ **Purser 0.1.42 updated:** Improvements."}]),
         _assistant(content=[{"type": "tool_use", "id": "tool-1", "name": "Bash"}]),
         {"type": "user", "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "tool-1", "content": "done"}]}},

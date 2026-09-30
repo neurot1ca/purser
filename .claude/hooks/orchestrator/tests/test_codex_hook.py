@@ -841,7 +841,7 @@ def test_dispatch_receipt_renders_english_in_approved_format(workspace, config, 
         "eta_minutes": 7,
     }, state, event())
     assert queued[0]["line"] == (
-        "**New session · model: gpt-6-luna (high) · task: OpenCode and Codex reviewer adapters · "
+        "> ⚓ **Codex: New session · model: gpt-6-luna (high) · task: OpenCode and Codex reviewer adapters · "
         "estimated completion: 7 min**"
     )
 
@@ -858,7 +858,7 @@ def test_dispatch_receipt_uses_continuing_session_wording(workspace, monkeypatch
         "repo_root": str(repo), "agent": "codex", "prior_thread_id": "thread-1",
     }, state, event())
     assert queued[0]["line"] == (
-        "**Continuing session · model: gpt-6-luna (high) · task: Keep working · "
+        "> ⚓ **Codex: Continuing session · model: gpt-6-luna (high) · task: Keep working · "
         "estimated completion: 5 min**"
     )
 
@@ -876,7 +876,7 @@ def test_dispatch_receipt_uses_route_default_without_duration_history(workspace,
         "repo_root": str(repo), "agent": "codex",
     }, state, event())
     assert queued[0]["line"] == (
-        f"**New session · model: gpt-6-luna (high) · task: First run · "
+        f"> ⚓ **Codex: New session · model: gpt-6-luna (high) · task: First run · "
         f"estimated completion: {expected} min**"
     )
 
@@ -1329,10 +1329,10 @@ def test_project_job_board_orders_attention_running_queued_and_applied(workspace
             "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
         }), encoding="utf-8")
     message = codex._project_job_board(state, "project")
-    tasks = [line.strip("|").split("|")[0].strip() for line in message.splitlines()
-             if line.startswith("| ") and not line.startswith("| Task |") and "---" not in line]
+    tasks = [line.removeprefix("> ").strip("|").split("|")[0].strip() for line in message.splitlines()
+             if line.startswith("> | ") and not line.startswith("> | ⚓ Task |") and "---" not in line]
     assert tasks == ["running", "queued", "applied", "done", "conflict", "failed"]
-    assert "| Task | Model | State | ETA | Review | Apply |" in message
+    assert "> | ⚓ Task | Model | State | ETA | Review | Apply |" in message
 
 
 def test_project_job_board_keeps_all_in_progress_and_finished_jobs(workspace):
@@ -1344,8 +1344,8 @@ def test_project_job_board_keeps_all_in_progress_and_finished_jobs(workspace):
 
     message = codex._project_job_board(state, "project")
 
-    tasks = [line.strip("|").split("|")[0].strip() for line in message.splitlines()
-             if line.startswith("| ") and not line.startswith("| Task |") and "---" not in line]
+    tasks = [line.removeprefix("> ").strip("|").split("|")[0].strip() for line in message.splitlines()
+             if line.startswith("> | ") and not line.startswith("> | ⚓ Task |") and "---" not in line]
     assert tasks == ["running", "finished-0", "finished-1", "finished-2", "finished-3", "finished-4"]
 
 
@@ -7022,14 +7022,29 @@ def _show_fallback_question(repo, state_root, session_id):
     pending = compaction_advisor._read_state(path, session_id)["fallback_pending"]
     assert pending is not None
     blocked = compaction_advisor.stop({"session_id": session_id, "last_assistant_message": ""}, repo)
-    assert blocked and "exactly one bold question line" in blocked["reason"]
+    assert blocked and "exactly one bold quoted question line" in blocked["reason"]
     rendered = compaction_advisor.stop(
-        {"session_id": session_id, "last_assistant_message": f"**{pending['line']}**"}, repo)
+        {"session_id": session_id, "last_assistant_message": pending["line"]}, repo)
     assert rendered is None
     compaction_advisor.advise({"session_id": session_id}, repo)
     evidence = active_coder_state.read(repo, state_root)["triggering_evidence"]
     assert evidence["question_shown"] is True and evidence["answerable"] is True
     return pending
+
+
+def test_fallback_receipt_detector_accepts_quoted_form(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    _record_launch_failure(workspace, "CREDIT_EXHAUSTED")
+    result = codex.pre_tool_use(event(), config=config, state_root=state, repo_root=repo)
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    pending = compaction_advisor._read_state(
+        compaction_advisor._state_directory(repo) / "compaction_advisor.json",
+        "session-1")["fallback_pending"]
+    assert pending["line"].startswith("> ⚓ **")
+    assert compaction_advisor.stop(
+        {"session_id": "session-1", "last_assistant_message": pending["line"]}, repo) is None
 
 
 def _approve_fallback(workspace, config, state, *, session_id="session-1", tool_use_id="approve"):
@@ -7053,8 +7068,8 @@ def test_approved_fallback_routes_same_and_later_session(workspace, config, monk
     pending = compaction_advisor._read_state(pending_path, "session-1")["fallback_pending"]
     assert "anthropic/claude-sonnet" in pending["line"]
     shown = compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
-    assert shown["decision"] == "block" and "exactly one bold question line" in shown["reason"]
-    line = "**" + pending["line"] + "**"
+    assert shown["decision"] == "block" and "exactly one bold quoted question line" in shown["reason"]
+    line = pending["line"]
     assert compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": line}, repo) is None
     compaction_advisor.advise({"session_id": "session-1"}, repo)
     evidence = _fallback_state(workspace)["triggering_evidence"]
@@ -7402,11 +7417,11 @@ def test_credit_return_probes_once_and_notifies_on_success(workspace, config, mo
     assert pending is not None
     assert pending["notice"] is True
     stop = compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
-    assert "bold line in the user's language" in stop["reason"]
+    assert "exactly one line in the user's language as" in stop["reason"]
     retry = compaction_advisor.stop(
         {"session_id": "session-1", "last_assistant_message": "No notice yet."}, repo)
-    assert "bold line in the user's language" in retry["reason"]
-    localized = f"**⚓ {config['sol_model']} credit is available; primary coder restored.**"
+    assert "exactly one line in the user's language as" in retry["reason"]
+    localized = f"> ⚓ **{config['sol_model']} credit is available; primary coder restored.**"
     assert compaction_advisor.stop(
         {"session_id": "session-1", "last_assistant_message": localized}, repo) is None
     assert compaction_advisor._read_state(
@@ -7513,10 +7528,10 @@ def test_quota_return_question_decline_is_remembered_per_reset(workspace, config
     assert asked["hookSpecificOutput"]["permissionDecision"] == "deny"
     pending_path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
     pending = compaction_advisor._read_state(pending_path, "session-1")["fallback_pending"]
-    assert pending["line"] == f"⚓ {config['sol_model']} kotası yenilendi. Ana kodlayıcıya geri dönülsün mü?"
+    assert pending["line"] == f"> ⚓ **{config['sol_model']} kotası yenilendi. Ana kodlayıcıya geri dönülsün mü?**"
     compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
     compaction_advisor.stop(
-        {"session_id": "session-1", "last_assistant_message": f"**{pending['line']}**"}, repo)
+        {"session_id": "session-1", "last_assistant_message": pending["line"]}, repo)
     compaction_advisor.advise({"session_id": "session-1"}, repo)
     evidence = _fallback_state(workspace)["triggering_evidence"]
     assert evidence["question_shown"] is True and evidence["answerable"] is True, evidence
@@ -7601,7 +7616,7 @@ def test_integrated_credit_exhaustion_switch_receipt_persistence_and_return(work
     path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
     notice = compaction_advisor._read_state(path, "session-1")["fallback_pending"]
     assert notice and notice["notice"] is True
-    expected = f"**⚓ {config['sol_model']} credit is available; primary coder restored.**"
+    expected = f"> ⚓ **{config['sol_model']} credit is available; primary coder restored.**"
     assert compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
     assert compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": expected}, repo) is None
     assert compaction_advisor._read_state(path, "session-1")["fallback_pending"] is None

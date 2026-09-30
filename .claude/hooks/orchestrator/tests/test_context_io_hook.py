@@ -125,6 +125,7 @@ def test_plugin_version_upgrade_context_and_first_install(monkeypatch, tmp_path)
     assert context_io_hook.main() == 0
     context = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"]
     assert context and "Purser 2.0.0" in context
+    assert "> ⚓ **Purser 2.0.0 sürümüne yükseltildi:**" in context
     assert "First change." in context and "Second change." in context and "Old change." not in context
     assert compaction_advisor._read_state(compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-update")["version_pending"]["version"] == "2.0.0"
 
@@ -147,7 +148,7 @@ def test_mechanical_leader_context_is_cleared_and_recorded_by_stop(monkeypatch, 
     payload = {"session_id": "session-leader"}
 
     context = context_io_hook._plugin_update_context(payload, tmp_path)
-    assert ("⚓ **Ücretsiz model sıralaması değişti:** `vendor/free-model` son 9 denemeden "
+    assert ("> ⚓ **Ücretsiz model sıralaması değişti:** `vendor/free-model` son 9 denemeden "
             "7 tanesinde başarılı oldu ve yarışta ilk sıraya yerleşti. Mekanik işler önce bu modele gidecek.") in context
     blocked = compaction_advisor.stop({**payload, "last_assistant_message": "Not announced."}, tmp_path)
     assert blocked["decision"] == "block"
@@ -292,10 +293,10 @@ def test_resumed_hint_uses_approved_wording_and_ambiguous_job_is_skipped(tmp_pat
     job = {"jobId": job_id, "call": call, "state": "RUNNING", "resumedAfterInterruption": 1}
     record.write_text(json.dumps(job), encoding="utf-8")
     hint = async_session_maintenance.followup_hints(state, "project-key", "new-session")
-    assert "⚓ Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." in hint
+    assert "> ⚓ **Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim.**" in hint
     own = async_session_maintenance.followup_hints(state, "project-key", "old-session")
     assert "Start purser_wait.py" in own and "PowerShell tool on Windows" in own and "without adopt" in own
-    assert "⚓ Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." in own
+    assert "> ⚓ **Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim.**" in own
     assert "uygulama kapalıyken" not in own
     job["state"] = "SUCCEEDED"
     record.write_text(json.dumps(job), encoding="utf-8")

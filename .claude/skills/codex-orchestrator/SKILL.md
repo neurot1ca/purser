@@ -67,8 +67,8 @@ Runtime configuration owns capability; never pass `sandbox` or
 proactively by quota. After each call, report bundle model and effort plus
 `codex_quota` 5h/7d used percentages and reset times when present; show the
 5h reset as time remaining (e.g. "resets in 1h 20m").
-Format the completion receipt as one bold line between `---` rules, with blank
-lines around it, in the user's language; explain below in plain text.
+Format the completion receipt as one line `> ⚓ **Codex done: ...**` in the
+user's language; explain below in plain text.
 Pass `label` on every `codex_start`, `codex`, and `codex-reply` call: a short
 human description of the task in the user's language, at most 80 characters.
 A reply may omit it only when the existing thread has a saved label. Purser

@@ -849,14 +849,14 @@ def _fallback_question(evidence: Mapping[str, Any], fallback: Mapping[str, Any],
                                        - datetime.now(timezone.utc)).total_seconds() / 60))
         except (AttributeError, TypeError, ValueError):
             minutes = 5
-        return "quota", f"⚓ Kotan dolmak üzere, sıradaki iş yarım kalabilir. Yenilenmesini ({minutes} dakika) bekleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?"
+        return "quota", f"> ⚓ **Kotan dolmak üzere, sıradaki iş yarım kalabilir. Yenilenmesini ({minutes} dakika) bekleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?**"
     if kind == "CREDIT_EXHAUSTED":
-        return "credit", f"⚓ API kredin bitti, sıradaki iş başlayamaz. Kredi yükleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?"
+        return "credit", f"> ⚓ **API kredin bitti, sıradaki iş başlayamaz. Kredi yükleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?**"
     if kind == "RATE_LIMITED":
         seconds = evidence.get("retryAfterSeconds")
         minutes = max(1, math.ceil(seconds / 60)) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else 5
-        return "rate_limit", f"⚓ API hız sınırına takıldın. Açılmasını ({minutes} dakika) bekleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?"
-    return "unresponsive", f"⚓ Codex 5 denemede yanıt vermedi. Biraz sonra yeniden denensin mi, yoksa yedek kodlayıcıya ({model}) geçilsin mi?"
+        return "rate_limit", f"> ⚓ **API hız sınırına takıldın. Açılmasını ({minutes} dakika) bekleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?**"
+    return "unresponsive", f"> ⚓ **Codex 5 denemede yanıt vermedi. Biraz sonra yeniden denensin mi, yoksa yedek kodlayıcıya ({model}) geçilsin mi?**"
 
 
 def _pending_project_key(pending: Mapping[str, Any]) -> str:
@@ -1550,7 +1550,7 @@ def pre_tool_use(
                             if not primary_route.valid:
                                 return _deny("PRIMARY_RETURN_ROUTE_INVALID", primary_route.message)
                             primary_model = primary_route.model
-                            line = f"⚓ {primary_model} kotası yenilendi. Ana kodlayıcıya geri dönülsün mü?"
+                            line = f"> ⚓ **{primary_model} kotası yenilendi. Ana kodlayıcıya geri dönülsün mü?**"
                             recorded = False
                             def record_return_question(value):
                                 nonlocal recorded
@@ -1608,7 +1608,7 @@ def pre_tool_use(
                                 if returned and kind == "CREDIT_EXHAUSTED" and primary_route.valid:
                                     compaction_advisor.queue_fallback_question(
                                         event, repository_for_fallback,
-                                        f"⚓ {primary_model} kredisi yüklendi, ana kodlayıcıya geri dönüldü.",
+                                        f"> ⚓ **{primary_model} kredisi yüklendi, ana kodlayıcıya geri dönüldü.**",
                                         primary_model, notice=True,
                                     )
                     elif kind == "RATE_LIMITED":
@@ -2570,8 +2570,8 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                 stamp = job.get("finishedAt")
             return 1, 0, -float(stamp) if isinstance(stamp, (int, float)) else 0.0, text
 
-        lines = ["| Task | Model | State | ETA | Review | Apply |", "| --- | --- | --- | --- | --- | --- |"]
-        lines.extend(row[3] for row in sorted(map(board_row, jobs), key=lambda row: row[:3]))
+        lines = ["> | ⚓ Task | Model | State | ETA | Review | Apply |", "> | --- | --- | --- | --- | --- | --- |"]
+        lines.extend("> " + row[3] for row in sorted(map(board_row, jobs), key=lambda row: row[:3]))
         block = "Purser jobs:\n" + "\n".join(lines)
         return block, [job["jobId"] for job, _index in jobs]
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
@@ -2612,7 +2612,7 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
     fields = [f"{continuity} · model: {model} ({effort}) · task: {label}"]
     if median is not None:
         fields.append(f"estimated completion: {median} min")
-    receipt = f"**{' · '.join(fields)}**"
+    receipt = f"> ⚓ **Codex: {' · '.join(fields)}**"
     repository = Path(pending["repo_root"]) if isinstance(pending.get("repo_root"), str) else None
     if (event is not None
             and event.get("tool_name") not in (CODEX_RESULT_TOOL_NAMES | CODEX_APPLY_TOOL_NAMES)):

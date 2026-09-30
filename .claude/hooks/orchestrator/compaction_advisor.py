@@ -839,7 +839,7 @@ def _receipt_advice(receipt: Mapping[str, Any], now: datetime | None = None) -> 
     parts = [f"model {receipt['model']}", f"effort {receipt['effort']}"]
     stale = not _receipt_quota_current(receipt, now)
     if stale:
-        return ("The quota snapshot is stale. Write one bold line between `---` rules with blank lines around it, "
+        return ("The quota snapshot is stale. Write one line in the user's language as `> ⚓ **Codex done: ...**`, "
                 "in the user's language, showing " + ", ".join(parts) + ".")
     if "5h_used_pct" in receipt:
         parts.append(f"5h used {receipt['5h_used_pct']}%")
@@ -857,7 +857,7 @@ def _receipt_advice(receipt: Mapping[str, Any], now: datetime | None = None) -> 
             pass
     if "7d_used_pct" in receipt:
         parts.append(f"7d used {receipt['7d_used_pct']}%")
-    return ("Write one bold line between `---` rules with blank lines around it, in the user's language, "
+    return ("Write one line in the user's language as `> ⚓ **Codex done: ...**`, "
             "showing " + ", ".join(parts) + ".")
 
 
@@ -878,7 +878,7 @@ def _dispatch_advice(dispatch: Mapping[str, Any]) -> str:
     board = dispatch.get("board")
     if not lines:
         return "Include this latest job board verbatim:\n" + board if isinstance(board, str) else ""
-    advice = ("Write one bold line between `---` rules with blank lines around it, in the user's language, "
+    advice = ("Write one line in the user's language as `> ⚓ **Codex: ...**`, "
               "including every exact dispatch receipt line below verbatim:\n" + "\n".join(lines))
     return advice + ("\nInclude this latest job board verbatim:\n" + board if isinstance(board, str) else "")
 
@@ -1050,7 +1050,9 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             state["leader_pending"] = None
             changed = True
             record_announced_mechanical_leader(leader_pending["model"])
-        anchored_lines = re.findall(r"^\*\*⚓ .+\*\*$", turn_message, re.MULTILINE)
+        anchored_lines = re.findall(
+            r"^(?:\*\*⚓ .+\*\*|> ⚓ \*\*.+\*\*|\*\*> ⚓ \*\*.+\*\*\*\*)$",
+            turn_message, re.MULTILINE)
         if (fallback_pending is not None and len(anchored_lines) == 1
                 and fallback_pending["model"] in anchored_lines[0]):
             active_coder_state.update_fallback_question(
@@ -1105,13 +1107,13 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             fallback_pending["blocked"] = True
             if fallback_pending.get("notice"):
                 reasons.append(
-                    "On your next reply, render exactly one bold line in the user's language. "
+                    "On your next reply, render exactly one line in the user's language as `> ⚓ **...**`. "
                     "Translate the line below while keeping ⚓ and the model name; do not add another notice line.\n\n"
                     + fallback_pending["line"]
                 )
             else:
                 reasons.append(
-                    "On your next reply, render exactly one bold question line in the user's language. "
+                    "On your next reply, render exactly one bold quoted question line in the user's language as `> ⚓ **...**`. "
                     "Translate the line below while keeping ⚓ and the model name; include no other question line.\n\n"
                     + fallback_pending["line"]
                 )

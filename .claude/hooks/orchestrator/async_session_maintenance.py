@@ -172,7 +172,7 @@ def compact_accuracy_hint(state_root: str | Path, project_key: str, *, now: floa
                 if (isinstance(previous, (int, float)) and not isinstance(previous, bool)
                         and math.isfinite(previous) and error < previous):
                     name, suffix = AGENT_NAMES.get(agent, (agent, "in"))
-                    messages.append(f'Tell the user in the user\'s language: "⚓ {name}\'{suffix} iş süresi tahminleri self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %{round(error)}."')
+                    messages.append(f'Tell the user in the user\'s language: "> ⚓ **{name}\'{suffix} iş süresi tahminleri self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %{round(error)}.**"')
             _write_json(path, state)
             return "\n".join(messages) or None
     except BaseException:
@@ -252,10 +252,10 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
                                "When it finishes, ask for the user's agreement before calling codex_result with adopt: true.")
             else:
                 continue
-            resumed_hint = (f'Tell the user in the user\'s language: "⚓ Codex işi ({task}) bilgisayar '
-                            'kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim." '
+            resumed_hint = (f'Tell the user in the user\'s language: "> ⚓ **Codex işi ({task}) bilgisayar '
+                            'kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim.**" '
                             if isinstance(resumed, int) and resumed > 0 else "")
-            user_hint = f'Tell the user in the user\'s language: "{message}" ' if message else ""
+            user_hint = f'Tell the user in the user\'s language: "> ⚓ **{message.removeprefix("⚓ ")}**" ' if message else ""
             lines.append(f"Purser (jobId={job_id}, for Claude only): {resumed_hint}{user_hint}"
                          f"{instruction} Do not show the jobId to the user.")
         return "\n".join(lines) or None

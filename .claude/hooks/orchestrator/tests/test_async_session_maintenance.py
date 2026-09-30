@@ -211,8 +211,8 @@ def test_compact_accuracy_baseline_improvement_regression_and_bad_data(tmp_path)
     for _ in range(4):
         assert maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now) is None
     message = maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now)
-    assert message == ('Tell the user in the user\'s language: "⚓ Codex\'in iş süresi tahminleri '
-                       'self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %50."')
+    assert message == ('Tell the user in the user\'s language: "> ⚓ **Codex\'in iş süresi tahminleri '
+                       'self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %50.**"')
     item["payload"]["eta_minutes"] = 5
     path.write_text(json.dumps(item), encoding="utf-8")
     for _ in range(5):
@@ -233,8 +233,8 @@ def test_compact_accuracy_claude_and_unknown_possessives(tmp_path):
         state_path.parent.mkdir(parents=True)
         state_path.write_text(json.dumps({"compacts": 4, "errors": {agent: 100}}), encoding="utf-8")
         assert maintenance.compact_accuracy_hint(root, PROJECT_KEY, now=now) == (
-            f'Tell the user in the user\'s language: "⚓ {possessive} iş süresi tahminleri '
-            'self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %50."'
+            f'Tell the user in the user\'s language: "> ⚓ **{possessive} iş süresi tahminleri '
+            'self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %50.**"'
         )
 
 
