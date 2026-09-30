@@ -455,6 +455,67 @@ def test_benchmark_normal_model_failure_is_recorded(tmp_path, monkeypatch):
     assert candidate["benchmarks"][mechanical_learning.MECHANICAL_SUITE_VERSION]["passed_count"] == 5
 
 
+def test_first_qualifying_benchmark_writes_mechanical_leader(tmp_path):
+    path = _inventory(tmp_path, "vendor/benchmark-free")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["candidates"][0]["status"] = "unmeasured"
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    assert mechanical_learning.record_benchmark({
+        "model": "vendor/benchmark-free", "suite_version": mechanical_learning.MECHANICAL_SUITE_VERSION,
+        "passed_count": 5, "total": len(mechanical_learning.MECHANICAL_CHORES), "chores": [],
+    }, root=tmp_path)
+
+    assert json.loads((tmp_path / "opencode" / "leader.json").read_text(encoding="utf-8")) == {
+        "model": "vendor/benchmark-free", "successes": 5,
+        "sample_count": len(mechanical_learning.MECHANICAL_CHORES), "announced": False,
+    }
+
+
+def test_benchmark_qualifying_lower_seed_does_not_write_mechanical_leader(tmp_path):
+    path = _inventory(tmp_path, "vendor/first-seed", "vendor/lower-seed")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    for candidate in value["candidates"]:
+        candidate["status"] = "unmeasured"
+    value["candidates"][0]["benchmarks"] = {mechanical_learning.MECHANICAL_SUITE_VERSION: {
+        "passed_count": 5, "total": len(mechanical_learning.MECHANICAL_CHORES),
+    }}
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    assert mechanical_learning.record_benchmark({
+        "model": "vendor/lower-seed", "suite_version": mechanical_learning.MECHANICAL_SUITE_VERSION,
+        "passed_count": 5, "total": len(mechanical_learning.MECHANICAL_CHORES), "chores": [],
+    }, root=tmp_path)
+
+    assert not (tmp_path / "opencode" / "leader.json").exists()
+
+
+def test_benchmark_does_not_write_leader_when_measured_candidate_is_first(tmp_path):
+    _inventory(tmp_path, "vendor/measured-free", "vendor/benchmark-free")
+
+    assert mechanical_learning.record_benchmark({
+        "model": "vendor/benchmark-free", "suite_version": mechanical_learning.MECHANICAL_SUITE_VERSION,
+        "passed_count": 5, "total": len(mechanical_learning.MECHANICAL_CHORES), "chores": [],
+    }, root=tmp_path)
+
+    assert not (tmp_path / "opencode" / "leader.json").exists()
+
+
+def test_below_threshold_benchmark_does_not_write_mechanical_leader(tmp_path):
+    path = _inventory(tmp_path, "vendor/benchmark-free")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["candidates"][0]["status"] = "unmeasured"
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    assert mechanical_learning.record_benchmark({
+        "model": "vendor/benchmark-free", "suite_version": mechanical_learning.MECHANICAL_SUITE_VERSION,
+        "passed_count": mechanical_learning.BENCHMARK_MIN_PASSED - 1,
+        "total": len(mechanical_learning.MECHANICAL_CHORES), "chores": [],
+    }, root=tmp_path)
+
+    assert not (tmp_path / "opencode" / "leader.json").exists()
+
+
 def test_benchmark_unscored_candidates_caps_candidates_per_run(tmp_path, monkeypatch):
     path = _inventory(tmp_path, "vendor/one-free", "vendor/two-free", "vendor/three-free")
     calls = []

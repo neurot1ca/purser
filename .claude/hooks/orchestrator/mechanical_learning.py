@@ -116,6 +116,8 @@ def record_benchmark(result: dict[str, Any], *, root: Path | None = None) -> boo
                           if isinstance(item, dict) and item.get("id") == model), None)
         if candidate is None:
             return False
+        import coder_config
+        before = coder_config._ordered_opencode_candidates(value["candidates"])
         benchmarks = candidate.get("benchmarks")
         if not isinstance(benchmarks, dict):
             benchmarks = {}
@@ -125,7 +127,20 @@ def record_benchmark(result: dict[str, Any], *, root: Path | None = None) -> boo
             "recorded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
         candidate["benchmarks"] = benchmarks
+        after = coder_config._ordered_opencode_candidates(value["candidates"])
         model_listing._atomic_write(path, value)
+        if before[:1] != after[:1] and after and after[0] == model and candidate.get("status") != "measured":
+            try:
+                if passed >= BENCHMARK_MIN_PASSED:
+                    leader_path = state / "opencode" / "leader.json"
+                    model_listing._atomic_write(leader_path, {
+                        "model": model,
+                        "successes": passed,
+                        "sample_count": total,
+                        "announced": False,
+                    })
+            except BaseException:
+                pass
         return True
 
 

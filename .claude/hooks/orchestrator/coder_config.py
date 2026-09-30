@@ -25,24 +25,29 @@ def opencode_candidates() -> list[str]:
         candidates = value.get("candidates") if isinstance(value, dict) else None
         if not isinstance(candidates, list):
             return []
-        measured, seeded = [], []
-        for item in candidates:
-            if (not isinstance(item, dict) or item.get("status") == "failed"
-                    or not isinstance(item.get("id"), str) or not MODEL.fullmatch(item["id"])):
-                continue
-            if item.get("status") == "measured":
-                measured.append(item["id"])
-                continue
-            benchmarks = item.get("benchmarks")
-            result = benchmarks.get(mechanical_learning.MECHANICAL_SUITE_VERSION) if isinstance(benchmarks, dict) else None
-            if (isinstance(result, dict) and type(result.get("passed_count")) is int
-                    and type(result.get("total")) is int
-                    and result["total"] == len(mechanical_learning.MECHANICAL_CHORES)
-                    and mechanical_learning.BENCHMARK_MIN_PASSED <= result["passed_count"] <= result["total"]):
-                seeded.append(item["id"])
-        return measured + seeded
+        return _ordered_opencode_candidates(candidates)
     except (OSError, ValueError, TypeError, AttributeError):
         return []
+
+
+def _ordered_opencode_candidates(candidates: list) -> list[str]:
+    import mechanical_learning
+    measured, seeded = [], []
+    for item in candidates:
+        if (not isinstance(item, dict) or item.get("status") == "failed"
+                or not isinstance(item.get("id"), str) or not MODEL.fullmatch(item["id"])):
+            continue
+        if item.get("status") == "measured":
+            measured.append(item["id"])
+            continue
+        benchmarks = item.get("benchmarks")
+        result = benchmarks.get(mechanical_learning.MECHANICAL_SUITE_VERSION) if isinstance(benchmarks, dict) else None
+        if (isinstance(result, dict) and type(result.get("passed_count")) is int
+                and type(result.get("total")) is int
+                and result["total"] == len(mechanical_learning.MECHANICAL_CHORES)
+                and mechanical_learning.BENCHMARK_MIN_PASSED <= result["passed_count"] <= result["total"]):
+            seeded.append(item["id"])
+    return measured + seeded
 
 
 def agy_binary() -> str | None:
