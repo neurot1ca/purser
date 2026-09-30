@@ -416,13 +416,16 @@ def _flow_records(*, tool_name="mcp__plugin_purser_codex-main__codex_result", is
 def test_codex_result_question_prompts_next_part_once_per_user_turn(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _flow_records())
+    continuation = "Your previous reply is already visible to the user: write only the lines requested above, without repeating any of its text."
 
     result = advisor.stop(event, repo)
 
     assert result == {
         "decision": "block",
-        "reason": "Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question.",
+        "reason": "Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question.\n\n" + continuation,
     }
+    assert result["reason"].endswith(continuation)
+    assert result["reason"].count(continuation) == 1
     assert advisor.stop(event, repo) is None
 
 

@@ -1089,7 +1089,11 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         if version_pending is not None and version_pending.get("blocked") and reasons:
             record_announced_plugin_version(version_pending["version"])
-        return {"decision": "block", "reason": "\n\n".join(reasons)} if reasons else None
+        if reasons:
+            reason = "\n\n".join(reasons)
+            reason += "\n\nYour previous reply is already visible to the user: write only the lines requested above, without repeating any of its text."
+            return {"decision": "block", "reason": reason}
+        return None
     except BaseException:
         return None
 
