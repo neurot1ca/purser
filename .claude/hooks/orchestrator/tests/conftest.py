@@ -33,7 +33,7 @@ def isolated_purser_state_root(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def prevent_detached_mechanical_benchmarks(monkeypatch):
+def prevent_detached_mechanical_benchmarks(monkeypatch, request):
     """Fail if a test tries to launch the detached OpenCode benchmark worker."""
     import mechanical_learning
 
@@ -44,8 +44,10 @@ def prevent_detached_mechanical_benchmarks(monkeypatch):
         def Popen(self, args, *positional, **options):
             if (isinstance(args, (list, tuple)) and len(args) >= 3
                     and Path(args[1]).resolve() == Path(mechanical_learning.__file__).resolve()
-                    and args[2] == "--benchmark"):
-                pytest.fail("test attempted to launch a detached mechanical benchmark")
+                    and args[2] in ("--benchmark", "--shadow")):
+                pytest.fail(
+                    f"{request.node.nodeid} attempted to launch a detached mechanical benchmark"
+                )
             return subprocess.Popen(args, *positional, **options)
 
     monkeypatch.setattr(mechanical_learning, "subprocess", GuardedSubprocess())
