@@ -280,6 +280,17 @@ def test_missing_codex_usage_remains_null_and_unknown(tmp_path):
     assert aggregate["usage"]["codex_input_tokens"] is None
 
 
+def test_task_without_code_map_event_keeps_code_map_unknown(tmp_path):
+    telemetry.emit(
+        "IMPLEMENTER_FINISHED", task_id="no-code-map-event", state_root=tmp_path,
+        session_id="session-1", duration_ms=12.5, implementer="codex-main",
+    )
+    telemetry.update_task("no-code-map-event", state_root=tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "no-code-map-event.json").read_text(encoding="utf-8"))
+    assert aggregate["has_code_map"] is None
+
+
 def test_task_fold_keeps_routed_type_and_latest_claude_decision(tmp_path):
     common = {"task_id": "decision-latest", "state_root": tmp_path,
               "session_id": "session-1", "repo": "repo", "branch": "main",

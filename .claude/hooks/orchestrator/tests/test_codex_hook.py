@@ -7362,6 +7362,47 @@ def test_implementation_count_wording_stays_unknown_and_unflagged(workspace, con
     assert route_event["suspected_route_mismatch"] is None
 
 
+def test_finished_task_persists_code_map_present_and_codex_usage(workspace):
+    _repo, state = workspace
+    task_id = "code-map-present"
+    codex._post_observations(
+        {"session_id": "session-1", "duration_ms": 1234,
+         "tool_response": {"structuredContent": {"usage": {
+             "input_tokens": 23, "output_tokens": 7, "total_tokens": 30,
+         }}}},
+        state,
+        {"task_id": task_id, "project_key": "unresolved", "agent": "codex",
+         "model": "gpt-6-sol", "phase": "implementation", "route": "normal",
+         "has_code_map": True},
+        {"delta_files": 0},
+    )
+
+    aggregate = json.loads((state / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / f"{task_id}.json").read_text(encoding="utf-8"))
+    assert aggregate["has_code_map"] is True
+    assert aggregate["duration_ms"] == 1234
+    assert aggregate["usage"]["codex_input_tokens"] == 23
+    assert aggregate["usage"]["codex_output_tokens"] == 7
+    assert aggregate["usage"]["codex_total_tokens"] == 30
+
+
+def test_finished_task_persists_code_map_absent(workspace):
+    _repo, state = workspace
+    task_id = "code-map-absent"
+    codex._post_observations(
+        {"session_id": "session-1", "duration_ms": 1234},
+        state,
+        {"task_id": task_id, "project_key": "unresolved", "agent": "codex",
+         "model": "gpt-6-sol", "phase": "implementation", "route": "normal",
+         "has_code_map": False},
+        {"delta_files": 0},
+    )
+
+    aggregate = json.loads((state / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / f"{task_id}.json").read_text(encoding="utf-8"))
+    assert aggregate["has_code_map"] is False
+
+
 def test_reviewer_incomplete_telemetry_has_error_elapsed_and_retry_outcome(workspace, monkeypatch):
     _repo, state = workspace
     observed = []

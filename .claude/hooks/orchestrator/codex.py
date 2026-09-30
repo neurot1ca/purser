@@ -3598,6 +3598,7 @@ def _post_observations(
         "route": pending.get("route"),
         "phase": pending.get("phase"),
         "task_type": pending.get("task_type", "unknown"),
+        "has_code_map": pending.get("has_code_map") is True,
         "suspected_route_mismatch": pending.get("suspected_route_mismatch"),
         "changed_paths_count": bundle.get("delta_files"),
         "known_concurrent_scopes": bundle.get("known_concurrent_scopes", []),

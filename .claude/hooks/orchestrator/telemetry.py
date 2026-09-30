@@ -1056,6 +1056,7 @@ def _new_aggregate(
         "duration_ms": None,
         "phase": None,
         "task_type": "unknown",
+        "has_code_map": None,
         "selected_agent": None,
         "selected_provider": None,
         "selected_model": None,
@@ -1211,6 +1212,8 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
                       "served_agent", "served_provider", "served_model"):
             if field in payload:
                 aggregate[field] = payload[field]
+        if "has_code_map" in payload:
+            aggregate["has_code_map"] = payload["has_code_map"]
         if aggregate["validation"] is None and payload.get("validation") is not None:
             aggregate["validation"] = payload["validation"]
         known = payload.get("codex_usage_known") is True
