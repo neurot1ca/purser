@@ -3674,10 +3674,13 @@ def _post_observations(
         duration_seconds = getattr(reviewer_report, "duration_seconds", None)
         elapsed_seconds = getattr(reviewer_report, "elapsed_seconds", None)
         if isinstance(reviewer_report, Mapping):
-            elapsed_seconds = reviewer_report.get(
-                "elapsed_seconds", elapsed_seconds if elapsed_seconds is not None else reviewer_elapsed_seconds
-            )
-        elif elapsed_seconds is None:
+            elapsed_seconds = reviewer_report.get("elapsed_seconds")
+        if not (
+            isinstance(elapsed_seconds, (int, float))
+            and not isinstance(elapsed_seconds, bool)
+            and math.isfinite(elapsed_seconds)
+            and elapsed_seconds >= 0
+        ):
             elapsed_seconds = reviewer_elapsed_seconds
         duration_ms = (
             duration_seconds * 1000

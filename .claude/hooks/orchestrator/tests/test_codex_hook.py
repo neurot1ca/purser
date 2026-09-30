@@ -7386,6 +7386,27 @@ def test_reviewer_incomplete_telemetry_has_error_elapsed_and_retry_outcome(works
     assert failure["reviewer1_retry_recovered"] is False
 
 
+def test_reviewer_incomplete_telemetry_uses_measured_elapsed_when_report_is_none(workspace, monkeypatch):
+    _repo, state = workspace
+    observed = []
+    monkeypatch.setattr(codex, "_observe", lambda *args, **kwargs: observed.append((args, kwargs)))
+    event_value = event(tool_use_id="review-incomplete-none")
+    codex._post_observations(
+        event_value, state,
+        {"task_id": "review-incomplete-none", "agent": "codex", "model": "gpt-6-sol",
+         "phase": "implementation", "route": "normal"},
+        {"reviewer1_result": policy.UNCERTAIN, "reviewer1_provider": "agy",
+         "reviewer1_model_requested": "gemini-test", "reviewer1_attempts": []},
+        reviewer_report={"review_status": "NOT_RUN_INCOMPLETE_PACKET",
+                         "error_code": "REVIEW_PACKET_INCOMPLETE",
+                         "elapsed_seconds": None},
+        reviewer_started=True,
+        reviewer_elapsed_seconds=4.25,
+    )
+    failure = next(kwargs for args, kwargs in observed if args[1] == "REVIEWER1_FAILED")
+    assert failure["duration_ms"] == 4250
+
+
 def _activate_fallback(workspace, kind, **evidence):
     repo, root = workspace
     state = active_coder_state.read(repo, root)
