@@ -579,6 +579,49 @@ def _replace_state_block(path: Path, body: str, recent: str | None = "") -> None
     _atomic_write(path, content.encode("utf-8"))
 
 
+def _active_plan_line(repository: Path) -> str | None:
+    jobs: dict[str, dict[int, dict[str, Any]]] = {}
+    newest: tuple[float, str] | None = None
+    for path in (state_root.default_state_root() / "codex_exec_mcp" / "jobs").glob("*.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+            task = job.get("taskId")
+            match = re.fullmatch(r"(.+)-m([1-5])of([1-5])", task) if isinstance(task, str) else None
+            if (not match or int(match[2]) > int(match[3])
+                    or job.get("phase") != "implementation"
+                    or job.get("repoRoot") != os.fspath(repository)
+                    or job.get("jobId") != path.stem or not re.fullmatch(r"[0-9a-f]{64}", path.stem)):
+                continue
+            plan, number = match[1], int(match[2])
+            previous = jobs.setdefault(plan, {}).get(number)
+            if previous is None or job.get("acceptedAt", 0) > previous.get("acceptedAt", 0):
+                jobs[plan][number] = job
+            stamp = job.get("acceptedAt", 0)
+            if isinstance(stamp, (int, float)) and (newest is None or stamp > newest[0]):
+                newest = stamp, plan
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    if newest is None:
+        return None
+    plan = newest[1]
+    plan_jobs = jobs[plan]
+    total = int(re.fullmatch(r".+-m[1-5]of([1-5])", plan_jobs[max(plan_jobs)]["taskId"])[1])
+    parts = []
+    next_number = None
+    for number in range(1, total + 1):
+        job = plan_jobs.get(number)
+        if job is None:
+            next_number = next_number or number
+            continue
+        state = str(job.get("state", "unknown"))
+        if job.get("applyState") == "applied":
+            state = "applied"
+        else:
+            next_number = next_number or number
+        parts.append(f"M{number} {state} (job={job['jobId']})")
+    return f"Plan {plan}: " + ", ".join(parts + [f"next M{next_number}"]) if next_number else None
+
+
 def _mechanical_state(repository: Path, context: int, triggers: list[str], calls: list[dict[str, Any]]) -> str:
     lines = [
         f"as of {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}",
@@ -591,6 +634,12 @@ def _mechanical_state(repository: Path, context: int, triggers: list[str], calls
             f"- task={call['task_id']} tool={call['tool']} threadId={call.get('threadId') or 'unknown'} "
             f"claude_review_mode={call.get('claude_review_mode') or 'unknown'}"
         )
+    try:
+        plan_line = _active_plan_line(repository)
+        if plan_line:
+            lines.append(plan_line)
+    except (OSError, subprocess.SubprocessError):
+        pass
     try:
         commits = subprocess.run(["git", "log", "--oneline", "-5"], cwd=repository, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3, check=False,
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)

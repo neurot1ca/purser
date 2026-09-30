@@ -864,6 +864,38 @@ def test_precompact_refreshes_only_existing_handoff_state(setup, monkeypatch):
                for entry in entries for hook in entry["hooks"])
 
 
+def test_plan_milestones_in_handoff_show_jobs_apply_and_next(setup):
+    repo, local, scratch = setup
+    jobs = scratch / "purser-state" / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    ids = [f"{number:064x}" for number in range(1, 4)]
+    for number, state, applied in ((1, "SUCCEEDED", "applied"),
+                                   (2, "SUCCEEDED", "applied"), (3, "FAILED", None)):
+        job = {"jobId": ids[number - 1], "taskId": f"launch-m{number}of3",
+               "phase": "implementation", "repoRoot": str(repo), "state": state,
+               "acceptedAt": number}
+        if applied:
+            job["applyState"] = applied
+        (jobs / f"{job['jobId']}.json").write_text(json.dumps(job), encoding="utf-8")
+    unrelated = {"jobId": f"{4:064x}", "taskId": "other-m1of2",
+                 "phase": "implementation", "repoRoot": str(repo), "state": "SUCCEEDED",
+                 "applyState": "applied", "acceptedAt": 0}
+    (jobs / f"{unrelated['jobId']}.json").write_text(json.dumps(unrelated), encoding="utf-8")
+    foreign = {**unrelated, "jobId": f"{5:064x}", "taskId": "launch-m2of3",
+               "repoRoot": str(scratch / "foreign"), "acceptedAt": 5}
+    (jobs / f"{foreign['jobId']}.json").write_text(json.dumps(foreign), encoding="utf-8")
+    event = _event(scratch, repo, local, _records("commit"))
+    assert advisor.advise(event, repo, now=NOW)
+    handoff = advisor.handoff_path(repo).read_text(encoding="utf-8")
+    assert f"Plan launch: M1 applied (job={ids[0]})" in handoff
+    assert f"M2 applied (job={ids[1]})" in handoff
+    assert f"M3 FAILED (job={ids[2]})" in handoff
+    assert "next M3" in handoff
+    assert "other-m1of2" not in handoff
+    assert f"job={foreign['jobId']}" not in handoff
+    assert len([line for line in handoff.splitlines() if line.startswith("Plan ")]) == 1
+
+
 def test_precompact_without_handoff_does_not_create_one(setup, monkeypatch):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("commit"))
