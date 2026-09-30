@@ -2366,24 +2366,30 @@ def test_async_lease_waits_for_finalize_or_expired_job_record(workspace, monkeyp
     assert store.acquire("after-expired", "after-expired-task", ["file0.py"])["status"] == ledger.OK
 
 
-def test_async_missing_job_record_requires_retention_cutoff(workspace, monkeypatch):
+def test_async_missing_job_record_releases_after_grace_period(workspace, monkeypatch):
     store = _lease_state(workspace)
     job_id = hashlib.sha256(b"missing-call").hexdigest()
     monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
     store.acquire("missing-owner", "missing-task", ["file0.py"], job_id=job_id,
                   timeout_seconds=100)
-    cutoff = store._read()["owners"]["missing-owner"]["retention_after"]
-    monkeypatch.setattr(ledger.time, "time", lambda: cutoff - 1)
+    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0 + 10 * 60 - 1)
     assert store.acquire("next", "next-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
-    monkeypatch.setattr(ledger.time, "time", lambda: cutoff)
+    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0 + 10 * 60)
+    assert store.owner_state("missing-owner") == "RELEASED"
     assert store.acquire("next", "next-task", ["file0.py"])["status"] == ledger.OK
 
 
 def test_owner_state_promotes_waiter_after_blocker_retention_expires(workspace, monkeypatch):
     store = _lease_state(workspace)
+    blocker_call = "completed blocker"
+    blocker_job_id = hashlib.sha256(blocker_call.encode()).hexdigest()
+    store.jobs_root.mkdir(parents=True)
+    (store.jobs_root / f"{blocker_job_id}.json").write_text(json.dumps({
+        "jobId": blocker_job_id, "call": blocker_call, "state": "SUCCEEDED",
+    }), encoding="utf-8")
     monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
     assert store.acquire("blocker", "blocking-task", ["file0.py"],
-                         job_id="a" * 64, timeout_seconds=100)["status"] == ledger.OK
+                         job_id=blocker_job_id, timeout_seconds=100)["status"] == ledger.OK
     cutoff = store._read()["owners"]["blocker"]["retention_after"]
     monkeypatch.setattr(ledger.time, "time", lambda: cutoff - 10)
     assert store.acquire("waiter", "waiting-task", ["file0.py"],
