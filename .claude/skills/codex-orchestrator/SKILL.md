@@ -97,9 +97,12 @@ Put estimated duration in `eta` beside the recorded actual duration.
 Treat plan paths as estimates. Claude may start several accepted, disjoint
 milestones as separate async `codex_start` calls only when the longest job plus
 fan-in review is clearly shorter than serial work. Include shared generated
-files and validation inputs when judging disjointness. Overlapping milestones
-may also be started; the conflict queue serializes them, and a reply on a
-conflicting scope is still denied. Review each result on its own delta;
+files and validation inputs when judging disjointness. For worktree jobs,
+dispatch overlapping paths immediately: Purser queues hot-path conflicts as
+`QUEUED` and auto-starts them on lease release; otherwise jobs run in parallel
+worktrees and resolve overlap at apply. Wait only for a logical dependency,
+such as a milestone needing the previous milestone's accepted result; a reply
+on a conflicting scope is still denied. Review each result on its own delta;
 otherwise run disjoint work sequentially.
 
 Use the SessionStart duration hint for `eta` when present. Dispatch every call
