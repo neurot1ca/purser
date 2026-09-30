@@ -74,6 +74,79 @@ def test_second_apply_noop(site):
     assert len(list(config.parent.glob("config.toml.bak-*"))) == 0
 
 
+@pytest.mark.parametrize("json_output", [False, True])
+def test_concise_style_offer_is_reported_once(site, capsys, json_output):
+    home, _ = site
+    args = ("--apply", "--coder", "claude", "--reviewer", "none")
+    assert run(*(args + (("--json",) if json_output else ()))) == 0
+    output = capsys.readouterr().out
+    if json_output:
+        assert json.loads(output)["concise_style_offer_due"] is True
+    else:
+        assert "Concise reply style offer due." in output
+    assert (home / ".orchestrator" / "reply-style-suggestion-shown").exists()
+    second_json = not json_output
+    assert run(*(args + (("--json",) if second_json else ()))) == 0
+    output = capsys.readouterr().out
+    if second_json:
+        assert json.loads(output)["concise_style_offer_due"] is False
+    else:
+        assert "Concise reply style offer due." not in output
+
+
+def test_global_concise_style_does_not_offer_or_create_marker(site, capsys):
+    home, _ = site
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{\n  "outputStyle": "Concise",\n  "other": true\n}\n', encoding="utf-8")
+    assert run("--apply", "--coder", "claude", "--reviewer", "none") == 0
+    assert "Concise style offer" not in capsys.readouterr().out
+    assert not (home / ".orchestrator" / "reply-style-suggestion-shown").exists()
+
+
+def test_project_style_override_wins_over_global_style(site, capsys):
+    home, project = site
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{"outputStyle":"Concise"}', encoding="utf-8")
+    local = project / ".claude" / "settings.local.json"
+    local.parent.mkdir()
+    local.write_text('{"outputStyle":"Explanatory"}', encoding="utf-8")
+    (project / ".claude" / "settings.json").write_text('{"outputStyle":"Concise"}', encoding="utf-8")
+    assert run("--apply", "--coder", "claude", "--reviewer", "none") == 0
+    assert "Concise reply style offer due." in capsys.readouterr().out
+
+
+def test_failed_apply_does_not_consume_concise_offer(site, monkeypatch):
+    home, _ = site
+
+    def fail():
+        raise ValueError("setup failure")
+
+    monkeypatch.setattr(purser_init, "_python_to_store", fail)
+    assert run("--apply", "--coder", "claude", "--reviewer", "none") == 1
+    assert not (home / ".orchestrator" / "reply-style-suggestion-shown").exists()
+
+
+def test_enable_concise_style_preserves_settings_and_reports_project_override(site, capsys):
+    home, project = site
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{\n  "other": {"keep": true},\n  "outputStyle": "Explanatory"\n}\n', encoding="utf-8")
+    shared = project / ".claude" / "settings.json"
+    shared.parent.mkdir()
+    shared.write_text('{"outputStyle":"Explanatory"}', encoding="utf-8")
+    assert run("--enable-concise-style") == 0
+    output = capsys.readouterr().out
+    saved = json.loads(settings.read_text(encoding="utf-8"))
+    assert saved == {"other": {"keep": True}, "outputStyle": "Concise"}
+    assert "project" in output.lower() and "override" in output.lower()
+    assert json.loads(shared.read_text(encoding="utf-8")) == {"outputStyle": "Explanatory"}
+    settings.unlink()
+    assert run("--enable-concise-style") == 0
+    assert json.loads(settings.read_text(encoding="utf-8")) == {"outputStyle": "Concise"}
+
+
 def test_python_path_is_planned_and_second_apply_is_noop(site, capsys):
     home, _ = site
     args = ("--coder", "codex", "--reviewer", "none")

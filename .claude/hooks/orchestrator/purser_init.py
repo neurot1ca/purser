@@ -552,6 +552,63 @@ def _atomic(path: Path, content: bytes, *, exclusive: bool = False) -> None:
             os.unlink(temporary)
 
 
+def _output_style(path: Path) -> tuple[bool, object]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False, None
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return "outputStyle" in data, data.get("outputStyle")
+
+
+def _effective_output_style(project: Path) -> tuple[object, bool]:
+    """Return the winning style and whether a project setting overrides the user setting."""
+    claude = project / ".claude"
+    for path in (claude / "settings.local.json", claude / "settings.json"):
+        try:
+            present, style = _output_style(path)
+        except (OSError, UnicodeError, ValueError):
+            return None, False
+        if present:
+            return style, True
+    try:
+        _, style = _output_style(Path.home() / ".claude" / "settings.json")
+    except (OSError, UnicodeError, ValueError):
+        return None, False
+    return style, False
+
+
+def _claim_concise_style_offer(project: Path) -> bool:
+    try:
+        style, _ = _effective_output_style(project)
+        if style == "Concise":
+            return False
+        marker = Path.home() / ".orchestrator" / "reply-style-suggestion-shown"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        with marker.open("x", encoding="utf-8"):
+            pass
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+
+
+def _enable_concise_style(project: Path) -> bool:
+    path = Path.home() / ".claude" / "settings.json"
+    original = path.read_bytes() if path.exists() else None
+    settings = json.loads(original.decode("utf-8")) if original is not None else {}
+    if not isinstance(settings, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    settings["outputStyle"] = "Concise"
+    if (path.read_bytes() if path.exists() else None) != original:
+        raise ValueError("Claude settings changed during the update; try again")
+    _atomic(path, (json.dumps(settings, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+    _, project_override = _effective_output_style(project)
+    return project_override
+
+
 def _python_to_store() -> tuple[Path, bool]:
     """Return the usable Python 3.11+ path and whether the active Python is a venv."""
     active = Path(sys.executable).resolve()
@@ -597,6 +654,7 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--list-models", action="store_true")
     modes.add_argument("--plan", action="store_true")
     modes.add_argument("--apply", action="store_true")
+    modes.add_argument("--enable-concise-style", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--coder", choices=("codex", "claude", "opencode", "agy"))
     parser.add_argument("--model")
@@ -611,6 +669,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trust", action="store_true")
     parser.add_argument("--scaffold-profile", action="store_true")
     args = parser.parse_args(argv)
+    if args.enable_concise_style:
+        if (args.json or args.coder or args.model or args.fallback_agent or args.fallback_model or args.mode or args.effort
+                or args.reviewer or args.reviewer_model or args.opencode_mechanical is not None or args.trust
+                or args.scaffold_profile):
+            parser.error("--enable-concise-style accepts no other options")
+        try:
+            project_override = _enable_concise_style(Path.cwd().resolve())
+            print("Enabled Claude Code Concise reply style.")
+            if project_override:
+                print("A project-level outputStyle override still takes precedence for this project.")
+            return 0
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            print(f"purser:init: {exc}", file=sys.stderr)
+            return 1
     if args.detect:
         if not args.json or args.mode or args.effort or args.reviewer or args.reviewer_model or args.fallback_agent or args.fallback_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
             parser.error("--detect requires --json and accepts only optional --coder and --model")
@@ -619,8 +691,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.list_models:
         if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.mode or args.effort or args.reviewer or args.reviewer_model or args.fallback_agent or args.fallback_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
             parser.error("--list-models requires --json and --coder codex, opencode, or agy")
-    elif args.json or args.coder is None or args.reviewer is None:
-        parser.error("--plan and --apply require --coder and --reviewer, without --json")
+    elif (args.json and not args.apply) or args.coder is None or args.reviewer is None:
+        parser.error("--plan requires --coder and --reviewer without --json; --apply requires --coder and --reviewer")
     if bool(args.fallback_agent) != bool(args.fallback_model):
         parser.error("--fallback-agent and --fallback-model must be used together")
     if args.fallback_agent and args.coder == "claude":
@@ -760,8 +832,15 @@ def main(argv: list[str] | None = None) -> int:
             if (python_file.read_bytes() if python_file.exists() else None) != python_original:
                 raise ValueError("Python locator path changed during setup; run the plan again")
             _atomic(python_file, python_changed)
-        print("Applied." if changed != original or scaffold is not None or python_update or handoff_created else "No changes.")
-        print(f"Handoff: {handoff}")
+        offer_due = _claim_concise_style_offer(project)
+        if args.json:
+            print(json.dumps({"status": "applied", "handoff": str(handoff),
+                              "concise_style_offer_due": offer_due}, indent=2))
+        else:
+            print("Applied." if changed != original or scaffold is not None or python_update or handoff_created else "No changes.")
+            print(f"Handoff: {handoff}")
+            if offer_due:
+                print("Concise reply style offer due.")
         return 0
     except (OSError, UnicodeError, ValueError, tomllib.TOMLDecodeError) as exc:
         print(f"purser:init: {exc}", file=sys.stderr)

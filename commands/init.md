@@ -13,7 +13,19 @@ allowed-tools: Bash(python *)
    > Before writing code, read `.orchestrator/ponytail.md`. The repository contract and the task's acceptance criteria outrank it.
 
    On no, do nothing.
-7. Run `python "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/purser_init.py" --plan --coder X --reviewer AGENT`, adding the selected `--mode MODE` and manual `--model MODEL --effort EFFORT` only when Codex was chosen, or coder `--model MODEL` only when OpenCode or agy was chosen. For a selected Reviewer-1 model, add `--reviewer-model MODEL`. Use `--reviewer none` when None was selected. Pass the selected mechanical-route flag when OpenCode was detected. Add `--trust` and `--scaffold-profile` only if chosen. Show the entire plan, including its resolved route-to-model/effort pairs. Ask for explicit yes to this exact plan. Only after that yes, run the same options with `--apply` instead of `--plan`.
+7. Run `python "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/purser_init.py" --plan --coder X --reviewer AGENT`, adding the selected `--mode MODE` and manual `--model MODEL --effort EFFORT` only when Codex was chosen, or coder `--model MODEL` only when OpenCode or agy was chosen. For a selected Reviewer-1 model, add `--reviewer-model MODEL`. Use `--reviewer none` when None was selected. Pass the selected mechanical-route flag when OpenCode was detected. Add `--trust` and `--scaffold-profile` only if chosen. Show the entire plan, including its resolved route-to-model/effort pairs. Ask for explicit yes to this exact plan. Only after that yes, run the same options with `--apply --json` instead of `--plan`. If the JSON reports `concise_style_offer_due: true`, ask in the user's language and wait for 1 or 2, using exactly these approved lines (render the second line in italics):
+
+   Turkish:
+
+   > Purser'ın ölçümlerinde kısa yanıtlar ortalama %56 daha az çıktı tokenı kullandı. Senin için Concise cevap stilini açayım mı? Endişelenme, istediğin zaman yine uzun cevap isteyebilirsin. (1-evet 2-hayır)
+   > *Güvenlik ayarların izin vermezse, ayarı senin açman için haber vereceğim.*
+
+   English:
+
+   > In Purser's measurements, concise replies used 56% fewer output tokens on average. Shall I turn on the Concise reply style for you? Don't worry, you can still ask for longer answers anytime. (1-yes 2-no)
+   > *If your security settings don't allow it, I'll let you know so you can turn it on yourself.*
+
+   On 1, run `python "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/purser_init.py" --enable-concise-style`. If it is denied or fails, tell the user in their language: "Ayarı açamadım; `/output-style concise` yazarak sen açabilirsin." / "I couldn't change the setting; type `/output-style concise` to turn it on yourself." On 2, continue; declining still counts as shown.
 8. Run `/purser:check` and show its result.
 9. Offer `/purser:optimize` in one sentence; do not run it automatically.
 
