@@ -291,7 +291,7 @@ def test_served_model_updates_ledger_and_finished_telemetry(workspace, config, m
     finished = [item["payload"] for item in _all_telemetry_events(state)
                 if item["event_type"] == "IMPLEMENTER_FINISHED"]
     assert finished[-1]["served_model"] == "gpt-6-sol"
-    assert finished[-1]["implementer"] == "codex"
+    assert finished[-1]["implementer"] == "codex-main"
 
 
 def test_agy_start_passes_route_effort_to_bridge(workspace, config):
@@ -1707,6 +1707,11 @@ def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace
     assert not list((state / "async_jobs").glob("*.claim*"))
     bypass = codex.internal_pre_error_response(result, RuntimeError("internal"), state_root=state)
     assert "additionalContext" in bypass["hookSpecificOutput"]
+
+
+def test_async_duration_excludes_queue_wait_and_keeps_legacy_fallback():
+    assert codex._async_duration({"acceptedAt": 100, "startedAt": 838, "finishedAt": 868}) == 30_000
+    assert codex._async_duration({"acceptedAt": 100, "finishedAt": 105}) == 5_000
 
 
 @pytest.mark.parametrize("response_shape", ("string", "blocks", "mapping"))

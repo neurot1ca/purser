@@ -2707,7 +2707,7 @@ def _async_pre_followup(event: Mapping[str, Any], state_root: str | os.PathLike[
 def _async_duration(job: Mapping[str, Any] | None) -> int | None:
     if job is None:
         return None
-    start, finish = job.get("acceptedAt"), job.get("finishedAt")
+    start, finish = job.get("startedAt", job.get("acceptedAt")), job.get("finishedAt")
     if all(isinstance(value, (int, float)) and not isinstance(value, bool)
            and math.isfinite(value) for value in (start, finish)) and finish >= start:
         return int((finish - start) * 1000)
@@ -3530,11 +3530,14 @@ def _post_observations(
         project_namespace if isinstance(project_namespace, str) else None,
     )
     codex_tokens = _codex_usage(event.get("tool_response"))
+    implementer = pending.get("agent", bundle.get("implementer"))
+    if implementer == "codex":
+        implementer = "codex-main"
     finished_payload: dict[str, Any] = {
         "state_root": runtime_root,
         **envelope,
         "duration_ms": _numeric_duration_ms(event.get("duration_ms")),
-        "implementer": pending.get("agent", bundle.get("implementer")),
+        "implementer": implementer,
         "served_model": pending.get("model"),
         "route": pending.get("route"),
         "phase": pending.get("phase"),

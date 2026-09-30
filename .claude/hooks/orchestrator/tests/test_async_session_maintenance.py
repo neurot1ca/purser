@@ -153,6 +153,43 @@ def test_duration_hint_prefers_agent_after_five_and_keeps_other_samples(tmp_path
     assert "typical Claude durations" in other
 
 
+def test_duration_hint_pools_codex_aliases_at_five_samples(tmp_path):
+    month = tmp_path / "telemetry" / "events" / "2026-09"
+    month.mkdir(parents=True)
+    records = []
+    for agent, count, minutes in (("codex", 3, 2), ("codex-main", 2, 8)):
+        for _ in range(count):
+            item = event("IMPLEMENTER_FINISHED", "mechanical", minutes * 60000)
+            item["payload"]["implementer"] = agent
+            records.append(item)
+    (month / "session_aliases.jsonl").write_text("\n".join(map(json.dumps, records)), encoding="utf-8")
+
+    hint = maintenance.duration_hint(
+        tmp_path, PROJECT_KEY, now=datetime(2026, 9, 2, tzinfo=timezone.utc).timestamp()
+    )
+
+    assert "mechanical 2/8 min (n=5)" in hint
+
+
+def test_duration_hint_missing_implementer_stays_route_only(tmp_path):
+    month = tmp_path / "telemetry" / "events" / "2026-09"
+    month.mkdir(parents=True)
+    records = []
+    for agent, count, minutes in (("codex-main", 4, 2), (None, 1, 8), ("claude", 5, 10)):
+        for _ in range(count):
+            item = event("IMPLEMENTER_FINISHED", "mechanical", minutes * 60000)
+            if agent is not None:
+                item["payload"]["implementer"] = agent
+            records.append(item)
+    (month / "session_missing.jsonl").write_text("\n".join(map(json.dumps, records)), encoding="utf-8")
+
+    hint = maintenance.duration_hint(
+        tmp_path, PROJECT_KEY, now=datetime(2026, 9, 2, tzinfo=timezone.utc).timestamp()
+    )
+
+    assert "mechanical 9/10 min (n=10)" in hint
+
+
 def test_compact_accuracy_baseline_improvement_regression_and_bad_data(tmp_path):
     month = tmp_path / "telemetry" / "events" / "2026-09"
     month.mkdir(parents=True)

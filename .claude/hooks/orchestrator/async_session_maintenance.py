@@ -30,6 +30,7 @@ MAX_TELEMETRY_BYTES = 2 * 1024 * 1024
 MAX_TELEMETRY_LINES = 4096
 ACCURACY_WINDOW = 30
 IMPLEMENTER = "codex-main"
+IMPLEMENTER_ALIASES = {"codex": IMPLEMENTER}
 ROUTES = ("mechanical", "subtle", "normal", "consequential", "escalated", "operation")
 AGENT_NAMES = {"codex-main": ("Codex", "in"), "opencode-main": ("OpenCode", "in"), "agy-main": ("Antigravity", "in"), "claude": ("Claude", "un")}
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED"}
@@ -109,11 +110,13 @@ def duration_hint(state_root: str | Path, project_key: str, *, now: float | None
     try:
         grouped: dict[str, list[float]] = {}
         own: dict[str, list[float]] = {}
+        implementer = IMPLEMENTER_ALIASES.get(implementer, implementer)
         for item, payload, duration, _stamp in _finished_events(
                 state_root, project_key, time.time() if now is None else now):
             route = payload["route"]
             grouped.setdefault(route, []).append(duration)
-            if payload.get("implementer") == implementer:
+            sample_implementer = payload.get("implementer")
+            if IMPLEMENTER_ALIASES.get(sample_implementer, sample_implementer) == implementer:
                 own.setdefault(route, []).append(duration)
         parts = []
         for route in ROUTES:
