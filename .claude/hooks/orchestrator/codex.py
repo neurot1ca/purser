@@ -3189,6 +3189,21 @@ def _changed_paths_summary(paths: Sequence[Any]) -> tuple[list[Any], int, str]:
     return list(paths[:CHANGED_PATH_PREVIEW_LIMIT]), len(paths), hashlib.sha256(encoded).hexdigest()
 
 
+def _reviewer1_scope(
+    reviewed: Sequence[str], omitted: Sequence[str], reason: str
+) -> dict[str, Any] | None:
+    if not omitted:
+        return None
+
+    def preview(paths: Sequence[str]) -> list[str]:
+        values = list(paths[:10])
+        if len(paths) > 10:
+            values.append(f"+{len(paths) - 10} more")
+        return values
+
+    return {"reviewed": preview(reviewed), "omitted": preview(omitted), "reason": reason}
+
+
 def _copy_findings(findings: Any, message_limit: int | None = None) -> list[dict[str, Any]]:
     if not isinstance(findings, list):
         return []
@@ -3325,6 +3340,8 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
     }
     if "known_concurrent_scopes" in compact:
         mandatory["known_concurrent_scopes"] = compact["known_concurrent_scopes"]
+    if "reviewer1_scope" in compact:
+        mandatory["reviewer1_scope"] = compact["reviewer1_scope"]
     if "code_map" in compact:
         mandatory["code_map"] = compact["code_map"]
     return mandatory, _non_report_bytes(mandatory) > cap
@@ -4448,6 +4465,53 @@ def post_tool_use(
                 if isinstance(reported_model, str) and reported_model:
                     bundle["reviewer1_model_requested"] = reported_model
                 bundle["reviewer1_result"] = result
+                whole_tree = bundle.get("whole_tree_delta")
+                report_status = (
+                    reviewer_report.get("review_status")
+                    if isinstance(reviewer_report, Mapping)
+                    else None
+                )
+                job_paths = (
+                    whole_tree.get("changed_paths")
+                    if isinstance(whole_tree, Mapping)
+                    and isinstance(whole_tree.get("changed_paths"), list)
+                    else delta.get("changed_paths")
+                )
+                if isinstance(job_paths, list) and all(isinstance(path, str) for path in job_paths):
+                    if report_status == "NOT_RUN_INCOMPLETE_PACKET":
+                        reviewed_paths: list[str] = []
+                        scope_reason = "Reviewer-1 did not receive a complete packet."
+                    else:
+                        classified_paths = (
+                            classification.get("in_scope_paths")
+                            if isinstance(classification, Mapping)
+                            else None
+                        )
+                        reviewed_raw = (
+                            classified_paths
+                            if isinstance(classified_paths, list)
+                            else delta.get("changed_paths", [])
+                        )
+                        reviewed_paths = (
+                            reviewed_raw
+                            if isinstance(reviewed_raw, list)
+                            and all(isinstance(path, str) for path in reviewed_raw)
+                            else []
+                        )
+                        delta_paths = delta.get("changed_paths")
+                        scope_reason = (
+                            "Only delegated in-scope paths were sent to Reviewer-1."
+                            if isinstance(classified_paths, list)
+                            and isinstance(delta_paths, list)
+                            and set(reviewed_paths) != set(delta_paths)
+                            else "Some job delta paths were excluded from Reviewer-1's packet."
+                        )
+                    omitted_paths = sorted(set(job_paths).difference(reviewed_paths))
+                    reviewer_scope = _reviewer1_scope(
+                        reviewed_paths, omitted_paths, scope_reason
+                    )
+                    if reviewer_scope is not None:
+                        bundle["reviewer1_scope"] = reviewer_scope
                 if isinstance(findings, list):
                     bundle["findings"].extend(findings)
                 bundle["validation"] = validation if validation in {"PASS", "FAIL", "UNKNOWN"} else "UNKNOWN"
@@ -4517,6 +4581,7 @@ def post_tool_use(
                 and (classification is None or classification.get("decision") == ledger.PROCEED)
                 and not force_full_review
                 and not check_side_effects
+                and not bundle.get("reviewer1_scope")
                 and (thread_id is not None)
                 and mode.mode == policy.AUDIT
             )

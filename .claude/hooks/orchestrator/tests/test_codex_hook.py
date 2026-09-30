@@ -2124,6 +2124,114 @@ def test_single_job_compact_bundle_omits_whole_tree_fields(workspace, config):
     assert artifact["known_concurrent_scopes"] == []
 
 
+def test_partial_reviewer_scope_is_reported_and_forces_full(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
+    call = event(
+        prompt=orch(scope="file0.py,file1.py")
+        + '\nTASK_CONTRACT: {"objective":"Review both files","criteria":"Account for the full delta"}',
+        tool_use_id="partial-review-scope",
+    )
+    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "file1.py").write_text("value = 3\n", encoding="utf-8")
+
+    def partial_classification(delta, delegated_scope, **kwargs):
+        paths = delta["changed_paths"]
+        return {
+            "decision": ledger.PROCEED,
+            "in_scope_paths": paths[:1],
+            "out_of_scope_paths": [],
+            "protected_paths": [],
+            "concurrent_writer": False,
+        }
+
+    monkeypatch.setattr(ledger, "classify_concurrent_writers", partial_classification)
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{
+            "type": "text",
+            "text": json.dumps({
+                "threadId": "thread-partial-review-scope",
+                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+            }),
+        }],
+    }
+    bundle = response_bundle(
+        codex.post_tool_use(
+            post,
+            config=config,
+            state_root=state,
+            repo_root=repo,
+            reviewer=lambda **kwargs: {
+                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "validation": "PASS",
+                "findings": [],
+            },
+        ),
+        config,
+    )
+
+    assert bundle["reviewer1_scope"] == {
+        "reviewed": ["file0.py"],
+        "omitted": ["file1.py"],
+        "reason": "Only delegated in-scope paths were sent to Reviewer-1.",
+    }
+    assert bundle["claude_review_mode"] == policy.FULL
+
+
+def test_full_reviewer_scope_adds_no_scope_field(workspace, config):
+    repo, state = workspace
+    config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
+    call = event(
+        prompt=orch(scope="file0.py")
+        + '\nTASK_CONTRACT: {"objective":"Review the file","criteria":"Account for the full delta"}',
+        tool_use_id="full-review-scope",
+    )
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "tool_response": [{
+            "type": "text",
+            "text": json.dumps({
+                "threadId": "thread-full-review-scope",
+                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
+            }),
+        }],
+    }
+    bundle = response_bundle(
+        codex.post_tool_use(
+            post,
+            config=config,
+            state_root=state,
+            repo_root=repo,
+            reviewer=lambda **kwargs: {
+                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "validation": "PASS",
+                "findings": [],
+            },
+        ),
+        config,
+    )
+
+    assert "reviewer1_scope" not in bundle
+
+
+def test_reviewer_scope_path_lists_are_capped_with_remaining_count():
+    reviewed = [f"src/reviewed{index}.py" for index in range(14)]
+    omitted = [f"src/omitted{index}.py" for index in range(14)]
+    scope = codex._reviewer1_scope(reviewed, omitted, "partial")
+
+    assert scope == {
+        "reviewed": reviewed[:10] + ["+4 more"],
+        "omitted": omitted[:10] + ["+4 more"],
+        "reason": "partial",
+    }
+
+
 def test_code_map_line_survives_worker_prompt(workspace, config):
     repo, state = workspace
     line = r"CODE_MAP=C:\Users\Example User\code-map\map.txt STATUS=FRESH"
