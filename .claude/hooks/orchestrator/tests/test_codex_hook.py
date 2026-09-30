@@ -7257,6 +7257,96 @@ def test_reviewer_uses_configured_fallback_family(workspace, config, monkeypatch
     assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
 
 
+def test_task_type_mismatch_is_telemetry_only(workspace, config, monkeypatch):
+    repo, state = workspace
+    contract = (
+        "Objective: Count the accepted entries in the supplied report.\n"
+        "Acceptance criteria: Return the exact number of accepted entries."
+    )
+    objective, criteria, grounded = codex._parse_task_contract(
+        contract, "task-1", "implementation", ["file0.py"]
+    )
+    assert grounded
+    assert codex._derive_task_type(objective, criteria, "implementation") == "unknown"
+    assert codex._derive_task_type(objective, criteria, "operation") == "counting_status"
+
+    ambiguous = (
+        "Objective: Check the deployment status.\n"
+        "Acceptance criteria: Report whether the service is healthy."
+    )
+    objective, criteria, grounded = codex._parse_task_contract(
+        ambiguous, "task-1", "implementation", ["file0.py"]
+    )
+    assert grounded
+    assert codex._derive_task_type(objective, criteria, "implementation") == "unknown"
+    assert codex._derive_task_type(
+        "Follow the established runbook to fetch the package.",
+        "Use the documented steps and return the result.",
+        "implementation",
+    ) == "operation"
+
+    prompt = orch(phase="operation", route="subtle", scope=None) + "\n" + contract
+    call = event(prompt=prompt)
+    observations = []
+    monkeypatch.setattr(codex, "_observe", lambda *args, **kwargs: observations.append((args, kwargs)))
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    pending = codex._read_pending(state, call)
+    route_event = next(item[1] for item in observations if item[0][1] == "TASK_ROUTE_SELECTED")
+
+    assert updated["model"] == config["routes"]["subtle"]["model"]
+    assert pending["route"] == "subtle"
+    assert pending["task_type"] == "counting_status"
+    assert route_event["task_type"] == "counting_status"
+    assert route_event["suspected_route_mismatch"] == {
+        "declared_route": "subtle", "derived_type": "counting_status"
+    }
+    codex._post_observations(call, state, pending, {"delta_files": 0})
+    finished_event = next(item[1] for item in observations if item[0][1] == "IMPLEMENTER_FINISHED")
+    assert finished_event["task_type"] == "counting_status"
+    assert finished_event["suspected_route_mismatch"] == route_event["suspected_route_mismatch"]
+
+    ambiguous_call = event(
+        prompt=orch(task="ambiguous-task", phase="operation", route="subtle", scope=None) + "\n" + ambiguous,
+        tool_use_id="call-ambiguous",
+    )
+    codex.pre_tool_use(ambiguous_call, config=config, state_root=state, repo_root=repo)
+    ambiguous_pending = codex._read_pending(state, ambiguous_call)
+    assert ambiguous_pending["task_type"] == "unknown"
+    assert ambiguous_pending["suspected_route_mismatch"] is None
+
+    before = updated.copy()
+    monkeypatch.setattr(codex, "_derive_task_type", lambda *_args: "unknown")
+    other_call = event(
+        prompt=orch(task="no-flag", phase="operation", route="subtle", scope=None) + "\n" + contract,
+        tool_use_id="call-no-flag",
+    )
+    other = codex.pre_tool_use(other_call, config=config, state_root=state, repo_root=repo)
+    assert other["hookSpecificOutput"]["updatedInput"] == before
+
+
+def test_implementation_count_wording_stays_unknown_and_unflagged(workspace, config, monkeypatch):
+    repo, state = workspace
+    prompt = (
+        orch(task="implementation-count", route="subtle", scope="file0.py")
+        + "\nObjective: Record the number of retries in the implementation.\n"
+        + "Acceptance criteria: Preserve the retry counter behavior."
+    )
+    call = event(prompt=prompt, tool_use_id="implementation-count")
+    observations = []
+    monkeypatch.setattr(codex, "_observe", lambda *args, **kwargs: observations.append((args, kwargs)))
+
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    pending = codex._read_pending(state, call)
+    route_event = next(item[1] for item in observations if item[0][1] == "TASK_ROUTE_SELECTED")
+
+    assert "updatedInput" in result["hookSpecificOutput"]
+    assert pending["phase"] == "implementation"
+    assert pending["task_type"] == "unknown"
+    assert pending["suspected_route_mismatch"] is None
+    assert route_event["suspected_route_mismatch"] is None
+
+
 def _activate_fallback(workspace, kind, **evidence):
     repo, root = workspace
     state = active_coder_state.read(repo, root)

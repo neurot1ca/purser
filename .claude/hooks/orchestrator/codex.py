@@ -287,6 +287,17 @@ def _parse_task_contract(
     return (found_obj or default_obj), (found_crit or default_crit), False
 
 
+def _derive_task_type(objective: str, criteria: str, phase: str) -> str:
+    """Return a conservative task-type signal from the parsed contract."""
+    text = f"{objective}\n{criteria}".lower()
+    if phase == "operation" and re.search(r"\b(?:count|counting|number of|how many)\b", text):
+        return "counting_status"
+    if (re.search(r"\b(?:established|documented) runbook\b", text)
+            and re.search(r"\b(?:deploy|runner control|fetch|package|packaging)\b", text)):
+        return "operation"
+    return "unknown"
+
+
 _ALLOWED_VALIDATION_KEYS = frozenset({
     "source",
     "status",
@@ -2010,6 +2021,15 @@ def pre_tool_use(
                 task_objective = prior_obj
                 acceptance_criteria = prior_crit
                 task_contract_grounded = bool(live_thread.get("task_contract_grounded", True))
+        task_type = (
+            _derive_task_type(task_objective, acceptance_criteria, parsed.phase)
+            if task_contract_grounded else "unknown"
+        )
+        task_route = {"counting_status": "mechanical", "operation": "operation"}.get(task_type)
+        suspected_route_mismatch = (
+            {"declared_route": parsed.route, "derived_type": task_type}
+            if task_route is not None and parsed.route != task_route else None
+        )
 
         pending = {
             "kind": "call",
@@ -2040,6 +2060,8 @@ def pre_tool_use(
             "task_objective": task_objective,
             "acceptance_criteria": acceptance_criteria,
             "task_contract_grounded": task_contract_grounded,
+            "task_type": task_type,
+            "suspected_route_mismatch": suspected_route_mismatch,
             "has_code_map": bool(re.search(
                 r"(?m)^CODE_MAP=.+ STATUS=(?:FRESH|STALE|UNAVAILABLE)\r?$", updated["prompt"]
             )),
@@ -2160,6 +2182,8 @@ def pre_tool_use(
             "project_key": project_namespace,
             "phase": parsed.phase,
             "route": parsed.route,
+            "task_type": task_type,
+            "suspected_route_mismatch": suspected_route_mismatch,
             "model": model,
             "effort": effort,
             "routing_enforced": True,
@@ -3558,6 +3582,8 @@ def _post_observations(
         "served_model": pending.get("model"),
         "route": pending.get("route"),
         "phase": pending.get("phase"),
+        "task_type": pending.get("task_type", "unknown"),
+        "suspected_route_mismatch": pending.get("suspected_route_mismatch"),
         "changed_paths_count": bundle.get("delta_files"),
         "known_concurrent_scopes": bundle.get("known_concurrent_scopes", []),
         "validation": bundle.get("validation"),

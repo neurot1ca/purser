@@ -150,6 +150,7 @@ _WINDOWS_RESERVED = frozenset(
 _ROUTES = frozenset({"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard"})
 _PHASES = frozenset({"implementation", "operation", "plan"})
 CLAUDE_TASK_TYPES = frozenset({"implementation", "operation", "plan", "unknown"})
+DERIVED_TASK_TYPES = frozenset({"counting_status", "operation", "unknown"})
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 _VALIDATIONS = frozenset({"PASS", "FAIL", "UNKNOWN"})
 _REVIEW_RESULTS = frozenset(
@@ -207,6 +208,7 @@ _COMMON_CALL_FIELDS = frozenset(
     {
         "phase", "route", "model", "effort", "routing_enforced", "fresh_thread", "reply_call",
         "reason", "reason_source", "previous_route", "new_route", "eta_minutes",
+        "task_type", "suspected_route_mismatch",
     }
 )
 _CALL_CONTEXT_FIELDS = frozenset({"reason", "reason_source", "previous_route", "new_route", "eta_minutes"})
@@ -225,6 +227,8 @@ _PAYLOAD_FIELDS = {
             "served_model",
             "route",
             "phase",
+            "task_type",
+            "suspected_route_mismatch",
             "changed_paths_count",
             "known_concurrent_scopes",
             "validation",
@@ -338,8 +342,16 @@ def _payload_value(name: str, value: Any) -> Any:
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise ValueError("mechanical fingerprint is invalid")
         return value
-    if name == "task_type" and isinstance(value, str) and value in CLAUDE_TASK_TYPES:
+    if name == "task_type" and isinstance(value, str) and value in CLAUDE_TASK_TYPES | DERIVED_TASK_TYPES:
         return value
+    if name == "suspected_route_mismatch":
+        if value is None:
+            return None
+        if (not isinstance(value, Mapping) or set(value) != {"declared_route", "derived_type"}
+                or value.get("declared_route") not in _ROUTES
+                or value.get("derived_type") not in {"counting_status", "operation"}):
+            raise ValueError("suspected route mismatch is invalid")
+        return {"declared_route": value["declared_route"], "derived_type": value["derived_type"]}
     if name == "source":
         if (not isinstance(value, Mapping) or set(value) != {"kind", "job_id"}
                 or not isinstance(value.get("kind"), str)

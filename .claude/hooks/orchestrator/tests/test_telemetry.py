@@ -1190,3 +1190,26 @@ def test_hook_outputs_are_identical_when_telemetry_raises(tmp_path, monkeypatch)
     monkeypatch.setattr(telemetry, "update_task", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()))
     monkeypatch.setattr(telemetry, "record_health", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()))
     assert codex.post_tool_use(post_event, state_root=tmp_path) == expected_post
+
+
+def test_task_type_and_suspected_route_mismatch_schema():
+    payload = {
+        "phase": "implementation",
+        "route": "subtle",
+        "task_type": "counting_status",
+        "suspected_route_mismatch": {
+            "declared_route": "subtle",
+            "derived_type": "counting_status",
+        },
+    }
+    event = schema.build_event("TASK_ROUTE_SELECTED", task_id="task-1", payload=payload)
+    assert schema.valid_event(event)
+    finished = schema.build_event(
+        "IMPLEMENTER_FINISHED",
+        task_id="task-1",
+        payload={
+            "task_type": "counting_status",
+            "suspected_route_mismatch": payload["suspected_route_mismatch"],
+        },
+    )
+    assert schema.valid_event(finished)
