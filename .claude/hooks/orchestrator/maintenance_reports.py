@@ -4,21 +4,34 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import contextlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import time
 import uuid
 
-import codex_exec_mcp
 import project_root
 import state_root
 
 
 JOB_TIMEOUT_SECONDS = 2700
+QUIET_PERIOD_SECONDS = 900
+MAINTENANCE_CADENCE_SECONDS = 7 * 24 * 60 * 60
+FIVE_HOUR_QUOTA_MAX_PERCENT = 50
+QUOTA_MAX_AGE_SECONDS = 30 * 60
+BACKGROUND_CHECK_DELAY_SECONDS = QUIET_PERIOD_SECONDS
+BACKGROUND_CHECK_TIMEOUT_SECONDS = QUIET_PERIOD_SECONDS + JOB_TIMEOUT_SECONDS
+_FINDINGS_START = "```purser-findings-json"
+_FINDING_LINE = re.compile(r"^(.+?):(\d+)$")
+CLEANUP_HANDOFF_COMMIT_RULE = (
+    "Any `temizle` cleanup must land as ONE separate commit containing only that cleanup; "
+    "a single `git revert` must undo it."
+)
 
 
 def _canonical_root(value: str | os.PathLike[str]) -> Path:
@@ -73,11 +86,14 @@ def _source_commit(root: Path) -> str:
 
 
 def _write_report(path: Path, body: str, *, commit: str, timestamp: str,
-                  versions: list[str], limitations: str) -> None:
+                  versions: list[str], limitations: str, findings: list[dict] | None = None,
+                  cost: dict | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = ("# Cleanup report\n\n"
                f"- Source commit: `{commit}`\n- Run time (UTC): `{timestamp}`\n"
                f"- Tool versions: {', '.join(versions)}\n- Limitations: {limitations}\n\n"
+               + f"- Findings: {len(findings) if findings is not None else 'unknown'}\n"
+               + f"- Cost: `{json.dumps(cost or {'tokens': 'unknown', 'elapsed_seconds': 'unknown', 'quota_change': 'unknown'}, sort_keys=True)}`\n\n"
                + body.rstrip() + "\n")
     temporary = path.with_name("." + uuid.uuid4().hex + ".tmp")
     try:
@@ -90,7 +106,232 @@ def _write_report(path: Path, body: str, *, commit: str, timestamp: str,
         temporary.unlink(missing_ok=True)
 
 
+def parse_findings(body: str) -> list[dict] | None:
+    """Parse the worker's final structured list; malformed output stays unknown."""
+    try:
+        start = body.rindex(_FINDINGS_START) + len(_FINDINGS_START)
+        end = body.index("```", start)
+        value = json.loads(body[start:end].strip())
+        if not isinstance(value, list):
+            return None
+        result = []
+        for item in value:
+            if not isinstance(item, dict) or set(item) != {"path_line", "symbol", "evidence", "confidence"}:
+                return None
+            match = _FINDING_LINE.fullmatch(item["path_line"]) if isinstance(item["path_line"], str) else None
+            if (not match or not all(isinstance(item[key], str) and item[key].strip()
+                                     for key in ("symbol", "evidence", "confidence"))):
+                return None
+            if item["confidence"].casefold() not in {"high", "medium", "low"}:
+                return None
+            result.append({**item, "confidence_rank": _confidence_rank(item["confidence"])})
+        return sorted(result, key=lambda item: item["confidence_rank"], reverse=True)
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
+def _confidence_rank(value: str) -> int:
+    return {"high": 3, "medium": 2, "low": 1}.get(value.casefold(), 0)
+
+
+def _global_slot(state: Path):
+    """Exclusive process-lifetime slot shared by all project maintenance jobs."""
+    slot = state / "maintenance" / "active.json"
+    slot.parent.mkdir(parents=True, exist_ok=True)
+    return _exclusive_file(slot, stale_check=_global_slot_is_stale)
+
+
+@contextlib.contextmanager
+def _exclusive_file(path: Path, *, stale_check=None):
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        if stale_check is None or not stale_check(path):
+            raise
+        stale_path = path.with_name("." + uuid.uuid4().hex + ".stale")
+        try:
+            os.replace(path, stale_path)
+        except FileNotFoundError:
+            pass
+        else:
+            stale_path.unlink(missing_ok=True)
+        descriptor = os.open(path, flags, 0o600)
+    try:
+        os.write(descriptor, json.dumps({"pid": os.getpid(), "started_at": time.time()}).encode("utf-8"))
+        os.fsync(descriptor)
+        yield
+    finally:
+        os.close(descriptor)
+        path.unlink(missing_ok=True)
+
+
+def _pid_alive(pid: int) -> bool:
+    if type(pid) is not int or pid <= 0:
+        return False
+    if os.name == "nt":
+        import codex_exec_mcp
+        identity, _created = codex_exec_mcp._windows_process_identity(pid)
+        return identity != "DEAD"
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError as exc:
+        return not (getattr(exc, "winerror", None) == 87 or getattr(exc, "errno", None) == 3)
+    return True
+
+
+def _global_slot_is_stale(path: Path) -> bool:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        pid, started_at = value.get("pid"), value.get("started_at")
+        if (isinstance(started_at, (int, float))
+                and time.time() - started_at > BACKGROUND_CHECK_TIMEOUT_SECONDS):
+            return True
+        return type(pid) is int and not _pid_alive(pid)
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _active_user_jobs(state: Path, *, exclude_job_id: str | None = None) -> bool | None:
+    """True means a user job exists; None means job evidence is unreadable."""
+    directory = state / "codex_exec_mcp" / "jobs"
+    if not directory.exists():
+        return False
+    try:
+        for path in directory.glob("*.json"):
+            job = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(job, dict) or not isinstance(job.get("state"), str):
+                return None
+            if job.get("jobId", path.stem) != exclude_job_id and job["state"] in {"RUNNING", "QUEUED"}:
+                return True
+    except (OSError, ValueError):
+        return None
+    return False
+
+
+def _job_ids(state: Path) -> set[str] | None:
+    try:
+        return {path.stem for path in (state / "codex_exec_mcp" / "jobs").glob("*.json")}
+    except OSError:
+        return None
+
+
+def _fresh_quota(now: float | None = None) -> dict | None:
+    import codex_quota
+    snapshot = codex_quota.read_latest_quota()
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("5h_used_pct"), (int, float)):
+        return None
+    try:
+        stamp = datetime.fromisoformat(snapshot["snapshot_at"].replace("Z", "+00:00")).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return None
+    current = time.time() if now is None else now
+    if stamp > current or current - stamp > QUOTA_MAX_AGE_SECONDS:
+        return None
+    return snapshot
+
+
+def record_activity(repo: Path, *, state: Path | None = None) -> None:
+    state = state or state_root.default_state_root()
+    candidate = Path(repo).resolve()
+    directory = _maintenance_dir(candidate, state)
+    if not _is_opted_in(candidate, directory):
+        return
+    import codex_exec_mcp
+    root = _canonical_root(candidate)
+    directory = _maintenance_dir(root, state)
+    codex_exec_mcp._atomic_json(directory / "last-activity.json", {"at": time.time()})
+
+
+def _is_opted_in(root: Path, directory: Path) -> bool:
+    try:
+        marker = json.loads((directory / "opt-in.json").read_text(encoding="utf-8"))
+        return marker.get("enabled") is True and marker.get("project_root") == str(root)
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _cadence_due(directory: Path, now: float | None = None) -> bool:
+    try:
+        last = json.loads((directory / "last-run.json").read_text(encoding="utf-8"))
+        at = last.get("completed_at")
+        current = time.time() if now is None else now
+        return isinstance(at, (int, float)) and current - at >= MAINTENANCE_CADENCE_SECONDS
+    except (OSError, ValueError, TypeError):
+        return True
+
+
+def eligible(repo: Path, *, state: Path, now: float | None = None) -> bool:
+    root = _canonical_root(repo)
+    directory = _maintenance_dir(root, state)
+    try:
+        marker = json.loads((directory / "opt-in.json").read_text(encoding="utf-8"))
+        activity = json.loads((directory / "last-activity.json").read_text(encoding="utf-8"))
+        last_activity = activity.get("at")
+        current = time.time() if now is None else now
+        if (marker.get("enabled") is not True or marker.get("project_root") != str(root)
+                or not isinstance(last_activity, (int, float))
+                or current - last_activity < QUIET_PERIOD_SECONDS):
+            return False
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+    if not _cadence_due(directory, now):
+        return False
+    quota = _fresh_quota(now)
+    if quota is None or quota["5h_used_pct"] > FIVE_HOUR_QUOTA_MAX_PERCENT:
+        return False
+    return _active_user_jobs(state) is False
+
+
+def _opted_in_projects(state: Path):
+    projects = state / "projects"
+    for maintenance in projects.glob("*/maintenance"):
+        try:
+            value = json.loads((maintenance / "opt-in.json").read_text(encoding="utf-8"))
+            root = Path(value["project_root"])
+            if value.get("enabled") is True and _maintenance_dir(_canonical_root(root), state) == maintenance:
+                yield root
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+
+
+def delayed_check(repo: Path, *, state: Path | None = None, delay: float = BACKGROUND_CHECK_DELAY_SECONDS) -> Path | None:
+    """Wait off-hook, then start at most one globally eligible cleanup job."""
+    state = state or state_root.default_state_root()
+    time.sleep(min(max(delay, 0), BACKGROUND_CHECK_TIMEOUT_SECONDS - JOB_TIMEOUT_SECONDS))
+    candidate = _canonical_root(repo)
+    if not any(project == candidate for project in _opted_in_projects(state)) or not eligible(candidate, state=state):
+        return None
+    try:
+        return run_cleanup(candidate, state=state, _require_idle=True)
+    except FileExistsError:
+        return None
+
+
+def wake_background_check(repo: Path, *, state: Path | None = None) -> bool:
+    """Detach bounded work from SessionStart; the hook itself never waits."""
+    state = state or state_root.default_state_root()
+    candidate = Path(repo).resolve()
+    if not _is_opted_in(candidate, _maintenance_dir(candidate, state)):
+        return False
+    root = _canonical_root(candidate)
+    args = [sys.executable, str(Path(__file__).resolve()), "check", "--repo", str(root)]
+    try:
+        subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, close_fds=True,
+                         creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                        | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)) if os.name == "nt" else 0)
+        return True
+    except OSError:
+        return False
+
+
 def _active_is_stale(active_path: Path, bridge: codex_exec_mcp.Server) -> bool:
+    import codex_exec_mcp
     try:
         active = json.loads(active_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -116,8 +357,10 @@ def _create_active(active_path: Path, active: dict) -> None:
 
 
 def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
-                server: codex_exec_mcp.Server | None = None, poll_seconds: float = 1.0) -> Path:
+                server: codex_exec_mcp.Server | None = None, poll_seconds: float = 1.0,
+                _require_idle: bool = False) -> Path | None:
     root = _canonical_root(repo)
+    import codex_exec_mcp
     state = state or state_root.default_state_root()
     directory = _maintenance_dir(root, state)
     marker = directory / "opt-in.json"
@@ -129,6 +372,11 @@ def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
         raise RuntimeError(f"Maintenance is not opted in for {root}; run opt-in explicitly first.")
 
     directory.mkdir(parents=True, exist_ok=True)
+    slot_context = _global_slot(state)
+    slot_context.__enter__()
+    if _require_idle and not eligible(root, state=state):
+        slot_context.__exit__(None, None, None)
+        return None
     active_path = directory / "cleanup-active.json"
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     active = {"project_root": str(root), "started_at": timestamp, "state": "RUNNING"}
@@ -137,6 +385,7 @@ def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
         _create_active(active_path, active)
     except FileExistsError as exc:
         if not _active_is_stale(active_path, bridge):
+            slot_context.__exit__(None, None, None)
             raise RuntimeError(f"A cleanup report is already running for {root}.") from exc
         stale_path = active_path.with_name("." + uuid.uuid4().hex + ".stale")
         try:
@@ -148,13 +397,22 @@ def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
         try:
             _create_active(active_path, active)
         except FileExistsError as duplicate:
+            slot_context.__exit__(None, None, None)
             raise RuntimeError(f"A cleanup report is already running for {root}.") from duplicate
+    except Exception:
+        slot_context.__exit__(None, None, None)
+        raise
 
     reports = directory / "reports" / "cleanup"
     report_path = reports / (timestamp + ".md")
     failure_path = reports / "failures" / (timestamp + ".json")
     job_id = None
+    started_clock = time.monotonic()
+    before_quota = _fresh_quota()
+    retain_slot = False
     try:
+        if _active_user_jobs(state) is not False:
+            raise RuntimeError("active or unknown user job state; maintenance skipped")
         commit = _source_commit(root)
         vulture_version, limitations = _tool_info()
         versions = [f"Python: {sys.version.split()[0]}", "Git: " + subprocess.run(
@@ -171,8 +429,15 @@ use before calling it unused. If vulture is available, use its installed version
 otherwise state that vulture is unavailable and use grep-based searches, explaining
 that grep can miss indirect or dynamic use. Never install any tool. Include the
 commands/searches used and distinguish uncertain candidates from confirmed facts.
+If user-initiated work starts, it has priority: do not delay it, cancel it, or
+continue consuming resources once it needs the machine. End your report with this
+machine-readable list, using one object per finding and an empty list for no findings:
+```purser-findings-json
+[{{"path_line":"relative/path.py:12","symbol":"name","evidence":"short evidence","confidence":"high|medium|low"}}]
+```
 """
         call = str(uuid.uuid4())
+        jobs_before = _job_ids(state)
         started = bridge._start_job({"call": call, "mode": "new", "prompt": prompt,
                                      "cwd": str(root), "sandbox": "read-only",
                                      "jobPhase": "operation", "agent": "codex",
@@ -189,11 +454,54 @@ commands/searches used and distinguish uncertain candidates from confirmed facts
             os.fsync(stream.fileno())
         os.replace(temporary, active_path)
         while True:
+            if _active_user_jobs(state, exclude_job_id=job_id) is True:
+                retain_slot = True
+                cancellation = bridge._cancel_job({"jobId": job_id}).get("structuredContent", {})
+                if cancellation.get("state") != "CANCELLED":
+                    deadline = time.monotonic() + JOB_TIMEOUT_SECONDS
+                    while time.monotonic() < deadline:
+                        current = bridge._result_job({"jobId": job_id}).get("structuredContent", {})
+                        if current.get("state") in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}:
+                            retain_slot = False
+                            break
+                        time.sleep(min(poll_seconds, max(0, deadline - time.monotonic())))
+                    else:
+                        raise RuntimeError("maintenance cancellation was unconfirmed; global slot retained by job timeout")
+                else:
+                    retain_slot = False
+                raise RuntimeError("maintenance yielded to a user Codex job")
             result = bridge._result_job({"jobId": job_id}).get("structuredContent", {})
             status = result.get("state")
             if status == "SUCCEEDED":
-                _write_report(report_path, result.get("content", ""), commit=commit,
-                              timestamp=timestamp, versions=versions, limitations=limitations)
+                body = result.get("content", "")
+                findings = parse_findings(body) if isinstance(body, str) else None
+                after_quota = _fresh_quota()
+                concurrent = _active_user_jobs(state)
+                before_reset = (before_quota or {}).get("5h_resets_at")
+                after_reset = (after_quota or {}).get("5h_resets_at")
+                jobs_after = _job_ids(state)
+                concurrent_job = (jobs_before is None or jobs_after is None
+                                  or bool((jobs_after - jobs_before) - {job_id}))
+                quota_change = "unknown"
+                if (before_quota and after_quota and isinstance(before_reset, str)
+                        and before_reset == after_reset and concurrent is False and not concurrent_job):
+                    quota_change = round(after_quota["5h_used_pct"] - before_quota["5h_used_pct"], 3)
+                usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+                tokens = usage or result.get("tokens", result.get("totalTokens"))
+                cost = {"tokens": tokens if tokens else "unknown",
+                        "elapsed_seconds": round(time.monotonic() - started_clock, 3),
+                        "quota_before": before_quota or "unknown",
+                        "quota_after": after_quota or "unknown",
+                        "quota_change_5h_pct": quota_change}
+                _write_report(report_path, body if isinstance(body, str) else "", commit=commit,
+                              timestamp=timestamp, versions=versions, limitations=limitations,
+                              findings=findings, cost=cost)
+                codex_exec_mcp._atomic_json(directory / "last-run.json", {"completed_at": time.time()})
+                codex_exec_mcp._atomic_json(report_path.with_suffix(".notice.json"), {
+                    "report_path": str(report_path), "findings": findings,
+                    "finding_count": len(findings) if findings is not None else None,
+                    "shown": False,
+                })
                 return report_path
             if status in codex_exec_mcp.TERMINAL:
                 raise RuntimeError(f"Codex job {status}: {result.get('errorCode', '')} {result.get('message', '')}".strip())
@@ -203,10 +511,75 @@ commands/searches used and distinguish uncertain candidates from confirmed facts
         codex_exec_mcp._atomic_json(failure_path, {
             "project_root": str(root), "started_at": timestamp, "job_id": job_id,
             "state": "FAILED", "error": str(exc),
+            "cost": {"tokens": "unknown", "elapsed_seconds": round(time.monotonic() - started_clock, 3),
+                     "quota_before": before_quota or "unknown", "quota_after": _fresh_quota() or "unknown",
+                     "quota_change_5h_pct": "unknown"},
         })
         raise
     finally:
         active_path.unlink(missing_ok=True)
+        if not retain_slot:
+            slot_context.__exit__(None, None, None)
+
+
+def notice_context(repo: Path, *, state: Path) -> dict | None:
+    """Return and claim the oldest completed report notice for a later session."""
+    directory = _maintenance_dir(_canonical_root(repo), state) / "reports" / "cleanup"
+    for notice_path in sorted(directory.glob("*.notice.json")):
+        try:
+            notice = json.loads(notice_path.read_text(encoding="utf-8"))
+            if notice.get("shown") is True or notice.get("pending") is True:
+                continue
+            notice["pending"] = True
+            import codex_exec_mcp
+            codex_exec_mcp._atomic_json(notice_path, notice)
+            evidence = []
+            report_path = notice.get("report_path")
+            if isinstance(report_path, str) and Path(report_path).name:
+                evidence.append(Path(report_path).name)
+            findings = notice.get("findings")
+            if isinstance(findings, list) and findings and isinstance(findings[0], dict):
+                path_line = findings[0].get("path_line")
+                if isinstance(path_line, str) and path_line:
+                    evidence.append(path_line)
+            return {**notice, "notice_file": str(notice_path), "confirmation_evidence": evidence}
+        except (OSError, ValueError, AttributeError):
+            continue
+    return None
+
+
+def confirm_notice(notice_file: str) -> None:
+    try:
+        import codex_exec_mcp
+        path = Path(notice_file)
+        notice = json.loads(path.read_text(encoding="utf-8"))
+        notice.update(pending=False, shown=True)
+        codex_exec_mcp._atomic_json(path, notice)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def format_notice(notice: dict) -> str:
+    path = notice.get("report_path", "unknown")
+    count = notice.get("finding_count")
+    findings = notice.get("findings")
+    intro = (f"⚓ **Purser sen çalışırken arka planda projeni proaktif temizlik modülüyle taradı: raporda {count} bulgu var.**"
+             if isinstance(count, int) else
+             f"⚓ **Purser sen çalışırken arka planda projeni proaktif temizlik modülüyle taradı: raporda bulgu sayısı bilinmiyor.**")
+    if not isinstance(findings, list):
+        return f"> {intro}\n> *Bulgular ayrıştırılamadı; rapor: `{path}`.*"
+    ranked = sorted(findings, key=lambda item: item.get(
+        "confidence_rank", _confidence_rank(item.get("confidence", ""))), reverse=True)
+    shown = ranked if len(findings) <= 5 else ranked[:5]
+    instruction = ("Aşağıdaki tabloda her bulgu ve kanıtı yazılı. Temizlenmesi için \"temizle\" demen yeterli."
+                   if len(findings) <= 5 else
+                   f"Aşağıdaki tabloda en önemli ilk 5 bulgu ve kanıtı yazılı. Temizlenmesi için \"temizle\" demen yeterli. Diğer bulgular token tasarrufu için şu dosyada: `{path}`")
+    rows = ["> | Bulgu | Kanıt |", "> | --- | --- |"]
+    for item in shown:
+        candidate = f"{item.get('path_line', '?')} {item.get('symbol', '?')}"
+        evidence = " ".join(str(item.get("evidence", "")).split())[:48]
+        rows.append(f"> | {candidate[:48]} | {evidence} |")
+    return "\n".join([f"> {intro}", f"> *{instruction}*", *rows])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -217,12 +590,16 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser("run", help="run a maintenance report")
     run.add_argument("report_type", choices=("cleanup",))
     run.add_argument("--repo", required=True)
+    check = commands.add_parser("check", help="run a delayed idle maintenance check")
+    check.add_argument("--repo", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "opt-in":
             print(opt_in(args.repo))
-        else:
+        elif args.command == "run":
             print(run_cleanup(args.repo))
+        else:
+            delayed_check(Path(args.repo))
         return 0
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"maintenance report failed: {exc}", file=sys.stderr)

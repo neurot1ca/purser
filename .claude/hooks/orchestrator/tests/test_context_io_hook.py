@@ -1,5 +1,6 @@
 import io
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,33 @@ def test_context_io_hook_reads_utf8_with_cp1254_wrapper(monkeypatch):
     # This lifecycle hook is intentionally silent; the UTF-8 transport change
     # preserves its existing empty stdout contract.
     assert output_raw.getvalue() == b""
+
+
+def test_context_hook_defers_maintenance_import_and_unopted_fast_paths(monkeypatch, tmp_path):
+    monkeypatch.delitem(sys.modules, "maintenance_reports", raising=False)
+    importlib.reload(context_io_hook)
+    assert "maintenance_reports" not in sys.modules
+
+    import maintenance_reports
+    monkeypatch.setattr(maintenance_reports, "_canonical_root",
+                        lambda _path: pytest.fail("unopted project must return before canonicalization"))
+    assert maintenance_reports.record_activity(tmp_path, state=tmp_path / "state") is None
+    assert not maintenance_reports.wake_background_check(tmp_path, state=tmp_path / "state")
+
+
+def test_session_start_queues_notice_without_maintenance_context(monkeypatch, tmp_path):
+    import maintenance_reports
+    monkeypatch.setattr(maintenance_reports, "notice_context", lambda *_args, **_kwargs: {
+        "notice_file": "report.notice.json", "report_path": "report.md", "findings": [],
+        "finding_count": 0, "confirmation_evidence": ["report.md"],
+    })
+    queued = []
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "queue_maintenance_notice",
+                        lambda *args, **kwargs: queued.append((args, kwargs)) or True)
+    context = context_io_hook._queue_maintenance_notice(
+        {"session_id": "maintenance-notice"}, tmp_path, tmp_path / "state")
+    assert context is None
+    assert queued and queued[0][1]["evidence"] == ["report.md"]
 
 
 def test_session_start_appends_duration_hint_and_runs_cleanup(monkeypatch, tmp_path):

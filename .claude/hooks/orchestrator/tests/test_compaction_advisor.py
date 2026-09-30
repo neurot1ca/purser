@@ -347,6 +347,28 @@ def test_dispatch_receipt_blocks_when_final_reply_lacks_line(setup):
     assert line in result["reason"]
 
 
+def test_maintenance_notice_requires_its_own_evidence_and_commit_rule(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    confirmed = []
+    import maintenance_reports
+    monkeypatch.setattr(maintenance_reports, "confirm_notice", lambda path: confirmed.append(path))
+    text = "> ⚓ **Purser taradı: raporda 0 bulgu var.**\n> *Temizle demen yeterli.*\n> | Bulgu | Kanıt |\n> | --- | --- |"
+    assert advisor.queue_maintenance_notice(
+        event, repo, "C:/reports/report.md.notice.json", text,
+        evidence=["report.md", "src/dead.py:4"],
+    )
+
+    receipt = "> ⚓ **Codex: task complete.**"
+    blocked = advisor.stop({**event, "last_assistant_message": receipt}, repo)
+    assert blocked["decision"] == "block" and text in blocked["reason"]
+    assert maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE in blocked["reason"]
+    assert not confirmed
+    assert advisor.stop({**event, "last_assistant_message": "Reviewed src/dead.py:4."}, repo) is None
+    assert confirmed == ["C:/reports/report.md.notice.json"]
+    assert advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["maintenance_pending"] is None
+
+
 def test_dispatch_receipt_passes_verbatim_and_clears(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))

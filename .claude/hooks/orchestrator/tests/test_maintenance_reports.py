@@ -1,7 +1,9 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import uuid
 
 import pytest
@@ -156,3 +158,178 @@ def test_report_job_does_not_create_async_followup_record(project):
     assert not (state / "async_jobs").exists()
     record = next((state / "codex_exec_mcp" / "jobs").glob("*.json"))
     assert json.loads(record.read_text(encoding="utf-8"))["jobPhase"] == "operation"
+
+
+def _eligible_project(project, state):
+    maintenance_reports.opt_in(project, state=state)
+    maintenance_reports.record_activity(project, state=state)
+    key = maintenance_reports.project_root.project_key(project.resolve())
+    directory = state / "projects" / key / "maintenance"
+    old = __import__("time").time() - maintenance_reports.QUIET_PERIOD_SECONDS - 1
+    (directory / "last-activity.json").write_text(json.dumps({"at": old}), encoding="utf-8")
+    (directory / "last-run.json").write_text(json.dumps({
+        "completed_at": old - maintenance_reports.MAINTENANCE_CADENCE_SECONDS - 1}), encoding="utf-8")
+    return directory
+
+
+def test_global_slot_race_admits_exactly_one_project(project):
+    state = _state(project)
+    slot = state / "maintenance" / "active.json"
+    barrier = threading.Barrier(2)
+    winners = []
+    def contend():
+        barrier.wait()
+        try:
+            with maintenance_reports._global_slot(state):
+                winners.append(True)
+                __import__("time").sleep(0.02)
+        except FileExistsError:
+            winners.append(False)
+    threads = [threading.Thread(target=contend) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(winners) == [False, True]
+    assert not slot.exists()
+
+
+@pytest.mark.parametrize("stale_reason", ("dead-pid", "expired"))
+def test_global_slot_recovers_dead_or_expired_owner(project, monkeypatch, stale_reason):
+    state = _state(project)
+    slot = state / "maintenance" / "active.json"
+    slot.parent.mkdir(parents=True)
+    monkeypatch.setattr(maintenance_reports, "_pid_alive", lambda _pid: stale_reason != "dead-pid")
+    started_at = (__import__("time").time() - maintenance_reports.BACKGROUND_CHECK_TIMEOUT_SECONDS - 1
+                  if stale_reason == "expired" else __import__("time").time())
+    slot.write_text(json.dumps({"pid": 123456, "started_at": started_at}), encoding="utf-8")
+    with maintenance_reports._global_slot(state):
+        current = json.loads(slot.read_text(encoding="utf-8"))
+        assert current["pid"] == os.getpid()
+        assert current["started_at"] > started_at
+    assert not slot.exists()
+
+
+@pytest.mark.parametrize(("identity", "alive"), (("DEAD", False), ("ALIVE", True), ("UNCONFIRMED", True)))
+def test_windows_pid_liveness_uses_process_identity_without_os_kill(monkeypatch, identity, alive):
+    import codex_exec_mcp
+    monkeypatch.setattr(maintenance_reports.os, "name", "nt")
+    monkeypatch.setattr(codex_exec_mcp, "_windows_process_identity", lambda _pid: (identity, None))
+    monkeypatch.setattr(maintenance_reports.os, "kill",
+                        lambda *_args: pytest.fail("Windows liveness must not call os.kill"))
+    assert maintenance_reports._pid_alive(4242) is alive
+
+
+def test_idle_check_skips_stale_quota(project, monkeypatch):
+    state = _state(project)
+    _eligible_project(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: None)
+    assert not maintenance_reports.eligible(project, state=state)
+
+
+def test_idle_check_requires_quiet_period(project, monkeypatch):
+    state = _state(project)
+    directory = _eligible_project(project, state)
+    (directory / "last-activity.json").write_text(json.dumps({"at": __import__("time").time()}), encoding="utf-8")
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"5h_used_pct": 1})
+    assert not maintenance_reports.eligible(project, state=state)
+
+
+def test_idle_check_rejects_quota_above_named_threshold(project, monkeypatch):
+    state = _state(project)
+    _eligible_project(project, state)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        "5h_used_pct": maintenance_reports.FIVE_HOUR_QUOTA_MAX_PERCENT + 1})
+    assert not maintenance_reports.eligible(project, state=state)
+
+
+def test_session_start_wake_is_detached_without_starting_a_process(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    calls = []
+    monkeypatch.setattr(maintenance_reports, "_canonical_root", lambda value: Path(value).resolve())
+    monkeypatch.setattr(maintenance_reports.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert maintenance_reports.wake_background_check(project, state=state)
+    assert calls and calls[0][1]["stdin"] == subprocess.DEVNULL
+    assert calls[0][1]["stdout"] == subprocess.DEVNULL and calls[0][1]["stderr"] == subprocess.DEVNULL
+
+
+def test_idle_check_skips_active_user_job(project, monkeypatch):
+    state = _state(project)
+    _eligible_project(project, state)
+    jobs = state / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    (jobs / ("c" * 64 + ".json")).write_text(json.dumps({"state": "RUNNING"}), encoding="utf-8")
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"5h_used_pct": 1})
+    assert not maintenance_reports.eligible(project, state=state)
+
+
+def test_idle_check_respects_seven_day_cadence(project, monkeypatch):
+    state = _state(project)
+    directory = _eligible_project(project, state)
+    (directory / "last-run.json").write_text(json.dumps({"completed_at": __import__("time").time()}), encoding="utf-8")
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"5h_used_pct": 1})
+    assert not maintenance_reports.eligible(project, state=state)
+
+
+def test_notice_formats_all_findings_up_to_five_and_claims_once(project):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    reports = state / "projects" / maintenance_reports.project_root.project_key(project.resolve()) / "maintenance" / "reports" / "cleanup"
+    reports.mkdir(parents=True)
+    path = reports / "one.md"
+    path.write_text("report", encoding="utf-8")
+    findings = [{"path_line": f"m{i}.py:{i+1}", "symbol": f"dead{i}", "evidence": "no references found",
+                 "confidence": "high", "confidence_rank": 3} for i in range(5)]
+    notice_path = path.with_suffix(".notice.json")
+    notice_path.write_text(json.dumps({"report_path": str(path), "findings": findings,
+                                       "finding_count": 5, "shown": False}), encoding="utf-8")
+    notice = maintenance_reports.notice_context(project, state=state)
+    text = maintenance_reports.format_notice(notice)
+    assert text.count("| m") == 5 and "5 bulgu var" in text
+    assert maintenance_reports.notice_context(project, state=state) is None
+    maintenance_reports.confirm_notice(notice["notice_file"])
+    assert json.loads(notice_path.read_text(encoding="utf-8"))["shown"] is True
+
+
+def test_notice_shows_top_five_by_confidence_and_report_path(project):
+    findings = [{"path_line": f"m{i}.py:{i+1}", "symbol": f"dead{i}", "evidence": f"evidence {i}",
+                 "confidence": level, "confidence_rank": rank}
+                for i, (level, rank) in enumerate([("low", 1), ("high", 3), ("medium", 2),
+                                                    ("low", 1), ("high", 3), ("medium", 2)])]
+    text = maintenance_reports.format_notice({"report_path": "C:/state/report.md", "findings": findings,
+                                               "finding_count": 6})
+    assert text.count("| m") == 5 and "m1.py:2" in text and "m3.py:4" not in text
+    assert "C:/state/report.md" in text
+
+
+def test_findings_parse_failure_keeps_report_count_unknown_and_path(project):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    report = maintenance_reports.run_cleanup(project, state=state, server=FakeServer(
+        state, {"state": "SUCCEEDED", "content": "Some prose without a findings block."}))
+    content = report.read_text(encoding="utf-8")
+    notice = json.loads(report.with_suffix(".notice.json").read_text(encoding="utf-8"))
+    rendered = maintenance_reports.format_notice(notice)
+    assert "Findings: unknown" in content and notice["finding_count"] is None
+    assert "| --- | --- |" not in rendered and str(report) in rendered
+
+
+def test_user_job_starting_during_maintenance_is_not_cancelled_or_waited_on(project):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    server = FakeServer(state, {"state": "RUNNING"})
+    user_job = {"jobId": "d" * 64, "state": "RUNNING", "jobPhase": "implementation"}
+    original_start = server._start_job
+    cancelled = []
+    def start(args):
+        value = original_start(args)
+        path = server.job_dir / (user_job["jobId"] + ".json")
+        path.write_text(json.dumps(user_job), encoding="utf-8")
+        return value
+    server._start_job = start
+    server._cancel_job = lambda args: cancelled.append(args["jobId"]) or {"structuredContent": {"state": "CANCELLED"}}
+    with pytest.raises(RuntimeError, match="yielded to a user"):
+        maintenance_reports.run_cleanup(project, state=state, server=server)
+    assert cancelled == ["a" * 64]
+    assert json.loads((server.job_dir / (user_job["jobId"] + ".json")).read_text(encoding="utf-8"))["state"] == "RUNNING"

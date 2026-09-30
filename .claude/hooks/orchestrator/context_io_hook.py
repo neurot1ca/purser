@@ -149,6 +149,19 @@ def _model_version_context(repository: Path | None) -> str | None:
         return None
 
 
+def _queue_maintenance_notice(payload: Mapping[str, Any], repository: Path | None,
+                             state: Path) -> None:
+    import maintenance_reports
+    if repository is None:
+        return
+    notice = maintenance_reports.notice_context(repository, state=state)
+    if notice is None:
+        return
+    compaction_advisor.queue_maintenance_notice(
+        payload, repository, notice["notice_file"], maintenance_reports.format_notice(notice),
+        evidence=notice.get("confirmation_evidence", []))
+
+
 def _planning_hint(prompt: Any) -> bool:
     if not isinstance(prompt, str) or _PLAN_COMMAND.search(prompt):
         return False
@@ -192,6 +205,12 @@ def main() -> int:
                 except BaseException:
                     pass
             elif value.get("hook_event_name") == "UserPromptSubmit":
+                try:
+                    import maintenance_reports
+                    if repository is not None:
+                        maintenance_reports.record_activity(repository)
+                except BaseException:
+                    pass
                 try:
                     try:
                         language = compaction_advisor.recorded_user_language(repository)
@@ -239,12 +258,23 @@ def main() -> int:
                     pass
             elif value.get("hook_event_name") == "SessionStart":
                 try:
+                    import maintenance_reports
+                    if repository is not None:
+                        maintenance_reports.record_activity(repository)
+                        maintenance_reports.wake_background_check(repository)
+                except BaseException:
+                    pass
+                try:
                     compaction_advisor.clear_pending(value, repository)
                     try:
                         async_session_maintenance.cleanup_jobs(state_root.default_state_root())
                     except BaseException:
                         pass
                     additional_context = compaction_advisor.restore(value, repository)
+                    try:
+                        _queue_maintenance_notice(value, repository, state_root.default_state_root())
+                    except BaseException:
+                        pass
                     update_context = _plugin_update_context(value, repository)
                     if update_context:
                         additional_context = "\n".join(part for part in (additional_context, update_context) if part)

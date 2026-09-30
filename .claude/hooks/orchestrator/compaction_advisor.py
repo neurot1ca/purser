@@ -444,6 +444,18 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                                     "model": fallback_pending["model"],
                                     "blocked": fallback_pending.get("blocked") is True,
                                     "notice": fallback_pending.get("notice") is True}
+            maintenance_pending = value.get("maintenance_pending")
+            if (not isinstance(maintenance_pending, dict)
+                    or not isinstance(maintenance_pending.get("notice_file"), str)
+                    or not isinstance(maintenance_pending.get("text"), str)
+                    or not isinstance(maintenance_pending.get("evidence"), list)
+                    or not all(isinstance(item, str) and item for item in maintenance_pending["evidence"])):
+                maintenance_pending = None
+            else:
+                maintenance_pending = {"notice_file": maintenance_pending["notice_file"],
+                                       "text": maintenance_pending["text"],
+                                       "evidence": maintenance_pending["evidence"],
+                                       "blocked": maintenance_pending.get("blocked") is True}
             codex_retry_pending = value.get("codex_retry_pending")
             if isinstance(codex_retry_pending, str) and codex_retry_pending.strip():
                 codex_retry_pending = re.sub(
@@ -463,6 +475,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "version_pending": version_pending,
                 "leader_pending": leader_pending,
                 "fallback_pending": fallback_pending,
+                "maintenance_pending": maintenance_pending,
                 "flow_blocked_user": value.get("flow_blocked_user") if type(value.get("flow_blocked_user")) is int else None,
                 "codex_retry_count": min(2, max(0, int(value.get("codex_retry_count", 0)))),
                 "codex_retry_pending": codex_retry_pending,
@@ -475,6 +488,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             "version_pending": None,
             "leader_pending": None,
             "fallback_pending": None,
+            "maintenance_pending": None,
             "flow_blocked_user": None, "codex_retry_count": 0, "codex_retry_pending": False}
 
 
@@ -535,6 +549,23 @@ def record_announced_mechanical_leader(model: str) -> None:
             _atomic_write(path, json.dumps(value, sort_keys=True).encode("utf-8"))
     except BaseException:
         pass
+
+
+def queue_maintenance_notice(payload: Mapping[str, Any], repository: Path | None,
+                             notice_file: str, text: str, *, evidence: list[str]) -> bool:
+    try:
+        session_id = payload.get("session_id")
+        if (repository is None or not isinstance(session_id, str) or not session_id
+                or not isinstance(evidence, list) or not all(isinstance(item, str) and item for item in evidence)):
+            return False
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        state["maintenance_pending"] = {"notice_file": notice_file, "text": text,
+                                         "evidence": evidence, "blocked": False}
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        return True
+    except BaseException:
+        return False
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -977,6 +1008,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         state_path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(state_path, session_id)
         notice = state["notice_pending"]
+        maintenance_pending = state["maintenance_pending"]
         receipt = state["receipt_pending"]
         dispatch = state["dispatch_pending"]
         version_pending = state["version_pending"]
@@ -1006,6 +1038,15 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         changed = False
         if notice is not None and any(line.startswith("> ⚓") for line in turn_message.splitlines()):
             state["notice_pending"] = None
+            changed = True
+        if (maintenance_pending is not None
+                and any(evidence in turn_message for evidence in maintenance_pending["evidence"])):
+            try:
+                import maintenance_reports
+                maintenance_reports.confirm_notice(maintenance_pending["notice_file"])
+            except BaseException:
+                pass
+            state["maintenance_pending"] = None
             changed = True
         clock = datetime.now(timezone.utc)
         if receipt is not None and _receipt_satisfied(receipt, turn_message, clock):
@@ -1068,6 +1109,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             state["fallback_pending"] = None
             changed = True
         notice = state["notice_pending"]
+        maintenance_pending = state["maintenance_pending"]
         receipt = state["receipt_pending"]
         dispatch = state["dispatch_pending"]
         version_pending = state["version_pending"]
@@ -1091,6 +1133,17 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         if notice is not None and not notice.get("blocked"):
             notice["blocked"] = True
             reasons.append("End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n" + _blockquote(notice))
+        if maintenance_pending is not None and not maintenance_pending.get("blocked"):
+            import maintenance_reports
+            maintenance_pending["blocked"] = True
+            reasons.append(
+                "Render the completed maintenance notice below in the user's language, keeping ⚓, the count, paths, and table. "
+                "If the user answers `temizle`, dispatch one ordinary Codex implementation job routed as subtle. "
+                "That job must re-verify every listed item against current HEAD first and remove exactly the still-unused listed items; "
+                "skip each item that is no longer unused and explain why. Do not invent items or edit unlisted code. "
+                + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
+                + maintenance_pending["text"]
+            )
         if receipt is not None and not receipt.get("blocked"):
             receipt["blocked"] = True
             reasons.append(_receipt_advice(receipt))
