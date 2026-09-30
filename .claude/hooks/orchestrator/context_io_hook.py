@@ -18,6 +18,9 @@ import compaction_advisor
 import project_profile
 import project_root
 import state_root
+import model_catalog
+import model_listing
+import model_version_notice
 
 
 _PLANNING_WORD = re.compile(
@@ -98,6 +101,50 @@ def _plugin_update_context(payload: Mapping[str, Any], repository: Path | None) 
         leader_context = _mechanical_leader_context(payload, repository)
         version_context = _plugin_version_context(payload, repository)
         return "\n".join(part for part in (leader_context, version_context) if part) or None
+    except BaseException:
+        return None
+
+
+def _model_version_context(repository: Path | None) -> str | None:
+    """Check pinned routes against a bounded live CLI listing at most daily."""
+    try:
+        if repository is None or not model_version_notice.due_today():
+            return None
+        config = coder_config.load(Path(__file__).with_name("config.json"))
+        agent = config.get("coder_agent", "codex")
+        routes = config.get("routes", {})
+        pinned = list(dict.fromkeys(
+            route.get("model") if isinstance(route, dict) else route
+            for route in routes.values()
+        ))
+        pinned = [model for model in pinned if isinstance(model, str)]
+        if not pinned:
+            return None
+        catalog = model_catalog.load_cached_catalog()
+        listing = model_listing.list_models(agent, catalog["providers"], timeout_seconds=2)
+        if listing.get("status") != "available":
+            return None
+        candidates = [item.get("id") for item in listing.get("models", []) if isinstance(item, dict)]
+        state = model_version_notice.read_state()
+        for current in pinned:
+            newer = model_version_notice.newer_version(current, candidates)
+            if newer and newer not in state["asked"] and newer not in state["declined"]:
+                state["pending"] = {"current": current, "new": newer, "blocked": False}
+                model_version_notice.write_state(state)
+                model_version_notice.record_check()
+                return (
+                    "On your next reply, render exactly these three lines in the user's language; "
+                    "translate from Turkish and keep ⚓ and both model names unchanged. "
+                    f"If the user answers 1/yes, apply only these routes with "
+                    f"`python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --adopt-model-version {newer}`. "
+                    f"If they answer 2/no, record that choice with `python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --decline-model-version {newer}`. "
+                    "Do not change routes unless the user says yes.\n"
+                    f"> ⚓ **Yeni model sürümü çıktı: `{newer}`, şu an `{current}` kullanılıyor.**\n"
+                    "> *Purser'ın bu sürüme geçmesini ister misin? (1-evet 2-hayır)*\n"
+                    "> *Hayır dersen bu sürüm için bir daha sorulmaz. İstediğin zaman `/purser:init` ile geçebilirsin.*"
+                )
+        model_version_notice.record_check()
+        return None
     except BaseException:
         return None
 
@@ -201,6 +248,9 @@ def main() -> int:
                     update_context = _plugin_update_context(value, repository)
                     if update_context:
                         additional_context = "\n".join(part for part in (additional_context, update_context) if part)
+                    model_context = _model_version_context(repository)
+                    if model_context:
+                        additional_context = "\n".join(part for part in (additional_context, model_context) if part)
                     try:
                         if repository is not None:
                             selected = coder_config.load(Path(__file__).with_name("config.json")).get("coder_agent", "codex")

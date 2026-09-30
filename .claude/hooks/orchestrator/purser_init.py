@@ -20,6 +20,7 @@ import compaction_advisor
 import coder_config
 import model_catalog
 import model_listing
+import model_version_notice
 import mechanical_learning
 import policy
 
@@ -552,6 +553,76 @@ def _atomic(path: Path, content: bytes, *, exclusive: bool = False) -> None:
             os.unlink(temporary)
 
 
+def _model_version_decision(version: str, *, adopt: bool) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", version):
+        raise ValueError("model version is invalid")
+    if not adopt:
+        model_version_notice.decide(version, decline=True)
+        print(f"Declined model version {version}.")
+        return
+    config_path = Path.home() / ".orchestrator" / "config.toml"
+    original = config_path.read_bytes() if config_path.exists() else None
+    before = tomllib.loads(original.decode("utf-8")) if original is not None else {}
+    loaded = coder_config.load(Path(__file__).with_name("config.json"))
+    agent = loaded.get("coder_agent", "codex")
+    catalog = model_catalog.load_cached_catalog()
+    listing = model_listing.list_models(agent, catalog["providers"])
+    if listing.get("status") != "available" or version not in {
+            item.get("id") for item in listing.get("models", []) if isinstance(item, dict)}:
+        raise ValueError(f"model {version!r} is absent from the live {agent} listing")
+    routes = before.get("coding", {}).get("routes", {}) if isinstance(before.get("coding", {}), dict) else {}
+    if not routes:
+        routes = {name: route for name, route in json.loads(
+            Path(__file__).with_name("config.json").read_text(encoding="utf-8"))["routes"].items()}
+    updated = deepcopy(routes)
+    changed = False
+    for name, route in updated.items():
+        current = route.get("model") if isinstance(route, dict) else route
+        if isinstance(current, str) and model_version_notice.is_newer(current, version):
+            if isinstance(route, dict):
+                route["model"] = version
+            else:
+                updated[name] = version
+            changed = True
+    if not changed:
+        raise ValueError(f"no pinned route has a strictly older version in {version!r}'s model family")
+    if original is None:
+        text = "schema_version = 1\n"
+        before = {"schema_version": 1}
+    else:
+        text = original.decode("utf-8")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    coding = before.get("coding", {})
+    if not isinstance(coding, dict):
+        raise ValueError("[coding] must be a table")
+    if "coder_agent" not in coding:
+        text = _upsert(text, "coding", "coder_agent", agent, newline)
+    rendered = "routes = {" + ", ".join(
+        f"{name} = {{ model = {json.dumps(value['model'])}, effort = {json.dumps(value['effort'])} }}"
+        if isinstance(value, dict) else f"{name} = {json.dumps(value)}"
+        for name, value in updated.items()) + "}" + newline
+    text = _upsert(text, "coding", "routes", updated, newline, rendered=rendered)
+    after = tomllib.loads(text)
+    expected = deepcopy(before)
+    expected_coding = expected.setdefault("coding", {})
+    expected_coding["coder_agent"] = agent
+    expected_coding["routes"] = updated
+    if after != expected:
+        raise ValueError("model adoption changed config values outside coding routes")
+    if (config_path.read_bytes() if config_path.exists() else None) != original:
+        raise ValueError("config changed during model adoption")
+    if original is not None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup = config_path.with_name(f"config.toml.bak-{stamp}")
+        with backup.open("xb") as stream:
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+    _atomic(config_path, text.encode("utf-8"))
+    model_version_notice.decide(version, decline=False)
+    print(f"Adopted model version {version} for its pinned routes.")
+
+
 def _output_style(path: Path) -> tuple[bool, object]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -655,6 +726,8 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--plan", action="store_true")
     modes.add_argument("--apply", action="store_true")
     modes.add_argument("--enable-concise-style", action="store_true")
+    modes.add_argument("--adopt-model-version")
+    modes.add_argument("--decline-model-version")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--coder", choices=("codex", "claude", "opencode", "agy"))
     parser.add_argument("--model")
@@ -669,6 +742,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trust", action="store_true")
     parser.add_argument("--scaffold-profile", action="store_true")
     args = parser.parse_args(argv)
+    if args.adopt_model_version or args.decline_model_version:
+        try:
+            _model_version_decision(args.adopt_model_version or args.decline_model_version,
+                                    adopt=bool(args.adopt_model_version))
+            return 0
+        except (OSError, UnicodeError, ValueError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
+            print(f"purser:init: {exc}", file=sys.stderr)
+            return 1
     if args.enable_concise_style:
         if (args.json or args.coder or args.model or args.fallback_agent or args.fallback_model or args.mode or args.effort
                 or args.reviewer or args.reviewer_model or args.opencode_mechanical is not None or args.trust

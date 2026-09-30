@@ -12,6 +12,7 @@ import context_io_hook
 import async_session_maintenance
 import codex_exec_mcp
 import compaction_advisor
+import model_version_notice
 
 
 def _run_user_prompt_hook(monkeypatch, repo, *, prompt="", language_handoff=None, advice=None, unreadable=False):
@@ -133,6 +134,65 @@ def test_plugin_version_upgrade_context_and_first_install(monkeypatch, tmp_path)
 def test_plugin_update_context_is_silent_without_plugin_root(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     assert context_io_hook._plugin_update_context({"session_id": "session-update"}, tmp_path) is None
+
+
+def test_model_version_notice_checks_once_daily_and_skips_declined(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(context_io_hook.coder_config, "load", lambda *_: {
+        "coder_agent": "codex", "routes": {"normal": {"model": "gpt-6-luna"}}
+    })
+    monkeypatch.setattr(context_io_hook.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    calls = []
+    monkeypatch.setattr(context_io_hook.model_listing, "list_models", lambda *_a, **_k: calls.append(True) or {
+        "status": "available", "models": [{"id": "gpt-6.1-luna"}]
+    })
+    first = context_io_hook._model_version_context(tmp_path)
+    assert first and "> ⚓ **Yeni model sürümü çıktı: `gpt-6.1-luna`, şu an `gpt-6-luna` kullanılıyor.**" in first
+    assert context_io_hook._model_version_context(tmp_path) is None
+    assert len(calls) == 1
+
+    model_version_notice.decide("gpt-6.1-luna", decline=True)
+    state = model_version_notice.read_state()
+    state["checked_on"] = "2000-01-01"
+    model_version_notice.write_state(state)
+    assert context_io_hook._model_version_context(tmp_path) is None
+    assert len(calls) == 2
+
+
+def test_model_version_notice_stop_records_visible_line(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(compaction_advisor, "_state_directory", lambda _repo: tmp_path / "advisor")
+    model_version_notice.write_state({"checked_on": "2026-09-30", "asked": [], "declined": [],
+                                      "pending": {"current": "gpt-6-luna", "new": "gpt-6.1-luna"}})
+    visible = "> ⚓ **Yeni model sürümü çıktı: `gpt-6.1-luna`, şu an `gpt-6-luna` kullanılıyor.**"
+    assert compaction_advisor.stop({"session_id": "model-notice", "last_assistant_message": visible,
+                                    "stop_hook_active": True}, tmp_path) is None
+    state = model_version_notice.read_state()
+    assert state["asked"] == ["gpt-6.1-luna"]
+    assert state["pending"] is None
+
+
+def test_session_start_survives_model_listing_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(context_io_hook.project_root, "project_key", lambda _root: "project-key")
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_a, **_k: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_a: "restored context")
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "cleanup_jobs", lambda *_a: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint", lambda *_a, **_k: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "followup_hints", lambda *_a: None)
+    monkeypatch.setattr(context_io_hook.coder_config, "load", lambda *_: {
+        "coder_agent": "codex", "routes": {"normal": {"model": "gpt-6-luna"}}
+    })
+    monkeypatch.setattr(context_io_hook.model_catalog, "load_cached_catalog",
+                        lambda: (_ for _ in ()).throw(OSError("bad cache")))
+    incoming = io.BytesIO(json.dumps({"hook_event_name": "SessionStart", "source": "startup",
+                                      "cwd": str(tmp_path)}).encode())
+    outgoing = io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(incoming, encoding="utf-8"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(outgoing, encoding="utf-8"))
+    assert context_io_hook.main() == 0
+    assert json.loads(outgoing.getvalue())["hookSpecificOutput"]["additionalContext"] == "restored context"
 
 
 def test_mechanical_leader_context_is_cleared_and_recorded_by_stop(monkeypatch, tmp_path):

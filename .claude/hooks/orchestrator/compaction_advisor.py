@@ -982,6 +982,8 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         version_pending = state["version_pending"]
         leader_pending = state["leader_pending"]
         fallback_pending = state["fallback_pending"]
+        import model_version_notice
+        model_pending = model_version_notice.read_state().get("pending")
         records = _read_transcript(payload.get("transcript_path"))
         flow_message = next((text for record in reversed(records)
                              if _record_type(record) == "assistant"
@@ -1050,6 +1052,11 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             state["leader_pending"] = None
             changed = True
             record_announced_mechanical_leader(leader_pending["model"])
+        if (isinstance(model_pending, dict)
+                and any("⚓" in line and model_pending.get("new") in line
+                        and model_pending.get("current") in line for line in turn_message.splitlines())):
+            model_version_notice.mark_shown(model_pending["new"])
+            model_pending = None
         anchored_lines = re.findall(
             r"^(?:\*\*⚓ .+\*\*|> ⚓ \*\*.+\*\*|\*\*> ⚓ \*\*.+\*\*\*\*)$",
             turn_message, re.MULTILINE)
@@ -1101,6 +1108,17 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             leader_pending["blocked"] = True
             reasons.append(
                 f"Include one visible line containing both `⚓` and `{leader_pending['model']}` to announce the new free mechanical model leader."
+            )
+        if isinstance(model_pending, dict) and not model_pending.get("blocked"):
+            model_pending["blocked"] = True
+            model_version_notice.write_state({**model_version_notice.read_state(), "pending": model_pending})
+            reasons.append(
+                "Include this model-version notice in the user's language, translating from Turkish while keeping ⚓ "
+                "and both model names unchanged. Keep the three blockquote lines exactly formatted; do not change "
+                "routes until the user says yes.\n"
+                f"> ⚓ **Yeni model sürümü çıktı: `{model_pending['new']}`, şu an `{model_pending['current']}` kullanılıyor.**\n"
+                "> *Purser'ın bu sürüme geçmesini ister misin? (1-evet 2-hayır)*\n"
+                "> *Hayır dersen bu sürüm için bir daha sorulmaz. İstediğin zaman `/purser:init` ile geçebilirsin.*"
             )
         if (fallback_pending is not None
                 and (fallback_pending.get("notice") or not fallback_pending.get("blocked"))):

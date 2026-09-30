@@ -83,7 +83,7 @@ def parse_agy(output: str) -> list[dict]:
     return list(grouped.values())
 
 
-def list_models(agent: str, providers: dict) -> dict:
+def list_models(agent: str, providers: dict, *, timeout_seconds: float = 30) -> dict:
     """Return verified CLI choices; a failed listing never falls back to catalog IDs."""
     if agent == "codex":
         binary, args, parser = shutil.which("codex"), ("debug", "models"), parse_codex
@@ -98,7 +98,7 @@ def list_models(agent: str, providers: dict) -> dict:
         return {"status": "unavailable", "models": [], "source": source, "reason": "binary not found"}
     try:
         result = subprocess.run([binary, *args], capture_output=True, text=True, encoding="utf-8",
-                                errors="replace", timeout=30, check=False,
+                                errors="replace", timeout=timeout_seconds, check=False,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
                                 if os.name == "nt" else 0)
         if result.returncode:

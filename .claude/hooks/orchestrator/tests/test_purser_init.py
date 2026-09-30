@@ -15,6 +15,7 @@ import codex
 import codex_exec_mcp
 import project_profile
 import mechanical_learning
+import model_version_notice
 
 
 @pytest.fixture
@@ -60,6 +61,32 @@ def test_apply_preserves_unrelated_bytes_and_backs_up(site):
     assert str(project) in tomllib.loads(changed.decode())["trust"]["paths"]
     backups = list(config.parent.glob("config.toml.bak-*"))
     assert len(backups) == 1 and backups[0].read_bytes() == original
+
+
+def test_adopt_model_version_rewrites_only_matching_family_routes(site, monkeypatch):
+    home, project = site
+    monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda *_a, **_k: {
+        "status": "available", "models": [{"id": "gpt-6.1-luna"}]
+    })
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: home / "state")
+    routes = {
+        name: {"model": "gpt-6-luna" if name in ("mechanical", "subtle") else "gpt-6-sol",
+               "effort": "medium"}
+        for name in json.loads((Path(purser_init.__file__).with_name("config.json")).read_text())[
+            "required_routes"]
+    }
+    config = home / ".orchestrator" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_bytes(purser_init._candidate(None, "codex", "none", False, project, routes=routes))
+
+    assert run("--adopt-model-version", "gpt-6.1-luna") == 0
+    updated = tomllib.loads(config.read_text(encoding="utf-8"))["coding"]["routes"]
+    assert updated["mechanical"]["model"] == "gpt-6.1-luna"
+    assert updated["subtle"]["model"] == "gpt-6.1-luna"
+    assert updated["normal"]["model"] == "gpt-6-sol"
+    assert updated["mechanical"]["effort"] == "medium"
+    assert json.loads(model_version_notice.state_path().read_text(encoding="utf-8"))["asked"] == ["gpt-6.1-luna"]
 
 
 def test_second_apply_noop(site):
