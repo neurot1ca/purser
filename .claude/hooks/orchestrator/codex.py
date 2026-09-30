@@ -2479,21 +2479,30 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                     review = "failed"
                 elif raw_state in {"FAILED", "TIMED_OUT"}:
                     review = "failed"
+            changed_paths = job.get("changed_paths")
+            if not isinstance(changed_paths, list) and isinstance(bundle, dict):
+                changed_paths = bundle.get("changed_paths")
             apply = "—"
-            if job.get("applyState") in {"applied", "conflict"}:
-                apply = job["applyState"]
-            elif (isinstance(job.get("threadId"), str)
-                  and any(other.get("threadId") == job["threadId"] and other.get("applyState") == "applied"
-                          for other, _other_index in all_jobs)):
+            thread_apply_covers_delta = (
+                isinstance(job.get("threadId"), str) and isinstance(changed_paths, list)
+                and changed_paths and all(isinstance(path, str) for path in changed_paths)
+                and any(
+                      other.get("threadId") == job["threadId"] and other.get("applyState") == "applied"
+                      and isinstance(other.get("applyResult"), dict)
+                      and other["applyResult"].get("applied") is True
+                      and isinstance(other["applyResult"].get("paths"), list)
+                      and all(isinstance(path, str) for path in other["applyResult"]["paths"])
+                      and all(path in other["applyResult"]["paths"] for path in changed_paths)
+                      for other, _other_index in all_jobs))
+            if job.get("applyState") == "applied" or thread_apply_covers_delta:
                 apply = "applied"
+            elif job.get("applyState") == "conflict":
+                apply = "conflict"
             elif isinstance(bundle, dict) and bundle:
                 if job.get("phase", bundle.get("phase")) in {"operation", "plan"} or bundle.get("apply") != "codex_apply":
                     apply = "n/a"
             elif job.get("phase") in {"operation", "plan"}:
                 apply = "n/a"
-            changed_paths = job.get("changed_paths")
-            if not isinstance(changed_paths, list) and isinstance(bundle, dict):
-                changed_paths = bundle.get("changed_paths")
             if (apply == "—" and raw_state not in {"QUEUED", "RUNNING", "UNKNOWN_OR_IN_PROGRESS"}
                     and changed_paths == []):
                 apply = "no change"

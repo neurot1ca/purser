@@ -1405,12 +1405,15 @@ def test_operation_without_reviewer_result_shows_skipped_review(workspace):
     assert "| operation-review | gpt-6-sol (medium) | done | — | skipped | n/a |" in message
 
 
-def test_reply_job_shows_applied_status_from_earlier_thread_job(workspace):
+def test_reply_job_shows_applied_when_thread_apply_covers_reply_delta(workspace):
     _, state = workspace
     _board_job(state, "continued-applied", "SUCCEEDED", label="continued",
-               threadId="thread-board", applyState="applied", appliedAt=time.time())
+               threadId="thread-board", applyState="applied",
+               applyResult={"applied": True, "paths": ["file.py"]},
+               changed_paths=["file.py"], appliedAt=time.time())
     _board_job(state, "continued-reply", "SUCCEEDED", label="continued",
-               threadId="thread-board", acceptedAt=time.time() + 1)
+               threadId="thread-board", acceptedAt=time.time() + 1,
+               applyState="conflict", changed_paths=["file.py"])
     _board_job(state, "independent", "RUNNING")
 
     message = codex._project_job_board(state, "project")
