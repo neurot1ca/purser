@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import json
 import os
 import shutil
@@ -25,6 +26,57 @@ def test_expired_queued_job_releases_scope_before_new_acquire(tmp_path, monkeypa
     assert store.acquire("new", "new-task", ["src"])["status"] == ledger.OK
 
 
+def test_orphaned_lease_releases_and_promotes_queued_job(tmp_path, monkeypatch):
+    store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
+    now = [1_000.0]
+    monkeypatch.setattr(ledger.time, "time", lambda: now[0])
+    waiter_call = "queued job"
+    waiter_job_id = hashlib.sha256(waiter_call.encode()).hexdigest()
+    store.jobs_root.mkdir(parents=True)
+    (store.jobs_root / f"{waiter_job_id}.json").write_text(
+        json.dumps({"jobId": waiter_job_id, "call": waiter_call, "state": "RUNNING"}),
+        encoding="utf-8",
+    )
+
+    assert store.acquire("orphan", "orphan-task", ["src"], job_id="a" * 64)["status"] == ledger.OK
+    assert store.acquire("waiter", "waiter-task", ["src"], job_id=waiter_job_id,
+                         queue_conflict=True)["code"] == "LEASE_QUEUED"
+    now[0] += 10 * 60 + 1
+
+    assert store.owner_state("orphan") == "RELEASED"
+    assert store.owner_state("waiter") == "ACTIVE"
+    orphan = store._read()["owners"]["orphan"]
+    assert orphan["released_at"] == now[0]
+
+
+def test_recent_orphaned_lease_is_kept(tmp_path, monkeypatch):
+    store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
+    now = [1_000.0]
+    monkeypatch.setattr(ledger.time, "time", lambda: now[0])
+    assert store.acquire("orphan", "orphan-task", ["src"], job_id="a" * 64)["status"] == ledger.OK
+
+    now[0] += 10 * 60 - 1
+
+    assert store.owner_state("orphan") == "ACTIVE"
+
+
+def test_old_lease_with_existing_job_file_is_kept(tmp_path, monkeypatch):
+    store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
+    now = [1_000.0]
+    monkeypatch.setattr(ledger.time, "time", lambda: now[0])
+    call = "existing job"
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    store.jobs_root.mkdir(parents=True)
+    (store.jobs_root / f"{job_id}.json").write_text(
+        json.dumps({"jobId": job_id, "call": call, "state": "RUNNING"}), encoding="utf-8"
+    )
+    assert store.acquire("owner", "owner-task", ["src"], job_id=job_id)["status"] == ledger.OK
+
+    now[0] += 10 * 60 + 1
+
+    assert store.owner_state("owner") == "ACTIVE"
+
+
 def test_protective_job_lease_expires_at_bounded_retention(tmp_path, monkeypatch):
     store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
     now = [1_000.0]
@@ -41,6 +93,7 @@ def test_finished_worktree_lease_expires_two_hours_after_finish(tmp_path, monkey
     store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
     now = [1_000.0]
     monkeypatch.setattr(ledger.time, "time", lambda: now[0])
+    monkeypatch.setattr(store, "_job_state", lambda _job_id: "SUCCEEDED")
     store.acquire("finished", "task", ["src"], job_id="a" * 64,
                   timeout_seconds=1)
 

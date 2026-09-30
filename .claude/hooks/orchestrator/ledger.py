@@ -213,7 +213,12 @@ class ScopeLeases:
             elif isinstance(job_id, str):
                 state = self._job_state(job_id)
                 cutoff = owner.get("retention_after")
-                expired = (state == "JOB_EXPIRED" or
+                started = owner.get("acquired_at")
+                if not isinstance(started, (int, float)):
+                    started = owner.get("queued_at")
+                orphaned = (state == "MISSING" and isinstance(started, (int, float))
+                            and now >= started + 10 * 60)
+                expired = (orphaned or state == "JOB_EXPIRED" or
                            (state not in {"UNREADABLE", "QUEUED", "RUNNING"}
                             and isinstance(cutoff, (int, float)) and now >= cutoff))
             else:
