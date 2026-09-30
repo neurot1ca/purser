@@ -581,9 +581,9 @@ def _replace_state_block(path: Path, body: str, recent: str | None = "") -> None
 
 def _mechanical_state(repository: Path, context: int, triggers: list[str], calls: list[dict[str, Any]]) -> str:
     lines = [
-        f"Generated UTC: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
-        f"Context tokens: {context}",
-        f"Triggers: {', '.join(triggers)}",
+        f"as of {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}",
+        f"Context tokens: {context} [transcript]",
+        f"Triggers: {', '.join(triggers)} [transcript]",
         "Last Codex calls:",
     ]
     for call in calls[-5:]:
@@ -603,7 +603,7 @@ def _mechanical_state(repository: Path, context: int, triggers: list[str], calls
         status = subprocess.run(["git", "status", "--porcelain"], cwd=repository, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3, check=False,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0)
         if status.returncode == 0:
-            lines.append(f"Uncommitted changed paths: {sum(bool(line.strip()) for line in status.stdout.splitlines())}")
+            lines.append(f"Uncommitted changed paths: {sum(bool(line.strip()) for line in status.stdout.splitlines())} [git status]")
     except (OSError, subprocess.SubprocessError):
         pass
     full = "\n".join(lines)
@@ -652,7 +652,7 @@ def _notice_advice(notice: Mapping[str, Any], triggers: list[str]) -> str:
     handoff = notice["handoff"]
     return (
         f"Purser: {context:,} context tokens; trigger(s): {', '.join(triggers)}. Handoff: {handoff}. "
-        "After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total). Keep the first Goal line `User language: <language>` set to the language the user writes in. Link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction. End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n"
+        "After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total). End each State and Decisions line with its source (commit or job). Keep the first Goal line `User language: <language>` set to the language the user writes in. Link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction. End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n"
         + _blockquote(notice)
         + "\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself."
     )

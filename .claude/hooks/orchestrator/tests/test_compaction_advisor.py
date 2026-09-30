@@ -926,6 +926,44 @@ def test_replaces_state_block_preserving_user_sections_and_caps_it(scratch):
     assert len(body) <= 1500 and body.endswith("... truncated")
 
 
+def test_mechanical_state_as_of_and_fact_sources_stay_compact(monkeypatch, tmp_path):
+    commits = "\n".join(f"{index:07x} commit message {index}" for index in range(1, 6))
+
+    def git_run(args, **_kwargs):
+        output = commits if args[1:2] == ["log"] else " M file.py\n"
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    monkeypatch.setattr(advisor.subprocess, "run", git_run)
+    calls = [
+        {"task_id": f"job-{index}", "tool": "codex", "threadId": f"thread-{index}",
+         "claude_review_mode": "FULL"}
+        for index in range(1, 6)
+    ]
+
+    state = advisor._mechanical_state(tmp_path, 260_000, ["threshold", "idle"], calls)
+    lines = state.splitlines()
+    header = lines[0]
+    job_lines = [line for line in lines if line.startswith("- task=")]
+    commit_lines = [line for line in lines if line.startswith("- ") and "commit message" in line]
+
+    assert header.startswith("as of ")
+    assert __import__("re").fullmatch(r"as of \d{4}-\d\d-\d\dT\d\d:\d\dZ", header)
+    assert len(job_lines) == len(calls)
+    assert all(f"task=job-{index}" in line for index, line in enumerate(job_lines, 1))
+    assert all(f"{index:07x} commit message {index}" in line for index, line in enumerate(commit_lines, 1))
+    assert "[transcript]" in lines[1] and "[transcript]" in lines[2]
+    assert "[git status]" in lines[-1]
+    before = [
+        f"Generated UTC: {datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc).isoformat(timespec='seconds')}",
+        "Context tokens: 260000", "Triggers: threshold, idle", "Last Codex calls:",
+        *(f"- task=job-{index} tool=codex threadId=thread-{index} claude_review_mode=FULL"
+          for index in range(1, 6)),
+        "Last commits:", *(f"- {index:07x} commit message {index}" for index in range(1, 6)),
+        "Uncommitted changed paths: 1",
+    ]
+    assert len(state) <= len("\n".join(before)) * 1.15
+
+
 def test_handoff_quotes_recent_turns_without_transcript_noise(setup):
     repo, local, scratch = setup
     records = _records("commit")[:-1]
