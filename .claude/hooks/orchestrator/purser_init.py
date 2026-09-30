@@ -186,11 +186,11 @@ def detect(config_path: Path, project: Path, coder: str | None = None, model: st
 
 
 def _refresh_opencode_candidates(models: list[str], providers: dict) -> None:
-    if model_listing.refresh_candidates(providers, model_ids=models):
-        try:
-            mechanical_learning.start_benchmark()
-        except Exception:
-            pass
+    model_listing.refresh_candidates(providers, model_ids=models)
+    try:
+        mechanical_learning.start_benchmark()
+    except Exception:
+        pass
 
 
 def _opencode_models(binary: str) -> list[str]:

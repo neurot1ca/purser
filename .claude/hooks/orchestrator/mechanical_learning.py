@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,8 @@ BENCHMARK_MIN_PASSED = 5
 MAX_BENCHMARK_CANDIDATES = 2
 RECENT_SAMPLES = 20
 SHADOW_TIMEOUT_SECONDS = 45
+BENCHMARK_LOCK_GRACE_SECONDS = 30
+BENCHMARK_LOGS_TO_KEEP = 5
 MECHANICAL_SUITE_VERSION = "1"
 MECHANICAL_CHORES = (
     {"id": "rename_symbol", "prompt": "Rename old_total to new_total in both files.",
@@ -73,6 +76,63 @@ def _shadow_lock_is_stale(lock: Path) -> bool:
     except OSError:
         return too_old
     return too_old
+
+
+def _benchmark_lock_is_stale(lock: Path) -> bool:
+    try:
+        value = json.loads(lock.read_text(encoding="utf-8"))
+        pid, heartbeat = value["pid"], value["heartbeat"]
+        stale = time.time() - float(heartbeat) > SHADOW_TIMEOUT_SECONDS + BENCHMARK_LOCK_GRACE_SECONDS
+    except (OSError, ValueError, TypeError, KeyError):
+        try:
+            pid = int(lock.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            pid = 0
+        try:
+            stale = time.time() - lock.stat().st_mtime > SHADOW_TIMEOUT_SECONDS + BENCHMARK_LOCK_GRACE_SECONDS
+        except OSError:
+            return False
+    if not stale:
+        return False
+    if os.name == "nt":
+        return True
+    if type(pid) is not int or pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    except OSError as exc:
+        return exc.errno == errno.ESRCH or getattr(exc, "winerror", None) == 87
+    return False
+
+
+def _write_benchmark_lock(lock: Path, pid: int, run_id: str | None = None) -> None:
+    value = {"pid": pid, "heartbeat": time.time()}
+    if run_id is not None:
+        value["run_id"] = run_id
+    model_listing._atomic_write(lock, value)
+
+
+def _record_interrupted_run(lock: Path) -> None:
+    try:
+        value = json.loads(lock.read_text(encoding="utf-8"))
+        run_id = value.get("run_id")
+        if isinstance(run_id, str):
+            events = lock.parent / f"benchmark-{run_id}.jsonl"
+            rows = events.read_text(encoding="utf-8").splitlines() if events.exists() else []
+            if rows and json.loads(rows[-1]).get("event") not in {"completed", "failed", "interrupted"}:
+                _append_benchmark_event(events, "interrupted", run_id=run_id,
+                                        reason="worker heartbeat expired and process exited")
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _append_benchmark_event(path: Path, event: str, **fields: Any) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"event": event, **fields}, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def _inventory(root: Path) -> tuple[Path, dict[str, Any]]:
@@ -144,7 +204,8 @@ def record_benchmark(result: dict[str, Any], *, root: Path | None = None) -> boo
         return True
 
 
-def benchmark_unscored_candidates(*, root: Path | None = None, runner: Any = None) -> list[dict[str, Any]]:
+def benchmark_unscored_candidates(*, root: Path | None = None, runner: Any = None,
+                                  event_log: Path | None = None) -> list[dict[str, Any]]:
     """Benchmark candidates missing this suite's result; completed results are never repeated."""
     state = root or state_root.default_state_root()
     path = state / "opencode" / "candidates.json"
@@ -157,8 +218,16 @@ def benchmark_unscored_candidates(*, root: Path | None = None, runner: Any = Non
                   and not _has_current_benchmark(item)][:MAX_BENCHMARK_CANDIDATES]
     results = []
     for model in models:
-        result = run_mechanical_benchmark(model, runner=runner)
-        if record_benchmark(result, root=state):
+        result = run_mechanical_benchmark(model, runner=runner,
+                                          heartbeat=lambda: _write_benchmark_lock(
+                                              state / "opencode" / "benchmark.running.lock", os.getpid(),
+                                              event_log.stem.removeprefix("benchmark-") if event_log else None))
+        recorded = record_benchmark(result, root=state)
+        if event_log is not None:
+            _append_benchmark_event(event_log, "candidate", model=model, recorded=recorded,
+                                    passed_count=result.get("passed_count"), total=result.get("total"),
+                                    chores=result.get("chores", []))
+        if recorded:
             results.append(result)
     return results
 
@@ -291,6 +360,10 @@ def start_benchmark(*, root: Path | None = None) -> bool:
         _, value = _inventory(state)
         if not any(isinstance(item, dict) and isinstance(item.get("id"), str)
                    and not _has_current_benchmark(item) for item in value["candidates"]):
+            lock = state / "opencode" / "benchmark.running.lock"
+            if lock.exists() and _benchmark_lock_is_stale(lock):
+                _record_interrupted_run(lock)
+                lock.unlink(missing_ok=True)
             return False
     except (OSError, ValueError, TypeError):
         return False
@@ -298,31 +371,67 @@ def start_benchmark(*, root: Path | None = None) -> bool:
     try:
         descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
-        if not _shadow_lock_is_stale(lock):
+        if not _benchmark_lock_is_stale(lock):
             return False
+        _record_interrupted_run(lock)
         lock.unlink(missing_ok=True)
         try:
             descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             return False
     try:
+        run_id = uuid.uuid4().hex
+        events = state / "opencode" / f"benchmark-{run_id}.jsonl"
+        output = state / "opencode" / f"benchmark-{run_id}.log"
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(str(os.getpid()))
+            json.dump({"pid": os.getpid(), "heartbeat": time.time(), "run_id": run_id}, handle)
+        events.touch()
+        _append_benchmark_event(events, "start", run_id=run_id, pid=os.getpid())
         flags = 0x08000000 | 0x00000200 if os.name == "nt" else 0
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--benchmark", str(state)],
-                         cwd=str(Path(__file__).resolve().parent), stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         creationflags=flags, start_new_session=os.name != "nt")
+        with output.open("ab") as log:
+            launched = subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
+                                         "--benchmark", str(state), run_id],
+                                        cwd=str(Path(__file__).resolve().parent), stdin=subprocess.DEVNULL,
+                                        stdout=log, stderr=subprocess.STDOUT,
+                                        creationflags=flags, start_new_session=os.name != "nt")
+        _write_benchmark_lock(lock, launched.pid, run_id)
+        logs = sorted((state / "opencode").glob("benchmark-*.jsonl"),
+                      key=lambda path: path.stat().st_mtime, reverse=True)
+        for old in logs[BENCHMARK_LOGS_TO_KEEP:]:
+            old.unlink(missing_ok=True)
+            old.with_suffix(".log").unlink(missing_ok=True)
         return True
     except Exception:
+        if "events" in locals():
+            _append_benchmark_event(events, "failed", run_id=run_id, reason="worker launch failed")
         lock.unlink(missing_ok=True)
         return False
 
 
-def run_benchmarks(state: Path) -> None:
+def run_benchmarks(state: Path, run_id: str | None = None, *, runner: Any = None) -> None:
     lock = state / "opencode" / "benchmark.running.lock"
+    run_id = run_id or uuid.uuid4().hex
+    events = state / "opencode" / f"benchmark-{run_id}.jsonl"
     try:
-        benchmark_unscored_candidates(root=state)
+        _write_benchmark_lock(lock, os.getpid(), run_id)
+        if not events.exists() or events.stat().st_size == 0:
+            _append_benchmark_event(events, "start", run_id=run_id, pid=os.getpid())
+        while True:
+            results = benchmark_unscored_candidates(root=state, runner=runner, event_log=events)
+            try:
+                _, inventory = _inventory(state)
+                remaining = any(isinstance(item, dict) and isinstance(item.get("id"), str)
+                                and not _has_current_benchmark(item) for item in inventory["candidates"])
+            except (OSError, ValueError, TypeError):
+                remaining = False
+            if not remaining:
+                break
+            if not results:
+                raise RuntimeError("benchmark batch made no scoring progress")
+        _append_benchmark_event(events, "completed", run_id=run_id, reason="no_unscored_candidates")
+    except BaseException as exc:
+        _append_benchmark_event(events, "failed", run_id=run_id,
+                                reason=f"{type(exc).__name__}: {exc}")
     finally:
         lock.unlink(missing_ok=True)
 
@@ -393,7 +502,7 @@ def _normalize_chore_text(value: str) -> str:
 
 
 def run_mechanical_benchmark(model: str, *, timeout_seconds: int = SHADOW_TIMEOUT_SECONDS,
-                             runner: Any = None) -> dict[str, Any]:
+                             runner: Any = None, heartbeat: Any = None) -> dict[str, Any]:
     results = []
     for chore in MECHANICAL_CHORES:
         reason = "matched"
@@ -405,6 +514,8 @@ def run_mechanical_benchmark(model: str, *, timeout_seconds: int = SHADOW_TIMEOU
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text(content, encoding="utf-8")
                 try:
+                    if heartbeat is not None:
+                        heartbeat()
                     result = _run_opencode(model, chore["prompt"], scratch, timeout_seconds, runner,
                                            benchmark=True)
                 except subprocess.TimeoutExpired:
@@ -445,6 +556,9 @@ def run_mechanical_benchmark(model: str, *, timeout_seconds: int = SHADOW_TIMEOU
                                 _normalize_chore_text(actual[name]) != _normalize_chore_text(expected)
                                 for name, expected in chore["expected_files"].items()):
                             reason = "mismatch"
+                finally:
+                    if heartbeat is not None:
+                        heartbeat()
         except Exception:
             reason = "runner_error"
         results.append({"id": chore["id"], "passed": reason == "matched", "reason": reason})
@@ -486,5 +600,5 @@ def run_shadow(job_path: Path) -> bool:
 
 if __name__ == "__main__" and len(sys.argv) == 3 and sys.argv[1] == "--shadow":
     run_shadow(Path(sys.argv[2]))
-elif __name__ == "__main__" and len(sys.argv) == 3 and sys.argv[1] == "--benchmark":
-    run_benchmarks(Path(sys.argv[2]))
+elif __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--benchmark":
+    run_benchmarks(Path(sys.argv[2]), sys.argv[3])

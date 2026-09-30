@@ -455,6 +455,76 @@ def test_benchmark_normal_model_failure_is_recorded(tmp_path, monkeypatch):
     assert candidate["benchmarks"][mechanical_learning.MECHANICAL_SUITE_VERSION]["passed_count"] == 5
 
 
+def test_benchmark_worker_drains_batches_and_records_run(tmp_path, monkeypatch):
+    path = _inventory(tmp_path, *(f"vendor/model-{index}-free" for index in range(5)))
+    calls = []
+
+    def benchmark(model, **_kwargs):
+        calls.append(model)
+        result = {"suite_version": mechanical_learning.MECHANICAL_SUITE_VERSION,
+                  "model": model, "passed_count": 5, "total": 6, "chores": []}
+        mechanical_learning.record_benchmark(result, root=tmp_path)
+        return result
+
+    monkeypatch.setattr(mechanical_learning, "run_mechanical_benchmark", benchmark)
+    mechanical_learning.run_benchmarks(tmp_path)
+    saved = json.loads(path.read_text(encoding="utf-8"))["candidates"]
+    assert len(calls) == 5
+    assert all(mechanical_learning._has_current_benchmark(item) for item in saved)
+    run_files = list((tmp_path / "opencode").glob("benchmark-*.jsonl"))
+    events = [json.loads(line) for line in run_files[0].read_text(encoding="utf-8").splitlines()]
+    assert events[0]["event"] == "start"
+    assert sum(event["event"] == "candidate" for event in events) == 5
+    assert events[-1]["event"] == "completed"
+
+
+def test_benchmark_lock_uses_heartbeat_and_live_worker_blocks_start(tmp_path, monkeypatch):
+    path = _inventory(tmp_path, "vendor/model-free")
+    lock = tmp_path / "opencode" / "benchmark.running.lock"
+    lock.write_text(json.dumps({"pid": os.getpid(), "heartbeat": time.time()}), encoding="utf-8")
+    assert not mechanical_learning._benchmark_lock_is_stale(lock)
+    monkeypatch.setattr(mechanical_learning.subprocess, "Popen", lambda *args, **kwargs:
+                       pytest.fail("live worker must block second start"))
+    assert not mechanical_learning.start_benchmark(root=tmp_path)
+    old_run = tmp_path / "opencode" / "benchmark-old-run.jsonl"
+    old_run.write_text('{"event":"start","run_id":"old-run"}\n', encoding="utf-8")
+    lock.write_text(json.dumps({"pid": 999999999, "run_id": "old-run", "heartbeat": time.time() -
+                                mechanical_learning.SHADOW_TIMEOUT_SECONDS - 31}), encoding="utf-8")
+    monkeypatch.setattr(mechanical_learning.subprocess, "Popen", lambda *args, **kwargs:
+                       type("Launched", (), {"pid": os.getpid()})())
+    assert mechanical_learning.start_benchmark(root=tmp_path)
+    assert json.loads(old_run.read_text(encoding="utf-8").splitlines()[-1])["event"] == "interrupted"
+
+
+def test_windows_benchmark_staleness_uses_heartbeat_without_pid_probe(tmp_path, monkeypatch):
+    lock = tmp_path / "benchmark.running.lock"
+
+    def unexpected_kill(*_args):
+        raise AssertionError("Windows benchmark staleness must not probe PIDs")
+
+    monkeypatch.setattr(mechanical_learning.os, "name", "nt")
+    monkeypatch.setattr(mechanical_learning.os, "kill", unexpected_kill)
+    lock.write_text(json.dumps({"pid": 999999999, "heartbeat": time.time() -
+                                mechanical_learning.SHADOW_TIMEOUT_SECONDS -
+                                mechanical_learning.BENCHMARK_LOCK_GRACE_SECONDS - 1}), encoding="utf-8")
+    assert mechanical_learning._benchmark_lock_is_stale(lock)
+    lock.write_text(json.dumps({"pid": 999999999, "heartbeat": time.time()}), encoding="utf-8")
+    assert not mechanical_learning._benchmark_lock_is_stale(lock)
+
+
+def test_benchmark_worker_exception_logs_failed_without_scoring(tmp_path, monkeypatch):
+    path = _inventory(tmp_path, "vendor/model-free")
+    monkeypatch.setattr(mechanical_learning, "benchmark_unscored_candidates",
+                        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("worker exploded")))
+    mechanical_learning.run_benchmarks(tmp_path)
+    saved = json.loads(path.read_text(encoding="utf-8"))["candidates"][0]
+    assert not mechanical_learning._has_current_benchmark(saved)
+    run_file = next((tmp_path / "opencode").glob("benchmark-*.jsonl"))
+    events = [json.loads(line) for line in run_file.read_text(encoding="utf-8").splitlines()]
+    assert events[-1]["event"] == "failed"
+    assert "worker exploded" in events[-1]["reason"]
+
+
 def test_first_qualifying_benchmark_writes_mechanical_leader(tmp_path):
     path = _inventory(tmp_path, "vendor/benchmark-free")
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -547,8 +617,8 @@ def test_start_benchmark_launch_is_single_flight(tmp_path, monkeypatch):
     assert args[1:3] == [str(Path(mechanical_learning.__file__).resolve()), "--benchmark"]
     assert args[3] == str(tmp_path)
     assert kwargs["stdin"] == mechanical_learning.subprocess.DEVNULL
-    assert kwargs["stdout"] == mechanical_learning.subprocess.DEVNULL
-    assert kwargs["stderr"] == mechanical_learning.subprocess.DEVNULL
+    assert kwargs["stdout"].name.endswith(".log")
+    assert kwargs["stderr"] == mechanical_learning.subprocess.STDOUT
     assert kwargs["creationflags"] == (0x08000000 | 0x00000200 if os.name == "nt" else 0)
 
 

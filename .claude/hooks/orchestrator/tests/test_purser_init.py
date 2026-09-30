@@ -338,6 +338,49 @@ def test_opencode_list_models_refreshes_and_starts_benchmark(site, monkeypatch, 
     assert calls == [({"opencode": {}}, {"model_ids": ["vendor/new-free"]}), "benchmark"]
 
 
+def test_opencode_refresh_attempts_resume_when_inventory_is_unchanged(monkeypatch):
+    calls = []
+    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda *_a, **_k: False)
+    monkeypatch.setattr(mechanical_learning, "start_benchmark", lambda **_kwargs: calls.append("benchmark"))
+    purser_init._refresh_opencode_candidates(["vendor/existing-free"], {"opencode": {}})
+    assert calls == ["benchmark"]
+
+
+def test_unchanged_init_resumes_candidates_after_interrupted_worker(site, monkeypatch):
+    home, _ = site
+    state = home / "state"
+    opencode = state / "opencode"
+    opencode.mkdir(parents=True)
+    path = opencode / "candidates.json"
+    path.write_text(json.dumps({"candidates": [{"id": f"vendor/model-{index}-free",
+                                                "status": "unmeasured"} for index in range(3)]}),
+                    encoding="utf-8")
+    calls = []
+    fail_once = {"value": True}
+
+    def benchmark(model, **_kwargs):
+        calls.append(model)
+        if len(calls) == 3 and fail_once["value"]:
+            fail_once["value"] = False
+            raise RuntimeError("simulated interruption")
+        return {"suite_version": mechanical_learning.MECHANICAL_SUITE_VERSION,
+                "model": model, "passed_count": 5, "total": 6, "chores": []}
+
+    monkeypatch.setattr(mechanical_learning, "run_mechanical_benchmark", benchmark)
+    mechanical_learning.run_benchmarks(state, "first-run")
+    saved = json.loads(path.read_text(encoding="utf-8"))["candidates"]
+    assert sum(mechanical_learning._has_current_benchmark(item) for item in saved) == 2
+
+    monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda *_a, **_k: False)
+    monkeypatch.setattr(mechanical_learning, "start_benchmark",
+                        lambda **_kwargs: mechanical_learning.run_benchmarks(state, "resumed-run") or True)
+    purser_init._refresh_opencode_candidates([item["id"] for item in saved], {"opencode": {}})
+    saved = json.loads(path.read_text(encoding="utf-8"))["candidates"]
+    assert all(mechanical_learning._has_current_benchmark(item) for item in saved)
+    assert calls == ["vendor/model-0-free", "vendor/model-1-free", "vendor/model-2-free",
+                     "vendor/model-2-free"]
+
+
 def test_detect_lists_opencode_models_once(site, monkeypatch):
     import subprocess
 
