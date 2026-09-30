@@ -244,6 +244,31 @@ def test_seeded_benchmark_score_controls_next_mechanical_job(workspace, config, 
     assert (updated.get("agent") == "opencode" and updated["model"] == candidate) is selected
 
 
+def test_current_qualified_nemotron_candidate_binds_fresh_mechanical_job(workspace, config, monkeypatch):
+    repo, state = workspace
+    candidate = "opencode/nemotron-3-ultra-free"
+    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
+    inventory = state / "opencode"
+    inventory.mkdir(parents=True, exist_ok=True)
+    (inventory / "candidates.json").write_text(json.dumps({"candidates": [{
+        "id": candidate, "status": "unmeasured", "added_at": "2026-09-28T09:22:51.190774Z",
+        "benchmarks": {"1": {"passed_count": 5, "total": 6}},
+    }]}), encoding="utf-8")
+    (inventory / "leader.json").write_text(json.dumps({
+        "announced": True, "model": candidate, "sample_count": 6, "successes": 5,
+    }), encoding="utf-8")
+
+    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the small change.")
+    updated = codex.pre_tool_use(call, config=config, state_root=state,
+                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+
+    assert "mechanical_opencode_enabled" not in config
+    assert updated["agent"] == "opencode"
+    assert updated["model"] == candidate
+    assert updated["mechanicalFallback"] is True
+    assert updated["fallbackAgent"] == "codex"
+
+
 def test_mechanical_opencode_opt_out_keeps_configured_coder(workspace, config, monkeypatch):
     repo, state = workspace
     config["mechanical_opencode_enabled"] = False

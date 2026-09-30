@@ -1926,6 +1926,29 @@ def test_mechanical_missing_model_with_codex_fallback_tries_next_candidate_first
         client.close()
 
 
+def test_mechanical_missing_candidates_fall_back_to_luna_with_served_identity(area, monkeypatch):
+    first, second = "vendor/missing-free", "vendor/second-missing-free"
+    server, job_id, calls = _mechanical_bridge(area, monkeypatch)
+    _candidate_inventory(area, first, second)
+
+    def run_once(_name, arguments, _request_id, _async_job):
+        calls.append(dict(arguments))
+        if arguments.get("agent") == "opencode":
+            return {"isError": True, "errorCode": "CODEX_FAILED", "retryableModelMissing": True,
+                    "typedEvidence": {"type": "MODEL_MISSING", "noWorkProof": True}}
+        return codex_exec_mcp._tool_result("luna-thread", content="DONE")
+
+    monkeypatch.setattr(server, "_run_tool_once", run_once)
+    arguments = {"prompt": "same prompt", "cwd": str(area), "worktree": True,
+                 "agent": "opencode", "model": first, "mechanicalFallback": True,
+                 "fallbackAgent": "codex", "fallbackModel": "gpt-6-luna", "fallbackEffort": "high"}
+    result = server._run_tool("codex", arguments, job_id, async_job=True)
+
+    assert [call["model"] for call in calls] == [first, second, "gpt-6-luna"]
+    assert (result["structuredContent"]["servedAgent"],
+            result["structuredContent"]["servedModel"]) == ("codex", "gpt-6-luna")
+
+
 def test_mechanical_timeout_finishes_timed_out_without_takeover(area):
     client = _opencode_client(area, FAKE_OC_HANG_BEFORE_EVENTS="1")
     try:
