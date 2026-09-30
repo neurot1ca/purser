@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.55 — 2026-09-30
+
+- **Changed:** Purser messages, dispatch and done receipts and the jobs board render as a grey quote with an anchored bold first line; the stop hook accepts both the quoted and the legacy form.
+- **New:** running Codex jobs record the active agent, last activity, a process-alive checkpoint at most once a minute and the longest silent gap, and a stale generation cannot overwrite a newer record.
+
 ## 0.1.54 — 2026-09-30
 
 - Operation and plan jobs record Claude's acceptance when their result is read, and redispatching a task records the earlier unapplied job as rejected.
