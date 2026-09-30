@@ -74,3 +74,71 @@ def test_small_groups_suppress_rates(tmp_path):
     assert group["insufficient_evidence"] is True
     assert group["outcome_coverage"] is None
     assert group["applied_as_is_rate"] is None
+
+
+def test_task_evidence_distribution_and_historical_records(tmp_path):
+    state_root = tmp_path / "route-evidence-fixture"
+    task_dir = state_root / "projects" / "0123456789abcdef" / "telemetry" / "tasks"
+    task_dir.mkdir(parents=True)
+    tasks = [
+        {
+            "task_id": "fallback-mismatch", "project_key": "0123456789abcdef",
+            "started_at": "2026-09-01T00:00:00Z", "route": "normal", "model": "coder",
+            "task_type": "counting_status", "selected_agent": "opencode",
+            "selected_provider": "openai", "selected_model": "gpt-coder",
+            "served_agent": "claude", "served_provider": "anthropic", "served_model": "sonnet",
+            "suspected_route_mismatch": {"declared_route": "normal", "derived_type": "operation"},
+            "claude_decision": {"decision": "send_back"},
+            "reviewer1_result": "CHANGES_REQUIRED", "reviewer1_error_code": "TEMPORARY_ERROR",
+            "reviewer1_retry_count": 1, "reviewer1_retry_recovered": True,
+            "usage": {"codex_usage_known": True, "codex_total_tokens": 125},
+        },
+        {
+            "task_id": "new-accepted", "project_key": "0123456789abcdef",
+            "started_at": "2026-09-02T00:00:00Z", "route": "deep",
+            "task_type": "operation", "selected_agent": "codex", "selected_provider": "openai",
+            "selected_model": "gpt-coder", "served_agent": "codex", "served_provider": "openai",
+            "served_model": "gpt-coder", "suspected_route_mismatch": None,
+            "claude_decision": {"decision": "accepted"}, "reviewer1_result": "APPROVED",
+            "reviewer1_retry_count": 0, "reviewer1_retry_recovered": False,
+            "usage": {"codex_usage_known": False},
+        },
+    ]
+    for task in tasks:
+        (task_dir / f"{task['task_id']}.json").write_text(json.dumps(task), encoding="utf-8")
+
+    result = report(state_root, timestamp("2026-09-01T00:00:00Z"), project_key="0123456789abcdef")
+    rendered = markdown(result, state_root / "report.md", state_root)
+    assert result["distribution"]["historical_records"] == 0
+    assert result["distribution"]["codex_known_count"] == 1
+    assert result["distribution"]["codex_unknown_count"] == 1
+    assert result["distribution"]["codex_total_tokens"] == 125
+    assert result["distribution"]["route_mismatches"][0]["task_ids"] == ["fallback-mismatch"]
+    assert "Task evidence distribution" in rendered
+    assert "selected_agent" in rendered and "opencode" in rendered
+    assert "served_agent" in rendered and "claude" in rendered
+    assert "fallback" in rendered
+    assert "historical" in rendered
+    assert "Unknown / total" in rendered and "1 / 2" in rendered
+    assert "Suspected route mismatches" in rendered
+    assert "reviewer1_error_code" in rendered and "TEMPORARY_ERROR" in rendered
+    assert "reviewer1_retry_count" in rendered and "reviewer1_retry_recovered" in rendered
+
+
+def test_old_task_records_are_historical_and_unknown(tmp_path):
+    state_root = tmp_path / "route-old-records"
+    task_dir = state_root / "projects" / "old-project" / "telemetry" / "tasks"
+    task_dir.mkdir(parents=True)
+    task = {"task_id": "old-task", "project_key": "old-project", "started_at": "2026-09-01T00:00:00Z",
+            "route": "normal", "model": "coder", "effort": "medium",
+            "claude_acceptance": {"outcome": "accepted"}}
+    (task_dir / "old-task.json").write_text(json.dumps(task), encoding="utf-8")
+
+    result = report(state_root, timestamp("2026-09-01T00:00:00Z"), project_key="old-project")
+    rendered = markdown(result, state_root / "report.md", state_root)
+    assert result["distribution"]["historical_records"] == 1
+    assert result["distribution"]["dimensions"]["selected_agent"] == {
+        "counts": {"unknown": 1}, "unknown": 1, "total": 1,
+    }
+    assert "historical (no milestone 2–3 fields): 1" in rendered
+    assert "Unknown / total" in rendered
