@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.54 — 2026-09-30
+
+- Operation and plan jobs record Claude's acceptance when their result is read, and redispatching a task records the earlier unapplied job as rejected.
+- Setup offers once to turn on the Concise reply style, changes only `outputStyle` on yes, and points to `/output-style concise` when the write is not allowed.
+- Telemetry records a conservative derived task type and flags a suspected route mismatch without changing dispatch.
+- Task telemetry keeps selected and served agent, provider and model, Codex turn usage and the latest Claude decision; Reviewer-1 failures record an error code, elapsed time and retry outcome.
+- The route outcome report shows the distribution by task type, selected versus served agent, decisions, Reviewer-1 outcomes, Codex tokens and suspected mismatches.
+
 ## 0.1.53 — 2026-09-30
 
 - A replay whose paths are all new files is not a conflict, and a replay conflict keeps the job's thread replyable.
