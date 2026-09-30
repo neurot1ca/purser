@@ -67,6 +67,8 @@ if release:
     if not Path(release).exists():
         sys.exit(3)
 print(json.dumps({"type": "turn.started"}), flush=True)
+if os.environ.get("FAKE_EVENT_GAP_SECONDS"):
+    time.sleep(float(os.environ["FAKE_EVENT_GAP_SECONDS"]))
 if os.environ.get("FAKE_FAIL") == "1":
     print(json.dumps({"type": "turn.failed", "error": {"message": "Quota exceeded: try again tomorrow"}}), flush=True)
     if os.environ.get("FAKE_HANG_AFTER_TERMINAL") == "1":
@@ -639,6 +641,77 @@ def finish(client, job_id, wanted, *, timeout=30):
             return result
         time.sleep(0.02)
     pytest.fail(f"expected {wanted}, got {result}")
+
+
+def test_stream_activity_updates_and_checkpoints_are_throttled(tmp_path, monkeypatch):
+    job_id = "e" * 64
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 2,
+                       "ownershipToken": "current", "route": "implementation"})
+    activity = {"route": "implementation", "agent": "codex", "lastActivityAt": 100.0,
+                "processAlive": True, "processAliveAt": 100.0,
+                "longestSilentGapSeconds": 0.0, "checkpointAt": 100.0}
+    writes = []
+    original = server._write_job
+    monkeypatch.setattr(server, "_write_job", lambda job: (writes.append(job.copy()), original(job)))
+
+    for now in (103.0, 106.0):
+        codex_exec_mcp._record_activity(activity, now)
+        assert not server._checkpoint_liveness(job_id, 2, "current", activity,
+                                               now=now, process_alive=True)
+    assert activity["lastActivityAt"] == 106.0
+    assert activity["longestSilentGapSeconds"] == 3.0
+    assert writes == []
+
+    codex_exec_mcp._record_activity(activity, 161.0)
+    assert server._checkpoint_liveness(job_id, 2, "current", activity,
+                                        now=161.0, process_alive=True)
+    assert len(writes) == 1
+    saved = server._read_job(job_id)
+    assert saved["activeAgent"] == "codex"
+    assert saved["liveness"]["lastActivityAt"] == 161.0
+    assert saved["liveness"]["processAliveAt"] == 161.0
+    assert saved["liveness"]["route"] == "implementation"
+
+
+def test_async_silent_process_gap_is_recorded(area):
+    client = Client(area, extra_env={"FAKE_EVENT_GAP_SECONDS": "0.15"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "measure silence",
+                                                    "route": "implementation"})
+        assert finish(client, started["jobId"], "SUCCEEDED")["threadId"] == "thread-123"
+        record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                 (started["jobId"] + ".json"))
+        assert record["liveness"]["longestSilentGapSeconds"] >= 0.1
+        assert record["liveness"]["processAlive"] is False
+        assert record["liveness"]["route"] == "implementation"
+        assert record["liveness"]["agent"] == record["activeAgent"] == "codex"
+    finally:
+        client.close()
+
+
+def test_liveness_checkpoint_refuses_stale_generation(area):
+    job_id = "f" * 64
+    jobs = area / "root" / "codex_exec_mcp" / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 2,
+                       "ownershipToken": "recovered", "liveness": {"lastActivityAt": 200.0}})
+    stale_activity = {"route": "implementation", "agent": "codex", "lastActivityAt": 100.0,
+                      "processAlive": True, "processAliveAt": 100.0,
+                      "longestSilentGapSeconds": 0.0, "checkpointAt": 0.0}
+
+    assert not server._checkpoint_liveness(job_id, 1, "earlier", stale_activity,
+                                           now=201.0, process_alive=True, force=True)
+    record = server._read_job(job_id)
+    assert record["generation"] == 2
+    assert record["ownershipToken"] == "recovered"
+    assert record["liveness"]["lastActivityAt"] == 200.0
+
+    record["state"] = "SUCCEEDED"
+    server._write_job(record)
+    assert not server._checkpoint_liveness(job_id, 2, "recovered", stale_activity,
+                                           now=202.0, process_alive=False, force=True)
+    assert server._read_job(job_id)["state"] == "SUCCEEDED"
 
 
 def decision_events(area):

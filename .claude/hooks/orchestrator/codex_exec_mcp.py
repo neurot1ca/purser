@@ -309,6 +309,21 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         temp.unlink(missing_ok=True)
 
 
+def _measure_silent_gap(activity: dict[str, Any], now: float) -> None:
+    previous = activity.get("lastActivityAt")
+    if isinstance(previous, (int, float)) and not isinstance(previous, bool):
+        previous_max = activity.get("longestSilentGapSeconds", 0.0)
+        if not isinstance(previous_max, (int, float)) or isinstance(previous_max, bool):
+            previous_max = 0.0
+        activity["longestSilentGapSeconds"] = max(
+            previous_max, max(0.0, now - previous))
+
+
+def _record_activity(activity: dict[str, Any], now: float) -> None:
+    _measure_silent_gap(activity, now)
+    activity["lastActivityAt"] = now
+
+
 @contextmanager
 def _ownership_lock(job_dir: Path, job_id: str):
     """Serialize generation claims across bridge and host processes."""
@@ -929,6 +944,26 @@ class Server:
 
     def _write_job(self, job: dict[str, Any]) -> None:
         _atomic_json(self._job_path(job["jobId"]), job)
+
+    def _checkpoint_liveness(self, job_id: str, generation: int, ownership_token: str,
+                             activity: dict[str, Any], *, now: float,
+                             process_alive: bool, force: bool = False) -> bool:
+        if not force and now - activity.get("checkpointAt", 0.0) < 60:
+            return False
+        with _ownership_lock(self.job_dir, job_id):
+            job = self._read_job(job_id)
+            if (job is None or job.get("state") != "RUNNING"
+                    or job.get("generation") != generation
+                    or job.get("ownershipToken") != ownership_token):
+                return False
+            activity["processAlive"] = process_alive
+            activity["processAliveAt"] = now
+            activity["checkpointAt"] = now
+            job["activeAgent"] = activity["agent"]
+            job["liveness"] = {key: value for key, value in activity.items()
+                               if key != "checkpointAt"}
+            self._write_job(job)
+            return True
 
     def _host_ping(self, job: dict[str, Any]) -> bool:
         try:
@@ -1834,8 +1869,34 @@ class Server:
                     if async_job:
                         self.job_processes[request_id] = process
                         job = self._read_job(request_id)
+                        started_at = time.time()
+                        previous = job.get("liveness", {})
+                        if not isinstance(previous, dict):
+                            previous = {}
+                        activity = {
+                            "route": job.get("route"), "agent": agent,
+                            "lastActivityAt": previous.get("lastActivityAt", started_at),
+                            "processAlive": True, "processAliveAt": started_at,
+                            "longestSilentGapSeconds": previous.get("longestSilentGapSeconds", 0.0),
+                            "checkpointAt": started_at,
+                        }
+                        generation = job.get("generation", 1)
+                        ownership_token = job.get("ownershipToken", "")
+                        job["activeAgent"] = agent
+                        job["liveness"] = {key: value for key, value in activity.items()
+                                           if key != "checkpointAt"}
                         job["pid"] = process.pid
                         self._write_job(job)
+                    activity_lock = threading.Lock()
+
+                    def checkpoint_activity(process_alive: bool, *, force: bool = False) -> bool:
+                        if not async_job:
+                            return False
+                        with activity_lock:
+                            return self._checkpoint_liveness(
+                                request_id, generation, ownership_token, activity,
+                                now=time.time(), process_alive=process_alive, force=force)
+
                 events: list[dict[str, Any]] = []
                 stdout_had_output: list[bool] = []
                 stderr_chunks: list[bytes] = []
@@ -1854,6 +1915,10 @@ class Server:
                         if not isinstance(event, dict):
                             continue
                         events.append(event)
+                        if async_job:
+                            with activity_lock:
+                                _record_activity(activity, time.time())
+                            checkpoint_activity(process.poll() is None)
                         started_id, terminal, _, _ = _agent_event(agent, event)
                         if terminal:
                             terminal_event.set()
@@ -1895,6 +1960,7 @@ class Server:
                             remaining = job["deadlineAt"] - time.time()
                             if remaining <= 0:
                                 raise subprocess.TimeoutExpired(command, remaining)
+                            checkpoint_activity(True)
                             terminal_event.wait(timeout=min(remaining, 0.1))
                         if process.poll() is None:
                             remaining = max(0, job["deadlineAt"] - time.time())
@@ -1924,10 +1990,18 @@ class Server:
                         return _tool_result(None, error="process termination unconfirmed")
                     stdout_reader.join()
                     stderr_reader.join()
+                    if async_job:
+                        with activity_lock:
+                            _measure_silent_gap(activity, time.time())
+                    checkpoint_activity(process.poll() is None, force=True)
                     self._finish_job(request_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
                     return _tool_result(None, error="deadline exceeded")
                 stdout_reader.join()
                 stderr_reader.join()
+                if async_job:
+                    with activity_lock:
+                        _measure_silent_gap(activity, time.time())
+                    checkpoint_activity(process.poll() is None, force=True)
                 stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
                 with self.jobs_lock:
                     self.jobs[request_id] = None
