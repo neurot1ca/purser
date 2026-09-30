@@ -980,6 +980,77 @@ def test_apply_and_reply_emit_decisions_but_conflict_does_not(area):
         client.close()
 
 
+def test_result_records_non_worktree_acceptance_once(area):
+    client = Client(area)
+    try:
+        started = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "operation", "taskId": "operation-result",
+            "jobPhase": "operation",
+        })
+        finish(client, started["jobId"], "SUCCEEDED")
+        for _ in range(2):
+            result = job_call(client, "codex_result", {"jobId": started["jobId"]})
+            assert result["state"] == "SUCCEEDED"
+        event, = decision_events(area)
+        assert (event["payload"]["decision"], event["payload"]["source"]) == (
+            "accepted", {"kind": "result", "job_id": started["jobId"]})
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                              (started["jobId"] + ".json"))
+        assert job["decisionRecorded"] is True
+    finally:
+        client.close()
+
+
+def test_new_task_redispatch_rejects_prior_unapplied_worktree_job(area):
+    repo = _git_repo(area)
+    client = Client(area)
+    try:
+        earlier = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "first", "cwd": str(repo), "worktree": True,
+            "taskId": "redispatch-task", "jobPhase": "implementation",
+        })
+        finish(client, earlier["jobId"], "SUCCEEDED")
+        newer = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "redispatched", "cwd": str(repo),
+            "taskId": "redispatch-task", "jobPhase": "implementation",
+        })
+        event, = decision_events(area)
+        assert (event["payload"]["decision"], event["payload"]["source"]) == (
+            "rejected", {"kind": "redispatch", "job_id": newer["jobId"]})
+        old_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                  (earlier["jobId"] + ".json"))
+        assert old_job["decisionRecorded"] is True
+        finish(client, newer["jobId"], "SUCCEEDED")
+    finally:
+        client.close()
+
+
+def test_redispatch_does_not_reject_applied_job(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        earlier = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "first", "cwd": str(repo), "worktree": True,
+            "taskId": "applied-redispatch-task", "jobPhase": "implementation",
+        })
+        finish(client, earlier["jobId"], "SUCCEEDED")
+        assert job_call(client, "codex_apply", {"jobId": earlier["jobId"]})["applied"] is True
+        newer = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "redispatched", "cwd": str(repo),
+            "taskId": "applied-redispatch-task", "jobPhase": "implementation",
+        })
+        events = decision_events(area)
+        assert [(event["payload"]["decision"], event["payload"]["source"])
+                for event in events] == [
+                    ("accepted", {"kind": "apply", "job_id": earlier["jobId"]})]
+        old_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                  (earlier["jobId"] + ".json"))
+        assert old_job["decisionRecorded"] is True
+        finish(client, newer["jobId"], "SUCCEEDED")
+    finally:
+        client.close()
+
+
 def test_terminal_unapplied_cancel_emits_rejected(area):
     repo = _git_repo(area)
     client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})

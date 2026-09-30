@@ -343,7 +343,7 @@ def _payload_value(name: str, value: Any) -> Any:
     if name == "source":
         if (not isinstance(value, Mapping) or set(value) != {"kind", "job_id"}
                 or not isinstance(value.get("kind"), str)
-                or value["kind"] not in {"apply", "reply", "discard"}):
+                or value["kind"] not in {"apply", "reply", "discard", "result", "redispatch"}):
             raise ValueError("telemetry decision source is invalid")
         return {"kind": value["kind"], "job_id": _identifier(value["job_id"])}
     if name == "known_concurrent_scopes":

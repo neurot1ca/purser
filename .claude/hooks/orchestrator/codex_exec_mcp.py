@@ -1248,6 +1248,22 @@ class Server:
                                  {"name": name, "args": args, "codexBin": self.codex_bin,
                                  "agent": job_agent})
                     self._write_job(job)
+                    if mode == "new" and isinstance(job.get("taskId"), str) and job["taskId"]:
+                        for path in sorted(self.job_dir.glob("*.json")):
+                            earlier_id = path.stem
+                            if earlier_id == job_id:
+                                continue
+                            with _ownership_lock(self.job_dir, earlier_id):
+                                earlier = self._read_job(earlier_id)
+                                if (earlier is None or earlier.get("taskId") != job["taskId"]
+                                        or earlier.get("decisionRecorded")
+                                        or earlier.get("state") != "SUCCEEDED"
+                                        or not earlier.get("worktreePath")
+                                        or earlier.get("applyState") == "applied"):
+                                    continue
+                                _record_claude_decision(earlier, "rejected", "redispatch", job_id)
+                                earlier["decisionRecorded"] = True
+                                self._write_job(earlier)
                     try:
                         _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
                     except OSError as exc:
@@ -1255,7 +1271,13 @@ class Server:
                         return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
                                             "errorCode": "PROCESS_UNCONFIRMED", "message": "Host launch unconfirmed"})
                     if send_back_from is not None:
-                        _record_claude_decision(send_back_from, "send_back", "reply", job_id)
+                        with _ownership_lock(self.job_dir, send_back_from["jobId"]):
+                            current = self._read_job(send_back_from["jobId"])
+                            if current is not None:
+                                _record_claude_decision(current, "send_back", "reply", job_id)
+                                if isinstance(current.get("taskId"), str) and current["taskId"]:
+                                    current["decisionRecorded"] = True
+                                self._write_job(current)
         return self._await_host(job_id)
 
     def _job_worker(self, job_id: str, name: str, args: dict[str, Any]) -> None:
@@ -1355,6 +1377,16 @@ class Server:
             if host_state == "UNCONFIRMED":
                 return _job_result({"jobId": job["jobId"], "state": state,
                                     "message": "Host identity unconfirmed"})
+        if state == "SUCCEEDED" and not job.get("worktreePath") and not job.get("decisionRecorded"):
+            with _ownership_lock(self.job_dir, job["jobId"]):
+                current = self._read_job(job["jobId"])
+                if (current is not None and current.get("state") == "SUCCEEDED"
+                        and not current.get("worktreePath") and not current.get("decisionRecorded")
+                        and isinstance(current.get("taskId"), str) and current["taskId"]):
+                    _record_claude_decision(current, "accepted", "result", current["jobId"])
+                    current["decisionRecorded"] = True
+                    self._write_job(current)
+                    job = current
         value = {"jobId": job["jobId"], "state": state}
         if "attemptedModels" in job:
             value.update(attemptedModels=job["attemptedModels"],
@@ -1418,6 +1450,8 @@ class Server:
                                                 "reason": f"Conflict markers remain in {path}."})
                 value = {"applied": True, "resolvedByHand": True, "paths": paths}
                 job.update(applyState="applied", applyResult=value, appliedAt=time.time())
+                if isinstance(job.get("taskId"), str) and job["taskId"]:
+                    job["decisionRecorded"] = True
                 self._write_job(job)
                 _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
@@ -1446,6 +1480,8 @@ class Server:
             if paths and all(same_content(path) for path in paths):
                 value = {"applied": True, "paths": paths}
                 job.update(applyState="applied", applyResult=value, appliedAt=time.time())
+                if isinstance(job.get("taskId"), str) and job["taskId"]:
+                    job["decisionRecorded"] = True
                 self._write_job(job)
                 _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
@@ -1487,6 +1523,8 @@ class Server:
             job.update(applyState="applied" if outcome["applied"] else "conflict", applyResult=value)
             if outcome["applied"]:
                 job["appliedAt"] = time.time()
+                if isinstance(job.get("taskId"), str) and job["taskId"]:
+                    job["decisionRecorded"] = True
             self._write_job(job)
             if outcome["applied"]:
                 _record_claude_decision(job, "accepted", "apply", job["jobId"])
@@ -1530,7 +1568,14 @@ class Server:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
         if job["state"] in TERMINAL and job.get("worktreePath") and job.get("applyState") != "applied":
-            _record_claude_decision(job, "rejected", "discard", job_id)
+            with _ownership_lock(self.job_dir, job_id):
+                current = self._read_job(job_id)
+                if (current is not None and current["state"] in TERMINAL and current.get("worktreePath")
+                        and current.get("applyState") != "applied"):
+                    _record_claude_decision(current, "rejected", "discard", job_id)
+                    if isinstance(current.get("taskId"), str) and current["taskId"]:
+                        current["decisionRecorded"] = True
+                    self._write_job(current)
             self._release_job_scope_lease(purser_state_root.default_state_root(), job_id)
         if job.get("leaseQueued") and job["state"] == "QUEUED":
             with _ownership_lock(self.job_dir, job_id):
