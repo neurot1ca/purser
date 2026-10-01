@@ -1293,6 +1293,17 @@ def test_project_job_board_is_omitted_with_one_job(workspace):
     assert "| only |" in codex._project_job_board(state, "project")
 
 
+def test_project_job_board_marks_only_stalled_job(workspace):
+    _, state = workspace
+    _board_job(state, "stalled", "RUNNING", errorCode="STALLED", stallDetectedAt=1234.0)
+    _board_job(state, "healthy", "RUNNING")
+
+    message = codex._project_job_board(state, "project")
+
+    assert "| stalled | gpt-6-sol (medium) | stalled |" in message
+    assert "| healthy | gpt-6-sol (medium) | running |" in message
+
+
 def test_project_job_board_stops_demanding_when_only_seen_terminal_remains(workspace, monkeypatch):
     repo, state = workspace
     monkeypatch.setenv("PURSER_STATE_DIR", str(state))

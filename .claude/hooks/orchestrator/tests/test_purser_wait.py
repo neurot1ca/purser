@@ -31,6 +31,53 @@ def test_terminal_job_returns_immediately(tmp_path, monkeypatch, capsys):
     assert isinstance(read_job(tmp_path, "terminal")["waiterObservedTerminalAt"], float)
 
 
+def test_stalled_job_surfaces_once_and_rerun_waits_until_terminal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path))
+    last_activity_at = time.time() - 125
+    write_job(tmp_path, "stalled", signalPort=None, errorCode="STALLED",
+              stallDetectedAt=1234.0, deadlineAt=time.time() - 1,
+              liveness={"lastActivityAt": last_activity_at})
+
+    assert purser_wait.main(["stalled"]) == 4
+    assert read_job(tmp_path, "stalled")["waiterObservedStallAt"] == 1234.0
+    write_job(tmp_path, "stalled", signalPort=None, deadlineAt=time.time() + 60,
+              errorCode="STALLED", stallDetectedAt=1234.0,
+              waiterObservedStallAt=1234.0)
+
+    original_sleep = time.sleep
+    sleeps = 0
+
+    def finish_after_wait(seconds):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 1:
+            write_job(tmp_path, "stalled", state="SUCCEEDED", signalPort=None)
+        original_sleep(0)
+
+    monkeypatch.setattr(purser_wait.time, "sleep", finish_after_wait)
+    assert purser_wait.main(["stalled"]) == 0
+    output = capsys.readouterr().out.splitlines()
+    assert output[0] == "purser-wait stalled STALLED (worker still running)"
+    assert output[1] == (
+        f"{purser_wait.stall_followup.instruction(last_activity_at)} "
+        "Do not show the jobId to the user."
+    )
+    assert output[2] == "purser-wait stalled SUCCEEDED"
+
+
+def test_new_stall_episode_surfaces_again(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path))
+    write_job(tmp_path, "stalled", signalPort=None, errorCode="STALLED",
+              stallDetectedAt=1235.0, waiterObservedStallAt=1234.0)
+
+    assert purser_wait.main(["stalled"]) == 4
+    assert read_job(tmp_path, "stalled")["waiterObservedStallAt"] == 1235.0
+    assert capsys.readouterr().out.splitlines() == [
+        "purser-wait stalled STALLED (worker still running)",
+        f"{purser_wait.stall_followup.instruction(None)} Do not show the jobId to the user.",
+    ]
+
+
 def test_terminal_failed_job_is_non_success(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path))
     write_job(tmp_path, "failed", state="FAILED")

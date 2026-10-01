@@ -12,6 +12,7 @@ from typing import Any
 
 import codex_exec_mcp
 import state_root as purser_state_root
+import stall_followup
 
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS"}
@@ -38,6 +39,33 @@ def _record_terminal_observation(job_id: str, state: str) -> None:
         current["waiterObservedTerminalAt"] = time.time()
         current["waiterObservedTerminalState"] = state
         codex_exec_mcp._atomic_json(job_dir / f"{job_id}.json", current)
+
+
+def _surface_stall(job_id: str, job: dict[str, Any]) -> bool:
+    """Atomically claim and report the one waiter return for this silence episode."""
+    stall_detected_at = job.get("stallDetectedAt")
+    if (job.get("state") != "RUNNING" or job.get("errorCode") != "STALLED"
+            or isinstance(stall_detected_at, bool)
+            or not isinstance(stall_detected_at, (int, float))):
+        return False
+    job_dir = purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs"
+    try:
+        with codex_exec_mcp._ownership_lock(job_dir, job_id):
+            current = _job_record(job_id)
+            if (current is None or current.get("state") != "RUNNING"
+                    or current.get("errorCode") != "STALLED"
+                    or current.get("stallDetectedAt") != stall_detected_at
+                    or current.get("waiterObservedStallAt") == stall_detected_at):
+                return False
+            current["waiterObservedStallAt"] = stall_detected_at
+            codex_exec_mcp._atomic_json(job_dir / f"{job_id}.json", current)
+    except BaseException:
+        return False
+    print(f"purser-wait {job_id} STALLED (worker still running)")
+    liveness = current.get("liveness")
+    last_activity = liveness.get("lastActivityAt") if isinstance(liveness, dict) else None
+    print(f"{stall_followup.instruction(last_activity)} Do not show the jobId to the user.")
+    return True
 
 
 def _report_record_state(job_id: str, job: dict[str, Any] | None = None) -> int:
@@ -77,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         state = job.get("state")
         if state in TERMINAL:
             return _report_record_state(job_id, job)
+        if _surface_stall(job_id, job):
+            return 4
         port, token, deadline = job.get("signalPort"), job.get("signalToken"), job.get("deadlineAt")
         if (isinstance(port, bool) or (port is not None and
                 (not isinstance(port, int) or not 1 <= port <= 65535))
@@ -102,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
                         current = _job_record(job_id)
                         if current is None or current.get("state") in TERMINAL:
                             return _report_record_state(job_id, current)
+                        if _surface_stall(job_id, current):
+                            return 4
                         if signal is not None or (current.get("generation"), current.get("signalPort"),
                                                    current.get("signalToken"), current.get("deadlineAt")) != endpoint:
                             break

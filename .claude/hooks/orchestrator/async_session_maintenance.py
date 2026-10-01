@@ -19,6 +19,7 @@ import codex_exec_mcp
 import codex
 import ledger
 import telemetry
+import stall_followup
 
 
 RETENTION_SECONDS = 7 * 86400
@@ -230,6 +231,10 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
                 continue
             task = re.sub(r"\s+", " ", task).strip()[:80]
             state = job.get("state")
+            liveness = job.get("liveness")
+            if not isinstance(liveness, dict):
+                liveness = {}
+            last_activity = liveness.get("lastActivityAt")
             resumed = job.get("resumedAfterInterruption", 0)
             same_session = index["session_id"] == session_id
             if (same_session and state in TERMINAL - {"SUCCEEDED"}
@@ -243,6 +248,11 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
                 instruction = ("Call codex_result with this jobId now, without adopt or asking the user."
                                if same_session else
                                "Ask for the user's agreement before calling codex_result with adopt: true.")
+            elif (state == "RUNNING" and job.get("errorCode") == "STALLED"
+                  and isinstance(job.get("stallDetectedAt"), (int, float))
+                  and not isinstance(job.get("stallDetectedAt"), bool)):
+                message = None
+                instruction = stall_followup.instruction(last_activity)
             elif state in {"QUEUED", "RUNNING"}:
                 message = (None if same_session else
                            f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "

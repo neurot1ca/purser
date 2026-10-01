@@ -2,6 +2,7 @@ import json
 import os
 import hashlib
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -46,6 +47,21 @@ def test_same_session_observed_failed_job_has_no_followup_hint(tmp_path):
 def test_same_session_unobserved_failed_job_is_reminded(tmp_path):
     _single_followup_job(tmp_path, "FAILED")
     assert "Call codex_result" in maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-1")
+
+
+def test_stalled_followup_keeps_waiting_and_instructs_user_receipt(tmp_path):
+    _single_followup_job(tmp_path, "RUNNING")
+    job_path = next((tmp_path / "codex_exec_mcp" / "jobs").glob("*.json"))
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(errorCode="STALLED", stallDetectedAt=time.time(),
+               liveness={"lastActivityAt": time.time() - 125})
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+
+    hint = maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-1")
+
+    assert "do not call codex_result" in hint.lower()
+    assert "Restart purser_wait.py for this same jobId" in hint
+    assert 'Tell the user in the user\'s language exactly one line, translated from: "> ⚓ **Purser has seen no worker activity for 2 minutes.** The job is still running; I\'m checking its status."' in hint
 
 
 def test_same_session_observed_success_is_still_reminded(tmp_path):

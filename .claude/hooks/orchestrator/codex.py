@@ -2496,6 +2496,8 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             state = {"QUEUED": "queued", "RUNNING": "running", "SUCCEEDED": "done",
                      "FAILED": "failed", "TIMED_OUT": "failed", "CANCELLED": "cancelled",
                      "UNKNOWN_OR_IN_PROGRESS": "running"}.get(raw_state, "failed")
+            if raw_state == "RUNNING" and job.get("errorCode") == "STALLED":
+                state = "stalled"
             call_key = index.get("call_key")
             bundle = {}
             try:
@@ -2543,7 +2545,7 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                     and changed_paths == []):
                 apply = "no change"
             eta_label = "—"
-            if state == "running":
+            if state in {"running", "stalled"}:
                 started = job.get("startedAt", job.get("acceptedAt"))
                 elapsed = max(0.0, (now - started) / 60) if isinstance(started, (int, float)) else None
                 estimates = _route_duration_percentiles(
