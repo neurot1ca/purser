@@ -105,6 +105,11 @@ def load(config_path: Path) -> dict:
         if not isinstance(reviewer_model, str) or not AGY_MODEL.fullmatch(reviewer_model):
             raise ValueError("[coding] reviewer1_model_requested is invalid")
         config["reviewer1_model_requested"] = reviewer_model
+    reviewer_executable = coding.get("reviewer1_executable")
+    if reviewer_executable is not None:
+        if not isinstance(reviewer_executable, str) or not os.path.isabs(reviewer_executable):
+            raise ValueError("[coding] reviewer1_executable must be an absolute path")
+        config["reviewer1_executable"] = reviewer_executable
     agent = coding.get("coder_agent", "codex")
     if agent not in ("codex", "opencode", "agy"):
         raise ValueError("[coding] coder_agent is invalid")

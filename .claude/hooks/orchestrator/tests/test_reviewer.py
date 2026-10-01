@@ -21,8 +21,12 @@ CONFIG_PATH = Path(__file__).parents[1] / "config.json"
 
 
 @pytest.fixture()
-def config():
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+def config(tmp_path):
+    value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    executable = tmp_path / "agy.exe"
+    executable.write_text("fake executable", encoding="utf-8")
+    value["reviewer1_executable"] = str(executable.resolve())
+    return value
 
 
 def git(repo, *args):
@@ -75,6 +79,7 @@ def credential_text():
     return "api_" + "key = '" + "abcdefghijklmnopqrstuvwxyz012345" + "'"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows console flags")
 def test_reviewer_launches_and_git_calls_hide_windows_console(monkeypatch):
     monkeypatch.setattr(reviewer, "os", SimpleNamespace(
         name="nt", path=os.path, devnull=os.devnull, environ=os.environ,
@@ -102,6 +107,7 @@ def test_reviewer_launches_and_git_calls_hide_windows_console(monkeypatch):
     assert all(call["creationflags"] & 0x08000000 for call in git_calls)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows console flags")
 def test_agy_windows_launch_uses_hidden_new_console(monkeypatch):
     class StartupInfo:
         dwFlags = 0
@@ -381,7 +387,7 @@ def test_well_formed_success_parses_and_attests_only_requested_model(config):
         "served_model_attestation": "UNAVAILABLE",
     }
     command = runner.calls[0][0]
-    assert command[0] == r"C:\Users\ugur\scripts\agy.exe"
+    assert command[0] == config["reviewer1_executable"]
     assert command[command.index("--model") + 1] == "gemini-3.8-flash-high"
     assert command[command.index("--output-format") + 1] == "json"
     assert command[command.index("--mode") + 1] == "plan"
@@ -395,6 +401,65 @@ def test_well_formed_success_parses_and_attests_only_requested_model(config):
     )
     assert runner.forwarded == materials()
     assert runner.packet_path is not None and not runner.packet_path.exists()
+
+
+def test_reviewer_executable_resolution_prefers_config_path(config, monkeypatch):
+    configured = config["reviewer1_executable"]
+    monkeypatch.setattr(
+        reviewer.shutil,
+        "which",
+        lambda command: pytest.fail(f"PATH lookup should not run for {command}"),
+    )
+    command = reviewer.AGY_ADAPTER.build_command(
+        "Review packet", reviewer.REVIEW_SCHEMA, config
+    )
+    assert command[0] == configured
+
+
+@pytest.mark.parametrize(
+    ("provider", "command_name"),
+    (("agy", "agy"), ("opencode", "opencode"), ("codex", "codex")),
+)
+def test_reviewer_executable_resolution_uses_provider_path_command(
+    config, monkeypatch, tmp_path, provider, command_name
+):
+    executable = tmp_path / command_name
+    executable.write_text("fake executable", encoding="utf-8")
+    path_executable = str(executable.resolve())
+    config.pop("reviewer1_executable")
+    monkeypatch.setattr(
+        reviewer.shutil,
+        "which",
+        lambda command: path_executable if command == command_name else None,
+    )
+    adapter = reviewer.REVIEWER_ADAPTERS[provider]
+    if provider == "opencode":
+        config.update(reviewer1_model_requested="vendor/model-id")
+    elif provider == "codex":
+        config.update(reviewer1_model_requested="codex-review-model")
+    kwargs = {"cwd": tmp_path} if provider != "agy" else {}
+    command = adapter.build_command(
+        "Review packet", reviewer.REVIEW_SCHEMA, config, **kwargs
+    )
+    assert command[0] == path_executable
+
+
+def test_missing_reviewer_path_reports_looked_up_command(config, monkeypatch):
+    config.pop("reviewer1_executable")
+    monkeypatch.setattr(reviewer.shutil, "which", lambda _command: None)
+
+    result = run_review(config, FakeRunner())
+
+    assert_unavailable(result)
+    message = result["findings"][0]["message"]
+    assert "ValueError" in message
+    assert "agy" in message
+    assert "PATH" in message
+
+
+def test_shipped_config_has_no_reviewer_executable_path():
+    shipped = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    assert "reviewer1_executable" not in shipped
 
 
 def test_no_material_verdict_with_findings_is_rejected(config):
@@ -426,9 +491,10 @@ def reviewer_opencode_stream(final_text=None, *, model="vendor/model-id"):
 
 
 def test_opencode_command_uses_ask_config_and_isolated_scratch_dir(config, tmp_path):
+    opencode_executable = str((tmp_path / "opencode.exe").resolve())
     opencode_config = {
         **config,
-        "reviewer1_executable": r"C:\tools\opencode.exe",
+        "reviewer1_executable": opencode_executable,
         "reviewer1_model_requested": "vendor/model-id",
         "reviewer1_agent": "reviewer",
     }
@@ -465,7 +531,7 @@ def test_opencode_command_uses_ask_config_and_isolated_scratch_dir(config, tmp_p
 
     assert isinstance(result, reviewer.CompletedReview), getattr(result, "message", None)
     command, kwargs = runner.calls[0]
-    assert command[:2] == [r"C:\tools\opencode.exe", "run"]
+    assert command[:2] == [opencode_executable, "run"]
     assert command[command.index("--model") + 1] == "vendor/model-id"
     assert command[command.index("--agent") + 1] == "reviewer"
     assert Path(command[command.index("--dir") + 1]) == runner.isolated_dir
@@ -499,16 +565,17 @@ def test_provider_reviewers_accept_one_json_fence_and_reject_ambiguous_text():
 
 
 def test_codex_command_enforces_read_only_execution(config, tmp_path):
+    codex_executable = str((tmp_path / "codex.exe").resolve())
     codex_config = {
         **config,
-        "reviewer1_executable": r"C:\tools\codex.exe",
+        "reviewer1_executable": codex_executable,
         "reviewer1_model_requested": "codex-review-model",
     }
     command = reviewer.CODEX_ADAPTER.build_command(
         "Review packet", reviewer.REVIEW_SCHEMA, codex_config, cwd=tmp_path
     )
 
-    assert command[:2] == [r"C:\tools\codex.exe", "exec"]
+    assert command[:2] == [codex_executable, "exec"]
     assert "--json" in command
     assert command[command.index("-s") + 1] == "read-only"
     assert command[command.index("-c") + 1] == 'approval_policy="never"'
@@ -516,9 +583,10 @@ def test_codex_command_enforces_read_only_execution(config, tmp_path):
 
 
 def test_codex_adapter_provider_is_reported_on_outcome(config, tmp_path):
+    codex_executable = str((tmp_path / "codex.exe").resolve())
     codex_config = {
         **config,
-        "reviewer1_executable": r"C:\tools\codex.exe",
+        "reviewer1_executable": codex_executable,
         "reviewer1_model_requested": "codex-review-model",
     }
     stream = "\n".join((

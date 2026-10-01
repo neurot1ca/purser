@@ -17,6 +17,7 @@ import time
 from typing import Any
 import uuid
 
+import coder_config
 import ledger
 import policy
 import telemetry
@@ -24,6 +25,7 @@ import telemetry
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _CONFIG_PATH = _PACKAGE_ROOT / "config.json"
+_REVIEWER_COMMANDS = {"agy": "agy", "opencode": "opencode", "codex": "codex"}
 _PACKET_FIELDS = (
     "objective",
     "acceptance_criteria",
@@ -190,10 +192,8 @@ class _AgyAdapter:
         extra_flags: Sequence[str] = (),
         repository_root: Path | None = None,
     ) -> list[str]:
-        executable = config.get("reviewer1_executable")
+        executable = _reviewer_executable(config, self.provider)
         model = config.get("reviewer1_model_requested")
-        if not isinstance(executable, str) or not os.path.isabs(executable):
-            raise ValueError("reviewer1_executable must be an absolute path")
         self.validate_model(model)
         command = [
             executable,
@@ -292,11 +292,9 @@ class _OpenCodeAdapter:
         *,
         cwd: Path,
     ) -> list[str]:
-        executable = config.get("reviewer1_executable")
+        executable = _reviewer_executable(config, self.provider)
         model = config.get("reviewer1_model_requested")
         agent = config.get("reviewer1_agent", "reviewer")
-        if not isinstance(executable, str) or not os.path.isabs(executable):
-            raise ValueError("reviewer1_executable must be an absolute path")
         self.validate_model(model)
         if not isinstance(agent, str) or not agent.strip():
             raise ValueError("reviewer1_agent must be a nonempty name")
@@ -370,10 +368,8 @@ class _CodexAdapter:
         *,
         cwd: Path,
     ) -> list[str]:
-        executable = config.get("reviewer1_executable")
+        executable = _reviewer_executable(config, self.provider)
         model = config.get("reviewer1_model_requested")
-        if not isinstance(executable, str) or not os.path.isabs(executable):
-            raise ValueError("reviewer1_executable must be an absolute path")
         self.validate_model(model)
         command = [
             executable,
@@ -667,6 +663,21 @@ def _canonical_json(value: Any) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
+
+
+def _reviewer_executable(config: Mapping[str, Any], provider: str) -> str:
+    executable = config.get("reviewer1_executable")
+    if isinstance(executable, str) and os.path.isabs(executable):
+        return executable
+    command = _REVIEWER_COMMANDS[provider]
+    resolved = shutil.which(command)
+    if resolved:
+        resolved = str(Path(resolved).resolve())
+        if os.path.isabs(resolved):
+            return resolved
+    raise ValueError(
+        f"reviewer1_executable must be an absolute path or `{command}` must be available on PATH"
+    )
 
 
 def _contains_forbidden_text(value: str) -> bool:
@@ -1327,7 +1338,7 @@ def invoke_packet(
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             return UnavailableReview(
                 "REVIEWER_RESPONSE_INVALID",
-                f"Reviewer-1 response or configuration was invalid ({type(error).__name__})."
+                f"Reviewer-1 response or configuration was invalid ({type(error).__name__}): {error}"
                 + (" (after 1 retry)" if retried else ""),
                 _requested_model(config),
                 raw_stdout=stdout[-262144:],
@@ -1390,7 +1401,7 @@ def invoke_packet(
     except (json.JSONDecodeError, TypeError, ValueError, OSError) as error:
         return UnavailableReview(
             "REVIEWER_RESPONSE_INVALID",
-            f"Reviewer-1 response or configuration was invalid ({type(error).__name__})."
+            f"Reviewer-1 response or configuration was invalid ({type(error).__name__}): {error}"
             + (" (after 1 retry)" if retried else ""),
             _requested_model(config),
             provider=reviewer_agent,
@@ -1432,7 +1443,7 @@ def review_materials(
         fallback = config if isinstance(config, Mapping) else {}
         return _unavailable(
             "REVIEWER_CONFIG_INVALID",
-            f"Reviewer-1 configuration was invalid ({type(error).__name__}).",
+            f"Reviewer-1 configuration was invalid ({type(error).__name__}): {error}",
             fallback,
             provider=reviewer_agent,
         )
@@ -1486,7 +1497,7 @@ def review_materials(
 
 def _load_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     loaded = (
-        json.loads(_CONFIG_PATH.read_text(encoding="utf-8")) if config is None else config
+        coder_config.load(_CONFIG_PATH) if config is None else config
     )
     timeout = loaded.get("reviewer1_timeout_seconds")
     budget = loaded.get("reviewer1_packet_max_bytes")
@@ -1860,7 +1871,7 @@ def review(
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
         return _unavailable(
             "REVIEWER_CONFIG_INVALID",
-            f"Reviewer-1 configuration was invalid ({type(error).__name__}).",
+            f"Reviewer-1 configuration was invalid ({type(error).__name__}): {error}",
             {"reviewer1_model_requested": PINNED_MODEL},
         )
     try:
