@@ -89,6 +89,26 @@ def test_adopt_model_version_rewrites_only_matching_family_routes(site, monkeypa
     assert json.loads(model_version_notice.state_path().read_text(encoding="utf-8"))["asked"] == ["gpt-6.1-luna"]
 
 
+def test_adopt_model_version_updates_only_reviewer_pin(site, monkeypatch):
+    home, project = site
+    monkeypatch.setattr(purser_init.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    monkeypatch.setattr(purser_init.model_listing, "list_models", lambda agent, *_a, **_k: {
+        "status": "available", "models": [{"id": "gemini-3.9-flash-high"}]
+    } if agent == "agy" else {"status": "available", "models": []})
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: home / "state")
+    routes = {name: {"model": "gpt-6-luna", "effort": "medium"}
+              for name in json.loads((Path(purser_init.__file__).with_name("config.json")).read_text())[
+                  "required_routes"]}
+    config = home / ".orchestrator" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_bytes(purser_init._candidate(None, "codex", "none", False, project, routes=routes))
+
+    assert run("--adopt-model-version", "gemini-3.9-flash-high") == 0
+    updated = coder_config.load(Path(purser_init.__file__).with_name("config.json"))
+    assert updated["reviewer1_model_requested"] == "gemini-3.9-flash-high"
+    assert updated["routes"] == routes
+
+
 def test_second_apply_noop(site):
     home, _ = site
     args = ("--apply", "--coder", "claude", "--reviewer", "none", "--trust", "--scaffold-profile")

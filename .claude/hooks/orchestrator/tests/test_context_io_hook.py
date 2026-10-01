@@ -201,7 +201,11 @@ def test_model_version_notice_checks_once_daily_and_skips_declined(monkeypatch, 
         "status": "available", "models": [{"id": "gpt-6.1-luna"}]
     })
     first = context_io_hook._model_version_context(tmp_path)
-    assert first and "> ⚓ **Yeni model sürümü çıktı: `gpt-6.1-luna`, şu an `gpt-6-luna` kullanılıyor.**" in first
+    assert first and (
+        "> ⚓ **New model version available: `gpt-6.1-luna` (you are on `gpt-6-luna`).**\n"
+        "> *Should Purser switch to it? (1-yes 2-no)*\n"
+        "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
+    ) in first
     assert context_io_hook._model_version_context(tmp_path) is None
     assert len(calls) == 1
 
@@ -213,12 +217,95 @@ def test_model_version_notice_checks_once_daily_and_skips_declined(monkeypatch, 
     assert len(calls) == 2
 
 
+def test_model_version_notice_checks_agy_reviewer_after_routes(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(context_io_hook.coder_config, "load", lambda *_: {
+        "coder_agent": "codex", "routes": {"normal": {"model": "gpt-6-luna"}},
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+    })
+    monkeypatch.setattr(context_io_hook.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    calls = []
+
+    def listing(agent, *_args, **_kwargs):
+        calls.append(agent)
+        models = {"codex": ["gpt-6-luna"], "agy": ["gemini-3.9-flash-high"]}[agent]
+        return {"status": "available", "models": [{"id": model} for model in models]}
+
+    monkeypatch.setattr(context_io_hook.model_listing, "list_models", listing)
+    notice = context_io_hook._model_version_context(tmp_path)
+    assert notice and "`gemini-3.9-flash-high` (you are on `gemini-3.8-flash-high`)" in notice
+    assert calls == ["codex", "agy"]
+
+
+def test_model_version_notice_lists_once_per_agent_for_multiple_routes(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(context_io_hook.coder_config, "load", lambda *_: {
+        "coder_agent": "codex", "routes": {
+            "mechanical": {"model": "gpt-6-luna"},
+            "normal": {"model": "gpt-6-sol"},
+            "escalated": {"model": "gpt-6-mini"},
+        }, "reviewer1_model_requested": "gemini-3.8-flash-high",
+    })
+    monkeypatch.setattr(context_io_hook.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    calls = []
+
+    def listing(agent, *_args, **_kwargs):
+        calls.append(agent)
+        models = {"codex": ["gpt-6-luna", "gpt-6-sol", "gpt-6-mini"],
+                  "agy": ["gemini-3.9-flash-high"]}[agent]
+        return {"status": "available", "models": [{"id": model} for model in models]}
+
+    monkeypatch.setattr(context_io_hook.model_listing, "list_models", listing)
+    notice = context_io_hook._model_version_context(tmp_path)
+    assert notice and "`gemini-3.9-flash-high`" in notice
+    assert calls == ["codex", "agy"]
+
+
+def test_model_version_notice_silently_skips_failed_agy_listing(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(context_io_hook.coder_config, "load", lambda *_: {
+        "coder_agent": "codex", "routes": {"normal": {"model": "gpt-6-luna"}},
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+    })
+    monkeypatch.setattr(context_io_hook.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+
+    calls = []
+
+    def listing(agent, *_args, **_kwargs):
+        calls.append(agent)
+        return ({"status": "available", "models": [{"id": "gpt-6-luna"}]}
+                if agent == "codex" else {"status": "unavailable", "models": []})
+
+    monkeypatch.setattr(context_io_hook.model_listing, "list_models", listing)
+    assert context_io_hook._model_version_context(tmp_path) is None
+    assert calls == ["codex", "agy"]
+
+
+def test_model_version_notice_does_not_offer_different_reviewer_tier(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(context_io_hook.coder_config, "load", lambda *_: {
+        "coder_agent": "codex", "routes": {"normal": {"model": "gpt-6-luna"}},
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+    })
+    monkeypatch.setattr(context_io_hook.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    calls = []
+
+    def listing(agent, *_args, **_kwargs):
+        calls.append(agent)
+        models = {"codex": ["gpt-6-luna"], "agy": ["gemini-3.9-pro-high"]}[agent]
+        return {"status": "available", "models": [{"id": model} for model in models]}
+
+    monkeypatch.setattr(context_io_hook.model_listing, "list_models", listing)
+    assert context_io_hook._model_version_context(tmp_path) is None
+    assert calls == ["codex", "agy"]
+
+
 def test_model_version_notice_stop_records_visible_line(monkeypatch, tmp_path):
     monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path / "state")
     monkeypatch.setattr(compaction_advisor, "_state_directory", lambda _repo: tmp_path / "advisor")
     model_version_notice.write_state({"checked_on": "2026-09-30", "asked": [], "declined": [],
                                       "pending": {"current": "gpt-6-luna", "new": "gpt-6.1-luna"}})
-    visible = "> ⚓ **Yeni model sürümü çıktı: `gpt-6.1-luna`, şu an `gpt-6-luna` kullanılıyor.**"
+    visible = "> ⚓ **New model version available: `gpt-6.1-luna` (you are on `gpt-6-luna`).**"
     assert compaction_advisor.stop({"session_id": "model-notice", "last_assistant_message": visible,
                                     "stop_hook_active": True}, tmp_path) is None
     state = model_version_notice.read_state()

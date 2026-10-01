@@ -18,6 +18,16 @@ def test_ignores_other_family_older_and_unparsable_names():
     ) is None
 
 
+def test_gemini_version_comparison_preserves_tier_and_effort():
+    assert model_version_notice.newer_version(
+        "gemini-3.8-flash-high",
+        ["gemini-3.9-pro-high", "gemini-3.9-flash-medium", "gemini-3.9-flash-high"],
+    ) == "gemini-3.9-flash-high"
+    assert model_version_notice.newer_version(
+        "gemini-3.8-flash-high", ["gemini-3.9-pro-high", "gemini-3.9-flash-medium"]
+    ) is None
+
+
 def test_declined_version_is_persisted(monkeypatch, tmp_path):
     monkeypatch.setattr(model_version_notice.state_root, "default_state_root", lambda: tmp_path)
     model_version_notice.decide("gpt-6.1-luna", decline=True)

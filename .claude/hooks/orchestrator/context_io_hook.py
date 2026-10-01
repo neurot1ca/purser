@@ -106,7 +106,7 @@ def _plugin_update_context(payload: Mapping[str, Any], repository: Path | None) 
 
 
 def _model_version_context(repository: Path | None) -> str | None:
-    """Check pinned routes against a bounded live CLI listing at most daily."""
+    """Check pinned models against bounded live CLI listings at most daily."""
     try:
         if repository is None or not model_version_notice.due_today():
             return None
@@ -118,15 +118,22 @@ def _model_version_context(repository: Path | None) -> str | None:
             for route in routes.values()
         ))
         pinned = [model for model in pinned if isinstance(model, str)]
-        if not pinned:
-            return None
         catalog = model_catalog.load_cached_catalog()
-        listing = model_listing.list_models(agent, catalog["providers"], timeout_seconds=2)
-        if listing.get("status") != "available":
-            return None
-        candidates = [item.get("id") for item in listing.get("models", []) if isinstance(item, dict)]
         state = model_version_notice.read_state()
-        for current in pinned:
+        checks = [(agent, current) for current in pinned]
+        reviewer_model = config.get("reviewer1_model_requested")
+        if isinstance(reviewer_model, str):
+            checks.append(("agy", reviewer_model))
+        listings = {}
+        for listing_agent, current in checks:
+            if listing_agent not in listings:
+                listings[listing_agent] = model_listing.list_models(
+                    listing_agent, catalog["providers"], timeout_seconds=2
+                )
+            listing = listings[listing_agent]
+            if listing.get("status") != "available":
+                continue
+            candidates = [item.get("id") for item in listing.get("models", []) if isinstance(item, dict)]
             newer = model_version_notice.newer_version(current, candidates)
             if newer and newer not in state["asked"] and newer not in state["declined"]:
                 state["pending"] = {"current": current, "new": newer, "blocked": False}
@@ -134,14 +141,14 @@ def _model_version_context(repository: Path | None) -> str | None:
                 model_version_notice.record_check()
                 return (
                     "On your next reply, render exactly these three lines in the user's language; "
-                    "translate from Turkish and keep ⚓ and both model names unchanged. "
+                    "translate from English, keeping ⚓, both model names, and `/purser:init` unchanged. "
                     f"If the user answers 1/yes, apply only these routes with "
                     f"`python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --adopt-model-version {newer}`. "
                     f"If they answer 2/no, record that choice with `python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --decline-model-version {newer}`. "
                     "Do not change routes unless the user says yes.\n"
-                    f"> ⚓ **Yeni model sürümü çıktı: `{newer}`, şu an `{current}` kullanılıyor.**\n"
-                    "> *Purser'ın bu sürüme geçmesini ister misin? (1-evet 2-hayır)*\n"
-                    "> *Hayır dersen bu sürüm için bir daha sorulmaz. İstediğin zaman `/purser:init` ile geçebilirsin.*"
+                    f"> ⚓ **New model version available: `{newer}` (you are on `{current}`).**\n"
+                    "> *Should Purser switch to it? (1-yes 2-no)*\n"
+                    "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
                 )
         model_version_notice.record_check()
         return None

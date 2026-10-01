@@ -565,11 +565,45 @@ def _model_version_decision(version: str, *, adopt: bool) -> None:
     before = tomllib.loads(original.decode("utf-8")) if original is not None else {}
     loaded = coder_config.load(Path(__file__).with_name("config.json"))
     agent = loaded.get("coder_agent", "codex")
+    reviewer_current = loaded.get("reviewer1_model_requested")
+    is_reviewer_model = (isinstance(reviewer_current, str)
+                         and model_version_notice.is_newer(reviewer_current, version))
+    listing_agent = "agy" if is_reviewer_model else agent
     catalog = model_catalog.load_cached_catalog()
-    listing = model_listing.list_models(agent, catalog["providers"])
+    listing = model_listing.list_models(listing_agent, catalog["providers"])
     if listing.get("status") != "available" or version not in {
             item.get("id") for item in listing.get("models", []) if isinstance(item, dict)}:
-        raise ValueError(f"model {version!r} is absent from the live {agent} listing")
+        raise ValueError(f"model {version!r} is absent from the live {listing_agent} listing")
+    if is_reviewer_model:
+        coding = before.get("coding", {})
+        if not isinstance(coding, dict):
+            raise ValueError("[coding] must be a table")
+        if original is None:
+            text = "schema_version = 1\n"
+            before = {"schema_version": 1}
+        else:
+            text = original.decode("utf-8")
+        newline = "\r\n" if "\r\n" in text else "\n"
+        text = _upsert(text, "coding", "reviewer1_model_requested", version, newline)
+        after = tomllib.loads(text)
+        expected = deepcopy(before)
+        expected_coding = expected.setdefault("coding", {})
+        expected_coding["reviewer1_model_requested"] = version
+        if after != expected:
+            raise ValueError("model adoption changed config values outside the reviewer model")
+        if (config_path.read_bytes() if config_path.exists() else None) != original:
+            raise ValueError("config changed during model adoption")
+        if original is not None:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            backup = config_path.with_name(f"config.toml.bak-{stamp}")
+            with backup.open("xb") as stream:
+                stream.write(original)
+                stream.flush()
+                os.fsync(stream.fileno())
+        _atomic(config_path, text.encode("utf-8"))
+        model_version_notice.decide(version, decline=False)
+        print(f"Adopted model version {version} for Reviewer-1.")
+        return
     routes = before.get("coding", {}).get("routes", {}) if isinstance(before.get("coding", {}), dict) else {}
     if not routes:
         routes = {name: route for name, route in json.loads(

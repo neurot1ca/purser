@@ -99,6 +99,11 @@ def load(config_path: Path) -> dict:
     coding = user.get("coding", {})
     if not isinstance(coding, dict):
         raise ValueError("[coding] must be a table")
+    reviewer_model = coding.get("reviewer1_model_requested")
+    if reviewer_model is not None:
+        if not isinstance(reviewer_model, str) or not AGY_MODEL.fullmatch(reviewer_model):
+            raise ValueError("[coding] reviewer1_model_requested is invalid")
+        config["reviewer1_model_requested"] = reviewer_model
     agent = coding.get("coder_agent", "codex")
     if agent not in ("codex", "opencode", "agy"):
         raise ValueError("[coding] coder_agent is invalid")
