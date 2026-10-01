@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.58 — 2026-10-01
+
+- **Changed:** An explicitly requested model and effort on a new Codex call now win over the route defaults; replies, fallback and the mechanical OpenCode path keep their own models.
+- **Fixed:** Telemetry reports read the global task event index and count starts with no project in a separate global bucket.
+- **Added:** An admitted sync reply records a send-back decision, and the route outcome report shows failed, cancelled, timed-out and awaiting-apply jobs apart from Claude's decisions.
+- **Changed:** The delegation skill states the Objective plus Acceptance criteria prompt form that grounds the task contract.
+
 ## 0.1.57 — 2026-10-01
 
 - **Fixed:** A reply chain applies against the thread's first baseline, so continued jobs no longer fail with a worker replay conflict.
