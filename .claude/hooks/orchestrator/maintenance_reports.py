@@ -34,6 +34,7 @@ CLEANUP_HANDOFF_COMMIT_RULE = (
     "Any `temizle` cleanup must land as ONE separate commit containing only that cleanup; "
     "a single `git revert` must undo it."
 )
+_REPORT_TYPES = ("cleanup", "test-gaps")
 
 
 def _canonical_root(value: str | os.PathLike[str]) -> Path:
@@ -102,9 +103,11 @@ def record_consent(repo: str | os.PathLike[str], decision: str, *, state: Path |
 
 def skip_second_show(repo: str | os.PathLike[str], report: str, *, state: Path | None = None) -> None:
     root = _canonical_root(repo)
-    expected_dir = _maintenance_dir(root, state or state_root.default_state_root()) / "reports" / "cleanup"
     path = Path(report).resolve()
-    if path.parent != expected_dir.resolve() or path.suffix != ".json" or not path.name.endswith(".notice.json"):
+    report_type = path.parent.name
+    expected_dir = _maintenance_dir(root, state or state_root.default_state_root()) / "reports" / report_type
+    if (report_type not in _REPORT_TYPES or path.parent != expected_dir.resolve()
+            or path.suffix != ".json" or not path.name.endswith(".notice.json")):
         raise ValueError("report notice must belong to this project")
     notice = json.loads(path.read_text(encoding="utf-8"))
     cycle = notice.get("pending_cycle") or notice.get("last_shown_cycle")
@@ -143,9 +146,10 @@ def _source_commit(root: Path) -> str:
 
 def _write_report(path: Path, body: str, *, commit: str, timestamp: str,
                   versions: list[str], limitations: str, findings: list[dict] | None = None,
-                  cost: dict | None = None) -> None:
+                  cost: dict | None = None, report_type: str = "cleanup") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = ("# Cleanup report\n\n"
+    title = "Cleanup" if report_type == "cleanup" else "Test gaps"
+    content = (f"# {title} report\n\n"
                f"- Source commit: `{commit}`\n- Run time (UTC): `{timestamp}`\n"
                f"- Tool versions: {', '.join(versions)}\n- Limitations: {limitations}\n\n"
                + f"- Findings: {len(findings) if findings is not None else 'unknown'}\n"
@@ -168,6 +172,13 @@ def parse_findings(body: str) -> list[dict] | None:
         start = body.rindex(_FINDINGS_START) + len(_FINDINGS_START)
         end = body.index("```", start)
         value = json.loads(body[start:end].strip())
+        if isinstance(value, dict):
+            coverage = value.get("line_coverage_pct")
+            if (set(value) != {"findings", "line_coverage_pct"}
+                    or (coverage is not None and (isinstance(coverage, bool)
+                        or not isinstance(coverage, (int, float)) or not 0 <= coverage <= 100))):
+                return None
+            value = value["findings"]
         if not isinstance(value, list):
             return None
         result = []
@@ -183,6 +194,18 @@ def parse_findings(body: str) -> list[dict] | None:
             result.append({**item, "confidence_rank": _confidence_rank(item["confidence"])})
         return sorted(result, key=lambda item: item["confidence_rank"], reverse=True)
     except (ValueError, TypeError, KeyError):
+        return None
+
+
+def _line_coverage(body: str) -> int | float | None:
+    try:
+        start = body.rindex(_FINDINGS_START) + len(_FINDINGS_START)
+        end = body.index("```", start)
+        value = json.loads(body[start:end].strip())
+        coverage = value.get("line_coverage_pct") if isinstance(value, dict) else None
+        return coverage if (isinstance(coverage, (int, float)) and not isinstance(coverage, bool)
+                            and 0 <= coverage <= 100) else None
+    except (ValueError, TypeError, AttributeError):
         return None
 
 
@@ -324,9 +347,27 @@ def _is_opted_in(root: Path, directory: Path) -> bool:
         return False
 
 
-def _cadence_due(directory: Path, now: float | None = None) -> bool:
+def _last_run_path(directory: Path, report_type: str) -> Path:
+    return directory / "last-run.json" if report_type == "cleanup" else directory / "reports" / report_type / "last-run.json"
+
+
+def _last_completed_at(directory: Path, report_type: str) -> float:
     try:
-        last = json.loads((directory / "last-run.json").read_text(encoding="utf-8"))
+        value = json.loads(_last_run_path(directory, report_type).read_text(encoding="utf-8"))
+        at = value.get("completed_at")
+        return float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else 0
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
+
+
+def _select_due_report_type(directory: Path, candidates: tuple[str, ...] = _REPORT_TYPES) -> str:
+    return min(candidates, key=lambda report_type: (_last_completed_at(directory, report_type),
+                                                     _REPORT_TYPES.index(report_type)))
+
+
+def _cadence_due(directory: Path, now: float | None = None, *, report_type: str = "cleanup") -> bool:
+    try:
+        last = json.loads(_last_run_path(directory, report_type).read_text(encoding="utf-8"))
         at = last.get("completed_at")
         current = time.time() if now is None else now
         return isinstance(at, (int, float)) and current - at >= MAINTENANCE_CADENCE_SECONDS
@@ -334,7 +375,10 @@ def _cadence_due(directory: Path, now: float | None = None) -> bool:
         return True
 
 
-def eligible(repo: Path, *, state: Path, now: float | None = None) -> bool:
+def eligible(repo: Path, *, state: Path, now: float | None = None,
+             report_type: str = "cleanup") -> bool:
+    if report_type not in _REPORT_TYPES:
+        raise ValueError(f"unsupported maintenance report type: {report_type}")
     root = _canonical_root(repo)
     directory = _maintenance_dir(root, state)
     try:
@@ -348,7 +392,7 @@ def eligible(repo: Path, *, state: Path, now: float | None = None) -> bool:
             return False
     except (OSError, ValueError, TypeError, AttributeError):
         return False
-    if not _cadence_due(directory, now):
+    if not _cadence_due(directory, now, report_type=report_type):
         return False
     quota = _fresh_quota(now)
     if quota is None:
@@ -380,14 +424,19 @@ def _opted_in_projects(state: Path):
 
 
 def delayed_check(repo: Path, *, state: Path | None = None, delay: float = BACKGROUND_CHECK_DELAY_SECONDS) -> Path | None:
-    """Wait off-hook, then start at most one globally eligible cleanup job."""
+    """Wait off-hook, then start the oldest-due globally eligible maintenance report."""
     state = state or state_root.default_state_root()
     time.sleep(min(max(delay, 0), BACKGROUND_CHECK_TIMEOUT_SECONDS - JOB_TIMEOUT_SECONDS))
     candidate = _canonical_root(repo)
-    if not any(project == candidate for project in _opted_in_projects(state)) or not eligible(candidate, state=state):
+    if not any(project == candidate for project in _opted_in_projects(state)):
         return None
+    due = [report_type for report_type in _REPORT_TYPES
+           if eligible(candidate, state=state, report_type=report_type)]
+    if not due:
+        return None
+    report_type = _select_due_report_type(_maintenance_dir(candidate, state), tuple(due))
     try:
-        return run_cleanup(candidate, state=state, _require_idle=True)
+        return run_report(candidate, report_type=report_type, state=state, _require_idle=True)
     except FileExistsError:
         return None
 
@@ -439,6 +488,22 @@ def _create_active(active_path: Path, active: dict) -> None:
 def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
                 server: codex_exec_mcp.Server | None = None, poll_seconds: float = 1.0,
                 _require_idle: bool = False) -> Path | None:
+    return run_report(repo, report_type="cleanup", state=state, server=server,
+                      poll_seconds=poll_seconds, _require_idle=_require_idle)
+
+
+def run_test_gaps(repo: str | os.PathLike[str], *, state: Path | None = None,
+                  server: codex_exec_mcp.Server | None = None, poll_seconds: float = 1.0,
+                  _require_idle: bool = False) -> Path | None:
+    return run_report(repo, report_type="test-gaps", state=state, server=server,
+                      poll_seconds=poll_seconds, _require_idle=_require_idle)
+
+
+def run_report(repo: str | os.PathLike[str], *, report_type: str, state: Path | None = None,
+               server: codex_exec_mcp.Server | None = None, poll_seconds: float = 1.0,
+               _require_idle: bool = False) -> Path | None:
+    if report_type not in _REPORT_TYPES:
+        raise ValueError(f"unsupported maintenance report type: {report_type}")
     root = _canonical_root(repo)
     import codex_exec_mcp
     state = state or state_root.default_state_root()
@@ -454,10 +519,10 @@ def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
     directory.mkdir(parents=True, exist_ok=True)
     slot_context = _global_slot(state)
     slot_context.__enter__()
-    if _require_idle and not eligible(root, state=state):
+    if _require_idle and not eligible(root, state=state, report_type=report_type):
         slot_context.__exit__(None, None, None)
         return None
-    active_path = directory / "cleanup-active.json"
+    active_path = directory / f"{report_type}-active.json"
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     active = {"project_root": str(root), "started_at": timestamp, "state": "RUNNING"}
     bridge = server or codex_exec_mcp.Server(job_dir=state / "codex_exec_mcp" / "jobs", agent="codex")
@@ -466,7 +531,7 @@ def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
     except FileExistsError as exc:
         if not _active_is_stale(active_path, bridge):
             slot_context.__exit__(None, None, None)
-            raise RuntimeError(f"A cleanup report is already running for {root}.") from exc
+            raise RuntimeError(f"A {report_type} report is already running for {root}.") from exc
         stale_path = active_path.with_name("." + uuid.uuid4().hex + ".stale")
         try:
             os.replace(active_path, stale_path)
@@ -478,12 +543,12 @@ def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
             _create_active(active_path, active)
         except FileExistsError as duplicate:
             slot_context.__exit__(None, None, None)
-            raise RuntimeError(f"A cleanup report is already running for {root}.") from duplicate
+            raise RuntimeError(f"A {report_type} report is already running for {root}.") from duplicate
     except Exception:
         slot_context.__exit__(None, None, None)
         raise
 
-    reports = directory / "reports" / "cleanup"
+    reports = directory / "reports" / report_type
     report_path = reports / (timestamp + ".md")
     failure_path = reports / "failures" / (timestamp + ".json")
     job_id = None
@@ -494,13 +559,19 @@ def run_cleanup(repo: str | os.PathLike[str], *, state: Path | None = None,
         if _active_user_jobs(state) is not False:
             raise RuntimeError("active or unknown user job state; maintenance skipped")
         commit = _source_commit(root)
-        vulture_version, limitations = _tool_info()
+        if report_type == "cleanup":
+            vulture_version, limitations = _tool_info()
+            tool_versions = [vulture_version]
+        else:
+            limitations = "Coverage availability and result are reported by the worker."
+            tool_versions = []
         versions = [f"Python: {sys.version.split()[0]}", "Git: " + subprocess.run(
             ["git", "--version"], cwd=root, capture_output=True, text=True, timeout=10,
             check=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0).stdout.strip(),
-                    vulture_version]
-        prompt = f"""Produce a cleanup report for the repository at {root}.
+                    *tool_versions]
+        if report_type == "cleanup":
+            prompt = f"""Produce a cleanup report for the repository at {root}.
 This is a strictly read-only inspection. Do not edit files, create repository files,
 install tools, or run package managers. Report only evidence-backed candidates.
 For every item include (1) exact tool output or search evidence, (2) repository
@@ -514,6 +585,30 @@ continue consuming resources once it needs the machine. End your report with thi
 machine-readable list, using one object per finding and an empty list for no findings:
 ```purser-findings-json
 [{{"path_line":"relative/path.py:12","symbol":"name","evidence":"short evidence","confidence":"high|medium|low"}}]
+```
+"""
+        else:
+            prompt = f"""Produce a test-gaps report for the repository at {root}.
+This is a strictly read-only inspection. Do not edit files, create repository files,
+install tools, or run package managers. Report only evidence-bound candidate tests.
+For each candidate, give the target path:line and symbol, the untested behaviour,
+evidence from source, the exact command used to search existing tests and its result
+showing no test already covers that behaviour, and a high, medium, or low confidence
+level. Include a compact contract evidence section covering documented requirements,
+invariants, boundaries, and affected callers, cite each item to a source path:line,
+and write "unknown" where evidence is absent.
+Check whether a coverage tool is already available in this project's environment.
+For Python coverage, if `python -m coverage --version` succeeds, run
+`python -m coverage report --format=total`; report its total line coverage as a
+number and include that exact command. Use an existing configured command for other
+available coverage tools. If no usable coverage tool or coverage data is available,
+report coverage as unknown. Never install anything.
+If user-initiated work starts, it has priority: do not delay it, cancel it, or
+continue consuming resources once it needs the machine. End with one JSON object in
+this machine-readable block. Findings use the cleanup shape; line_coverage_pct must
+be a number or null:
+```purser-findings-json
+{{"findings":[{{"path_line":"relative/path.py:12","symbol":"name","evidence":"source evidence; untested behaviour; test search command and no-match result","confidence":"high|medium|low"}}],"line_coverage_pct":null}}
 ```
 """
         call = str(uuid.uuid4())
@@ -555,6 +650,7 @@ machine-readable list, using one object per finding and an empty list for no fin
             if status == "SUCCEEDED":
                 body = result.get("content", "")
                 findings = parse_findings(body) if isinstance(body, str) else None
+                line_coverage = _line_coverage(body) if report_type == "test-gaps" and isinstance(body, str) else None
                 after_quota = _fresh_quota()
                 concurrent = _active_user_jobs(state)
                 before_window = _active_quota_window(before_quota or {})
@@ -575,11 +671,13 @@ machine-readable list, using one object per finding and an empty list for no fin
                         "quota_change_active_window_pct": quota_change}
                 _write_report(report_path, body if isinstance(body, str) else "", commit=commit,
                               timestamp=timestamp, versions=versions, limitations=limitations,
-                              findings=findings, cost=cost)
-                codex_exec_mcp._atomic_json(directory / "last-run.json", {"completed_at": time.time()})
+                              findings=findings, cost=cost, report_type=report_type)
+                codex_exec_mcp._atomic_json(_last_run_path(directory, report_type), {"completed_at": time.time()})
                 codex_exec_mcp._atomic_json(report_path.with_suffix(".notice.json"), {
+                    "report_type": report_type,
                     "report_path": str(report_path), "findings": findings,
                     "finding_count": len(findings) if findings is not None else None,
+                    "line_coverage_pct": line_coverage,
                     "shown": False,
                 })
                 return report_path
@@ -632,15 +730,17 @@ def notice_context(repo: Path, *, state: Path, allow_no_window: bool = True) -> 
     maintenance = _maintenance_dir(root, state)
     if not _is_opted_in(root, maintenance):
         return None
-    directory = maintenance / "reports" / "cleanup"
     candidates = []
-    for notice_path in sorted(directory.glob("*.notice.json")):
-        try:
-            notice = json.loads(notice_path.read_text(encoding="utf-8"))
-            if notice.get("done") is not True and notice.get("pending") is not True:
-                candidates.append((notice_path, notice))
-        except (OSError, ValueError, AttributeError):
-            continue
+    for report_type in _REPORT_TYPES:
+        directory = maintenance / "reports" / report_type
+        for notice_path in sorted(directory.glob("*.notice.json")):
+            try:
+                notice = json.loads(notice_path.read_text(encoding="utf-8"))
+                if notice.get("done") is not True and notice.get("pending") is not True:
+                    notice.setdefault("report_type", report_type)
+                    candidates.append((notice_path, notice))
+            except (OSError, ValueError, AttributeError):
+                continue
     if not candidates:
         return None
     quota = _fresh_quota()
@@ -718,6 +818,30 @@ def format_notice(notice: dict) -> str:
     path = notice.get("report_path", "unknown")
     count = notice.get("finding_count")
     findings = notice.get("findings")
+    if notice.get("report_type") == "test-gaps":
+        count_text = str(count) if isinstance(count, int) else "an unknown number of"
+        intro = (f"⚓ **Purser checked your tests in the background while you worked: the report lists {count_text} missing tests.**")
+        lines = []
+        coverage = notice.get("line_coverage_pct")
+        if (isinstance(coverage, (int, float)) and not isinstance(coverage, bool) and coverage > 90):
+            lines.append(f"> ⚓ **Purser: your code is now {int(coverage + 0.5)}% covered by tests! 🚀** You have reached a top-tier quality bar. Purser found the gaps for you in the background while you focused on your work. Type /purser:optimize for the last few steps.")
+        lines.append(f"> {intro}")
+        if not isinstance(findings, list):
+            lines.append(f"> *The findings could not be parsed; report: `{path}`.*")
+        else:
+            ranked = sorted(findings, key=lambda item: item.get(
+                "confidence_rank", _confidence_rank(item.get("confidence", ""))), reverse=True)[:5]
+            lines.extend([f"> *The table below shows each gap and its evidence; the full report is at `{path}`.*",
+                          "> | Gap | Evidence |", "> | --- | --- |"])
+            for item in ranked:
+                candidate = f"{item.get('path_line', '?')} {item.get('symbol', '?')}"
+                evidence = " ".join(str(item.get("evidence", "")).split())[:48]
+                lines.append(f"> | {candidate[:48]} | {evidence} |")
+        if (notice.get("pending_cycle") not in {None, "no-window"}
+                and notice.get("pending_show") == 1 and not notice.get("pending_skip_second")):
+            lines.append("> *Skip showing this again in this cycle?*")
+        lines.append("> *You can turn the module off at any time, or run it any time with /purser:optimize.*")
+        return "\n".join(lines)
     intro = (f"⚓ **While you worked, Purser scanned your project in the background with its proactive cleanup module: the report has {count} findings.**"
              if isinstance(count, int) else
              "⚓ **While you worked, Purser scanned your project in the background with its proactive cleanup module: the number of findings is unknown.**")
@@ -744,9 +868,10 @@ def format_notice(notice: dict) -> str:
 
 def mark_report_done(repo: str | os.PathLike[str], report: str, *, state: Path | None = None) -> None:
     root = _canonical_root(repo)
-    expected_dir = _maintenance_dir(root, state or state_root.default_state_root()) / "reports" / "cleanup"
     path = Path(report).resolve()
-    if path.parent != expected_dir.resolve() or not path.name.endswith(".notice.json"):
+    report_type = path.parent.name
+    expected_dir = _maintenance_dir(root, state or state_root.default_state_root()) / "reports" / report_type
+    if report_type not in _REPORT_TYPES or path.parent != expected_dir.resolve() or not path.name.endswith(".notice.json"):
         raise ValueError("report notice must belong to this project")
     notice = json.loads(path.read_text(encoding="utf-8"))
     notice.update(done=True, pending=False, shown=True)
@@ -771,7 +896,7 @@ def main(argv: list[str] | None = None) -> int:
     done.add_argument("--repo", required=True)
     done.add_argument("--report", required=True)
     run = commands.add_parser("run", help="run a maintenance report")
-    run.add_argument("report_type", choices=("cleanup",))
+    run.add_argument("report_type", choices=_REPORT_TYPES)
     run.add_argument("--repo", required=True)
     check = commands.add_parser("check", help="run a delayed idle maintenance check")
     check.add_argument("--repo", required=True)
@@ -788,7 +913,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "mark-done":
             mark_report_done(args.repo, args.report)
         elif args.command == "run":
-            print(run_cleanup(args.repo))
+            print(run_report(args.repo, report_type=args.report_type))
         else:
             delayed_check(Path(args.repo))
         return 0

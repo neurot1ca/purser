@@ -379,6 +379,20 @@ def test_maintenance_notice_requires_its_own_evidence_and_commit_rule(setup, mon
     assert advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["maintenance_pending"] is None
 
 
+def test_test_gaps_notice_has_no_cleanup_handoff(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    text = "> ⚓ **Purser checked your tests in the background while you worked: the report lists 1 missing tests.**"
+    assert advisor.queue_maintenance_notice(
+        event, repo, "C:/reports/test-gaps/report.md.notice.json", text,
+        evidence=["report.md", "src/module.py:4"],
+    )
+    blocked = advisor.stop({**event, "last_assistant_message": "> ⚓ **Codex: task complete.**"}, repo)
+    assert "skip-second-show --repo" in blocked["reason"]
+    assert "clean up" not in blocked["reason"].casefold()
+    assert "CLEANUP_HANDOFF" not in blocked["reason"]
+
+
 def test_maintenance_api_consent_notice_records_yes_or_no(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))

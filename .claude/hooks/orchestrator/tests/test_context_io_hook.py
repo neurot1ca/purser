@@ -179,8 +179,9 @@ def test_plugin_version_upgrade_context_and_first_install(monkeypatch, tmp_path)
     monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(output_raw, encoding="cp1254"))
     assert context_io_hook.main() == 0
     context = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"]
-    assert context and "Purser 2.0.0" in context
-    assert "> ⚓ **Purser 2.0.0 sürümüne yükseltildi:**" in context
+    assert context and "Purser upgraded to 2.0.0" in context
+    assert "> ⚓ **Purser upgraded to 2.0.0:**" in context
+    assert "render exactly one line in the user's language" in context
     assert "First change." in context and "Second change." in context and "Old change." not in context
     assert compaction_advisor._read_state(compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-update")["version_pending"]["version"] == "2.0.0"
 

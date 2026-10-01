@@ -85,9 +85,9 @@ def _plugin_version_context(payload: Mapping[str, Any], repository: Path | None)
         if not bullets or not compaction_advisor.queue_version_announcement(payload, repository, version):
             return None
         return (
-            f"On your next reply, render exactly one line in the user's language in this form: "
-            f"`> ⚓ **Purser {version} sürümüne yükseltildi:** <one short sentence summarizing the bullets>`. "
-            f"Translate the bold lead for other languages, keeping ⚓ and {version}. "
+            f"On your next reply, render exactly one line in the user's language in this form, translating from English: "
+            f"`> ⚓ **Purser upgraded to {version}:** <one short sentence summarizing the bullets>`. "
+            f"Keep ⚓ and {version}. "
             "Source bullets (summarize them in one short sentence):\n" + "\n".join(bullets)
         )
     except BaseException:

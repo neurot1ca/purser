@@ -443,6 +443,57 @@ def test_idle_check_respects_seven_day_cadence(project, monkeypatch):
     assert not maintenance_reports.eligible(project, state=state)
 
 
+def test_test_gaps_uses_opt_in_slot_and_its_own_cadence_and_report_dir(project, monkeypatch):
+    state = _state(project)
+    directory = _eligible_project(project, state)
+    cleanup_last_run = json.loads((directory / "last-run.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {
+        "5h_used_pct": 1, "5h_resets_at": "cycle-a"})
+    assert maintenance_reports.eligible(project, state=state, report_type="test-gaps")
+    server = FakeServer(state, {"state": "SUCCEEDED", "content": """
+```purser-findings-json
+{"findings":[{"path_line":"module.py:1","symbol":"unused","evidence":"no test exercises this behavior","confidence":"high"}],"line_coverage_pct":91.2}
+```
+"""})
+    report = maintenance_reports.run_test_gaps(project, state=state, server=server)
+    assert report.parent.name == "test-gaps" and report.exists()
+    assert "read-only" in server.args["prompt"] and "line_coverage_pct" in server.args["prompt"]
+    assert not (state / "maintenance" / "active.json").exists()
+    notice = json.loads(report.with_suffix(".notice.json").read_text(encoding="utf-8"))
+    assert notice["line_coverage_pct"] == 91.2
+    assert (report.parent / "last-run.json").exists()
+    assert not maintenance_reports.eligible(project, state=state, report_type="test-gaps")
+    assert json.loads((directory / "last-run.json").read_text(encoding="utf-8")) == cleanup_last_run
+
+
+def test_due_report_type_uses_oldest_last_run_and_cleanup_wins_ties(tmp_path):
+    cleanup = tmp_path / "last-run.json"
+    gaps = tmp_path / "reports" / "test-gaps" / "last-run.json"
+    cleanup.parent.mkdir(parents=True, exist_ok=True)
+    gaps.parent.mkdir(parents=True)
+    cleanup.write_text('{"completed_at":20}', encoding="utf-8")
+    gaps.write_text('{"completed_at":10}', encoding="utf-8")
+    assert maintenance_reports._select_due_report_type(tmp_path) == "test-gaps"
+    gaps.write_text('{"completed_at":20}', encoding="utf-8")
+    assert maintenance_reports._select_due_report_type(tmp_path) == "cleanup"
+
+
+def test_test_gaps_notice_and_coverage_milestone():
+    notice = {"report_type": "test-gaps", "report_path": "C:/state/report.md",
+              "finding_count": 1, "line_coverage_pct": 91,
+              "findings": [{"path_line": "module.py:8", "symbol": "parse",
+                            "evidence": "branch lacks test", "confidence": "high"}]}
+    text = maintenance_reports.format_notice(notice)
+    assert "lists 1 missing tests" in text
+    assert "Gap | Evidence" in text and "module.py:8 parse" in text
+    assert "report is at `C:/state/report.md`" in text
+    assert "91% covered by tests" in text
+    assert "clean up" not in text.casefold()
+    for coverage in (90, None):
+        notice["line_coverage_pct"] = coverage
+        assert "covered by tests" not in maintenance_reports.format_notice(notice)
+
+
 def test_notice_formats_all_findings_up_to_five_and_claims_once(project, monkeypatch):
     state = _state(project)
     maintenance_reports.opt_in(project, state=state)

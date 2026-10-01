@@ -460,6 +460,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 maintenance_pending = {"notice_file": maintenance_pending["notice_file"],
                                        "text": maintenance_pending["text"],
                                        "evidence": maintenance_pending["evidence"],
+                                       "report_type": maintenance_pending.get("report_type", "cleanup"),
                                        "blocked": maintenance_pending.get("blocked") is True}
             codex_retry_pending = value.get("codex_retry_pending")
             if isinstance(codex_retry_pending, str) and codex_retry_pending.strip():
@@ -614,8 +615,10 @@ def queue_maintenance_notice(payload: Mapping[str, Any], repository: Path | None
             return False
         state_path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(state_path, session_id)
+        report_type = "test-gaps" if Path(notice_file).parent.name == "test-gaps" else "cleanup"
         state["maintenance_pending"] = {"notice_file": notice_file, "text": text,
-                                         "evidence": evidence, "blocked": False}
+                                         "evidence": evidence, "report_type": report_type,
+                                         "blocked": False}
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return True
     except BaseException:
@@ -1234,19 +1237,21 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                 notice_file = maintenance_pending["notice_file"]
                 skip_command = (f'{maintenance_cli} skip-second-show --repo "<repository-root>" '
                                 f'--report "{notice_file}"')
-                done_command = (f'{maintenance_cli} mark-done --repo "<repository-root>" '
-                                f'--report "{notice_file}"')
                 instruction = (
                     "Render the completed maintenance notice below in the user's language, translating from the English text and keeping ⚓, count, paths, and table. "
                     f"If the user wants the module off (or uses the equivalent in their language, including `kapat`), run `{maintenance_cli} opt-out --repo \"<repository-root>\"`. "
                     f"If the user says not to show it again this cycle, run `{skip_command}`. "
-                    "If they answer `clean up` or its equivalent in the user's language (including `temizle`), dispatch one ordinary Codex implementation job routed as subtle. "
-                    "Re-verify every listed item against current HEAD and remove exactly the still-unused listed items; "
-                    "skip each item that is no longer unused and explain why. After successful cleanup, run "
-                    + f"`{done_command}`. "
-                    "Do not invent items or edit unlisted code. "
-                    + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
                 )
+                if maintenance_pending.get("report_type", "cleanup") == "cleanup":
+                    done_command = (f'{maintenance_cli} mark-done --repo "<repository-root>" '
+                                    f'--report "{notice_file}"')
+                    instruction += (
+                        "If they answer `clean up` or its equivalent in the user's language (including `temizle`), dispatch one ordinary Codex implementation job routed as subtle. "
+                        "Re-verify every listed item against current HEAD and remove exactly the still-unused listed items; "
+                        "skip each item that is no longer unused and explain why. After successful cleanup, run "
+                        + f"`{done_command}`. Do not invent items or edit unlisted code. "
+                        + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
+                    )
             reasons.append(instruction + maintenance_pending["text"])
         if receipt is not None and not receipt.get("blocked"):
             receipt["blocked"] = True
