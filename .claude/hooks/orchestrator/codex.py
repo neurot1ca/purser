@@ -1801,6 +1801,7 @@ def pre_tool_use(
         agent = loaded_config.get("coder_agent", "codex")
         model = route.model
         effort = route.effort
+        model_source = "route"
         mechanical_candidate = False
         active_coder = (active_coder_state.read(repository, runtime_root)
                         if (repository is not None and isinstance(loaded_config.get("fallback"), Mapping))
@@ -1848,6 +1849,19 @@ def pre_tool_use(
             requested["model"] = model
             requested["effort"] = effort
             mechanical_candidate = False
+        elif (new_call and not mechanical_candidate
+              and agent == loaded_config.get("coder_agent", "codex")):
+            supplied_model = tool_input.get("model")
+            if isinstance(supplied_model, str) and coder_config.MODEL.fullmatch(supplied_model):
+                model = supplied_model
+                requested["model"] = model
+                model_source = "override"
+                supplied_config = tool_input.get("config")
+                supplied_effort = (supplied_config.get("model_reasoning_effort")
+                                   if isinstance(supplied_config, Mapping) else None)
+                if supplied_effort in {"low", "medium", "high", "xhigh"}:
+                    effort = supplied_effort
+                    requested["effort"] = effort
         fallback_serving = (isinstance(loaded_config.get("fallback"), Mapping)
                             and agent == loaded_config["fallback"]["agent"]
                             and model == loaded_config["fallback"]["model"])
@@ -2195,6 +2209,7 @@ def pre_tool_use(
             "task_type": task_type if task_type != "unknown" else parsed.phase,
             "suspected_route_mismatch": suspected_route_mismatch,
             "model": model,
+            "model_source": model_source,
             "agent": agent,
             "provider": _implementer_provider(agent, model),
             "effort": effort,

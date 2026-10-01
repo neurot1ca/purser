@@ -206,7 +206,7 @@ _VIOLATION_CODES = frozenset(
 
 _COMMON_CALL_FIELDS = frozenset(
     {
-        "phase", "route", "model", "effort", "routing_enforced", "fresh_thread", "reply_call",
+        "phase", "route", "model", "model_source", "effort", "routing_enforced", "fresh_thread", "reply_call",
         "reason", "reason_source", "previous_route", "new_route", "eta_minutes",
         "task_type", "suspected_route_mismatch", "agent", "provider",
     }
@@ -467,7 +467,9 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name == "reason_source" and value in {"explicit", "inherited"}:
         return value
-    if name == "effort" and value in _EFFORTS:
+    if name == "model_source" and value in {"override", "route"}:
+        return value
+    if name == "effort" and value in _EFFORTS | {"none"}:
         return value
     if name == "served_effort" and value in _EFFORTS | {"none"}:
         return value

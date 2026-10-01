@@ -3839,6 +3839,77 @@ def test_each_route_sets_exact_model_and_effort(workspace, config, route, model,
     assert updated["prompt"] == codex._append_worker_validation_instruction("Implement.")
 
 
+def test_new_call_model_override_reaches_worker_receipt_and_telemetry(workspace, config):
+    repo, state = workspace
+    call = event(START_TOOL, prompt=orch(route="subtle") + "\nImplement.",
+                 model="openai/gpt-6-sol", config={"model_reasoning_effort": "xhigh"})
+
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    route_event = next(e for e in _all_telemetry_events(state)
+                       if e["event_type"] == "TASK_ROUTE_SELECTED")
+
+    assert updated["model"] == "openai/gpt-6-sol"
+    assert updated["config"]["model_reasoning_effort"] == "xhigh"
+    assert updated["jobModel"] == "openai/gpt-6-sol"
+    assert updated["jobEffort"] == "xhigh"
+    assert result["systemMessage"] == "Purser: route=subtle -> openai/gpt-6-sol / xhigh"
+    assert route_event["payload"]["model"] == "openai/gpt-6-sol"
+    assert route_event["payload"]["effort"] == "xhigh"
+    assert route_event["payload"]["model_source"] == "override"
+
+
+def test_model_override_is_rejected_on_reply_to_preserve_thread_pin(workspace, config):
+    repo, state = workspace
+    save_live_thread(state, route="normal", model="gpt-6-sol", effort="medium")
+    reply = event(codex.CODEX_REPLY_TOOL, prompt=orch() + "\nContinue.",
+                 threadId="thread-1", model="openai/gpt-6-luna",
+                 config={"model_reasoning_effort": "high"})
+
+    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "CODEX_REPLY_INPUT_INVALID" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    saved = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")["record"]
+    assert saved["live_thread"]["model"] == "gpt-6-sol"
+    assert saved["live_thread"]["effort"] == "medium"
+
+
+def test_model_override_is_ignored_under_active_fallback(workspace, config, monkeypatch):
+    repo, state = workspace
+    config = _fallback_config(config)
+    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+    active = _fallback_state(workspace)
+    active["active_coder"] = "fallback"
+    active_coder_state.write(repo, active, state)
+    call = event(START_TOOL, prompt=orch() + "\nImplement.", model="openai/gpt-6-sol",
+                 config={"model_reasoning_effort": "xhigh"})
+
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    assert updated["model"] == "anthropic/claude-sonnet"
+    assert updated["jobModel"] == "anthropic/claude-sonnet"
+    assert updated["jobEffort"] == "none"
+    route_event = next(e for e in _all_telemetry_events(state)
+                       if e["event_type"] == "TASK_ROUTE_SELECTED")
+    assert route_event["payload"]["model_source"] == "route"
+
+
+def test_invalid_model_override_is_ignored(workspace, config):
+    repo, state = workspace
+    call = event(prompt=orch(route="subtle") + "\nImplement.", model="gpt-6-sol")
+
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    route_event = next(e for e in _all_telemetry_events(state)
+                       if e["event_type"] == "TASK_ROUTE_SELECTED")
+
+    assert updated["model"] == "gpt-6-luna"
+    assert route_event["payload"]["model_source"] == "route"
+
+
 def test_routed_call_shows_selected_model_and_effort(workspace, config):
     repo, state = workspace
     result = codex.pre_tool_use(
