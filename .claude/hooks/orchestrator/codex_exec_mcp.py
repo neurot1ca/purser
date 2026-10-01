@@ -386,6 +386,41 @@ def _windows_process_identity(pid: int) -> tuple[str, int | None]:
         kernel.CloseHandle(handle)
 
 
+def _posix_process_identity(pid: int) -> tuple[str, int | None]:
+    """Return Linux process state and /proc start ticks, or fail closed."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        fields = stat[stat.rfind(")") + 2:].split()
+        state = fields[0]
+        created = int(fields[19])  # field 22: process start time
+    except FileNotFoundError:
+        return "DEAD", None
+    except (OSError, ValueError, IndexError):
+        return "UNCONFIRMED", None
+    return ("DEAD" if state in {"Z", "X"} else "ALIVE"), created
+
+
+def _posix_process_group_stopped(pid: int) -> bool:
+    """Confirm a detached POSIX child session has no live processes."""
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return False
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="ascii")
+            fields = stat[stat.rfind(")") + 2:].split()
+            if int(fields[2]) == pid and fields[0] not in {"Z", "X"}:  # pgrp, state
+                return False
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, IndexError):
+            return False
+    return True
+
+
 def _toml(value: Any) -> str:
     if isinstance(value, str):
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + '"'
@@ -833,6 +868,8 @@ def _child_tree_stopped(process: subprocess.Popen[bytes], job_handle: Any) -> bo
             time.sleep(0.02)
         return False
     try:
+        if _posix_process_group_stopped(process.pid):
+            return True
         os.killpg(process.pid, 0)
         return False
     except ProcessLookupError:
@@ -1038,15 +1075,19 @@ class Server:
             return False
 
     def _classify_host(self, job: dict[str, Any]) -> str:
-        if os.name != "nt":
-            return "UNCONFIRMED"
         pid = job.get("hostPid")
         created = job.get("hostCreatedAt")
         if (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
-                or not isinstance(created, int) or isinstance(created, bool)
-                or not job.get("hostContained")):
+                or not isinstance(created, int) or isinstance(created, bool)):
             return "UNCONFIRMED"
-        state, actual_created = _windows_process_identity(pid)
+        if os.name == "nt":
+            if not job.get("hostContained"):
+                return "UNCONFIRMED"
+            state, actual_created = _windows_process_identity(pid)
+        elif sys.platform.startswith("linux"):
+            state, actual_created = _posix_process_identity(pid)
+        else:
+            return "UNCONFIRMED"
         if actual_created is not None and actual_created != created:
             return "DEAD"
         return state
@@ -1082,7 +1123,8 @@ class Server:
                 except OSError:
                     return "UNCONFIRMED"
                 return "RECOVERED"
-            if not job.get("hostPid") or not job.get("hostContained"):
+            if (not job.get("hostPid")
+                    or (os.name == "nt" and not job.get("hostContained"))):
                 return "UNCONFIRMED"
             classification = self._classify_host(job)
             if classification != "DEAD":
@@ -1111,6 +1153,11 @@ class Server:
 
             if not isinstance(job.get("hostCreatedAt"), int) or not isinstance(job.get("generation"), int):
                 return ambiguous("RECOVERY_PROOF_MISSING", "Host or child-tree termination proof is missing")
+            if os.name != "nt" and job.get("state") == "RUNNING":
+                child_pid = job.get("pid")
+                if (not isinstance(child_pid, int) or isinstance(child_pid, bool) or child_pid <= 0
+                        or not _posix_process_group_stopped(child_pid)):
+                    return "UNCONFIRMED"
             attempts = job.get("resumedAfterInterruption", 0)
             if not isinstance(attempts, int) or attempts < 0:
                 return ambiguous("RECOVERY_PROOF_MISSING", "Recovery attempt history is invalid")
@@ -2262,6 +2309,10 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                 if not containment:
                     raise OSError("host Job Object containment unconfirmed")
                 process_state, created = _windows_process_identity(os.getpid())
+                if process_state != "ALIVE" or created is None:
+                    raise OSError("host process identity unavailable")
+            elif sys.platform.startswith("linux"):
+                process_state, created = _posix_process_identity(os.getpid())
                 if process_state != "ALIVE" or created is None:
                     raise OSError("host process identity unavailable")
             else:

@@ -446,6 +446,7 @@ def test_session_start_reminds_unconsumed_jobs_and_caps_at_five(monkeypatch, tmp
     monkeypatch.setattr(context_io_hook.state_root, "default_state_root", lambda: state)
     monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *_args: None)
     monkeypatch.setattr(codex_exec_mcp, "_windows_process_identity", lambda _pid: ("ALIVE", 456))
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_identity", lambda _pid: ("ALIVE", 456))
     assert context_io_hook.main() == 0
     lines = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"].splitlines()
     assert len(lines) == 6

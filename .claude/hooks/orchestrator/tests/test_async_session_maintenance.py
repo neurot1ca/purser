@@ -296,6 +296,7 @@ def test_cleanup_dead_host_reconciles_once_to_ambiguous(tmp_path, monkeypatch):
     job.update(hostPid=123, hostContained=True)
     record.write_text(json.dumps(job), encoding="utf-8")
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
     maintenance.cleanup_jobs(tmp_path, now=1000)
     first = json.loads(record.read_text())
     maintenance.cleanup_jobs(tmp_path, now=2000)
@@ -419,7 +420,7 @@ def _recoverable(root, *, thread_id=None, stage="PENDING", attempts=0):
     jobs = root / "codex_exec_mcp" / "jobs"
     record = jobs / f"{job_id}.json"
     job = json.loads(record.read_text(encoding="utf-8"))
-    job.update(generation=1, ownershipToken="old", hostPid=123,
+    job.update(generation=1, ownershipToken="old", hostPid=123, pid=789,
                hostCreatedAt=456, hostContained=True, deadlineAt=100,
                resumedAfterInterruption=attempts)
     if thread_id:
@@ -436,6 +437,7 @@ def _recoverable(root, *, thread_id=None, stage="PENDING", attempts=0):
 def test_concurrent_recoverers_launch_one_host(tmp_path, monkeypatch):
     job_id, record, pending, lease = _recoverable(tmp_path)
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
     launches = []
     monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launches.append(args))
     bridge = codex_exec_mcp.Server(job_dir=record.parent)
@@ -455,6 +457,7 @@ def test_recovery_with_thread_resumes_and_without_thread_inspects(tmp_path, monk
         root = tmp_path / (thread_id or "fresh")
         job_id, record, _, _ = _recoverable(root, thread_id=thread_id)
         monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+        monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
         monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: None)
         maintenance.cleanup_jobs(root, now=1000)
         launch = json.loads(record.with_suffix(".launch").read_text())
@@ -467,6 +470,7 @@ def test_recovery_with_thread_resumes_and_without_thread_inspects(tmp_path, monk
 def test_recovery_attempt_cap_and_unconfirmed_and_consumed(tmp_path, monkeypatch):
     job_id, record, _, _ = _recoverable(tmp_path / "cap", attempts=2)
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
     launches = []
     monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launches.append(args))
     maintenance.cleanup_jobs(tmp_path / "cap", now=1000)
@@ -486,6 +490,7 @@ def test_recovery_missing_launch_stays_ambiguous(tmp_path, monkeypatch):
     _, record, _, _ = _recoverable(tmp_path)
     record.with_suffix(".launch").unlink()
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
     maintenance.cleanup_jobs(tmp_path, now=1000)
     job = json.loads(record.read_text())
     assert job["state"] == "UNKNOWN_OR_IN_PROGRESS"
@@ -496,6 +501,7 @@ def test_recovery_missing_launch_stays_ambiguous(tmp_path, monkeypatch):
 def test_failed_thread_resume_never_starts_a_fresh_thread(tmp_path, monkeypatch):
     job_id, record, _, _ = _recoverable(tmp_path, thread_id="thread-1")
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
     monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: None)
     maintenance.cleanup_jobs(tmp_path, now=1000)
     server = codex_exec_mcp.Server(job_dir=record.parent)

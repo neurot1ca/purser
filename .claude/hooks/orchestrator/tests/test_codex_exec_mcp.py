@@ -280,12 +280,27 @@ def test_queued_job_with_host_pid_recovers(area, monkeypatch):
                        "hostCreatedAt": 1, "hostContained": True,
                        "acceptedAt": 1000.0, "deadlineAt": 1100.0})
     monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
     launched = []
     monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launched.append(args))
     assert server.recover_job(job_id, now=1001.0) == "RECOVERED"
     job = server._read_job(job_id)
     assert job["generation"] == 2 and "hostPid" not in job
     assert len(launched) == 1 and launched[0][2:] == (2, job["ownershipToken"])
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX child process groups")
+def test_live_posix_child_group_blocks_dead_host_recovery(tmp_path, monkeypatch):
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    job_id = "6" * 64
+    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 1,
+                       "hostPid": 123, "hostCreatedAt": 456, "hostContained": False,
+                       "pid": 789, "acceptedAt": 1, "deadlineAt": 100})
+    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: False)
+
+    assert server.recover_job(job_id, now=2) == "UNCONFIRMED"
+    assert server._read_job(job_id)["state"] == "RUNNING"
 
 
 def test_atomic_job_write_retries_transient_replace_permission_error(area, monkeypatch):
@@ -389,6 +404,7 @@ def test_initialize_and_list(client):
     assert missing["structuredContent"]["errorCode"] == "INVALID_ARGUMENT"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows process creation flags")
 def test_windows_codex_child_uses_hidden_process_group_flags():
     creation = codex_exec_mcp._process_creation_options(windows=True)
     flags = creation["creationflags"]
@@ -458,6 +474,7 @@ def test_superseded_generation_exits_without_starting_codex(tmp_path, monkeypatc
     assert not (tmp_path / f"{job_id}.host-claim").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows ctypes process launch")
 def test_windows_host_launch_uses_hidden_console_flags(monkeypatch, tmp_path):
     class MockFunction:
         def __init__(self, callback):
@@ -497,7 +514,6 @@ def test_windows_host_launch_uses_hidden_console_flags(monkeypatch, tmp_path):
         return kernel if name == "kernel32" else user
 
     monkeypatch.setattr(codex_exec_mcp.ctypes, "WinDLL", win_dll, raising=False)
-    monkeypatch.setattr(codex_exec_mcp, "os", type("WindowsOS", (), {"name": "nt", "environ": {}})())
     codex_exec_mcp._launch_host(tmp_path, "job")
 
     flags = creation["flags"]
@@ -1001,7 +1017,9 @@ def test_worktree_job_keeps_existing_relative_cwd(area):
         config_args = [argv[index + 1] for index, value in enumerate(argv[:-1]) if value == "-c"]
         assert (f"sandbox_workspace_write.writable_roots="
                 f"{codex_exec_mcp._toml([str(worktree)])}") in config_args
-        assert all(str(repo.parent) not in value for value in config_args)
+        assert config_args == [
+            f"sandbox_workspace_write.writable_roots={codex_exec_mcp._toml([str(worktree)])}"
+        ]
         assert "cwdFallback" not in job
     finally:
         client.close()
@@ -1722,6 +1740,9 @@ def test_completed_turn_hang_succeeds_and_stops_child_tree(area, monkeypatch):
 
 
 def _pid_alive(pid):
+    if sys.platform.startswith("linux"):
+        state, _created = codex_exec_mcp._posix_process_identity(pid)
+        return state == "ALIVE"
     try:
         os.kill(pid, 0)
         return True

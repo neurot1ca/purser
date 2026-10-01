@@ -519,11 +519,12 @@ def test_opencode_selection_reaches_reviewer_adapter_with_fake_runner(workspace,
     runner = FakeRunner()
     caller_workdir = tmp_path / "opencode-caller"
     caller_workdir.mkdir()
+    executable = r"C:\tools\opencode.exe" if os.name == "nt" else "/tools/opencode"
 
     def selected_reviewer(**kwargs):
         selected_config = {
             **reviewer_module._load_config(config),
-            "reviewer1_executable": r"C:\tools\opencode.exe",
+            "reviewer1_executable": executable,
         }
         return reviewer_module.review_materials(
             {
@@ -553,7 +554,7 @@ def test_opencode_selection_reaches_reviewer_adapter_with_fake_runner(workspace,
 
     assert len(runner.calls) == 1
     command, run_kwargs = runner.calls[0]
-    assert command[:2] == [r"C:\tools\opencode.exe", "run"]
+    assert command[:2] == [executable, "run"]
     assert command[command.index("--model") + 1] == candidate_model
     agent = command[command.index("--agent") + 1]
     assert agent == "opencode"
@@ -1792,12 +1793,13 @@ def test_recovered_job_reviews_original_baseline_and_releases_lease_after_consum
     original_call = json.loads(record.read_text(encoding="utf-8"))["call"]
     (repo / "file0.py").write_text("before = True\n", encoding="utf-8")
     job = json.loads(record.read_text(encoding="utf-8"))
-    job.update(generation=1, ownershipToken="old", hostPid=123, hostCreatedAt=456,
+    job.update(generation=1, ownershipToken="old", hostPid=123, pid=789, hostCreatedAt=456,
                hostContained=True, deadlineAt=time.time() - 1, signalToken="secret")
     record.write_text(json.dumps(job), encoding="utf-8")
     record.with_suffix(".launch").write_text(json.dumps({"name": "codex", "args": {
         "prompt": "Update both files.", "timeoutSeconds": 30}, "codexBin": "codex"}), encoding="utf-8")
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
     launches = []
     monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launches.append(args))
     async_session_maintenance.cleanup_jobs(state)
@@ -1844,10 +1846,11 @@ def test_failed_recovery_finalizes_through_ambiguous_path(workspace, config, mon
     repo, state = workspace
     start, job_id, record = async_started(workspace, config)
     job = json.loads(record.read_text(encoding="utf-8"))
-    job.update(generation=1, ownershipToken="old", hostPid=123, hostCreatedAt=456,
+    job.update(generation=1, ownershipToken="old", hostPid=123, pid=789, hostCreatedAt=456,
                hostContained=True, deadlineAt=time.time() - 1)
     record.write_text(json.dumps(job), encoding="utf-8")
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
     async_session_maintenance.cleanup_jobs(state)
     assert json.loads(record.read_text())["state"] == "UNKNOWN_OR_IN_PROGRESS"
     assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "ACTIVE"
@@ -2627,7 +2630,7 @@ def test_overlapping_worktree_admission_keeps_baseline_without_waiting(workspace
     assert len(_lease_state(workspace).overlapping_owners(codex._call_key(first))) == 1
     job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
     jobs = state / "codex_exec_mcp" / "jobs"
-    server = codex_exec_mcp.Server(job_dir=jobs)
+    server = codex_exec_mcp.Server(codex_bin=json.dumps([sys.executable]), job_dir=jobs)
     monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *_args: None)
     monkeypatch.setattr(server, "_await_host", lambda *_args: {"structuredContent": {"jobId": job_id, "state": "QUEUED"}})
     server._start_job(updated)
