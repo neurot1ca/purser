@@ -816,11 +816,11 @@ def queue_receipt(payload: Mapping[str, Any], repository: Path | None,
         receipt: dict[str, Any] = {"model": model, "effort": str(bundle.get("effort") or "unknown"), "blocked": False}
         quota = bundle.get("codex_quota")
         if isinstance(quota, Mapping):
-            for key in ("5h_used_pct", "5h_resets_at", "7d_used_pct", "snapshot_at"):
+            for key in ("5h_used_pct", "5h_resets_at", "7d_used_pct", "7d_resets_at", "snapshot_at"):
                 value = quota.get(key)
                 if key.endswith("pct") and type(value) in (int, float):
                     receipt[key] = round(value)
-                elif key in ("5h_resets_at", "snapshot_at") and isinstance(value, str):
+                elif key in ("5h_resets_at", "7d_resets_at", "snapshot_at") and isinstance(value, str):
                     receipt[key] = value
         path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(path, session_id)
@@ -942,6 +942,21 @@ def _receipt_advice(receipt: Mapping[str, Any], now: datetime | None = None) -> 
             pass
     if "7d_used_pct" in receipt:
         parts.append(f"7d used {receipt['7d_used_pct']}%")
+    reset = receipt.get("7d_resets_at")
+    if isinstance(reset, str):
+        try:
+            parsed = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                clock = now or datetime.now(timezone.utc)
+                if clock.tzinfo is None:
+                    clock = clock.replace(tzinfo=timezone.utc)
+                minutes = max(0, int((parsed - clock.astimezone(parsed.tzinfo)).total_seconds() // 60))
+                if minutes >= 24 * 60:
+                    parts.append(f"time until 7d reset {minutes // (24 * 60)}d {minutes % (24 * 60) // 60}h")
+                else:
+                    parts.append(f"time until 7d reset {minutes // 60}h {minutes % 60}m")
+        except ValueError:
+            pass
     return ("Write one line in the user's language as `> ⚓ **Codex done: ...**`, "
             "showing " + ", ".join(parts) + ".")
 
@@ -955,6 +970,24 @@ def _receipt_satisfied(receipt: Mapping[str, Any], message: str, now: datetime) 
         percentage = re.escape(str(receipt["7d_used_pct"]))
         if not re.search(r"(?<!\d)(?:" + percentage + r"\s*%|%\s*" + percentage + r")(?!\d)", message):
             return False
+    reset = receipt.get("7d_resets_at")
+    if isinstance(reset, str):
+        try:
+            parsed = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                clock = now
+                if clock.tzinfo is None:
+                    clock = clock.replace(tzinfo=timezone.utc)
+                minutes = max(0, int((parsed - clock.astimezone(parsed.tzinfo)).total_seconds() // 60))
+                if minutes >= 24 * 60:
+                    first, second = minutes // (24 * 60), minutes % (24 * 60) // 60
+                else:
+                    first, second = minutes // 60, minutes % 60
+                remaining = r"(?<!\d)" + str(first) + r"\D+" + str(second) + r"(?!\d)"
+                if not re.search(remaining, message):
+                    return False
+        except ValueError:
+            pass
     return True
 
 

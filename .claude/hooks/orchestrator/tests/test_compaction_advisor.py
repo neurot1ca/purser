@@ -323,9 +323,10 @@ def _receipt_state(repo):
     return advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["receipt_pending"]
 
 
-def _queue_receipt(event, repo, model="gpt-6-sol", *, seven_day_pct=46, reset_at="2099-09-24T13:20:00Z", snapshot_at=None):
+def _queue_receipt(event, repo, model="gpt-6-sol", *, seven_day_pct=46, reset_at="2099-09-24T13:20:00Z", seven_day_reset=None, snapshot_at=None):
     advisor.queue_receipt(event, repo, {"model": model, "effort": "high", "codex_quota": {
         "5h_used_pct": 24, "5h_resets_at": reset_at, "7d_used_pct": seven_day_pct,
+        **({"7d_resets_at": seven_day_reset} if seven_day_reset is not None else {}),
         **({"snapshot_at": snapshot_at} if snapshot_at is not None else {}),
     }})
 
@@ -496,6 +497,44 @@ def test_missing_receipt_blocks_once(setup):
     assert "gpt-6-sol" in result["reason"] and "24%" in result["reason"] and "46%" in result["reason"]
     assert "time until 5h reset" in result["reason"]
     assert advisor.stop({**event, "last_assistant_message": "Done."}, repo) is None
+
+
+def test_receipt_advice_includes_seven_day_reset_and_accepts_it(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo, seven_day_reset="2026-09-27T14:00:00Z")
+    receipt = _receipt_state(repo)
+
+    advice = advisor._receipt_advice(receipt, now=NOW)
+
+    assert "time until 7d reset 3d 2h" in advice
+    assert advisor._receipt_satisfied(
+        receipt, "gpt-6-sol high 46%; 3 gün 2 sa sonra yenilenir", NOW,
+    )
+
+
+def test_seven_day_reset_under_one_day_uses_hours_and_minutes():
+    receipt = {
+        "model": "gpt-6-sol", "effort": "high", "5h_resets_at": "2099-09-24T13:20:00Z",
+        "7d_used_pct": 46, "7d_resets_at": "2026-09-24T18:37:00Z",
+    }
+
+    advice = advisor._receipt_advice(receipt, now=NOW)
+
+    assert "time until 7d reset 6h 37m" in advice
+
+
+def test_receipt_without_seven_day_reset_keeps_old_output():
+    receipt = {
+        "model": "gpt-6-sol", "effort": "high", "5h_resets_at": "2099-09-24T13:20:00Z",
+        "7d_used_pct": 46,
+    }
+
+    advice = advisor._receipt_advice(receipt, now=NOW)
+
+    assert "7d used 46%" in advice
+    assert "time until 7d reset" not in advice
+    assert advisor._receipt_satisfied(receipt, "gpt-6-sol high 46%", NOW)
 
 
 def test_present_receipt_clears_pending(setup):
