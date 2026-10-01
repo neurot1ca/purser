@@ -215,6 +215,7 @@ def test_claude_decision_duplicate_source_counts_once(tmp_path):
     as_is = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
                         "tasks" / "as-is.json").read_text(encoding="utf-8"))
     assert as_is["claude_acceptance"]["applied_as_is"] is True
+    assert as_is["task_type_source"] == "decision"
     projected = telemetry.obsidian_projection._prepare_aggregate(as_is)
     assert projected["task_type"] == "implementation"
     assert projected["claude_acceptance"]["sources"][0]["ts_utc"]
@@ -306,6 +307,7 @@ def test_task_fold_keeps_routed_type_and_latest_claude_decision(tmp_path):
     aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
                             "tasks" / "decision-latest.json").read_text(encoding="utf-8"))
     assert aggregate["task_type"] == "counting_status"
+    assert aggregate["task_type_source"] == "route"
     assert aggregate["claude_decision"]["decision"] == "accepted"
 
 

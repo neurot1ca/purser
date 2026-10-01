@@ -1056,6 +1056,7 @@ def _new_aggregate(
         "duration_ms": None,
         "phase": None,
         "task_type": "unknown",
+        "task_type_source": "unknown",
         "has_code_map": None,
         "selected_agent": None,
         "selected_provider": None,
@@ -1189,6 +1190,7 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
                 aggregate[field] = payload[field]
         if "task_type" in payload:
             aggregate["task_type"] = payload["task_type"]
+            aggregate["task_type_source"] = "route"
         for payload_field, aggregate_field in (
             ("agent", "selected_agent"), ("provider", "selected_provider"),
             ("model", "selected_model"),
@@ -1277,6 +1279,7 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
         }
         if aggregate["task_type"] == "unknown" and payload["task_type"] != "unknown":
             aggregate["task_type"] = payload["task_type"]
+            aggregate["task_type_source"] = "decision"
         if payload["decision"] == "send_back":
             acceptance["send_backs"] += 1
         terminals = {item["decision"] for item in sources

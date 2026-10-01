@@ -174,7 +174,27 @@ def report(state_root, since, *, project_key=None, min_samples=5):
                 continue
             if project_key and task.get("project_key") != project_key:
                 continue
-            key = tuple(task.get(field) or "unknown" for field in ("route", "model", "effort", "task_type"))
+            selected = (
+                task.get("selected_route") or task.get("selected_agent") or task.get("route") or "unknown",
+                task.get("selected_model") or task.get("model") or "unknown",
+                task.get("selected_effort") or task.get("effort") or "unknown",
+            )
+            served = tuple(task.get(field) or "unknown" for field in (
+                "served_route", "served_model", "served_effort",
+            ))
+            if served[0] == "unknown":
+                served = (task.get("served_agent") or "unknown", served[1], served[2])
+            task_type = task.get("task_type")
+            task_type = (task_type if task.get("task_type_source") == "route"
+                         and isinstance(task_type, str) and task_type.strip() else "unknown")
+            if task_type.casefold() == "unknown":
+                task_type = "unknown"
+            acceptance = task.get("claude_acceptance")
+            sources = acceptance.get("sources", []) if isinstance(acceptance, dict) else []
+            kinds = {source.get("kind") for source in sources if isinstance(source, dict)}
+            work_kind = ("fetched_operation" if "result" in kinds else
+                         "applied_implementation" if "apply" in kinds else "unknown")
+            key = (*selected, *served, task_type, work_kind)
             task["_source_project_key"] = task.get("project_key") or project_dir.name
             groups[key].append(task)
             all_tasks.append(task)
@@ -182,33 +202,101 @@ def report(state_root, since, *, project_key=None, min_samples=5):
     results = []
     for key in sorted(groups, key=lambda row: tuple(str(value).casefold() for value in row)):
         tasks = groups[key]
+        selected_route, selected_model, selected_effort = key[:3]
+        served_route, served_model, served_effort = key[3:6]
+        task_type, work_kind = key[6:]
         outcomes = Counter(
-            task.get("claude_acceptance", {}).get("outcome", "unknown")
-            if isinstance(task.get("claude_acceptance"), dict) else "unknown"
+            outcome if outcome in {"accepted", "rejected"} else "unknown"
             for task in tasks
+            for outcome in [task.get("claude_acceptance", {}).get("outcome", "unknown")
+                            if isinstance(task.get("claude_acceptance"), dict) else "unknown"]
         )
         known = outcomes["accepted"] + outcomes["rejected"]
         accepted = [task for task in tasks if isinstance(task.get("claude_acceptance"), dict)
                     and task["claude_acceptance"].get("outcome") == "accepted"]
         applied = sum(task["claude_acceptance"].get("applied_as_is") is True for task in accepted)
+        if work_kind == "fetched_operation":
+            applied = 0
         send_backs = sum(
             _number((task.get("claude_acceptance") or {}).get("send_backs")) or 0 for task in tasks
         )
         durations = [_number(task.get("duration_ms")) for task in accepted]
         durations = [value for value in durations if value is not None]
-        tokens = [_task_tokens(task) for task in accepted]
-        worker_tokens = [value["worker"] for value in tokens if value["worker"] is not None]
-        claude_tokens = [value["claude"] for value in tokens if value["claude"] is not None]
+        tokens = [_task_tokens(task) for task in tasks]
+        attempt_durations = [_number(task.get("duration_ms")) for task in tasks]
+        worker_values = [value["worker"] for value in tokens]
+        claude_values = [value["claude"] for value in tokens]
+        elapsed_values = attempt_durations
+        usage = {
+            name: {"known": sum(value is not None for value in values),
+                  "unknown": sum(value is None for value in values), "total": len(values)}
+            for name, values in (("worker_tokens", worker_values), ("claude_tokens", claude_values),
+                                 ("elapsed_ms", elapsed_values))
+        }
+        outcome_denominator = {"known": known, "unknown": len(tasks) - known, "total": len(tasks)}
+        applied_accepted = sum(
+            task.get("claude_acceptance", {}).get("outcome") == "accepted"
+            and any(source.get("kind") == "apply" for source in task.get("claude_acceptance", {}).get("sources", [])
+                    if isinstance(source, dict))
+            for task in tasks if isinstance(task.get("claude_acceptance"), dict)
+        )
+        fetched_operation_accepted = sum(
+            task.get("claude_acceptance", {}).get("outcome") == "accepted"
+            and any(source.get("kind") == "result" for source in task.get("claude_acceptance", {}).get("sources", [])
+                    if isinstance(source, dict))
+            for task in tasks if isinstance(task.get("claude_acceptance"), dict)
+        )
+        cost_per_accepted = {
+            name: (sum(values) / outcomes["accepted"]
+                   if outcomes["accepted"] and known == len(tasks)
+                   and all(value is not None for value in values) else None)
+            for name, values in (("worker_tokens", worker_values), ("claude_tokens", claude_values),
+                                 ("elapsed_ms", elapsed_values))
+        }
+        adequate = len(tasks) >= min_samples
+        decision = "no decision" if (
+            not adequate or known != len(tasks) or not outcomes["accepted"] or work_kind == "unknown"
+            or any(item["unknown"] for item in usage.values())
+        ) else "reported"
+        accepted_tokens = [_task_tokens(task) for task in accepted]
+        worker_tokens = [value["worker"] for value in accepted_tokens if value["worker"] is not None]
+        claude_tokens = [value["claude"] for value in accepted_tokens if value["claude"] is not None]
         reviewers = Counter(
             (f"SKIPPED:{task['reviewer1_skipped_reason']}"
              if task.get("reviewer1_skipped_reason") else task.get("reviewer1_result") or "unknown")
             for task in tasks
         )
-        adequate = len(tasks) >= min_samples
+        comparison_sources = []
+        for task in tasks:
+            acceptance = task.get("claude_acceptance")
+            source_events = acceptance.get("sources", []) if isinstance(acceptance, dict) else []
+            latest = task.get("claude_decision")
+            decision_time = latest.get("ts_utc") if isinstance(latest, dict) else None
+            if not decision_time and source_events:
+                decision_time = source_events[-1].get("ts_utc")
+            comparison_sources.append({
+                "task_id": task.get("task_id"), "project_key": task.get("_source_project_key"),
+                "decision_sources": source_events, "decision_time": decision_time or "unknown",
+            })
+        fallback = None
+        if "unknown" not in (selected_route, selected_model, served_route, served_model):
+            route_or_model_differs = (selected_route, selected_model) != (served_route, served_model)
+            fallback = route_or_model_differs or (
+                selected_effort != served_effort
+                if selected_effort != "unknown" and served_effort != "unknown" else None
+            )
         results.append({
-            "route": key[0], "model": key[1], "effort": key[2], "task_type": key[3],
+            "route": selected_route, "model": selected_model, "effort": selected_effort,
+            "selected_route": selected_route, "selected_model": selected_model, "selected_effort": selected_effort,
+            "served_route": served_route, "served_model": served_model, "served_effort": served_effort,
+            "fallback": fallback,
+            "task_type": task_type, "work_kind": work_kind,
             "sample_count": len(tasks), "outcome_coverage": known / len(tasks) if adequate and tasks else None,
             "accepted": outcomes["accepted"], "rejected": outcomes["rejected"], "unknown": outcomes["unknown"],
+            "outcome_denominator": outcome_denominator, "usage": usage,
+            "cost_per_accepted": cost_per_accepted, "attempt_elapsed_ms": usage["elapsed_ms"],
+            "applied_accepted": applied_accepted, "fetched_operation_accepted": fetched_operation_accepted,
+            "decision": decision,
             "applied_as_is_rate": applied / len(accepted) if adequate and accepted else None,
             "send_backs": send_backs,
             "accepted_duration_ms": {"count": len(durations), "median": statistics.median(durations) if durations else None,
@@ -218,9 +306,7 @@ def report(state_root, since, *, project_key=None, min_samples=5):
             "accepted_claude_tokens": {"count": len(claude_tokens), "median": statistics.median(claude_tokens) if claude_tokens else None,
                                        "p90": _percentile(claude_tokens, .9)},
             "reviewer_outcomes": dict(sorted(reviewers.items())),
-            "sources": [{"task_id": task["task_id"],
-                         "project_key": task.get("_source_project_key")}
-                        for task in tasks[:5] if task.get("task_id")],
+            "sources": [source for source in comparison_sources if source.get("task_id")],
             "insufficient_evidence": not adequate,
         })
     return {"since": since.isoformat().replace("+00:00", "Z"), "project_key": project_key,
@@ -230,8 +316,8 @@ def report(state_root, since, *, project_key=None, min_samples=5):
 def markdown(result, output_path, state_root):
     lines = ["# Route outcome report", "", f"Since (UTC): {result['since']}",
              f"Minimum sample size: {result['minimum_sample_size']}", "",
-             "| Route | Model | Effort | Task type | Samples | Coverage | Accepted | Rejected | Unknown | Applied as-is | Send-backs | Accepted duration ms (n / median / p90) | Accepted worker tokens (n / median / p90) | Accepted Claude tokens (n / median / p90) | Reviewer outcomes | Sources | Evidence |",
-             "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- |"]
+             "| Selected route (agent) / model / effort | Served route (agent) / model / effort | Fallback | Task type | Work kind | Samples | Decision | Outcomes known / unknown / total | Accepted | Rejected | Unknown | Cost per accepted: worker tokens / Claude tokens / elapsed ms | Usage known / unknown / total (worker / Claude / elapsed) | Applied accepted | Fetched operation accepted | Applied as-is | Send-backs | Accepted duration ms (n / median / p90) | Accepted worker tokens (n / median / p90) | Accepted Claude tokens (n / median / p90) | Reviewer outcomes | Task source and decision time | Evidence |",
+             "| --- | --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- |"]
     for group in result["groups"]:
         def rate(value):
             return "—" if value is None else f"{value:.1%}"
@@ -243,12 +329,31 @@ def markdown(result, output_path, state_root):
             path = state_root / "projects" / source["project_key"] / "telemetry" / "tasks" / f"{task_id}.json"
             link = os.path.relpath(path, Path(output_path).parent).replace(os.sep, "/")
             label = str(task_id).replace("[", "\\[").replace("]", "\\]")
-            sources.append(f"[{label}](<{link}>)")
-        evidence = "insufficient evidence" if group["insufficient_evidence"] else "reported"
-        values = [str(group[field]) for field in ("route", "model", "effort", "task_type")]
-        values += [
-            str(group["sample_count"]), rate(group["outcome_coverage"]), str(group["accepted"]),
-            str(group["rejected"]), str(group["unknown"]), rate(group["applied_as_is_rate"]),
+            decision_sources = ", ".join(
+                f"{item.get('kind', 'unknown')}:{item.get('job_id', 'unknown')}"
+                for item in source["decision_sources"] if isinstance(item, dict)
+            ) or "unknown source"
+            sources.append(f"[{label}](<{link}>) ({decision_sources}; {source['decision_time']})")
+        evidence = "insufficient evidence" if group["decision"] == "no decision" else "reported"
+        fallback = "unknown" if group["fallback"] is None else "yes" if group["fallback"] else "no"
+        worker_cost = group["cost_per_accepted"]["worker_tokens"]
+        claude_cost = group["cost_per_accepted"]["claude_tokens"]
+        elapsed_cost = group["cost_per_accepted"]["elapsed_ms"]
+        usage = group["usage"]
+        values = [
+            f"{group['selected_route']} / {group['selected_model']} / {group['selected_effort']}",
+            f"{group['served_route']} / {group['served_model']} / {group['served_effort']}",
+            fallback, str(group["task_type"]), str(group["work_kind"]), str(group["sample_count"]),
+            group["decision"],
+            f"{group['outcome_denominator']['known']} / {group['outcome_denominator']['unknown']} / {group['outcome_denominator']['total']}",
+            str(group["accepted"]),
+            str(group["rejected"]), str(group["unknown"]),
+            ", ".join("unknown" if value is None else str(value) for value in
+                      (worker_cost, claude_cost, elapsed_cost)),
+            " / ".join(f"{usage[name]['known']} / {usage[name]['unknown']} / {usage[name]['total']}"
+                       for name in ("worker_tokens", "claude_tokens", "elapsed_ms")),
+            str(group["applied_accepted"]), str(group["fetched_operation_accepted"]),
+            rate(group["applied_as_is_rate"]),
             str(group["send_backs"]), dist(group["accepted_duration_ms"]),
             dist(group["accepted_worker_tokens"]), dist(group["accepted_claude_tokens"]),
             ", ".join(f"{name}: {count}" for name, count in group["reviewer_outcomes"].items()),
