@@ -1190,6 +1190,39 @@ def test_apply_and_reply_emit_decisions_but_conflict_does_not(area):
         client.close()
 
 
+def test_apply_original_reply_chain_projects_accepted_thread_outcome(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "work", "cwd": str(repo), "worktree": True,
+            "taskId": "reply-chain-task", "jobPhase": "implementation",
+        })
+        finished = finish(client, started["jobId"], "SUCCEEDED")
+        reply = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "repair", "mode": "reply",
+            "threadId": finished["threadId"], "taskId": "reply-chain-task",
+            "jobPhase": "implementation",
+        })
+        finish(client, reply["jobId"], "SUCCEEDED")
+        original_path = (area / "root" / "codex_exec_mcp" / "jobs" /
+                         (started["jobId"] + ".json"))
+        original = read_job_record(original_path)
+        original.update(applyState="applied", applyResult={"applied": True, "paths": []})
+        codex_exec_mcp._atomic_json(original_path, original)
+        assert job_call(client, "codex_apply", {"jobId": started["jobId"]})["applied"] is True
+
+        import telemetry
+        project_key = codex_exec_mcp.project_root.project_key(repo.resolve())
+        telemetry.update_task("reply-chain-task", project_key=project_key, state_root=area / "root")
+        projection = json.loads((area / "root" / "projects" / project_key / "telemetry" /
+                                 "tasks" / "reply-chain-task.json").read_text(encoding="utf-8"))
+        assert projection["claude_acceptance"]["outcome"] == "accepted"
+        assert projection["claude_acceptance"]["send_backs"] == 1
+    finally:
+        client.close()
+
+
 def test_result_records_non_worktree_acceptance_once(area):
     client = Client(area)
     try:

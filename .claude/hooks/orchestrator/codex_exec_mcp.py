@@ -1543,6 +1543,7 @@ class Server:
         with ledger._lease_lock(lock_path):
             job = self._read_job(job["jobId"])
             if job.get("applyState") == "applied" and isinstance(job.get("applyResult"), dict):
+                _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
                 return _job_result(job["applyResult"])
             if args.get("resolved") is True:

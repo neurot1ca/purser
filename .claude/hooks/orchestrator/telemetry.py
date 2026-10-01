@@ -1064,6 +1064,8 @@ def _new_aggregate(
         "served_agent": None,
         "served_provider": None,
         "served_model": None,
+        "served_route": None,
+        "served_effort": None,
         "claude_decision": None,
         "claude_acceptance": {
             "outcome": "unknown", "send_backs": 0, "applied_as_is": False, "sources": []
@@ -1211,7 +1213,7 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
             aggregate["usage"]["codex_duration_ms"], payload.get("duration_ms")
         )
         for field in ("changed_paths_count", "thread_id", "claude_review_mode", "routing_enforced",
-                      "served_agent", "served_provider", "served_model"):
+                      "served_agent", "served_provider", "served_model", "served_route", "served_effort"):
             if field in payload:
                 aggregate[field] = payload[field]
         if "has_code_map" in payload:

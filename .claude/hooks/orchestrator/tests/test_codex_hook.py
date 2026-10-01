@@ -7370,6 +7370,7 @@ def test_implementation_count_wording_stays_unknown_and_unflagged(workspace, con
     assert pending["phase"] == "implementation"
     assert pending["task_type"] == "unknown"
     assert pending["suspected_route_mismatch"] is None
+    assert route_event["task_type"] == "implementation"
     assert route_event["suspected_route_mismatch"] is None
 
 
@@ -7383,9 +7384,9 @@ def test_finished_task_persists_code_map_present_and_codex_usage(workspace):
          }}}},
         state,
         {"task_id": task_id, "project_key": "unresolved", "agent": "codex",
-         "model": "gpt-6-sol", "phase": "implementation", "route": "normal",
+         "model": "gpt-6-sol", "effort": "high", "phase": "implementation", "route": "normal",
          "has_code_map": True},
-        {"delta_files": 0},
+        {"delta_files": 0, "model": "served-model", "effort": "xhigh"},
     )
 
     aggregate = json.loads((state / "projects" / "unresolved" / "telemetry" /
@@ -7395,6 +7396,8 @@ def test_finished_task_persists_code_map_present_and_codex_usage(workspace):
     assert aggregate["usage"]["codex_input_tokens"] == 23
     assert aggregate["usage"]["codex_output_tokens"] == 7
     assert aggregate["usage"]["codex_total_tokens"] == 30
+    assert (aggregate["served_route"], aggregate["served_model"], aggregate["served_effort"]) == (
+        "normal", "served-model", "xhigh")
 
 
 def test_finished_task_persists_code_map_absent(workspace):

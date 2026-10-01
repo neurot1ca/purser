@@ -254,6 +254,19 @@ def test_task_fold_preserves_selected_and_served_identity_after_fallback(tmp_pat
         "codex", "openai", "gpt-6-sol")
 
 
+def test_route_phase_projects_as_route_task_type(tmp_path):
+    common = {"task_id": "route-phase", "state_root": tmp_path,
+              "session_id": "session-1", "repo": "repo", "branch": "main",
+              "agent_id": "call-1", "agent_type": "codex-main"}
+    telemetry.emit("TASK_ROUTE_SELECTED", **common, phase="implementation", route="normal",
+                   model="gpt-6-sol", effort="medium", routing_enforced=True,
+                   task_type="implementation")
+    telemetry.update_task("route-phase", state_root=tmp_path)
+    aggregate = json.loads((tmp_path / "projects" / "unresolved" / "telemetry" /
+                            "tasks" / "route-phase.json").read_text(encoding="utf-8"))
+    assert (aggregate["task_type"], aggregate["task_type_source"]) == ("implementation", "route")
+
+
 def test_reply_usage_is_summed_once_per_finished_call(tmp_path):
     common = {"task_id": "usage-task", "state_root": tmp_path,
               "session_id": "session-1", "repo": "repo", "branch": "main",

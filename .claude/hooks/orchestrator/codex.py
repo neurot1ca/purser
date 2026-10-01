@@ -2192,7 +2192,7 @@ def pre_tool_use(
             "project_key": project_namespace,
             "phase": parsed.phase,
             "route": parsed.route,
-            "task_type": task_type,
+            "task_type": task_type if task_type != "unknown" else parsed.phase,
             "suspected_route_mismatch": suspected_route_mismatch,
             "model": model,
             "agent": agent,
@@ -3589,12 +3589,20 @@ def _post_observations(
     implementer = pending.get("agent", bundle.get("implementer"))
     if implementer == "codex":
         implementer = "codex-main"
+    served_model = bundle.get("model")
+    if not isinstance(served_model, str) or re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", served_model) is None:
+        served_model = pending.get("model")
+    served_effort = bundle.get("effort")
+    if not isinstance(served_effort, str) or served_effort not in {"low", "medium", "high", "xhigh", "none"}:
+        served_effort = pending.get("effort")
     finished_payload: dict[str, Any] = {
         "state_root": runtime_root,
         **envelope,
         "duration_ms": _numeric_duration_ms(event.get("duration_ms")),
         "implementer": implementer,
-        "served_model": pending.get("model"),
+        "served_model": served_model,
+        "served_effort": served_effort,
+        "served_route": pending.get("route"),
         "served_agent": pending.get("agent"),
         "served_provider": _implementer_provider(pending.get("agent"), pending.get("model")),
         "route": pending.get("route"),

@@ -225,6 +225,8 @@ _PAYLOAD_FIELDS = {
             "duration_ms",
             "implementer",
             "served_model",
+            "served_route",
+            "served_effort",
             "served_agent",
             "served_provider",
             "route",
@@ -457,7 +459,7 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name == "phase" and value in _PHASES:
         return value
-    if name in {"route", "previous_route", "new_route"} and value in _ROUTES:
+    if name in {"route", "previous_route", "new_route", "served_route"} and value in _ROUTES:
         return value
     if name == "reason" and value in {
         "new_task", "continue", "route_change", "reanchor", "repeated_failure", "user_override"
@@ -466,6 +468,8 @@ def _payload_value(name: str, value: Any) -> Any:
     if name == "reason_source" and value in {"explicit", "inherited"}:
         return value
     if name == "effort" and value in _EFFORTS:
+        return value
+    if name == "served_effort" and value in _EFFORTS | {"none"}:
         return value
     if name == "validation" and value in _VALIDATIONS:
         return value
