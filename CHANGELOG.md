@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.59 — 2026-10-01
+
+- **Added:** The daily new-model notice also checks the Reviewer-1 Gemini model; adopting it changes only the reviewer model.
+- **Changed:** Every user-facing Purser notice has an English master that Claude shows in the user's language.
+- **Added:** Maintenance can run a read-only test-gaps report with evidence-bound candidate tests, and shows a coverage milestone message above 90% line coverage.
+- **Fixed:** An explicitly requested model such as gpt-6-sol is now accepted for a new Codex call.
+
 ## 0.1.58 — 2026-10-01
 
 - **Changed:** An explicitly requested model and effort on a new Codex call now win over the route defaults; replies, fallback and the mechanical OpenCode path keep their own models.
