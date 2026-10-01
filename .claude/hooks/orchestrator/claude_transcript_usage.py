@@ -320,8 +320,10 @@ def check_transcript_identity(
         if current_identity["st_ino"] != expected_ino:
             return "TRANSCRIPT_IDENTITY_MISMATCH"
 
+    # Windows ctime is creation time; on POSIX it is inode-change time and
+    # changes on ordinary appends, so it cannot identify a growing transcript.
     expected_ctime = expected_identity.get("st_ctime_ns")
-    if expected_ctime is not None and current_identity["st_ctime_ns"] != expected_ctime:
+    if os.name == "nt" and expected_ctime is not None and current_identity["st_ctime_ns"] != expected_ctime:
         return "TRANSCRIPT_IDENTITY_MISMATCH"
 
     initial_size = expected_identity.get("st_size", 0)

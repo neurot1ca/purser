@@ -19,7 +19,7 @@ import telemetry_schema as schema
 import state_root as purser_state_root
 
 
-DEFAULT_VAULT_ROOT = Path(r"C:\AI-Operations")
+DEFAULT_VAULT_ROOT: Path | None = None
 LOCAL_TIMEZONE = "Europe/Istanbul"
 PROJECTION_SCHEMA_VERSION = 1
 SAMPLE_SIZE = 30
@@ -186,24 +186,23 @@ def _state_root(state_root: str | os.PathLike[str] | None) -> Path:
     return purser_state_root.default_state_root()
 
 
-def _vault_root(vault_root: str | os.PathLike[str] | None) -> Path:
-    if vault_root is not None:
-        return Path(vault_root)
-    try:
-        config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return DEFAULT_VAULT_ROOT
-    if not isinstance(config, Mapping):
-        return DEFAULT_VAULT_ROOT
-    setting = config.get("obsidian_projection")
-    configured_root = setting.get("vault_root") if isinstance(setting, Mapping) else None
+def _vault_root(vault_root: str | os.PathLike[str] | None) -> Path | None:
+    configured_root = vault_root if vault_root is not None else os.environ.get("PURSER_OBSIDIAN_VAULT")
     if configured_root is None:
-        configured_root = config.get("obsidian_vault_root")
-    if configured_root is None:
-        return DEFAULT_VAULT_ROOT
-    if not isinstance(configured_root, str) or not configured_root.strip():
-        raise ProjectionError("obsidian projection vault_root is invalid")
-    return Path(configured_root)
+        try:
+            config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(config, Mapping):
+            return None
+        setting = config.get("obsidian_projection")
+        configured_root = setting.get("vault_root") if isinstance(setting, Mapping) else None
+        if configured_root is None:
+            configured_root = config.get("obsidian_vault_root")
+    if not isinstance(configured_root, (str, os.PathLike)) or not str(configured_root).strip():
+        return None
+    root = Path(configured_root)
+    return root if root.is_absolute() else None
 
 
 def _identifier(name: str, value: Any, *, nullable: bool = True) -> str | None:
@@ -619,7 +618,7 @@ def project_task(
     *,
     state_root: str | os.PathLike[str] | None = None,
     vault_root: str | os.PathLike[str] | None = None,
-) -> Path:
+) -> Path | None:
     """Project one aggregate, or load one by task id, into its run note."""
 
     aggregate = (
@@ -628,7 +627,10 @@ def project_task(
         else _read_task_aggregate(aggregate_or_task_id, state_root)
     )
     prepared = _prepare_aggregate(aggregate)
-    path = _safe_run_path(_vault_root(vault_root), prepared)
+    vault = _vault_root(vault_root)
+    if vault is None:
+        return None
+    path = _safe_run_path(vault, prepared)
     _atomic_write(path, _with_marker(_frontmatter(prepared), _run_body(prepared)))
     return path
 
@@ -638,10 +640,12 @@ def project_health(
     state_root: str | os.PathLike[str] | None = None,
     vault_root: str | os.PathLike[str] | None = None,
     last_projection_write_at: str | None = None,
-) -> Path:
+) -> Path | None:
     """Write the reader-facing health note from the current telemetry state."""
 
     vault = _vault_root(vault_root)
+    if vault is None:
+        return None
     aggregates = _read_aggregates(state_root)
     path = _safe_vault_path(vault, "System", "Telemetry Health.md")
     content = _with_marker(
@@ -930,10 +934,12 @@ def project_metrics(
     state_root: str | os.PathLike[str] | None = None,
     vault_root: str | os.PathLike[str] | None = None,
     batching_snapshot_path: str | os.PathLike[str] | None = None,
-) -> Path:
+) -> Path | None:
     """Write Current Metrics from aggregates and the last valid audit snapshot."""
 
     vault = _vault_root(vault_root)
+    if vault is None:
+        return None
     path = _safe_vault_path(vault, "Calibration", "Current Metrics.md")
     content = _with_marker(
         "",
@@ -1173,6 +1179,8 @@ def rebuild(
     """Regenerate all projection-owned files from aggregate caches."""
 
     vault = _vault_root(vault_root)
+    if vault is None:
+        return ()
     aggregates = _read_aggregates(state_root)
     prepared = [_prepare_aggregate(aggregate) for aggregate in aggregates]
     outputs: list[tuple[Path, str]] = []

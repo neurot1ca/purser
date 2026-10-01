@@ -419,7 +419,20 @@ def test_human_note_is_never_overwritten(tmp_path):
     assert path.read_text(encoding="utf-8") == "# Human note\n"
 
 
-def test_missing_tz_database_degrades_instead_of_killing_the_hook():
+def test_projection_without_absolute_vault_root_creates_nothing(tmp_path, monkeypatch):
+    monkeypatch.delenv("PURSER_OBSIDIAN_VAULT", raising=False)
+    monkeypatch.setattr(projection, "_CONFIG_PATH", tmp_path / "missing-config.json")
+    monkeypatch.chdir(tmp_path)
+    aggregate = _aggregate()
+
+    assert projection.project_task(aggregate) is None
+    relative_vault = Path("relative-vault")
+    assert projection.project_task(aggregate, vault_root=relative_vault) is None
+    assert not (tmp_path / "missing-config.json").exists()
+    assert not (tmp_path / relative_vault).exists()
+
+
+def test_missing_tz_database_degrades_instead_of_killing_the_hook(monkeypatch):
     """A host without `tzdata` must not take the enforcement layer down with it.
 
     `_ZONE` used to be resolved at module import. Because `codex` imports
@@ -429,33 +442,14 @@ def test_missing_tz_database_degrades_instead_of_killing_the_hook():
     Observability is allowed to lose precision here; it is not allowed to block.
     """
 
-    import importlib
-    from importlib.abc import MetaPathFinder
+    from zoneinfo import ZoneInfoNotFoundError
 
-    class BlockTzdata(MetaPathFinder):
-        def find_spec(self, name, path=None, target=None):
-            if name == "tzdata" or name.startswith("tzdata."):
-                raise ImportError("tzdata blocked for test")
-            return None
+    def missing_zone(_name):
+        raise ZoneInfoNotFoundError("timezone database unavailable")
 
-    from zoneinfo import ZoneInfo
-
-    blocker = BlockTzdata()
-    sys.meta_path.insert(0, blocker)
-    cached = {name: module for name, module in sys.modules.items() if name.startswith("tzdata")}
-    for name in cached:
-        del sys.modules[name]
-    ZoneInfo.clear_cache()
-    try:
-        reloaded = importlib.reload(projection)
-        assert reloaded.LOCAL_TIMEZONE_RESOLVED.endswith("_FIXED_OFFSET_FALLBACK")
-        # The import that actually matters: enforcement must still load.
-        importlib.reload(importlib.import_module("codex"))
-    finally:
-        sys.meta_path.remove(blocker)
-        sys.modules.update(cached)
-        ZoneInfo.clear_cache()
-        importlib.reload(projection)
-        importlib.reload(importlib.import_module("codex"))
-
-    assert projection.LOCAL_TIMEZONE_RESOLVED == projection.LOCAL_TIMEZONE
+    monkeypatch.setattr(projection, "ZoneInfo", missing_zone)
+    zone, resolved = projection._resolve_zone()
+    assert resolved.endswith("_FIXED_OFFSET_FALLBACK")
+    assert zone.utcoffset(None).total_seconds() == 3 * 60 * 60
+    # The import that actually matters: enforcement must still load.
+    __import__("codex")

@@ -541,10 +541,12 @@ def test_same_path_replacement_or_rotation_detected(tmp_path):
         allowed_projects_root=projects_root,
     )
 
-    # Simulate rotation / replacement by unlinking and writing a new file with different ctime/ino
-    transcript.unlink()
+    # Simulate rotation / replacement with a new file (new inode) moved over the old path.
+    # Unlink-then-recreate can reuse the inode on POSIX filesystems.
     r2 = _make_assistant_record("sess-rot", "msg_2", "req_2", "call_rot", 200, 30)
-    _write_jsonl(transcript, [r2])
+    replacement = projects_root / "sess-rot.new"
+    _write_jsonl(replacement, [r2])
+    os.replace(replacement, transcript)
 
     stop_res = ctu.finalize_stop_task(
         state_root,
@@ -554,6 +556,16 @@ def test_same_path_replacement_or_rotation_detected(tmp_path):
     )
     assert stop_res["status"] == "FAILED"
     assert stop_res["reason"] in ("TRANSCRIPT_IDENTITY_MISMATCH", "TRANSCRIPT_ROTATED_OR_TRUNCATED")
+
+
+def test_ctime_identity_check_is_windows_only(tmp_path):
+    transcript = tmp_path / "sess-ctime.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    identity = ctu.get_transcript_identity(transcript)
+    identity["st_ctime_ns"] += 1
+
+    reason = ctu.check_transcript_identity(transcript, identity, None, None)
+    assert reason == ("TRANSCRIPT_IDENTITY_MISMATCH" if os.name == "nt" else None)
 
 
 # --- 16. Transcript truncation or cursor beyond EOF rejected ---

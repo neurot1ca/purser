@@ -848,15 +848,15 @@ def _claude_usage_payload(root: Path, event_type: str) -> dict[str, Any]:
     return payload
 
 
-def _projection_settings() -> tuple[bool, Path]:
+def _projection_settings() -> tuple[bool, Path | None]:
     """Read the optional local projection setting without making it authoritative."""
 
     try:
         config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return False, obsidian_projection.DEFAULT_VAULT_ROOT
+        return False, None
     if not isinstance(config, Mapping):
-        return False, obsidian_projection.DEFAULT_VAULT_ROOT
+        return False, None
 
     setting = config.get("obsidian_projection")
     if isinstance(setting, Mapping):
@@ -869,12 +869,9 @@ def _projection_settings() -> tuple[bool, Path]:
         enabled = config.get("obsidian_projection_enabled") is True
         configured_root = config.get("obsidian_vault_root")
     if not enabled:
-        return False, obsidian_projection.DEFAULT_VAULT_ROOT
-    if configured_root is None:
-        return True, obsidian_projection.DEFAULT_VAULT_ROOT
-    if not isinstance(configured_root, str) or not configured_root.strip():
-        raise ValueError("obsidian projection vault_root is invalid")
-    return True, Path(configured_root)
+        return False, None
+    root = obsidian_projection._vault_root(None)
+    return (root is not None), root
 
 
 def _project_task(
@@ -893,10 +890,12 @@ def _project_task(
         elif projection_enabled is None:
             enabled, configured_root = _projection_settings()
         else:
-            enabled, configured_root = projection_enabled, obsidian_projection.DEFAULT_VAULT_ROOT
+            enabled, configured_root = projection_enabled, obsidian_projection._vault_root(vault_root)
         if not enabled:
             return
-        target_vault = vault_root if vault_root is not None else configured_root
+        target_vault = obsidian_projection._vault_root(vault_root if vault_root is not None else configured_root)
+        if target_vault is None:
+            return
         project_state_root = _project_root(state_root, project_key).parent
         obsidian_projection.project_task(
             task_id,
