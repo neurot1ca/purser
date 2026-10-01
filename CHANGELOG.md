@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.57 — 2026-10-01
+
+- **Fixed:** A reply chain applies against the thread's first baseline, so continued jobs no longer fail with a worker replay conflict.
+- **Added:** A silent running job is marked stalled once per silence episode from learned per-route thresholds without being cancelled; the waiter reports it once and the board shows it as stalled. Async jobs default to a 24-hour cap.
+- **Changed:** The Codex done receipt also shows the time until the 7-day quota resets.
+- **Added:** The route outcome report attributes results to the served route, counts rejected and sent-back attempt cost per accepted result, and uses only route-time task types.
+- **Fixed:** Telemetry records the route-time task type, the served model, effort and route, and an accepted decision on a repeated apply of a reply chain.
+
 ## 0.1.56 — 2026-09-30
 
 - **Added:** An opted-in project can run a read-only Codex cleanup report by hand or automatically when idle (quiet period, no user job, weekly cadence, one global slot); findings are ranked and one notice offers a 'temizle' handoff that lands the cleanup as one revertible commit.
