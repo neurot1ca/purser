@@ -1273,9 +1273,11 @@ class Server:
                        "generation": 1, "ownershipToken": uuid.uuid4().hex}
                 if reply_record is not None:
                     job.update({key: reply_record[key] for key in
-                                ("worktreePath", "snapshot", "head", "repoRoot") if key in reply_record})
+                                ("worktreePath", "snapshot", "head", "repoRoot",
+                                 "baselineSnapshot") if key in reply_record})
                     if job.get("worktreePath"):
-                        job["replySnapshotPending"] = True
+                        job["baselineSnapshot"] = job.get("baselineSnapshot", job["snapshot"])
+                        job["snapshot"] = job["baselineSnapshot"]
                 if args.get("leaseQueued") is True:
                     job["leaseQueued"] = True
                 for field in ("taskId", "route", "etaMinutes"):
@@ -1930,7 +1932,8 @@ class Server:
                             current = self._read_job(request_id) if async_job else None
                             if current is not None:
                                 thread_config.update({key: current[key] for key in
-                                                      ("worktreePath", "snapshot", "head", "repoRoot")
+                                                      ("worktreePath", "snapshot", "baselineSnapshot",
+                                                       "head", "repoRoot")
                                                       if key in current})
                             with self.jobs_lock:
                                 current = self._read_job(request_id)
@@ -2047,7 +2050,8 @@ class Server:
                     current = self._read_job(request_id) if async_job else None
                     if current is not None:
                         thread_record.update({key: current[key] for key in
-                                              ("worktreePath", "snapshot", "head", "repoRoot")
+                                              ("worktreePath", "snapshot", "baselineSnapshot",
+                                               "head", "repoRoot")
                                               if key in current})
                     _save_record(self.state_dir, thread_record)
                 if async_job and forced_complete:
@@ -2180,12 +2184,10 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                     if job.get("resumedAfterInterruption"):
                         server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_INTERRUPTED")
                         return
-                    try:
-                        snapshot = ledger.capture_job_snapshot(worktree_path)
-                    except Exception:
-                        server._finish_job(job_id, "FAILED", "WORKTREE_SNAPSHOT_FAILED")
-                        return
-                    job["snapshot"] = snapshot
+                    # Older queued reply records may still carry this marker.
+                    # Keep their thread baseline instead of snapshotting the
+                    # staged state left by the previous turn.
+                    job["snapshot"] = job.get("baselineSnapshot", job["snapshot"])
                     job.pop("replySnapshotPending", None)
                     server._write_job(job)
                 repo_root = Path(job.get("repoRoot", worktree_path)).resolve()
@@ -2221,6 +2223,7 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                     return
                 job = server._read_job(job_id)
                 job.update(worktreePath=snapshot["path"], snapshot=snapshot["snapshot"],
+                           baselineSnapshot=snapshot["snapshot"],
                            head=snapshot["head"], repoRoot=os.fspath(repo_root))
                 server._write_job(job)
                 launch["args"] = {**launch["args"], "cwd": os.fspath(Path(snapshot["path"]) / relative_cwd)}
