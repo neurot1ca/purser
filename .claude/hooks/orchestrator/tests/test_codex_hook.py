@@ -2755,7 +2755,7 @@ def test_async_start_requires_orch_and_denies_internal_pre_error(workspace, conf
 def test_async_start_rewrites_and_retries_same_call(workspace, config):
     repo, state = workspace
     prompt = orch(scope="file0.py", reason="repeated_failure") + "|eta=8m\nDo the work."
-    call = event(START_TOOL, prompt=prompt, call="claude-value", model="wrong",
+    call = event(START_TOOL, prompt=prompt, call="claude-value", model="wrong model",
                  timeoutSeconds=90, config={"model_reasoning_effort": "low"})
     first = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     updated = first["hookSpecificOutput"]["updatedInput"]
@@ -3842,20 +3842,20 @@ def test_each_route_sets_exact_model_and_effort(workspace, config, route, model,
 def test_new_call_model_override_reaches_worker_receipt_and_telemetry(workspace, config):
     repo, state = workspace
     call = event(START_TOOL, prompt=orch(route="subtle") + "\nImplement.",
-                 model="openai/gpt-6-sol", config={"model_reasoning_effort": "xhigh"})
+                 model="gpt-6-sol", config={"model_reasoning_effort": "medium"})
 
     result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     updated = result["hookSpecificOutput"]["updatedInput"]
     route_event = next(e for e in _all_telemetry_events(state)
                        if e["event_type"] == "TASK_ROUTE_SELECTED")
 
-    assert updated["model"] == "openai/gpt-6-sol"
-    assert updated["config"]["model_reasoning_effort"] == "xhigh"
-    assert updated["jobModel"] == "openai/gpt-6-sol"
-    assert updated["jobEffort"] == "xhigh"
-    assert result["systemMessage"] == "Purser: route=subtle -> openai/gpt-6-sol / xhigh"
-    assert route_event["payload"]["model"] == "openai/gpt-6-sol"
-    assert route_event["payload"]["effort"] == "xhigh"
+    assert updated["model"] == "gpt-6-sol"
+    assert updated["config"]["model_reasoning_effort"] == "medium"
+    assert updated["jobModel"] == "gpt-6-sol"
+    assert updated["jobEffort"] == "medium"
+    assert result["systemMessage"] == "Purser: route=subtle -> gpt-6-sol / medium"
+    assert route_event["payload"]["model"] == "gpt-6-sol"
+    assert route_event["payload"]["effort"] == "medium"
     assert route_event["payload"]["model_source"] == "override"
 
 
@@ -3863,7 +3863,7 @@ def test_model_override_is_rejected_on_reply_to_preserve_thread_pin(workspace, c
     repo, state = workspace
     save_live_thread(state, route="normal", model="gpt-6-sol", effort="medium")
     reply = event(codex.CODEX_REPLY_TOOL, prompt=orch() + "\nContinue.",
-                 threadId="thread-1", model="openai/gpt-6-luna",
+                 threadId="thread-1", model="gpt-6-luna",
                  config={"model_reasoning_effort": "high"})
 
     result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
@@ -3884,7 +3884,7 @@ def test_model_override_is_ignored_under_active_fallback(workspace, config, monk
     active = _fallback_state(workspace)
     active["active_coder"] = "fallback"
     active_coder_state.write(repo, active, state)
-    call = event(START_TOOL, prompt=orch() + "\nImplement.", model="openai/gpt-6-sol",
+    call = event(START_TOOL, prompt=orch() + "\nImplement.", model="gpt-6-sol",
                  config={"model_reasoning_effort": "xhigh"})
 
     result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
@@ -3897,9 +3897,10 @@ def test_model_override_is_ignored_under_active_fallback(workspace, config, monk
     assert route_event["payload"]["model_source"] == "route"
 
 
-def test_invalid_model_override_is_ignored(workspace, config):
+@pytest.mark.parametrize("model", ["", "gpt-6 sol", "gpt-6-sol;echo"])
+def test_invalid_model_override_is_ignored(workspace, config, model):
     repo, state = workspace
-    call = event(prompt=orch(route="subtle") + "\nImplement.", model="gpt-6-sol")
+    call = event(prompt=orch(route="subtle") + "\nImplement.", model=model)
 
     result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     updated = result["hookSpecificOutput"]["updatedInput"]

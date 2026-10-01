@@ -1852,7 +1852,7 @@ def pre_tool_use(
         elif (new_call and not mechanical_candidate
               and agent == loaded_config.get("coder_agent", "codex")):
             supplied_model = tool_input.get("model")
-            if isinstance(supplied_model, str) and coder_config.MODEL.fullmatch(supplied_model):
+            if isinstance(supplied_model, str) and coder_config.CODEX_MODEL.fullmatch(supplied_model):
                 model = supplied_model
                 requested["model"] = model
                 model_source = "override"

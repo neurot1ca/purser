@@ -10,6 +10,7 @@ import tomllib
 
 
 MODEL = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
+CODEX_MODEL = re.compile(r"[A-Za-z0-9._-]+\Z")
 AGY_MODEL = re.compile(r"gemini-[A-Za-z0-9._-]+\Z")
 AGY_EFFORTS = frozenset(("low", "medium", "high", "max"))
 FAMILY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
@@ -141,7 +142,7 @@ def load(config_path: Path) -> dict:
             raise ValueError("[coding] coder routes or role are invalid")
         if routes:
             if not all(isinstance(entry, dict) and set(entry) == {"model", "effort"}
-                       and isinstance(entry["model"], str) and re.fullmatch(r"[A-Za-z0-9._-]+", entry["model"])
+                       and isinstance(entry["model"], str) and CODEX_MODEL.fullmatch(entry["model"])
                        and entry["effort"] in config["allowed_efforts"] for entry in routes.values()):
                 raise ValueError("[coding] Codex route model or effort is invalid")
             config["routes"] = routes
@@ -158,7 +159,7 @@ def load(config_path: Path) -> dict:
         model_pattern = (
             MODEL if fallback_agent == "opencode" else
             AGY_MODEL if fallback_agent == "agy" else
-            re.compile(r"[A-Za-z0-9._-]+\Z")
+            CODEX_MODEL
         )
         if not model_pattern.fullmatch(fallback_model):
             raise ValueError("[fallback] model is invalid")
