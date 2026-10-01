@@ -31,36 +31,38 @@ def default_state_root() -> Path:
 def report(state_root: Path, since: datetime) -> dict:
     since = timestamp(since) if isinstance(since, str) else since
     jobs: dict[tuple[str, str, str], dict] = {}
-    for project_dir in sorted((state_root / "projects").glob("*")):
-        event_dir = project_dir / "telemetry" / "events" / "by_task"
-        for path in sorted(event_dir.glob("*.jsonl")):
+    event_dir = state_root / "telemetry" / "events" / "by_task"
+    for path in sorted(event_dir.glob("*.jsonl")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in lines:
             try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
+                event = json.loads(line)
+                if not isinstance(event, dict) or event.get("event_type") != "MECHANICAL_EDIT_OBSERVED":
+                    continue
+                event_time = timestamp(event.get("ts_utc", ""))
+            except (ValueError, TypeError, AttributeError, argparse.ArgumentTypeError):
                 continue
-            for line in lines:
-                try:
-                    event = json.loads(line)
-                    if not isinstance(event, dict) or event.get("event_type") != "MECHANICAL_EDIT_OBSERVED":
-                        continue
-                    event_time = timestamp(event.get("ts_utc", ""))
-                except (ValueError, TypeError, AttributeError, argparse.ArgumentTypeError):
-                    continue
-                if event_time < since:
-                    continue
-                task_id = event.get("task_id")
-                payload = event.get("payload")
-                if not isinstance(task_id, str) or not isinstance(payload, dict):
-                    continue
-                thread_id = payload.get("thread_id")
-                if not isinstance(thread_id, str) or not thread_id:
-                    continue
-                key = (project_dir.name, task_id, thread_id)
-                jobs.setdefault(key, {
-                    "task_id": task_id,
-                    "classification": payload.get("classification"),
-                    "fingerprint": payload.get("fingerprint"),
-                })
+            if event_time < since:
+                continue
+            task_id = event.get("task_id")
+            payload = event.get("payload")
+            if not isinstance(task_id, str) or not isinstance(payload, dict):
+                continue
+            thread_id = payload.get("thread_id")
+            project_key = event.get("project_key")
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            if project_key is not None and not isinstance(project_key, str):
+                continue
+            key = (project_key, task_id, thread_id)
+            jobs.setdefault(key, {
+                "task_id": task_id,
+                "classification": payload.get("classification"),
+                "fingerprint": payload.get("fingerprint"),
+            })
 
     classified = [job for job in jobs.values() if job["classification"] == "rename"
                   and isinstance(job["fingerprint"], str)

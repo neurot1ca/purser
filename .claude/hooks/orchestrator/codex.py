@@ -2265,6 +2265,17 @@ def pre_tool_use(
             )
         except Exception:
             pass
+        if reply_call and not is_start:
+            _observe(
+                "emit",
+                "CLAUDE_DECISION_RECORDED",
+                task_id=parsed.task_id,
+                state_root=runtime_root,
+                project_key=project_namespace,
+                decision="send_back",
+                task_type=task_type if task_type != "unknown" else parsed.phase,
+                source={"kind": "reply", "job_id": _call_key(event)},
+            )
         return result
     except Exception as error:
         if lease_pending is not None and runtime_root is not None:

@@ -18,6 +18,44 @@ def _report(state_root, *, min_samples=1):
                   project_key="0123456789abcdef", min_samples=min_samples)
 
 
+def _write_events(state_root, entries):
+    event_path = state_root / "telemetry" / "events" / "2026-09" / "session_legacy.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text("".join(json.dumps(item) + "\n" for item in entries), encoding="utf-8")
+
+
+def test_report_counts_unattributed_starts_without_assigning_project(tmp_path):
+    state_root = tmp_path / "unattributed-starts"
+    _write_tasks(state_root, [{
+        "task_id": "named-task", "route": "normal", "model": "coder", "effort": "medium",
+        "task_type": "implementation", "claude_acceptance": {"outcome": "accepted"},
+    }])
+    _write_events(state_root, [
+        {"event_type": "IMPLEMENTER_STARTED", "ts_utc": "2026-09-01T00:00:00Z",
+         "project_key": None, "task_id": "legacy-one"},
+        {"event_type": "IMPLEMENTER_STARTED", "ts_utc": "2026-09-02T00:00:00Z",
+         "project_key": None, "task_id": "legacy-one"},
+        {"event_type": "IMPLEMENTER_STARTED", "ts_utc": "2026-08-31T23:59:59Z",
+         "project_key": None, "task_id": "too-old"},
+        {"event_type": "IMPLEMENTER_STARTED", "ts_utc": "2026-09-02T00:00:00Z",
+         "project_key": "0123456789abcdef", "task_id": "named-start"},
+    ])
+
+    result = report(state_root, timestamp("2026-09-01T00:00:00Z"),
+                    project_key="0123456789abcdef", min_samples=1)
+    rendered = markdown(result, state_root / "report.md", state_root)
+
+    assert [group["sample_count"] for group in result["groups"]] == [1]
+    assert result["groups"][0]["outcome_denominator"]["total"] == 1
+    assert result["groups"][0]["sources"][0]["task_id"] == "named-task"
+    assert result["distribution"]["total"] == 1
+    assert result["unattributed_starts"] == {
+        "scope": "global", "distinct_tasks": 1, "start_events": 2,
+    }
+    assert "Global unattributed starts" in rendered
+    assert "1 distinct tasks; 2 start events" in rendered
+
+
 def test_route_outcome_report_aggregates_outcomes_and_reply_usage(tmp_path):
     state_root = tmp_path / "route-outcome-report-fixture"
     task_dir = state_root / "projects" / "0123456789abcdef" / "telemetry" / "tasks"

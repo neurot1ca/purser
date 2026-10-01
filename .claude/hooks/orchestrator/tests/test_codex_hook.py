@@ -3874,6 +3874,55 @@ def test_codex_reply_shows_recorded_model_and_effort(workspace, config):
     assert result["systemMessage"] == "Purser: route=mechanical -> gpt-6-luna / high"
 
 
+def test_sync_reply_records_send_back_once_after_admission(workspace, config):
+    repo, state = workspace
+    save_live_thread(state)
+    reply = event(
+        codex.CODEX_REPLY_TOOL,
+        prompt=orch(task="task-1") + "\nContinue.",
+        tool_use_id="reply-decision",
+        threadId="thread-1",
+    )
+
+    admitted = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    assert "updatedInput" in admitted["hookSpecificOutput"]
+    codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+
+    denied = event(
+        codex.CODEX_REPLY_TOOL,
+        prompt=orch(task="task-1") + "\nContinue.",
+        tool_use_id="reply-denied",
+        threadId="missing-thread",
+    )
+    assert codex.pre_tool_use(
+        denied, config=config, state_root=state, repo_root=repo
+    )["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    plain = event(
+        codex.CODEX_TOOL,
+        prompt=orch(task="task-2") + "\nDo the work.",
+        tool_use_id="plain-codex",
+    )
+    codex.pre_tool_use(plain, config=config, state_root=state, repo_root=repo)
+
+    project_key = project_root.project_key(repo.resolve())
+    telemetry.update_task("task-1", project_key=project_key, state_root=state)
+    aggregate = json.loads(
+        (state / "projects" / project_key / "telemetry" / "tasks" / "task-1.json")
+        .read_text(encoding="utf-8")
+    )
+    assert aggregate["claude_acceptance"]["send_backs"] == 1
+    assert aggregate["claude_acceptance"]["sources"] == [
+        {"kind": "reply", "job_id": codex._call_key(reply), "decision": "send_back",
+         "task_type": "implementation", "ts_utc": aggregate["claude_decision"]["ts_utc"]}
+    ]
+    assert not any(
+        item["event_type"] == "CLAUDE_DECISION_RECORDED"
+        and item["task_id"] == "task-2"
+        for item in _all_telemetry_events(state)
+    )
+
+
 def test_denied_call_has_no_system_message(workspace, config):
     repo, state = workspace
     result = codex.pre_tool_use(

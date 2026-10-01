@@ -152,6 +152,28 @@ def _percentile(values, fraction):
     return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
 
 
+def _unattributed_starts(state_root, since):
+    task_ids = set()
+    start_events = 0
+    for path in sorted((state_root / "telemetry" / "events").glob("????-??/session_*.jsonl")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in lines:
+            try:
+                event = json.loads(line)
+                if (not isinstance(event, dict) or event.get("event_type") != "IMPLEMENTER_STARTED"
+                        or event.get("project_key") is not None or timestamp(event.get("ts_utc", "")) < since):
+                    continue
+            except (ValueError, TypeError, AttributeError, argparse.ArgumentTypeError):
+                continue
+            start_events += 1
+            if isinstance(event.get("task_id"), str):
+                task_ids.add(event["task_id"])
+    return {"scope": "global", "distinct_tasks": len(task_ids), "start_events": start_events}
+
+
 def report(state_root, since, *, project_key=None, min_samples=5):
     since = timestamp(since) if isinstance(since, str) else since
     project_dirs = [state_root / "projects" / project_key] if project_key else sorted((state_root / "projects").glob("*"))
@@ -310,12 +332,16 @@ def report(state_root, since, *, project_key=None, min_samples=5):
             "insufficient_evidence": not adequate,
         })
     return {"since": since.isoformat().replace("+00:00", "Z"), "project_key": project_key,
-            "minimum_sample_size": min_samples, "groups": results, "distribution": _task_evidence(all_tasks)}
+            "minimum_sample_size": min_samples, "groups": results, "distribution": _task_evidence(all_tasks),
+            "unattributed_starts": _unattributed_starts(state_root, since)}
 
 
 def markdown(result, output_path, state_root):
     lines = ["# Route outcome report", "", f"Since (UTC): {result['since']}",
              f"Minimum sample size: {result['minimum_sample_size']}", "",
+             "## Global unattributed starts", "",
+             f"{result['unattributed_starts']['distinct_tasks']} distinct tasks; "
+             f"{result['unattributed_starts']['start_events']} start events.", "",
              "| Selected route (agent) / model / effort | Served route (agent) / model / effort | Fallback | Task type | Work kind | Samples | Decision | Outcomes known / unknown / total | Accepted | Rejected | Unknown | Cost per accepted: worker tokens / Claude tokens / elapsed ms | Usage known / unknown / total (worker / Claude / elapsed) | Applied accepted | Fetched operation accepted | Applied as-is | Send-backs | Accepted duration ms (n / median / p90) | Accepted worker tokens (n / median / p90) | Accepted Claude tokens (n / median / p90) | Reviewer outcomes | Task source and decision time | Evidence |",
              "| --- | --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- |"]
     for group in result["groups"]:

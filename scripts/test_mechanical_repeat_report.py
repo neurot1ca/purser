@@ -12,7 +12,7 @@ spec.loader.exec_module(reporter)
 
 
 def write_events(root, task_id, entries):
-    path = root / "projects" / "0123456789abcdef" / "telemetry" / "events" / "by_task" / f"{task_id}.jsonl"
+    path = root / "telemetry" / "events" / "by_task" / f"{task_id}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(item) + "\n" for item in entries), encoding="utf-8")
 
@@ -31,6 +31,23 @@ def event(task, thread, fingerprint, classification="rename", ts="2026-09-28T00:
             "hunk_count": 1,
         },
     }
+
+
+def test_report_reads_global_task_index_and_separates_projects(tmp_path):
+    root = tmp_path / "state"
+    fingerprint = hashlib.sha256(b"rename:old_name->new_name:.py").hexdigest()
+    first = event("same-task", "same-thread", fingerprint)
+    second = event("same-task", "same-thread", fingerprint)
+    second["project_key"] = "fedcba9876543210"
+    write_events(root, "same-task", [first, first, second])
+
+    result = reporter.report(root, reporter.timestamp("2026-09-28T00:00:00Z"))
+
+    assert result["usable_diff_jobs"] == 2
+    assert result["classified_jobs"] == 2
+    repeated, = result["repeated_fingerprints"]
+    assert repeated["count"] == 2
+    assert repeated["task_ids"] == ["same-task"]
 
 
 def test_report_counts_repeated_identifier_rename_and_keeps_near_matches_separate(tmp_path):
