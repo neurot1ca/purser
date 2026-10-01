@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 from pathlib import Path
 
 from route_outcome_report import markdown, report, timestamp
@@ -221,6 +223,46 @@ def test_fallback_comparison_attributes_to_served_route_and_preserves_both(tmp_p
     assert group["fallback"] is True
     assert group["sources"][0]["decision_time"] == "2026-09-01T00:01:00Z"
     assert group["decision"] == "no decision"
+
+
+def test_bridge_terminal_states_do_not_become_claude_decisions(tmp_path):
+    state_root = tmp_path / "bridge-states"
+    repo_root = tmp_path / "repo"
+    project_key = hashlib.sha256(os.path.normcase(str(repo_root.resolve())).encode("utf-8")).hexdigest()[:16]
+    task_dir = state_root / "projects" / project_key / "telemetry" / "tasks"
+    task_dir.mkdir(parents=True)
+    task = {
+        "task_id": "bridge-task", "route": "normal", "model": "m", "effort": "low",
+        "task_type": "implementation", "project_key": project_key,
+        "started_at": "2026-09-01T00:00:00Z",
+    }
+    (task_dir / "bridge-task.json").write_text(json.dumps(task), encoding="utf-8")
+    jobs = state_root / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    records = [
+        {"jobId": "failed", "taskId": "bridge-task", "repoRoot": str(repo_root), "state": "FAILED"},
+        {"jobId": "cancelled", "taskId": "bridge-task", "repoRoot": str(repo_root), "state": "CANCELLED"},
+        {"jobId": "timed-out", "taskId": "bridge-task", "repoRoot": str(repo_root), "state": "TIMED_OUT"},
+        {"jobId": "awaiting", "taskId": "bridge-task", "repoRoot": str(repo_root), "state": "SUCCEEDED"},
+        {"jobId": "applied", "taskId": "bridge-task", "repoRoot": str(repo_root), "state": "SUCCEEDED",
+         "applyState": "applied", "decisionRecorded": True},
+        {"jobId": "expired", "taskId": "bridge-task", "repoRoot": str(repo_root), "state": "EXPIRED"},
+        {"jobId": "unmatched", "taskId": "missing-task", "repoRoot": str(repo_root), "state": "FAILED"},
+        {"jobId": "no-project", "taskId": "bridge-task", "state": "FAILED"},
+    ]
+    for record in records:
+        (jobs / f"{record['jobId']}.json").write_text(json.dumps(record), encoding="utf-8")
+
+    result = report(state_root, timestamp("2026-09-01T00:00:00Z"))
+    group, = result["groups"]
+    assert (group["accepted"], group["rejected"], group["unknown"]) == (0, 0, 1)
+    assert group["outcome_coverage"] is None
+    assert group["state_evidence"] == {
+        "failed": 1, "cancelled": 1, "timed_out": 1, "awaiting_apply_or_fetch": 1,
+    }
+    assert result["unmatched_jobs"] == 2
+    rendered = markdown(result, state_root / "report.md", state_root)
+    assert "awaiting apply or fetch" in rendered
 
 
 def test_rejected_and_sent_back_attempt_cost_is_in_cost_per_acceptance(tmp_path):

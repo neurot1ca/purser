@@ -130,9 +130,9 @@ next one or to new work until the user has answered on the current one.
 For implementation, plan, and investigation calls, run `node "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js" mcp "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/code_map.py" --repo <project root>` outside the hook before delegation and paste its one `CODE_MAP=... STATUS=...` line into the worker prompt only when the task scope does not already name the files or symbols to change (discovery work); otherwise omit it and give the paths.
 Treat the map as navigation only; workers verify current source before acting.
 
-Label a precise objective and observable criteria `Objective:` and `Acceptance
-criteria:` (or corresponding `#` headings); missing labels force FULL review
-because the hook cannot ground the contract. Keep the ORCH line and bounded scope.
+Write worker prompts with an `Objective:` line and an `Acceptance criteria:`
+list; missing labels force FULL review because the hook cannot ground the
+contract. Keep the ORCH line and bounded scope.
 
 - Give verified task context, resolved behavior, invariants, failure direction,
   and only necessary exact examples or schemas.

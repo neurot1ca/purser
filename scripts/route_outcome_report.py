@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import os
@@ -221,6 +222,39 @@ def report(state_root, since, *, project_key=None, min_samples=5):
             groups[key].append(task)
             all_tasks.append(task)
 
+    task_groups = {
+        (task.get("_source_project_key"), task.get("task_id")): key
+        for key, tasks in groups.items() for task in tasks
+        if isinstance(task.get("_source_project_key"), str) and task.get("_source_project_key")
+        and isinstance(task.get("task_id"), str) and task.get("task_id")
+    }
+    state_evidence = defaultdict(Counter)
+    unmatched_jobs = 0
+    for path in sorted((state_root / "codex_exec_mcp" / "jobs").glob("*.json")):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+            repo_root = job.get("repoRoot")
+            task_id = job.get("taskId")
+            if not isinstance(repo_root, str) or not repo_root or not isinstance(task_id, str) or not task_id:
+                unmatched_jobs += 1
+                continue
+            project_key_from_root = hashlib.sha256(
+                os.path.normcase(str(Path(repo_root).resolve())).encode("utf-8")
+            ).hexdigest()[:16]
+            group_key = task_groups.get((project_key_from_root, task_id))
+            if group_key is None:
+                unmatched_jobs += 1
+                continue
+            state = job.get("state")
+            if state in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+                state_evidence[group_key][state.lower()] += 1
+            elif (state == "SUCCEEDED" and job.get("applyState") != "applied"
+                  and not job.get("decisionRecorded")):
+                state_evidence[group_key]["awaiting_apply_or_fetch"] += 1
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError,
+                RuntimeError):
+            continue
+
     results = []
     for key in sorted(groups, key=lambda row: tuple(str(value).casefold() for value in row)):
         tasks = groups[key]
@@ -313,6 +347,8 @@ def report(state_root, since, *, project_key=None, min_samples=5):
             "served_route": served_route, "served_model": served_model, "served_effort": served_effort,
             "fallback": fallback,
             "task_type": task_type, "work_kind": work_kind,
+            "state_evidence": {name: state_evidence[key][name] for name in (
+                "failed", "cancelled", "timed_out", "awaiting_apply_or_fetch")},
             "sample_count": len(tasks), "outcome_coverage": known / len(tasks) if adequate and tasks else None,
             "accepted": outcomes["accepted"], "rejected": outcomes["rejected"], "unknown": outcomes["unknown"],
             "outcome_denominator": outcome_denominator, "usage": usage,
@@ -333,7 +369,7 @@ def report(state_root, since, *, project_key=None, min_samples=5):
         })
     return {"since": since.isoformat().replace("+00:00", "Z"), "project_key": project_key,
             "minimum_sample_size": min_samples, "groups": results, "distribution": _task_evidence(all_tasks),
-            "unattributed_starts": _unattributed_starts(state_root, since)}
+            "unattributed_starts": _unattributed_starts(state_root, since), "unmatched_jobs": unmatched_jobs}
 
 
 def markdown(result, output_path, state_root):
@@ -342,8 +378,9 @@ def markdown(result, output_path, state_root):
              "## Global unattributed starts", "",
              f"{result['unattributed_starts']['distinct_tasks']} distinct tasks; "
              f"{result['unattributed_starts']['start_events']} start events.", "",
-             "| Selected route (agent) / model / effort | Served route (agent) / model / effort | Fallback | Task type | Work kind | Samples | Decision | Outcomes known / unknown / total | Accepted | Rejected | Unknown | Cost per accepted: worker tokens / Claude tokens / elapsed ms | Usage known / unknown / total (worker / Claude / elapsed) | Applied accepted | Fetched operation accepted | Applied as-is | Send-backs | Accepted duration ms (n / median / p90) | Accepted worker tokens (n / median / p90) | Accepted Claude tokens (n / median / p90) | Reviewer outcomes | Task source and decision time | Evidence |",
-             "| --- | --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- |"]
+             f"Unmatched bridge jobs: {result['unmatched_jobs']}.", "",
+             "| Selected route (agent) / model / effort | Served route (agent) / model / effort | Fallback | Task type | Work kind | Samples | Decision | Outcomes known / unknown / total | Accepted | Rejected | Unknown | Bridge state evidence (failed / cancelled / timed out / awaiting apply or fetch) | Cost per accepted: worker tokens / Claude tokens / elapsed ms | Usage known / unknown / total (worker / Claude / elapsed) | Applied accepted | Fetched operation accepted | Applied as-is | Send-backs | Accepted duration ms (n / median / p90) | Accepted worker tokens (n / median / p90) | Accepted Claude tokens (n / median / p90) | Reviewer outcomes | Task source and decision time | Evidence |",
+             "| --- | --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- |"]
     for group in result["groups"]:
         def rate(value):
             return "—" if value is None else f"{value:.1%}"
@@ -374,6 +411,8 @@ def markdown(result, output_path, state_root):
             f"{group['outcome_denominator']['known']} / {group['outcome_denominator']['unknown']} / {group['outcome_denominator']['total']}",
             str(group["accepted"]),
             str(group["rejected"]), str(group["unknown"]),
+            " / ".join(str(group["state_evidence"][name]) for name in (
+                "failed", "cancelled", "timed_out", "awaiting_apply_or_fetch")),
             ", ".join("unknown" if value is None else str(value) for value in
                       (worker_cost, claude_cost, elapsed_cost)),
             " / ".join(f"{usage[name]['known']} / {usage[name]['unknown']} / {usage[name]['total']}"
