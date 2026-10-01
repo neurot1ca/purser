@@ -349,8 +349,8 @@ def test_mechanical_leader_context_is_cleared_and_recorded_by_stop(monkeypatch, 
     payload = {"session_id": "session-leader"}
 
     context = context_io_hook._plugin_update_context(payload, tmp_path)
-    assert ("> ⚓ **Ücretsiz model sıralaması değişti:** `vendor/free-model` son 9 denemeden "
-            "7 tanesinde başarılı oldu ve yarışta ilk sıraya yerleşti. Mekanik işler önce bu modele gidecek.") in context
+    assert ("> ⚓ **Free model ranking changed:** `vendor/free-model` succeeded in 7 of its last 9 attempts "
+            "and moved to the top of the ranking. Mechanical tasks will go to this model first.") in context
     blocked = compaction_advisor.stop({**payload, "last_assistant_message": "Not announced."}, tmp_path)
     assert blocked["decision"] == "block"
     assert "⚓" in blocked["reason"] and "vendor/free-model" in blocked["reason"]
@@ -449,8 +449,8 @@ def test_session_start_reminds_unconsumed_jobs_and_caps_at_five(monkeypatch, tmp
     lines = json.loads(output_raw.getvalue().decode("utf-8"))["hookSpecificOutput"]["additionalContext"].splitlines()
     assert len(lines) == 6
     assert lines[0] == "Reply in the language the user writes in."
-    assert "finished-task" in lines[1] and "bitince haber" not in lines[1]
-    assert "running-task" in lines[2] and "bitince haber" in lines[2]
+    assert "finished-task" in lines[1] and "I'll let you know when it finishes." not in lines[1]
+    assert "running-task" in lines[2] and "I'll let you know when it finishes." in lines[2]
     assert "own-task" not in "\n".join(lines)  # The five older hints fill the cap.
     assert all("jobId=" in line for line in lines[1:])
     for path in (state / "async_jobs").glob("*.json"):
@@ -495,16 +495,16 @@ def test_resumed_hint_uses_approved_wording_and_ambiguous_job_is_skipped(tmp_pat
     job = {"jobId": job_id, "call": call, "state": "RUNNING", "resumedAfterInterruption": 1}
     record.write_text(json.dumps(job), encoding="utf-8")
     hint = async_session_maintenance.followup_hints(state, "project-key", "new-session")
-    assert "> ⚓ **Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim.**" in hint
+    assert "> ⚓ **The Codex task (task-a) was interrupted when the computer shut down; I resumed it from where it left off.**" in hint
     own = async_session_maintenance.followup_hints(state, "project-key", "old-session")
     assert "Start purser_wait.py" in own and "PowerShell tool on Windows" in own and "without adopt" in own
-    assert "> ⚓ **Codex işi (task-a) bilgisayar kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim.**" in own
-    assert "uygulama kapalıyken" not in own
+    assert "> ⚓ **The Codex task (task-a) was interrupted when the computer shut down; I resumed it from where it left off.**" in own
+    assert "while the app is closed" not in own
     job["state"] = "SUCCEEDED"
     record.write_text(json.dumps(job), encoding="utf-8")
     own = async_session_maintenance.followup_hints(state, "project-key", "old-session")
     assert "Call codex_result" in own and "Start purser_wait.py" not in own
-    assert "uygulama kapalıyken" not in own
+    assert "while the app is closed" not in own
     job["state"] = "UNKNOWN_OR_IN_PROGRESS"
     record.write_text(json.dumps(job), encoding="utf-8")
     assert async_session_maintenance.followup_hints(state, "project-key", "new-session") is None

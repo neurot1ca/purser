@@ -354,7 +354,7 @@ def test_maintenance_notice_requires_its_own_evidence_and_commit_rule(setup, mon
     confirmed = []
     import maintenance_reports
     monkeypatch.setattr(maintenance_reports, "confirm_notice", lambda path: confirmed.append(path))
-    text = "> ⚓ **Purser taradı: raporda 0 bulgu var.**\n> *Temizle demen yeterli.*\n> | Bulgu | Kanıt |\n> | --- | --- |"
+    text = "> ⚓ **While you worked, Purser scanned your project in the background with its proactive cleanup module: the report has 0 findings.**\n> *The table below lists each finding and its evidence. Just say \"clean up\" to have them cleaned.*\n> | Finding | Evidence |\n> | --- | --- |"
     assert advisor.queue_maintenance_notice(
         event, repo, "C:/reports/report.md.notice.json", text,
         evidence=["report.md", "src/dead.py:4"],
@@ -367,6 +367,8 @@ def test_maintenance_notice_requires_its_own_evidence_and_commit_rule(setup, mon
     assert "opt-out --repo" in blocked["reason"]
     assert "skip-second-show --repo" in blocked["reason"]
     assert "mark-done --repo" in blocked["reason"]
+    assert "translating from the English text" in blocked["reason"]
+    assert "`clean up` or its equivalent in the user's language (including `temizle`)" in blocked["reason"]
     command = (f'"{sys.executable}" "{Path(maintenance_reports.__file__).resolve()}" '
                'skip-second-show --repo "<repository-root>" '
                '--report "C:/reports/report.md.notice.json"')
@@ -387,6 +389,26 @@ def test_maintenance_api_consent_notice_records_yes_or_no(setup):
     blocked = advisor.stop({**event, "last_assistant_message": "> ⚓ **Codex: task complete.**"}, repo)
     assert "consent yes --repo" in blocked["reason"]
     assert "consent no --repo" in blocked["reason"]
+
+
+def test_turkish_rendering_confirms_consent_notice_by_api_token(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    confirmed = []
+    import maintenance_reports
+    monkeypatch.setattr(maintenance_reports, "confirm_notice", lambda path: confirmed.append(path))
+    notice_file = "C:/state/consent.json"
+    assert advisor.queue_maintenance_notice(
+        event, repo, notice_file, "> ⚓ **API scan consent?**", evidence=["API"]
+    )
+    assert advisor.stop({**event, "last_assistant_message": "> ⚓ **Codex: task complete.**"}, repo)["decision"] == "block"
+
+    turkish_rendering = "> ⚓ **Purser sen çalışırken arka planda projeni proaktif temizlik modülüyle tarayabilir. Bu tarama API hesabından ücretlendirilir. Taransın mı?**"
+    assert advisor.stop({**event, "last_assistant_message": turkish_rendering}, repo) is None
+    assert confirmed == [notice_file]
+    assert advisor._read_state(
+        advisor._state_directory(repo) / "compaction_advisor.json", "session-1"
+    )["maintenance_pending"] is None
 
 
 def test_dispatch_receipt_passes_verbatim_and_clears(setup):

@@ -622,7 +622,7 @@ def consent_context(repo: Path, *, state: Path) -> dict | None:
         import codex_exec_mcp
         codex_exec_mcp._atomic_json(consent_path, consent)
         return {"kind": "consent", "notice_file": str(consent_path),
-                "confirmation_evidence": ["API hesabından ücretlendirilir"]}
+                "confirmation_evidence": ["API"]}
     return None
 
 
@@ -713,23 +713,23 @@ def confirm_notice(notice_file: str) -> None:
 
 def format_notice(notice: dict) -> str:
     if notice.get("kind") == "consent":
-        return ("> ⚓ **Purser sen çalışırken arka planda projeni proaktif temizlik modülüyle tarayabilir. "
-                "Bu tarama API hesabından ücretlendirilir. Taransın mı?**")
+        return ("> ⚓ **While you work, Purser can scan your project in the background with its proactive cleanup module. "
+                "This scan is billed to your API account. Run it?**")
     path = notice.get("report_path", "unknown")
     count = notice.get("finding_count")
     findings = notice.get("findings")
-    intro = (f"⚓ **Purser sen çalışırken arka planda projeni proaktif temizlik modülüyle taradı: raporda {count} bulgu var.**"
+    intro = (f"⚓ **While you worked, Purser scanned your project in the background with its proactive cleanup module: the report has {count} findings.**"
              if isinstance(count, int) else
-             f"⚓ **Purser sen çalışırken arka planda projeni proaktif temizlik modülüyle taradı: raporda bulgu sayısı bilinmiyor.**")
+             "⚓ **While you worked, Purser scanned your project in the background with its proactive cleanup module: the number of findings is unknown.**")
     if not isinstance(findings, list):
-        return f"> {intro}\n> *Bulgular ayrıştırılamadı; rapor: `{path}`.*"
+        return f"> {intro}\n> *The findings could not be parsed; report: `{path}`.*"
     ranked = sorted(findings, key=lambda item: item.get(
         "confidence_rank", _confidence_rank(item.get("confidence", ""))), reverse=True)
     shown = ranked if len(findings) <= 5 else ranked[:5]
-    instruction = ("Aşağıdaki tabloda her bulgu ve kanıtı yazılı. Temizlenmesi için \"temizle\" demen yeterli."
+    instruction = ('The table below lists each finding and its evidence. Just say "clean up" to have them cleaned.'
                    if len(findings) <= 5 else
-                   f"Aşağıdaki tabloda en önemli ilk 5 bulgu ve kanıtı yazılı. Temizlenmesi için \"temizle\" demen yeterli. Diğer bulgular token tasarrufu için şu dosyada: `{path}`")
-    rows = ["> | Bulgu | Kanıt |", "> | --- | --- |"]
+                   f'The table below lists the top 5 findings and their evidence. Just say "clean up" to have them cleaned. The other findings are in this file to save tokens: `{path}`')
+    rows = ["> | Finding | Evidence |", "> | --- | --- |"]
     for item in shown:
         candidate = f"{item.get('path_line', '?')} {item.get('symbol', '?')}"
         evidence = " ".join(str(item.get("evidence", "")).split())[:48]
@@ -737,8 +737,8 @@ def format_notice(notice: dict) -> str:
     lines = [f"> {intro}", f"> *{instruction}*", *rows]
     if (notice.get("pending_cycle") not in {None, "no-window"}
             and notice.get("pending_show") == 1 and not notice.get("pending_skip_second")):
-        lines.append("> *Bu döngüde bir daha gösterilmesin mi?*")
-    lines.append("> *Modülü istediğin zaman kapatabilir, /purser:optimize ile istediğin zaman çalıştırabilirsin.*")
+        lines.append("> *Skip showing this again in this cycle?*")
+    lines.append("> *You can turn the module off at any time, or run it any time with /purser:optimize.*")
     return "\n".join(lines)
 
 

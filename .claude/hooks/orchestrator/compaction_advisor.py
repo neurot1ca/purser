@@ -1226,7 +1226,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             maintenance_pending["blocked"] = True
             if maintenance_pending["notice_file"].endswith("consent.json"):
                 instruction = (
-                    "Render the maintenance API-cost consent question below in the user's language, preserving ⚓ and bold. "
+                    "Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. "
                     f"If the user says yes, run `{maintenance_cli} consent yes --repo \"<repository-root>\"`; "
                     f"if no, run `{maintenance_cli} consent no --repo \"<repository-root>\"`. Do not infer consent.\n"
                 )
@@ -1237,10 +1237,10 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                 done_command = (f'{maintenance_cli} mark-done --repo "<repository-root>" '
                                 f'--report "{notice_file}"')
                 instruction = (
-                    "Render the completed maintenance notice below in the user's language, keeping ⚓, count, paths, and table. "
-                    f"If the user wants the module off (`kapat`), run `{maintenance_cli} opt-out --repo \"<repository-root>\"`. "
+                    "Render the completed maintenance notice below in the user's language, translating from the English text and keeping ⚓, count, paths, and table. "
+                    f"If the user wants the module off (or uses the equivalent in their language, including `kapat`), run `{maintenance_cli} opt-out --repo \"<repository-root>\"`. "
                     f"If the user says not to show it again this cycle, run `{skip_command}`. "
-                    "If they answer `temizle`, dispatch one ordinary Codex implementation job routed as subtle. "
+                    "If they answer `clean up` or its equivalent in the user's language (including `temizle`), dispatch one ordinary Codex implementation job routed as subtle. "
                     "Re-verify every listed item against current HEAD and remove exactly the still-unused listed items; "
                     "skip each item that is no longer unused and explain why. After successful cleanup, run "
                     + f"`{done_command}`. "
@@ -1270,12 +1270,12 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             model_pending["blocked"] = True
             model_version_notice.write_state({**model_version_notice.read_state(), "pending": model_pending})
             reasons.append(
-                "Include this model-version notice in the user's language, translating from Turkish while keeping ⚓ "
+                "Render this model-version notice in the user's language, translating from the English text while keeping ⚓ "
                 "and both model names unchanged. Keep the three blockquote lines exactly formatted; do not change "
                 "routes until the user says yes.\n"
-                f"> ⚓ **Yeni model sürümü çıktı: `{model_pending['new']}`, şu an `{model_pending['current']}` kullanılıyor.**\n"
-                "> *Purser'ın bu sürüme geçmesini ister misin? (1-evet 2-hayır)*\n"
-                "> *Hayır dersen bu sürüm için bir daha sorulmaz. İstediğin zaman `/purser:init` ile geçebilirsin.*"
+                f"> ⚓ **New model version available: `{model_pending['new']}` (you are on `{model_pending['current']}`).**\n"
+                "> *Should Purser switch to it? (1-yes 2-no)*\n"
+                "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
             )
         if (fallback_pending is not None
                 and (fallback_pending.get("notice") or not fallback_pending.get("blocked"))):

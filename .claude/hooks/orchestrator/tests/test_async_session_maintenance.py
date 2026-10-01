@@ -227,8 +227,9 @@ def test_compact_accuracy_baseline_improvement_regression_and_bad_data(tmp_path)
     for _ in range(4):
         assert maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now) is None
     message = maintenance.compact_accuracy_hint(tmp_path, PROJECT_KEY, now=now)
-    assert message == ('Tell the user in the user\'s language: "> ⚓ **Codex\'in iş süresi tahminleri '
-                       'self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %50.**"')
+    assert message == ('Render the line in the user\'s language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: '
+                       '"> ⚓ **Codex\'s task duration estimates have improved through the self-learning system! '
+                       'The estimated margin of error is now 50%.**"')
     item["payload"]["eta_minutes"] = 5
     path.write_text(json.dumps(item), encoding="utf-8")
     for _ in range(5):
@@ -238,7 +239,7 @@ def test_compact_accuracy_baseline_improvement_regression_and_bad_data(tmp_path)
 
 def test_compact_accuracy_claude_and_unknown_possessives(tmp_path):
     now = datetime(2026, 9, 2, tzinfo=timezone.utc).timestamp()
-    for agent, possessive in (("claude", "Claude'un"), ("agent-x", "agent-x'in")):
+    for agent, name in (("claude", "Claude"), ("agent-x", "agent-x")):
         root = tmp_path / agent
         month = root / "telemetry" / "events" / "2026-09"
         month.mkdir(parents=True)
@@ -249,8 +250,9 @@ def test_compact_accuracy_claude_and_unknown_possessives(tmp_path):
         state_path.parent.mkdir(parents=True)
         state_path.write_text(json.dumps({"compacts": 4, "errors": {agent: 100}}), encoding="utf-8")
         assert maintenance.compact_accuracy_hint(root, PROJECT_KEY, now=now) == (
-            f'Tell the user in the user\'s language: "> ⚓ **{possessive} iş süresi tahminleri '
-            'self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %50.**"'
+            f'Render the line in the user\'s language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: '
+            f'"> ⚓ **{name}\'s task duration estimates have improved through the self-learning system! '
+            'The estimated margin of error is now 50%.**"'
         )
 
 

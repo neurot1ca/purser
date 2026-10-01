@@ -173,7 +173,7 @@ def compact_accuracy_hint(state_root: str | Path, project_key: str, *, now: floa
                 if (isinstance(previous, (int, float)) and not isinstance(previous, bool)
                         and math.isfinite(previous) and error < previous):
                     name, suffix = AGENT_NAMES.get(agent, (agent, "in"))
-                    messages.append(f'Tell the user in the user\'s language: "> ⚓ **{name}\'{suffix} iş süresi tahminleri self-learning sistemiyle geliştirildi! Tahmini yanılma payı artık %{round(error)}.**"')
+                    messages.append(f'Render the line in the user\'s language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: "> ⚓ **{name}\'s task duration estimates have improved through the self-learning system! The estimated margin of error is now {round(error)}%.**"')
             _write_json(path, state)
             return "\n".join(messages) or None
     except BaseException:
@@ -243,8 +243,8 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
                 continue
             if state in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"} or (same_session and state in TERMINAL):
                 message = (None if same_session else
-                           f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
-                           "uygulama kapalıyken çalışmaya devam etti ve bitti. Sonucunu alıp inceleyeyim mi?")
+                           f"⚓ The Codex task I started before the app closed ({task}) "
+                           "kept running while the app was closed and has finished. Would you like me to retrieve and review its result?")
                 instruction = ("Call codex_result with this jobId now, without adopt or asking the user."
                                if same_session else
                                "Ask for the user's agreement before calling codex_result with adopt: true.")
@@ -255,17 +255,16 @@ def followup_hints(state_root: str | Path, project_key: str, session_id: str) ->
                 instruction = stall_followup.instruction(last_activity)
             elif state in {"QUEUED", "RUNNING"}:
                 message = (None if same_session else
-                           f"⚓ Uygulama kapanmadan önce başlattığım Codex işi ({task}) "
-                           "uygulama kapalıyken çalışmaya devam ediyor, bitince haber vereceğim.")
+                           f"⚓ The Codex task I started before the app closed ({task}) "
+                           "is still running while the app is closed. I'll let you know when it finishes.")
                 instruction = ("Start purser_wait.py for this jobId in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user."
                                if same_session else
                                "When it finishes, ask for the user's agreement before calling codex_result with adopt: true.")
             else:
                 continue
-            resumed_hint = (f'Tell the user in the user\'s language: "> ⚓ **Codex işi ({task}) bilgisayar '
-                            'kapanınca yarıda kalmıştı; kaldığı yerden devam ettirdim.**" '
+            resumed_hint = (f'Render the line in the user\'s language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: "> ⚓ **The Codex task ({task}) was interrupted when the computer shut down; I resumed it from where it left off.**" '
                             if isinstance(resumed, int) and resumed > 0 else "")
-            user_hint = f'Tell the user in the user\'s language: "> ⚓ **{message.removeprefix("⚓ ")}**" ' if message else ""
+            user_hint = f'Render the line in the user\'s language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: "> ⚓ **{message.removeprefix("⚓ ")}**" ' if message else ""
             lines.append(f"Purser (jobId={job_id}, for Claude only): {resumed_hint}{user_hint}"
                          f"{instruction} Do not show the jobId to the user.")
         return "\n".join(lines) or None

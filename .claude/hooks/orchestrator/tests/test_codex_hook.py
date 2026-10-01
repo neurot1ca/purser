@@ -7724,7 +7724,7 @@ def test_quota_return_question_decline_is_remembered_per_reset(workspace, config
     assert asked["hookSpecificOutput"]["permissionDecision"] == "deny"
     pending_path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
     pending = compaction_advisor._read_state(pending_path, "session-1")["fallback_pending"]
-    assert pending["line"] == f"> ⚓ **{config['sol_model']} kotası yenilendi. Ana kodlayıcıya geri dönülsün mü?**"
+    assert pending["line"] == f"> ⚓ **{config['sol_model']}'s quota has renewed. Return to the primary coder?**"
     compaction_advisor.stop({"session_id": "session-1", "last_assistant_message": ""}, repo)
     compaction_advisor.stop(
         {"session_id": "session-1", "last_assistant_message": pending["line"]}, repo)

@@ -52,11 +52,9 @@ def _mechanical_leader_context(payload: Mapping[str, Any], repository: Path | No
                 payload, repository, model, successes, sample_count):
             return None
         return (
-            "On your next reply, render exactly one line in the user's language in this form: "
-            f"> ⚓ **Ücretsiz model sıralaması değişti:** `{model}` son {sample_count} denemeden "
-            f"{successes} tanesinde başarılı oldu ve yarışta ilk sıraya yerleşti. "
-            "Mekanik işler önce bu modele gidecek. "
-            f"Translate the line for other languages, keeping ⚓, `{model}`, and the numbers."
+            "On your next reply, render exactly one line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged, in this form: "
+            f"> ⚓ **Free model ranking changed:** `{model}` succeeded in {successes} of its last {sample_count} attempts "
+            "and moved to the top of the ranking. Mechanical tasks will go to this model first."
         )
     except BaseException:
         return None

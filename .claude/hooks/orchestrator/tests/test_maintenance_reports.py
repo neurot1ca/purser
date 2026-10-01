@@ -296,7 +296,7 @@ def test_no_window_consent_notice_is_shown_once(project, monkeypatch):
         "snapshot_at": "fresh", "windows_seen": False})
     notice = maintenance_reports.consent_context(project, state=state)
     assert notice["kind"] == "consent"
-    assert "API hesabından ücretlendirilir" in maintenance_reports.format_notice(notice)
+    assert "billed to your API account" in maintenance_reports.format_notice(notice)
     assert maintenance_reports.consent_context(project, state=state) is None
 
 
@@ -324,7 +324,7 @@ def test_report_first_show_at_seventy_percent_remaining(project, monkeypatch):
     monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("5h", 30, "cycle-a"))
     first = maintenance_reports.notice_context(project, state=state)
     assert first["notice_file"] == str(path)
-    assert "Bu döngüde bir daha gösterilmesin mi?" in maintenance_reports.format_notice(first)
+    assert "Skip showing this again in this cycle?" in maintenance_reports.format_notice(first)
 
 
 def test_report_first_show_is_immediate_when_session_starts_at_sixty_remaining(project, monkeypatch):
@@ -343,13 +343,13 @@ def test_report_shows_second_time_at_thirty_remaining(project, monkeypatch):
     monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: quota["value"])
     first = maintenance_reports.notice_context(project, state=state)
     assert first["pending_skip_second"] is False
-    assert "Bu döngüde bir daha gösterilmesin mi?" in maintenance_reports.format_notice(first)
+    assert "Skip showing this again in this cycle?" in maintenance_reports.format_notice(first)
     maintenance_reports.confirm_notice(first["notice_file"])
     assert maintenance_reports.notice_context(project, state=state) is None
     quota["value"] = _quota("5h", 70, "cycle-a")
     second = maintenance_reports.notice_context(project, state=state)
     assert second["notice_file"] == str(path)
-    assert "Bu döngüde bir daha gösterilmesin mi?" not in maintenance_reports.format_notice(second)
+    assert "Skip showing this again in this cycle?" not in maintenance_reports.format_notice(second)
     maintenance_reports.confirm_notice(second["notice_file"])
     assert maintenance_reports.notice_context(project, state=state) is None
 
@@ -361,7 +361,7 @@ def test_skip_second_show_applies_only_to_current_cycle(project, monkeypatch):
     quota = {"value": _quota("5h", 30, "cycle-a")}
     monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: quota["value"])
     first = maintenance_reports.notice_context(project, state=state)
-    assert "Bu döngüde bir daha gösterilmesin mi?" in maintenance_reports.format_notice(first)
+    assert "Skip showing this again in this cycle?" in maintenance_reports.format_notice(first)
     maintenance_reports.confirm_notice(first["notice_file"])
     maintenance_reports.skip_second_show(project, first["notice_file"], state=state)
     quota["value"] = _quota("5h", 70, "cycle-a")
@@ -377,7 +377,7 @@ def test_report_start_below_thirty_remaining_shows_once_per_cycle(project, monke
     monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("7d", 75, "cycle-a"))
     first = maintenance_reports.notice_context(project, state=state)
     assert first["pending_skip_second"] is True
-    assert "Bu döngüde bir daha gösterilmesin mi?" not in maintenance_reports.format_notice(first)
+    assert "Skip showing this again in this cycle?" not in maintenance_reports.format_notice(first)
     maintenance_reports.confirm_notice(first["notice_file"])
     assert maintenance_reports.notice_context(project, state=state) is None
 
@@ -390,7 +390,7 @@ def test_no_window_report_has_no_second_show_question(project, monkeypatch):
         "snapshot_at": "fresh", "windows_seen": False})
     notice = maintenance_reports.notice_context(project, state=state)
     assert notice["pending_cycle"] == "no-window"
-    assert "Bu döngüde bir daha gösterilmesin mi?" not in maintenance_reports.format_notice(notice)
+    assert "Skip showing this again in this cycle?" not in maintenance_reports.format_notice(notice)
 
 
 def test_completed_cleanup_marks_report_done_permanently(project, monkeypatch):
@@ -458,7 +458,7 @@ def test_notice_formats_all_findings_up_to_five_and_claims_once(project, monkeyp
     monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: {"snapshot_at": "fresh"})
     notice = maintenance_reports.notice_context(project, state=state)
     text = maintenance_reports.format_notice(notice)
-    assert text.count("| m") == 5 and "5 bulgu var" in text
+    assert text.count("| m") == 5 and "the report has 5 findings" in text
     assert maintenance_reports.notice_context(project, state=state) is None
     maintenance_reports.confirm_notice(notice["notice_file"])
     assert json.loads(notice_path.read_text(encoding="utf-8"))["shown"] is True

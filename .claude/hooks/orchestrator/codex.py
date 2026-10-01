@@ -849,14 +849,14 @@ def _fallback_question(evidence: Mapping[str, Any], fallback: Mapping[str, Any],
                                        - datetime.now(timezone.utc)).total_seconds() / 60))
         except (AttributeError, TypeError, ValueError):
             minutes = 5
-        return "quota", f"> ⚓ **Kotan dolmak üzere, sıradaki iş yarım kalabilir. Yenilenmesini ({minutes} dakika) bekleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?**"
+        return "quota", f"> ⚓ **Your quota is nearly exhausted, so the next task may be interrupted. Would you like to wait for it to renew ({minutes} minutes) or switch to the fallback coder ({model})?**"
     if kind == "CREDIT_EXHAUSTED":
-        return "credit", f"> ⚓ **API kredin bitti, sıradaki iş başlayamaz. Kredi yükleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?**"
+        return "credit", f"> ⚓ **Your API credits are exhausted, so the next task can't start. Would you like to add credits or switch to the fallback coder ({model})?**"
     if kind == "RATE_LIMITED":
         seconds = evidence.get("retryAfterSeconds")
         minutes = max(1, math.ceil(seconds / 60)) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else 5
-        return "rate_limit", f"> ⚓ **API hız sınırına takıldın. Açılmasını ({minutes} dakika) bekleyecek misin, yoksa yedek kodlayıcıya ({model}) geçilsin mi?**"
-    return "unresponsive", f"> ⚓ **Codex 5 denemede yanıt vermedi. Biraz sonra yeniden denensin mi, yoksa yedek kodlayıcıya ({model}) geçilsin mi?**"
+        return "rate_limit", f"> ⚓ **You've hit the API rate limit. Would you like to wait for it to reset ({minutes} minutes) or switch to the fallback coder ({model})?**"
+    return "unresponsive", f"> ⚓ **Codex did not respond after 5 attempts. Would you like to retry later or switch to the fallback coder ({model})?**"
 
 
 def _pending_project_key(pending: Mapping[str, Any]) -> str:
@@ -1550,7 +1550,7 @@ def pre_tool_use(
                             if not primary_route.valid:
                                 return _deny("PRIMARY_RETURN_ROUTE_INVALID", primary_route.message)
                             primary_model = primary_route.model
-                            line = f"> ⚓ **{primary_model} kotası yenilendi. Ana kodlayıcıya geri dönülsün mü?**"
+                            line = f"> ⚓ **{primary_model}'s quota has renewed. Return to the primary coder?**"
                             recorded = False
                             def record_return_question(value):
                                 nonlocal recorded
@@ -1608,7 +1608,7 @@ def pre_tool_use(
                                 if returned and kind == "CREDIT_EXHAUSTED" and primary_route.valid:
                                     compaction_advisor.queue_fallback_question(
                                         event, repository_for_fallback,
-                                        f"> ⚓ **{primary_model} kredisi yüklendi, ana kodlayıcıya geri dönüldü.**",
+                                        f"> ⚓ **{primary_model}'s credits have been replenished; returned to the primary coder.**",
                                         primary_model, notice=True,
                                     )
                     elif kind == "RATE_LIMITED":
