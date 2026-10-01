@@ -105,6 +105,16 @@ def test_finished_worktree_lease_expires_two_hours_after_finish(tmp_path, monkey
     assert store.owner_state("finished") == "RELEASED"
 
 
+def test_default_async_lease_retention_matches_24_hour_job_cap(tmp_path, monkeypatch):
+    store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
+    now = [1_000.0]
+    monkeypatch.setattr(ledger.time, "time", lambda: now[0])
+    assert store.acquire("default", "task", ["src"], job_id="b" * 64)["status"] == ledger.OK
+    owner = store._read()["owners"]["default"]
+    assert ledger.ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS == 24 * 60 * 60
+    assert owner["retention_after"] == now[0] + 24 * 60 * 60 + ledger.JOB_RETENTION_SECONDS
+
+
 def test_hot_conflict_selectively_queues_and_expires(tmp_path, monkeypatch):
     store = ledger.ScopeLeases(tmp_path / "projects" / "sample")
     now = [1_000.0]

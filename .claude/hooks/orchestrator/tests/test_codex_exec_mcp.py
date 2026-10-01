@@ -674,6 +674,72 @@ def test_stream_activity_updates_and_checkpoints_are_throttled(tmp_path, monkeyp
     assert saved["liveness"]["route"] == "implementation"
 
 
+def test_stall_threshold_cold_start_uses_bounded_route_eta(tmp_path):
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    assert server._stall_threshold({"route": "implementation", "activeAgent": "codex",
+                                    "etaMinutes": 8}) == 16 * 60
+    assert server._stall_threshold({"route": "implementation", "activeAgent": "codex",
+                                    "etaMinutes": 60}) == 30 * 60
+    assert server._stall_threshold({"route": "implementation", "activeAgent": "agy",
+                                    "etaMinutes": 2}) == 30 * 60
+
+
+def test_stall_threshold_learns_from_five_matching_successes(tmp_path):
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    for index, gap in enumerate((1000, 1100, 1200, 1300)):
+        server._write_job({"jobId": str(index) * 64, "state": "SUCCEEDED",
+                           "route": "implementation", "activeAgent": "codex",
+                           "liveness": {"agent": "codex", "longestSilentGapSeconds": gap}})
+    job = {"route": "implementation", "activeAgent": "codex", "etaMinutes": 8}
+    assert server._stall_threshold(job) == 16 * 60
+    server._write_job({"jobId": "5" * 64, "state": "SUCCEEDED",
+                       "route": "implementation", "activeAgent": "codex",
+                       "liveness": {"agent": "codex", "longestSilentGapSeconds": 1400}})
+    assert server._stall_threshold(job) == 2100  # ceil(P90 * 1.5)
+
+
+def test_stall_episode_survives_restart_and_clears_on_activity(tmp_path):
+    job_id = "6" * 64
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 2,
+                       "ownershipToken": "current", "activeAgent": "codex"})
+    activity = {"route": "implementation", "agent": "codex", "lastActivityAt": 0.0,
+                "stdoutBytes": 0, "processAlive": True, "processAliveAt": 0.0,
+                "longestSilentGapSeconds": 0.0, "stallThresholdSeconds": 900,
+                "checkpointAt": 0.0}
+
+    # Periodic output can sustain arbitrarily long work beyond the threshold.
+    for now in (600.0, 1200.0, 1800.0, 2400.0):
+        activity["stdoutBytes"] += 1
+        codex_exec_mcp._record_activity(activity, now)
+        server._checkpoint_liveness(job_id, 2, "current", activity,
+                                    now=now, process_alive=True)
+        assert server._read_job(job_id).get("errorCode") != "STALLED"
+
+    server._checkpoint_liveness(job_id, 2, "current", activity,
+                                now=3301.0, process_alive=True)
+    first_marker = server._read_job(job_id)["stallDetectedAt"]
+    assert server._read_job(job_id)["state"] == "RUNNING"
+    assert server._read_job(job_id)["errorCode"] == "STALLED"
+
+    restarted = codex_exec_mcp.Server(job_dir=tmp_path)
+    recovered = dict(server._read_job(job_id)["liveness"], stallThresholdSeconds=900,
+                     checkpointAt=3301.0)
+    restarted._checkpoint_liveness(job_id, 2, "current", recovered,
+                                   now=3400.0, process_alive=True)
+    assert restarted._read_job(job_id)["stallDetectedAt"] == first_marker
+
+    codex_exec_mcp._record_activity(recovered, 3401.0)
+    restarted._checkpoint_liveness(job_id, 2, "current", recovered,
+                                   now=3401.0, process_alive=True)
+    assert "stallDetectedAt" not in restarted._read_job(job_id)
+    assert "errorCode" not in restarted._read_job(job_id)
+
+    restarted._checkpoint_liveness(job_id, 2, "current", recovered,
+                                   now=4302.0, process_alive=True)
+    assert restarted._read_job(job_id)["stallDetectedAt"] == 4302.0
+
+
 def test_async_silent_process_gap_is_recorded(area):
     client = Client(area, extra_env={"FAKE_EVENT_GAP_SECONDS": "0.15"})
     try:
@@ -683,6 +749,7 @@ def test_async_silent_process_gap_is_recorded(area):
         record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
                                  (started["jobId"] + ".json"))
         assert record["liveness"]["longestSilentGapSeconds"] >= 0.1
+        assert record["liveness"]["stdoutBytes"] > 0
         assert record["liveness"]["processAlive"] is False
         assert record["liveness"]["route"] == "implementation"
         assert record["liveness"]["agent"] == record["activeAgent"] == "codex"
@@ -1533,6 +1600,7 @@ def test_async_start_result_idempotency_and_sync(area):
                                                   "jobEffort": "high", "jobLabel": "Bridge task",
                                                   "jobPhase": "implementation"})
         assert started["state"] == "RUNNING" and started["acceptedAt"] < started["deadlineAt"]
+        assert started["deadlineAt"] - started["acceptedAt"] == 24 * 60 * 60
         assert job_call(client, "codex_result", {"jobId": started["jobId"]})["state"] == "RUNNING"
         assert job_call(client, "codex_start", {"call": key, "prompt": "slow"})["jobId"] == started["jobId"]
         record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))

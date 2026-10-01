@@ -30,6 +30,10 @@ import time
 from typing import Any
 import uuid
 
+ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS = 24 * 60 * 60
+STALL_COLD_START_FLOOR_SECONDS = 15 * 60
+STALL_COLD_START_CEILING_SECONDS = 30 * 60
+
 if os.name == "nt":
     import msvcrt
 else:
@@ -948,7 +952,13 @@ class Server:
     def _checkpoint_liveness(self, job_id: str, generation: int, ownership_token: str,
                              activity: dict[str, Any], *, now: float,
                              process_alive: bool, force: bool = False) -> bool:
-        if not force and now - activity.get("checkpointAt", 0.0) < 60:
+        silent_for = max(0.0, now - activity.get("lastActivityAt", now))
+        threshold = activity.get("stallThresholdSeconds")
+        should_stall = (isinstance(threshold, (int, float)) and not isinstance(threshold, bool)
+                        and math.isfinite(threshold) and silent_for >= threshold)
+        was_stalled = isinstance(activity.get("stallDetectedAt"), (int, float))
+        transition = should_stall != was_stalled
+        if not transition and not force and now - activity.get("checkpointAt", 0.0) < 60:
             return False
         with _ownership_lock(self.job_dir, job_id):
             job = self._read_job(job_id)
@@ -959,11 +969,64 @@ class Server:
             activity["processAlive"] = process_alive
             activity["processAliveAt"] = now
             activity["checkpointAt"] = now
+            if should_stall and not was_stalled:
+                activity["stallDetectedAt"] = now
+                job["stallDetectedAt"] = now
+                job["errorCode"] = "STALLED"
+            elif not should_stall and was_stalled:
+                activity.pop("stallDetectedAt", None)
+                job.pop("stallDetectedAt", None)
+                if job.get("errorCode") == "STALLED":
+                    job.pop("errorCode", None)
             job["activeAgent"] = activity["agent"]
             job["liveness"] = {key: value for key, value in activity.items()
                                if key != "checkpointAt"}
             self._write_job(job)
             return True
+
+    def _stall_threshold(self, job: dict[str, Any]) -> int:
+        route, agent = job.get("route"), job.get("activeAgent")
+        live = job.get("liveness", {})
+        if not isinstance(live, dict):
+            live = {}
+        if not isinstance(agent, str):
+            agent = live.get("agent")
+        samples = []
+        try:
+            if isinstance(route, str) and isinstance(agent, str):
+                sample_paths = self.job_dir.glob("*.json")
+            else:
+                sample_paths = ()
+            for path in sample_paths:
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError):
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                live = record.get("liveness", {})
+                if not isinstance(live, dict):
+                    live = {}
+                gap = live.get("longestSilentGapSeconds")
+                record_agent = record.get("activeAgent", live.get("agent"))
+                if (record.get("state") == "SUCCEEDED" and record.get("route") == route
+                        and record_agent == agent and isinstance(gap, (int, float))
+                        and not isinstance(gap, bool) and math.isfinite(gap) and gap >= 0):
+                    samples.append(float(gap))
+        except OSError:
+            pass
+        if len(samples) >= 5:
+            ordered = sorted(samples)
+            p90 = ordered[math.ceil(0.9 * len(ordered)) - 1]
+            return max(STALL_COLD_START_FLOOR_SECONDS, math.ceil(p90 * 1.5))
+        if agent == "agy":
+            return STALL_COLD_START_CEILING_SECONDS
+        eta = job.get("etaMinutes")
+        eta_seconds = (float(eta) * 60 if isinstance(eta, (int, float))
+                       and not isinstance(eta, bool) and math.isfinite(eta) and eta > 0 else
+                       STALL_COLD_START_FLOOR_SECONDS)
+        return max(STALL_COLD_START_FLOOR_SECONDS,
+                   min(STALL_COLD_START_CEILING_SECONDS, math.ceil(eta_seconds * 2)))
 
     def _host_ping(self, job: dict[str, Any]) -> bool:
         try:
@@ -1079,7 +1142,7 @@ class Server:
                     raise ValueError("original prompt missing")
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 return ambiguous("RECOVERY_LAUNCH_MISSING", f"Recovery launch data unavailable: {exc}")
-            timeout = original_args.get("timeoutSeconds", 2700)
+            timeout = original_args.get("timeoutSeconds", ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS)
             if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
                 return ambiguous("RECOVERY_LAUNCH_MISSING", "Recovery timeout is invalid")
             deadline = time.time() + timeout
@@ -1105,6 +1168,8 @@ class Server:
                        deadlineAt=deadline)
             for key in ("hostPid", "hostCreatedAt", "hostContained", "signalPort", "startedAt", "finishedAt", "exitCode", "errorCode", "message"):
                 job.pop(key, None)
+            if isinstance(job.get("stallDetectedAt"), (int, float)):
+                job["errorCode"] = "STALLED"
             self._write_job(job)
             try:
                 _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
@@ -1139,6 +1204,10 @@ class Server:
             if job_id in self.cancelled and state not in ("CANCELLED", "UNKNOWN_OR_IN_PROGRESS"):
                 return
             job.update(state=state, finishedAt=time.time())
+            if state in TERMINAL:
+                job.pop("stallDetectedAt", None)
+                if job.get("errorCode") == "STALLED":
+                    job.pop("errorCode", None)
             process = self.job_processes.get(job_id)
             if process is not None and process.poll() is not None:
                 job["exitCode"] = process.returncode
@@ -1209,7 +1278,7 @@ class Server:
                 return _job_result({"state": "FAILED", "errorCode": "INVALID_CONFIG", "message": str(exc)})
         call = args.get("call")
         prompt = args.get("prompt")
-        timeout = args.get("timeoutSeconds", 2700)
+        timeout = args.get("timeoutSeconds", ASYNC_JOB_DEFAULT_TIMEOUT_SECONDS)
         if not isinstance(call, str) or not call or not isinstance(prompt, str):
             return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT", "message": "call and prompt are required"})
         try:
@@ -1878,17 +1947,27 @@ class Server:
                         activity = {
                             "route": job.get("route"), "agent": agent,
                             "lastActivityAt": previous.get("lastActivityAt", started_at),
+                            "stdoutBytes": previous.get("stdoutBytes", 0),
                             "processAlive": True, "processAliveAt": started_at,
                             "longestSilentGapSeconds": previous.get("longestSilentGapSeconds", 0.0),
+                            "stallThresholdSeconds": self._stall_threshold(
+                                {**job, "activeAgent": agent}),
+                            **({"stallDetectedAt": job["stallDetectedAt"]}
+                               if isinstance(job.get("stallDetectedAt"), (int, float)) else {}),
                             "checkpointAt": started_at,
                         }
                         generation = job.get("generation", 1)
                         ownership_token = job.get("ownershipToken", "")
-                        job["activeAgent"] = agent
-                        job["liveness"] = {key: value for key, value in activity.items()
-                                           if key != "checkpointAt"}
-                        job["pid"] = process.pid
-                        self._write_job(job)
+                        with _ownership_lock(self.job_dir, request_id):
+                            current = self._read_job(request_id)
+                            if (current is not None and current.get("state") == "RUNNING"
+                                    and current.get("generation") == generation
+                                    and current.get("ownershipToken") == ownership_token):
+                                current["activeAgent"] = agent
+                                current["liveness"] = {key: value for key, value in activity.items()
+                                                       if key != "checkpointAt"}
+                                current["pid"] = process.pid
+                                self._write_job(current)
                     activity_lock = threading.Lock()
 
                     def checkpoint_activity(process_alive: bool, *, force: bool = False) -> bool:
@@ -1905,43 +1984,61 @@ class Server:
                 terminal_event = threading.Event()
                 exit_forced_after_terminal = False
 
+                def read_stdout_line(line: bytes, recorded_session: list[bool]) -> None:
+                    if line.strip():
+                        stdout_had_output.append(True)
+                    try:
+                        event = json.loads(line)
+                    except (ValueError, UnicodeError):
+                        return
+                    if not isinstance(event, dict):
+                        return
+                    events.append(event)
+                    if async_job:
+                        with activity_lock:
+                            _record_activity(activity, time.time())
+                        checkpoint_activity(process.poll() is None)
+                    started_id, terminal, _, _ = _agent_event(agent, event)
+                    if terminal:
+                        terminal_event.set()
+                    if async_job and started_id and not recorded_session[0]:
+                        recorded_session[0] = True
+                        thread_config = {"cwd": cwd, "model": model,
+                                         "config_args": config_args,
+                                         "sandbox": sandbox, "agent": agent}
+                        current = self._read_job(request_id) if async_job else None
+                        if current is not None:
+                            thread_config.update({key: current[key] for key in
+                                                  ("worktreePath", "snapshot", "baselineSnapshot",
+                                                   "head", "repoRoot")
+                                                  if key in current})
+                        with self.jobs_lock:
+                            current = self._read_job(request_id)
+                            if current is not None and current["state"] not in TERMINAL:
+                                current.update(threadId=started_id, threadConfig=thread_config)
+                                self._write_job(current)
+                        if name == "codex":
+                            _save_record(self.state_dir, {"thread_id": started_id, **thread_config})
+
                 def read_stdout() -> None:
                     recorded_session = False
-                    for line in process.stdout:
-                        if line.strip():
-                            stdout_had_output.append(True)
-                        try:
-                            event = json.loads(line)
-                        except (ValueError, UnicodeError):
-                            continue
-                        if not isinstance(event, dict):
-                            continue
-                        events.append(event)
+                    recorded = [recorded_session]
+                    pending = b""
+                    while True:
+                        chunk = process.stdout.read1(65536)
+                        if not chunk:
+                            break
                         if async_job:
                             with activity_lock:
+                                activity["stdoutBytes"] += len(chunk)
                                 _record_activity(activity, time.time())
                             checkpoint_activity(process.poll() is None)
-                        started_id, terminal, _, _ = _agent_event(agent, event)
-                        if terminal:
-                            terminal_event.set()
-                        if async_job and started_id and not recorded_session:
-                            recorded_session = True
-                            thread_config = {"cwd": cwd, "model": model,
-                                             "config_args": config_args,
-                                             "sandbox": sandbox, "agent": agent}
-                            current = self._read_job(request_id) if async_job else None
-                            if current is not None:
-                                thread_config.update({key: current[key] for key in
-                                                      ("worktreePath", "snapshot", "baselineSnapshot",
-                                                       "head", "repoRoot")
-                                                      if key in current})
-                            with self.jobs_lock:
-                                current = self._read_job(request_id)
-                                if current is not None and current["state"] not in TERMINAL:
-                                    current.update(threadId=started_id, threadConfig=thread_config)
-                                    self._write_job(current)
-                            if name == "codex":
-                                _save_record(self.state_dir, {"thread_id": started_id, **thread_config})
+                        pending += chunk
+                        while b"\n" in pending:
+                            line, pending = pending.split(b"\n", 1)
+                            read_stdout_line(line, recorded)
+                    if pending:
+                        read_stdout_line(pending, recorded)
 
                 stdout_reader = threading.Thread(target=read_stdout, daemon=True)
                 stderr_reader = threading.Thread(target=lambda: stderr_chunks.append(process.stderr.read()), daemon=True)
@@ -1963,7 +2060,7 @@ class Server:
                             remaining = job["deadlineAt"] - time.time()
                             if remaining <= 0:
                                 raise subprocess.TimeoutExpired(command, remaining)
-                            checkpoint_activity(True)
+                            checkpoint_activity(process.poll() is None)
                             terminal_event.wait(timeout=min(remaining, 0.1))
                         if process.poll() is None:
                             remaining = max(0, job["deadlineAt"] - time.time())
