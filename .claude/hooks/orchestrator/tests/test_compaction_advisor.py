@@ -119,6 +119,53 @@ def test_does_not_fire_below_threshold(setup):
     assert advisor.advise(event, repo, now=NOW) is None
 
 
+def test_advice_outcome_records_compact_and_measured_post_context(setup, monkeypatch):
+    repo, _local, scratch = setup
+    events = []
+    monkeypatch.setattr(advisor.telemetry, "emit", lambda event_type, **fields: events.append((event_type, fields)))
+    payload = _event(scratch, repo, None, _records("commit", context=260_000))
+
+    assert advisor.advise(payload, repo, now=NOW)
+    advisor.record_advice_written(payload, repo)
+    compacted_records = _records("commit", context=24_321)
+    compacted_records.insert(-1, {"type": "system", "subtype": "compact_boundary"})
+    compacted_transcript = scratch / "compacted-transcript.jsonl"
+    compacted_transcript.write_text("\n".join(json.dumps(record) for record in compacted_records), encoding="utf-8")
+    payload["transcript_path"] = str(compacted_transcript)
+    advisor.clear_pending({**payload, "source": "compact"}, repo)
+
+    assert [event for event, _ in events] == ["COMPACTION_ADVICE_OUTCOME"] * 2
+    initial, compacted = [fields for _, fields in events]
+    assert initial["advice_written"] is True
+    assert initial["compaction_observed"] is False
+    assert initial["pre_context_tokens"] == 260_000
+    assert "post_context_tokens" not in initial
+    assert compacted["notice_id"] == initial["notice_id"]
+    assert len(compacted["notice_id"]) == 32
+    assert compacted["compaction_observed"] is True
+    assert compacted["post_context_tokens"] == 24_321
+    assert compacted["elapsed_turns"] == 0
+
+
+def test_advice_outcome_without_compact_keeps_post_context_unknown(setup, monkeypatch):
+    repo, _local, scratch = setup
+    events = []
+    monkeypatch.setattr(advisor.telemetry, "emit", lambda event_type, **fields: events.append((event_type, fields)))
+    payload = _event(scratch, repo, None, _records("commit", context=260_000))
+
+    assert advisor.advise(payload, repo, now=NOW)
+    advisor.record_advice_written(payload, repo)
+
+    assert len(events) == 1
+    event_type, fields = events[0]
+    assert event_type == "COMPACTION_ADVICE_OUTCOME"
+    assert fields["advice_written"] is True
+    assert fields["compaction_observed"] is False
+    assert fields["pre_context_tokens"] == 260_000
+    assert "post_context_tokens" not in fields
+    assert "elapsed_turns" not in fields
+
+
 def test_threshold_crossing_without_other_trigger_writes_handoff(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records("none", age_minutes=2))

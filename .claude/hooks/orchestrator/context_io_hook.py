@@ -268,6 +268,8 @@ def main() -> int:
                                 json.dumps(output, ensure_ascii=False).encode("utf-8")
                             )
                             stdout_buffer.flush()
+                            if compaction_advice:
+                                compaction_advisor.record_advice_written(value, repository)
                 except BaseException:
                     pass
             elif value.get("hook_event_name") == "SessionStart":

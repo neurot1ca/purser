@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import uuid
 from typing import Any
 
 import ledger
@@ -408,6 +409,23 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                     and type(pending.get("percentage")) is int
                     and isinstance(pending.get("handoff"), str)):
                 pending = None
+            elif (not isinstance(pending.get("notice_id"), str)
+                  or not re.fullmatch(r"[0-9a-f]{32}", pending["notice_id"])):
+                pending = None
+            else:
+                pending = {**pending, "advice_written": pending.get("advice_written") is True,
+                           "compaction_observed": pending.get("compaction_observed") is True,
+                           "advice_turn": pending.get("advice_turn", 0)}
+            outcome = value.get("compaction_outcome_pending")
+            if not (isinstance(outcome, dict)
+                    and isinstance(outcome.get("notice_id"), str)
+                    and re.fullmatch(r"[0-9a-f]{32}", outcome["notice_id"])
+                    and type(outcome.get("pre_context_tokens")) is int):
+                outcome = None
+            elif type(outcome.get("advice_turn")) is not int:
+                outcome = None
+            else:
+                outcome = {**outcome, "compaction_observed": outcome.get("compaction_observed") is True}
             receipt = value.get("receipt_pending")
             if not (isinstance(receipt, dict) and isinstance(receipt.get("model"), str)
                     and receipt["model"] and isinstance(receipt.get("effort"), str)):
@@ -479,6 +497,7 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                 "last_task_id": value.get("last_task_id") if isinstance(value.get("last_task_id"), str) else None,
                 "session_id": session_id,
                 "notice_pending": pending,
+                "compaction_outcome_pending": outcome,
                 "receipt_pending": receipt,
                 "dispatch_pending": dispatch,
                 "version_pending": version_pending,
@@ -498,7 +517,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
         pass
     return {"last_suggested_context": 0, "reminder_messages": 0, "reminder_wasted_tokens": 0,
             "last_task_id": None, "session_id": session_id,
-            "notice_pending": None, "receipt_pending": None, "dispatch_pending": None,
+            "notice_pending": None, "compaction_outcome_pending": None,
+            "receipt_pending": None, "dispatch_pending": None,
             "version_pending": None,
             "leader_pending": None,
             "fallback_pending": None,
@@ -1341,9 +1361,79 @@ def clear_pending(payload: Mapping[str, Any], repository: Path | None) -> None:
             return
         state_path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(state_path, session_id)
+        if payload.get("source") == "compact":
+            notice = state["notice_pending"]
+            if notice is not None and notice.get("advice_written"):
+                state["compaction_outcome_pending"] = {
+                    "notice_id": notice["notice_id"],
+                    "pre_context_tokens": notice["context"],
+                    "advice_turn": notice.get("advice_turn", 0),
+                    "compaction_observed": True,
+                }
+            outcome = state["compaction_outcome_pending"]
+            if outcome is not None:
+                outcome["compaction_observed"] = True
+                post_context = _payload_context(payload)
+                _emit_compaction_outcome(session_id, outcome, compaction_observed=True,
+                                         post_context_tokens=post_context,
+                                         elapsed_turns=(max(0, state["context_prompt_count"]
+                                                            - outcome.get("advice_turn", 0))
+                                                        if post_context is not None else None))
+                if post_context is not None:
+                    state["compaction_outcome_pending"] = None
+        else:
+            state["compaction_outcome_pending"] = None
         if state["notice_pending"] is not None:
             state["notice_pending"] = None
-            _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    except BaseException:
+        pass
+
+
+def _payload_context(payload: Mapping[str, Any]) -> int | None:
+    records = _read_transcript(payload.get("transcript_path"))
+    boundary = max((index for index, record in enumerate(records)
+                    if record.get("subtype") == "compact_boundary"), default=-1)
+    context = _usage_context(records[boundary + 1:]) if boundary >= 0 else 0
+    return context if context > 0 else None
+
+
+def _emit_compaction_outcome(session_id: str, notice: Mapping[str, Any], *,
+                             compaction_observed: bool, post_context_tokens: int | None = None,
+                             elapsed_turns: int | None = None) -> None:
+    fields: dict[str, Any] = {
+        "session_id": session_id, "notice_id": notice["notice_id"],
+        "advice_written": True, "compaction_observed": compaction_observed,
+        "pre_context_tokens": notice["pre_context_tokens"],
+    }
+    if post_context_tokens is not None:
+        fields["post_context_tokens"] = post_context_tokens
+    if elapsed_turns is not None:
+        fields["elapsed_turns"] = elapsed_turns
+    telemetry.emit("COMPACTION_ADVICE_OUTCOME", **fields)
+
+
+def record_advice_written(payload: Mapping[str, Any], repository: Path | None) -> None:
+    """Record that UserPromptSubmit advice was successfully written to hook output."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        notice = state["notice_pending"]
+        if notice is None or notice.get("advice_written"):
+            return
+        notice["advice_written"] = True
+        notice["advice_turn"] = state["context_prompt_count"] + 1
+        state["compaction_outcome_pending"] = {
+            "notice_id": notice["notice_id"], "pre_context_tokens": notice["context"],
+            "advice_turn": notice["advice_turn"], "compaction_observed": False,
+        }
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        _emit_compaction_outcome(session_id, {
+            "notice_id": notice["notice_id"], "pre_context_tokens": notice["context"]
+        }, compaction_observed=False)
     except BaseException:
         pass
 
@@ -1383,6 +1473,15 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     receipt_advice = _receipt_advice(receipt) if receipt is not None else None
     if receipt is not None:
         state["receipt_pending"] = None
+        _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    outcome = state["compaction_outcome_pending"]
+    post_context = (_payload_context(payload) if outcome is not None
+                    and outcome.get("compaction_observed") else None)
+    if outcome is not None and post_context is not None:
+        elapsed = max(0, state["context_prompt_count"] + 1 - outcome.get("advice_turn", 0))
+        _emit_compaction_outcome(session_id, outcome, compaction_observed=True,
+                                 post_context_tokens=post_context, elapsed_turns=elapsed)
+        state["compaction_outcome_pending"] = None
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
     if state["notice_pending"] is not None:
         pending = state["notice_pending"]
@@ -1428,7 +1527,9 @@ def advise(payload: Mapping[str, Any], repository: Path | None = None, *, now: d
     state["last_suggested_context"] = context
     state["reminder_messages"] = 0
     pct = max(0, round(100 * (1 - POST_COMPACT_CONTEXT_TOKENS / context)))
-    state["notice_pending"] = {"context": context, "percentage": pct, "handoff": str(handoff), "triggers": triggers, "blocked": False}
+    state["notice_pending"] = {"context": context, "percentage": pct, "handoff": str(handoff),
+                               "triggers": triggers, "blocked": False, "notice_id": uuid.uuid4().hex,
+                               "advice_written": False, "advice_turn": 0}
     _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
     return "\n".join(part for part in (_notice_advice(state["notice_pending"], triggers), receipt_advice) if part)
 
