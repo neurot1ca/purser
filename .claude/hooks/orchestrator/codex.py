@@ -3604,6 +3604,8 @@ def _post_observations(
     reviewer_started: bool = False,
     reviewer_elapsed_seconds: float | None = None,
 ) -> None:
+    initial_findings = reviewer_report.get("findings") if isinstance(reviewer_report, Mapping) else None
+    initial_finding_count = len(initial_findings) if isinstance(initial_findings, list) else None
     task_id = pending.get("task_id")
     project_namespace = _pending_project_key(pending)
     envelope = _telemetry_envelope(
@@ -3751,6 +3753,8 @@ def _post_observations(
             and bundle.get("reviewer1_result") != policy.REVIEWER1_UNAVAILABLE
         ):
             event_type = "REVIEWER1_FINISHED"
+            if initial_finding_count is not None:
+                review_payload["reviewer1_initial_finding_count"] = initial_finding_count
         else:
             event_type = "REVIEWER1_FAILED"
             reviewer_error_code = reviewer_report.get("error_code") if isinstance(reviewer_report, Mapping) else None

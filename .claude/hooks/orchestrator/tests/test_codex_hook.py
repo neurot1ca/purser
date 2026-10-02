@@ -16,6 +16,7 @@ import uuid
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
+sys.path.insert(0, str(Path(__file__).parents[4] / "scripts"))
 import active_coder_state
 import codex
 import async_session_maintenance
@@ -32,6 +33,8 @@ import project_root
 import reviewer as reviewer_module
 import telemetry
 import compaction_advisor
+import telemetry_schema
+import route_outcome_report
 
 
 CONFIG_PATH = Path(__file__).parents[1] / "config.json"
@@ -7563,6 +7566,118 @@ def test_reviewer_incomplete_telemetry_has_error_elapsed_and_retry_outcome(works
     assert failure["duration_ms"] == 2500
     assert failure["reviewer1_retry_count"] == 1
     assert failure["reviewer1_retry_recovered"] is False
+
+
+def test_reviewer_finding_count_stays_separate_from_task_decisions_and_schema_is_bounded(
+    workspace, monkeypatch,
+):
+    _repo, state = workspace
+    captured = []
+
+    def capture(*args, **kwargs):
+        if args[:2] and args[0] == "emit" and args[1].startswith("REVIEWER1_"):
+            captured.append((args[1], kwargs))
+
+    monkeypatch.setattr(codex, "_observe", capture)
+
+    def observe_review(task_id, result, *, findings=None, skipped=None):
+        captured.clear()
+        telemetry.emit(
+            "TASK_ROUTE_SELECTED", task_id=task_id, state_root=state,
+            phase="implementation", route="normal", model="gpt-6-sol", effort="medium",
+            task_type="implementation",
+        )
+        telemetry.emit(
+            "IMPLEMENTER_STARTED", task_id=task_id, state_root=state,
+            phase="implementation", route="normal", model="gpt-6-sol", effort="medium",
+            implementer="codex-main",
+        )
+        bundle = {"reviewer1_result": result, "reviewer1_provider": "agy",
+                  "reviewer1_model_requested": "gemini-test", "reviewer1_attempts": [], "findings": []}
+        if skipped is not None:
+            bundle["reviewer1_skipped_reason"] = skipped
+        report = {"review_status": ("NOT_RUN_INCOMPLETE_PACKET"
+                                     if result == policy.REVIEWER1_UNAVAILABLE else "COMPLETED"),
+                  "findings": findings or []}
+        codex._post_observations(
+            event(tool_use_id=f"review-{task_id}"), state,
+            {"task_id": task_id, "agent": "codex", "model": "gpt-6-sol",
+             "phase": "implementation", "route": "normal"},
+            bundle, reviewer_report=report, reviewer_started=skipped is None,
+        )
+        event_type, payload = next(
+            (name, kwargs) for name, kwargs in captured if name.startswith("REVIEWER1_")
+        )
+        payload = dict(payload)
+        payload.pop("task_id", None)
+        telemetry.emit(event_type, task_id=task_id, **payload)
+        telemetry.update_task(task_id, state_root=state)
+
+    # Simulate post-repair bundle state: the initial reviewer report still has both findings.
+    observe_review("findings-then-send-back", policy.CHANGES_REQUIRED,
+                   findings=[{"code": "F1"}, {"code": "F2"}])
+    telemetry.emit(
+        "CLAUDE_DECISION_RECORDED", task_id="findings-then-send-back", state_root=state,
+        decision="send_back", task_type="implementation",
+        source={"kind": "reply", "job_id": "reply-1"},
+    )
+    telemetry.update_task("findings-then-send-back", state_root=state)
+
+    observe_review("accepted", policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE)
+    telemetry.emit(
+        "CLAUDE_DECISION_RECORDED", task_id="accepted", state_root=state,
+        decision="accepted", task_type="implementation",
+        source={"kind": "apply", "job_id": "apply-1"},
+    )
+    telemetry.update_task("accepted", state_root=state)
+
+    observe_review("unavailable", policy.REVIEWER1_UNAVAILABLE)
+    observe_review("skipped", None, skipped="NO_DELTA")
+
+    def task(task_id):
+        path = state / "projects" / "unresolved" / "telemetry" / "tasks" / f"{task_id}.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    finding_task = task("findings-then-send-back")
+    assert finding_task["reviewer1_initial_finding_count"] == 2
+    assert finding_task["reviewer1_result"] == policy.CHANGES_REQUIRED
+    assert finding_task["claude_acceptance"]["send_backs"] == 1
+    assert finding_task["claude_acceptance"]["outcome"] == "unknown"
+    assert task("accepted")["claude_acceptance"]["outcome"] == "accepted"
+    assert task("unavailable")["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
+    assert task("unavailable")["reviewer1_initial_finding_count"] is None
+    assert task("skipped")["reviewer1_result"] is None
+    assert task("skipped")["reviewer1_skipped_reason"] == "NO_DELTA"
+    assert "REVIEWER1_FINDING_DISPOSITION" not in telemetry_schema.EVENT_TYPES
+
+    report = route_outcome_report.report(
+        state, route_outcome_report.timestamp("2000-01-01T00:00:00Z"),
+        project_key="unresolved", min_samples=1,
+    )
+    rendered = route_outcome_report.markdown(report, state / "report.md", state)
+    assert "Task-level proxies: initial Reviewer-1 findings / CHANGES_REQUIRED / send-backs / accepted" in rendered
+    assert "2 findings total; 1 known / 2 unknown; 1 CHANGES_REQUIRED / 1 send-backs / 0 accepted" in rendered
+    assert "0 findings total; 1 known / 0 unknown; 0 CHANGES_REQUIRED / 0 send-backs / 1 accepted" in rendered
+
+    valid_payloads = {
+        "COMPACTION_ADVICE_OUTCOME": {"notice_id": "notice-1", "advice_written": True,
+                                      "compaction_observed": True, "pre_context_tokens": 100,
+                                      "post_context_tokens": 25, "elapsed_turns": 2},
+        "SHADOW_FINISHED": {"candidate": "model-a", "status": "completed", "agreement": True,
+                            "elapsed_ms": 10, "input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+        "SCOPE_CONFLICT_OUTCOME": {"action": "queued", "job_id": "job-1", "queue_wait_ms": 1},
+    }
+    for event_type, payload in valid_payloads.items():
+        assert telemetry_schema.valid_event(telemetry_schema.build_event(event_type, payload=payload))
+    malformed = (
+        ("REVIEWER1_FINISHED", {"reviewer1_initial_finding_count": True}),
+        ("COMPACTION_ADVICE_OUTCOME", {"notice_id": "bad id"}),
+        ("SHADOW_FINISHED", {"candidate": "model-a", "status": "partial"}),
+        ("SCOPE_CONFLICT_OUTCOME", {"action": "expired"}),
+    )
+    for event_type, payload in malformed:
+        with pytest.raises(ValueError):
+            telemetry_schema.build_event(event_type, payload=payload)
 
 
 def test_reviewer_incomplete_telemetry_uses_measured_elapsed_when_report_is_none(workspace, monkeypatch):

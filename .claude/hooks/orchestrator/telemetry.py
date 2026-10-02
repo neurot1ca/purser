@@ -1081,6 +1081,7 @@ def _new_aggregate(
         "reviewer1_model_requested": None,
         "served_model_attestation": "UNAVAILABLE",
         "reviewer1_result": None,
+        "reviewer1_initial_finding_count": None,
         "reviewer1_skipped_reason": None,
         "claude_review_mode": None,
         "changed_paths_count": None,
@@ -1234,10 +1235,12 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
     elif event_type in {"REVIEWER1_STARTED", "REVIEWER1_FINISHED", "REVIEWER1_FAILED"}:
         if event_type == "REVIEWER1_STARTED":
             aggregate["reviewer1_result"] = None
+            aggregate["reviewer1_initial_finding_count"] = None
             aggregate["reviewer1_skipped_reason"] = None
         else:
             aggregate["reviewer1_skipped_reason"] = None
-        for field in ("reviewer1_provider", "reviewer1_model_requested", "served_model_attestation", "reviewer1_result"):
+        for field in ("reviewer1_provider", "reviewer1_model_requested", "served_model_attestation",
+                      "reviewer1_result", "reviewer1_initial_finding_count"):
             if field in payload:
                 aggregate[field] = payload[field]
         if event_type != "REVIEWER1_STARTED":
@@ -1255,6 +1258,7 @@ def _fold_event(aggregate: dict[str, Any], event: Mapping[str, Any]) -> bool:
     elif event_type == "REVIEWER1_SKIPPED":
         aggregate["reviewer1_provider"] = None
         aggregate["reviewer1_result"] = None
+        aggregate["reviewer1_initial_finding_count"] = None
         aggregate["reviewer1_skipped_reason"] = payload.get("reviewer1_skipped_reason")
         aggregate["reviewer1_model_requested"] = payload.get("reviewer1_model_requested")
     elif event_type == "ROUTING_PROTOCOL_VIOLATION":

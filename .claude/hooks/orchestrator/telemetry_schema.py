@@ -21,6 +21,9 @@ EVENT_TYPES = frozenset(
         "MECHANICAL_MODEL_RANK_CHANGED",
         "REVIEWER1_STARTED",
         "REVIEWER1_FINISHED",
+        "COMPACTION_ADVICE_OUTCOME",
+        "SHADOW_FINISHED",
+        "SCOPE_CONFLICT_OUTCOME",
         "REVIEWER1_SKIPPED",
         "REVIEWER1_FAILED",
         "ROUTING_PROTOCOL_VIOLATION",
@@ -261,6 +264,7 @@ _PAYLOAD_FIELDS = {
             "reviewer1_model_requested",
             "served_model_attestation",
             "reviewer1_result",
+            "reviewer1_initial_finding_count",
             "duration_ms",
             "gemini_usage_known",
             "reviewer1_retry_count",
@@ -271,6 +275,14 @@ _PAYLOAD_FIELDS = {
     "REVIEWER1_SKIPPED": frozenset(
         {"reviewer1_skipped_reason", "reviewer1_model_requested", "served_model_attestation"}
     ),
+    "COMPACTION_ADVICE_OUTCOME": frozenset({
+        "notice_id", "advice_written", "compaction_observed", "pre_context_tokens",
+        "post_context_tokens", "elapsed_turns",
+    }),
+    "SHADOW_FINISHED": frozenset({
+        "candidate", "status", "agreement", "elapsed_ms", "input_tokens", "output_tokens", "total_tokens",
+    }),
+    "SCOPE_CONFLICT_OUTCOME": frozenset({"action", "job_id", "queue_wait_ms"}),
     "REVIEWER1_FAILED": frozenset(
         {
             "failure_code",
@@ -406,6 +418,28 @@ def _payload_value(name: str, value: Any) -> Any:
         if isinstance(value, int) and not isinstance(value, bool) and value in (0, 1):
             return value
         raise ValueError("telemetry reviewer retry count is invalid")
+    if name == "reviewer1_initial_finding_count":
+        return _number(value, integer=True)
+    if name in {"advice_written", "compaction_observed"}:
+        if not isinstance(value, bool):
+            raise ValueError("telemetry compaction outcome boolean is invalid")
+        return value
+    if name in {"pre_context_tokens", "post_context_tokens", "elapsed_turns"}:
+        return _number(value, integer=True)
+    if name in {"notice_id", "candidate", "job_id"}:
+        return _identifier(value)
+    if name == "status" and value in {"completed", "failed"}:
+        return value
+    if name == "agreement":
+        if isinstance(value, bool):
+            return value
+        raise ValueError("telemetry shadow agreement is invalid")
+    if name in {"input_tokens", "output_tokens", "total_tokens"}:
+        return _number(value, integer=True)
+    if name == "action" and value in {"denied", "queued", "promoted", "applied", "discarded"}:
+        return value
+    if name in {"elapsed_ms", "queue_wait_ms"}:
+        return _number(value)
     if name in {
         "routing_enforced",
         "fresh_thread",

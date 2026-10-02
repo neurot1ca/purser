@@ -322,6 +322,10 @@ def report(state_root, since, *, project_key=None, min_samples=5):
              if task.get("reviewer1_skipped_reason") else task.get("reviewer1_result") or "unknown")
             for task in tasks
         )
+        initial_findings = [
+            _number(task.get("reviewer1_initial_finding_count")) for task in tasks
+        ]
+        known_initial_findings = [value for value in initial_findings if value is not None]
         comparison_sources = []
         for task in tasks:
             acceptance = task.get("claude_acceptance")
@@ -357,6 +361,14 @@ def report(state_root, since, *, project_key=None, min_samples=5):
             "decision": decision,
             "applied_as_is_rate": applied / len(accepted) if adequate and accepted else None,
             "send_backs": send_backs,
+            "task_level_proxies": {
+                "initial_reviewer1_findings": sum(known_initial_findings),
+                "initial_reviewer1_findings_known": len(known_initial_findings),
+                "initial_reviewer1_findings_unknown": len(tasks) - len(known_initial_findings),
+                "changes_required": reviewers["CHANGES_REQUIRED"],
+                "send_backs": send_backs,
+                "accepted": outcomes["accepted"],
+            },
             "accepted_duration_ms": {"count": len(durations), "median": statistics.median(durations) if durations else None,
                                      "p90": _percentile(durations, .9)},
             "accepted_worker_tokens": {"count": len(worker_tokens), "median": statistics.median(worker_tokens) if worker_tokens else None,
@@ -379,8 +391,8 @@ def markdown(result, output_path, state_root):
              f"{result['unattributed_starts']['distinct_tasks']} distinct tasks; "
              f"{result['unattributed_starts']['start_events']} start events.", "",
              f"Unmatched bridge jobs: {result['unmatched_jobs']}.", "",
-             "| Selected route (agent) / model / effort | Served route (agent) / model / effort | Fallback | Task type | Work kind | Samples | Decision | Outcomes known / unknown / total | Accepted | Rejected | Unknown | Bridge state evidence (failed / cancelled / timed out / awaiting apply or fetch) | Cost per accepted: worker tokens / Claude tokens / elapsed ms | Usage known / unknown / total (worker / Claude / elapsed) | Applied accepted | Fetched operation accepted | Applied as-is | Send-backs | Accepted duration ms (n / median / p90) | Accepted worker tokens (n / median / p90) | Accepted Claude tokens (n / median / p90) | Reviewer outcomes | Task source and decision time | Evidence |",
-             "| --- | --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- |"]
+             "| Selected route (agent) / model / effort | Served route (agent) / model / effort | Fallback | Task type | Work kind | Samples | Decision | Outcomes known / unknown / total | Accepted | Rejected | Unknown | Bridge state evidence (failed / cancelled / timed out / awaiting apply or fetch) | Cost per accepted: worker tokens / Claude tokens / elapsed ms | Usage known / unknown / total (worker / Claude / elapsed) | Applied accepted | Fetched operation accepted | Applied as-is | Send-backs | Accepted duration ms (n / median / p90) | Accepted worker tokens (n / median / p90) | Accepted Claude tokens (n / median / p90) | Task-level proxies: initial Reviewer-1 findings / CHANGES_REQUIRED / send-backs / accepted | Reviewer outcomes | Task source and decision time | Evidence |",
+             "| --- | --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- | --- |"]
     for group in result["groups"]:
         def rate(value):
             return "—" if value is None else f"{value:.1%}"
@@ -421,6 +433,12 @@ def markdown(result, output_path, state_root):
             rate(group["applied_as_is_rate"]),
             str(group["send_backs"]), dist(group["accepted_duration_ms"]),
             dist(group["accepted_worker_tokens"]), dist(group["accepted_claude_tokens"]),
+            (f"{group['task_level_proxies']['initial_reviewer1_findings']} findings total; "
+             f"{group['task_level_proxies']['initial_reviewer1_findings_known']} known / "
+             f"{group['task_level_proxies']['initial_reviewer1_findings_unknown']} unknown; "
+             f"{group['task_level_proxies']['changes_required']} CHANGES_REQUIRED / "
+             f"{group['task_level_proxies']['send_backs']} send-backs / "
+             f"{group['task_level_proxies']['accepted']} accepted"),
             ", ".join(f"{name}: {count}" for name, count in group["reviewer_outcomes"].items()),
             ", ".join(sources), evidence]
         lines.append("| " + " | ".join(values) + " |")
