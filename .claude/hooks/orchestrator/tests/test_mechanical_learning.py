@@ -10,6 +10,7 @@ import codex
 import coder_config
 import mechanical_learning
 import state_root
+import telemetry
 import telemetry_schema
 
 
@@ -183,9 +184,11 @@ def test_shadow_scoring_failures_and_matching_report(tmp_path, monkeypatch):
                 subprocess.CompletedProcess([], 0, "", ""),
                 subprocess.CompletedProcess([], 0,
                     '{"type":"text","part":{"text":"' + report + '"}}\n'
-                    '{"type":"step_finish","part":{"reason":"stop"}}\n', "")]
+                    '{"type":"step_finish","part":{"reason":"stop","tokens":{"input":10,"output":4,"total":14}}}\n', "")]
     values = []
+    events = []
     monkeypatch.setattr(mechanical_learning, "record_sample", lambda model, success, **kwargs: values.append(success))
+    monkeypatch.setattr(telemetry, "emit", lambda event_type, **payload: events.append((event_type, payload)))
     monkeypatch.setattr(mechanical_learning, "_copy_scratch", lambda src, dest: dest.mkdir())
     monkeypatch.setattr(coder_config, "opencode_binary", lambda: "opencode")
     monkeypatch.setattr(mechanical_learning.subprocess, "run", lambda *args, **kwargs: _next(outcomes))
@@ -199,6 +202,17 @@ def test_shadow_scoring_failures_and_matching_report(tmp_path, monkeypatch):
             "project_key": "0123456789abcdef", "state_root": str(tmp_path)}), encoding="utf-8")
         assert mechanical_learning.run_shadow(job) is (idx == 3)
     assert values == [False, False, False, True]
+    shadow_events = [payload for event_type, payload in events if event_type == "SHADOW_FINISHED"]
+    assert shadow_events[0]["status"] == "failed"
+    assert "agreement" not in shadow_events[0]
+    assert "input_tokens" not in shadow_events[0]
+    assert shadow_events[2]["status"] == "failed"
+    assert "agreement" not in shadow_events[2]
+    assert shadow_events[3]["status"] == "completed"
+    assert shadow_events[3]["agreement"] is True
+    assert shadow_events[3]["input_tokens"] == 10
+    assert shadow_events[3]["output_tokens"] == 4
+    assert shadow_events[3]["total_tokens"] == 14
 
 
 def _next(outcomes):

@@ -467,6 +467,26 @@ def _final_report(stdout: str) -> str:
     return report
 
 
+def _opencode_tokens(stdout: str) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    fields = {"input_tokens": ("input", "input_tokens"),
+              "output_tokens": ("output", "output_tokens"),
+              "total_tokens": ("total", "total_tokens")}
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        part = event.get("part") if isinstance(event, dict) else None
+        usage = part.get("tokens") if isinstance(part, dict) else None
+        if event.get("type") == "step_finish" and isinstance(usage, dict):
+            for target, sources in fields.items():
+                value = next((usage[key] for key in sources if key in usage), None)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    totals[target] = totals.get(target, 0) + value
+    return totals
+
+
 def _copy_scratch(source: Path, scratch: Path) -> None:
     def safe_entries(directory: str, names: list[str]) -> set[str]:
         ignored = {name for name in names if Path(directory, name).is_symlink()
@@ -571,14 +591,22 @@ def run_shadow(job_path: Path) -> bool:
     job = json.loads(job_path.read_text(encoding="utf-8"))
     scratch = Path(job["scratch"])
     lock = job_path.parent / "running.lock"
+    started = time.monotonic()
     success = False
+    completed = False
+    agreement = None
+    tokens: dict[str, int] = {}
     try:
         lock.write_text(str(os.getpid()), encoding="utf-8")
         source = Path(job["repository"]).resolve()
         _copy_scratch(source, scratch)
         result = _run_opencode(job["model"], job["prompt"], scratch, SHADOW_TIMEOUT_SECONDS)
-        report = _final_report(result.stdout) if result.returncode == 0 else ""
-        success = bool(report and reports_agree(report, job["accepted_report"]))
+        tokens = _opencode_tokens(result.stdout or "")
+        if result.returncode == 0:
+            report = _final_report(result.stdout)
+            completed = True
+            agreement = reports_agree(report, job["accepted_report"])
+            success = agreement
     except Exception:
         success = False
     try:
@@ -592,6 +620,16 @@ def run_shadow(job_path: Path) -> bool:
     except Exception:
         pass
     finally:
+        try:
+            import telemetry
+            payload = {"candidate": job["model"], "status": "completed" if completed else "failed",
+                       "elapsed_ms": (time.monotonic() - started) * 1000, **tokens}
+            if completed:
+                payload["agreement"] = agreement
+            telemetry.emit("SHADOW_FINISHED", state_root=job["state_root"],
+                           project_key=job["project_key"], **payload)
+        except Exception:
+            pass
         shutil.rmtree(scratch, ignore_errors=True)
         job_path.unlink(missing_ok=True)
         lock.unlink(missing_ok=True)
