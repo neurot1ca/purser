@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.62 — 2026-10-02
+
+- **Changed:** Codex receipts, the job board and lifecycle notices (maintenance, upgrade, new model, free-model leader, fallback) now reach Claude before it replies, so it writes them in its first reply; the Stop hook only blocks as a fallback when a line is missing, saving an extra full-context request each time.
+- **Added:** Stop blocks emit STOP_BLOCKED telemetry (reason kinds and count, no notice text).
+- **Changed:** Maintenance `mark-done` takes `--acted <path_line>` values and records acted versus listed findings.
+- **Changed:** The compact Codex result no longer repeats the worker's VALIDATION line.
+
 ## 0.1.61 — 2026-10-02
 
 - **Fixed:** The handoff's recent history no longer shows stale turns from before a compaction.
