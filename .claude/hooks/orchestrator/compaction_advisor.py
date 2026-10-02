@@ -124,7 +124,8 @@ def _usage_context(records: list[dict[str, Any]]) -> int:
 
 
 def _genuine_user(record: Mapping[str, Any]) -> bool:
-    if _record_type(record) != "user" or record.get("isMeta") is True:
+    if (_record_type(record) != "user" or record.get("isMeta") is True
+            or record.get("isCompactSummary") is True):
         return False
     if any(isinstance(block, Mapping) and block.get("type") == "tool_result" for block in _content(record)):
         return False
@@ -357,13 +358,15 @@ def restore(payload: Mapping[str, Any], repository: Path | None) -> str | None:
         boundary = next((index for index in range(len(records) - 1, -1, -1)
                          if records[index].get("type") == "system"
                          and records[index].get("subtype") == "compact_boundary"), None)
-        if boundary is not None and (recent := _recent_turns(records[:boundary])):
+        if boundary is not None:
+            recent = _recent_turns(records[:boundary])
             if RECENT_START in content and RECENT_END in content:
                 start = content.index(RECENT_START)
                 end = content.find(RECENT_END, start)
                 if end >= 0:
                     content = content[:start] + content[end + len(RECENT_END):]
-            content = content.rstrip() + f"\n{RECENT_START}\n{recent}\n{RECENT_END}\n"
+            if recent:
+                content = content.rstrip() + f"\n{RECENT_START}\n{recent}\n{RECENT_END}\n"
 
     header = (
         "Purser handoff (historical reference, written before the context was compacted or cleared; "
@@ -769,7 +772,8 @@ def refresh_handoff(payload: Mapping[str, Any], repository: Path | None = None) 
             records, datetime.now(timezone.utc), settings["idle_minutes"]
         )
         _unused_triggers, _latest_task_id, calls = _transcript_facts_all(records)
-        _replace_state_block(path, _mechanical_state(repository, _usage_context(records), triggers, calls), None)
+        _replace_state_block(path, _mechanical_state(repository, _usage_context(records), triggers, calls),
+                             _recent_turns(records))
     except BaseException:
         pass
 

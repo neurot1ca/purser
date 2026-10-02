@@ -980,6 +980,36 @@ def test_precompact_refreshes_only_existing_handoff_state(setup, monkeypatch):
                for entry in entries for hook in entry["hooks"])
 
 
+def test_precompact_replaces_recent_turns_and_ignores_injected_summary_records(setup):
+    repo, _local, scratch = setup
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "older genuine turn"}},
+        {"type": "user", "message": {"role": "user", "content": "devam"}},
+        {"type": "user", "isMeta": True,
+         "message": {"role": "user", "content": "hook-injected feedback"}},
+        {"type": "user", "message": {"role": "user", "content": "başlat"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "latest assistant reply"},
+        ]}},
+        {"type": "user", "isCompactSummary": True,
+         "message": {"role": "user", "content": "compact summary of older work"}},
+    ]
+    event = _event(scratch, repo, scratch, records)
+    path = advisor.handoff_path(repo)
+    path.parent.mkdir(parents=True)
+    advisor._replace_state_block(path, "mechanical", "User:\nvery old saved turn")
+
+    advisor.refresh_handoff(event, repo)
+
+    handoff = path.read_text(encoding="utf-8")
+    recent = handoff.split(advisor.RECENT_START, 1)[1].split(advisor.RECENT_END, 1)[0]
+    assert "User:\ndevam" in recent
+    assert "User:\nbaşlat" in recent
+    assert "Assistant:\nlatest assistant reply" in recent
+    for excluded in ("very old saved turn", "hook-injected feedback", "compact summary of older work"):
+        assert excluded not in recent
+
+
 def test_plan_milestones_in_handoff_show_jobs_apply_and_next(setup):
     repo, local, scratch = setup
     jobs = scratch / "purser-state" / "codex_exec_mcp" / "jobs"
