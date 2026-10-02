@@ -18,7 +18,6 @@ from typing import Any
 import uuid
 
 import coder_config
-import ledger
 import policy
 import telemetry
 

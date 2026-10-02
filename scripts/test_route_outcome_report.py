@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-from pathlib import Path
 
 from route_outcome_report import markdown, report, timestamp
 

@@ -16,7 +16,6 @@ are approximate at four characters per token.
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 import glob
 import json
 import os
@@ -26,9 +25,9 @@ import sys
 from typing import Any
 
 try:
-    from orchestration_token_audit_0 import _project_slug, _timestamp, _transcript_glob
+    from orchestration_token_audit_0 import _timestamp, _transcript_glob
 except ImportError:  # Support both ``python scripts/compaction_eval.py`` and package imports.
-    from scripts.orchestration_token_audit_0 import _project_slug, _timestamp, _transcript_glob
+    from scripts.orchestration_token_audit_0 import _timestamp, _transcript_glob
 
 
 CHARS_PER_TOKEN = 4.0
