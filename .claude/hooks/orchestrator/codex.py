@@ -2158,6 +2158,10 @@ def pre_tool_use(
                 hot_path_queue=worktree_start,
             )
             if admitted["status"] != ledger.OK:
+                if admitted.get("code") == "SCOPE_LEASE_CONFLICT":
+                    _observe("emit", "SCOPE_CONFLICT_OUTCOME", task_id=parsed.task_id,
+                             state_root=runtime_root, project_key=project_namespace,
+                             action="denied", job_id=job_id)
                 return _observed_denial(
                     event, admitted["code"],
                     (f"Scope is leased by task {admitted['task_id']}. "
@@ -2170,6 +2174,9 @@ def pre_tool_use(
             pending["lease_owner"] = owner
             lease_pending = pending
             if admitted["code"] == "LEASE_QUEUED":
+                _observe("emit", "SCOPE_CONFLICT_OUTCOME", task_id=parsed.task_id,
+                         state_root=runtime_root, project_key=project_namespace,
+                         action="queued", job_id=job_id)
                 pending["lease_queued"] = True
                 pending["baseline"] = {"status": ledger.UNKNOWN, "code": "QUEUED"}
                 baseline = pending["baseline"]

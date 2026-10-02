@@ -111,6 +111,15 @@ def _scope_covers(scope: Sequence[str], path: str) -> bool:
     return False
 
 
+def _queue_wait_ms(owner: Mapping[str, Any]) -> int | None:
+    queued, acquired = owner.get("queued_at"), owner.get("acquired_at")
+    if (not isinstance(queued, (int, float)) or isinstance(queued, bool)
+            or not isinstance(acquired, (int, float)) or isinstance(acquired, bool)
+            or not math.isfinite(queued) or not math.isfinite(acquired)):
+        return None
+    return max(0, round((acquired - queued) * 1000))
+
+
 class ScopeLeases:
     """Durable per-repository ownership; uncertain owners stay active."""
 
@@ -244,7 +253,22 @@ class ScopeLeases:
             owner.update(state="ACTIVE", acquired_at=now)
             owner.pop("hot_path_queue", None)
             changed = True
+            job_id = owner.get("job_id")
+            if isinstance(job_id, str):
+                try:
+                    import telemetry
+                    telemetry.emit("SCOPE_CONFLICT_OUTCOME", task_id=owner["task_id"],
+                                   project_key=self.path.parent.name,
+                                   state_root=self.path.parent.parent.parent,
+                                   action="promoted", job_id=job_id,
+                                   queue_wait_ms=_queue_wait_ms(owner))
+                except BaseException:
+                    pass
         return changed
+
+    def queue_wait_ms(self, owner_key: str) -> int | None:
+        with _lease_lock(self.lock_path):
+            return _queue_wait_ms(self._read()["owners"].get(owner_key, {}))
 
     def acquire(self, owner_key: str, task_id: str, scope: Sequence[str],
                 *, job_id: str | None = None, timeout_seconds: float | None = None,

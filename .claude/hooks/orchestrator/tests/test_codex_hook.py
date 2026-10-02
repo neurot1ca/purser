@@ -2469,6 +2469,9 @@ def test_scope_lease_path_prefix_and_stale_owner_block(workspace, config):
     denied = codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)
     assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
     assert "old-task" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    outcome, = [item for item in _all_telemetry_events(state)
+                if item["event_type"] == "SCOPE_CONFLICT_OUTCOME"]
+    assert outcome["payload"] == {"action": "denied"}
     assert store.release("lost-owner")["status"] == ledger.OK
     assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
     broad = _lease_call("broad-task", "src", "lease-broad")
@@ -2526,6 +2529,9 @@ def test_async_lease_waits_for_finalize_or_expired_job_record(workspace, monkeyp
     job.update(state="EXPIRED", errorCode="JOB_EXPIRED")
     path.write_text(json.dumps(job), encoding="utf-8")
     assert store.acquire("after-expired", "after-expired-task", ["file0.py"])["status"] == ledger.OK
+    assert not [item for item in _all_telemetry_events(state)
+                if item["event_type"] == "SCOPE_CONFLICT_OUTCOME"
+                and item["payload"].get("action") == "discarded"]
 
 
 def test_async_missing_job_record_releases_after_grace_period(workspace, monkeypatch):
@@ -2656,6 +2662,10 @@ def test_hot_path_queues_only_matching_worktree_start(workspace, config):
     cold_input = codex.pre_tool_use(disjoint, config=config, state_root=state, repo_root=repo)[
         "hookSpecificOutput"]["updatedInput"]
     assert hot_input["leaseQueued"] is True
+    queued, = [item for item in _all_telemetry_events(state)
+               if item["event_type"] == "SCOPE_CONFLICT_OUTCOME"]
+    assert queued["payload"]["action"] == "queued"
+    assert queued["payload"]["job_id"] == hashlib.sha256(hot_input["call"].encode()).hexdigest()
     pending = codex._read_pending(state, hot)
     assert pending["baseline"]["code"] == "QUEUED"
     assert "leaseQueued" not in cold_input
@@ -2668,6 +2678,11 @@ def test_hot_path_queues_only_matching_worktree_start(workspace, config):
     async_index.parent.mkdir(parents=True, exist_ok=True)
     async_index.write_text(json.dumps(index), encoding="utf-8")
     assert store.release(codex._call_key(owner))["status"] == ledger.OK
+    promoted, = [item for item in _all_telemetry_events(state)
+                 if item["event_type"] == "SCOPE_CONFLICT_OUTCOME"
+                 and item["payload"]["action"] == "promoted"]
+    assert promoted["payload"]["job_id"] == job_id
+    assert isinstance(promoted["payload"]["queue_wait_ms"], (int, float))
     assert codex.bind_queued_baseline(state, job_id) is True
     assert codex._read_pending(state, hot)["baseline"]["status"] == ledger.OK
 

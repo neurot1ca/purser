@@ -804,6 +804,13 @@ def decision_events(area):
     return [event for event in events if event["event_type"] == "CLAUDE_DECISION_RECORDED"]
 
 
+def scope_outcome_events(area):
+    events = []
+    for path in (area / "root" / "telemetry" / "events").glob("????-??/session_*.jsonl"):
+        events.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    return [event for event in events if event["event_type"] == "SCOPE_CONFLICT_OUTCOME"]
+
+
 def wait_for_path(path, exists, description, timeout=30):
     deadline = time.monotonic() + timeout
     while path.exists() != exists and time.monotonic() < deadline:
@@ -1193,6 +1200,10 @@ def test_apply_and_reply_emit_decisions_but_conflict_does_not(area):
         finish(client, reply["jobId"], "SUCCEEDED")
         applied = job_call(client, "codex_apply", {"jobId": reply["jobId"]})
         assert applied["applied"] is True
+        outcome, = [event for event in scope_outcome_events(area)
+                    if event["payload"].get("action") == "applied"]
+        assert outcome["payload"]["job_id"] == reply["jobId"]
+        assert "queue_wait_ms" not in outcome["payload"]
         accepted = decision_events(area)
         assert [(event["payload"]["decision"], event["payload"]["source"])
                 for event in accepted] == [
@@ -1206,6 +1217,38 @@ def test_apply_and_reply_emit_decisions_but_conflict_does_not(area):
         assert len(decision_events(area)) == 2
     finally:
         client.close()
+
+
+def test_applied_scope_outcome_uses_recorded_queue_wait(area, monkeypatch):
+    import ledger
+    import telemetry
+
+    repo = _git_repo(area)
+    root = area / "root"
+    project_key = codex_exec_mcp.project_root.project_key(repo.resolve())
+    store = ledger.ScopeLeases(root / "projects" / project_key)
+    job_id = "b" * 64
+    store.acquire("blocker", "blocker-task", ["tracked.txt"], job_id="a" * 64)
+    assert store.acquire("queued-owner", "queued-task", ["tracked.txt"], job_id=job_id,
+                         queue_conflict=True)["code"] == "LEASE_QUEUED"
+    record = store._read()
+    record["owners"]["queued-owner"].update(state="ACTIVE", queued_at=10.0, acquired_at=13.25)
+    store._write(record)
+    index_path = root / "async_jobs" / f"{job_id}.json"
+    index_path.parent.mkdir(parents=True)
+    index_path.write_text(json.dumps({"jobId": job_id, "project_key": project_key,
+                                      "call_key": "queued-owner"}), encoding="utf-8")
+    captured = []
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: root)
+    monkeypatch.setattr(telemetry, "emit", lambda *args, **kwargs: captured.append((args, kwargs)))
+
+    codex_exec_mcp._record_scope_conflict_outcome(
+        {"jobId": job_id, "taskId": "queued-task", "repoRoot": str(repo)}, "applied")
+
+    args, payload = captured[0]
+    assert args == ("SCOPE_CONFLICT_OUTCOME",)
+    assert payload["action"] == "applied"
+    assert payload["queue_wait_ms"] == 3250
 
 
 def test_apply_original_reply_chain_projects_accepted_thread_outcome(area):
@@ -1322,6 +1365,8 @@ def test_terminal_unapplied_cancel_emits_rejected(area):
         })
         finish(client, started["jobId"], "SUCCEEDED")
         job_call(client, "codex_cancel", {"jobId": started["jobId"]})
+        outcome, = scope_outcome_events(area)
+        assert outcome["payload"] == {"action": "discarded", "job_id": started["jobId"]}
         event, = decision_events(area)
         assert event["payload"]["decision"] == "rejected"
         assert event["payload"]["task_type"] == "operation"

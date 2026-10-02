@@ -65,6 +65,32 @@ def _record_claude_decision(job: dict[str, Any], decision: str, kind: str, sourc
         pass
 
 
+def _record_scope_conflict_outcome(job: dict[str, Any], action: str) -> None:
+    job_id = job.get("jobId")
+    if not isinstance(job_id, str):
+        return
+    try:
+        import ledger
+        import telemetry
+        root = purser_state_root.default_state_root()
+        task_id = job.get("taskId")
+        repo = job.get("repoRoot")
+        key = project_root.project_key(Path(repo).resolve()) if isinstance(repo, str) else None
+        queue_wait_ms = None
+        try:
+            index = json.loads((root / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+            if (isinstance(index, dict) and index.get("jobId") == job_id
+                    and index.get("project_key") == key and isinstance(index.get("call_key"), str)):
+                queue_wait_ms = ledger.ScopeLeases(root / "projects" / key).queue_wait_ms(index["call_key"])
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        telemetry.emit("SCOPE_CONFLICT_OUTCOME", task_id=task_id, project_key=key,
+                       state_root=root, action=action, job_id=job_id,
+                       queue_wait_ms=queue_wait_ms)
+    except BaseException:
+        pass
+
+
 def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | None:
     try:
         for path in sorted(job_dir.glob("*.json")):
@@ -1625,6 +1651,7 @@ class Server:
                 if isinstance(job.get("taskId"), str) and job["taskId"]:
                     job["decisionRecorded"] = True
                 self._write_job(job)
+                _record_scope_conflict_outcome(job, "applied")
                 _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
                 return _job_result(value)
@@ -1655,6 +1682,7 @@ class Server:
                 if isinstance(job.get("taskId"), str) and job["taskId"]:
                     job["decisionRecorded"] = True
                 self._write_job(job)
+                _record_scope_conflict_outcome(job, "applied")
                 _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
                 return _job_result(value)
@@ -1699,6 +1727,7 @@ class Server:
                     job["decisionRecorded"] = True
             self._write_job(job)
             if outcome["applied"]:
+                _record_scope_conflict_outcome(job, "applied")
                 _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
             return _job_result(value)
@@ -1745,6 +1774,7 @@ class Server:
                 if (current is not None and current["state"] in TERMINAL and current.get("worktreePath")
                         and current.get("applyState") != "applied"):
                     _record_claude_decision(current, "rejected", "discard", job_id)
+                    _record_scope_conflict_outcome(current, "discarded")
                     if isinstance(current.get("taskId"), str) and current["taskId"]:
                         current["decisionRecorded"] = True
                     self._write_job(current)
@@ -1754,6 +1784,7 @@ class Server:
                 current = self._read_job(job_id)
                 if current is not None and current["state"] == "QUEUED":
                     self._finish_job(job_id, "CANCELLED", "CANCELLED")
+                    _record_scope_conflict_outcome(current, "discarded")
                     return self._result_job({"jobId": job_id})
         if self.listener is None:
             if job["state"] in TERMINAL:
