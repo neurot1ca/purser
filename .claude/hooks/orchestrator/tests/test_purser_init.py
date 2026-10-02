@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import subprocess
 import tomllib
 import uuid
 
@@ -16,6 +17,7 @@ import codex_exec_mcp
 import project_profile
 import mechanical_learning
 import model_version_notice
+import maintenance_reports
 
 
 @pytest.fixture
@@ -46,6 +48,32 @@ def test_plan_writes_nothing(site, capsys):
     assert not handoff.exists()
     assert not (home / ".orchestrator").exists()
     assert not (project / ".orchestrator").exists()
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_maintenance_choice_is_planned_then_applied_once_per_project(site, monkeypatch, capsys, enabled):
+    home, project = site
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    state = project.parent / "state"
+    monkeypatch.setattr(maintenance_reports.state_root, "default_state_root", lambda: state)
+    flag = "--maintenance" if enabled else "--no-maintenance"
+    base = ("--coder", "codex", "--reviewer", "none", flag)
+    assert run("--plan", *base) == 0
+    assert ("enabled" if enabled else "disabled") in capsys.readouterr().out
+    key = maintenance_reports.project_root.project_key(project.resolve())
+    marker = state / "projects" / key / "maintenance" / "opt-in.json"
+    assert not marker.exists()
+    assert run("--apply", *base) == 0
+    assert json.loads(marker.read_text(encoding="utf-8"))["enabled"] is enabled
+    monkeypatch.setattr(purser_init, "_agent", lambda *_args, **_kwargs: {
+        "available": False, "path": None, "version": None})
+    monkeypatch.setattr(purser_init, "_working_opencode", lambda: None)
+    assert purser_init.detect(home / "missing-config.toml", project)["maintenance_enabled"] is enabled
+
+
+def test_maintenance_choice_is_codex_only(site):
+    with pytest.raises(SystemExit):
+        run("--plan", "--coder", "claude", "--reviewer", "none", "--maintenance")
 
 
 def test_apply_preserves_unrelated_bytes_and_backs_up(site):
@@ -408,6 +436,8 @@ def test_opencode_detection_falls_back_to_platform_binary(site, monkeypatch):
     monkeypatch.setattr(purser_init.model_listing, "refresh_candidates", lambda *_args, **_kwargs: None)
 
     def run(args, **_kwargs):
+        if args[0] == "git":
+            return subprocess.CompletedProcess(args, 128, "", "not a git repository")
         if args[0] == "opencode-shim":
             return subprocess.CompletedProcess(args, 1, "", "placeholder")
         if args == ["platform-opencode", "models"]:
@@ -515,6 +545,8 @@ def test_detect_lists_opencode_models_once(site, monkeypatch):
     monkeypatch.setattr(mechanical_learning, "start_benchmark", lambda **_kwargs: None)
 
     def run(args, **_kwargs):
+        if args[0] == "git":
+            return subprocess.CompletedProcess(args, 128, "", "not a git repository")
         if args[1:] == ["models"]:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0, "vendor/model-free\n", "")

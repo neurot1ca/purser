@@ -33,6 +33,8 @@ EVENT_TYPES = frozenset(
         "CODEX_RESULT_UNFETCHED",
         "CLAUDE_DECISION_RECORDED",
         "MECHANICAL_EDIT_OBSERVED",
+        "MAINTENANCE_REPORT_FINISHED",
+        "MAINTENANCE_REPORT_ACTED",
     }
 )
 
@@ -296,6 +298,12 @@ _PAYLOAD_FIELDS = {
     "MECHANICAL_EDIT_OBSERVED": frozenset(
         {"thread_id", "classification", "fingerprint", "changed_file_count", "hunk_count"}
     ),
+    "MAINTENANCE_REPORT_FINISHED": frozenset({
+        "report_id", "report_type", "outcome", "reason_code", "elapsed_seconds",
+        "quota_change_active_window_pct", "findings_high_count", "findings_medium_count",
+        "findings_low_count", "line_coverage_pct",
+    }),
+    "MAINTENANCE_REPORT_ACTED": frozenset({"report_id", "findings_marked_done"}),
 }
 
 
@@ -343,6 +351,21 @@ def _project_key(value: Any, *, required: bool) -> str | None:
 
 
 def _payload_value(name: str, value: Any) -> Any:
+    if name in {"report_id", "reason_code"}:
+        return _identifier(value)
+    if name == "report_type" and value in {"cleanup", "test-gaps"}:
+        return value
+    if name == "outcome" and value in {"completed", "yielded", "failed"}:
+        return value
+    if name in {"elapsed_seconds", "findings_high_count", "findings_medium_count",
+                "findings_low_count", "findings_marked_done"}:
+        return _number(value, integer=name not in {"elapsed_seconds"})
+    if name in {"quota_change_active_window_pct", "line_coverage_pct"}:
+        if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value)
+                and (name == "quota_change_active_window_pct" or 0 <= value <= 100)):
+            return value
+        raise ValueError("maintenance telemetry percentage is invalid")
     if name == "decision" and isinstance(value, str) and value in {"accepted", "send_back", "rejected"}:
         return value
     if name == "classification" and value in {"rename", "unclassified"}:

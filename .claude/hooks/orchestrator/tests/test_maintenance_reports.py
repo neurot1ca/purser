@@ -12,6 +12,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import maintenance_reports
+import telemetry
+import telemetry_schema
 
 
 @pytest.fixture
@@ -99,9 +101,12 @@ def test_stale_active_marker_is_replaced(project, stale_kind):
     assert not active_path.exists()
 
 
-def test_failed_job_leaves_durable_failure_record_and_no_report(project):
+def test_failed_job_leaves_durable_failure_record_and_no_report(project, monkeypatch):
     state = _state(project)
     maintenance_reports.opt_in(project, state=state)
+    events = []
+    monkeypatch.setattr(telemetry, "emit",
+                        lambda event_type, **payload: events.append((event_type, payload)))
     server = FakeServer(state, {"state": "FAILED", "errorCode": "CODEX_FAILED", "message": "failed"})
     with pytest.raises(RuntimeError, match="Codex job FAILED"):
         maintenance_reports.run_cleanup(project, state=state, server=server)
@@ -111,6 +116,8 @@ def test_failed_job_leaves_durable_failure_record_and_no_report(project):
     record = json.loads(failure.read_text(encoding="utf-8"))
     assert record["state"] == "FAILED" and "Codex job FAILED" in record["error"]
     assert not list(reports.glob("*.md"))
+    assert events[0][0] == "MAINTENANCE_REPORT_FINISHED"
+    assert (events[0][1]["outcome"], events[0][1]["reason_code"]) == ("failed", "CODEX_JOB_FAILED")
 
 
 def test_report_is_atomically_persisted_with_source_and_tool_header(project, monkeypatch):
@@ -137,6 +144,43 @@ def test_report_is_atomically_persisted_with_source_and_tool_header(project, mon
     assert all(term in prompt for term in ("search evidence", "path and symbol", "entry points",
                                             "hooks", "dynamic", "install", "grep-based"))
     assert not list(report.parent.glob("*.tmp"))
+
+
+def test_report_completion_and_mark_done_emit_valid_telemetry(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    events = []
+    monkeypatch.setattr(telemetry, "emit",
+                        lambda event_type, **payload: events.append((event_type, payload)))
+    body = ('Report.\n```purser-findings-json\n'
+            '{"findings":[{"path_line":"module.py:1","symbol":"a","evidence":"e",'
+            '"confidence":"high"},{"path_line":"module.py:2","symbol":"b","evidence":"e",'
+            '"confidence":"medium"}],"line_coverage_pct":73.5}\n```')
+    report = maintenance_reports.run_test_gaps(project, state=state,
+                                               server=FakeServer(state, {"state": "SUCCEEDED", "content": body}))
+    assert report is not None
+    finished_type, finished = events[0]
+    assert finished_type == "MAINTENANCE_REPORT_FINISHED"
+    assert finished["project_key"] == maintenance_reports.project_root.project_key(project.resolve())
+    assert (finished["report_type"], finished["outcome"], finished["reason_code"]) == (
+        "test-gaps", "completed", "COMPLETED")
+    assert (finished["findings_high_count"], finished["findings_medium_count"],
+            finished["findings_low_count"], finished["line_coverage_pct"]) == (1, 1, 0, 73.5)
+    assert telemetry_schema.valid_event(telemetry_schema.build_event(
+        finished_type, project_key=finished["project_key"], payload={
+            key: value for key, value in finished.items() if key not in {"state_root", "project_key"}
+        }))
+
+    notice = report.with_suffix(".notice.json")
+    maintenance_reports.mark_report_done(project, str(notice), state=state)
+    acted_type, acted = events[1]
+    assert acted_type == "MAINTENANCE_REPORT_ACTED"
+    assert acted["report_id"] == report.name.removesuffix(".md")
+    assert acted["findings_marked_done"] == 2
+    assert telemetry_schema.valid_event(telemetry_schema.build_event(
+        acted_type, project_key=acted["project_key"], payload={
+            key: value for key, value in acted.items() if key not in {"state_root", "project_key"}
+        }))
 
 
 def test_report_run_leaves_repository_unchanged(project):
@@ -538,13 +582,16 @@ def test_findings_parse_failure_keeps_report_count_unknown_and_path(project):
     assert "| --- | --- |" not in rendered and str(report) in rendered
 
 
-def test_user_job_starting_during_maintenance_is_not_cancelled_or_waited_on(project):
+def test_user_job_starting_during_maintenance_is_not_cancelled_or_waited_on(project, monkeypatch):
     state = _state(project)
     maintenance_reports.opt_in(project, state=state)
     server = FakeServer(state, {"state": "RUNNING"})
     user_job = {"jobId": "d" * 64, "state": "RUNNING", "jobPhase": "implementation"}
     original_start = server._start_job
     cancelled = []
+    events = []
+    monkeypatch.setattr(telemetry, "emit",
+                        lambda event_type, **payload: events.append((event_type, payload)))
     def start(args):
         value = original_start(args)
         path = server.job_dir / (user_job["jobId"] + ".json")
@@ -556,3 +603,4 @@ def test_user_job_starting_during_maintenance_is_not_cancelled_or_waited_on(proj
         maintenance_reports.run_cleanup(project, state=state, server=server)
     assert cancelled == ["a" * 64]
     assert json.loads((server.job_dir / (user_job["jobId"] + ".json")).read_text(encoding="utf-8"))["state"] == "RUNNING"
+    assert (events[0][1]["outcome"], events[0][1]["reason_code"]) == ("yielded", "USER_JOB_PREEMPTED")

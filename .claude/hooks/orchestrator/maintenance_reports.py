@@ -37,6 +37,14 @@ CLEANUP_HANDOFF_COMMIT_RULE = (
 _REPORT_TYPES = ("cleanup", "test-gaps")
 
 
+def _emit_telemetry(event_type: str, root: Path, state: Path, **payload) -> None:
+    try:
+        import telemetry
+        telemetry.emit(event_type, project_key=project_root.project_key(root), state_root=state, **payload)
+    except BaseException:
+        return
+
+
 def _canonical_root(value: str | os.PathLike[str]) -> Path:
     root, error = project_root.resolve_candidate(value)
     if root is None:
@@ -555,6 +563,11 @@ def run_report(repo: str | os.PathLike[str], *, report_type: str, state: Path | 
     started_clock = time.monotonic()
     before_quota = _fresh_quota()
     retain_slot = False
+    outcome = "failed"
+    reason_code = "REPORT_FAILED"
+    quota_change = None
+    findings = None
+    line_coverage = None
     try:
         if _active_user_jobs(state) is not False:
             raise RuntimeError("active or unknown user job state; maintenance skipped")
@@ -630,6 +643,7 @@ be a number or null:
         os.replace(temporary, active_path)
         while True:
             if _active_user_jobs(state, exclude_job_id=job_id) is True:
+                outcome, reason_code = "yielded", "USER_JOB_PREEMPTED"
                 retain_slot = True
                 cancellation = bridge._cancel_job({"jobId": job_id}).get("structuredContent", {})
                 if cancellation.get("state") != "CANCELLED":
@@ -680,8 +694,10 @@ be a number or null:
                     "line_coverage_pct": line_coverage,
                     "shown": False,
                 })
+                outcome, reason_code = "completed", "COMPLETED"
                 return report_path
             if status in codex_exec_mcp.TERMINAL:
+                reason_code = "CODEX_JOB_" + status
                 raise RuntimeError(f"Codex job {status}: {result.get('errorCode', '')} {result.get('message', '')}".strip())
             time.sleep(poll_seconds)
     except Exception as exc:
@@ -695,6 +711,18 @@ be a number or null:
         })
         raise
     finally:
+        confidence_counts = ({name: sum(item["confidence"].casefold() == name for item in findings)
+                             for name in ("high", "medium", "low")} if findings is not None else {})
+        _emit_telemetry(
+            "MAINTENANCE_REPORT_FINISHED", root, state,
+            report_id=timestamp, report_type=report_type, outcome=outcome, reason_code=reason_code,
+            elapsed_seconds=round(time.monotonic() - started_clock, 3),
+            quota_change_active_window_pct=quota_change if isinstance(quota_change, (int, float)) else None,
+            findings_high_count=confidence_counts.get("high"),
+            findings_medium_count=confidence_counts.get("medium"),
+            findings_low_count=confidence_counts.get("low"),
+            line_coverage_pct=line_coverage if report_type == "test-gaps" else None,
+        )
         active_path.unlink(missing_ok=True)
         if not retain_slot:
             slot_context.__exit__(None, None, None)
@@ -877,6 +905,12 @@ def mark_report_done(repo: str | os.PathLike[str], report: str, *, state: Path |
     notice.update(done=True, pending=False, shown=True)
     import codex_exec_mcp
     codex_exec_mcp._atomic_json(path, notice)
+    findings = notice.get("findings")
+    _emit_telemetry(
+        "MAINTENANCE_REPORT_ACTED", root, state or state_root.default_state_root(),
+        report_id=path.name.removesuffix(".notice.json").removesuffix(".md"),
+        findings_marked_done=len(findings) if isinstance(findings, list) else None,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

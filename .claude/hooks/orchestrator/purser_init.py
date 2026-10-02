@@ -22,6 +22,7 @@ import model_catalog
 import model_listing
 import model_version_notice
 import mechanical_learning
+import maintenance_reports
 import policy
 
 
@@ -171,6 +172,17 @@ def detect(config_path: Path, project: Path, coder: str | None = None, model: st
     coder_family = _selected_coder_family(data, coder, model)
     if coder_family is not None:
         reviewer_options = _mark_reviewer_options(reviewer_options, coder_family)
+    maintenance_root, _ = maintenance_reports.project_root.resolve_candidate(project)
+    maintenance_enabled = None
+    if maintenance_root is not None:
+        marker = (maintenance_reports._maintenance_dir(
+            maintenance_root, maintenance_reports.state_root.default_state_root()) / "opt-in.json")
+        try:
+            value = json.loads(marker.read_text(encoding="utf-8"))
+            if value.get("project_root") == str(maintenance_root) and type(value.get("enabled")) is bool:
+                maintenance_enabled = value["enabled"]
+        except (OSError, ValueError, AttributeError):
+            pass
     return {
         "agents": {
             "codex": codex,
@@ -183,6 +195,7 @@ def detect(config_path: Path, project: Path, coder: str | None = None, model: st
         "roles": roles,
         "trusted": str(project) in trust.get("paths", []) if isinstance(trust, dict) else False,
         "profile_exists": (project / ".orchestrator" / "profile.toml").exists(),
+        "maintenance_enabled": maintenance_enabled,
     }
 
 
@@ -762,6 +775,9 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--enable-concise-style", action="store_true")
     modes.add_argument("--adopt-model-version")
     modes.add_argument("--decline-model-version")
+    maintenance = parser.add_mutually_exclusive_group()
+    maintenance.add_argument("--maintenance", action="store_true", default=None)
+    maintenance.add_argument("--no-maintenance", action="store_const", const=False, dest="maintenance")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--coder", choices=("codex", "claude", "opencode", "agy"))
     parser.add_argument("--model")
@@ -787,7 +803,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.enable_concise_style:
         if (args.json or args.coder or args.model or args.fallback_agent or args.fallback_model or args.mode or args.effort
                 or args.reviewer or args.reviewer_model or args.opencode_mechanical is not None or args.trust
-                or args.scaffold_profile):
+                or args.scaffold_profile or args.maintenance is not None):
             parser.error("--enable-concise-style accepts no other options")
         try:
             project_override = _enable_concise_style(Path.cwd().resolve())
@@ -799,15 +815,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"purser:init: {exc}", file=sys.stderr)
             return 1
     if args.detect:
-        if not args.json or args.mode or args.effort or args.reviewer or args.reviewer_model or args.fallback_agent or args.fallback_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
+        if not args.json or args.mode or args.effort or args.reviewer or args.reviewer_model or args.fallback_agent or args.fallback_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile or args.maintenance is not None:
             parser.error("--detect requires --json and accepts only optional --coder and --model")
         if args.model and not args.coder:
             parser.error("--detect --model requires --coder")
     elif args.list_models:
-        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.mode or args.effort or args.reviewer or args.reviewer_model or args.fallback_agent or args.fallback_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile:
+        if not args.json or args.coder not in ("codex", "opencode", "agy") or args.model or args.mode or args.effort or args.reviewer or args.reviewer_model or args.fallback_agent or args.fallback_model or args.opencode_mechanical is not None or args.trust or args.scaffold_profile or args.maintenance is not None:
             parser.error("--list-models requires --json and --coder codex, opencode, or agy")
     elif (args.json and not args.apply) or args.coder is None or args.reviewer is None:
         parser.error("--plan requires --coder and --reviewer without --json; --apply requires --coder and --reviewer")
+    if args.maintenance is not None and args.coder != "codex":
+        parser.error("maintenance reports can only be configured when Codex is the coder")
     if bool(args.fallback_agent) != bool(args.fallback_model):
         parser.error("--fallback-agent and --fallback-model must be used together")
     if args.fallback_agent and args.coder == "claude":
@@ -905,6 +923,9 @@ def main(argv: list[str] | None = None) -> int:
                     model = value["model"] if isinstance(value, dict) else value
                     effort = value.get("effort", "none") if isinstance(value, dict) else "none"
                     print(f"  {name} -> {model} / {effort}")
+            if args.maintenance is not None:
+                print("Maintenance reports: " + ("enabled for this project" if args.maintenance
+                                                   else "disabled for this project"))
             if python_changed is not None:
                 print(f"Python locator: {python_path}")
             if in_venv and python_path == Path(sys.executable).resolve():
@@ -947,6 +968,10 @@ def main(argv: list[str] | None = None) -> int:
             if (python_file.read_bytes() if python_file.exists() else None) != python_original:
                 raise ValueError("Python locator path changed during setup; run the plan again")
             _atomic(python_file, python_changed)
+        if args.maintenance is True:
+            maintenance_reports.opt_in(project)
+        elif args.maintenance is False:
+            maintenance_reports.opt_out(project)
         offer_due = _claim_concise_style_offer(project)
         if args.json:
             print(json.dumps({"status": "applied", "handoff": str(handoff),
