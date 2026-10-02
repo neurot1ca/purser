@@ -1,6 +1,6 @@
 {
   "name": "purser",
-  "version": "0.1.59",
+  "version": "0.1.60",
   "description": "Route, baseline, attribute, and review delegated Codex coding work.",
   "skills": "./.claude/skills/",
   "hooks": "./hooks/hooks.json",

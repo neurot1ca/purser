@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.60 — 2026-10-02
+
+- **Fixed:** The async Codex bridge works on Linux: finished jobs are detected, dead hosts recover, and recovery waits until the old worker is gone.
+- **Fixed:** Reviewer-1 finds agy, OpenCode or Codex on PATH on any OS (an absolute `[coding] reviewer1_executable` still wins), and configuration errors name their cause.
+- **Fixed:** Transcript token attribution no longer raises a false identity mismatch on Linux.
+- **Changed:** The Obsidian vault comes from `PURSER_OBSIDIAN_VAULT` or config and must be absolute; nothing is written when it is unset.
+- **Changed:** The `/purser:plan` dispatch receipt no longer states a stall threshold.
+
 ## 0.1.59 — 2026-10-01
 
 - **Added:** The daily new-model notice also checks the Reviewer-1 Gemini model; adopting it changes only the reviewer model.
