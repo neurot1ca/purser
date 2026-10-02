@@ -252,8 +252,10 @@ def main() -> int:
                     )
                     if not inject_plan:
                         plan_hint = ""
+                    lifecycle_context = compaction_advisor.lifecycle_guidance(value, repository)
                     additional_context = "\n".join(
-                        part for part in (language_instruction, compaction_advice, retry_context, plan_hint) if part
+                        part for part in (language_instruction, compaction_advice, retry_context, plan_hint,
+                                          lifecycle_context) if part
                     )
                     if additional_context:
                         output = {
@@ -268,6 +270,8 @@ def main() -> int:
                                 json.dumps(output, ensure_ascii=False).encode("utf-8")
                             )
                             stdout_buffer.flush()
+                            if lifecycle_context:
+                                compaction_advisor.mark_lifecycle_guidance_delivered(value, repository)
                             if compaction_advice:
                                 compaction_advisor.record_advice_written(value, repository)
                 except BaseException:
@@ -309,11 +313,22 @@ def main() -> int:
                     except BaseException:
                         pass
                     update_context = _plugin_update_context(value, repository)
+                    session_delivered_kinds = set()
                     if update_context:
                         additional_context = "\n".join(part for part in (additional_context, update_context) if part)
+                        if "Purser upgraded to " in update_context:
+                            session_delivered_kinds.add("version")
+                        if "Free model ranking changed:" in update_context:
+                            session_delivered_kinds.add("leader")
                     model_context = _model_version_context(repository)
                     if model_context:
                         additional_context = "\n".join(part for part in (additional_context, model_context) if part)
+                        session_delivered_kinds.add("model")
+                    lifecycle_context = compaction_advisor.lifecycle_guidance(
+                        value, repository, exclude_kinds=session_delivered_kinds
+                    )
+                    if lifecycle_context:
+                        additional_context = "\n".join(part for part in (additional_context, lifecycle_context) if part)
                     try:
                         if repository is not None:
                             selected = coder_config.load(Path(__file__).with_name("config.json")).get("coder_agent", "codex")
@@ -363,6 +378,12 @@ def main() -> int:
                                 json.dumps(output, ensure_ascii=False).encode("utf-8")
                             )
                             stdout_buffer.flush()
+                            compaction_advisor.mark_lifecycle_guidance_delivered(
+                                value, repository, kinds=session_delivered_kinds | (
+                                    {"maintenance", "version", "leader", "model", "fallback"}
+                                    if lifecycle_context else set()
+                                )
+                            )
                 except BaseException:
                     pass
     except BaseException:

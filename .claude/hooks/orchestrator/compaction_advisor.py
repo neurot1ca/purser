@@ -448,7 +448,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                     and version_pending["version"]):
                 version_pending = None
             elif version_pending is not None:
-                version_pending = {"version": version_pending["version"], "blocked": version_pending.get("blocked") is True}
+                version_pending = {"version": version_pending["version"], "blocked": version_pending.get("blocked") is True,
+                                  "delivered": version_pending.get("delivered") is True}
             leader_pending = value.get("leader_pending")
             if not (isinstance(leader_pending, dict) and isinstance(leader_pending.get("model"), str)
                     and leader_pending["model"] and type(leader_pending.get("successes")) is int
@@ -457,7 +458,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
             elif leader_pending is not None:
                 leader_pending = {"model": leader_pending["model"], "successes": leader_pending["successes"],
                                   "sample_count": leader_pending["sample_count"],
-                                  "blocked": leader_pending.get("blocked") is True}
+                                  "blocked": leader_pending.get("blocked") is True,
+                                  "delivered": leader_pending.get("delivered") is True}
             fallback_pending = value.get("fallback_pending")
             if (not isinstance(fallback_pending, dict)
                     or not isinstance(fallback_pending.get("line"), str)
@@ -469,7 +471,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                                     "project": fallback_pending["project"],
                                     "model": fallback_pending["model"],
                                     "blocked": fallback_pending.get("blocked") is True,
-                                    "notice": fallback_pending.get("notice") is True}
+                                    "notice": fallback_pending.get("notice") is True,
+                                    "delivered": fallback_pending.get("delivered") is True}
             maintenance_pending = value.get("maintenance_pending")
             if (not isinstance(maintenance_pending, dict)
                     or not isinstance(maintenance_pending.get("notice_file"), str)
@@ -482,7 +485,8 @@ def _read_state(path: Path, session_id: str) -> dict[str, Any]:
                                        "text": maintenance_pending["text"],
                                        "evidence": maintenance_pending["evidence"],
                                        "report_type": maintenance_pending.get("report_type", "cleanup"),
-                                       "blocked": maintenance_pending.get("blocked") is True}
+                                       "blocked": maintenance_pending.get("blocked") is True,
+                                       "delivered": maintenance_pending.get("delivered") is True}
             codex_retry_pending = value.get("codex_retry_pending")
             if isinstance(codex_retry_pending, str) and codex_retry_pending.strip():
                 codex_retry_pending = re.sub(
@@ -594,7 +598,11 @@ def queue_version_announcement(payload: Mapping[str, Any], repository: Path | No
             return False
         state_path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(state_path, session_id)
-        state["version_pending"] = {"version": version, "blocked": False}
+        delivered = (state["version_pending"] or {}).get("delivered", False) if (
+            state["version_pending"] is not None
+            and state["version_pending"]["version"] == version
+        ) else False
+        state["version_pending"] = {"version": version, "blocked": False, "delivered": delivered}
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return True
     except BaseException:
@@ -610,8 +618,11 @@ def queue_leader_announcement(payload: Mapping[str, Any], repository: Path | Non
             return False
         state_path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(state_path, session_id)
+        old = state["leader_pending"]
+        delivered = old.get("delivered", False) if old is not None and old["model"] == model else False
         state["leader_pending"] = {"model": model, "successes": successes,
-                                   "sample_count": sample_count, "blocked": False}
+                                   "sample_count": sample_count, "blocked": False,
+                                   "delivered": delivered}
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return True
     except BaseException:
@@ -639,9 +650,12 @@ def queue_maintenance_notice(payload: Mapping[str, Any], repository: Path | None
         state_path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(state_path, session_id)
         report_type = "test-gaps" if Path(notice_file).parent.name == "test-gaps" else "cleanup"
+        old = state["maintenance_pending"]
+        delivered = (old.get("delivered", False) if old is not None
+                     and old["notice_file"] == notice_file and old["text"] == text else False)
         state["maintenance_pending"] = {"notice_file": notice_file, "text": text,
                                          "evidence": evidence, "report_type": report_type,
-                                         "blocked": False}
+                                         "blocked": False, "delivered": delivered}
         _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return True
     except BaseException:
@@ -889,8 +903,12 @@ def queue_fallback_question(payload: Mapping[str, Any], repository: Path | None,
     try:
         path = _state_directory(repository) / "compaction_advisor.json"
         state = _read_state(path, session_id)
+        old = state["fallback_pending"]
+        delivered = (old.get("delivered", False) if old is not None
+                     and old["line"] == line and old["model"] == model else False)
         state["fallback_pending"] = {"line": line, "project": str(repository),
-                                      "model": model, "blocked": False, "notice": notice}
+                                      "model": model, "blocked": False, "notice": notice,
+                                      "delivered": delivered}
         _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
         return True
     except BaseException:
@@ -1045,6 +1063,135 @@ def pending_guidance(payload: Mapping[str, Any], repository: Path | None) -> str
         return "\n".join(parts)
     except BaseException:
         return ""
+
+
+def _maintenance_guidance(pending: Mapping[str, Any]) -> str:
+    import maintenance_reports
+    maintenance_cli = f'"{sys.executable}" "{Path(maintenance_reports.__file__).resolve()}"'
+    if pending["notice_file"].endswith("consent.json"):
+        instruction = (
+            "Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. "
+            f'If the user says yes, run `{maintenance_cli} consent yes --repo "<repository-root>"`; '
+            f'if no, run `{maintenance_cli} consent no --repo "<repository-root>"`. Do not infer consent.\n'
+        )
+    else:
+        notice_file = pending["notice_file"]
+        skip_command = (f'{maintenance_cli} skip-second-show --repo "<repository-root>" '
+                        f'--report "{notice_file}"')
+        instruction = (
+            "Render the completed maintenance notice below in the user's language, translating from the English text and keeping ⚓, count, paths, and table. "
+            f'If the user wants the module off (or uses the equivalent in their language, including `kapat`), run `{maintenance_cli} opt-out --repo "<repository-root>"`. '
+            f'If the user says not to show it again this cycle, run `{skip_command}`. '
+        )
+        if pending.get("report_type", "cleanup") == "cleanup":
+            done_command = (f'{maintenance_cli} mark-done --repo "<repository-root>" '
+                            f'--report "{notice_file}"')
+            instruction += (
+                "If they answer `clean up` or its equivalent in the user's language (including `temizle`), dispatch one ordinary Codex implementation job routed as subtle. "
+                "Re-verify every listed item against current HEAD and remove exactly the still-unused listed items; "
+                "skip each item that is no longer unused and explain why. After successful cleanup, run "
+                + f'`{done_command}` and include one `--acted "<path_line>"` argument per item actually removed, copying each `path_line` exactly from the report. Do not invent items or edit unlisted code. '
+                + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
+            )
+    return instruction + pending["text"]
+
+
+def _model_version_guidance(pending: Mapping[str, Any]) -> str:
+    return (
+        "Render this model-version notice in the user's language, translating from the English text while keeping ⚓ "
+        "and both model names unchanged. Keep the three blockquote lines exactly formatted; do not change "
+        "routes until the user says yes.\n"
+        f"> ⚓ **New model version available: `{pending['new']}` (you are on `{pending['current']}`).**\n"
+        "> *Should Purser switch to it? (1-yes 2-no)*\n"
+        "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
+    )
+
+
+def _version_guidance(pending: Mapping[str, Any]) -> str:
+    return f"Include one visible line containing both `⚓` and `{pending['version']}` to announce the Purser update."
+
+
+def _leader_guidance(pending: Mapping[str, Any]) -> str:
+    return f"Include one visible line containing both `⚓` and `{pending['model']}` to announce the new free mechanical model leader."
+
+
+def _fallback_guidance(pending: Mapping[str, Any]) -> str:
+    if pending.get("notice"):
+        return (
+            "On your next reply, render exactly one line in the user's language as `> ⚓ **...**`. "
+            "Translate the line below while keeping ⚓ and the model name; do not add another notice line.\n\n"
+            + pending["line"]
+        )
+    return (
+        "On your next reply, render exactly one bold quoted question line in the user's language as `> ⚓ **...**`. "
+        "Translate the line below while keeping ⚓ and the model name; include no other question line.\n\n"
+        + pending["line"]
+    )
+
+
+def lifecycle_guidance(payload: Mapping[str, Any], repository: Path | None,
+                       *, exclude_kinds: set[str] | None = None) -> str:
+    """Render undelivered lifecycle notice guidance for the next prompt context."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return ""
+        state = _read_state(_state_directory(repository) / "compaction_advisor.json", session_id)
+        parts = []
+        maintenance = state["maintenance_pending"]
+        if (maintenance is not None and not maintenance["delivered"] and not maintenance["blocked"]
+                and "maintenance" not in (exclude_kinds or set())):
+            parts.append(_maintenance_guidance(maintenance))
+        version = state["version_pending"]
+        if (version is not None and not version["delivered"] and not version["blocked"]
+                and "version" not in (exclude_kinds or set())):
+            parts.append(_version_guidance(version))
+        leader = state["leader_pending"]
+        if (leader is not None and not leader["delivered"] and not leader["blocked"]
+                and "leader" not in (exclude_kinds or set())):
+            parts.append(_leader_guidance(leader))
+        import model_version_notice
+        model = model_version_notice.read_state().get("pending")
+        if (isinstance(model, dict) and not model.get("delivered") and not model.get("blocked")
+                and "model" not in (exclude_kinds or set())):
+            parts.append(_model_version_guidance(model))
+        fallback = state["fallback_pending"]
+        if (fallback is not None and not fallback["delivered"] and not fallback["blocked"]
+                and "fallback" not in (exclude_kinds or set())):
+            parts.append(_fallback_guidance(fallback))
+        return "\n\n".join(parts)
+    except BaseException:
+        return ""
+
+
+def mark_lifecycle_guidance_delivered(payload: Mapping[str, Any], repository: Path | None,
+                                      *, kinds: set[str] | None = None) -> None:
+    """Persist which pending lifecycle notices were included in emitted context."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return
+        state_path = _state_directory(repository) / "compaction_advisor.json"
+        state = _read_state(state_path, session_id)
+        fields = {"maintenance": "maintenance_pending", "version": "version_pending",
+                  "leader": "leader_pending", "fallback": "fallback_pending"}
+        changed = False
+        for kind, field in fields.items():
+            pending = state[field]
+            if pending is not None and (kinds is None or kind in kinds) and not pending["delivered"]:
+                pending["delivered"] = True
+                changed = True
+        if changed:
+            _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
+        if kinds is None or "model" in kinds:
+            import model_version_notice
+            model_state = model_version_notice.read_state()
+            model = model_state.get("pending")
+            if isinstance(model, dict) and not model.get("delivered"):
+                model["delivered"] = True
+                model_version_notice.write_state({**model_state, "pending": model})
+    except BaseException:
+        pass
 
 
 def _codex_retry_reason(records: list[dict[str, Any]], latest_user: int,
@@ -1270,35 +1417,8 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
             reasons.append("End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n" + _blockquote(notice))
             reason_kinds.add("compaction")
         if maintenance_pending is not None and not maintenance_pending.get("blocked"):
-            import maintenance_reports
-            maintenance_cli = f'"{sys.executable}" "{Path(maintenance_reports.__file__).resolve()}"'
             maintenance_pending["blocked"] = True
-            if maintenance_pending["notice_file"].endswith("consent.json"):
-                instruction = (
-                    "Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. "
-                    f"If the user says yes, run `{maintenance_cli} consent yes --repo \"<repository-root>\"`; "
-                    f"if no, run `{maintenance_cli} consent no --repo \"<repository-root>\"`. Do not infer consent.\n"
-                )
-            else:
-                notice_file = maintenance_pending["notice_file"]
-                skip_command = (f'{maintenance_cli} skip-second-show --repo "<repository-root>" '
-                                f'--report "{notice_file}"')
-                instruction = (
-                    "Render the completed maintenance notice below in the user's language, translating from the English text and keeping ⚓, count, paths, and table. "
-                    f"If the user wants the module off (or uses the equivalent in their language, including `kapat`), run `{maintenance_cli} opt-out --repo \"<repository-root>\"`. "
-                    f"If the user says not to show it again this cycle, run `{skip_command}`. "
-                )
-                if maintenance_pending.get("report_type", "cleanup") == "cleanup":
-                    done_command = (f'{maintenance_cli} mark-done --repo "<repository-root>" '
-                                    f'--report "{notice_file}"')
-                    instruction += (
-                        "If they answer `clean up` or its equivalent in the user's language (including `temizle`), dispatch one ordinary Codex implementation job routed as subtle. "
-                        "Re-verify every listed item against current HEAD and remove exactly the still-unused listed items; "
-                        "skip each item that is no longer unused and explain why. After successful cleanup, run "
-                        + f"`{done_command}` and include one `--acted \"<path_line>\"` argument per item actually removed, copying each `path_line` exactly from the report. Do not invent items or edit unlisted code. "
-                        + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
-                    )
-            reasons.append(instruction + maintenance_pending["text"])
+            reasons.append(_maintenance_guidance(maintenance_pending))
             reason_kinds.add("maintenance")
         if receipt is not None and not receipt.get("blocked"):
             receipt["blocked"] = True
@@ -1312,45 +1432,22 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                 reason_kinds.add("dispatch")
         if version_pending is not None and not version_pending.get("blocked"):
             version_pending["blocked"] = True
-            reasons.append(
-                f"Include one visible line containing both `⚓` and `{version_pending['version']}` to announce the Purser update."
-            )
+            reasons.append(_version_guidance(version_pending))
             reason_kinds.add("version")
         if leader_pending is not None and not leader_pending.get("blocked"):
             leader_pending["blocked"] = True
-            reasons.append(
-                f"Include one visible line containing both `⚓` and `{leader_pending['model']}` to announce the new free mechanical model leader."
-            )
+            reasons.append(_leader_guidance(leader_pending))
             reason_kinds.add("leader")
         if isinstance(model_pending, dict) and not model_pending.get("blocked"):
             model_pending["blocked"] = True
             model_version_notice.write_state({**model_version_notice.read_state(), "pending": model_pending})
-            reasons.append(
-                "Render this model-version notice in the user's language, translating from the English text while keeping ⚓ "
-                "and both model names unchanged. Keep the three blockquote lines exactly formatted; do not change "
-                "routes until the user says yes.\n"
-                f"> ⚓ **New model version available: `{model_pending['new']}` (you are on `{model_pending['current']}`).**\n"
-                "> *Should Purser switch to it? (1-yes 2-no)*\n"
-                "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
-            )
+            reasons.append(_model_version_guidance(model_pending))
             reason_kinds.add("version")
         if (fallback_pending is not None
                 and (fallback_pending.get("notice") or not fallback_pending.get("blocked"))):
             fallback_pending["blocked"] = True
-            if fallback_pending.get("notice"):
-                reasons.append(
-                    "On your next reply, render exactly one line in the user's language as `> ⚓ **...**`. "
-                    "Translate the line below while keeping ⚓ and the model name; do not add another notice line.\n\n"
-                    + fallback_pending["line"]
-                )
-                reason_kinds.add("fallback")
-            else:
-                reasons.append(
-                    "On your next reply, render exactly one bold quoted question line in the user's language as `> ⚓ **...**`. "
-                    "Translate the line below while keeping ⚓ and the model name; include no other question line.\n\n"
-                    + fallback_pending["line"]
-                )
-                reason_kinds.add("fallback")
+            reasons.append(_fallback_guidance(fallback_pending))
+            reason_kinds.add("fallback")
 
         if not reasons and flow_message.rstrip().endswith(("?", "؟", "？")):
             latest_user = max((i for i, record in enumerate(records) if _genuine_user(record)), default=-1)

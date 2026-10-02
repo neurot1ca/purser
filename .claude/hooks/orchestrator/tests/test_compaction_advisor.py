@@ -474,6 +474,51 @@ def test_maintenance_notice_requires_its_own_evidence_and_commit_rule(setup, mon
     assert advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")["maintenance_pending"] is None
 
 
+def test_delivered_maintenance_notice_clears_when_reply_contains_evidence(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    text = "> ⚓ **Maintenance report is ready.**"
+    notice_file = "C:/reports/delivered.notice.json"
+    assert advisor.queue_maintenance_notice(event, repo, notice_file, text, evidence=["src/unused.py:12"])
+
+    guidance = advisor.lifecycle_guidance(event, repo)
+    assert text in guidance
+    advisor.mark_lifecycle_guidance_delivered(event, repo)
+    state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")
+    assert state["maintenance_pending"]["delivered"] is True
+
+    confirmed = []
+    import maintenance_reports
+    monkeypatch.setattr(maintenance_reports, "confirm_notice", lambda path: confirmed.append(path))
+    assert advisor.stop({**event, "last_assistant_message": "Reviewed src/unused.py:12."}, repo) is None
+    state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-1")
+    assert state["maintenance_pending"] is None
+    assert confirmed == [notice_file]
+
+
+def test_delivered_maintenance_notice_still_blocks_without_evidence(setup, monkeypatch):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    text = "> ⚓ **Maintenance report is ready.**"
+    assert advisor.queue_maintenance_notice(
+        event, repo, "C:/reports/delivered.notice.json", text, evidence=["src/unused.py:12"]
+    )
+
+    guidance = advisor.lifecycle_guidance(event, repo)
+    assert text in guidance
+    advisor.mark_lifecycle_guidance_delivered(event, repo)
+    events = []
+    monkeypatch.setattr(advisor.telemetry, "emit", lambda event_type, **fields: events.append((event_type, fields)))
+
+    blocked = advisor.stop({**event, "last_assistant_message": "Reviewed src/other.py."}, repo)
+
+    assert blocked["decision"] == "block"
+    assert text in blocked["reason"]
+    assert len(events) == 1
+    assert events[0][0] == "STOP_BLOCKED"
+    assert events[0][1]["reason_kinds"] == ["maintenance"]
+
+
 def test_test_gaps_notice_has_no_cleanup_handoff(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))
@@ -1015,7 +1060,7 @@ def test_version_announcement_stop_blocks_once_and_records_version(setup):
     assert "⚓" in result["reason"] and "0.1.42" in result["reason"]
     assert advisor.announced_plugin_version() == "0.1.42"
     state = advisor._read_state(advisor._state_directory(repo) / "compaction_advisor.json", "session-version")
-    assert state["version_pending"] == {"version": "0.1.42", "blocked": True}
+    assert state["version_pending"] == {"version": "0.1.42", "blocked": True, "delivered": False}
     assert advisor.stop({**event, "last_assistant_message": "Still missing."}, repo) is None
 
 

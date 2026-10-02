@@ -71,6 +71,48 @@ def test_user_prompt_submit_checks_maintenance_notice_thresholds(monkeypatch, tm
     assert calls[0][1]["allow_no_window"] is False
 
 
+def test_user_prompt_submit_delivers_queued_maintenance_notice_once(monkeypatch, tmp_path):
+    monkeypatch.setattr(compaction_advisor, "_state_directory", lambda _repo: tmp_path / ".state")
+    event = {"session_id": "test-session"}
+    notice = "> ⚓ **Maintenance report is ready.**"
+    assert compaction_advisor.queue_maintenance_notice(
+        event, tmp_path, "report.notice.json", notice, evidence=["report.md"]
+    )
+
+    first = _run_user_prompt_hook(monkeypatch, tmp_path)
+    second = _run_user_prompt_hook(monkeypatch, tmp_path)
+
+    assert notice in first
+    assert "mark-done --repo" in first
+    assert not second or (notice not in second and "mark-done --repo" not in second)
+
+
+def test_session_start_version_notice_is_not_repeated_on_user_prompt(monkeypatch, tmp_path):
+    state_dir = tmp_path / ".state"
+    monkeypatch.setattr(compaction_advisor, "_state_directory", lambda _repo: state_dir)
+    event = {"session_id": "version-session"}
+    assert compaction_advisor.queue_version_announcement(event, tmp_path, "2.0.0")
+    monkeypatch.setattr(context_io_hook.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(context_io_hook.context_io_telemetry, "handle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_io_hook.compaction_advisor, "restore", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook, "_plugin_update_context", lambda *_args: "Purser upgraded to 2.0.0")
+    monkeypatch.setattr(context_io_hook, "_model_version_context", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "cleanup_jobs", lambda *_args: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "duration_hint", lambda *_a, **_k: None)
+    monkeypatch.setattr(context_io_hook.async_session_maintenance, "followup_hints", lambda *_a: None)
+    incoming = io.BytesIO(json.dumps({"hook_event_name": "SessionStart", "cwd": str(tmp_path),
+                                      "session_id": "version-session"}).encode())
+    outgoing = io.BytesIO()
+    monkeypatch.setattr(context_io_hook.sys, "stdin", io.TextIOWrapper(incoming, encoding="utf-8"))
+    monkeypatch.setattr(context_io_hook.sys, "stdout", io.TextIOWrapper(outgoing, encoding="utf-8"))
+
+    assert context_io_hook.main() == 0
+    session_context = json.loads(outgoing.getvalue())["hookSpecificOutput"]["additionalContext"]
+    assert "Purser upgraded to 2.0.0" in session_context
+    prompt_context = _run_user_prompt_hook(monkeypatch, tmp_path, session_id="version-session")
+    assert not prompt_context or "Include one visible line containing both `⚓` and `2.0.0`" not in prompt_context
+
+
 def test_context_io_hook_reads_utf8_with_cp1254_wrapper(monkeypatch):
     payload = {"hook_event_name": "PostToolUse", "prompt": "❯ ı"}
     input_raw = io.BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8"))

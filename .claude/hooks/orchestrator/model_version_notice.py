@@ -61,7 +61,8 @@ def read_state() -> dict:
             pending = None
         else:
             pending = {"current": pending["current"], "new": pending["new"],
-                       "blocked": pending.get("blocked") is True}
+                       "blocked": pending.get("blocked") is True,
+                       "delivered": pending.get("delivered") is True}
         return {
             "checked_on": value.get("checked_on") if isinstance(value.get("checked_on"), str) else None,
             "asked": list(dict.fromkeys(item for item in value.get("asked", []) if isinstance(item, str)))
