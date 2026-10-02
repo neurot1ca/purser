@@ -315,7 +315,7 @@ _PAYLOAD_FIELDS = {
         "quota_change_active_window_pct", "findings_high_count", "findings_medium_count",
         "findings_low_count", "line_coverage_pct",
     }),
-    "MAINTENANCE_REPORT_ACTED": frozenset({"report_id", "findings_marked_done"}),
+    "MAINTENANCE_REPORT_ACTED": frozenset({"report_id", "findings_marked_done", "findings_listed"}),
 }
 
 
@@ -370,7 +370,7 @@ def _payload_value(name: str, value: Any) -> Any:
     if name == "outcome" and value in {"completed", "yielded", "failed"}:
         return value
     if name in {"elapsed_seconds", "findings_high_count", "findings_medium_count",
-                "findings_low_count", "findings_marked_done"}:
+                "findings_low_count", "findings_marked_done", "findings_listed"}:
         return _number(value, integer=name not in {"elapsed_seconds"})
     if name in {"quota_change_active_window_pct", "line_coverage_pct"}:
         if (isinstance(value, (int, float)) and not isinstance(value, bool)

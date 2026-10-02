@@ -894,7 +894,10 @@ def format_notice(notice: dict) -> str:
     return "\n".join(lines)
 
 
-def mark_report_done(repo: str | os.PathLike[str], report: str, *, state: Path | None = None) -> None:
+def mark_report_done(
+    repo: str | os.PathLike[str], report: str, *, acted: list[str] | None = None,
+    state: Path | None = None,
+) -> None:
     root = _canonical_root(repo)
     path = Path(report).resolve()
     report_type = path.parent.name
@@ -902,14 +905,20 @@ def mark_report_done(repo: str | os.PathLike[str], report: str, *, state: Path |
     if report_type not in _REPORT_TYPES or path.parent != expected_dir.resolve() or not path.name.endswith(".notice.json"):
         raise ValueError("report notice must belong to this project")
     notice = json.loads(path.read_text(encoding="utf-8"))
-    notice.update(done=True, pending=False, shown=True)
+    findings = notice.get("findings")
+    finding_paths = [item.get("path_line") for item in findings if isinstance(item, dict)] if isinstance(findings, list) else []
+    if acted is not None:
+        for value in acted:
+            if value not in finding_paths:
+                raise ValueError(f"acted path_line not found in report: {value!r}")
+    notice.update(done=True, pending=False, shown=True, acted_findings=acted)
     import codex_exec_mcp
     codex_exec_mcp._atomic_json(path, notice)
-    findings = notice.get("findings")
     _emit_telemetry(
         "MAINTENANCE_REPORT_ACTED", root, state or state_root.default_state_root(),
         report_id=path.name.removesuffix(".notice.json").removesuffix(".md"),
-        findings_marked_done=len(findings) if isinstance(findings, list) else None,
+        findings_marked_done=len(acted) if acted is not None else None,
+        findings_listed=len(findings) if isinstance(findings, list) else None,
     )
 
 
@@ -929,6 +938,7 @@ def main(argv: list[str] | None = None) -> int:
     done = commands.add_parser("mark-done", help="mark a completed cleanup report as done")
     done.add_argument("--repo", required=True)
     done.add_argument("--report", required=True)
+    done.add_argument("--acted", action="append", default=None, metavar="path_line")
     run = commands.add_parser("run", help="run a maintenance report")
     run.add_argument("report_type", choices=_REPORT_TYPES)
     run.add_argument("--repo", required=True)
@@ -945,7 +955,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "skip-second-show":
             skip_second_show(args.repo, args.report)
         elif args.command == "mark-done":
-            mark_report_done(args.repo, args.report)
+            mark_report_done(args.repo, args.report, acted=args.acted)
         elif args.command == "run":
             print(run_report(args.repo, report_type=args.report_type))
         else:

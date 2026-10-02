@@ -414,6 +414,7 @@ def test_maintenance_notice_requires_its_own_evidence_and_commit_rule(setup, mon
     assert "opt-out --repo" in blocked["reason"]
     assert "skip-second-show --repo" in blocked["reason"]
     assert "mark-done --repo" in blocked["reason"]
+    assert "--acted \"<path_line>\"" in blocked["reason"]
     assert "translating from the English text" in blocked["reason"]
     assert "`clean up` or its equivalent in the user's language (including `temizle`)" in blocked["reason"]
     command = (f'"{sys.executable}" "{Path(maintenance_reports.__file__).resolve()}" '

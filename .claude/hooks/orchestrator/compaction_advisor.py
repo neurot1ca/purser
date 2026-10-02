@@ -1273,7 +1273,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                         "If they answer `clean up` or its equivalent in the user's language (including `temizle`), dispatch one ordinary Codex implementation job routed as subtle. "
                         "Re-verify every listed item against current HEAD and remove exactly the still-unused listed items; "
                         "skip each item that is no longer unused and explain why. After successful cleanup, run "
-                        + f"`{done_command}`. Do not invent items or edit unlisted code. "
+                        + f"`{done_command}` and include one `--acted \"<path_line>\"` argument per item actually removed, copying each `path_line` exactly from the report. Do not invent items or edit unlisted code. "
                         + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
                     )
             reasons.append(instruction + maintenance_pending["text"])

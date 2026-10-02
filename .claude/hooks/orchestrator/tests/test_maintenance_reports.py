@@ -155,7 +155,8 @@ def test_report_completion_and_mark_done_emit_valid_telemetry(project, monkeypat
     body = ('Report.\n```purser-findings-json\n'
             '{"findings":[{"path_line":"module.py:1","symbol":"a","evidence":"e",'
             '"confidence":"high"},{"path_line":"module.py:2","symbol":"b","evidence":"e",'
-            '"confidence":"medium"}],"line_coverage_pct":73.5}\n```')
+            '"confidence":"medium"},{"path_line":"module.py:3","symbol":"c","evidence":"e",'
+            '"confidence":"low"}],"line_coverage_pct":73.5}\n```')
     report = maintenance_reports.run_test_gaps(project, state=state,
                                                server=FakeServer(state, {"state": "SUCCEEDED", "content": body}))
     assert report is not None
@@ -165,18 +166,19 @@ def test_report_completion_and_mark_done_emit_valid_telemetry(project, monkeypat
     assert (finished["report_type"], finished["outcome"], finished["reason_code"]) == (
         "test-gaps", "completed", "COMPLETED")
     assert (finished["findings_high_count"], finished["findings_medium_count"],
-            finished["findings_low_count"], finished["line_coverage_pct"]) == (1, 1, 0, 73.5)
+            finished["findings_low_count"], finished["line_coverage_pct"]) == (1, 1, 1, 73.5)
     assert telemetry_schema.valid_event(telemetry_schema.build_event(
         finished_type, project_key=finished["project_key"], payload={
             key: value for key, value in finished.items() if key not in {"state_root", "project_key"}
         }))
 
     notice = report.with_suffix(".notice.json")
-    maintenance_reports.mark_report_done(project, str(notice), state=state)
+    maintenance_reports.mark_report_done(project, str(notice), acted=["module.py:1", "module.py:3"], state=state)
     acted_type, acted = events[1]
     assert acted_type == "MAINTENANCE_REPORT_ACTED"
     assert acted["report_id"] == report.name.removesuffix(".md")
-    assert acted["findings_marked_done"] == 2
+    assert acted["findings_marked_done"] == 2 and acted["findings_listed"] == 3
+    assert json.loads(notice.read_text(encoding="utf-8"))["acted_findings"] == ["module.py:1", "module.py:3"]
     assert telemetry_schema.valid_event(telemetry_schema.build_event(
         acted_type, project_key=acted["project_key"], payload={
             key: value for key, value in acted.items() if key not in {"state_root", "project_key"}
@@ -217,15 +219,16 @@ def _eligible_project(project, state):
     return directory
 
 
-def _report_notice(project, state, *, shown=False):
+def _report_notice(project, state, *, shown=False, findings=None):
     directory = (state / "projects" / maintenance_reports.project_root.project_key(project.resolve())
                  / "maintenance" / "reports" / "cleanup")
     directory.mkdir(parents=True, exist_ok=True)
     report = directory / "report.md"
     report.write_text("report", encoding="utf-8")
     notice_path = report.with_suffix(".notice.json")
-    notice_path.write_text(json.dumps({"report_path": str(report), "findings": [],
-                                       "finding_count": 0, "shown": shown}), encoding="utf-8")
+    findings = [] if findings is None else findings
+    notice_path.write_text(json.dumps({"report_path": str(report), "findings": findings,
+                                       "finding_count": len(findings), "shown": shown}), encoding="utf-8")
     return notice_path
 
 
@@ -445,6 +448,33 @@ def test_completed_cleanup_marks_report_done_permanently(project, monkeypatch):
     monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: _quota("5h", 0, "cycle-a"))
     assert maintenance_reports.notice_context(project, state=state) is None
     assert json.loads(path.read_text(encoding="utf-8"))["done"] is True
+
+
+def test_mark_done_rejects_unknown_path_line_without_changing_notice(project):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    path = _report_notice(project, state, findings=[{"path_line": "module.py:1"}])
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="missing.py:9"):
+        maintenance_reports.mark_report_done(project, str(path), acted=["missing.py:9"], state=state)
+    assert path.read_bytes() == before
+
+
+def test_mark_done_without_acted_records_unknown_count(project, monkeypatch):
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    findings = [{"path_line": f"module.py:{line}"} for line in range(1, 4)]
+    path = _report_notice(project, state, findings=findings)
+    events = []
+    monkeypatch.setattr(telemetry, "emit",
+                        lambda event_type, **payload: events.append((event_type, payload)))
+
+    maintenance_reports.mark_report_done(project, str(path), state=state)
+
+    event_type, payload = events[0]
+    assert event_type == "MAINTENANCE_REPORT_ACTED"
+    assert payload["findings_marked_done"] is None and payload["findings_listed"] == 3
+    assert json.loads(path.read_text(encoding="utf-8"))["acted_findings"] is None
 
 
 def test_opt_out_stops_automatic_runs(project, monkeypatch):
