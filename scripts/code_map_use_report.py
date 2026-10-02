@@ -100,10 +100,12 @@ def trace(path: Path) -> dict | None:
                     if isinstance(event_item, dict) and event_item.get("type") == "UserMessage":
                         prompt.append(text_content(event_item.get("content")))
                 elif item.get("type") == "response_item" and kind in ("function_call", "custom_tool_call"):
-                    calls[payload.get("call_id")] = command_text(payload)
+                    calls[payload.get("call_id")] = [(command, None) for command in command_text(payload)]
                 elif item.get("type") == "response_item" and kind in ("function_call_output", "custom_tool_call_output"):
-                    output = text_content(payload.get("output"))
-                    operations.extend((command, output) for command in calls.get(payload.get("call_id"), []))
+                    call = calls.get(payload.get("call_id"))
+                    if call is not None and "output" in payload:
+                        output = text_content(payload["output"])
+                        calls[payload.get("call_id")] = [(command, output) for command, _ in call]
     except (OSError, UnicodeError):
         return None
     if not valid_rows or not isinstance(meta, dict) or meta.get("originator") != "codex_exec":
@@ -116,12 +118,15 @@ def trace(path: Path) -> dict | None:
     map_path = match.group(1).strip().strip("\"'")
     normalized_path = map_path.replace("\\", "/").rstrip("/").casefold()
     reads = []
+    for commands in calls.values():
+        operations.extend(commands)
     for command, output in operations:
         normalized_command = command.replace("\\", "/").casefold()
         if (normalized_path not in normalized_command or not READ_COMMAND.search(command)
                 or re.search(r"\b(?:set-content|add-content|out-file|write-file)\b|>{1,2}", command, re.I)):
             continue
-        reads.append({"kind": "targeted" if TARGETED_COMMAND.search(command) else "whole", "bytes": len(output.encode("utf-8")) if output else None})
+        reads.append({"kind": "targeted" if TARGETED_COMMAND.search(command) else "whole",
+                      "bytes": len(output.encode("utf-8")) if output is not None else None})
     return {"thread_id": thread_id, "eligible": True, "operations": reads}
 
 
@@ -149,7 +154,8 @@ def event_jobs(events: Path, since: datetime) -> list[dict]:
                    payload.get("phase", "implementation"))
             if kind == "IMPLEMENTER_FINISHED":
                 finish_by_job[key] = {"provider": provider_name(payload.get("implementer")),
-                                      "thread_id": payload.get("thread_id")}
+                                      "thread_id": payload.get("thread_id"),
+                                      "offered": payload.get("has_code_map") if isinstance(payload.get("has_code_map"), bool) else None}
             if kind != "IMPLEMENTER_STARTED" or payload.get("phase") not in (None, "implementation"):
                 continue
             try:
@@ -165,8 +171,8 @@ def event_jobs(events: Path, since: datetime) -> list[dict]:
         provider = start["provider"]
         if provider == "unknown":
             provider = finish.get("provider", "unknown")
-        jobs.append({"provider": provider,
-                     "thread_id": finish.get("thread_id")})
+        jobs.append({"provider": provider, "thread_id": finish.get("thread_id"),
+                     "session_id": key[0], "task_id": key[1], "offered": finish.get("offered")})
     return jobs
 
 
@@ -183,11 +189,16 @@ def report(sessions: Path, events: Path, since: datetime) -> dict:
                                      "bytes_read": None, "bytes_measured_reads": None,
                                      "unobservable_jobs": 0, "ineligible_jobs": None,
                                      "eligible_no_open_jobs": None})
+    code_map_use = []
     for job in jobs:
         provider = providers[job["provider"]]
         provider["jobs"] += 1
         if job["provider"] != "codex":
             provider["unobservable_jobs"] += 1
+            code_map_use.append({"session_id": job["session_id"], "task_id": job["task_id"],
+                                 "provider": job["provider"], "offered": job["offered"],
+                                 "observed_open_count": None, "measured_output_bytes": None,
+                                 "exploration_read_count": None})
             continue
         for field in ("eligible_jobs", "map_open_jobs", "whole_map_reads", "targeted_map_reads",
                       "bytes_read", "bytes_measured_reads", "ineligible_jobs", "eligible_no_open_jobs"):
@@ -196,8 +207,17 @@ def report(sessions: Path, events: Path, since: datetime) -> dict:
         observation = traces.get(job.get("thread_id"))
         if observation is None:
             provider["unobservable_jobs"] += 1
+            code_map_use.append({"session_id": job["session_id"], "task_id": job["task_id"],
+                                 "provider": job["provider"], "offered": job["offered"],
+                                 "observed_open_count": None, "measured_output_bytes": None,
+                                 "exploration_read_count": None})
         elif not observation["eligible"]:
             provider["ineligible_jobs"] += 1
+            known_no_offer = job["offered"] is False
+            code_map_use.append({"session_id": job["session_id"], "task_id": job["task_id"],
+                                 "provider": job["provider"], "offered": job["offered"],
+                                 "observed_open_count": 0 if known_no_offer else None,
+                                 "measured_output_bytes": None, "exploration_read_count": 0 if known_no_offer else None})
         else:
             provider["eligible_jobs"] += 1
             if observation["operations"]:
@@ -209,9 +229,15 @@ def report(sessions: Path, events: Path, since: datetime) -> dict:
                         provider["bytes_measured_reads"] += 1
             else:
                 provider["eligible_no_open_jobs"] += 1
+            measured = [operation["bytes"] for operation in observation["operations"] if operation["bytes"] is not None]
+            code_map_use.append({"session_id": job["session_id"], "task_id": job["task_id"],
+                                 "provider": job["provider"], "offered": job["offered"],
+                                 "observed_open_count": len(observation["operations"]),
+                                 "measured_output_bytes": sum(measured) if measured else None,
+                                 "exploration_read_count": sum(operation["kind"] == "targeted" for operation in observation["operations"])})
     return {"since": since.isoformat().replace("+00:00", "Z"),
             "trace_root": str(sessions), "telemetry_root": str(events),
-            "providers": dict(sorted(providers.items()))}
+            "providers": dict(sorted(providers.items())), "code_map_use": code_map_use}
 
 
 def markdown(result: dict) -> str:
@@ -225,7 +251,13 @@ def markdown(result: dict) -> str:
                   "bytes_read", "unobservable_jobs", "ineligible_jobs", "eligible_no_open_jobs")
         cells = ["unobservable" if values[field] is None else str(values[field]) for field in fields]
         lines.append("| " + name + " | " + " | ".join(cells) + " |")
-    lines.extend(("", "Bytes count UTF-8 text returned by the worker trace; 0 means no measurable returned text."))
+    lines.extend(("", "## CODE_MAP_USE", "", "| Session | Task | Provider | Offered | Observed opens | Measured output bytes | Exploration reads |",
+                  "|---|---|---|---|---:|---:|---:|"))
+    for row in result.get("code_map_use", []):
+        cells = [row[key] for key in ("session_id", "task_id", "provider", "offered", "observed_open_count",
+                                      "measured_output_bytes", "exploration_read_count")]
+        lines.append("| " + " | ".join("unknown" if value is None else str(value) for value in cells) + " |")
+    lines.extend(("", "Measured output bytes are UTF-8 bytes returned in the worker trace; they are not token savings."))
     return "\n".join(lines) + "\n"
 
 

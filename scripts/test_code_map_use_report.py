@@ -15,11 +15,11 @@ def write(path, values):
     path.write_text("\n".join(json.dumps(value) for value in values) + "\n", encoding="utf-8")
 
 
-def worker_trace(thread, map_path, command=None, output=""):
+def worker_trace(thread, map_path, command=None, output="", status="FRESH"):
     values = [
         {"type": "session_meta", "payload": {"id": thread, "originator": "codex_exec"}},
         {"type": "response_item", "payload": {"type": "message", "role": "user",
-         "content": [{"type": "input_text", "text": f"Use map\nCODE_MAP={map_path} STATUS=FRESH"}]}},
+         "content": [{"type": "input_text", "text": f"Use map\nCODE_MAP={map_path} STATUS={status}"}]}},
     ]
     if command is not None:
         values.extend([
@@ -37,9 +37,41 @@ def start(session, task, provider, ts="2026-09-25T01:00:00Z"):
                         "implementer": provider}}
 
 
-def finish(session, task, thread):
+def finish(session, task, thread, offered=None):
     return {"event_type": "IMPLEMENTER_FINISHED", "session_id": session, "task_id": task,
-            "payload": {"phase": "implementation", "thread_id": thread, "implementer": "codex"}}
+            "payload": {"phase": "implementation", "thread_id": thread, "implementer": "codex",
+                        "has_code_map": offered}}
+
+
+def test_code_map_use_rows_keep_missing_evidence_unknown():
+    root = Path(__file__).parents[1] / ".tmp" / ("code-map-use-" + uuid.uuid4().hex)
+    sessions, events = root / "sessions", root / "events"
+    map_path = "C:/workspace/.claude/hooks/orchestrator/code_map.py"
+    write(sessions / "rollout-read.jsonl",
+          worker_trace("read", map_path, f'rg -n "symbol" "{map_path}"', "line", status="STALE"))
+    write(sessions / "rollout-no-read.jsonl", worker_trace("no-read", map_path, status="FRESH"))
+    write(events / "session_jobs.jsonl", [
+        start("s", "read", "codex"), finish("s", "read", "read", offered=True),
+        start("s", "no-read", "codex"), finish("s", "no-read", "no-read", offered=True),
+        start("s", "missing", "codex"), finish("s", "missing", "missing", offered=True),
+    ])
+    try:
+        result = reporter.report(sessions, events, reporter.timestamp("2026-09-25T00:00:00Z"))
+    finally:
+        shutil.rmtree(root)
+
+    rows = {row["task_id"]: row for row in result["code_map_use"]}
+    assert rows["read"] == {"session_id": "s", "task_id": "read", "provider": "codex", "offered": True,
+                            "observed_open_count": 1, "measured_output_bytes": 4, "exploration_read_count": 1}
+    assert rows["no-read"]["offered"] is True
+    assert rows["no-read"]["observed_open_count"] == 0
+    assert rows["no-read"]["measured_output_bytes"] is None
+    assert rows["no-read"]["exploration_read_count"] == 0
+    assert rows["missing"]["offered"] is True
+    assert rows["missing"]["observed_open_count"] is None
+    assert rows["missing"]["measured_output_bytes"] is None
+    assert rows["missing"]["exploration_read_count"] is None
+    assert "not token savings" in reporter.markdown(result)
 
 
 def test_report_distinguishes_whole_scoped_absent_and_unobservable_traces():
