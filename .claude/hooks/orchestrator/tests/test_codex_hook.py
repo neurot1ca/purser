@@ -725,6 +725,22 @@ def test_async_unknown_and_foreign_jobs_are_denied(workspace, config, name):
     assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_codex_start_posttooluse_returns_dispatch_guidance(workspace, config):
+    repo, state = workspace
+    start = event(START_TOOL, prompt=orch(task="early-receipt") + "\nWork.", cwd=str(repo))
+    updated = codex.pre_tool_use(start, config=config, state_root=state,
+                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
+
+    response = codex.post_tool_use({**start, "hook_event_name": "PostToolUse", "tool_response": {
+        "structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
+        config=config, state_root=state, repo_root=repo)
+
+    context = response["hookSpecificOutput"]["additionalContext"]
+    assert "Write one line in the user's language as `> ⚓ **Codex: ...**`" in context
+    assert "> ⚓ **Codex:" in context
+
+
 START_TOOL = "mcp__plugin_purser_codex-main__codex_start"
 RESULT_TOOL = "mcp__plugin_purser_codex-main__codex_result"
 CANCEL_TOOL = "mcp__plugin_purser_codex-main__codex_cancel"
@@ -1683,6 +1699,7 @@ def test_async_result_response_appends_project_job_board(workspace, config, monk
                                        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
                                        "provider": "agy"})
     assert "systemMessage" not in response
+    assert "Write one line in the user's language as `> ⚓ **Codex done: ...**`" in response["hookSpecificOutput"]["additionalContext"]
     assert queued_dispatches and all("line" not in queued for queued in queued_dispatches), response
 
 
@@ -1697,6 +1714,8 @@ def test_codex_apply_replaces_pending_board_with_applied_status(workspace, confi
     codex.compaction_advisor.queue_dispatch(event_value, repo, board="outdated board")
     response = codex.post_tool_use(event_value, config=config, state_root=state)
     assert "systemMessage" not in response
+    assert "Include this latest job board verbatim:" in response["hookSpecificOutput"]["additionalContext"]
+    assert "| applied-job |" in response["hookSpecificOutput"]["additionalContext"]
     pending = codex.compaction_advisor._read_state(
         codex.compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1"
     )["dispatch_pending"]
@@ -1733,7 +1752,9 @@ def test_hook_dispatch_refreshes_result_board_after_apply(workspace, monkeypatch
     apply_event = event("mcp__plugin_purser_codex-main__codex_apply", cwd=str(repo), jobId=job_id)
     apply_event.update(hook_event_name="PostToolUse")
 
-    assert hook.dispatch(apply_event) == {}
+    response = hook.dispatch(apply_event)
+    assert "Include this latest job board verbatim:" in response["hookSpecificOutput"]["additionalContext"]
+    assert "| applied-after-result |" in response["hookSpecificOutput"]["additionalContext"]
     pending = codex.compaction_advisor._read_state(pending_path, "session-1")["dispatch_pending"]
     assert "| applied-after-result | gpt-6-sol (medium) | done | — | — | applied |" in pending["board"]
 
@@ -2312,6 +2333,25 @@ def test_known_concurrent_scope_summary_bounds_task_ids(config):
     assert compact["known_concurrent_scopes"] == {
         "count": 8, "task_ids": [f"task-{n}" for n in range(5)]}
     assert "whole_tree_delta" not in compact and "whole_tree_anomaly" not in compact
+
+
+def test_compact_bundle_drops_only_successfully_parsed_trailing_validation(config):
+    record = 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}'
+    report = f"Implemented the change.\n{record}"
+    bundle = codex._base_bundle()
+    bundle.update(implementer_report=report, worker_validation=codex._parse_worker_validation(report))
+
+    compact, overflow = codex._compact_bundle(bundle, config["bundle_non_report_max_bytes"])
+
+    assert not overflow
+    assert compact["implementer_report"] == "Implemented the change."
+    assert bundle["implementer_report"] == report
+
+    failed_report = "Implemented the change.\nVALIDATION: {bad json}"
+    failed = dict(bundle, implementer_report=failed_report,
+                  worker_validation=codex._parse_worker_validation(failed_report))
+    compact_failed, _ = codex._compact_bundle(failed, config["bundle_non_report_max_bytes"])
+    assert compact_failed["implementer_report"] == failed_report
 
 
 def test_concurrent_leased_jobs_get_only_their_own_diff(workspace, config):

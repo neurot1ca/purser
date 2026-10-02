@@ -743,6 +743,50 @@ def test_old_quota_snapshot_uses_stale_receipt_variant(setup):
     assert "7d used" not in advice
 
 
+def test_pending_guidance_reuses_receipt_and_dispatch_stop_text(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo)
+    line = "> ⚓ **Codex: New session · model: gpt-6-sol (high) · task: Repair**"
+    board = "> | ⚓ Task | Model | State |\n> | repair | gpt-6-sol | running |"
+    advisor.queue_dispatch(event, repo, line=line, board=board)
+
+    guidance = advisor.pending_guidance(event, repo)
+
+    assert guidance == advisor._receipt_advice(_receipt_state(repo)) + "\n" + advisor._dispatch_advice(_dispatch_state(repo))
+    assert "Codex done" in guidance and line in guidance and board in guidance
+
+
+def test_pending_guidance_stale_quota_only_requests_model_and_effort(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo, reset_at=(datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat())
+
+    guidance = advisor.pending_guidance(event, repo)
+
+    assert "quota snapshot is stale" in guidance.lower()
+    assert "model gpt-6-sol" in guidance and "effort high" in guidance
+    assert "5h used" not in guidance and "7d used" not in guidance
+
+
+def test_first_reply_satisfying_pending_receipt_and_board_avoids_stop_block(setup):
+    repo, local, scratch = setup
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo)
+    line = "> ⚓ **Codex: New session · model: gpt-6-sol (high) · task: Repair**"
+    board = "> | ⚓ Task | Model | State |\n> | repair | gpt-6-sol | running |"
+    advisor.queue_dispatch(event, repo, line=line, board=board)
+
+    satisfied = f"gpt-6-sol high 46%\n{line}\n{board}"
+    assert advisor.stop({**event, "last_assistant_message": satisfied}, repo) is None
+    assert _receipt_state(repo) is None and _dispatch_state(repo) is None
+
+    _queue_receipt(event, repo)
+    advisor.queue_dispatch(event, repo, line=line, board=board)
+    blocked = advisor.stop({**event, "last_assistant_message": "Done."}, repo)
+    assert blocked and blocked["decision"] == "block"
+
+
 def test_receipt_stop_hook_active_does_not_block(setup):
     repo, local, scratch = setup
     event = _event(scratch, repo, local, _records(context=100_000))

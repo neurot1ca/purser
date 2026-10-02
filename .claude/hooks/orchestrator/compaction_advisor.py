@@ -1028,6 +1028,25 @@ def _dispatch_advice(dispatch: Mapping[str, Any]) -> str:
     return advice + ("\nInclude this latest job board verbatim:\n" + board if isinstance(board, str) else "")
 
 
+def pending_guidance(payload: Mapping[str, Any], repository: Path | None) -> str:
+    """Render the receipt and dispatch guidance currently pending for this session."""
+    try:
+        session_id = payload.get("session_id")
+        if repository is None or not isinstance(session_id, str) or not session_id:
+            return ""
+        state = _read_state(_state_directory(repository) / "compaction_advisor.json", session_id)
+        parts = []
+        if state["receipt_pending"] is not None:
+            parts.append(_receipt_advice(state["receipt_pending"]))
+        if state["dispatch_pending"] is not None:
+            advice = _dispatch_advice(state["dispatch_pending"])
+            if advice:
+                parts.append(advice)
+        return "\n".join(parts)
+    except BaseException:
+        return ""
+
+
 def _codex_retry_reason(records: list[dict[str, Any]], latest_user: int,
                         repository: Path) -> str | None:
     """Find a finished uncollected job or a classifier-denied Codex call in this turn."""

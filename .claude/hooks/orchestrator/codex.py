@@ -2619,6 +2619,24 @@ def _project_job_board(root: Path, project_key: str) -> str | None:
     return _project_job_board_details(root, project_key)[0]
 
 
+def _append_pending_guidance(response: dict[str, Any], event: Mapping[str, Any],
+                             repository: Path | None) -> dict[str, Any]:
+    guidance = compaction_advisor.pending_guidance(event, repository)
+    if guidance:
+        output = response.setdefault("hookSpecificOutput", {"hookEventName": "PostToolUse"})
+        existing = output.get("additionalContext")
+        if isinstance(existing, str) and existing:
+            if guidance in existing:
+                return response
+            if guidance.startswith(existing):
+                output["additionalContext"] = f"{existing}\n{guidance[len(existing):].lstrip()}"
+            else:
+                output["additionalContext"] = f"{existing}\n{guidance}"
+        else:
+            output["additionalContext"] = guidance
+    return response
+
+
 def _append_project_job_status(response: dict[str, Any], root: Path,
                                project_key: str, event: Mapping[str, Any] | None = None,
                                *, pending_only: bool = False) -> dict[str, Any]:
@@ -2631,6 +2649,7 @@ def _append_project_job_status(response: dict[str, Any], root: Path,
         elif board is not None:
             compaction_advisor.queue_dispatch(event, repository, board=board,
                                               board_job_ids=board_job_ids)
+        return _append_pending_guidance(response, event, repository)
     return response
 
 
@@ -2654,7 +2673,7 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
         compaction_advisor.queue_dispatch(event, repository, line=receipt)
     if pending.get("async_call") and isinstance(pending.get("project_key"), str):
         _append_project_job_status(response, state_root, pending["project_key"], event)
-    return response
+    return _append_pending_guidance(response, event, repository)
 
 
 def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
@@ -3303,6 +3322,18 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
     """Return the Claude-facing bundle and whether mandatory fields exceeded the cap."""
 
     compact = dict(bundle)
+    report = compact.get("implementer_report")
+    validation = compact.get("worker_validation")
+    if isinstance(report, str) and isinstance(validation, Mapping):
+        report_lines = report.rstrip().splitlines()
+        if report_lines:
+            final_line = report_lines[-1].strip()
+            if final_line.startswith("`") and final_line.endswith("`"):
+                final_line = final_line[1:-1].strip()
+            if (final_line.startswith("VALIDATION:")
+                    and _parse_worker_validation(final_line) == validation
+                    and final_line not in str(validation.get("summary", ""))):
+                compact["implementer_report"] = "\n".join(report_lines[:-1]).rstrip()
     compact.pop("hook_checks_full", None)
     compact.pop("codex_quota", None)
     compact.pop("whole_tree_delta", None)
@@ -3433,7 +3464,7 @@ def _finalize_replacement(
         bundle["claude_review_mode"] = policy.FULL
         bundle["audit_receipt"] = None
         compact, _ = _compact_bundle(bundle, cap)
-    compact["implementer_report"] = str(bundle.get("implementer_report", ""))[
+    compact["implementer_report"] = str(compact.get("implementer_report", ""))[
         : _report_limit(config, bundle.get("phase"))
     ]
     if "codex_quota" in bundle:
@@ -3444,7 +3475,7 @@ def _finalize_replacement(
             smaller["codex_quota"] = bundle["codex_quota"]
             if not overflow and _non_report_bytes(smaller) <= cap:
                 compact = smaller
-                compact["implementer_report"] = str(bundle.get("implementer_report", ""))[
+                compact["implementer_report"] = str(compact.get("implementer_report", ""))[
                     : _report_limit(config, bundle.get("phase"))
                 ]
             else:
@@ -3465,6 +3496,7 @@ def _finalize_replacement(
     try:
         repository, _reason = _repo_root(event, repo_root)
         compaction_advisor.queue_receipt(event, repository, bundle)
+        response = _append_pending_guidance(response, event, repository)
     except BaseException:
         pass
     return response
