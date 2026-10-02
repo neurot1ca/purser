@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import compaction_advisor as advisor
 import context_io_hook
+import telemetry_schema
 
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
@@ -393,6 +394,52 @@ def test_dispatch_receipt_blocks_when_final_reply_lacks_line(setup):
     assert result["decision"] == "block"
     assert "Codex: ..." in result["reason"]
     assert line in result["reason"]
+
+
+def test_stop_blocked_telemetry_counts_receipt_and_dispatch(setup, monkeypatch):
+    repo, local, scratch = setup
+    events = []
+    monkeypatch.setattr(advisor.telemetry, "emit", lambda event_type, **fields: events.append((event_type, fields)))
+    event = _event(scratch, repo, local, _records(context=100_000))
+    _queue_receipt(event, repo)
+    advisor.queue_dispatch(event, repo, line="> ⚓ **Codex: task complete.**")
+
+    blocked = advisor.stop({**event, "last_assistant_message": "Done."}, repo)
+
+    assert blocked["decision"] == "block"
+    assert len(events) == 1
+    event_type, fields = events[0]
+    assert event_type == "STOP_BLOCKED"
+    assert fields == {"session_id": "session-1", "reason_kinds": ["dispatch", "receipt"], "reason_count": 2}
+    schema_event = telemetry_schema.build_event(
+        event_type, session_id=fields["session_id"],
+        payload={key: value for key, value in fields.items() if key != "session_id"},
+    )
+    assert telemetry_schema.valid_event(schema_event)
+
+
+def test_nonblocking_stop_emits_no_stop_blocked_event(setup, monkeypatch):
+    repo, local, scratch = setup
+    events = []
+    monkeypatch.setattr(advisor.telemetry, "emit", lambda event_type, **fields: events.append((event_type, fields)))
+    event = _event(scratch, repo, local, _records(context=100_000))
+
+    assert advisor.stop({**event, "last_assistant_message": "Done."}, repo) is None
+    assert events == []
+
+
+def test_stop_blocked_schema_accepts_compaction_and_rejects_board_kind():
+    event = telemetry_schema.build_event(
+        "STOP_BLOCKED", session_id="session-1",
+        payload={"reason_kinds": ["compaction"], "reason_count": 1},
+    )
+    assert telemetry_schema.valid_event(event)
+
+    with pytest.raises(ValueError):
+        telemetry_schema.build_event(
+            "STOP_BLOCKED", session_id="session-1",
+            payload={"reason_kinds": ["board"], "reason_count": 1},
+        )
 
 
 def test_maintenance_notice_requires_its_own_evidence_and_commit_rule(setup, monkeypatch):

@@ -22,6 +22,7 @@ EVENT_TYPES = frozenset(
         "REVIEWER1_STARTED",
         "REVIEWER1_FINISHED",
         "COMPACTION_ADVICE_OUTCOME",
+        "STOP_BLOCKED",
         "SHADOW_FINISHED",
         "SCOPE_CONFLICT_OUTCOME",
         "REVIEWER1_SKIPPED",
@@ -279,6 +280,7 @@ _PAYLOAD_FIELDS = {
         "notice_id", "advice_written", "compaction_observed", "pre_context_tokens",
         "post_context_tokens", "elapsed_turns",
     }),
+    "STOP_BLOCKED": frozenset({"reason_kinds", "reason_count"}),
     "SHADOW_FINISHED": frozenset({
         "candidate", "status", "agreement", "elapsed_ms", "input_tokens", "output_tokens", "total_tokens",
     }),
@@ -363,6 +365,18 @@ def _project_key(value: Any, *, required: bool) -> str | None:
 
 
 def _payload_value(name: str, value: Any) -> Any:
+    if name == "reason_kinds":
+        kinds = {"maintenance", "receipt", "dispatch", "compaction", "version", "leader", "fallback", "flow"}
+        if (not isinstance(value, list) or len(value) > len(kinds)
+                or any(not isinstance(kind, str) or kind not in kinds for kind in value)
+                or value != sorted(set(value))):
+            raise ValueError("telemetry Stop reason kinds are invalid")
+        return value
+    if name == "reason_count":
+        count = _number(value, integer=True)
+        if count < 1 or count > 20:
+            raise ValueError("telemetry Stop reason count is invalid")
+        return count
     if name in {"report_id", "reason_code"}:
         return _identifier(value)
     if name == "report_type" and value in {"cleanup", "test-gaps"}:

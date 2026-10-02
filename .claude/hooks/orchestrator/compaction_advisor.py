@@ -1234,11 +1234,13 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                 _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
             return None
         reasons = []
+        reason_kinds: set[str] = set()
         retry_reason = _codex_retry_reason(records, latest_user, repository) if latest_user >= 0 else None
         if retry_reason:
             if state["codex_retry_count"] < 2:
                 state["codex_retry_count"] += 1
                 reasons.append(retry_reason)
+                reason_kinds.add("dispatch")
             else:
                 state["codex_retry_pending"] = re.sub(
                     r"[0-9a-f]{64}", "job", retry_reason, flags=re.IGNORECASE
@@ -1247,6 +1249,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         if notice is not None and not notice.get("blocked"):
             notice["blocked"] = True
             reasons.append("End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n" + _blockquote(notice))
+            reason_kinds.add("compaction")
         if maintenance_pending is not None and not maintenance_pending.get("blocked"):
             import maintenance_reports
             maintenance_cli = f'"{sys.executable}" "{Path(maintenance_reports.__file__).resolve()}"'
@@ -1277,24 +1280,29 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                         + maintenance_reports.CLEANUP_HANDOFF_COMMIT_RULE + "\n"
                     )
             reasons.append(instruction + maintenance_pending["text"])
+            reason_kinds.add("maintenance")
         if receipt is not None and not receipt.get("blocked"):
             receipt["blocked"] = True
             reasons.append(_receipt_advice(receipt))
+            reason_kinds.add("receipt")
         if dispatch is not None and not dispatch.get("blocked"):
             advice = _dispatch_advice(dispatch)
             if advice:
                 dispatch["blocked"] = True
                 reasons.append(advice)
+                reason_kinds.add("dispatch")
         if version_pending is not None and not version_pending.get("blocked"):
             version_pending["blocked"] = True
             reasons.append(
                 f"Include one visible line containing both `⚓` and `{version_pending['version']}` to announce the Purser update."
             )
+            reason_kinds.add("version")
         if leader_pending is not None and not leader_pending.get("blocked"):
             leader_pending["blocked"] = True
             reasons.append(
                 f"Include one visible line containing both `⚓` and `{leader_pending['model']}` to announce the new free mechanical model leader."
             )
+            reason_kinds.add("leader")
         if isinstance(model_pending, dict) and not model_pending.get("blocked"):
             model_pending["blocked"] = True
             model_version_notice.write_state({**model_version_notice.read_state(), "pending": model_pending})
@@ -1306,6 +1314,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                 "> *Should Purser switch to it? (1-yes 2-no)*\n"
                 "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
             )
+            reason_kinds.add("version")
         if (fallback_pending is not None
                 and (fallback_pending.get("notice") or not fallback_pending.get("blocked"))):
             fallback_pending["blocked"] = True
@@ -1315,12 +1324,14 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                     "Translate the line below while keeping ⚓ and the model name; do not add another notice line.\n\n"
                     + fallback_pending["line"]
                 )
+                reason_kinds.add("fallback")
             else:
                 reasons.append(
                     "On your next reply, render exactly one bold quoted question line in the user's language as `> ⚓ **...**`. "
                     "Translate the line below while keeping ⚓ and the model name; include no other question line.\n\n"
                     + fallback_pending["line"]
                 )
+                reason_kinds.add("fallback")
 
         if not reasons and flow_message.rstrip().endswith(("?", "؟", "？")):
             latest_user = max((i for i, record in enumerate(records) if _genuine_user(record)), default=-1)
@@ -1340,6 +1351,7 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
                 if successful_result:
                     state["flow_blocked_user"] = latest_user
                     reasons.append("Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question.")
+                    reason_kinds.add("flow")
         if changed or reasons:
             _atomic_write(state_path, json.dumps(state, sort_keys=True).encode("utf-8"))
         if version_pending is not None and version_pending.get("blocked") and reasons:
@@ -1347,6 +1359,11 @@ def stop(payload: Mapping[str, Any], repository: Path | None) -> dict[str, str] 
         if reasons:
             reason = "\n\n".join(reasons)
             reason += "\n\nYour previous reply is already visible to the user: write only the lines requested above, without repeating any of its text."
+            try:
+                telemetry.emit("STOP_BLOCKED", session_id=session_id,
+                               reason_kinds=sorted(reason_kinds), reason_count=len(reasons))
+            except BaseException:
+                pass
             return {"decision": "block", "reason": reason}
         return None
     except BaseException:
