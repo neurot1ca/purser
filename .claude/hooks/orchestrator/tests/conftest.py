@@ -30,6 +30,7 @@ def tmp_path():
 def isolated_purser_state_root(tmp_path, monkeypatch):
     """Keep tests that exercise default paths away from the user's real state."""
     monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path / "purser-state"))
+    monkeypatch.delenv("PURSER_OBSIDIAN_VAULT", raising=False)
 
 
 @pytest.fixture(autouse=True)
