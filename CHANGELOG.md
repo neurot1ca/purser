@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.61 — 2026-10-02
+
+- **Fixed:** The handoff's recent history no longer shows stale turns from before a compaction.
+- **Added:** `/purser:init` asks whether to enable background maintenance (cleanup reports), and maintenance reports record finished and acted-on telemetry.
+- **Added:** Outcome telemetry for Reviewer-1 finding counts, compaction advice, OpenCode shadow runs and scope conflicts, plus per-job code-map use rows in the code-map report.
+- **Changed:** Removed six unused imports found by the first cleanup report.
+
 ## 0.1.60 — 2026-10-02
 
 - **Fixed:** The async Codex bridge works on Linux: finished jobs are detected, dead hosts recover, and recovery waits until the old worker is gone.
