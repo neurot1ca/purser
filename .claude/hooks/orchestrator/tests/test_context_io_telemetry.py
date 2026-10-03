@@ -255,6 +255,28 @@ def test_subprocess_malformed_json_is_silent_and_successful(tmp_path):
     assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
 
 
+def test_subprocess_corrupt_journal_resets_silently_on_read(tmp_path):
+    repo = _contract_repo(tmp_path)
+    state = tmp_path / "state"
+    session = "subprocess-corrupt-journal-contract"
+    target = repo / "notes.txt"
+    target.write_text("read after corrupt state\n", encoding="utf-8")
+    journal = _journal(state, session)
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps({"observations": "corrupt", "read_count": []}), encoding="utf-8")
+
+    result = _run_contract_hook("Read", {
+        "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Read",
+        "cwd": str(repo), "tool_input": {"file_path": str(target)},
+    }, state)
+
+    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
+    turn = json.loads(journal.read_text(encoding="utf-8"))
+    assert turn["unknown_reason"] == "CORRUPT_STATE"
+    assert turn["read_count"] == 1
+    assert len(turn["observations"]) == 1
+
+
 def test_subprocess_user_and_project_protected_paths(tmp_path, monkeypatch):
     repo = _contract_repo(tmp_path)
     home = tmp_path / "home"

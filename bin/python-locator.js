@@ -39,22 +39,40 @@ function resolvePython(list = candidates(), run = spawnSync) {
   return null;
 }
 
-function main(args, resolve = resolvePython) {
-  const selected = resolve();
+function goBinaryPath() {
+  const platforms = { win32: 'windows', linux: 'linux', darwin: 'darwin' };
+  const architectures = { x64: 'amd64', arm64: 'arm64' };
+  const goos = platforms[process.platform];
+  const goarch = architectures[process.arch];
+  if (!goos || !goarch) return null;
+  return path.join(__dirname, '..', 'bin', `purser-hook-${goos}-${goarch}${goos === 'windows' ? '.exe' : ''}`);
+}
+
+function main(args, resolve = resolvePython, run = spawnSync) {
   if (args[0] === '--resolve-json') {
+    const selected = resolve();
     process.stdout.write(JSON.stringify(selected) + '\n');
     return selected ? 0 : 1;
   }
-  const mode = args.shift();
-  if (!['pre-codex', 'hook', 'mcp'].includes(mode) || !args.length) {
+  let mode = args.shift();
+  if (!['pre-codex', 'hook', 'go-hook', 'mcp'].includes(mode) || !args.length) {
     process.stderr.write('Purser: invalid Python locator invocation\n');
     return mode === 'pre-codex' ? 2 : 1;
   }
+  if (mode === 'go-hook') {
+    const binary = goBinaryPath();
+    if (binary) {
+      const child = run(binary, [], { stdio: 'inherit', windowsHide: true });
+      if (!child.error) return child.status === null ? 1 : child.status;
+    }
+    mode = 'hook';
+  }
+  const selected = resolve();
   if (!selected) {
     process.stderr.write(MESSAGE + '\n');
     return mode === 'pre-codex' ? 2 : mode === 'hook' ? 0 : 1;
   }
-  const child = spawnSync(selected.path, args, {
+  const child = run(selected.path, args, {
     stdio: 'inherit', windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' },
   });
   if (child.error) {
@@ -65,4 +83,4 @@ function main(args, resolve = resolvePython) {
 }
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));
-module.exports = { candidates, resolvePython, main };
+module.exports = { candidates, resolvePython, goBinaryPath, main };

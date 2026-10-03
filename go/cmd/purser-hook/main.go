@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+	defer func() { _ = recover() }()
 	started := time.Now()
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil || !utf8.Valid(data) {

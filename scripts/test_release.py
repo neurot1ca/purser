@@ -18,7 +18,7 @@ RELEASE = ROOT / "scripts" / "release.py"
 @pytest.fixture
 def tmp_path():
     scratch = ROOT / ".tmp" / f"release-test-{uuid.uuid4().hex}"
-    scratch.mkdir()
+    scratch.mkdir(parents=True)
     try:
         yield scratch
     finally:
@@ -32,6 +32,27 @@ def run(cmd, cwd, *, env=None, check=True):
     if check:
         assert result.returncode == 0, result.stdout + result.stderr
     return result
+
+
+def fake_go(tmp_path):
+    source = tmp_path / "fake-go.go"
+    source.write_text(
+        'package main\nimport ("os"; "strings")\nfunc main() {\n'
+        'args := os.Args[1:]; if log := os.Getenv("FAKE_GO_LOG"); log != "" { '
+        'f, _ := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); '
+        '_, _ = f.WriteString(os.Getenv("GOOS")+"/"+os.Getenv("GOARCH")+" "+strings.Join(args, " ")+"\\n"); _ = f.Close() }\n'
+        'if os.Getenv("FAKE_GO_FAIL_GOOS") == os.Getenv("GOOS") { os.Exit(9) }; '
+        'for i, arg := range args { if arg == "-o" && i+1 < len(args) { _ = os.WriteFile(args[i+1], []byte("fake binary"), 0700); return } }; os.Exit(2) }\n',
+        encoding="utf-8",
+    )
+    bindir = tmp_path / "fake-go-bin"
+    bindir.mkdir()
+    executable = bindir / ("go.exe" if os.name == "nt" else "go")
+    build_env = os.environ.copy()
+    build_env["GOCACHE"] = str(tmp_path / "go-cache")
+    built = run(["go", "build", "-o", str(executable), str(source)], tmp_path, env=build_env)
+    assert built.returncode == 0
+    return bindir
 
 
 def repo(tmp_path):
@@ -57,6 +78,14 @@ def repo(tmp_path):
     (path / "base.txt").write_text("base\n", encoding="utf-8")
     (path / "scripts").mkdir()
     shutil.copy2(RELEASE, path / "scripts" / "release.py")
+    (path / "go" / "cmd" / "purser-hook").mkdir(parents=True)
+    (path / "go" / "go.mod").write_text("module test-hook\n\ngo 1.27\n", encoding="utf-8")
+    (path / "go" / "cmd" / "purser-hook" / "main.go").write_text(
+        "package main\nfunc main() {}\n", encoding="utf-8"
+    )
+    fake_bin = fake_go(tmp_path)
+    env["PATH"] = str(fake_bin) + os.pathsep + os.environ.get("PATH", "")
+    env["GOCACHE"] = str(tmp_path / "go-cache")
     run(["git", "add", "-f", "--", "."], path, env=env)
     run(["git", "commit", "-qm", "initial"], path, env=env)
     return path, env
@@ -246,6 +275,92 @@ def test_export_only_uses_committed_tree_and_local_manifest(tmp_path):
     assert manifest["plugins"] == [{"name": "purser", "source": "./purser"}]
     assert "marketplace update ok" in result.stdout
     assert "plugin update ok" in result.stdout
+
+
+def test_export_builds_six_go_binaries_in_staged_plugin(tmp_path):
+    path, env = repo(tmp_path)
+    marketplace = tmp_path / "marketplace"
+    log = tmp_path / "go-builds.log"
+    env["FAKE_GO_LOG"] = str(log)
+    result = release(path, env, fake_claude(tmp_path), "--export-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = {
+        "windows-amd64.exe", "windows-arm64.exe", "linux-amd64", "linux-arm64",
+        "darwin-amd64", "darwin-arm64",
+    }
+    binaries = marketplace / "purser" / "bin"
+    assert {item.name.removeprefix("purser-hook-") for item in binaries.iterdir()} == expected
+    builds = log.read_text(encoding="utf-8").splitlines()
+    assert len(builds) == 6
+    assert {line.split()[0] for line in builds} == {
+        "windows/amd64", "windows/arm64", "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64",
+    }
+    assert all("build -trimpath -ldflags -s -w -o " in line and "./cmd/purser-hook" in line for line in builds)
+
+
+def test_failed_go_build_keeps_previous_marketplace_tree(tmp_path):
+    path, env = repo(tmp_path)
+    marketplace = tmp_path / "marketplace"
+    previous = marketplace / "purser"
+    previous.mkdir(parents=True)
+    sentinel = previous / "sentinel.txt"
+    sentinel.write_text("previous tree\n", encoding="utf-8")
+    env["FAKE_GO_FAIL_GOOS"] = "linux"
+    updates = fake_claude(tmp_path)
+    result = release(path, env, updates, "--export-only")
+    assert result.returncode == 1
+    assert "Go build failed for linux/amd64" in result.stdout + result.stderr
+    assert sentinel.read_text(encoding="utf-8") == "previous tree\n"
+    assert not list(marketplace.glob("purser-export-*"))
+    assert "marketplace update ok" not in result.stdout
+
+
+def test_go_hook_launcher_runs_binary_then_falls_back_on_spawn_error(tmp_path):
+    plugin = tmp_path / "plugin"
+    bindir = plugin / "bin"
+    hookdir = plugin / ".claude" / "hooks" / "orchestrator"
+    bindir.mkdir(parents=True)
+    hookdir.mkdir(parents=True)
+    shutil.copy2(ROOT / "bin" / "python-locator.js", bindir / "python-locator.js")
+    marker = tmp_path / "python-fallback.txt"
+    script = hookdir / "fallback.py"
+    script.write_text("# launcher fallback target\n", encoding="utf-8")
+    goos, goarch = run(["go", "env", "GOOS", "GOARCH"], ROOT).stdout.splitlines()
+    names = {"windows": "windows", "linux": "linux", "darwin": "darwin"}
+    suffix = ".exe" if goos == "windows" else ""
+    binary = bindir / f"purser-hook-{names[goos]}-{goarch}{suffix}"
+    build_env = os.environ.copy()
+    build_env["CGO_ENABLED"] = "0"
+    build_env["GOCACHE"] = str(tmp_path / "go-cache")
+    run(["go", "build", "-trimpath", "-ldflags", "-s -w", "-o", str(binary), "./cmd/purser-hook"], ROOT / "go", env=build_env)
+    payload = json.dumps({
+        "hook_event_name": "PreToolUse", "tool_name": "Read", "session_id": "launcher-test-session",
+        "tool_input": {"file_path": "sample.txt", "cwd": str(tmp_path)},
+    })
+    state_dir = tmp_path / "state"
+    env = os.environ.copy()
+    env["PURSER_STATE_DIR"] = str(state_dir)
+    command = ["node", str(bindir / "python-locator.js"), "go-hook", str(script)]
+    result = subprocess.run(command, input=payload, text=True, capture_output=True, env=env, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    journal = state_dir / "context_io" / "turns"
+    assert len(list(journal.glob("*.json"))) == 1
+    assert not marker.exists()
+
+    binary.unlink()
+    assert not binary.exists()
+    locator = bindir / "python-locator.js"
+    harness = (
+        "const fs=require('node:fs'); const locator=require(process.argv[1]); "
+        "const script=process.argv[2], marker=process.argv[3], calls=[]; "
+        "const code=locator.main(['go-hook',script],()=>({path:'python'}),(command,args)=>{"
+        "calls.push([command,args]); if(calls.length===1)return {error:{code:'EPERM'}}; "
+        "fs.writeFileSync(marker,command+' '+args.join(' ')); return {status:0};}); "
+        "if(code!==0||calls.length!==2||calls[1][1][0]!==script)process.exit(1);"
+    )
+    fallback = subprocess.run(["node", "-e", harness, str(locator), str(script), str(marker)], text=True, capture_output=True, check=False)
+    assert fallback.returncode == 0, fallback.stdout + fallback.stderr
+    assert marker.read_text(encoding="utf-8") == f"python {script}"
 
 
 def test_failed_export_keeps_previous_tree_and_skips_updates(tmp_path, monkeypatch):

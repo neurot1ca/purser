@@ -109,6 +109,36 @@ def _extract_archive(archive, destination, members):
             os.chmod(directory, mode & 0o777)
 
 
+def _build_go_hook(staged_tree):
+    go = shutil.which("go")
+    if not go:
+        raise ReleaseError("Go is required to build marketplace hook binaries")
+    binary_dir = staged_tree / "bin"
+    binary_dir.mkdir(parents=True, exist_ok=True)
+    for goos, goarch in (
+        ("windows", "amd64"), ("windows", "arm64"),
+        ("linux", "amd64"), ("linux", "arm64"),
+        ("darwin", "amd64"), ("darwin", "arm64"),
+    ):
+        name = f"purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")
+        output = binary_dir / name
+        env = os.environ.copy()
+        env.update(CGO_ENABLED="0", GOOS=goos, GOARCH=goarch)
+        try:
+            result = subprocess.run(
+                [go, "build", "-trimpath", "-ldflags", "-s -w", "-o", str(output), "./cmd/purser-hook"],
+                cwd=staged_tree / "go", env=env, text=True, encoding="utf-8",
+                errors="replace", capture_output=True, check=False,
+            )
+        except OSError as exc:
+            raise ReleaseError(f"Go build failed for {goos}/{goarch}: {exc}")
+        if result.returncode:
+            detail = (result.stderr or result.stdout).strip()
+            raise ReleaseError(f"Go build failed for {goos}/{goarch}" + (f": {detail}" if detail else ""))
+        if not output.is_file():
+            raise ReleaseError(f"Go build produced no binary for {goos}/{goarch}")
+
+
 def export_marketplace(commit, marketplace_dir):
     """Export one committed tree and publish it as the local marketplace source."""
     target = Path(marketplace_dir)
@@ -137,6 +167,8 @@ def export_marketplace(commit, marketplace_dir):
         with tarfile.open(fileobj=io.BytesIO(archive_result.stdout), mode="r:") as archive:
             members = _safe_archive_members(archive, staged_tree)
             _extract_archive(archive, staged_tree, members)
+        phase = "build Go hook binaries"
+        _build_go_hook(staged_tree)
         manifest = {
             "name": "purser-local",
             "owner": {"name": "Purser"},

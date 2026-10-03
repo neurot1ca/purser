@@ -25,7 +25,7 @@
             "timeout": 60,
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-              "hook",
+              "go-hook",
               "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
             ]
           }
