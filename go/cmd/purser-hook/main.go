@@ -28,8 +28,14 @@ func main() {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return
 	}
-	if event["hook_event_name"] != "PreToolUse" || event["tool_name"] != "Read" {
-		return
+	switch event["hook_event_name"] {
+	case "PreToolUse":
+		if event["tool_name"] == "Read" {
+			_ = contextio.Read(event, started)
+		}
+	case "SessionStart":
+		if output := contextio.SessionStart(event); len(output) > 0 {
+			_, _ = os.Stdout.Write(output)
+		}
 	}
-	_ = contextio.Read(event, started)
 }

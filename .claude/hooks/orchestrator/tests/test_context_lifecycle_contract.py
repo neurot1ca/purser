@@ -52,7 +52,11 @@ def _run(event, repo, state, **values):
 
 
 def _assert_json_stdout(result, expected):
-    assert result.stdout == json.dumps(expected, ensure_ascii=False).encode("utf-8")
+    actual = json.loads(result.stdout)
+    assert actual == expected, (repr(actual), repr(expected))
+    assert result.stdout == json.dumps(expected, ensure_ascii=False).encode("utf-8"), (
+        repr(actual), repr(expected)
+    )
 
 
 def test_user_prompt_nudge_throttle_and_lifecycle_delivery(isolated):
@@ -115,6 +119,59 @@ def test_session_start_handoff_and_absence_contract(isolated):
     advisor = json.loads(_advisor_state(state, repo).read_text(encoding="utf-8"))
     assert advisor["session_id"] == "restore-handoff"
     assert advisor["last_context_language"] == "English"
+    assert advisor["language_after_reset"] is True
+
+    # All three restoration sources share the same stable handoff envelope.
+    for source, reset in (("startup", False), ("clear", True)):
+        restored = _run("SessionStart", repo, state, session_id=f"restore-{source}", source=source)
+        assert (restored.returncode, restored.stderr) == (0, b"")
+        _assert_json_stdout(restored, {"hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": expected_context,
+        }})
+        source_state = json.loads(_advisor_state(state, repo).read_text(encoding="utf-8"))
+        assert source_state["session_id"] == f"restore-{source}"
+        assert source_state["last_context_language"] == "English"
+        assert source_state["language_after_reset"] is reset
+
+    lifecycle_session = "session-start-lifecycle"
+    advisor_path = _advisor_state(state, repo)
+    advisor_path.write_text(json.dumps({
+        "session_id": lifecycle_session,
+        "version_pending": {"version": "9.8.7", "blocked": False, "delivered": False},
+    }), encoding="utf-8")
+    lifecycle = _run("SessionStart", repo, state, session_id=lifecycle_session, source="resume")
+    assert (lifecycle.returncode, lifecycle.stderr) == (0, b"")
+    _assert_json_stdout(lifecycle, {"hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": "Include one visible line containing both `⚓` and `9.8.7` to announce the Purser update.",
+    }})
+    lifecycle_state = json.loads(advisor_path.read_text(encoding="utf-8"))
+    assert lifecycle_state["session_id"] == lifecycle_session
+    assert lifecycle_state["last_context_language"] == "English"
+    assert lifecycle_state["version_pending"]["delivered"] is True
+
+    model_state_path = state / "model-version-notice.json"
+    model_state_path.write_text(json.dumps({
+        "pending": {
+            "current": "openai/gpt-5.5", "new": "openai/gpt-5.6",
+            "blocked": False, "delivered": False,
+        },
+    }), encoding="utf-8")
+    model_notice = _run("SessionStart", repo, state, session_id="model-notice", source="resume")
+    assert (model_notice.returncode, model_notice.stderr) == (0, b"")
+    _assert_json_stdout(model_notice, {"hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": (
+            "Render this model-version notice in the user's language, translating from the English text while keeping ⚓ "
+            "and both model names unchanged. Keep the three blockquote lines exactly formatted; do not change "
+            "routes until the user says yes.\n"
+            "> ⚓ **New model version available: `openai/gpt-5.6` (you are on `openai/gpt-5.5`).**\n"
+            "> *Should Purser switch to it? (1-yes 2-no)*\n"
+            "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
+        ),
+    }})
+    model_state = json.loads(model_state_path.read_text(encoding="utf-8"))
+    assert model_state["pending"]["delivered"] is True
 
     handoff.unlink()
     absent = _run("SessionStart", repo, state, session_id="no-handoff", source="compact")

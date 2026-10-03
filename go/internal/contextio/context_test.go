@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -118,5 +119,33 @@ func TestReadLockContentionWritesMarker(t *testing.T) {
 	marker := filepath.Join(state, "context_io", "contention", key)
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("contention marker not written: %v", err)
+	}
+}
+
+func TestSessionStartFailsOpenWhenAdvisorStateCannotBeWritten(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("git", "init", "--quiet", repo)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	blockedStateRoot := filepath.Join(root, "state-is-a-file")
+	if err := os.WriteFile(blockedStateRoot, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", blockedStateRoot)
+
+	output := SessionStart(map[string]any{
+		"hook_event_name": "SessionStart",
+		"session_id":      "state-write-failure",
+		"source":          "compact",
+		"cwd":             repo,
+	})
+	want := `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "Reply in the language the user writes in."}}`
+	if string(output) != want {
+		t.Fatalf("SessionStart output after state write failure = %q, want %q", output, want)
 	}
 }
