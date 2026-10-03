@@ -162,7 +162,7 @@ def test_subprocess_in_turn_prompt_read_stop_contract(tmp_path):
     state = tmp_path / "state"
     session = "subprocess-in-turn-contract"
     target = repo / "notes.txt"
-    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    target.write_bytes("".join(f"line-{line:04d}-abcdefghij\n" for line in range(1, 401)).encode("utf-8"))
 
     prompt = _run_contract_hook("UserPromptSubmit", {
         "session_id": session, "hook_event_name": "UserPromptSubmit", "cwd": str(repo),
@@ -174,6 +174,45 @@ def test_subprocess_in_turn_prompt_read_stop_contract(tmp_path):
         "cwd": str(repo), "tool_input": {"file_path": str(target)},
     }, state)
     assert (read.returncode, read.stdout, read.stderr) == (0, b"", b"")
+    targeted = _run_contract_hook("Read", {
+        "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Read",
+        "cwd": str(repo), "tool_input": {"file_path": str(target), "offset": 10, "limit": 250},
+    }, state)
+    assert (targeted.returncode, targeted.stdout, targeted.stderr) == (0, b"", b"")
+    repeated = _run_contract_hook("Read", {
+        "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Read",
+        "cwd": str(repo), "tool_input": {"file_path": str(target)},
+    }, state)
+    assert (repeated.returncode, repeated.stdout, repeated.stderr) == (0, b"", b"")
+
+    identity = context_io._identity(target.stat())
+    expected_observations = [
+        {
+            "mode": "FULL", "bytes": 8400, "line_kind": "EXACT", "line_value": 400,
+            "oversized": False, "binary_suspected": False,
+            "thresholds": {"200": True, "350": True, "500": False},
+            "identity": identity, "repeat": False, "reason": None,
+        },
+        {
+            "mode": "TARGETED", "bytes": 5250, "line_kind": "EXACT", "line_value": 250,
+            "oversized": False, "binary_suspected": False,
+            "thresholds": {"200": True, "350": False, "500": False},
+            "identity": identity, "repeat": True, "reason": None,
+        },
+        {
+            "mode": "FULL", "bytes": 8400, "line_kind": "EXACT", "line_value": 400,
+            "oversized": False, "binary_suspected": False,
+            "thresholds": {"200": True, "350": True, "500": False},
+            "identity": identity, "repeat": True, "reason": None,
+        },
+    ]
+    journal = json.loads(_journal(state, session).read_text(encoding="utf-8"))
+    assert journal["observations"] == expected_observations
+    assert (journal["read_count"], journal["full_read_count"], journal["targeted_read_count"],
+            journal["unknown_read_count"], journal["bytes_scanned"], journal["lines_scanned"]) == (
+                3, 2, 1, 0, 25200, 1059,
+            )
+
     stop = _run_contract_hook("Stop", {
         "session_id": session, "hook_event_name": "Stop", "cwd": str(repo),
     }, state)
@@ -181,8 +220,33 @@ def test_subprocess_in_turn_prompt_read_stop_contract(tmp_path):
 
     [event] = _contract_events(state)
     assert event["event_type"] == "CONTEXT_IO_TURN_RECORDED"
-    assert event["payload"]["read_count"] == 1
-    assert "unknown_reason" not in event["payload"]
+    payload = event["payload"]
+    for volatile in ("internal_processing_us_total", "internal_processing_us_max",
+                     "hook_wall_time_us_total", "hook_wall_time_us_max"):
+        payload.pop(volatile, None)
+    assert payload == {
+        "read_count": 3,
+        "full_read_count": 2,
+        "targeted_read_count": 1,
+        "unknown_read_count": 0,
+        "observed_bytes_total": 22050,
+        "exact_line_read_count": 3,
+        "exact_line_count_total": 1050,
+        "lower_bound_line_read_count": 0,
+        "lower_bound_line_count_total": 0,
+        "oversized_read_count": 0,
+        "binary_suspected_read_count": 0,
+        "repeat_count": 2,
+        "repeat_known": True,
+        "task_association_known": False,
+        "threshold_200_known_count": 3,
+        "threshold_200_candidate_count": 3,
+        "threshold_350_known_count": 3,
+        "threshold_350_candidate_count": 2,
+        "threshold_500_known_count": 3,
+        "threshold_500_candidate_count": 0,
+        "hook_sample_count": 5,
+    }
 
 
 def test_subprocess_malformed_json_is_silent_and_successful(tmp_path):
