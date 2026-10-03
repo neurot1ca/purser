@@ -364,11 +364,42 @@ def _registered_job_worktree(root, state, *, apply_state=None, outside=False):
     return job_id, repo, worktree, record
 
 
+def _shared_worktree_job(root, state, worktree):
+    call = f"shared-worktree-{state}"
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    record = root / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    record.write_text(json.dumps({"jobId": job_id, "call": call, "state": state,
+        "finishedAt": 1000, "worktreePath": str(worktree),
+        "repoRoot": str(root / "repo")}), encoding="utf-8")
+    return record
+
+
 def test_cleanup_removes_applied_job_worktree(tmp_path, monkeypatch):
     _, _, worktree, _ = _registered_job_worktree(tmp_path, "SUCCEEDED", apply_state="applied")
     monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
     maintenance.cleanup_jobs(tmp_path, now=2000)
     assert not worktree.exists()
+
+
+def test_cleanup_keeps_applied_job_worktree_shared_with_running_job(tmp_path, monkeypatch):
+    _, _, worktree, _ = _registered_job_worktree(tmp_path, "SUCCEEDED", apply_state="applied")
+    _shared_worktree_job(tmp_path, "RUNNING", worktree)
+    monkeypatch.setattr(codex_exec_mcp.Server, "recover_job", lambda *args, **kwargs: None)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+
+    assert worktree.is_dir()
+
+
+def test_cleanup_keeps_applied_job_worktree_shared_with_unapplied_success(tmp_path, monkeypatch):
+    _, _, worktree, _ = _registered_job_worktree(tmp_path, "SUCCEEDED", apply_state="applied")
+    _shared_worktree_job(tmp_path, "SUCCEEDED", worktree)
+    monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
+
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+
+    assert worktree.is_dir()
 
 
 def test_cleanup_keeps_review_pending_job_worktree(tmp_path, monkeypatch):
@@ -398,6 +429,22 @@ def test_cleanup_removes_orphan_worktree_older_than_seven_days(tmp_path):
     os.utime(worktree, (old, old))
     maintenance.cleanup_jobs(tmp_path, now=old + 8 * 86400)
     assert not worktree.exists()
+
+
+def test_cleanup_orphan_keeps_worktree_referenced_by_differently_named_job(tmp_path):
+    _, repo, worktree, record = _registered_job_worktree(
+        tmp_path, "SUCCEEDED", apply_state="conflict")
+    renamed = worktree.with_name("independent-worktree-name")
+    subprocess.run(["git", "-C", str(repo), "worktree", "move", str(worktree), str(renamed)], check=True)
+    worktree = renamed
+    job = json.loads(record.read_text(encoding="utf-8"))
+    job["worktreePath"] = str(worktree)
+    record.write_text(json.dumps(job), encoding="utf-8")
+    os.utime(worktree, (1000, 1000))
+
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+
+    assert worktree.is_dir()
 
 
 def test_cleanup_never_removes_worktree_outside_state_wt(tmp_path, monkeypatch):

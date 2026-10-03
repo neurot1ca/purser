@@ -332,7 +332,14 @@ def _remove_worktree(state_root: Path, repo_root: Path, worktree_path: str | Pat
         return False
 
 
-def _cleanup_orphan_worktrees(root: Path, jobs: Path, current: float) -> None:
+def _worktree_key(worktree_path: Any) -> str | None:
+    try:
+        return os.path.normcase(os.fspath(Path(worktree_path).resolve()))
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _cleanup_orphan_worktrees(root: Path, current: float, protected_worktrees: set[str]) -> None:
     """Prune old registered worktrees only when their job record is absent."""
     wt_root = root / "wt"
     try:
@@ -346,7 +353,7 @@ def _cleanup_orphan_worktrees(root: Path, jobs: Path, current: float) -> None:
             worktree.resolve().relative_to(wt_root.resolve())
         except (OSError, ValueError):
             continue
-        if next(jobs.glob(f"{worktree.name}*.json"), None) is not None:
+        if _worktree_key(worktree) in protected_worktrees:
             continue
         try:
             if current - worktree.stat().st_mtime <= RETENTION_SECONDS:
@@ -373,7 +380,21 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
         jobs = root / "codex_exec_mcp" / "jobs"
         bridge = codex_exec_mcp.Server(job_dir=jobs)
         current = time.time() if now is None else now
-        records = list(islice(jobs.glob("*.json"), MAX_JOB_RECORDS))
+        all_records = list(jobs.glob("*.json"))
+        protected_worktrees = set()
+        for record in all_records:
+            job = _read_json(record)
+            if not job:
+                continue
+            state = job.get("state")
+            discard_without_patch = state in {"FAILED", "CANCELLED", "TIMED_OUT"} and "applyState" not in job
+            may_remove_worktree = (state != "UNKNOWN_OR_IN_PROGRESS"
+                                   and (job.get("applyState") == "applied" or discard_without_patch))
+            if state not in TERMINAL or not may_remove_worktree:
+                key = _worktree_key(job.get("worktreePath"))
+                if key is not None:
+                    protected_worktrees.add(key)
+        records = all_records[:MAX_JOB_RECORDS]
         for path in records:
             if not _JOB_ID.fullmatch(path.stem):
                 continue
@@ -389,7 +410,8 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
                                    and (job.get("applyState") == "applied" or discard_without_patch))
             if job.get("worktreePath") and not may_remove_worktree:
                 continue
-            if job.get("worktreePath") and may_remove_worktree:
+            if (job.get("worktreePath") and may_remove_worktree
+                    and _worktree_key(job["worktreePath"]) not in protected_worktrees):
                 repo_root = job.get("repoRoot")
                 if isinstance(repo_root, str) and repo_root:
                     _remove_worktree(root, Path(repo_root), job["worktreePath"])
@@ -445,7 +467,7 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
                         index_path.unlink(missing_ok=True)
             except OSError:
                 continue
-        _cleanup_orphan_worktrees(root, jobs, current)
+        _cleanup_orphan_worktrees(root, current, protected_worktrees)
     except BaseException:
         return None
 
