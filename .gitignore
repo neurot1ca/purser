@@ -7,3 +7,11 @@ pytest-cache-files-*/
 .claude/settings.local.json.bak-*
 docs/research/
 NEXT.md
+docs/ROADMAP.md
+docs/PROVENANCE.md
+docs/ORCHESTRATION_REFORM_SPEC.md
+docs/ORCHESTRATOR_PROFILE_PLAN.md
+.claude/hooks/orchestrator/BUILD_SPEC.md
+profiles/polymarket-btc5m-lab.toml
+CLAUDE.md
+.orchestrator/profile.toml
