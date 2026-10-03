@@ -249,10 +249,62 @@ def assert_unavailable(result):
     assert "conversation_id" not in result
 
 
-def test_real_purser_profile_authority_slice_includes_agents_and_build_spec():
-    repo_root = Path(__file__).parents[4]
+def test_authority_slice_includes_multiple_configured_sources(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".orchestrator").mkdir()
+    profile_toml = repo_root / ".orchestrator" / "profile.toml"
+    profile_toml.write_text(
+        """schema_version = 1
+
+[authority]
+sources = [
+    { path = "AGENTS.md", headings = ["Authority", "Working scope", "Proportional validation", "Test and comment quality"] },
+    { path = "SPEC.md", headings = ["Corrections to the canonical spec", "Reviewer-1 gate (mechanical)", "Hard constraints"] },
+]
+""",
+        encoding="utf-8",
+    )
+    agents_md = repo_root / "AGENTS.md"
+    agents_md.write_text(
+        """# Authority
+
+Observability never takes enforcement down. A hook internal failure fails open
+with a visible marker and forces FULL review.
+
+## Working scope
+
+Only the delegated diff is in scope.
+
+## Proportional validation
+
+Validation matches the risk.
+
+## Test and comment quality
+
+Tests must be focused.
+""",
+        encoding="utf-8",
+    )
+    spec_md = repo_root / "SPEC.md"
+    spec_md.write_text(
+        """# Corrections to the canonical spec
+
+No corrections at this time.
+
+## Reviewer-1 gate (mechanical)
+
+The reviewer-1 gate checks for mechanical issues only.
+
+## Hard constraints
+
+No hard constraints defined.
+""",
+        encoding="utf-8",
+    )
+
     resolved = project_profile.load_profile(
-        repo_root, user_config_path=repo_root / ".tmp" / "missing-user-config.toml"
+        repo_root, user_config_path=tmp_path / "missing-user-config.toml"
     )
 
     authority = reviewer._authority_slice(  # noqa: SLF001 - authority seam contract
