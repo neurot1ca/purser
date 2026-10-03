@@ -2,6 +2,7 @@
   "name": "purser",
   "version": "0.1.63",
   "description": "Route, baseline, attribute, and review delegated Codex coding work.",
+  "author": {"name": "Purser"},
   "license": "MIT OR Apache-2.0",
   "skills": "./.claude/skills/",
   "hooks": "./hooks/hooks.json",

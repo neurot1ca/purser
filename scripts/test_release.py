@@ -83,6 +83,9 @@ def repo(tmp_path):
     (path / "go" / "cmd" / "purser-hook" / "main.go").write_text(
         "package main\nfunc main() {}\n", encoding="utf-8"
     )
+    (path / "hooks" / "mod").mkdir(parents=True)
+    (path / "hooks" / "register.ts").write_text("// mod entry\n", encoding="utf-8")
+    (path / "hooks" / "mod" / "read.ts").write_text("// Read module\n", encoding="utf-8")
     fake_bin = fake_go(tmp_path)
     env["PATH"] = str(fake_bin) + os.pathsep + os.environ.get("PATH", "")
     env["GOCACHE"] = str(tmp_path / "go-cache")
@@ -269,9 +272,12 @@ def test_export_only_uses_committed_tree_and_local_manifest(tmp_path):
     exported = marketplace / "purser"
     assert (exported / "base.txt").read_text(encoding="utf-8") == "base\n"
     assert not (exported / "ignored.txt").exists()
+    assert (exported / "hooks" / "register.ts").is_file()
+    assert (exported / "hooks" / "mod" / "read.ts").is_file()
     manifest = json.loads((marketplace / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "purser-local"
     assert manifest["owner"]["name"] == "Purser"
+    assert manifest["description"] == "Local marketplace for the Purser plugin."
     assert manifest["plugins"] == [{"name": "purser", "source": "./purser"}]
     assert "marketplace update ok" in result.stdout
     assert "plugin update ok" in result.stdout
@@ -296,6 +302,31 @@ def test_export_builds_six_go_binaries_in_staged_plugin(tmp_path):
         "windows/amd64", "windows/arm64", "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64",
     }
     assert all("build -trimpath -ldflags -s -w -o " in line and "./cmd/purser-hook" in line for line in builds)
+
+
+def test_staged_export_requires_mod_sources_and_all_six_binaries(tmp_path):
+    module_spec = importlib.util.spec_from_file_location("release_under_test", RELEASE)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    staged = tmp_path / "staged"
+    for relative in ("hooks/register.ts", "hooks/mod/read.ts"):
+        target = staged / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("source\n", encoding="utf-8")
+    for goos, goarch in module.GO_HOOK_TARGETS:
+        name = f"purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")
+        target = staged / "bin" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"binary")
+
+    module._verify_staged_mod_assets(staged, include_binaries=True)
+    (staged / "hooks" / "mod" / "read.ts").unlink()
+    with pytest.raises(module.ReleaseError, match="hooks/mod/read.ts"):
+        module._verify_staged_mod_assets(staged, include_binaries=True)
+    (staged / "hooks" / "mod" / "read.ts").write_text("source\n", encoding="utf-8")
+    (staged / "bin" / "purser-hook-darwin-arm64").unlink()
+    with pytest.raises(module.ReleaseError, match="purser-hook-darwin-arm64"):
+        module._verify_staged_mod_assets(staged, include_binaries=True)
 
 
 def test_go_hook_build_chmods_four_unix_targets(tmp_path, monkeypatch):

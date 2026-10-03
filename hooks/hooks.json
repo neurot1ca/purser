@@ -1,4 +1,5 @@
 {
+  "modules": ["./register.ts"],
   "hooks": {
     "PreToolUse": [
       {
@@ -12,21 +13,6 @@
               "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
               "pre-codex",
               "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"
-            ]
-          }
-        ]
-      },
-      {
-        "matcher": "^Read$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 60,
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-              "go-hook",
-              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
             ]
           }
         ]

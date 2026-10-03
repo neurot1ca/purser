@@ -23,6 +23,11 @@ VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 HEADER_RE = re.compile(r"(?m)^## (\d+\.\d+\.\d+) — (\d{4}-\d{2}-\d{2})\s*$")
 RELEASE_SUBJECT_RE = re.compile(r"^purser: release (\d+\.\d+\.\d+) \((.*)\)$")
 DEFAULT_MARKETPLACE_DIR = Path.home() / ".claude" / "purser" / "marketplace"
+GO_HOOK_TARGETS = (
+    ("windows", "amd64"), ("windows", "arm64"),
+    ("linux", "amd64"), ("linux", "arm64"),
+    ("darwin", "amd64"), ("darwin", "arm64"),
+)
 
 
 class ReleaseError(Exception):
@@ -115,11 +120,7 @@ def _build_go_hook(staged_tree):
         raise ReleaseError("Go is required to build marketplace hook binaries")
     binary_dir = staged_tree / "bin"
     binary_dir.mkdir(parents=True, exist_ok=True)
-    for goos, goarch in (
-        ("windows", "amd64"), ("windows", "arm64"),
-        ("linux", "amd64"), ("linux", "arm64"),
-        ("darwin", "amd64"), ("darwin", "arm64"),
-    ):
+    for goos, goarch in GO_HOOK_TARGETS:
         name = f"purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")
         output = binary_dir / name
         env = os.environ.copy()
@@ -169,10 +170,13 @@ def export_marketplace(commit, marketplace_dir):
         with tarfile.open(fileobj=io.BytesIO(archive_result.stdout), mode="r:") as archive:
             members = _safe_archive_members(archive, staged_tree)
             _extract_archive(archive, staged_tree, members)
+        _verify_staged_mod_assets(staged_tree, include_binaries=False)
         phase = "build Go hook binaries"
         _build_go_hook(staged_tree)
+        _verify_staged_mod_assets(staged_tree, include_binaries=True)
         manifest = {
             "name": "purser-local",
+            "description": "Local marketplace for the Purser plugin.",
             "owner": {"name": "Purser"},
             "plugins": [{"name": "purser", "source": "./purser"}],
         }
@@ -225,6 +229,18 @@ def export_marketplace(commit, marketplace_dir):
             shutil.rmtree(staged_path, ignore_errors=True)
         if "stage" in locals() and stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
+
+
+def _verify_staged_mod_assets(staged_tree, *, include_binaries):
+    required = ["hooks/register.ts", "hooks/mod/read.ts"]
+    if include_binaries:
+        required.extend(
+            f"bin/purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")
+            for goos, goarch in GO_HOOK_TARGETS
+        )
+    missing = [path for path in required if not (staged_tree / path).is_file()]
+    if missing:
+        raise ReleaseError("staged export is missing required file(s): " + ", ".join(missing))
 
 
 def write_step(label, path, data):

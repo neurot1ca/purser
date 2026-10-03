@@ -32,6 +32,10 @@ def test_plugin_hooks_match_manual_installer():
             manual_command = entry["hooks"][0]["command"]
             script = Path(manual_command.split('" "')[-1].strip('"')).name
             matcher = entry.get("matcher")
+            # The plugin Read registration moved to hooks/register.ts; keep
+            # the manual installer Read hook available for release rollback.
+            if event == "PreToolUse" and matcher == r"^Read$":
+                continue
             if matcher and "mcp__codex-main__" in matcher:
                 matcher = matcher.replace(
                     "mcp__codex-main__", "mcp__plugin_purser_codex-main__"
@@ -53,6 +57,13 @@ def test_plugin_manifest_paths_and_registration():
     manifest = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
     marketplace = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
     hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+    assert hooks["modules"] == ["./register.ts"]
+    assert not any(
+        entry.get("matcher") == r"^Read$"
+        for entries in hooks["hooks"].values()
+        for entry in entries
+    )
+    assert (ROOT / "hooks/register.ts").is_file()
     assert not (ROOT / ".mcp.json").exists()
     mcp = json.loads((ROOT / manifest["mcpServers"]).read_text(encoding="utf-8"))
     assert manifest["name"] == "purser"

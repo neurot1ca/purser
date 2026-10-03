@@ -1,5 +1,6 @@
 {
   "name": "purser-local",
+  "description": "Local marketplace for the Purser plugin.",
   "owner": {"name": "Purser"},
   "plugins": [
     {"name": "purser", "source": "./"}
