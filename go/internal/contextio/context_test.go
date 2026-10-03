@@ -83,6 +83,53 @@ func TestReadEdgeCases(t *testing.T) {
 	}
 }
 
+func TestProjectRootWalk(t *testing.T) {
+	for _, key := range []string{"GIT_DIR", "GIT_WORK_TREE"} {
+		value, set := os.LookupEnv(key)
+		_ = os.Unsetenv(key)
+		t.Cleanup(func() {
+			if set {
+				_ = os.Setenv(key, value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		})
+	}
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	if out, err := exec.Command("git", "init", "--quiet", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	nested := filepath.Join(repo, "one", "two")
+	if err := os.MkdirAll(nested, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got := projectRoot(map[string]any{"cwd": nested}); got != resolve(repo) {
+		t.Fatalf("nested root = %q, want %q", got, resolve(repo))
+	}
+	if out, err := exec.Command("git", "-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "seed").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	worktree := filepath.Join(base, "linked")
+	if out, err := exec.Command("git", "-C", repo, "worktree", "add", "--quiet", "--detach", worktree).CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v: %s", err, out)
+	}
+	if info, err := os.Stat(filepath.Join(worktree, ".git")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("worktree .git is not a file: %v", err)
+	}
+	if got := projectRoot(map[string]any{"cwd": worktree}); got != resolve(worktree) {
+		t.Fatalf("worktree root = %q, want %q", got, resolve(worktree))
+	}
+	noRepo := filepath.VolumeName(base) + string(filepath.Separator)
+	if got := projectRoot(map[string]any{"cwd": noRepo}); got != "" {
+		t.Fatalf("no-repo cwd = %q, root = %q, want empty", noRepo, got)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(base, "missing-git-dir"))
+	if got := projectRoot(map[string]any{"cwd": nested}); got != "" {
+		t.Fatalf("GIT_DIR override bypassed git: root = %q", got)
+	}
+}
+
 func TestProtectedProfileParseFailure(t *testing.T) {
 	for _, input := range []string{
 		"schema_version = 1\n[paths]\nprotected = [\"private/**\"\n",

@@ -117,6 +117,22 @@ func projectRoot(event map[string]any) string {
 	if err != nil {
 		return ""
 	}
+	_, gitDirSet := os.LookupEnv("GIT_DIR")
+	_, workTreeSet := os.LookupEnv("GIT_WORK_TREE")
+	if !gitDirSet && !workTreeSet {
+		if start, err := filepath.EvalSymlinks(abs); err == nil {
+			if info, err := os.Stat(start); err == nil && info.IsDir() {
+				for dir := start; ; dir = filepath.Dir(dir) {
+					if marker, err := os.Stat(filepath.Join(dir, ".git")); err == nil && (marker.IsDir() || marker.Mode().IsRegular()) {
+						return dir
+					}
+					if parent := filepath.Dir(dir); parent == dir {
+						break
+					}
+				}
+			}
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
