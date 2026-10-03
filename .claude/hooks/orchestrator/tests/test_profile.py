@@ -64,10 +64,29 @@ def test_engine_protected_paths_survive_without_a_project_profile(tmp_path):
     )
 
 
-def test_polymarket_profile_retains_predecessor_protected_paths(tmp_path):
-    source = Path(__file__).parents[4] / "profiles" / "polymarket-btc5m-lab.toml"
+def test_profile_protected_paths_are_loaded_and_recognized(tmp_path):
     project_root = tmp_path / "project"
-    _write(project_root / ".orchestrator" / "profile.toml", source.read_text(encoding="utf-8"))
+    _write(
+        project_root / ".orchestrator" / "profile.toml",
+        """schema_version = 1
+
+[project]
+id = "example-project"
+
+[paths]
+protected = [
+    "state/current.yaml",
+    "docs/RULES.md",
+    ".gitattributes",
+    "inputs/**",
+    "artifacts/**",
+]
+
+[[authority.sources]]
+path = "AGENTS.md"
+headings = ["Authority", "Working scope"]
+""",
+    )
 
     resolved = project_profile.load_profile(
         project_root, user_config_path=tmp_path / "missing-user-config.toml"
@@ -77,10 +96,10 @@ def test_polymarket_profile_retains_predecessor_protected_paths(tmp_path):
         project_profile.is_protected(path, resolved.protected_paths)
         for path in (
             "state/current.yaml",
-            "docs/EVIDENCE_RULES.md",
+            "docs/RULES.md",
             ".gitattributes",
-            "inputs/a.csv",
-            "review_artifacts/x/y.json",
+            "inputs/data.csv",
+            "artifacts/report.json",
         )
     )
 
