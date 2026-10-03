@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -1773,6 +1774,97 @@ def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace
 def test_async_duration_excludes_queue_wait_and_keeps_legacy_fallback():
     assert codex._async_duration({"acceptedAt": 100, "startedAt": 838, "finishedAt": 868}) == 30_000
     assert codex._async_duration({"acceptedAt": 100, "finishedAt": 105}) == 5_000
+
+
+def _consumed_worktree_job(workspace, config, *, name="discard", applied=False):
+    repo, state = workspace
+    _, job_id, job_path = async_started(
+        workspace, config, prompt=orch(task=name, scope="file0.py") + "\nWork.",
+        state_name="SUCCEEDED", tool_use_id=f"{name}-start",
+    )
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=str(repo), repoRoot=str(repo),
+               applyState="applied" if applied else None, finishedAt=time.time())
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    index_path = state / "async_jobs" / f"{job_id}.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index.update(stage="CONSUMED", response={"status": "reviewed"})
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+    leases = ledger.ScopeLeases(codex._project_state_root(state, index["project_key"]))
+    assert leases.acquire(index["call_key"], name, ["file0.py"], job_id=job_id)["status"] == ledger.OK
+    return repo, state, job_id, job_path, index, leases
+
+
+def test_discard_consumed_job_releases_lease_and_promotes_overlapping_queue(workspace, config, monkeypatch):
+    repo, state, job_id, job_path, index, leases = _consumed_worktree_job(workspace, config)
+    queued_id = hashlib.sha256(b"queued-job").hexdigest()
+    assert leases.acquire("queued-owner", "queued-task", ["file0.py"], job_id=queued_id,
+                          queue_conflict=True)["code"] == "LEASE_QUEUED"
+    queued_path = job_path.parent / f"{queued_id}.json"
+    queued_path.write_text(json.dumps({"jobId": queued_id, "call": "queued-job", "state": "QUEUED",
+                                       "leaseQueued": True, "acceptedAt": time.time(),
+                                       "deadlineAt": time.time() + 30}), encoding="utf-8")
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: state)
+    server = codex_exec_mcp.Server(host=True, job_dir=job_path.parent)
+    launched = threading.Event()
+    monkeypatch.setattr(codex, "bind_queued_baseline",
+                        lambda *_args: leases.owner_state("queued-owner") == "ACTIVE")
+    server._run_tool = lambda *_args, **_kwargs: (launched.set() or {"structuredContent": {
+        "threadId": "queued-thread", "content": "started"}})
+    worker = threading.Thread(target=server._job_worker, args=(queued_id, "codex", {}), daemon=True)
+    worker.start()
+
+    result = codex.pre_tool_use(async_followup(CANCEL_TOOL, job_id), config=config,
+                                state_root=state, repo_root=repo)
+    assert result == {}
+    discarded = server._cancel_job({"jobId": job_id})["structuredContent"]
+
+    assert discarded["discarded"] is True
+    assert leases.owner_state(index["call_key"]) == "RELEASED"
+    assert leases.owner_state("queued-owner") == "ACTIVE"
+    assert launched.wait(timeout=5)
+    worker.join(timeout=5)
+    assert server._read_job(queued_id)["state"] == "SUCCEEDED"
+
+
+def test_apply_after_discard_returns_typed_discarded_error(workspace, config, monkeypatch):
+    repo, state, job_id, job_path, _, leases = _consumed_worktree_job(workspace, config)
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: state)
+    server = codex_exec_mcp.Server(host=True, job_dir=job_path.parent)
+    server._cancel_job({"jobId": job_id})
+
+    result = server._apply_job({"jobId": job_id})["structuredContent"]
+
+    assert result["errorCode"] == "DISCARDED"
+    assert leases.owner_state(json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["call_key"]) == "RELEASED"
+
+
+def test_cancel_on_applied_job_remains_consumed_denial(workspace, config):
+    repo, state, job_id, _, _, _ = _consumed_worktree_job(workspace, config, applied=True)
+
+    result = codex.pre_tool_use(async_followup(CANCEL_TOOL, job_id), config=config,
+                                state_root=state, repo_root=repo)
+
+    assert result["hookSpecificOutput"]["permissionDecisionReason"].startswith("ASYNC_ALREADY_CONSUMED:")
+
+
+def test_discard_cancel_is_idempotent_and_leaves_foreign_owner_lease(workspace, config, monkeypatch):
+    repo, state, job_id, job_path, index, leases = _consumed_worktree_job(workspace, config)
+    assert leases.acquire("foreign-owner", "foreign-task", ["other.py"], job_id="f" * 64)["status"] == ledger.OK
+    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: state)
+    server = codex_exec_mcp.Server(host=True, job_dir=job_path.parent)
+    first = server._cancel_job({"jobId": job_id})["structuredContent"]
+    second = server._cancel_job({"jobId": job_id})["structuredContent"]
+    followup = async_followup(CANCEL_TOOL, job_id)
+    assert codex.pre_tool_use(followup, config=config, state_root=state, repo_root=repo) == {}
+    response = codex.post_tool_use({**followup, "hook_event_name": "PostToolUse",
+                                    "tool_response": {"structuredContent": second}},
+                                   config=config, state_root=state, repo_root=repo)
+
+    assert first["discarded"] is True and second["discarded"] is True
+    assert response_bundle(response, config)["discarded"] is True
+    assert leases.owner_state(index["call_key"]) == "RELEASED"
+    assert leases.owner_state("foreign-owner") == "ACTIVE"
 
 
 @pytest.mark.parametrize("response_shape", ("string", "blocks", "mapping"))

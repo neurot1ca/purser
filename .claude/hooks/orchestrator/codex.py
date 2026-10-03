@@ -2781,6 +2781,13 @@ def _async_pre_followup(event: Mapping[str, Any], state_root: str | os.PathLike[
     except WiringError:
         return _deny("UNKNOWN_ASYNC_JOB", "No pending job belongs to this session/project.")
     if index.get("stage") == "CONSUMED":
+        if event.get("tool_name") in CODEX_CANCEL_TOOL_NAMES:
+            job = _async_job(root, index)
+            if (job is not None and job.get("applyState") != "applied"
+                    and (job.get("discarded") is True
+                         or (job.get("state") in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}
+                             and job.get("worktreePath")))):
+                return {}
         return {} if event.get("tool_name") in CODEX_RESULT_TOOL_NAMES else _deny(
             "ASYNC_ALREADY_CONSUMED", "This job has already been finalized.")
     if index.get("stage") == "FINALIZING":
@@ -2893,6 +2900,10 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
         path, index, pending, original = _async_owned(root, event, repo_root)
         if index.get("stage") == "CONSUMED":
             job = _async_job(root, index)
+            if (event.get("tool_name") in CODEX_CANCEL_TOOL_NAMES
+                    and job is not None and job.get("discarded") is True):
+                _release_async_lease(root, index, pending)
+                return _replacement({"jobId": index["jobId"], "discarded": True}, _load_config(config))
             if not (job and job.get("worktreePath") and job.get("applyState") != "applied"):
                 _release_async_lease(root, index, pending)
                 (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)

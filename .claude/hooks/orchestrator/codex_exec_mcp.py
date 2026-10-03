@@ -1627,6 +1627,9 @@ class Server:
         job = self._read_job(args.get("jobId"))
         if job is None:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
+        if job.get("discarded") is True:
+            return _job_result({"jobId": job["jobId"], "errorCode": "DISCARDED",
+                                "message": "This job was discarded and cannot be applied."})
         if not job.get("worktreePath"):
             return _job_result({"state": "FAILED", "errorCode": "NOT_WORKTREE_JOB", "message": "Job has no worktree"})
         if job.get("state") != "SUCCEEDED":
@@ -1790,17 +1793,22 @@ class Server:
         if job is None:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
+        if job.get("discarded") is True:
+            return _job_result({"jobId": job_id, "state": job["state"], "discarded": True})
         if job["state"] in TERMINAL and job.get("worktreePath") and job.get("applyState") != "applied":
             with _ownership_lock(self.job_dir, job_id):
                 current = self._read_job(job_id)
                 if (current is not None and current["state"] in TERMINAL and current.get("worktreePath")
                         and current.get("applyState") != "applied"):
+                    current["discarded"] = True
+                    current.setdefault("discardedAt", time.time())
                     _record_claude_decision(current, "rejected", "discard", job_id)
                     _record_scope_conflict_outcome(current, "discarded")
                     if isinstance(current.get("taskId"), str) and current["taskId"]:
                         current["decisionRecorded"] = True
                     self._write_job(current)
             self._release_job_scope_lease(purser_state_root.default_state_root(), job_id)
+            return _job_result({"jobId": job_id, "state": job["state"], "discarded": True})
         if job.get("leaseQueued") and job["state"] == "QUEUED":
             with _ownership_lock(self.job_dir, job_id):
                 current = self._read_job(job_id)
