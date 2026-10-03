@@ -41,6 +41,14 @@ func sessionKey(v any) string {
 	return hex.EncodeToString(h[:])
 }
 
+func repositoryProjectKey(repository string) string {
+	if runtime.GOOS == "windows" {
+		repository = strings.ToLower(repository)
+	}
+	h := sha256.Sum256([]byte(repository))
+	return hex.EncodeToString(h[:])[:16]
+}
+
 func stateRoot() string {
 	if p := os.Getenv("PURSER_STATE_DIR"); p != "" {
 		return resolve(expand(p))

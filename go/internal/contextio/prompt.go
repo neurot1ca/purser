@@ -1,12 +1,9 @@
 package contextio
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -21,12 +18,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 	statePath := ""
 	language := ""
 	if repository != "" {
-		keyPath := repository
-		if runtime.GOOS == "windows" {
-			keyPath = strings.ToLower(keyPath)
-		}
-		sum := sha256.Sum256([]byte(keyPath))
-		key = hex.EncodeToString(sum[:])[:16]
+		key = repositoryProjectKey(repository)
 		handoff := filepath.Join(stateRoot(), "projects", key, "telemetry", "purser-handoff.md")
 		if data, err := os.ReadFile(handoff); err == nil {
 			language = handoffUserLanguage(string(data))

@@ -41,5 +41,7 @@ func main() {
 		if output := contextio.UserPromptSubmit(event, started); len(output) > 0 {
 			_, _ = os.Stdout.Write(output)
 		}
+	case "PreCompact":
+		contextio.PreCompact(event)
 	}
 }

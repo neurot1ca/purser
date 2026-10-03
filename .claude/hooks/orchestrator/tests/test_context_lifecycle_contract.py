@@ -622,6 +622,87 @@ def test_precompact_refreshes_existing_handoff_only(isolated):
     assert (no_handoff.returncode, no_handoff.stdout, no_handoff.stderr) == (0, b"", b"")
     assert not missing.exists()
 
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    malformed = "# Handoff\n<!-- PURSER:STATE:END -->\nunchanged\n<!-- PURSER:STATE:START -->\n"
+    handoff.write_text(malformed, encoding="utf-8")
+    skipped = _run("PreCompact", repo, state, session_id="compact-malformed-state", transcript_path=str(transcript))
+    assert (skipped.returncode, skipped.stdout, skipped.stderr) == (0, b"", b"")
+    assert handoff.read_text(encoding="utf-8") == malformed
+
+
+def test_precompact_refreshes_recent_turns_without_changing_pending_outcome(isolated):
+    _root, repo, state = isolated
+    handoff = state / "projects" / _project_key(repo) / "telemetry" / "purser-handoff.md"
+    handoff.parent.mkdir(parents=True)
+    handoff.write_text(
+        "# Handoff\n<!-- PURSER:STATE:START -->\nold state\n<!-- PURSER:STATE:END -->\n"
+        "<!-- PURSER:RECENT:START -->\nstale recent\n<!-- PURSER:RECENT:END -->\n",
+        encoding="utf-8",
+    )
+    advisor = _advisor_state(state, repo)
+    pending = {"notice_id": "contract-pending"}
+    advisor.write_text(json.dumps({"session_id": "precompact-pending", "compaction_outcome_pending": pending}),
+                       encoding="utf-8")
+    transcript = _root / "transcript.jsonl"
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "first old request"}},
+        {"type": "user", "isMeta": True, "message": {"role": "user", "content": "exclude meta request"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": "latest assistant answer",
+                                              "usage": {"input_tokens": 42}}},
+        {"type": "user", "message": {"role": "user", "content": "last user request"}},
+    ]
+    transcript.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+    result = _run("PreCompact", repo, state, session_id="precompact-pending", transcript_path=str(transcript))
+
+    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
+    content = handoff.read_text(encoding="utf-8")
+    assert "Context tokens: 42 [transcript]" in content
+    assert "old state" not in content
+    assert "stale recent" not in content
+    assert "first old request" in content and "last user request" in content
+    assert "exclude meta request" not in content
+    assert "latest assistant answer" in content
+    assert json.loads(advisor.read_text(encoding="utf-8"))["compaction_outcome_pending"] == pending
+
+
+def test_precompact_records_transcript_facts_and_active_plan(isolated):
+    _root, repo, state = isolated
+    handoff = state / "projects" / _project_key(repo) / "telemetry" / "purser-handoff.md"
+    handoff.parent.mkdir(parents=True)
+    handoff.write_text("<!-- PURSER:STATE:START -->old<!-- PURSER:STATE:END -->\n", encoding="utf-8")
+    codex_call = "mcp__plugin_purser_codex-main__codex"
+    transcript = _root / "facts-transcript.jsonl"
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "Please commit and review"}},
+        {"type": "assistant", "timestamp": "2020-01-01T00:00:00Z", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "commit-tool", "name": "Bash", "input": {"command": "git commit -am done"}},
+            {"type": "tool_use", "id": "codex-tool", "name": codex_call,
+             "input": {"prompt": "ORCH|task=review-1| review the change"}},
+        ]}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "commit-tool", "content": "committed"},
+            {"type": "tool_result", "tool_use_id": "codex-tool",
+             "content": [{"type": "text", "text": json.dumps({"threadId": "thread-1", "claude_review_mode": "required"})}]},
+        ]}},
+    ]
+    transcript.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    jobs = state / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    job_id = "a" * 64
+    (jobs / f"{job_id}.json").write_text(json.dumps({
+        "jobId": job_id, "taskId": "active-plan-m1of2", "phase": "implementation",
+        "repoRoot": str(repo), "acceptedAt": time.time(), "state": "SUCCEEDED",
+    }), encoding="utf-8")
+
+    result = _run("PreCompact", repo, state, session_id="precompact-facts", transcript_path=str(transcript))
+
+    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
+    content = handoff.read_text(encoding="utf-8")
+    assert "Triggers: idle, commit [transcript]" in content
+    assert f"- task=review-1 tool=codex threadId=thread-1 claude_review_mode=required" in content
+    assert f"Plan active-plan: M1 SUCCEEDED (job={job_id}), next M1" in content
+
 
 def test_stop_silent_and_fallback_block_contract(isolated):
     _root, repo, state = isolated
