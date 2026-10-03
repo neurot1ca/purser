@@ -6,7 +6,10 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -15,6 +18,7 @@ import (
 
 const (
 	OK      = "OK"
+	MISSING = "MISSING"
 	CORRUPT = "CORRUPT"
 )
 
@@ -26,6 +30,59 @@ type Result struct {
 
 var secretValue = regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}\b|\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bAKIA[A-Z0-9]{16}\b|\bBearer\s+[A-Za-z0-9._~+/-]{12,}`)
 
+var replaceFile = os.Rename
+
+// PathForTask returns the Python SessionLedger path for taskID under root.
+func PathForTask(root, taskID string) (string, error) {
+	if taskID == "" {
+		return "", fmt.Errorf("task_id must be a non-empty string")
+	}
+	digest := sha256.Sum256([]byte(taskID))
+	return filepath.Join(root, "sessions", hex.EncodeToString(digest[:])+".json"), nil
+}
+
+// Save validates and atomically writes a checksummed Python-compatible record.
+func Save(root string, record map[string]any) Result {
+	taskID, ok := record["task_id"].(string)
+	if !ok || taskID == "" || !validRecord(record, taskID) {
+		return Result{Status: "UNKNOWN", Code: "LEDGER_RECORD_INVALID"}
+	}
+	target, _ := PathForTask(root, taskID)
+	payload, err := canonicalJSON(record)
+	if err != nil {
+		return Result{Status: "UNKNOWN", Code: "LEDGER_RECORD_INVALID"}
+	}
+	digest := sha256.Sum256(payload)
+	envelope := map[string]any{"schema_version": 1, "checksum": hex.EncodeToString(digest[:]), "payload": record}
+	encoded, err := canonicalJSON(envelope)
+	if err != nil {
+		return Result{Status: "UNKNOWN", Code: "LEDGER_RECORD_INVALID"}
+	}
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return Result{Status: "UNKNOWN", Code: "LEDGER_WRITE_FAILED"}
+	}
+	temporary, err := os.CreateTemp(dir, filepath.Base(target)+".*.tmp")
+	if err != nil {
+		return Result{Status: "UNKNOWN", Code: "LEDGER_WRITE_FAILED"}
+	}
+	tempPath := temporary.Name()
+	defer os.Remove(tempPath)
+	if _, err = temporary.Write(encoded); err == nil {
+		err = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = replaceFile(tempPath, target)
+	}
+	if err != nil {
+		return Result{Status: "UNKNOWN", Code: "LEDGER_WRITE_FAILED"}
+	}
+	return Result{Status: OK, Code: "LEDGER_WRITTEN"}
+}
+
 // Load reads and validates one Python SessionLedger envelope without changing it.
 func Load(path, taskID string) Result {
 	if taskID == "" {
@@ -33,6 +90,9 @@ func Load(path, taskID string) Result {
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Result{Status: MISSING, Code: "LEDGER_RECORD_MISSING"}
+		}
 		return corrupt()
 	}
 	var envelope map[string]any
