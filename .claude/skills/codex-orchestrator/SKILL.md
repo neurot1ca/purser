@@ -17,6 +17,8 @@ reports, commits, state, and repository documents. Other languages cost more
 tokens in every bundle.
 
 Replies: at most 5 lines unless asked for detail; replies remain in context.
+Exceed the limit only to state a risk, a failure or a decision the user must
+make; never drop one of these to fit.
 Follow ASD-STE100 rules, applied to the user's language: give the result first.
 Write one topic per sentence, with at most 20 words in an instruction and 25 in
 a description. Use the active voice, simple tenses and the imperative for
