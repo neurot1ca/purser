@@ -1,6 +1,7 @@
 import { buildReadEvent, platformBinary } from './mod/read.js'
 import { mapHookOutput } from './mod/lifecycle.js'
 import type { LifecycleEvent } from './mod/lifecycle.js'
+import { registerBoard } from './mod/board.js'
 
 const reported = new Set<string>()
 const lifecycleReported = new Set<string>()
@@ -28,6 +29,7 @@ async function detectBinary($): Promise<string> {
 
 async function lifecycle($, e, next, name: LifecycleEvent) {
   const prior = await next(e)
+  if (name === 'UserPromptSubmit' || name === 'Stop') $.ui.invalidate('ui.render')
   let mapped: ReturnType<typeof mapHookOutput> = {}
   try {
     binaryPath ??= detectBinary($).catch(error => {
@@ -55,6 +57,8 @@ async function lifecycle($, e, next, name: LifecycleEvent) {
 }
 
 export function register(on) {
+  registerBoard(on)
+
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     let sessionId = ''
     try {
