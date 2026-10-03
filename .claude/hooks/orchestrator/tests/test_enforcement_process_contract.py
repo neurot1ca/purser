@@ -35,9 +35,11 @@ def repo(tmp_path):
 @pytest.fixture
 def process(tmp_path, monkeypatch):
     state = tmp_path / "state"
-    monkeypatch.delenv("PURSER_HOOK_CMD", raising=False)
-    for event in ("PRETOOLUSE", "POSTTOOLUSE", "POSTTOOLUSEFAILURE"):
-        monkeypatch.delenv(f"PURSER_HOOK_CMD_{event}", raising=False)
+    event_overrides = {
+        event: os.environ.get(f"PURSER_HOOK_CMD_{event}")
+        for event in ("PRETOOLUSE", "POSTTOOLUSE", "POSTTOOLUSEFAILURE")
+    }
+    global_override = os.environ.get("PURSER_HOOK_CMD")
     wrapper = tmp_path / "hook_with_test_seam.py"
     wrapper.write_text(
         "import os, sys\n"
@@ -59,14 +61,21 @@ def process(tmp_path, monkeypatch):
     )
 
     def run(event, payload, seam=None):
+        event_key = f"PURSER_HOOK_CMD_{event.upper()}"
+        event_override = event_overrides.get(event.upper())
+        configured_override = event_override if event_override is not None else global_override
+        if event_overrides.get(event.upper()) is None:
+            monkeypatch.delenv(event_key, raising=False)
+        else:
+            monkeypatch.setenv(event_key, event_overrides[event.upper()])
         if seam:
             monkeypatch.setenv("PURSER_CONTRACT_SEAM", seam)
-            argv = [sys.executable, str(wrapper)]
-            command = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
-            monkeypatch.setenv(f"PURSER_HOOK_CMD_{event.upper()}", command)
+            if configured_override is None:
+                argv = [sys.executable, str(wrapper)]
+                command = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+                monkeypatch.setenv(event_key, command)
         else:
             monkeypatch.delenv("PURSER_CONTRACT_SEAM", raising=False)
-            monkeypatch.delenv(f"PURSER_HOOK_CMD_{event.upper()}", raising=False)
         return run_contract_hook(event, payload, state, entrypoint="enforcement")
 
     return state, run

@@ -15,9 +15,12 @@ ENFORCEMENT_ENTRYPOINT = PACKAGE_ROOT / "hook.py"
 
 def run_contract_hook(event, payload, state, *, entrypoint="context"):
     """Invoke the Python entrypoint unless an event-specific runner replaces it."""
-    command = os.environ.get(f"PURSER_HOOK_CMD_{event.upper()}") or os.environ.get("PURSER_HOOK_CMD")
-    if command:
+    event_command = os.environ.get(f"PURSER_HOOK_CMD_{event.upper()}")
+    command = event_command if event_command is not None else os.environ.get("PURSER_HOOK_CMD")
+    if command is not None:
         argv = shlex.split(command, posix=os.name != "nt")
+        if not argv:
+            raise ValueError("PURSER_HOOK_CMD override must not be empty")
     else:
         target = ENFORCEMENT_ENTRYPOINT if entrypoint == "enforcement" else HOOK_ENTRYPOINT
         argv = [sys.executable, str(target)]
