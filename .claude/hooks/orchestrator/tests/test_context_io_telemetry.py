@@ -1,11 +1,15 @@
+import hashlib
 import io
 import json
 import multiprocessing
 import os
 from pathlib import Path
+import shlex
 import shutil
 import stat
+import subprocess
 import sys
+import time
 import uuid
 
 import pytest
@@ -21,6 +25,35 @@ import telemetry
 import telemetry_schema as schema
 
 UNRESOLVED_PROJECT_KEY = "unresolved"
+HOOK_ENTRYPOINT = PACKAGE_ROOT / "context_io_hook.py"
+
+
+def _run_contract_hook(event, payload, state):
+    """Invoke the registered entry point; event-specific or generic env vars can swap it."""
+    command = os.environ.get(f"PURSER_HOOK_CMD_{event.upper()}") or os.environ.get("PURSER_HOOK_CMD")
+    argv = (
+        shlex.split(command, posix=os.name != "nt")
+        if command else [sys.executable, str(HOOK_ENTRYPOINT)]
+    )
+    env = os.environ.copy()
+    env["PURSER_STATE_DIR"] = str(state)
+    return subprocess.run(
+        argv,
+        input=payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8"),
+        capture_output=True,
+        cwd=(payload.get("cwd", Path(__file__).parents[4])
+             if isinstance(payload, dict) else Path(__file__).parents[4]),
+        env=env,
+        timeout=15,
+        check=False,
+    )
+
+
+def _contract_events(state):
+    events = []
+    for path in (state / "telemetry" / "events").glob("????-??/session_*.jsonl"):
+        events.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    return [event for event in events if event.get("event_type") == "CONTEXT_IO_TURN_RECORDED"]
 
 
 @pytest.fixture()
@@ -69,6 +102,148 @@ def _events(state):
 def _journal(state, session):
     key = context_io._session_key(session)
     return state / "context_io" / "turns" / f"{key}.json"
+
+
+def _contract_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True, capture_output=True)
+    return repo
+
+
+def test_subprocess_read_prompt_stop_contract(tmp_path):
+    repo = _contract_repo(tmp_path)
+    state = tmp_path / "state"
+    session = "subprocess-turn-contract"
+    target = repo / "notes.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    read = _run_contract_hook("Read", {
+        "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Read",
+        "cwd": str(repo), "tool_input": {"file_path": str(target)},
+    }, state)
+    assert (read.returncode, read.stdout, read.stderr) == (0, b"", b"")
+    journal = _journal(state, session)
+    first_turn = json.loads(journal.read_text(encoding="utf-8"))
+    assert first_turn["read_count"] == 1 and len(first_turn["observations"]) == 1
+
+    prompt = _run_contract_hook("UserPromptSubmit", {
+        "session_id": session, "hook_event_name": "UserPromptSubmit", "cwd": str(repo),
+        "prompt": "Please help me plan the migration.",
+    }, state)
+    assert prompt.returncode == 0 and prompt.stderr == b""
+    prompt_output = json.loads(prompt.stdout)
+    assert set(prompt_output) == {"hookSpecificOutput"}
+    assert prompt_output["hookSpecificOutput"] == {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": "The user mentioned planning; offer /purser:plan once in this session if you have not already.",
+    }
+    handed_off = json.loads(journal.read_text(encoding="utf-8"))
+    assert handed_off["read_count"] == 0
+    assert handed_off["unknown_reason"] == "PRIOR_TURN_MISSING_STOP"
+
+    stop = _run_contract_hook("Stop", {
+        "session_id": session, "hook_event_name": "Stop", "cwd": str(repo),
+    }, state)
+    assert (stop.returncode, stop.stdout, stop.stderr) == (0, b"", b"")
+    [event] = _contract_events(state)
+    assert event["event_type"] == "CONTEXT_IO_TURN_RECORDED"
+    assert event["session_id"] is None and event["task_id"] is None
+    assert event["schema_version"] == 1 and len(event["event_id"]) == 36
+    payload = event["payload"]
+    assert payload["read_count"] == 0
+    assert payload["unknown_reason"] == "PRIOR_TURN_MISSING_STOP"
+    assert payload["task_association_known"] is False
+    assert payload["threshold_200_known_count"] == 0
+
+
+def test_subprocess_in_turn_prompt_read_stop_contract(tmp_path):
+    repo = _contract_repo(tmp_path)
+    state = tmp_path / "state"
+    session = "subprocess-in-turn-contract"
+    target = repo / "notes.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    prompt = _run_contract_hook("UserPromptSubmit", {
+        "session_id": session, "hook_event_name": "UserPromptSubmit", "cwd": str(repo),
+        "prompt": "Summarize these notes.",
+    }, state)
+    assert (prompt.returncode, prompt.stdout, prompt.stderr) == (0, b"", b"")
+    read = _run_contract_hook("Read", {
+        "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Read",
+        "cwd": str(repo), "tool_input": {"file_path": str(target)},
+    }, state)
+    assert (read.returncode, read.stdout, read.stderr) == (0, b"", b"")
+    stop = _run_contract_hook("Stop", {
+        "session_id": session, "hook_event_name": "Stop", "cwd": str(repo),
+    }, state)
+    assert (stop.returncode, stop.stdout, stop.stderr) == (0, b"", b"")
+
+    [event] = _contract_events(state)
+    assert event["event_type"] == "CONTEXT_IO_TURN_RECORDED"
+    assert event["payload"]["read_count"] == 1
+    assert "unknown_reason" not in event["payload"]
+
+
+def test_subprocess_malformed_json_is_silent_and_successful(tmp_path):
+    result = _run_contract_hook("Read", b"{invalid json", tmp_path / "state")
+
+    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
+
+
+def test_subprocess_lock_contention_is_recorded_for_next_turn(tmp_path):
+    repo = _contract_repo(tmp_path)
+    state = tmp_path / "state"
+    session = "subprocess-lock-contract"
+    key = hashlib.sha256(session.encode("utf-8")).hexdigest()
+    lock = state / "context_io" / "locks" / f"{key}.lock"
+    lock.parent.mkdir(parents=True)
+    ready = tmp_path / "lock-ready"
+    holder_code = (
+        "import os, pathlib, sys, time\n"
+        "path, ready = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])\n"
+        "handle = path.open('a+b')\n"
+        "if path.stat().st_size == 0: handle.write(b'0'); handle.flush()\n"
+        "handle.seek(0)\n"
+        "if os.name == 'nt':\n import msvcrt; msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)\n"
+        "else:\n import fcntl; fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "ready.write_text('locked')\n"
+        "sys.stdin.read(1)\n"
+    )
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_code, str(lock), str(ready)],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and holder.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists(), "lock holder did not acquire the session lock"
+        read = _run_contract_hook("Read", {
+            "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Read",
+            "cwd": str(repo), "tool_input": {"file_path": str(repo / "missing.txt")},
+        }, state)
+        assert (read.returncode, read.stdout, read.stderr) == (0, b"", b"")
+        assert (state / "context_io" / "contention" / key).exists()
+    finally:
+        if holder.poll() is None:
+            holder.stdin.write("x")
+            holder.stdin.flush()
+            holder.wait(timeout=5)
+        holder.stdin.close()
+        holder.stderr.close()
+
+    prompt = _run_contract_hook("UserPromptSubmit", {
+        "session_id": session, "hook_event_name": "UserPromptSubmit", "cwd": str(repo),
+    }, state)
+    assert prompt.returncode == 0 and prompt.stderr == b""
+    stop = _run_contract_hook("Stop", {
+        "session_id": session, "hook_event_name": "Stop", "cwd": str(repo),
+    }, state)
+    assert (stop.returncode, stop.stdout, stop.stderr) == (0, b"", b"")
+    [event] = _contract_events(state)
+    assert event["payload"]["unknown_reason"] == "STATE_CONTENTION"
 
 
 def _stop_worker(state, session):
