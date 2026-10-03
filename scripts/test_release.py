@@ -83,9 +83,13 @@ def repo(tmp_path):
     (path / "go" / "cmd" / "purser-hook" / "main.go").write_text(
         "package main\nfunc main() {}\n", encoding="utf-8"
     )
-    (path / "hooks" / "mod").mkdir(parents=True)
-    (path / "hooks" / "register.ts").write_text("// mod entry\n", encoding="utf-8")
-    (path / "hooks" / "mod" / "read.ts").write_text("// Read module\n", encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location("release_under_test", RELEASE)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    for relative in module.MOD_SOURCE_FILES:
+        source = path / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("// mod source\n", encoding="utf-8")
     fake_bin = fake_go(tmp_path)
     env["PATH"] = str(fake_bin) + os.pathsep + os.environ.get("PATH", "")
     env["GOCACHE"] = str(tmp_path / "go-cache")

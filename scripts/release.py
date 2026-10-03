@@ -28,6 +28,7 @@ GO_HOOK_TARGETS = (
     ("linux", "amd64"), ("linux", "arm64"),
     ("darwin", "amd64"), ("darwin", "arm64"),
 )
+MOD_SOURCE_FILES = ("hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts")
 
 
 class ReleaseError(Exception):
@@ -232,7 +233,7 @@ def export_marketplace(commit, marketplace_dir):
 
 
 def _verify_staged_mod_assets(staged_tree, *, include_binaries):
-    required = ["hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts"]
+    required = list(MOD_SOURCE_FILES)
     if include_binaries:
         required.extend(
             f"bin/purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")
