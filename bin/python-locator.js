@@ -62,7 +62,13 @@ function main(args, resolve = resolvePython, run = spawnSync) {
   if (mode === 'go-hook') {
     const binary = goBinaryPath();
     if (binary) {
-      const child = run(binary, [], { stdio: 'inherit', windowsHide: true });
+      let child = run(binary, [], { stdio: 'inherit', windowsHide: true });
+      if (process.platform !== 'win32' && child.error && child.error.code === 'EACCES') {
+        try {
+          fs.chmodSync(binary, 0o755);
+          child = run(binary, [], { stdio: 'inherit', windowsHide: true });
+        } catch (_) { /* use Python fallback */ }
+      }
       if (!child.error) return child.status === null ? 1 : child.status;
     }
     mode = 'hook';

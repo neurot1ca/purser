@@ -137,6 +137,8 @@ def _build_go_hook(staged_tree):
             raise ReleaseError(f"Go build failed for {goos}/{goarch}" + (f": {detail}" if detail else ""))
         if not output.is_file():
             raise ReleaseError(f"Go build produced no binary for {goos}/{goarch}")
+        if goos != "windows":
+            os.chmod(output, 0o755)
 
 
 def export_marketplace(commit, marketplace_dir):

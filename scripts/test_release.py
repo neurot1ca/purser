@@ -298,6 +298,30 @@ def test_export_builds_six_go_binaries_in_staged_plugin(tmp_path):
     assert all("build -trimpath -ldflags -s -w -o " in line and "./cmd/purser-hook" in line for line in builds)
 
 
+def test_go_hook_build_chmods_four_unix_targets(tmp_path, monkeypatch):
+    module_spec = importlib.util.spec_from_file_location("release_under_test", RELEASE)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    staged_tree = tmp_path / "staged"
+    outputs = []
+    chmods = []
+
+    def build(command, **_kwargs):
+        output = Path(command[command.index("-o") + 1])
+        output.write_bytes(b"fake binary")
+        outputs.append(output.name)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "go")
+    monkeypatch.setattr(module.subprocess, "run", build)
+    monkeypatch.setattr(module.os, "chmod", lambda path, mode: chmods.append((Path(path).name, mode)))
+    module._build_go_hook(staged_tree)
+
+    expected = {"purser-hook-linux-amd64", "purser-hook-linux-arm64", "purser-hook-darwin-amd64", "purser-hook-darwin-arm64"}
+    assert set(outputs) == expected | {"purser-hook-windows-amd64.exe", "purser-hook-windows-arm64.exe"}
+    assert set(chmods) == {(name, 0o755) for name in expected}
+
+
 def test_failed_go_build_keeps_previous_marketplace_tree(tmp_path):
     path, env = repo(tmp_path)
     marketplace = tmp_path / "marketplace"
@@ -361,6 +385,28 @@ def test_go_hook_launcher_runs_binary_then_falls_back_on_spawn_error(tmp_path):
     fallback = subprocess.run(["node", "-e", harness, str(locator), str(script), str(marker)], text=True, capture_output=True, check=False)
     assert fallback.returncode == 0, fallback.stdout + fallback.stderr
     assert marker.read_text(encoding="utf-8") == f"python {script}"
+
+    retry_harness = (
+        "Object.defineProperty(process,'platform',{value:'linux'}); "
+        "const fs=require('node:fs'); const locator=require(process.argv[1]); "
+        "const script=process.argv[2], calls=[], chmods=[]; fs.chmodSync=(...args)=>chmods.push(args); "
+        "let resolves=0; const code=locator.main(['go-hook',script],()=>{resolves++;return {path:'python'}},(command,args)=>{"
+        "calls.push([command,args]); return calls.length===1?{error:{code:'EACCES'}}:{status:0};}); "
+        "if(code!==0||calls.length!==2||resolves!==0||calls[1][0]!==calls[0][0]||chmods.length!==1||chmods[0][1]!==0o755)process.exit(1);"
+    )
+    retried = subprocess.run(["node", "-e", retry_harness, str(locator), str(script)], text=True, capture_output=True, check=False)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+
+    chmod_failure_harness = (
+        "Object.defineProperty(process,'platform',{value:'linux'}); "
+        "const fs=require('node:fs'); const locator=require(process.argv[1]); "
+        "const script=process.argv[2], calls=[]; fs.chmodSync=()=>{throw Error('chmod failed')}; "
+        "const code=locator.main(['go-hook',script],()=>({path:'python'}),(command,args)=>{"
+        "calls.push([command,args]); return calls.length===1?{error:{code:'EACCES'}}:{status:0};}); "
+        "if(code!==0||calls.length!==2||calls[1][0]!=='python'||calls[1][1][0]!==script)process.exit(1);"
+    )
+    chmod_failed = subprocess.run(["node", "-e", chmod_failure_harness, str(locator), str(script)], text=True, capture_output=True, check=False)
+    assert chmod_failed.returncode == 0, chmod_failed.stdout + chmod_failed.stderr
 
 
 def test_failed_export_keeps_previous_tree_and_skips_updates(tmp_path, monkeypatch):
