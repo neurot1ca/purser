@@ -3,6 +3,18 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.65 — 2026-10-03
+
+- **Changed:** SessionStart, UserPromptSubmit, PreCompact and the context Stop hook run from the Claude Code mod on the Go binary; any Go failure lets the event continue. Python stays only for job-worktree cleanup at session start.
+- **Added:** A readiness check asks a second agent (agy by default, `[coding.readiness_check]`) whether the job meets its acceptance criteria and records the verdict on the job; it never blocks the job.
+- **Added:** At dispatch, Purser offers a newer Codex model or CLI once per version.
+- **Added:** Telemetry records Codex token usage, Claude turns that finished while a job ran, readiness verdicts, worker prompt size, how scope leases end, and whether a hook ran on Go or Python.
+- **Fixed:** A reply no longer fails with a replay conflict when the thread's earlier changes are already in main.
+- **Fixed:** The job board shows a job waiting on a scope lease as "queued behind <task>".
+- **Added:** The pre-hook denies a worker prompt that asks for the full suite when the project says Claude runs it at acceptance.
+- **Changed:** Each finished job gets one result line outside the 5-line reply limit.
+- **Fixed:** `codex_cancel` on a finished, unapplied job discards it and frees its scope lease.
+
 ## 0.1.64 — 2026-10-03
 
 - **Changed:** The Read hook runs from a Claude Code mod (`hooks/register.ts`) that calls the Go binary; Read always proceeds if the helper fails. Requires Claude Code 2.1.287 or later.
