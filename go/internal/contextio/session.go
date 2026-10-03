@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -30,10 +33,11 @@ func SessionStart(event map[string]any) []byte {
 		keyPath = strings.ToLower(keyPath)
 	}
 	handoff := ""
+	projectKey := ""
 	var contentBytes []byte
 	if repository != "" {
 		sum := sha256.Sum256([]byte(keyPath))
-		projectKey := hex.EncodeToString(sum[:])[:16]
+		projectKey = hex.EncodeToString(sum[:])[:16]
 		handoff = filepath.Join(stateRoot(), "projects", projectKey, "telemetry", "purser-handoff.md")
 		contentBytes, _ = os.ReadFile(handoff)
 	}
@@ -105,6 +109,14 @@ func SessionStart(event map[string]any) []byte {
 	additional = joinContext(additional, modelContext)
 	delivered := lifecycleGuidance(state)
 	additional = joinContext(additional, delivered)
+	if validSession && repository != "" {
+		root := stateRoot()
+		additional = joinContext(additional, durationHint(root, projectKey, "codex-main"))
+		additional = joinContext(additional, followupHints(root, projectKey, session))
+		if source == "compact" {
+			additional = joinContext(additional, compactAccuracyHint(root, projectKey))
+		}
+	}
 	if additional == "" {
 		return nil
 	}
@@ -123,6 +135,343 @@ func SessionStart(event map[string]any) []byte {
 		}
 	}
 	return []byte(output)
+}
+
+var finishedRoutes = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation"}
+var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func durationHint(root, key, implementer string) string {
+	type sample struct {
+		duration    float64
+		implementer string
+	}
+	groups := map[string][]sample{}
+	files := telemetryFiles(filepath.Join(root, "telemetry", "events"))
+	cutoff := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	bytesRead, lines := 0, 0
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if len(data) > (2<<20)-bytesRead {
+			data = data[:(2<<20)-bytesRead]
+		}
+		bytesRead += len(data)
+		for _, line := range bytes.Split(data, []byte{'\n'}) {
+			if lines >= 4096 {
+				break
+			}
+			lines++
+			var item map[string]any
+			if json.Unmarshal(line, &item) != nil || item["event_type"] != "IMPLEMENTER_FINISHED" || item["project_key"] != key {
+				continue
+			}
+			stamp, err := time.Parse(time.RFC3339Nano, fmt.Sprint(item["ts_utc"]))
+			if err != nil || stamp.Before(cutoff) || stamp.After(time.Now().UTC()) {
+				continue
+			}
+			p, _ := item["payload"].(map[string]any)
+			route, _ := p["route"].(string)
+			duration, ok := numeric(p["duration_ms"])
+			if !ok || duration <= 0 || !contains(finishedRoutes, route) {
+				continue
+			}
+			agent, _ := p["implementer"].(string)
+			if agent == "codex" {
+				agent = "codex-main"
+			}
+			groups[route] = append(groups[route], sample{duration, agent})
+		}
+		if bytesRead >= 2<<20 || lines >= 4096 {
+			break
+		}
+	}
+	var parts []string
+	for _, route := range finishedRoutes {
+		var own, all []float64
+		for _, s := range groups[route] {
+			all = append(all, s.duration)
+			if s.implementer == implementer {
+				own = append(own, s.duration)
+			}
+		}
+		values := own
+		ready := len(own) >= 5
+		if !ready {
+			values = all
+		}
+		if len(values) < map[bool]int{true: 5, false: 10}[ready] {
+			continue
+		}
+		sort.Float64s(values)
+		median := values[len(values)/2]
+		if len(values)%2 == 0 {
+			median = (values[len(values)/2-1] + median) / 2
+		}
+		p90 := values[int(math.Ceil(.9*float64(len(values))))-1]
+		parts = append(parts, fmt.Sprintf("%s %d/%d min (n=%d)", route, roundedMinutes(median), roundedMinutes(p90), len(values)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	name := "Codex"
+	return "Purser: typical " + name + " durations here (median/p90, n): " + strings.Join(parts, ", ") + "."
+}
+
+func telemetryFiles(root string) []string {
+	matches, _ := filepath.Glob(filepath.Join(root, "????-??", "session_*.jsonl"))
+	sort.Slice(matches, func(i, j int) bool {
+		a, _ := os.Stat(matches[i])
+		b, _ := os.Stat(matches[j])
+		if a == nil {
+			return false
+		}
+		if b == nil {
+			return true
+		}
+		return a.ModTime().After(b.ModTime())
+	})
+	if len(matches) > 32 {
+		matches = matches[:32]
+	}
+	return matches
+}
+func numeric(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, e := n.Float64()
+		return f, e == nil
+	}
+	return 0, false
+}
+func roundedMinutes(ms float64) int { return max(1, int(math.Floor(ms/60000+.5))) }
+func contains(values []string, value string) bool {
+	for _, item := range values {
+		if value == item {
+			return true
+		}
+	}
+	return false
+}
+
+func followupHints(root, key, session string) string {
+	paths, _ := filepath.Glob(filepath.Join(root, "async_jobs", "*.json"))
+	if len(paths) > 256 {
+		paths = paths[:256]
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		a, _ := os.Stat(paths[i])
+		b, _ := os.Stat(paths[j])
+		if a == nil {
+			return false
+		}
+		if b == nil {
+			return true
+		}
+		if a.ModTime().Equal(b.ModTime()) {
+			return filepath.Base(paths[i]) < filepath.Base(paths[j])
+		}
+		return a.ModTime().Before(b.ModTime())
+	})
+	var lines []string
+	for _, path := range paths {
+		if len(lines) >= 5 {
+			break
+		}
+		id := strings.TrimSuffix(filepath.Base(path), ".json")
+		if !jobIDPattern.MatchString(id) {
+			continue
+		}
+		index, ok := readSmallObject(path)
+		if !ok || index["stage"] == "CONSUMED" || index["jobId"] != id || index["project_key"] != key {
+			continue
+		}
+		prior, _ := index["session_id"].(string)
+		call, _ := index["call"].(string)
+		callKey, _ := index["call_key"].(string)
+		if prior == "" || call == "" || hashText(call) != id || !jobIDPattern.MatchString(callKey) {
+			continue
+		}
+		pending, ok := readSmallObject(filepath.Join(root, "pending", callKey+".json"))
+		job, jok := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"))
+		if !ok || !jok || pending["job_id"] != id || pending["async_call"] != call || pending["session_id"] != prior || pending["project_key"] != key || job["jobId"] != id || job["call"] != call {
+			continue
+		}
+		tool, _ := pending["tool_use_id"].(string)
+		if hashText(prior+"\x00"+tool) != callKey {
+			continue
+		}
+		task, _ := pending["task_id"].(string)
+		if task == "" {
+			continue
+		}
+		task = strings.Join(strings.Fields(task), " ")
+		if len([]rune(task)) > 80 {
+			task = string([]rune(task)[:80])
+		}
+		state, _ := job["state"].(string)
+		sameSession := prior == session
+		if sameSession && state != "SUCCEEDED" && contains([]string{"FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED"}, state) && job["waiterObservedTerminalState"] == state && job["waiterObservedTerminalAt"] != nil {
+			continue
+		}
+		message, instruction := "", ""
+		switch {
+		case state == "SUCCEEDED" || state == "FAILED" || state == "CANCELLED" || state == "TIMED_OUT" || sameSession && (state == "UNKNOWN_OR_IN_PROGRESS" || state == "EXPIRED"):
+			if sameSession {
+				instruction = "Call codex_result with this jobId now, without adopt or asking the user."
+			} else {
+				message = fmt.Sprintf("⚓ The Codex task I started before the app closed (%s) kept running while the app was closed and has finished. Would you like me to retrieve and review its result?", task)
+				instruction = "Ask for the user's agreement before calling codex_result with adopt: true."
+			}
+		case state == "RUNNING" && job["errorCode"] == "STALLED" && isNumericValue(job["stallDetectedAt"]):
+			liveness, _ := job["liveness"].(map[string]any)
+			instruction = stallInstruction(liveness["lastActivityAt"])
+		case state == "QUEUED" || state == "RUNNING":
+			if sameSession {
+				instruction = "Start purser_wait.py for this jobId in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user."
+			} else {
+				message = fmt.Sprintf("⚓ The Codex task I started before the app closed (%s) is still running while the app is closed. I'll let you know when it finishes.", task)
+				instruction = "When it finishes, ask for the user's agreement before calling codex_result with adopt: true."
+			}
+		default:
+			continue
+		}
+		resumedHint := ""
+		if resumed, ok := job["resumedAfterInterruption"].(json.Number); ok && jsonInteger(resumed) && resumed.String() != "0" && !strings.HasPrefix(resumed.String(), "-") {
+			resumedHint = fmt.Sprintf("Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **The Codex task (%s) was interrupted when the computer shut down; I resumed it from where it left off.**\" ", task)
+		}
+		userHint := ""
+		if message != "" {
+			userHint = fmt.Sprintf("Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **%s**\" ", strings.TrimPrefix(message, "⚓ "))
+		}
+		lines = append(lines, fmt.Sprintf("Purser (jobId=%s, for Claude only): %s%s%s Do not show the jobId to the user.", id, resumedHint, userHint, instruction))
+	}
+	return strings.Join(lines, "\n")
+}
+func readSmallObject(path string) (map[string]any, bool) {
+	info, e := os.Stat(path)
+	if e != nil || info.Size() > 64<<10 {
+		return nil, false
+	}
+	data, e := os.ReadFile(path)
+	if e != nil {
+		return nil, false
+	}
+	var v map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	if decoder.Decode(&v) != nil || v == nil {
+		return nil, false
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return nil, false
+	}
+	return v, true
+}
+func jsonInteger(n json.Number) bool {
+	return !strings.ContainsAny(n.String(), ".eE")
+}
+func isNumericValue(v any) bool {
+	_, ok := v.(json.Number)
+	return ok
+}
+func stallInstruction(lastActivity any) string {
+	minutes := 0
+	if value, ok := lastActivity.(json.Number); ok {
+		if stamp, err := value.Float64(); err == nil {
+			minutes = max(0, int((float64(time.Now().UnixNano())/1e9-stamp)/60))
+		}
+	}
+	receipt := fmt.Sprintf("> ⚓ **Purser has seen no worker activity for %d minutes.** The job is still running; I'm checking its status.", minutes)
+	return "Do not call codex_result yet. Restart purser_wait.py for this same jobId in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, translated from: \"" + receipt + "\""
+}
+func hashText(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func compactAccuracyHint(root, key string) string {
+	path := filepath.Join(root, "projects", key, "duration_accuracy.json")
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return ""
+	}
+	defer lock.Close()
+	if tryLock(lock) != nil {
+		return ""
+	}
+	defer unlock(lock)
+	state, ok := readSmallObject(path)
+	if !ok {
+		state = map[string]any{"compacts": float64(0), "errors": map[string]any{}}
+	}
+	countf, ok := numeric(state["compacts"])
+	errors, ok2 := state["errors"].(map[string]any)
+	if !ok || !ok2 || countf < 0 || math.Trunc(countf) != countf {
+		return ""
+	}
+	count := int(countf) + 1
+	state["compacts"] = count
+	if count%5 != 0 {
+		_ = writeJSONAtomically(path, state)
+		return ""
+	}
+	type estimate struct {
+		at    time.Time
+		error float64
+	}
+	jobs := map[string][]estimate{}
+	for _, file := range telemetryFiles(filepath.Join(root, "telemetry", "events")) {
+		data, e := os.ReadFile(file)
+		if e != nil {
+			continue
+		}
+		for _, line := range bytes.Split(data, []byte{'\n'}) {
+			var item map[string]any
+			if json.Unmarshal(line, &item) != nil || item["event_type"] != "IMPLEMENTER_FINISHED" || item["project_key"] != key {
+				continue
+			}
+			p, _ := item["payload"].(map[string]any)
+			agent, aok := p["implementer"].(string)
+			eta, eok := numeric(p["eta_minutes"])
+			duration, dok := numeric(p["duration_ms"])
+			stamp, e := time.Parse(time.RFC3339Nano, fmt.Sprint(item["ts_utc"]))
+			if !aok || agent == "" || !eok || !dok || eta <= 0 || duration <= 0 || e != nil {
+				continue
+			}
+			jobs[agent] = append(jobs[agent], estimate{stamp, math.Abs(eta*60000-duration) / duration * 100})
+		}
+	}
+	var messages []string
+	for agent, samples := range jobs {
+		sort.Slice(samples, func(i, j int) bool { return samples[i].at.After(samples[j].at) })
+		if len(samples) > 30 {
+			samples = samples[:30]
+		}
+		total := 0.0
+		for _, s := range samples {
+			total += s.error
+		}
+		if len(samples) == 0 {
+			continue
+		}
+		avg := total / float64(len(samples))
+		prev, pok := numeric(errors[agent])
+		errors[agent] = avg
+		if pok && avg < prev {
+			name := map[string]string{"codex-main": "Codex", "opencode-main": "OpenCode", "agy-main": "Antigravity", "claude": "Claude"}[agent]
+			if name == "" {
+				name = agent
+			}
+			messages = append(messages, fmt.Sprintf("Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **%s's task duration estimates have improved through the self-learning system! The estimated margin of error is now %d%%.**\"", name, int(math.Floor(avg+.5))))
+		}
+	}
+	_ = writeJSONAtomically(path, state)
+	return strings.Join(messages, "\n")
 }
 
 func handoffUserLanguage(content string) string {

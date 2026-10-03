@@ -279,6 +279,103 @@ def test_session_start_async_duration_followup_and_accuracy_contract(isolated):
     }})
 
 
+def _seed_async_followup(runtime_state, project_key, prior_session, task, **job_values):
+    call = f'codex_exec_async({json.dumps({"task": task})})'
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    tool_use_id = "followup-" + task
+    call_key = hashlib.sha256(f"{prior_session}\0{tool_use_id}".encode()).hexdigest()
+    index = {"jobId": job_id, "project_key": project_key, "session_id": prior_session,
+             "call": call, "call_key": call_key, "stage": "WAITING"}
+    pending = {"job_id": job_id, "async_call": call, "session_id": prior_session,
+               "project_key": project_key, "tool_use_id": tool_use_id, "task_id": task}
+    job = {"jobId": job_id, "call": call, "state": "RUNNING", **job_values}
+    for directory, name, value in ((runtime_state / "async_jobs", job_id + ".json", index),
+                                   (runtime_state / "pending", call_key + ".json", pending),
+                                   (runtime_state / "codex_exec_mcp" / "jobs", job_id + ".json", job)):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(json.dumps(value), encoding="utf-8")
+    return job_id
+
+
+@pytest.mark.parametrize("case", [
+    "same-session-terminal", "same-session-running", "observed-terminal",
+    "other-session-terminal", "stalled", "resumed-other-session",
+])
+def test_session_start_async_followup_branches_match_contract(isolated, case):
+    root, repo, state = isolated
+    key = _project_key(repo)
+    current = "current-session"
+    prior = current if case in {"same-session-terminal", "same-session-running", "observed-terminal"} else "prior-session"
+    task = "branch task"
+    job_values = {}
+    expected_line = ""
+    if case in {"same-session-terminal", "observed-terminal"}:
+        job_values["state"] = "FAILED"
+        if case == "observed-terminal":
+            job_values.update(waiterObservedTerminalState="FAILED", waiterObservedTerminalAt=123)
+    elif case == "same-session-running":
+        job_values.update(state="QUEUED", resumedAfterInterruption=1)
+    elif case == "other-session-terminal":
+        job_values["state"] = "SUCCEEDED"
+    elif case == "stalled":
+        last_activity = int(time.time() // 60) * 60 - 1201
+        job_values.update(errorCode="STALLED", stallDetectedAt=time.time(),
+                          liveness={"lastActivityAt": last_activity})
+    elif case == "resumed-other-session":
+        job_values["resumedAfterInterruption"] = 2
+    job_id = _seed_async_followup(state, key, prior, task, **job_values)
+    prefix = f"Purser (jobId={job_id}, for Claude only): "
+    translate = ('Render the line in the user\'s language, translating from the English text and keeping ⚓, markdown, '
+                 'model names, numbers, and commands unchanged: "')
+    if case == "same-session-terminal":
+        expected_line = prefix + "Call codex_result with this jobId now, without adopt or asking the user. Do not show the jobId to the user."
+    elif case == "same-session-running":
+        expected_line = (prefix + translate + '> ⚓ **The Codex task (branch task) was interrupted when the computer shut down; I resumed it from where it left off.**" '
+                         "Start purser_wait.py for this jobId in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user. Do not show the jobId to the user.")
+    elif case == "observed-terminal":
+        expected_line = ""
+    elif case == "other-session-terminal":
+        expected_line = (prefix + translate + '> ⚓ **The Codex task I started before the app closed (branch task) kept running while the app was closed and has finished. Would you like me to retrieve and review its result?**" '
+                         "Ask for the user's agreement before calling codex_result with adopt: true. Do not show the jobId to the user.")
+    elif case == "stalled":
+        expected_line = (prefix + "Do not call codex_result yet. Restart purser_wait.py for this same jobId in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, translated from: \""
+                         "> ⚓ **Purser has seen no worker activity for 20 minutes.** The job is still running; I'm checking its status.\" Do not show the jobId to the user.")
+    else:
+        expected_line = (prefix + translate + '> ⚓ **The Codex task (branch task) was interrupted when the computer shut down; I resumed it from where it left off.**" '
+                         + translate + '> ⚓ **The Codex task I started before the app closed (branch task) is still running while the app is closed. I\'ll let you know when it finishes.**" '
+                         "When it finishes, ask for the user's agreement before calling codex_result with adopt: true. Do not show the jobId to the user.")
+    result = _run("SessionStart", repo, state, session_id=current, source="resume")
+    assert (result.returncode, result.stderr) == (0, b"")
+    context = "Reply in the language the user writes in."
+    if expected_line:
+        context += "\n" + expected_line
+    _assert_json_stdout(result, {"hookSpecificOutput": {
+        "hookEventName": "SessionStart", "additionalContext": context,
+    }})
+
+
+def test_session_start_async_followup_file_order_and_five_job_cap(isolated):
+    _root, repo, state = isolated
+    key = _project_key(repo)
+    now = time.time()
+    records = []
+    # Create in reverse order so the expected order is determined by mtime.
+    for order in reversed(range(7)):
+        task = f"ordered task {order}"
+        job_id = _seed_async_followup(state, key, "prior-session", task)
+        index_path = state / "async_jobs" / f"{job_id}.json"
+        os.utime(index_path, (now + order, now + order))
+        records.append((order, job_id, task))
+    expected = [f"Purser (jobId={job_id}, for Claude only): Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **The Codex task I started before the app closed ({task}) is still running while the app is closed. I'll let you know when it finishes.**\" When it finishes, ask for the user's agreement before calling codex_result with adopt: true. Do not show the jobId to the user."
+                for _order, job_id, task in sorted(records)[:5]]
+    result = _run("SessionStart", repo, state, session_id="ordered-successor", source="resume")
+    assert (result.returncode, result.stderr) == (0, b"")
+    _assert_json_stdout(result, {"hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": "Reply in the language the user writes in.\n" + "\n".join(expected),
+    }})
+
+
 def test_session_start_maintenance_activity_and_notice_contract(isolated, monkeypatch):
     import datetime
 
