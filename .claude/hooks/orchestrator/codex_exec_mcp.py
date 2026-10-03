@@ -1409,6 +1409,28 @@ class Server:
                     if reply_record is None:
                         return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
                     send_back_from = _unapplied_thread_job(self.job_dir, args["threadId"])
+                    if send_back_from is None and reply_record.get("worktreePath"):
+                        import ledger
+                        repo_root = Path(reply_record["repoRoot"]).resolve()
+                        worktree = Path(reply_record["worktreePath"]).resolve()
+                        lock_key = hashlib.sha256(os.fspath(repo_root).encode("utf-8")).hexdigest()
+                        lock_path = self.job_dir.parent / "apply" / (lock_key + ".lock")
+                        try:
+                            with ledger._lease_lock(lock_path):
+                                snapshot = ledger.checkout_snapshot(repo_root)
+                                head = ledger._decode_path(ledger._run_git(
+                                    repo_root, ["rev-parse", "--verify", "HEAD"], 30.0,
+                                    "reading reply repository HEAD")).strip()
+                                ledger._run_git(worktree, ["read-tree", "--reset", snapshot], 30.0,
+                                                "resetting applied reply worktree index")
+                                ledger._run_git(worktree, ["clean", "-fd"], 30.0,
+                                                "clearing applied reply worktree changes")
+                                ledger._run_git(worktree, ["checkout-index", "--all", "--force"], 30.0,
+                                                "restoring applied reply worktree baseline")
+                        except (OSError, ledger._InspectionError):
+                            return _job_result({"state": "FAILED", "errorCode": "WORKTREE_REBASE_FAILED",
+                                                "message": "Applied thread worktree could not be rebased to the current checkout"})
+                        reply_record.update(snapshot=snapshot, baselineSnapshot=snapshot, head=head)
                 now = time.time()
                 job = {"jobId": job_id, "call": call, "state": "QUEUED", "acceptedAt": now,
                        "deadlineAt": now + timeout, "signalToken": uuid.uuid4().hex,

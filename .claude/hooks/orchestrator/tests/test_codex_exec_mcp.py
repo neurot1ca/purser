@@ -1626,6 +1626,54 @@ def test_reply_apply_marks_delta_already_in_repository_as_applied(area):
         client.close()
 
 
+def test_reply_after_applied_and_committed_job_rebases_worktree(area):
+    import ledger
+
+    repo = _git_repo(area)
+    client = Client(area)
+    try:
+        first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "first",
+                                                   "cwd": str(repo), "worktree": True})
+        finish(client, first["jobId"], "SUCCEEDED")
+        first_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                    (first["jobId"] + ".json"))
+        worktree = Path(first_job["worktreePath"])
+        (worktree / "tracked.txt").write_text("A first\nsecond\n", encoding="utf-8")
+
+        assert job_call(client, "codex_apply", {"jobId": first["jobId"]}) == {
+            "applied": True, "paths": ["tracked.txt"]}
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "apply A"], check=True)
+
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                  "threadId": "thread-123", "prompt": "continue"})
+        finish(client, reply["jobId"], "SUCCEEDED")
+        reply_job_path = area / "root" / "codex_exec_mcp" / "jobs" / (reply["jobId"] + ".json")
+        reply_job = read_job_record(reply_job_path)
+        assert reply_job["worktreePath"] == first_job["worktreePath"]
+        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "A first\nsecond\n"
+
+        (worktree / "tracked.txt").write_text("A first\nB second\n", encoding="utf-8")
+        (worktree / "new-b.txt").write_text("B addition\n", encoding="utf-8")
+        (repo / "notes.txt").write_text("unrelated checkout edit\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "notes.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "unrelated checkout edit"], check=True)
+
+        prepared = ledger.prepare_job_replay(
+            repo, worktree, reply_job["snapshot"], area / "reply-after-apply-preparation")
+
+        assert prepared["status"] == "prepared"
+        reply_job["snapshot"] = prepared["snapshot"]
+        codex_exec_mcp.Server(host=True, job_dir=reply_job_path.parent)._write_job(reply_job)
+        assert job_call(client, "codex_apply", {"jobId": reply["jobId"]}) == {
+            "applied": True, "paths": ["new-b.txt", "tracked.txt"]}
+        assert (repo / "tracked.txt").read_text(encoding="utf-8") == "A first\nB second\n"
+        assert (repo / "new-b.txt").read_text(encoding="utf-8") == "B addition\n"
+        assert (repo / "notes.txt").read_text(encoding="utf-8") == "unrelated checkout edit\n"
+    finally:
+        client.close()
+
+
 def kill_bridge_tree(client):
     if os.name == "nt":
         killed = subprocess.run(["taskkill", "/T", "/F", "/PID", str(client.process.pid)],
