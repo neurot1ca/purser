@@ -4,7 +4,6 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
-import shlex
 import shutil
 import stat
 import subprocess
@@ -25,28 +24,7 @@ import telemetry
 import telemetry_schema as schema
 
 UNRESOLVED_PROJECT_KEY = "unresolved"
-HOOK_ENTRYPOINT = PACKAGE_ROOT / "context_io_hook.py"
-
-
-def _run_contract_hook(event, payload, state):
-    """Invoke the registered entry point; event-specific or generic env vars can swap it."""
-    command = os.environ.get(f"PURSER_HOOK_CMD_{event.upper()}") or os.environ.get("PURSER_HOOK_CMD")
-    argv = (
-        shlex.split(command, posix=os.name != "nt")
-        if command else [sys.executable, str(HOOK_ENTRYPOINT)]
-    )
-    env = os.environ.copy()
-    env["PURSER_STATE_DIR"] = str(state)
-    return subprocess.run(
-        argv,
-        input=payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8"),
-        capture_output=True,
-        cwd=(payload.get("cwd", Path(__file__).parents[4])
-             if isinstance(payload, dict) else Path(__file__).parents[4]),
-        env=env,
-        timeout=15,
-        check=False,
-    )
+from contract_hook_runner import run_contract_hook as _run_contract_hook
 
 
 def _contract_events(state):
