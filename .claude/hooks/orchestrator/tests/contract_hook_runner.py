@@ -10,12 +10,17 @@ import sys
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 HOOK_ENTRYPOINT = PACKAGE_ROOT / "context_io_hook.py"
+ENFORCEMENT_ENTRYPOINT = PACKAGE_ROOT / "hook.py"
 
 
-def run_contract_hook(event, payload, state):
+def run_contract_hook(event, payload, state, *, entrypoint="context"):
     """Invoke the Python entrypoint unless an event-specific runner replaces it."""
     command = os.environ.get(f"PURSER_HOOK_CMD_{event.upper()}") or os.environ.get("PURSER_HOOK_CMD")
-    argv = shlex.split(command, posix=os.name != "nt") if command else [sys.executable, str(HOOK_ENTRYPOINT)]
+    if command:
+        argv = shlex.split(command, posix=os.name != "nt")
+    else:
+        target = ENFORCEMENT_ENTRYPOINT if entrypoint == "enforcement" else HOOK_ENTRYPOINT
+        argv = [sys.executable, str(target)]
     env = os.environ.copy()
     env["PURSER_STATE_DIR"] = str(state)
     return subprocess.run(
