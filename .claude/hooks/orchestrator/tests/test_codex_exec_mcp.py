@@ -1593,6 +1593,15 @@ def test_codex_apply_records_hand_resolved_conflict(area):
         started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
                                                     "cwd": str(repo), "worktree": True})
         finish(client, started["jobId"], "SUCCEEDED")
+        project = codex_exec_mcp.project_root.project_key(repo.resolve())
+        lease = __import__("ledger").ScopeLeases(area / "root" / "projects" / project)
+        owner = "resolved-owner"
+        lease.acquire(owner, "resolved-task", ["tracked.txt"], job_id=started["jobId"])
+        index_dir = area / "root" / "async_jobs"
+        index_dir.mkdir(parents=True, exist_ok=True)
+        (index_dir / f"{started['jobId']}.json").write_text(json.dumps({
+            "jobId": started["jobId"], "call_key": owner, "project_key": project,
+        }), encoding="utf-8")
         (repo / "tracked.txt").write_text("repository change\n", encoding="utf-8")
         conflict = job_call(client, "codex_apply", {"jobId": started["jobId"]})
         assert conflict["applied"] is False
@@ -1609,6 +1618,36 @@ def test_codex_apply_records_hand_resolved_conflict(area):
         assert job["applyState"] == "applied"
         assert job["applyResult"] == resolved
         assert isinstance(job["appliedAt"], (int, float))
+        assert lease.owner_state(owner) == "RELEASED"
+    finally:
+        client.close()
+
+
+def test_codex_apply_hand_resolution_records_accepted_decision(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        finish(client, started["jobId"], "SUCCEEDED")
+        job_path = area / "root" / "codex_exec_mcp" / "jobs" / f"{started['jobId']}.json"
+        job = read_job_record(job_path)
+        job["taskId"] = "hand-resolved-task"
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+        (repo / "tracked.txt").write_text("repository change\n", encoding="utf-8")
+        assert job_call(client, "codex_apply", {"jobId": started["jobId"]})["applied"] is False
+        (repo / "tracked.txt").write_text("hand merged result\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "resolve job conflict"], check=True)
+
+        job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True})
+
+        events = [json.loads(line) for path in (area / "root").rglob("*.jsonl")
+                  for line in path.read_text(encoding="utf-8").splitlines() if line]
+        assert any(event.get("event_type") == "CLAUDE_DECISION_RECORDED"
+                   and event.get("task_id") == "hand-resolved-task"
+                   and event.get("payload", {}).get("decision") == "accepted"
+                   for event in events)
     finally:
         client.close()
 

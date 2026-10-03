@@ -1688,7 +1688,7 @@ def pre_tool_use(
                 }
             if forbidden:
                 caller = "codex_start mode=reply" if is_start else "codex-reply"
-                allowed = "threadId, prompt and mode" if is_start else "threadId and prompt"
+                allowed = "threadId, prompt and mode; label is optional" if is_start else "threadId and prompt"
                 fields = ", ".join(sorted(forbidden))
                 return _observed_denial(
                     event,
@@ -2492,6 +2492,30 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             jobs.append((job, index))
 
         all_jobs = jobs
+        queued_behind: dict[str, str] = {}
+        try:
+            lease_state = json.loads(
+                (root / "projects" / project_key / "scope_leases.json").read_text(encoding="utf-8")
+            )
+            owners = lease_state.get("owners", {}) if isinstance(lease_state, dict) else {}
+            labels_by_job = {
+                job.get("jobId"): job.get("label") for job, _index in all_jobs
+                if isinstance(job.get("jobId"), str) and isinstance(job.get("label"), str)
+            }
+            if isinstance(owners, dict):
+                for queued in owners.values():
+                    if queued.get("state") != "QUEUED" or not isinstance(queued.get("job_id"), str):
+                        continue
+                    for active in owners.values():
+                        if (active.get("state") != "ACTIVE"
+                                or not ledger._scopes_overlap(queued.get("scope", []), active.get("scope", []))):
+                            continue
+                        holder_label = labels_by_job.get(active.get("job_id"))
+                        if isinstance(holder_label, str) and holder_label.strip():
+                            queued_behind[queued["job_id"]] = holder_label
+                            break
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
         newest_by_thread: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         for item in jobs:
             job, _index = item
@@ -2542,6 +2566,8 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             state = {"QUEUED": "queued", "RUNNING": "running", "SUCCEEDED": "done",
                      "FAILED": "failed", "TIMED_OUT": "failed", "CANCELLED": "cancelled",
                      "UNKNOWN_OR_IN_PROGRESS": "running"}.get(raw_state, "failed")
+            if raw_state == "QUEUED" and job.get("jobId") in queued_behind:
+                state = f"queued behind {queued_behind[job['jobId']]}"
             if raw_state == "RUNNING" and job.get("errorCode") == "STALLED":
                 state = "stalled"
             call_key = index.get("call_key")

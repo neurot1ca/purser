@@ -1429,6 +1429,29 @@ def test_project_job_board_marks_only_stalled_job(workspace):
     assert "| healthy | gpt-6-sol (medium) | running |" in message
 
 
+def test_project_job_board_explains_queued_scope_lease(workspace):
+    _, state = workspace
+    holder_id, _ = _board_job(state, "lease-holder", "RUNNING", label="Current task")
+    queued_id, _ = _board_job(state, "lease-queued", "QUEUED", label="Waiting task")
+    leases = ledger.ScopeLeases(state / "projects" / "project")
+    leases.acquire("holder", "holder-task", ["src"], job_id=holder_id)
+    leases.acquire("queued", "queued-task", ["src/file.py"], job_id=queued_id, queue_conflict=True)
+
+    message = codex._project_job_board(state, "project")
+
+    assert "queued behind Current task" in message
+
+
+def test_pre_hook_allows_resolved_replay_conflict_apply(workspace, config):
+    repo, state = workspace
+    job_id, _ = _board_job(state, "conflicted-job", "SUCCEEDED", applyState="conflict",
+                           applyResult={"applied": False})
+    apply_event = event("mcp__plugin_purser_codex-main__codex_apply", jobId=job_id,
+                        cwd=str(repo), resolved=True)
+
+    assert codex.pre_tool_use(apply_event, config=config, state_root=state) == {}
+
+
 def test_project_job_board_stops_demanding_when_only_seen_terminal_remains(workspace, monkeypatch):
     repo, state = workspace
     monkeypatch.setenv("PURSER_STATE_DIR", str(state))
@@ -3116,6 +3139,27 @@ def test_async_reply_start_keeps_recorded_thread(workspace, config):
     assert pending["prior_thread_id"] == "thread-1" and pending["reason"] == "continue"
 
 
+@pytest.mark.parametrize(("supplied_label", "expected_label"),
+                         [("new task", "new task"), (None, "old task")])
+def test_async_reply_start_uses_new_label_or_saved_thread_label(
+    workspace, config, supplied_label, expected_label
+):
+    repo, state = workspace
+    save_live_thread(state, reason="continue", label="old task")
+    fields = {"label": supplied_label} if supplied_label is not None else {}
+    call = event(START_TOOL, prompt=orch(task="task-1", reason="continue") + "\nContinue.",
+                 tool_use_id="reply-label", mode="reply", threadId="thread-1", **fields)
+    if supplied_label is None:
+        call["tool_input"].pop("label")
+
+    updated = codex.pre_tool_use(call, config=config, state_root=state,
+                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+
+    assert updated["jobLabel"] == expected_label
+    assert "label" not in updated
+    assert codex._read_pending(state, call)["label"] == expected_label
+
+
 def test_plugin_tool_names_route_new_and_reply(workspace, config):
     repo, state = workspace
     prompt = orch(scope="file0.py") + "\n## Objective\nInspect file0.\n## Acceptance criteria\n- Report result."
@@ -3688,6 +3732,7 @@ def save_live_thread(
     phase="implementation",
     scope=("file0.py", "file1.py", "file2.py"),
     reason=None,
+    label=None,
 ):
     result = ledger.SessionLedger(
         state / "projects" / project_root.project_key((state.parent / "repo").resolve())
@@ -3701,6 +3746,7 @@ def save_live_thread(
             phase=phase,
             scope=scope,
             reason=reason,
+            label=label,
         )
     )
     assert result["status"] == ledger.OK
