@@ -14,10 +14,13 @@ import (
 	"unicode/utf8"
 )
 
+const pinnedModel = "gemini-3.8-flash-high"
+
 type Request struct {
-	Command         []string
-	CWD, Repository string
-	Timeout         time.Duration
+	Executable, Model, PacketPath, CWD, Repository string
+	Schema                                         any
+	AddDirs, ExtraFlags                            []string
+	Timeout                                        time.Duration
 }
 
 type Outcome struct {
@@ -29,17 +32,75 @@ type Outcome struct {
 
 // Review classifies a reviewer subprocess result.
 func Review(request Request) Outcome {
-	if request.Timeout <= 0 || request.CWD == "" || request.Repository == "" || len(request.Command) == 0 {
+	if request.Timeout <= 0 || request.CWD == "" || request.Repository == "" || request.PacketPath == "" {
 		return unavailable("REVIEWER_RESPONSE_INVALID")
 	}
-	if unsafe(request.Command, request.Repository) || within(request.CWD, request.Repository) {
+	command, err := buildCommand(request)
+	if err != nil {
 		return unavailable("REVIEWER_RESPONSE_INVALID")
 	}
-	stdout, code := invoke(request.Command, request.CWD, request.Timeout)
+	cwd, err := resolve(request.CWD)
+	if err != nil || within(cwd, request.Repository) {
+		return unavailable("REVIEWER_RESPONSE_INVALID")
+	}
+	stdout, code := invoke(command, cwd, request.Timeout)
 	if code != "" {
 		return unavailable(code)
 	}
 	return parse(stdout)
+}
+
+func buildCommand(request Request) ([]string, error) {
+	if request.Model != pinnedModel {
+		return nil, errors.New("agy requires its pinned model")
+	}
+	executable := request.Executable
+	if !filepath.IsAbs(executable) {
+		var err error
+		executable, err = exec.LookPath("agy")
+		if err != nil {
+			return nil, err
+		}
+		if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+			executable = resolved
+		} else {
+			executable, err = filepath.Abs(executable)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	schema, err := canonicalJSON(request.Schema)
+	if err != nil {
+		return nil, err
+	}
+	command := []string{executable, "--print", reviewPrompt(request.PacketPath), "--output-format", "json", "--json-schema", string(schema), "--model", request.Model, "--mode", "plan", "--sandbox"}
+	for _, dir := range request.AddDirs {
+		path, err := resolve(dir)
+		if err != nil {
+			return nil, err
+		}
+		command = append(command, "--add-dir", path)
+	}
+	command = append(command, request.ExtraFlags...)
+	if unsafe(command, request.Repository) {
+		return nil, errors.New("unsafe reviewer command")
+	}
+	return command, nil
+}
+
+func reviewPrompt(path string) string {
+	return "You are Reviewer-1. Read and review only the JSON packet at the exact path below. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + path
+}
+
+func canonicalJSON(value any) ([]byte, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(output.Bytes(), []byte("\n")), nil
 }
 
 func unsafe(command []string, repository string) bool {
@@ -72,6 +133,9 @@ func invoke(command []string, cwd string, timeout time.Duration) ([]byte, string
 		ctx, cancel := context.WithTimeout(context.Background(), remaining)
 		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 		cmd.Dir = cwd
+		cmd.Env = os.Environ()
+		cmd.Stdin = os.Stdin
+		configureLaunch(cmd)
 		stdout, err := cmd.Output()
 		elapsed, deadline := time.Since(started), errors.Is(ctx.Err(), context.DeadlineExceeded)
 		cancel()
