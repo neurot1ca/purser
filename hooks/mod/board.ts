@@ -14,6 +14,13 @@ const routeMinutes: Record<string, number> = {
 
 const clean = (value: unknown) => String(value ?? '—').replace(/\|/g, '\\|').replace(/[\r\n]/g, ' ')
 const finiteTime = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+const duration = (seconds: number) => {
+  const whole = Math.floor(Math.max(0, seconds))
+  const minutes = Math.floor(whole / 60)
+  const remainder = whole % 60
+  if (!minutes) return `${remainder}s`
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`
+}
 
 export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windows = false): string | undefined {
   const jobsById = new Map(files.jobs.filter(job => typeof job.jobId === 'string').map(job => [job.jobId, job]))
@@ -69,6 +76,14 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
       TIMED_OUT: 'failed', CANCELLED: 'cancelled', UNKNOWN_OR_IN_PROGRESS: 'running' } as Record<string, string>)[raw] ?? 'failed'
     if (raw === 'QUEUED' && queuedBehind.has(job.jobId)) state = `queued behind ${queuedBehind.get(job.jobId)}`
     if (raw === 'RUNNING' && job.errorCode === 'STALLED') state = 'stalled'
+    if (raw === 'RUNNING') {
+      const lastActivity = [job.liveness?.lastActivityAt, job.lastActivityAt, job.liveness?.checkpointAt, job.checkpointAt]
+        .find(finiteTime)
+      if (finiteTime(lastActivity)) {
+        const agent = typeof job.activeAgent === 'string' ? ` ${clean(job.activeAgent)}` : ''
+        state += ` ·${agent} active ${Math.floor(Math.max(0, now - lastActivity))}s ago`
+      }
+    }
 
     const bundle = files.bundles?.[index.call_key] ?? {}
     let review = '—'
@@ -90,12 +105,18 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
     if (apply === '—' && !['QUEUED', 'RUNNING', 'UNKNOWN_OR_IN_PROGRESS'].includes(raw) && Array.isArray(paths) && paths.length === 0) apply = 'no change'
 
     let eta = '—'
-    if (state === 'running' || state === 'stalled') {
+    if (raw === 'QUEUED' && finiteTime(job.acceptedAt)) {
+      eta = `waited ${duration(now - job.acceptedAt)}`
+    } else if (raw === 'RUNNING') {
       const started = finiteTime(job.startedAt) ? job.startedAt : job.acceptedAt
-      const expected = Number.isInteger(job.etaMinutes) ? job.etaMinutes : routeMinutes[job.route]
-      if (finiteTime(started) && Number.isInteger(expected)) {
-        const elapsed = Math.max(0, (now - started) / 60)
-        eta = elapsed > 2 * expected ? 'overdue' : `~${Math.max(0, Math.ceil(expected - elapsed))} min`
+      if (finiteTime(started)) {
+        const elapsed = Math.max(0, now - started)
+        const expected = Number.isInteger(job.etaMinutes) ? job.etaMinutes : routeMinutes[job.route]
+        eta = Number.isInteger(expected)
+          ? elapsed > expected * 60
+            ? `${duration(elapsed)} elapsed, overdue +${Math.max(1, Math.ceil((elapsed - expected * 60) / 60))} min`
+            : `${duration(elapsed)} elapsed, ${duration(expected * 60 - elapsed)} left`
+          : `${duration(elapsed)} elapsed`
       }
     }
     const model = typeof job.model === 'string' && typeof job.effort === 'string'
@@ -120,7 +141,16 @@ async function readBoard($, cwd: string): Promise<string | undefined> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(root))
   const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
   const runtime = `${home}/.claude/purser`
-  const entries = await $.fs.list(`${runtime}/async_jobs`)
+  let entries
+  try { entries = await $.fs.list(`${runtime}/async_jobs`) }
+  catch (error) {
+    const failure = error as { code?: unknown; message?: unknown }
+    if (failure?.code === 'ENOENT' ||
+        (typeof failure?.message === 'string' && /\b(?:ENOENT|no such file or directory)\b/i.test(failure.message))) {
+      return undefined
+    }
+    throw error
+  }
   const indexes: Job[] = []
   const jobs: Job[] = []
   for (const entry of entries) {
