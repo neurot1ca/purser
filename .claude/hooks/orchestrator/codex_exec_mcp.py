@@ -107,6 +107,18 @@ def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | Non
     return None
 
 
+def _same_worktree_content(worktree: Path, repo_root: Path, path: str) -> bool:
+    worktree_file = worktree / path
+    repo_file = repo_root / path
+    if worktree_file.is_symlink() or repo_file.is_symlink():
+        return (worktree_file.is_symlink() and repo_file.is_symlink()
+                and os.readlink(worktree_file) == os.readlink(repo_file))
+    if not worktree_file.exists() or not repo_file.exists():
+        return not worktree_file.exists() and not repo_file.exists()
+    return (worktree_file.is_file() and repo_file.is_file()
+            and worktree_file.read_bytes() == repo_file.read_bytes())
+
+
 TOOL_SCHEMAS = [
     {
         "name": "codex",
@@ -1491,6 +1503,23 @@ class Server:
                     if reply_record is None:
                         return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
                     send_back_from = _unapplied_thread_job(self.job_dir, args["threadId"])
+                    if send_back_from is not None and reply_record.get("worktreePath"):
+                        import ledger
+                        repo_root = Path(reply_record["repoRoot"]).resolve()
+                        worktree = Path(reply_record["worktreePath"]).resolve()
+                        snapshot = reply_record.get("baselineSnapshot", reply_record.get("snapshot"))
+                        if isinstance(snapshot, str) and worktree.is_dir():
+                            try:
+                                patch = ledger.job_patch(worktree, snapshot)
+                                raw_paths = ledger._run_git(
+                                    repo_root, ["apply", "--numstat", "-z", "-"], 30.0,
+                                    "listing thread changes", input_data=patch.encode("utf-8", "surrogateescape")) if patch else b""
+                                paths = [ledger._decode_path(row.split(b"\t", 2)[2])
+                                         for row in raw_paths.split(b"\0") if row]
+                                if all(_same_worktree_content(worktree, repo_root, path) for path in paths):
+                                    send_back_from = None
+                            except (OSError, ledger._InspectionError):
+                                pass
                     if send_back_from is None and reply_record.get("worktreePath"):
                         import ledger
                         repo_root = Path(reply_record["repoRoot"]).resolve()
@@ -1786,18 +1815,8 @@ class Server:
                 raw_paths = ledger._run_git(repo_root, ["apply", "--numstat", "-z", "-"], 30.0,
                                             "listing job patch paths", input_data=patch.encode("utf-8", "surrogateescape"))
                 paths = [ledger._decode_path(row.split(b"\t", 2)[2]) for row in raw_paths.split(b"\0") if row]
-            def same_content(path: str) -> bool:
-                worktree_file = Path(job["worktreePath"]) / path
-                repo_file = repo_root / path
-                if worktree_file.is_symlink() or repo_file.is_symlink():
-                    return (worktree_file.is_symlink() and repo_file.is_symlink()
-                            and os.readlink(worktree_file) == os.readlink(repo_file))
-                if not worktree_file.exists() or not repo_file.exists():
-                    return not worktree_file.exists() and not repo_file.exists()
-                return (worktree_file.is_file() and repo_file.is_file()
-                        and worktree_file.read_bytes() == repo_file.read_bytes())
-
-            if paths and all(same_content(path) for path in paths):
+            if paths and all(_same_worktree_content(Path(job["worktreePath"]), repo_root, path)
+                             for path in paths):
                 value = {"applied": True, "paths": paths}
                 job.update(applyState="applied", applyResult=value, appliedAt=time.time())
                 if isinstance(job.get("taskId"), str) and job["taskId"]:

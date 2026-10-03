@@ -1036,6 +1036,76 @@ def test_original_worktree_job_applies_combined_reply_delta(area):
         client.close()
 
 
+def _thread_with_pending_reply(area, client):
+    repo = _git_repo(area)
+    tracked = repo / "tracked.txt"
+    first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "first",
+                                              "cwd": str(repo), "worktree": True})
+    finish(client, first["jobId"], "SUCCEEDED")
+    worktree = Path(read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                                    (first["jobId"] + ".json"))["worktreePath"])
+    (worktree / "tracked.txt").write_text("thread change\n", encoding="utf-8")
+    reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                              "threadId": "thread-123", "prompt": "reply"})
+    finish(client, reply["jobId"], "SUCCEEDED")
+    (worktree / "tracked.txt").write_text("thread change and reply\n", encoding="utf-8")
+    return repo, tracked, worktree, first, reply
+
+
+def test_reply_resets_thread_worktree_after_earlier_change_was_applied(area):
+    import ledger
+
+    client = Client(area)
+    try:
+        repo, tracked, worktree, first, _reply = _thread_with_pending_reply(area, client)
+        assert job_call(client, "codex_apply", {"jobId": first["jobId"]})["applied"] is True
+        (repo / "advance.txt").write_text("main advanced\n", encoding="utf-8")
+        tracked.write_text("thread change and reply\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt", "advance.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "advance main"], check=True)
+        expected = ledger.checkout_snapshot(repo)
+
+        next_reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                       "threadId": "thread-123", "prompt": "continue"})
+        finish(client, next_reply["jobId"], "SUCCEEDED")
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                              (next_reply["jobId"] + ".json"))
+
+        assert job["snapshot"] == expected
+        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == tracked.read_text(encoding="utf-8")
+        assert ledger.prepare_job_replay(repo, worktree, job["snapshot"], area / "applied-reply-check")["status"] == "unchanged"
+    finally:
+        client.close()
+
+
+def test_reply_resets_thread_worktree_after_earlier_change_was_committed_by_hand(area):
+    import ledger
+
+    client = Client(area)
+    try:
+        repo, tracked, worktree, _first, _reply = _thread_with_pending_reply(area, client)
+        tracked.write_text("thread change and reply\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "hand apply thread"], check=True)
+        (repo / "advance.txt").write_text("main advanced\n", encoding="utf-8")
+        tracked.write_text("thread change and reply\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt", "advance.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "advance main"], check=True)
+        expected = ledger.checkout_snapshot(repo)
+
+        next_reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                       "threadId": "thread-123", "prompt": "continue"})
+        finish(client, next_reply["jobId"], "SUCCEEDED")
+        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
+                              (next_reply["jobId"] + ".json"))
+
+        assert job["snapshot"] == expected
+        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == tracked.read_text(encoding="utf-8")
+        assert ledger.prepare_job_replay(repo, worktree, job["snapshot"], area / "hand-commit-reply-check")["status"] == "unchanged"
+    finally:
+        client.close()
+
+
 def test_reply_replay_reports_conflict_against_main_same_line_change(area):
     import ledger
 
