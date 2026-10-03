@@ -49,7 +49,7 @@ def _resolve_zone() -> tuple[Any, str]:
         return offset, f"UTC+{LOCAL_TIMEZONE_FALLBACK_OFFSET_HOURS:02d}:00_FIXED_OFFSET_FALLBACK"
 
 
-_ZONE, LOCAL_TIMEZONE_RESOLVED = _resolve_zone()
+_ZONE, _ = _resolve_zone()
 _CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 _MARKER_PREFIX = "<!-- orchestrator projection v1 sha256="
 _YAML_MARKER_PREFIX = "# orchestrator projection v1 sha256="

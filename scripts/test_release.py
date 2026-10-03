@@ -62,7 +62,7 @@ def repo(tmp_path):
     return path, env
 
 
-def fake_claude(tmp_path, code=0):
+def fake_claude(tmp_path):
     executable = tmp_path / "fake_claude.py"
     executable.write_text(
         "import os, sys\n"
