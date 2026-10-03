@@ -37,5 +37,9 @@ func main() {
 		if output := contextio.SessionStart(event); len(output) > 0 {
 			_, _ = os.Stdout.Write(output)
 		}
+	case "UserPromptSubmit":
+		if output := contextio.UserPromptSubmit(event, started); len(output) > 0 {
+			_, _ = os.Stdout.Write(output)
+		}
 	}
 }
