@@ -33,6 +33,9 @@ func unlock(f *os.File) error {
 	return nil
 }
 
+func TryLock(f *os.File) error { return tryLock(f) }
+func Unlock(f *os.File) error  { return unlock(f) }
+
 type fileIDInfo struct {
 	Volume uint64
 	ID     [16]byte
