@@ -1,6 +1,6 @@
 {
   "name": "purser",
-  "version": "0.1.65",
+  "version": "0.1.66",
   "description": "Route, baseline, attribute, and review delegated Codex coding work.",
   "author": {"name": "Purser"},
   "license": "MIT OR Apache-2.0",

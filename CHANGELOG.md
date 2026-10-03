@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.66 — 2026-10-03
+
+- **Fixed:** Prompts with `Goal:` and `Acceptance:` headers count as a grounded task contract, so the readiness check runs and Reviewer-1 is not forced to FULL review.
+- **Fixed:** Context turn events carry the session id, so the count of Claude turns during a job is real (0 when idle, unknown only without tagged turns).
+- **Added:** Telemetry records readiness verdicts, worker prompt size, how scope leases end (applied, resolved by hand, discarded, expired) and the hook runtime.
+
 ## 0.1.65 — 2026-10-03
 
 - **Changed:** SessionStart, UserPromptSubmit, PreCompact and the context Stop hook run from the Claude Code mod on the Go binary; any Go failure lets the event continue. Python stays only for job-worktree cleanup at session start.
