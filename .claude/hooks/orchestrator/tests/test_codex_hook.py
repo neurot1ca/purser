@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import replace
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
 import stat
@@ -900,6 +900,110 @@ def test_dispatch_receipt_uses_route_default_without_duration_history(workspace,
         f"> ⚓ **Codex: New session · model: gpt-6-luna (high) · task: First run · "
         f"estimated completion: {expected} min**"
     )
+
+
+def test_codex_start_dispatch_notices_cached_model_and_cli_once(workspace, monkeypatch):
+    repo, state = workspace
+    cache_home = state / "codex-home"
+    cache_home.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(cache_home))
+    (cache_home / "models_cache.json").write_text(json.dumps({
+        "client_version": "0.159.0",
+        "models": [
+            {"slug": "gpt-6.1-sol", "visibility": "list"},
+            {"slug": "gpt-6.2-sol", "visibility": "hidden"},
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
+    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k: pytest.fail("cached CLI version must avoid subprocess"))
+    (state / "codex-cli-version.json").write_text(json.dumps({
+        "checked_on": datetime.now(timezone.utc).date().isoformat(), "installed_version": "0.156.1",
+    }), encoding="utf-8")
+
+    def notice():
+        response = codex._append_dispatch_receipt({}, {
+            "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
+            "effort": "high", "route": "normal", "project_key": "project",
+            "repo_root": str(repo), "agent": "codex",
+        }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
+        return response["hookSpecificOutput"]["additionalContext"]
+
+    first = notice()
+    assert "> ⚓ **New Codex model gpt-6.1-sol is available (current: gpt-6-sol). Adopt it for these routes? (1/yes)**" in first
+    assert "--adopt-model-version gpt-6.1-sol" in first
+    assert "> ⚓ **Codex CLI 0.159.0 is available (installed: 0.156.1). Update it? (1/yes)**" in first
+    codex.model_version_notice.mark_shown("gpt-6.1-sol")
+    assert "> ⚓ **New Codex model" not in notice()
+    assert "> ⚓ **Codex CLI" not in notice()
+
+
+@pytest.mark.parametrize(("client_version", "installed_version"), (("0.159.0", "0.160.0"), ("0.159.0", "0.159.0")))
+def test_codex_start_dispatch_ignores_hidden_models_and_older_or_equal_cli(
+        workspace, monkeypatch, client_version, installed_version):
+    repo, state = workspace
+    cache_home = state / "codex-home"
+    cache_home.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(cache_home))
+    (cache_home / "models_cache.json").write_text(json.dumps({
+        "client_version": client_version,
+        "models": [{"slug": "gpt-6.1-sol", "visibility": "hidden"}],
+    }), encoding="utf-8")
+    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
+    (state / "codex-cli-version.json").write_text(json.dumps({
+        "checked_on": datetime.now(timezone.utc).date().isoformat(), "installed_version": installed_version,
+    }), encoding="utf-8")
+    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k: pytest.fail("cached CLI version must avoid subprocess"))
+    response = codex._append_dispatch_receipt({}, {
+        "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
+        "effort": "high", "route": "normal", "project_key": "project",
+        "repo_root": str(repo), "agent": "codex",
+    }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
+    context = response["hookSpecificOutput"]["additionalContext"]
+    assert "New Codex model" not in context and "Codex CLI" not in context
+
+
+@pytest.mark.parametrize("cache_contents", (None, "{bad json"))
+def test_codex_start_dispatch_skips_missing_or_malformed_model_cache(
+        workspace, monkeypatch, cache_contents):
+    repo, state = workspace
+    cache_home = state / "codex-home"
+    cache_home.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(cache_home))
+    if cache_contents is not None:
+        (cache_home / "models_cache.json").write_text(cache_contents, encoding="utf-8")
+    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
+    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k: pytest.fail("cache absence must skip version checks"))
+    response = codex._append_dispatch_receipt({}, {
+        "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
+        "effort": "high", "route": "normal", "project_key": "project",
+        "repo_root": str(repo), "agent": "codex",
+    }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
+    context = response["hookSpecificOutput"]["additionalContext"]
+    assert "> ⚓ **Codex:" in context
+    assert "New Codex model" not in context and "Codex CLI" not in context
+
+
+def test_codex_start_dispatch_caches_installed_cli_version_for_the_day(workspace, monkeypatch):
+    repo, state = workspace
+    cache_home = state / "codex-home"
+    cache_home.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(cache_home))
+    (cache_home / "models_cache.json").write_text(json.dumps({
+        "client_version": "0.159.0", "models": [],
+    }), encoding="utf-8")
+    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
+    calls = []
+    monkeypatch.setattr(codex.shutil, "which", lambda _name: "codex")
+    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k:
+                        calls.append(True) or subprocess.CompletedProcess([], 0, "codex-cli 0.156.1", ""))
+
+    for _ in range(2):
+        codex._append_dispatch_receipt({}, {
+            "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
+            "effort": "high", "route": "normal", "project_key": "project",
+            "repo_root": str(repo), "agent": "codex",
+        }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
+    assert calls == [True]
 
 
 def test_two_admitted_codex_starts_emit_two_dispatch_receipts(workspace, config, monkeypatch):

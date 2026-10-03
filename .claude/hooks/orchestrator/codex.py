@@ -12,6 +12,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -29,6 +30,7 @@ import codex_quota
 import codex_exec_mcp
 import checks
 import ledger
+import model_version_notice
 import policy
 import project_profile
 import project_root
@@ -2637,6 +2639,97 @@ def _append_pending_guidance(response: dict[str, Any], event: Mapping[str, Any],
     return response
 
 
+def _codex_version_dispatch_context(state_root: Path) -> str | None:
+    """Build cache-backed Codex model and CLI notices without network access."""
+    try:
+        codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser()
+        cache = json.loads((codex_home / "models_cache.json").read_text(encoding="utf-8"))
+        if not isinstance(cache, dict):
+            return None
+        models = cache.get("models")
+        if not isinstance(models, list):
+            return None
+        candidates = [item.get("slug") for item in models
+                      if isinstance(item, dict) and item.get("visibility") == "list"
+                      and isinstance(item.get("slug"), str)]
+        notices = []
+        config = coder_config.load(_CONFIG_PATH)
+        routes = config.get("routes", {})
+        pinned = list(dict.fromkeys(
+            route.get("model") if isinstance(route, dict) else route
+            for route in routes.values()
+        )) if isinstance(routes, Mapping) else []
+        state = model_version_notice.read_state()
+        pending = state.get("pending")
+        model_instructions = []
+        for current in pinned:
+            if not isinstance(current, str):
+                continue
+            newer = model_version_notice.newer_version(current, candidates)
+            if (newer and newer not in state["asked"] and newer not in state["declined"]
+                    and not isinstance(pending, dict)):
+                state["pending"] = {"current": current, "new": newer, "blocked": False}
+                model_version_notice.write_state(state)
+                model_instructions.append(
+                    f"If the user answers 1/yes, apply it with `python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --adopt-model-version {newer}`. "
+                    "Do not change routes unless the user says yes."
+                )
+                notices.append(f"> ⚓ **New Codex model {newer} is available (current: {current}). Adopt it for these routes? (1/yes)**")
+                break
+
+        today = datetime.now(timezone.utc).date().isoformat()
+        cli_state_path = state_root / "codex-cli-version.json"
+        try:
+            cli_state = json.loads(cli_state_path.read_text(encoding="utf-8"))
+            if not isinstance(cli_state, dict):
+                cli_state = {}
+        except (OSError, ValueError, TypeError):
+            cli_state = {}
+        checked_today = cli_state.get("checked_on") == today
+        installed = cli_state.get("installed_version") if checked_today else None
+        if not checked_today:
+            executable = shutil.which("codex")
+            installed = None
+            if executable:
+                try:
+                    result = subprocess.run([executable, "--version"], capture_output=True, text=True,
+                                            timeout=2, check=False,
+                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                            if os.name == "nt" else 0)
+                    match = re.search(r"(?<!\d)(\d+\.\d+(?:\.\d+)?)", result.stdout or result.stderr)
+                    if result.returncode == 0 and match:
+                        installed = match.group(1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            cli_state = {"checked_on": today, "installed_version": installed,
+                         "asked": cli_state.get("asked", []) if isinstance(cli_state.get("asked"), list) else []}
+            _atomic_json_write(cli_state_path, cli_state)
+
+        offered = cli_state.get("asked", [])
+        available = cache.get("client_version")
+        version_pattern = re.compile(r"^\d+(?:\.\d+){1,2}$")
+        if (isinstance(installed, str) and isinstance(available, str)
+                and version_pattern.fullmatch(installed) and version_pattern.fullmatch(available)):
+            installed_parts = tuple(int(part) for part in installed.split("."))
+            available_parts = tuple(int(part) for part in available.split("."))
+            width = max(len(installed_parts), len(available_parts))
+            if (available_parts + (0,) * (width - len(available_parts)) >
+                    installed_parts + (0,) * (width - len(installed_parts))
+                    and available not in offered):
+                offered.append(available)
+                cli_state["asked"] = offered
+                _atomic_json_write(cli_state_path, cli_state)
+                notices.append(f"> ⚓ **Codex CLI {available} is available (installed: {installed}). Update it? (1/yes)**")
+        if not notices:
+            return None
+        return (" ".join(model_instructions) + ("\n" if model_instructions else "")
+                + "On your next reply, render the following line(s) in the user's language, "
+                "translating from this English master text and keeping ⚓, names and versions unchanged:\n"
+                + "\n".join(notices))
+    except BaseException:
+        return None
+
+
 def _append_project_job_status(response: dict[str, Any], root: Path,
                                project_key: str, event: Mapping[str, Any] | None = None,
                                *, pending_only: bool = False) -> dict[str, Any]:
@@ -2673,7 +2766,14 @@ def _append_dispatch_receipt(response: dict[str, Any], pending: Mapping[str, Any
         compaction_advisor.queue_dispatch(event, repository, line=receipt)
     if pending.get("async_call") and isinstance(pending.get("project_key"), str):
         _append_project_job_status(response, state_root, pending["project_key"], event)
-    return _append_pending_guidance(response, event, repository)
+    response = _append_pending_guidance(response, event, repository)
+    if event is not None and event.get("tool_name") in CODEX_START_TOOL_NAMES:
+        version_context = _codex_version_dispatch_context(state_root)
+        if version_context:
+            output = response.setdefault("hookSpecificOutput", {})
+            existing = output.get("additionalContext")
+            output["additionalContext"] = f"{existing}\n{version_context}" if isinstance(existing, str) and existing else version_context
+    return response
 
 
 def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
