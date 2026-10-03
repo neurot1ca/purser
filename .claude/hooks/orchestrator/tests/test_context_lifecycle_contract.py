@@ -318,7 +318,7 @@ def test_session_start_async_followup_branches_match_contract(isolated, case):
     elif case == "other-session-terminal":
         job_values["state"] = "SUCCEEDED"
     elif case == "stalled":
-        last_activity = int(time.time() // 60) * 60 - 1201
+        last_activity = time.time() - (20 * 60 + 30)
         job_values.update(errorCode="STALLED", stallDetectedAt=time.time(),
                           liveness={"lastActivityAt": last_activity})
     elif case == "resumed-other-session":
@@ -431,14 +431,75 @@ def test_session_start_emits_compaction_outcome_contract(isolated):
     }), encoding="utf-8")
     result = _run("SessionStart", repo, state, session_id=session, source="compact")
     assert (result.returncode, result.stderr) == (0, b"")
-    events = [json.loads(line) for path in (state / "telemetry" / "events").glob("????-??/*.jsonl")
-              for line in path.read_text(encoding="utf-8").splitlines()]
+    event_files = list((state / "telemetry" / "events").glob("????-??/session_outcome-contract.jsonl"))
+    assert len(event_files) == 1
+    events = [json.loads(line) for path in event_files for line in path.read_text(encoding="utf-8").splitlines()]
     [event] = [item for item in events if item["event_type"] == "COMPACTION_ADVICE_OUTCOME"]
+    assert set(event) == {
+        "schema_version", "event_id", "ts_utc", "event_type", "task_id", "project_key",
+        "session_id", "repo", "branch", "agent_id", "agent_type", "payload",
+    }
+    assert event["schema_version"] == 1
+    uuid.UUID(event["event_id"])
+    assert event["ts_utc"].endswith("Z")
     assert event["session_id"] == session
     assert event["payload"] == {
         "advice_written": True, "compaction_observed": True,
         "notice_id": "0123456789abcdef0123456789abcdef", "pre_context_tokens": 120000,
     }
+
+    once_session = "outcome-once"
+    transcript = _root / "outcome-transcript.jsonl"
+    transcript.write_text("".join(json.dumps(record) + "\n" for record in (
+        {"type": "system", "subtype": "compact_boundary"},
+        {"type": "assistant", "message": {"role": "assistant", "usage": {
+            "input_tokens": 300, "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 5,
+        }}},
+    )), encoding="utf-8")
+    advisor.write_text(json.dumps({
+        "session_id": once_session, "context_prompt_count": 6,
+        "compaction_outcome_pending": {
+            "notice_id": "0123456789abcdef0123456789abcdef", "pre_context_tokens": 120000,
+            "advice_turn": 3, "compaction_observed": False,
+        },
+    }), encoding="utf-8")
+    for _ in range(2):
+        repeated = _run("SessionStart", repo, state, session_id=once_session, source="compact",
+                        transcript_path=str(transcript))
+        assert (repeated.returncode, repeated.stderr) == (0, b"")
+    once_events = [json.loads(line) for path in (state / "telemetry" / "events").glob("????-??/session_outcome-once.jsonl")
+                   for line in path.read_text(encoding="utf-8").splitlines()]
+    [once_event] = [item for item in once_events if item["event_type"] == "COMPACTION_ADVICE_OUTCOME"]
+    assert once_event["payload"] == {
+        "advice_written": True, "compaction_observed": True,
+        "notice_id": "0123456789abcdef0123456789abcdef", "pre_context_tokens": 120000,
+        "post_context_tokens": 325, "elapsed_turns": 3,
+    }
+    assert json.loads(advisor.read_text(encoding="utf-8"))["compaction_outcome_pending"] is None
+
+    # Invalid pending data is discarded, and clear events discard valid pending data without emission.
+    malformed_session = "outcome-malformed"
+    advisor.write_text(json.dumps({
+        "session_id": malformed_session,
+        "compaction_outcome_pending": {"notice_id": "bad", "pre_context_tokens": "120000", "advice_turn": 1},
+    }), encoding="utf-8")
+    malformed = _run("SessionStart", repo, state, session_id=malformed_session, source="compact")
+    assert (malformed.returncode, malformed.stderr) == (0, b"")
+    assert json.loads(advisor.read_text(encoding="utf-8"))["compaction_outcome_pending"] is None
+    cleared_session = "outcome-cleared"
+    advisor.write_text(json.dumps({
+        "session_id": cleared_session,
+        "compaction_outcome_pending": {
+            "notice_id": "0123456789abcdef0123456789abcdef", "pre_context_tokens": 120000,
+            "advice_turn": 3, "compaction_observed": False,
+        },
+    }), encoding="utf-8")
+    cleared = _run("SessionStart", repo, state, session_id=cleared_session, source="clear")
+    assert (cleared.returncode, cleared.stderr) == (0, b"")
+    assert json.loads(advisor.read_text(encoding="utf-8"))["compaction_outcome_pending"] is None
+    assert not list((state / "telemetry" / "events").glob("????-??/session_outcome-malformed.jsonl"))
+    assert not list((state / "telemetry" / "events").glob("????-??/session_outcome-cleared.jsonl"))
 
 
 def test_compact_boundary_removes_stale_recent_block_without_recent_turns(isolated):

@@ -2,6 +2,7 @@ package contextio
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -54,8 +55,14 @@ func SessionStart(event map[string]any) []byte {
 	if validSession && statePath != "" {
 		state = readAdvisorState(statePath, session)
 		if source == "compact" || source == "clear" {
+			if notice, ok := state["notice_pending"].(map[string]any); !ok || !validNoticePending(notice) {
+				state["notice_pending"] = nil
+			}
+			if outcome, ok := state["compaction_outcome_pending"].(map[string]any); !ok || !validCompactionOutcome(outcome) {
+				state["compaction_outcome_pending"] = nil
+			}
 			if notice, ok := state["notice_pending"].(map[string]any); ok {
-				if source == "compact" && notice["advice_written"] == true {
+				if source == "compact" && notice["advice_written"] == true && validNoticePending(notice) {
 					state["compaction_outcome_pending"] = map[string]any{
 						"notice_id":           notice["notice_id"],
 						"pre_context_tokens":  notice["context"],
@@ -66,6 +73,23 @@ func SessionStart(event map[string]any) []byte {
 			}
 			if source == "clear" {
 				state["compaction_outcome_pending"] = nil
+			} else if outcome, ok := state["compaction_outcome_pending"].(map[string]any); ok {
+				if validCompactionOutcome(outcome) {
+					outcome["compaction_observed"] = true
+					postContext, hasPostContext := compactedContext(event["transcript_path"])
+					if hasPostContext {
+						if count, countOK := exactInteger(state["context_prompt_count"]); countOK {
+							if adviceTurn, turnOK := exactInteger(outcome["advice_turn"]); turnOK {
+								outcome["elapsed_turns"] = max(0, count-adviceTurn)
+							}
+						}
+						outcome["post_context_tokens"] = postContext
+						state["compaction_outcome_pending"] = nil
+					}
+					emitCompactionOutcome(session, outcome)
+				} else {
+					state["compaction_outcome_pending"] = nil
+				}
 			}
 			state["notice_pending"] = nil
 		}
@@ -753,6 +777,191 @@ func readAdvisorState(path, session string) map[string]any {
 		state[key] = value
 	}
 	return state
+}
+
+var noticeIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func validNoticePending(notice map[string]any) bool {
+	id, idOK := notice["notice_id"].(string)
+	_, contextOK := exactInteger(notice["context"])
+	_, percentageOK := exactInteger(notice["percentage"])
+	_, handoffOK := notice["handoff"].(string)
+	return idOK && noticeIDPattern.MatchString(id) && contextOK && percentageOK && handoffOK
+}
+
+func validCompactionOutcome(outcome map[string]any) bool {
+	id, idOK := outcome["notice_id"].(string)
+	_, contextOK := exactInteger(outcome["pre_context_tokens"])
+	_, turnOK := exactInteger(outcome["advice_turn"])
+	return idOK && noticeIDPattern.MatchString(id) && contextOK && turnOK
+}
+
+func exactInteger(value any) (int, bool) {
+	switch n := value.(type) {
+	case int:
+		return n, true
+	case float64:
+		return int(n), n == math.Trunc(n)
+	}
+	return 0, false
+}
+
+func compactedContext(path any) (int, bool) {
+	name, ok := path.(string)
+	if !ok || name == "" {
+		return 0, false
+	}
+	f, err := os.Open(name)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, false
+	}
+	const limit = 4 << 20
+	start := max(int64(0), info.Size()-limit)
+	data := make([]byte, info.Size()-start)
+	if _, err = f.ReadAt(data, start); err != nil && err != io.EOF {
+		return 0, false
+	}
+	if info.Size() > limit {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			data = data[i+1:]
+		}
+	}
+	boundary, total, hasUsage := false, 0, false
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		var record map[string]any
+		if json.Unmarshal(line, &record) != nil || record == nil {
+			continue
+		}
+		if record["subtype"] == "compact_boundary" {
+			boundary, hasUsage = true, false
+			continue
+		}
+		if !boundary {
+			continue
+		}
+		message, _ := record["message"].(map[string]any)
+		if message == nil {
+			message = record
+		}
+		kind, exists := record["type"]
+		if !exists {
+			kind = message["role"]
+		}
+		if kind != "assistant" {
+			continue
+		}
+		usage, okUsage := message["usage"].(map[string]any)
+		if !okUsage {
+			continue
+		}
+		total, hasUsage = 0, true
+		for _, field := range []string{"input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
+			if n, ok := exactInteger(usage[field]); ok && n >= 0 {
+				total += n
+			}
+		}
+	}
+	return total, boundary && hasUsage && total > 0
+}
+
+func emitCompactionOutcome(session string, outcome map[string]any) {
+	preContext, _ := exactInteger(outcome["pre_context_tokens"])
+	if preContext < 0 {
+		return
+	}
+	payload := map[string]any{
+		"notice_id": outcome["notice_id"], "advice_written": true,
+		"compaction_observed": true, "pre_context_tokens": preContext,
+	}
+	for _, field := range []string{"post_context_tokens", "elapsed_turns"} {
+		if value, exists := outcome[field]; exists {
+			if n, ok := exactInteger(value); ok && n >= 0 {
+				payload[field] = n
+			}
+		}
+	}
+	eventID := newEventID()
+	if eventID == "" {
+		return
+	}
+	normalized := normalizeTelemetryID(session)
+	stamp := time.Now().UTC()
+	event := map[string]any{
+		"schema_version": 1, "event_id": eventID, "ts_utc": stamp.Format(time.RFC3339Nano),
+		"event_type": "COMPACTION_ADVICE_OUTCOME", "task_id": nil, "project_key": nil,
+		"session_id": normalized, "repo": nil, "branch": nil, "agent_id": nil, "agent_type": nil,
+		"payload": payload,
+	}
+	root := filepath.Join(stateRoot(), "telemetry")
+	events := filepath.Join(root, "events")
+	if os.MkdirAll(events, 0700) != nil {
+		return
+	}
+	lock, err := os.OpenFile(filepath.Join(events, ".append.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return
+	}
+	defer lock.Close()
+	if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
+		_, _ = lock.WriteAt([]byte("0"), 0)
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	if tryLock(lock) != nil {
+		_ = writeJSONAtomically(filepath.Join(events, "spool", eventID+".json"), event)
+		return
+	}
+	defer unlock(lock)
+	month := stamp.Format("2006-01")
+	path := filepath.Join(events, month, "session_"+normalized+".jsonl")
+	if os.MkdirAll(filepath.Dir(path), 0700) != nil {
+		return
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	written, writeErr := file.Write(append(data, '\n'))
+	if writeErr == nil && written != len(data)+1 {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	_ = file.Close()
+}
+
+func normalizeTelemetryID(value string) string {
+	clean := regexp.MustCompile(`[^A-Za-z0-9._-]`).ReplaceAllString(value, "_")
+	clean = strings.Trim(clean, ". ")
+	if len(clean) > 96 {
+		clean = clean[:96]
+	}
+	if clean == "" {
+		clean = "session"
+	}
+	if clean == value {
+		return clean
+	}
+	sum := sha256.Sum256([]byte(value))
+	return clean[:min(len(clean), 87)] + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
+func newEventID() string {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return ""
+	}
+	id[6] = id[6]&0x0f | 0x40
+	id[8] = id[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
 }
 
 func readModelNoticeState(path string) map[string]any {
