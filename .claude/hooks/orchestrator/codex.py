@@ -1165,7 +1165,7 @@ _PROTOCOL_HELP = (
     " | consequential -> sol/high | escalated -> sol/xhigh | operation -> luna/high\n"
     "  reason is optional; basis is required for normal, consequential, and escalated, and optional otherwise."
     " eta=<N>m is optional; N must be an integer from 1..600."
-    " Reason, when supplied, is one of new_task | continue |"
+    " Reason, when supplied, is one of new_task | continue | fix |"
     " route_change | reanchor | repeated_failure | user_override.\n"
     "  phase  'operation' for deploy, runner control, status, or read-only investigation;"
     " it skips Reviewer-1. 'implementation' for anything that changes code.\n"
@@ -3680,6 +3680,7 @@ def _post_observations(
         "changed_paths_count": bundle.get("delta_files"),
         "known_concurrent_scopes": bundle.get("known_concurrent_scopes", []),
         "validation": bundle.get("validation"),
+        "worker_validation_status": (bundle.get("worker_validation") or {}).get("status", "UNKNOWN"),
         "thread_id": (
             telemetry_schema.normalize_identifier(bundle.get("thread_id"), fallback="thread")
             if bundle.get("thread_id") is not None

@@ -144,6 +144,31 @@ def test_reviewer_failure_error_code_schema_and_stderr_evidence(tmp_path):
     assert json.loads(evidence_path.read_text(encoding="utf-8")) == "server stalled"
 
 
+def test_worker_validation_status_schema_accepts_enum_and_rejects_invalid():
+    for status in ("PASS", "FAIL", "UNKNOWN"):
+        event = schema.build_event(
+            "IMPLEMENTER_FINISHED",
+            task_id="task-1",
+            payload={"worker_validation_status": status},
+        )
+        assert event["payload"]["worker_validation_status"] == status
+    with pytest.raises(ValueError, match="telemetry enum"):
+        schema.build_event(
+            "IMPLEMENTER_FINISHED",
+            task_id="task-1",
+            payload={"worker_validation_status": "INVALID"},
+        )
+
+
+def test_fix_reason_is_valid_telemetry_reason():
+    event = schema.build_event(
+        "IMPLEMENTER_FINISHED",
+        task_id="task-1",
+        payload={"reason": "fix"},
+    )
+    assert event["payload"]["reason"] == "fix"
+
+
 def test_legacy_call_event_without_reason_fields_still_parses():
     legacy = schema.build_event(
         "IMPLEMENTER_STARTED",

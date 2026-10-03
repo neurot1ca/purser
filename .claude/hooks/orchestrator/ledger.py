@@ -2117,7 +2117,7 @@ def _valid_session_record(record: Any, expected_task_id: str | None = None) -> b
     if "task_contract_grounded" in thread and not isinstance(thread.get("task_contract_grounded"), bool):
         return False
     if "reason" in thread and thread.get("reason") not in {
-        "new_task", "continue", "route_change", "reanchor", "repeated_failure", "user_override"
+        "new_task", "continue", "fix", "route_change", "reanchor", "repeated_failure", "user_override"
     }:
         return False
     if "profile_checks" in thread and not isinstance(thread.get("profile_checks"), list):

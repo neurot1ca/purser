@@ -23,6 +23,7 @@
   "allowed_reasons": [
     "new_task",
     "continue",
+    "fix",
     "route_change",
     "reanchor",
     "repeated_failure",

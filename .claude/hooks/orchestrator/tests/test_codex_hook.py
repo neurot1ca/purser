@@ -7396,7 +7396,10 @@ def test_later_success_clears_prior_typed_failure(workspace, config, monkeypatch
     assert _fallback_state(workspace)["triggering_evidence"] is None
 
 
-def test_reply_stays_pinned_to_recorded_thread_after_fallback_switch(workspace, config, monkeypatch):
+@pytest.mark.parametrize("reason", ["continue", "fix"])
+def test_reply_stays_pinned_to_recorded_thread_after_fallback_switch(
+    workspace, config, monkeypatch, reason
+):
     repo, state = workspace
     config = _fallback_config(config)
     monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
@@ -7408,12 +7411,13 @@ def test_reply_stays_pinned_to_recorded_thread_after_fallback_switch(workspace, 
                                          phase="implementation", scope=["file0.py"],
                                          reason="new_task", label="test task", agent="codex")
     ledger.SessionLedger(codex._project_state_root(state, project_root.project_key(repo.resolve()))).save(record)
-    reply = event(codex.CODEX_REPLY_TOOL, prompt=orch() + "\nContinue.", threadId="thread-1")
+    reply = event(codex.CODEX_REPLY_TOOL, prompt=orch(reason=reason) + "\nContinue.", threadId="thread-1")
     result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
     updated = result["hookSpecificOutput"]["updatedInput"]
     assert "permissionDecision" not in result["hookSpecificOutput"]
     assert updated.get("agent", "codex") == "codex"
     assert "model" not in updated
+    assert codex._read_pending(state, reply)["reason"] == reason
 
 
 def test_reply_to_fallback_thread_stays_pinned_to_fallback_agent_and_model(workspace, config):
@@ -7580,6 +7584,42 @@ def test_finished_task_persists_code_map_present_and_codex_usage(workspace):
     assert aggregate["usage"]["codex_total_tokens"] == 30
     assert (aggregate["served_route"], aggregate["served_model"], aggregate["served_effort"]) == (
         "normal", "served-model", "xhigh")
+
+
+@pytest.mark.parametrize(
+    ("worker_validation", "expected_status"),
+    [
+        ({"status": "FAIL"}, "FAIL"),
+        ({"status": "PASS"}, "PASS"),
+        (None, "UNKNOWN"),
+    ],
+)
+def test_finished_event_records_worker_validation_and_fix_reason(
+    workspace, worker_validation, expected_status
+):
+    _repo, state = workspace
+    codex._post_observations(
+        {"session_id": "session-1"},
+        state,
+        {
+            "task_id": f"worker-validation-{expected_status}",
+            "project_key": "unresolved",
+            "phase": "implementation",
+            "route": "normal",
+            "reason": "fix",
+            "reason_source": "explicit",
+        },
+        {"worker_validation": worker_validation},
+    )
+
+    events = [
+        json.loads(line)
+        for path in (state / "telemetry" / "events").rglob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    finished = next(event for event in events if event["event_type"] == "IMPLEMENTER_FINISHED")
+    assert finished["payload"]["worker_validation_status"] == expected_status
+    assert finished["payload"]["reason"] == "fix"
 
 
 def test_finished_task_persists_code_map_absent(workspace):

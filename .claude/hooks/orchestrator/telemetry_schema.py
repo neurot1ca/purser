@@ -243,6 +243,7 @@ _PAYLOAD_FIELDS = {
             "changed_paths_count",
             "known_concurrent_scopes",
             "validation",
+            "worker_validation_status",
             "thread_id",
             "claude_review_mode",
             "routing_enforced",
@@ -533,7 +534,7 @@ def _payload_value(name: str, value: Any) -> Any:
     if name in {"route", "previous_route", "new_route", "served_route"} and value in _ROUTES:
         return value
     if name == "reason" and value in {
-        "new_task", "continue", "route_change", "reanchor", "repeated_failure", "user_override"
+        "new_task", "continue", "fix", "route_change", "reanchor", "repeated_failure", "user_override"
     }:
         return value
     if name == "reason_source" and value in {"explicit", "inherited"}:
@@ -545,6 +546,8 @@ def _payload_value(name: str, value: Any) -> Any:
     if name == "served_effort" and value in _EFFORTS | {"none"}:
         return value
     if name == "validation" and value in _VALIDATIONS:
+        return value
+    if name == "worker_validation_status" and value in {"PASS", "FAIL", "UNKNOWN"}:
         return value
     if name == "claude_review_mode" and value in {"AUDIT", "FULL"}:
         return value

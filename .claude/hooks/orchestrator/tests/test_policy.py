@@ -196,6 +196,7 @@ def test_non_sol_routes_do_not_require_basis(config, route):
 def test_reason_and_basis_are_optional_but_recorded_and_validated_when_supplied(config):
     absent = policy.parse_orch_prompt(orch(route="subtle", reason=None, basis=None), config)
     supplied = policy.parse_orch_prompt(orch(reason="continue", basis="complex"), config)
+    fix = policy.parse_orch_prompt(orch(reason="fix", basis="complex"), config)
     empty_basis = policy.parse_orch_prompt(orch(route="subtle", basis=""), config)
     invalid_reason = policy.parse_orch_prompt(orch(reason="invented"), config)
 
@@ -205,6 +206,8 @@ def test_reason_and_basis_are_optional_but_recorded_and_validated_when_supplied(
     assert supplied.valid is True
     assert supplied.reason == "continue"
     assert supplied.basis == "complex"
+    assert fix.valid is True
+    assert fix.reason == "fix"
     assert empty_basis.valid is True
     assert empty_basis.basis == ""
     assert invalid_reason.code == policy.INVALID_ENUM_VALUE
