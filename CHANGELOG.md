@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.64 — 2026-10-03
+
+- **Changed:** The Read hook runs from a Claude Code mod (`hooks/register.ts`) that calls the Go binary; Read always proceeds if the helper fails. Requires Claude Code 2.1.287 or later.
+- **Fixed:** Session maintenance no longer deletes a worktree while another job sharing it is running or unapplied.
+- **Fixed:** Unix Go hook binaries ship executable, and the launcher restores the exec bit once before falling back to Python.
+- **Changed:** Replies follow ASD-STE100 sentence rules within the 5-line limit and may exceed it only to state a risk, failure or pending decision.
+- **Changed:** Purser is dual-licensed under MIT OR Apache-2.0.
+
 ## 0.1.63 — 2026-10-03
 
 - **Changed:** The Read hook runs as a native Go binary built for Windows, Linux and macOS (amd64/arm64); Purser falls back to Python when the binary cannot start.
