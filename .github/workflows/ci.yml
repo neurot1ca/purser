@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+
+      - name: Vet Go packages
+        run: go vet ./...
+        working-directory: go
+
+      - name: Test Go packages
+        run: go test ./...
+        working-directory: go
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Python test dependencies
+        run: python -m pip install pytest pytest-xdist
+
+      - name: Test orchestrator
+        run: python -m pytest tests/ -q -n auto
+        working-directory: .claude/hooks/orchestrator
+
+      - name: Test release script
+        run: python -m pytest scripts/test_release.py -q
+
+      # Claude Code CLI is not installed in CI, so plugin test/validate are omitted.
