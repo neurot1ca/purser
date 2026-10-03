@@ -24,10 +24,119 @@ type Request struct {
 }
 
 type Outcome struct {
-	ReviewStatus string `json:"review_status"`
-	Result       string `json:"result"`
-	Validation   string `json:"validation"`
-	ErrorCode    string `json:"error_code,omitempty"`
+	ReviewStatus string    `json:"review_status"`
+	Result       string    `json:"result"`
+	Validation   string    `json:"validation"`
+	Findings     []Finding `json:"findings,omitempty"`
+	ErrorCode    string    `json:"error_code,omitempty"`
+}
+
+type Finding struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type GateDecision struct {
+	Run    bool
+	Reason string
+}
+
+type ModeDecision struct {
+	Mode string
+	Code string
+}
+
+const (
+	NoDelta        = "NO_DELTA"
+	BelowThreshold = "BELOW_THRESHOLD"
+	Audit          = "AUDIT"
+	Full           = "FULL"
+	PhaseOperation = "PHASE_OPERATION"
+	PhasePlan      = "PHASE_PLAN"
+)
+
+// Gate applies the mechanical delta threshold before deciding whether to run Reviewer-1.
+func Gate(phase, route string, routeKnown bool, deltaFiles, deltaLines, maxFiles, maxLines int, reviewerAvailable bool) GateDecision {
+	if phase == "operation" || (phase == "plan" && route == "plan_standard") {
+		reason := PhaseOperation
+		if phase == "plan" {
+			reason = PhasePlan
+		}
+		return GateDecision{Reason: reason}
+	}
+	if deltaFiles < 0 || deltaLines < 0 || maxFiles < 0 || maxLines < 0 || phase != "implementation" || !routeKnown {
+		return GateDecision{Run: true, Reason: "UNCLASSIFIABLE_INPUT"}
+	}
+	if deltaFiles == 0 && deltaLines == 0 {
+		return GateDecision{Reason: NoDelta}
+	}
+	if deltaFiles <= maxFiles && deltaLines <= maxLines {
+		return GateDecision{Reason: BelowThreshold}
+	}
+	if !reviewerAvailable {
+		return GateDecision{Reason: "REVIEWER_UNAVAILABLE"}
+	}
+	return GateDecision{Run: true, Reason: "RUN_REVIEWER"}
+}
+
+// ReviewMode fails closed to FULL. Skips are never reviewer passes.
+func ReviewMode(routeKnown, alwaysFull bool, skipReason, result string) ModeDecision {
+	if !routeKnown {
+		return ModeDecision{Mode: Full, Code: "UNCLASSIFIABLE_INPUT"}
+	}
+	if alwaysFull {
+		return ModeDecision{Mode: Full, Code: "ALWAYS_FULL_ROUTE"}
+	}
+	if skipReason != "" {
+		if skipReason == NoDelta || skipReason == BelowThreshold {
+			return ModeDecision{Mode: Audit, Code: skipReason}
+		}
+		return ModeDecision{Mode: Full, Code: skipReason}
+	}
+	switch result {
+	case "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE":
+		return ModeDecision{Mode: Audit, Code: result}
+	case "CHANGES_REQUIRED", "UNCERTAIN", "REVIEWER1_UNAVAILABLE":
+		return ModeDecision{Mode: Full, Code: result}
+	default:
+		return ModeDecision{Mode: Full, Code: "UNCLASSIFIABLE_INPUT"}
+	}
+}
+
+// SameFamily reports whether a candidate reviewer belongs to the implementer's vendor.
+func SameFamily(implementer, reviewer string) bool {
+	return vendorFamily(implementer) != "" && vendorFamily(implementer) == vendorFamily(reviewer)
+}
+
+func vendorFamily(family string) string {
+	family = strings.ToLower(strings.TrimSpace(family))
+	if i := strings.IndexAny(family, "-/"); i >= 0 {
+		family = family[:i]
+	}
+	switch family {
+	case "gpt", "openai":
+		return "openai"
+	case "gemini", "google":
+		return "google"
+	case "claude", "anthropic":
+		return "anthropic"
+	case "qwen3":
+		return "qwen"
+	case "llama3":
+		return "llama"
+	default:
+		for _, known := range []string{"qwen", "mistral", "llama"} {
+			if strings.HasPrefix(family, known) && strings.Trim(family[len(known):], "0123456789") == "" {
+				return known
+			}
+		}
+		return family
+	}
+}
+
+// Passed is true only for an executed, clean reviewer result with passing validation.
+func Passed(outcome Outcome, skippedReason string) bool {
+	return skippedReason == "" && outcome.ReviewStatus == "COMPLETED" && outcome.Validation == "PASS" && outcome.Result == "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE"
 }
 
 // Review classifies a reviewer subprocess result.
@@ -201,16 +310,18 @@ func parse(stdout []byte) Outcome {
 	if result != "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE" && result != "CHANGES_REQUIRED" && result != "UNCERTAIN" {
 		return invalid()
 	}
+	validatedFindings := make([]Finding, 0, len(findings))
 	for _, raw := range findings {
 		var finding map[string]string
 		if json.Unmarshal(raw, &finding) != nil || len(finding) != 2 || finding["code"] == "" || utf8.RuneCountInString(finding["code"]) > 120 || finding["message"] == "" || utf8.RuneCountInString(finding["message"]) > 2000 {
 			return invalid()
 		}
+		validatedFindings = append(validatedFindings, Finding{Code: finding["code"], Message: finding["message"]})
 	}
 	if result == "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE" && len(findings) != 0 {
 		return invalid()
 	}
-	return Outcome{ReviewStatus: "COMPLETED", Result: result, Validation: validation}
+	return Outcome{ReviewStatus: "COMPLETED", Result: result, Validation: validation, Findings: validatedFindings}
 }
 
 func unavailable(code string) Outcome {

@@ -49,6 +49,7 @@ case "timeout": time.Sleep(2*time.Second)
 }
 
 func TestReviewerAGYCommandAndOutcomes(t *testing.T) {
+	t.Log("findings retention mirrors reviewer.py:1362-1382")
 	fake, scratch := fakeReviewer(t)
 	repository, cwd := filepath.Join(scratch, "repo"), filepath.Join(scratch, "worker")
 	for _, dir := range []string{repository, cwd} {
@@ -109,6 +110,9 @@ func TestReviewerAGYCommandAndOutcomes(t *testing.T) {
 				if got.ReviewStatus != "COMPLETED" || got.Result != "CHANGES_REQUIRED" || got.Validation != "FAIL" {
 					t.Fatalf("outcome = %#v", got)
 				}
+				if len(got.Findings) != 1 || got.Findings[0] != (Finding{Code: "BUG", Message: "bad"}) {
+					t.Fatalf("findings were not retained: %#v", got.Findings)
+				}
 			} else if got.ReviewStatus != "UNAVAILABLE" || got.Result != "REVIEWER1_UNAVAILABLE" || got.Validation != "UNKNOWN" || got.ErrorCode != test.errorCode {
 				t.Fatalf("outcome = %#v", got)
 			}
@@ -145,6 +149,63 @@ func TestReviewerAGYCommandAndOutcomes(t *testing.T) {
 			}
 			if !equal(call.Args, want) || call.CWD != cwd || call.Env != "inherited-value" || call.Stdin != "" {
 				t.Fatalf("launch = %#v, want argv=%q cwd=%q inherited env and empty stdin", call, want, cwd)
+			}
+		})
+	}
+}
+
+func TestReviewDecisionPrimitives(t *testing.T) {
+	tests := []struct {
+		name, source string
+		check        func() bool
+	}{
+		{"skip versus executed pass", "policy.py:621-688; codex.py:3948-3956", func() bool {
+			skip := Gate("implementation", "normal", true, 0, 0, 2, 20, true)
+			run := Gate("implementation", "normal", true, 4, 40, 2, 20, true)
+			passed := Outcome{ReviewStatus: "COMPLETED", Result: "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", Validation: "PASS"}
+			return skip.Reason == NoDelta && !skip.Run && run.Run && !Passed(Outcome{}, NoDelta) && Passed(passed, "")
+		}},
+		{"same vendor excluded", "policy.py:580-618; codex.py:4582-4609", func() bool {
+			return SameFamily("gpt", "openai") && SameFamily("anthropic", "claude") && !SameFamily("google", "openai")
+		}},
+		{"full mode selection", "policy.py:715-770", func() bool {
+			cases := []struct{ route, skip, result, want string }{
+				{"normal", "REVIEWER_UNAVAILABLE", "", Full},
+				{"normal", "", "CHANGES_REQUIRED", Full},
+				{"normal", "", "UNCERTAIN", Full},
+				{"normal", "", "REVIEWER1_UNAVAILABLE", Full},
+				{"normal", "", "unrecognized", Full},
+			}
+			for _, tc := range cases {
+				if got := ReviewMode(true, false, tc.skip, tc.result).Mode; got != tc.want {
+					return false
+				}
+			}
+			return ReviewMode(true, true, "NO_DELTA", "").Mode == Full && ReviewMode(false, false, "", "").Mode == Full
+		}},
+		{"only trivial skips select audit", "policy.py:740-758", func() bool {
+			return ReviewMode(true, false, NoDelta, "").Mode == Audit &&
+				ReviewMode(true, false, BelowThreshold, "").Mode == Audit &&
+				ReviewMode(true, false, "", "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE").Mode == Audit
+		}},
+		{"trivial skips are not reviewer passes", "policy.py:740-751; codex.py:3948-3956", func() bool {
+			for _, reason := range []string{NoDelta, BelowThreshold} {
+				if Passed(Outcome{ReviewStatus: "COMPLETED", Result: "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", Validation: "PASS"}, reason) {
+					return false
+				}
+			}
+			return true
+		}},
+		{"below threshold skips", "policy.py:672-688", func() bool {
+			got := Gate("implementation", "normal", true, 1, 10, 2, 20, true)
+			return !got.Run && got.Reason == BelowThreshold
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Log("mirrors " + test.source)
+			if !test.check() {
+				t.Fatal("decision did not match Python contract")
 			}
 		})
 	}
