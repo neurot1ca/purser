@@ -66,36 +66,6 @@
             ]
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 60,
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-              "hook",
-              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
-            ]
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 60,
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-              "hook",
-              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
-            ]
-          }
-        ]
       }
     ],
     "SessionStart": [
@@ -108,23 +78,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
               "hook",
-              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
-            ]
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 60,
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-              "hook",
-              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py"
+              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/session_start_maintenance.py"
             ]
           }
         ]

@@ -1,6 +1,9 @@
 import { buildReadEvent, platformBinary } from './mod/read.js'
+import { mapHookOutput } from './mod/lifecycle.js'
+import type { LifecycleEvent } from './mod/lifecycle.js'
 
 const reported = new Set<string>()
+const lifecycleReported = new Set<string>()
 let binaryPath: Promise<string> | undefined
 
 async function detectBinary($): Promise<string> {
@@ -21,6 +24,34 @@ async function detectBinary($): Promise<string> {
       /^(arm64|aarch64)$/i.test(machine ?? '') ? 'arm64' : ''
   }
   return `${$.plugin.root}/bin/${platformBinary(goos, goarch)}`
+}
+
+async function lifecycle($, e, next, name: LifecycleEvent) {
+  const prior = await next(e)
+  let mapped: ReturnType<typeof mapHookOutput> = {}
+  try {
+    binaryPath ??= detectBinary($).catch(error => {
+      binaryPath = undefined
+      throw error
+    })
+    const result = await $.process.run([await binaryPath], {
+      cwd: e.cwd,
+      stdin: JSON.stringify(e),
+      timeoutMs: 60000,
+    })
+    if (result.exitCode !== 0) throw new Error(`Go ${name} helper exited ${result.exitCode}`)
+    mapped = mapHookOutput(name, result.stdout)
+  } catch {
+    const key = e.session_id || '<unknown>'
+    if (!lifecycleReported.has(key)) {
+      lifecycleReported.add(key)
+      try { await $.ui.log('Go context lifecycle failed; event continued unchanged.') }
+      catch { /* logging must not affect hooks */ }
+    }
+  }
+  if (prior.block || (!mapped.block && !mapped.additionalContext)) return prior
+  if (mapped.block) return { ...prior, block: mapped.block }
+  return { ...prior, additionalContext: [...(prior.additionalContext ?? []), ...mapped.additionalContext!] }
 }
 
 export function register(on) {
@@ -51,4 +82,9 @@ export function register(on) {
     }
     return next(e)
   })
+
+  on('classic.UserPromptSubmit', ($, e, next) => lifecycle($, e, next, 'UserPromptSubmit'))
+  on('classic.SessionStart', ($, e, next) => lifecycle($, e, next, 'SessionStart'))
+  on('classic.PreCompact', ($, e, next) => lifecycle($, e, next, 'PreCompact'))
+  on('classic.Stop', ($, e, next) => lifecycle($, e, next, 'Stop'))
 }

@@ -232,7 +232,7 @@ def export_marketplace(commit, marketplace_dir):
 
 
 def _verify_staged_mod_assets(staged_tree, *, include_binaries):
-    required = ["hooks/register.ts", "hooks/mod/read.ts"]
+    required = ["hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts"]
     if include_binaries:
         required.extend(
             f"bin/purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")

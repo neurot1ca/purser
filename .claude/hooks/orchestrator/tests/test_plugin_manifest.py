@@ -1,4 +1,5 @@
 import json
+import io
 from pathlib import Path
 import re
 import sys
@@ -10,6 +11,7 @@ if str(ORCHESTRATOR_ROOT) not in sys.path:
     sys.path.insert(0, str(ORCHESTRATOR_ROOT))
 
 import install_claude_task_telemetry as installer
+import session_start_maintenance
 
 
 PLUGIN_TOOLS = {
@@ -20,6 +22,17 @@ PLUGIN_TOOLS = {
     "mcp__plugin_purser_codex-main__codex_cancel",
 }
 PLUGIN_APPLY_TOOL = "mcp__plugin_purser_codex-main__codex_apply"
+
+
+def test_session_start_maintenance_keeps_python_cleanup(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(session_start_maintenance.sys, "stdin", io.StringIO(json.dumps({"hook_event_name": "SessionStart"})))
+    monkeypatch.setattr(session_start_maintenance.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(session_start_maintenance.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(session_start_maintenance.maintenance_reports, "wake_background_check", lambda repo: calls.append(("wake", repo)))
+    monkeypatch.setattr(session_start_maintenance.async_session_maintenance, "cleanup_jobs", lambda root: calls.append(("cleanup", root)))
+    assert session_start_maintenance.main() == 0
+    assert calls == [("wake", tmp_path), ("cleanup", tmp_path / "state")]
 
 
 def test_plugin_hooks_match_manual_installer():
@@ -35,6 +48,8 @@ def test_plugin_hooks_match_manual_installer():
             # The plugin Read registration moved to hooks/register.ts; keep
             # the manual installer Read hook available for release rollback.
             if event == "PreToolUse" and matcher == r"^Read$":
+                continue
+            if script == "context_io_hook.py" and event in {"Stop", "UserPromptSubmit", "SessionStart", "PreCompact"}:
                 continue
             if matcher and "mcp__codex-main__" in matcher:
                 matcher = matcher.replace(
@@ -77,7 +92,7 @@ def test_plugin_manifest_paths_and_registration():
     # Plugin commands are auto-discovered from the conventional commands/ directory.
     assert (ROOT / "commands/check.md").is_file()
     assert set(hooks["hooks"]) == {
-        "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "UserPromptSubmit", "SessionStart", "PreCompact"
+        "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionStart"
     }
     session_start, = hooks["hooks"]["SessionStart"]
     assert "matcher" not in session_start
@@ -88,7 +103,7 @@ def test_plugin_manifest_paths_and_registration():
         "args": [
             "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
             "hook",
-            "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/context_io_hook.py",
+            "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/session_start_maintenance.py",
         ],
     }
     for name, timeout in (

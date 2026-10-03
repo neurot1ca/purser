@@ -309,7 +309,7 @@ def test_staged_export_requires_mod_sources_and_all_six_binaries(tmp_path):
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     staged = tmp_path / "staged"
-    for relative in ("hooks/register.ts", "hooks/mod/read.ts"):
+    for relative in ("hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts"):
         target = staged / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("source\n", encoding="utf-8")
@@ -324,6 +324,10 @@ def test_staged_export_requires_mod_sources_and_all_six_binaries(tmp_path):
     with pytest.raises(module.ReleaseError, match="hooks/mod/read.ts"):
         module._verify_staged_mod_assets(staged, include_binaries=True)
     (staged / "hooks" / "mod" / "read.ts").write_text("source\n", encoding="utf-8")
+    (staged / "hooks" / "mod" / "lifecycle.ts").unlink()
+    with pytest.raises(module.ReleaseError, match="hooks/mod/lifecycle.ts"):
+        module._verify_staged_mod_assets(staged, include_binaries=True)
+    (staged / "hooks" / "mod" / "lifecycle.ts").write_text("source\n", encoding="utf-8")
     (staged / "bin" / "purser-hook-darwin-arm64").unlink()
     with pytest.raises(module.ReleaseError, match="purser-hook-darwin-arm64"):
         module._verify_staged_mod_assets(staged, include_binaries=True)
