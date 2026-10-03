@@ -6,6 +6,7 @@ import re
 import shutil
 import stat
 import subprocess
+import time
 import uuid
 
 import pytest
@@ -225,6 +226,122 @@ def test_session_start_compact_source_refreshes_recent_turns_and_truncates_hando
     assert "... truncated; read the full file at " + str(handoff) in context
     # Captured UTC is the only volatile field in the refreshed recent-history block.
     assert re.search(r"Captured UTC: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00", context)
+
+
+def test_session_start_async_duration_followup_and_accuracy_contract(isolated):
+    import datetime
+
+    root, repo, state = isolated
+    key = _project_key(repo)
+    events = state / "telemetry" / "events" / datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m") / "session_contract.jsonl"
+    events.parent.mkdir(parents=True)
+    # event_timestamp is volatile; the contract asserts only stable rendered text.
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    records = [{"event_type": "IMPLEMENTER_FINISHED", "project_key": key, "ts_utc": timestamp,
+                "payload": {"route": "mechanical", "duration_ms": 120000, "implementer": "codex-main",
+                            "eta_minutes": 2}} for _ in range(10)]
+    events.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+    accuracy = state / "projects" / key / "duration_accuracy.json"
+    accuracy.parent.mkdir(parents=True)
+    accuracy.write_text(json.dumps({"compacts": 4, "errors": {"codex-main": 100.0}}), encoding="utf-8")
+
+    call = "codex_exec_async({})"
+    job_id = hashlib.sha256(call.encode()).hexdigest()
+    session_id, tool_use_id = "prior-session", "tool-use-contract"
+    call_key = hashlib.sha256(f"{session_id}\0{tool_use_id}".encode()).hexdigest()
+    index = {"jobId": job_id, "project_key": key, "session_id": session_id, "call": call,
+             "call_key": call_key, "stage": "WAITING"}
+    pending = {"job_id": job_id, "async_call": call, "session_id": session_id,
+               "project_key": key, "tool_use_id": tool_use_id, "task_id": "contract task"}
+    job = {"jobId": job_id, "call": call, "state": "RUNNING"}
+    for directory, name, value in ((state / "async_jobs", job_id + ".json", index),
+                                   (state / "pending", call_key + ".json", pending),
+                                   (state / "codex_exec_mcp" / "jobs", job_id + ".json", job)):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(json.dumps(value), encoding="utf-8")
+
+    expected_duration = "Purser: typical Codex durations here (median/p90, n): mechanical 2/2 min (n=10)."
+    expected_accuracy = (
+        'Render the line in the user\'s language, translating from the English text and keeping ⚓, markdown, '
+        'model names, numbers, and commands unchanged: "> ⚓ **Codex\'s task duration estimates have improved '
+        'through the self-learning system! The estimated margin of error is now 0%.**"'
+    )
+    expected_followup = (
+        f"Purser (jobId={job_id}, for Claude only): Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: "
+            '"> ⚓ **The Codex task I started before the app closed (contract task) is still running while the app is closed. I\'ll let you know when it finishes.**" '
+        "When it finishes, ask for the user's agreement before calling codex_result with adopt: true. Do not show the jobId to the user."
+    )
+    result = _run("SessionStart", repo, state, session_id="async-successor", source="compact")
+    assert (result.returncode, result.stderr) == (0, b"")
+    _assert_json_stdout(result, {"hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": "Reply in the language the user writes in.\n" + expected_duration + "\n" + expected_followup + "\n" + expected_accuracy,
+    }})
+
+
+def test_session_start_maintenance_activity_and_notice_contract(isolated, monkeypatch):
+    import datetime
+
+    _root, _temporary_repo, state = isolated
+    # The Python hook intentionally detaches a 15-minute check with repo as cwd.
+    # Use the checkout root so that its directory is not removed during teardown.
+    repo = Path(__file__).parents[4].resolve()
+    key = _project_key(repo)
+    maintenance = state / "projects" / key / "maintenance"
+    maintenance.mkdir(parents=True)
+    (maintenance / "opt-in.json").write_text(json.dumps({"project_root": str(repo.resolve()), "enabled": True}), encoding="utf-8")
+    rollout = _root / "codex" / "sessions" / datetime.datetime.now(datetime.timezone.utc).strftime("%Y/%m/%d") / "rollout-contract.jsonl"
+    rollout.parent.mkdir(parents=True)
+    # quota_timestamp and activity.at are volatile and checked only for freshness/type.
+    stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    rollout.write_text(json.dumps({"timestamp": stamp, "payload": {"rate_limits": {}}}), encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(rollout.parents[4]))
+    result = _run("SessionStart", repo, state, session_id="maintenance-contract", source="resume")
+    assert (result.returncode, result.stderr) == (0, b"")
+    actual = json.loads(result.stdout)
+    additional = actual["hookSpecificOutput"]["additionalContext"]
+    # maintenance_cli is the only volatile text: it is the installed interpreter and hook path.
+    maintenance_cli = f'"{__import__("sys").executable}" "{Path(__file__).parents[1] / "maintenance_reports.py"}"'
+    additional = additional.replace(maintenance_cli, "<maintenance_cli>")
+    expected_context = (
+        "Reply in the language the user writes in.\n"
+        "Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. "
+        "If the user says yes, run `<maintenance_cli> consent yes --repo \"<repository-root>\"`; "
+        "if no, run `<maintenance_cli> consent no --repo \"<repository-root>\"`. Do not infer consent.\n"
+        "> ⚓ **While you work, Purser can scan your project in the background with its proactive cleanup module. "
+        "This scan is billed to your API account. Run it?**"
+    )
+    assert actual["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert additional == expected_context, (repr(additional), repr(expected_context))
+    activity = json.loads((maintenance / "last-activity.json").read_text(encoding="utf-8"))
+    assert isinstance(activity["at"], (int, float))
+    assert abs(activity["at"] - time.time()) < 10
+    # The hook detaches its opt-in maintenance check with this repo as cwd.
+    time.sleep(2)
+
+
+def test_session_start_emits_compaction_outcome_contract(isolated):
+    _root, repo, state = isolated
+    session = "outcome-contract"
+    advisor = _advisor_state(state, repo)
+    advisor.parent.mkdir(parents=True)
+    advisor.write_text(json.dumps({
+        "session_id": session, "context_prompt_count": 4,
+        "notice_pending": {"notice_id": "0123456789abcdef0123456789abcdef", "context": 120000,
+                           "percentage": 85, "handoff": "handoff", "advice_written": True, "advice_turn": 3},
+        "compaction_outcome_pending": {"notice_id": "0123456789abcdef0123456789abcdef", "pre_context_tokens": 120000,
+                                       "advice_turn": 3, "compaction_observed": False},
+    }), encoding="utf-8")
+    result = _run("SessionStart", repo, state, session_id=session, source="compact")
+    assert (result.returncode, result.stderr) == (0, b"")
+    events = [json.loads(line) for path in (state / "telemetry" / "events").glob("????-??/*.jsonl")
+              for line in path.read_text(encoding="utf-8").splitlines()]
+    [event] = [item for item in events if item["event_type"] == "COMPACTION_ADVICE_OUTCOME"]
+    assert event["session_id"] == session
+    assert event["payload"] == {
+        "advice_written": True, "compaction_observed": True,
+        "notice_id": "0123456789abcdef0123456789abcdef", "pre_context_tokens": 120000,
+    }
 
 
 def test_compact_boundary_removes_stale_recent_block_without_recent_turns(isolated):
