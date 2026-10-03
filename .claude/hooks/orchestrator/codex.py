@@ -187,11 +187,14 @@ def _parse_task_contract(
     for i, line in enumerate(lines):
         line_str = line.strip()
         lower = line_str.lower()
-        if lower.startswith(("task objective:", "objective:")):
+        if lower.startswith(("task objective:", "objective:", "goal:")):
             collecting_criteria = False
-            label = "task objective:" if lower.startswith("task objective:") else "objective:"
+            label = next(
+                label for label in ("task objective:", "objective:", "goal:")
+                if lower.startswith(label)
+            )
             val = line_str[len(label):].strip()
-            if not val and i + 1 < len(lines) and not lines[i + 1].strip().lower().startswith("acceptance criteria:"):
+            if not val and i + 1 < len(lines) and not lines[i + 1].strip().lower().startswith(("acceptance criteria:", "acceptance:")):
                 val = lines[i + 1].strip()
             if "acceptance criteria:" in val.lower():
                 c_idx = val.lower().find("acceptance criteria:")
@@ -201,13 +204,20 @@ def _parse_task_contract(
                 val = val[:c_idx].strip(". ")
             if val and found_obj is None:
                 found_obj = val
-        elif lower.startswith("acceptance criteria:"):
+        elif lower.startswith(("acceptance criteria:", "acceptance:")):
             collecting_criteria = True
-            val = line_str[len("acceptance criteria:"):].strip()
+            label = "acceptance criteria:" if lower.startswith("acceptance criteria:") else "acceptance:"
+            val = line_str[len(label):].strip()
             if val:
                 criteria_lines.append(val)
         elif collecting_criteria:
-            if line_str.startswith(("ORCH|", "TASK_CONTRACT:", "```")):
+            if (
+                line_str.startswith(("ORCH|", "TASK_CONTRACT:", "```"))
+                or re.match(
+                    r"^(?:task objective|objective|goal|acceptance criteria|acceptance|verified context|report):",
+                    lower,
+                )
+            ):
                 collecting_criteria = False
             elif re.match(r"^(?:[-*+]|\d+[.)])\s+", line_str):
                 criteria_lines.append(re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line_str))

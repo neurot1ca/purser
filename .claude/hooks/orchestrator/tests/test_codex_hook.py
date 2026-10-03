@@ -6865,6 +6865,43 @@ def test_task_contract_partial_is_not_grounded_and_handles_lists():
     assert crit == "Crit 1; Crit 2"
 
 
+def test_goal_and_acceptance_key_value_headers_ground_task_contract():
+    prompt = "gOaL: Update the parser\naCcEpTaNcE: Preserve contract validation"
+
+    obj, crit, grounded = codex._parse_task_contract(prompt, "goal", "implementation", [])
+
+    assert grounded is True
+    assert obj == "Update the parser"
+    assert crit == "Preserve contract validation"
+
+
+def test_goal_only_key_value_header_is_not_grounded():
+    obj, _, grounded = codex._parse_task_contract(
+        "Goal: Update the parser", "goal-only", "implementation", []
+    )
+
+    assert grounded is False
+    assert obj == "Update the parser"
+
+
+def test_acceptance_key_value_header_collects_bullets_until_next_section():
+    prompt = (
+        "Goal: Update the parser\n"
+        "Acceptance:\n"
+        "- Preserve JSON contracts\n"
+        "- Collect multiline criteria\n"
+        "Verified context:\n"
+        "This must not become a criterion.\n"
+        "Report:\n"
+        "Summarize the change."
+    )
+
+    _, crit, grounded = codex._parse_task_contract(prompt, "goal-list", "implementation", [])
+
+    assert grounded is True
+    assert crit == "Preserve JSON contracts; Collect multiline criteria"
+
+
 def test_plain_objective_label_grounds_with_next_line_and_inline_criteria():
     prompt = (
         "ORCH|task=plain|phase=implementation|route=normal|basis=test fixture design boundary|scope=f.py\n"
