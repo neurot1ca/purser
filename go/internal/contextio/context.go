@@ -148,7 +148,6 @@ func Read(event map[string]any, processStart time.Time) error {
 	defer f.Close()
 	if st, _ := f.Stat(); st != nil && st.Size() == 0 {
 		_, _ = f.WriteAt([]byte("0"), 0)
-		_ = f.Sync()
 	}
 	deadline := time.Now().Add(50 * time.Millisecond)
 	acquired := false
