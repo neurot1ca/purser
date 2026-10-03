@@ -39,10 +39,33 @@ func TestJournalWriteRoundTrip(t *testing.T) {
 }
 
 func TestContextTurnEventRecordsGoRuntime(t *testing.T) {
-	event := contextTurnEvent(newTurn(""), 0, 0, time.Now())
+	event := contextTurnEvent(newTurn(""), "session-1", 0, 0, time.Now())
 	payload, ok := event["payload"].(map[string]any)
 	if !ok || payload["runtime"] != "go" {
 		t.Fatalf("context turn runtime = %v, want go", payload["runtime"])
+	}
+	if event["session_id"] != "session-1" {
+		t.Fatalf("context turn session_id = %v, want session-1", event["session_id"])
+	}
+}
+
+func TestPersistContextTurnRoutesEmptyRawSessionIDAfterNormalization(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", root)
+	event := map[string]any{
+		"schema_version": 1,
+		"event_id":       "00000000-0000-4000-8000-000000000001",
+		"ts_utc":         "2026-10-03T12:00:00Z",
+		"event_type":     "CONTEXT_IO_TURN_RECORDED",
+		"task_id":        nil,
+		"session_id":     "",
+	}
+	if !persistContextTurn(event) {
+		t.Fatal("persistContextTurn failed")
+	}
+	path := filepath.Join(root, "telemetry", "events", "2026-10", "session_session-e3b0c442.jsonl")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("normalized session event missing at %s: %v", path, err)
 	}
 }
 

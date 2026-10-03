@@ -660,10 +660,12 @@ def build_context_io_turn_event(
     task_id: Any,
     event_id: str,
     project_key: Any = None,
+    session_id: Any = None,
 ) -> dict[str, Any]:
     uuid.UUID(event_id)
     event = schema.build_event(
-        "CONTEXT_IO_TURN_RECORDED", task_id=task_id, project_key=project_key, payload=payload
+        "CONTEXT_IO_TURN_RECORDED", task_id=task_id, project_key=project_key,
+        session_id=session_id, payload=payload
     )
     event["event_id"] = event_id
     if not schema.valid_event(event):

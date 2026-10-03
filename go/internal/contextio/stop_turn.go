@@ -60,7 +60,7 @@ func stopTurn(event map[string]any, processStart time.Time) {
 			consumeContention(turn, contention)
 			frozen, ok := turn["final_event"].(map[string]any)
 			if !ok {
-				frozen = contextTurnEvent(turn, time.Since(stopStarted), time.Since(processStart), time.Now())
+				frozen = contextTurnEvent(turn, str(event["session_id"]), time.Since(stopStarted), time.Since(processStart), time.Now())
 				turn["final_event"] = frozen
 				if writeTurn(journal, turn) != nil {
 					markContention(contention)
@@ -88,7 +88,7 @@ func stopTurn(event map[string]any, processStart time.Time) {
 	markContention(contention)
 }
 
-func contextTurnEvent(turn map[string]any, internal, wall time.Duration, started time.Time) map[string]any {
+func contextTurnEvent(turn map[string]any, session string, internal, wall time.Duration, started time.Time) map[string]any {
 	observations, _ := turn["observations"].([]any)
 	latency, _ := turn["latency"].([]any)
 	latency = append(latency, []any{max(int64(0), internal.Microseconds()), max(int64(0), wall.Microseconds())})
@@ -176,7 +176,8 @@ func contextTurnEvent(turn map[string]any, internal, wall time.Duration, started
 	if turn["task_association_known"] == true {
 		taskID, projectKey = turn["task_id"], turn["project_key"]
 	}
-	return map[string]any{"schema_version": 1, "event_id": id, "ts_utc": started.UTC().Format(time.RFC3339Nano), "event_type": "CONTEXT_IO_TURN_RECORDED", "task_id": taskID, "project_key": projectKey, "session_id": nil, "repo": nil, "branch": nil, "agent_id": nil, "agent_type": nil, "payload": payload}
+	sessionID := normalizeTelemetryID(session)
+	return map[string]any{"schema_version": 1, "event_id": id, "ts_utc": started.UTC().Format(time.RFC3339Nano), "event_type": "CONTEXT_IO_TURN_RECORDED", "task_id": taskID, "project_key": projectKey, "session_id": sessionID, "repo": nil, "branch": nil, "agent_id": nil, "agent_type": nil, "payload": payload}
 }
 
 func persistContextTurn(event map[string]any) bool {
@@ -209,7 +210,11 @@ func persistContextTurn(event map[string]any) bool {
 	if len(stamp) < 7 || !safeContextMonth.MatchString(stamp[:7]) {
 		return false
 	}
-	path := filepath.Join(root, stamp[:7], "session_unknown.jsonl")
+	sessionID := normalizeTelemetryID(str(event["session_id"]))
+	if sessionID == "" {
+		sessionID = "unknown"
+	}
+	path := filepath.Join(root, stamp[:7], "session_"+sessionID+".jsonl")
 	if !appendEventOnce(path, event) {
 		return false
 	}

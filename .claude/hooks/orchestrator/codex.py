@@ -793,19 +793,22 @@ def _async_continuation_turn_count(
             or accepted_at > result_at):
         return None
     count = 0
+    has_session_turn = False
     try:
         for item in telemetry._raw_events(telemetry._root(state_root)):
             if (item.get("event_type") != "CONTEXT_IO_TURN_RECORDED"
                     or item.get("session_id") != session_id):
                 continue
+            has_session_turn = True
             try:
                 stamp = datetime.fromisoformat(item["ts_utc"].replace("Z", "+00:00")).timestamp()
             except (KeyError, TypeError, ValueError):
                 continue
-            count += accepted_at <= stamp <= result_at
+            if accepted_at <= stamp <= result_at:
+                count += 1
     except (OSError, TypeError, ValueError):
         return None
-    return count
+    return count if has_session_turn else None
 
 
 def _load_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:

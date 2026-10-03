@@ -7946,6 +7946,13 @@ def test_async_continuation_count_uses_session_and_job_window(monkeypatch, tmp_p
 
 def test_async_continuation_count_is_unknown_without_session_id(monkeypatch, tmp_path):
     assert codex._async_continuation_turn_count(tmp_path, None, 1, 2) is None
+    turn_events = [{"event_type": "CONTEXT_IO_TURN_RECORDED", "session_id": None,
+                    "ts_utc": "1970-01-01T00:00:01Z"}]
+    monkeypatch.setattr(codex.telemetry, "_raw_events", lambda _root: turn_events)
+    assert codex._async_continuation_turn_count(tmp_path, "session-1", 1, 2) is None
+    turn_events.append({"event_type": "CONTEXT_IO_TURN_RECORDED", "session_id": "session-1",
+                        "ts_utc": "1970-01-01T00:00:03Z"})
+    assert codex._async_continuation_turn_count(tmp_path, "session-1", 1, 2) == 0
     events = []
     monkeypatch.setattr(codex, "_observe", lambda *args, **kwargs: events.append((args, kwargs)))
     codex._post_observations(
@@ -7956,6 +7963,15 @@ def test_async_continuation_count_is_unknown_without_session_id(monkeypatch, tmp
     )
     finished = next(kwargs for args, kwargs in events if args[1] == "IMPLEMENTER_FINISHED")
     assert finished["claude_continuation_turn_count"] is None
+
+
+def test_async_continuation_event_includes_session_id(tmp_path):
+    state = tmp_path / "state"
+    session = "session-emitted-turn"
+    context_io_telemetry.stop({"session_id": session, "hook_event_name": "Stop"}, state_root=state)
+    emitted = codex.telemetry._raw_events(codex.telemetry._root(state))
+    [event] = [item for item in emitted if item.get("event_type") == "CONTEXT_IO_TURN_RECORDED"]
+    assert event["session_id"] == session
 
 
 @pytest.mark.parametrize(

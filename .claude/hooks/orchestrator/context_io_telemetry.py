@@ -753,6 +753,7 @@ def stop(
                         if turn.get("task_association_known") is True
                         else None
                     ),
+                    session_id=event.get("session_id"),
                 )
                 turn["final_event"] = frozen_event
                 if not _write_turn(journal, turn, contention):

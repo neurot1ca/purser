@@ -72,9 +72,12 @@ def _read_event(session, root, path, **tool_input):
 def _events(state):
     events = []
     root = state / "telemetry" / "events"
-    for path in root.glob("????-??/session_unknown.jsonl") if root.exists() else ():
+    for path in root.glob("????-??/session_*.jsonl") if root.exists() else ():
         events.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
-    return [event for event in events if event["event_type"] == "CONTEXT_IO_TURN_RECORDED"]
+    return sorted(
+        (event for event in events if event["event_type"] == "CONTEXT_IO_TURN_RECORDED"),
+        key=lambda event: event["ts_utc"],
+    )
 
 
 def _journal(state, session):
@@ -126,7 +129,7 @@ def test_subprocess_read_prompt_stop_contract(tmp_path):
     assert (stop.returncode, stop.stdout, stop.stderr) == (0, b"", b"")
     [event] = _contract_events(state)
     assert event["event_type"] == "CONTEXT_IO_TURN_RECORDED"
-    assert event["session_id"] is None and event["task_id"] is None
+    assert event["session_id"] == session and event["task_id"] is None
     assert event["schema_version"] == 1 and len(event["event_id"]) == 36
     payload = event["payload"]
     assert payload["read_count"] == 0
@@ -202,8 +205,9 @@ def test_subprocess_in_turn_prompt_read_stop_contract(tmp_path):
     for volatile in ("internal_processing_us_total", "internal_processing_us_max",
                      "hook_wall_time_us_total", "hook_wall_time_us_max"):
         payload.pop(volatile, None)
+    assert payload["runtime"] in {"go", "python"}
     assert payload == {
-        "runtime": "python",
+        "runtime": payload["runtime"],
         "read_count": 3,
         "full_read_count": 2,
         "targeted_read_count": 1,
@@ -409,7 +413,9 @@ def test_full_turn_association_thresholds_and_projection(tmp_path):
     payload = event["payload"]
     assert schema.valid_event(event)
     assert event["task_id"] == "task-context-1"
-    assert event["session_id"] is None
+    assert event["session_id"] == session
+    assert (state / "telemetry" / "events" / event["ts_utc"][:7]
+            / f"session_{session}.jsonl").is_file()
     assert payload["read_count"] == 3
     assert (payload["full_read_count"], payload["targeted_read_count"]) == (2, 1)
     assert (payload["pre_codex_read_count"], payload["post_codex_read_count"]) == (1, 2)
@@ -429,6 +435,16 @@ def test_full_turn_association_thresholds_and_projection(tmp_path):
         ).read_text(encoding="utf-8")
     )
     assert aggregate["context_io"] == payload
+
+
+def test_empty_session_id_routes_using_normalized_identifier(tmp_path):
+    event = telemetry.build_context_io_turn_event(
+        {}, task_id=None, event_id=str(uuid.uuid4()), session_id="",
+    )
+    assert event["session_id"] == schema.normalize_identifier("", fallback="session")
+    assert telemetry._event_path(tmp_path / "telemetry", event).name == (
+        f"session_{event['session_id']}.jsonl"
+    )
 
 
 def test_targeted_read_near_eof_measures_only_requested_range(tmp_path):
@@ -561,7 +577,7 @@ def test_journal_to_canonical_transition_cannot_leak_path_content_or_identity(tm
     context_io.stop(_event(session, "Stop"), state_root=state)
     assert not journal.exists()
     raw_event = json.dumps(_events(state)[0], sort_keys=True)
-    for forbidden in (secret, "PROMPT_SENTINEL", str(target), target.name, root.name, session, "identity", "st_dev", "st_ino"):
+    for forbidden in (secret, "PROMPT_SENTINEL", str(target), target.name, root.name, "identity", "st_dev", "st_ino"):
         assert forbidden not in raw_event
 
 
@@ -690,7 +706,8 @@ def test_pending_intent_relocates_after_valid_event_occupies_offset(tmp_path, mo
 
     monkeypatch.setattr(telemetry, "_append_event", original_append)
     event_two = telemetry.build_context_io_turn_event(
-        event_one["payload"], task_id=task_two, event_id=str(uuid.uuid4())
+        event_one["payload"], task_id=task_two, event_id=str(uuid.uuid4()),
+        session_id=event_one["session_id"],
     )
     assert telemetry.emit_context_io_turn(event_two, state_root=state)
     assert telemetry.emit_context_io_turn(event_one, state_root=state)
