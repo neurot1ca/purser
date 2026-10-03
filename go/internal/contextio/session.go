@@ -138,7 +138,7 @@ func SessionStart(event map[string]any) []byte {
 	if validSession && repository != "" {
 		queueMaintenanceConsent(statePath, repository, projectKey, session, state)
 	}
-	delivered := lifecycleGuidance(state, repository)
+	delivered := lifecycleGuidance(state)
 	additional = joinContext(additional, delivered)
 	if validSession && repository != "" {
 		root := stateRoot()
@@ -1185,7 +1185,19 @@ func quotaWindow(window map[string]any, now int64) (float64, bool) {
 	return used, minOK && usedOK && resetOK && (minutes == 300 || minutes == 10080) && reset > float64(now)
 }
 
-func lifecycleGuidance(state map[string]any, repository string) string {
+func maintenanceScriptPath() string {
+	root := os.Getenv("CLAUDE_PLUGIN_ROOT")
+	if root == "" {
+		executable, err := os.Executable()
+		if err != nil {
+			return ""
+		}
+		root = filepath.Dir(filepath.Dir(executable))
+	}
+	return filepath.Join(root, ".claude", "hooks", "orchestrator", "maintenance_reports.py")
+}
+
+func lifecycleGuidance(state map[string]any) string {
 	if state == nil {
 		return ""
 	}
@@ -1197,7 +1209,7 @@ func lifecycleGuidance(state map[string]any, repository string) string {
 				if err == nil {
 					python, _ = filepath.Abs(python)
 				}
-				script := filepath.Join(repository, ".claude", "hooks", "orchestrator", "maintenance_reports.py")
+				script := maintenanceScriptPath()
 				cli := `"` + python + `" "` + script + `"`
 				if strings.HasSuffix(noticeFile, "consent.json") {
 					parts = append(parts, fmt.Sprintf("Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. If the user says yes, run `%s consent yes --repo \"<repository-root>\"`; if no, run `%s consent no --repo \"<repository-root>\"`. Do not infer consent.\n%s", cli, cli, text))

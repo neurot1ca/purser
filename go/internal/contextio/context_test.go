@@ -83,6 +83,42 @@ func TestReadEdgeCases(t *testing.T) {
 	}
 }
 
+func TestMaintenanceConsentUsesPluginRoot(t *testing.T) {
+	pluginRoot := filepath.Join(t.TempDir(), "installed-plugin")
+	projectRoot := filepath.Join(t.TempDir(), "user-project")
+	if pluginRoot == projectRoot {
+		t.Fatal("plugin and project roots must differ")
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python is not on PATH")
+	}
+	python, _ = filepath.Abs(python)
+	pluginScript := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "maintenance_reports.py")
+	projectScript := filepath.Join(projectRoot, ".claude", "hooks", "orchestrator", "maintenance_reports.py")
+	state := map[string]any{"maintenance_pending": map[string]any{
+		"notice_file": filepath.Join(projectRoot, "maintenance", "consent.json"),
+		"text":        "> ⚓ **Run it?**",
+	}}
+	got := lifecycleGuidance(state)
+	if !strings.Contains(got, `"`+python+`" "`+pluginScript+`"`) {
+		t.Fatalf("maintenance CLI did not use plugin script path %q: %s", pluginScript, got)
+	}
+	if strings.Contains(got, projectScript) {
+		t.Fatalf("maintenance CLI used project script path %q: %s", projectScript, got)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := filepath.Join(filepath.Dir(filepath.Dir(executable)), ".claude", "hooks", "orchestrator", "maintenance_reports.py")
+	if got := maintenanceScriptPath(); got != fallback {
+		t.Fatalf("maintenance script fallback = %q, want %q", got, fallback)
+	}
+}
+
 func TestProjectRootWalk(t *testing.T) {
 	for _, key := range []string{"GIT_DIR", "GIT_WORK_TREE"} {
 		value, set := os.LookupEnv(key)
