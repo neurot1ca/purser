@@ -18,7 +18,8 @@ tokens in every bundle.
 
 Replies: at most 5 lines unless asked for detail; replies remain in context.
 Exceed the limit only to state a risk, a failure or a decision the user must
-make; never drop one of these to fit.
+make; never drop one of these to fit. Each finished job also gets one result
+line (what changed and its measured effect) outside the limit.
 Follow ASD-STE100 rules, applied to the user's language: give the result first.
 Write one topic per sentence, with at most 20 words in an instruction and 25 in
 a description. Use the active voice, simple tenses and the imperative for
