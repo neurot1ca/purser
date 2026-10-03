@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -108,6 +109,9 @@ func SessionStart(event map[string]any) []byte {
 		transcriptPath, _ := event["transcript_path"].(string)
 		additional = restoreHandoff(source, handoff, string(content), transcriptPath)
 	}
+	if repository != "" {
+		recordMaintenanceActivity(stateRoot(), repository, projectKey)
+	}
 	line := languageInstruction(language)
 	if !validSession {
 		line = ""
@@ -131,7 +135,10 @@ func SessionStart(event map[string]any) []byte {
 		}
 	}
 	additional = joinContext(additional, modelContext)
-	delivered := lifecycleGuidance(state)
+	if validSession && repository != "" {
+		queueMaintenanceConsent(statePath, repository, projectKey, session, state)
+	}
+	delivered := lifecycleGuidance(state, repository)
 	additional = joinContext(additional, delivered)
 	if validSession && repository != "" {
 		root := stateRoot()
@@ -1059,11 +1066,145 @@ func number(value any) int {
 	}
 }
 
-func lifecycleGuidance(state map[string]any) string {
+func maintenanceOptedIn(directory, root string) bool {
+	data, err := os.ReadFile(filepath.Join(directory, "opt-in.json"))
+	if err != nil {
+		return false
+	}
+	var marker map[string]any
+	return json.Unmarshal(data, &marker) == nil && marker["enabled"] == true && marker["project_root"] == root
+}
+
+func recordMaintenanceActivity(stateRoot, root, key string) {
+	directory := filepath.Join(stateRoot, "projects", key, "maintenance")
+	if !maintenanceOptedIn(directory, root) {
+		return
+	}
+	_ = writeJSONAtomically(filepath.Join(directory, "last-activity.json"), map[string]any{"at": float64(time.Now().UnixNano()) / 1e9})
+}
+
+func queueMaintenanceConsent(statePath, root, key, session string, state map[string]any) {
+	directory := filepath.Join(stateRoot(), "projects", key, "maintenance")
+	if session == "" || statePath == "" || !maintenanceOptedIn(directory, root) || !maintenanceHasNoQuotaWindow() {
+		return
+	}
+	consentPath := filepath.Join(directory, "consent.json")
+	var consent map[string]any
+	if data, err := os.ReadFile(consentPath); err == nil {
+		_ = json.Unmarshal(data, &consent)
+	}
+	if consent == nil {
+		consent = map[string]any{}
+	}
+	if consent["project_root"] == root && (consent["decision"] == "yes" || consent["decision"] == "no") || consent["prompted"] == true {
+		return
+	}
+	consent["project_root"], consent["prompted"] = root, true
+	if writeJSONAtomically(consentPath, consent) != nil {
+		return
+	}
+	text := "> ⚓ **While you work, Purser can scan your project in the background with its proactive cleanup module. This scan is billed to your API account. Run it?**"
+	old, _ := state["maintenance_pending"].(map[string]any)
+	delivered := old != nil && old["notice_file"] == consentPath && old["text"] == text && old["delivered"] == true
+	state["maintenance_pending"] = map[string]any{
+		"notice_file": consentPath, "text": text, "evidence": []string{"API"},
+		"report_type": "cleanup", "blocked": false, "delivered": delivered,
+	}
+	_ = writeAdvisorState(statePath, state)
+}
+
+func maintenanceHasNoQuotaWindow() bool {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		home = filepath.Join(userHome, ".codex")
+	}
+	now := time.Now()
+	var candidates []string
+	for _, day := range []time.Time{now, now.AddDate(0, 0, -1)} {
+		matches, _ := filepath.Glob(filepath.Join(home, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"), "rollout-*.jsonl"))
+		candidates = append(candidates, matches...)
+	}
+	var latest string
+	var modified time.Time
+	for _, path := range candidates {
+		info, err := os.Stat(path)
+		if err == nil && (latest == "" || info.ModTime().After(modified)) {
+			latest, modified = path, info.ModTime()
+		}
+	}
+	if latest == "" {
+		return false
+	}
+	data, err := os.ReadFile(latest)
+	if err != nil {
+		return false
+	}
+	if len(data) > 256<<10 {
+		data = data[len(data)-(256<<10):]
+		if index := bytes.IndexByte(data, '\n'); index >= 0 {
+			data = data[index+1:]
+		}
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	for i := len(lines) - 1; i >= 0; i-- {
+		var event map[string]any
+		if json.Unmarshal(lines[i], &event) != nil {
+			continue
+		}
+		payload, _ := event["payload"].(map[string]any)
+		limits, _ := payload["rate_limits"].(map[string]any)
+		if limits == nil {
+			continue
+		}
+		stamp, ok := event["timestamp"].(string)
+		at, parseErr := time.Parse(time.RFC3339Nano, stamp)
+		if !ok || parseErr != nil || at.After(now) || now.Sub(at) > 30*time.Minute {
+			return false
+		}
+		for _, label := range []string{"primary", "secondary"} {
+			window, _ := limits[label].(map[string]any)
+			if window != nil {
+				if _, valid := quotaWindow(window, now.Unix()); valid {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func quotaWindow(window map[string]any, now int64) (float64, bool) {
+	minutes, minOK := exactInteger(window["window_minutes"])
+	used, usedOK := numeric(window["used_percent"])
+	reset, resetOK := numeric(window["resets_at"])
+	return used, minOK && usedOK && resetOK && (minutes == 300 || minutes == 10080) && reset > float64(now)
+}
+
+func lifecycleGuidance(state map[string]any, repository string) string {
 	if state == nil {
 		return ""
 	}
 	var parts []string
+	if pending, ok := state["maintenance_pending"].(map[string]any); ok && pending["delivered"] != true && pending["blocked"] != true {
+		if noticeFile, fileOK := pending["notice_file"].(string); fileOK {
+			if text, textOK := pending["text"].(string); textOK {
+				python, err := exec.LookPath("python")
+				if err == nil {
+					python, _ = filepath.Abs(python)
+				}
+				script := filepath.Join(repository, ".claude", "hooks", "orchestrator", "maintenance_reports.py")
+				cli := `"` + python + `" "` + script + `"`
+				if strings.HasSuffix(noticeFile, "consent.json") {
+					parts = append(parts, fmt.Sprintf("Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. If the user says yes, run `%s consent yes --repo \"<repository-root>\"`; if no, run `%s consent no --repo \"<repository-root>\"`. Do not infer consent.\n%s", cli, cli, text))
+				}
+			}
+		}
+	}
 	if pending, ok := state["version_pending"].(map[string]any); ok && pending["delivered"] != true && pending["blocked"] != true {
 		if version, valid := pending["version"].(string); valid && version != "" {
 			parts = append(parts, "Include one visible line containing both `⚓` and `"+version+"` to announce the Purser update.")
@@ -1090,13 +1231,20 @@ func lifecycleGuidance(state map[string]any) string {
 }
 
 func markLifecycleDelivered(state map[string]any) {
-	for _, field := range []string{"version_pending", "leader_pending", "fallback_pending"} {
+	for _, field := range []string{"maintenance_pending", "version_pending", "leader_pending", "fallback_pending"} {
 		pending, ok := state[field].(map[string]any)
 		if !ok || pending["delivered"] == true || pending["blocked"] == true {
 			continue
 		}
 		if field == "leader_pending" && (!integer(pending["successes"]) || !integer(pending["sample_count"])) {
 			continue
+		}
+		if field == "maintenance_pending" {
+			_, fileOK := pending["notice_file"].(string)
+			_, textOK := pending["text"].(string)
+			if !fileOK || !textOK {
+				continue
+			}
 		}
 		if field == "fallback_pending" {
 			_, lineOK := pending["line"].(string)

@@ -417,6 +417,46 @@ def test_session_start_maintenance_activity_and_notice_contract(isolated, monkey
     time.sleep(2)
 
 
+@pytest.mark.parametrize("marker", [None, "malformed"])
+def test_session_start_maintenance_missing_or_malformed_opt_in_is_ignored(isolated, marker):
+    _root, repo, state = isolated
+    maintenance = state / "projects" / _project_key(repo) / "maintenance"
+    if marker is not None:
+        maintenance.mkdir(parents=True)
+        (maintenance / "opt-in.json").write_text("{", encoding="utf-8")
+    result = _run("SessionStart", repo, state, session_id="maintenance-invalid", source="resume")
+    assert (result.returncode, result.stderr) == (0, b"")
+    _assert_json_stdout(result, {"hookSpecificOutput": {
+        "hookEventName": "SessionStart", "additionalContext": "Reply in the language the user writes in.",
+    }})
+    assert not (maintenance / "last-activity.json").exists()
+
+
+def test_session_start_maintenance_notice_is_delivered_once(isolated):
+    _root, repo, state = isolated
+    key = _project_key(repo)
+    maintenance = state / "projects" / key / "maintenance"
+    maintenance.mkdir(parents=True)
+    consent_path = maintenance / "consent.json"
+    advisor = _advisor_state(state, repo)
+    advisor.parent.mkdir(parents=True)
+    notice_text = ("> ⚓ **While you work, Purser can scan your project in the background with its proactive cleanup module. "
+                   "This scan is billed to your API account. Run it?**")
+    advisor.write_text(json.dumps({
+        "session_id": "maintenance-delivered", "maintenance_pending": {
+            "notice_file": str(consent_path), "text": notice_text, "evidence": ["API"],
+            "report_type": "cleanup", "blocked": False, "delivered": True,
+        },
+    }), encoding="utf-8")
+    result = _run("SessionStart", repo, state, session_id="maintenance-delivered", source="resume")
+    assert (result.returncode, result.stderr) == (0, b"")
+    _assert_json_stdout(result, {"hookSpecificOutput": {
+        "hookEventName": "SessionStart", "additionalContext": "Reply in the language the user writes in.",
+    }})
+    persisted = json.loads(advisor.read_text(encoding="utf-8"))
+    assert persisted["maintenance_pending"]["delivered"] is True
+
+
 def test_session_start_emits_compaction_outcome_contract(isolated):
     _root, repo, state = isolated
     session = "outcome-contract"
