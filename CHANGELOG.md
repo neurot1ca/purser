@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.63 — 2026-10-03
+
+- **Changed:** The Read hook runs as a native Go binary built for Windows, Linux and macOS (amd64/arm64); Purser falls back to Python when the binary cannot start.
+- **Fixed:** A Codex reply after the previous job was applied and committed no longer fails with a replay conflict.
+- **Added:** `reason=fix` for replies that send work back after review, and the worker's PASS/FAIL validation in job telemetry.
+- **Removed:** Unused internal code flagged by the cleanup report.
+
 ## 0.1.62 — 2026-10-02
 
 - **Changed:** Codex receipts, the job board and lifecycle notices (maintenance, upgrade, new model, free-model leader, fallback) now reach Claude before it replies, so it writes them in its first reply; the Stop hook only blocks as a fallback when a line is missing, saving an extra full-context request each time.
