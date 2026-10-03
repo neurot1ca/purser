@@ -2751,16 +2751,28 @@ def test_api_primary_probe_timeout_is_not_healthy(area):
     assert result["failure"]["type"] == "NO_RESPONSE"
 
 
-def test_codex_bridge_extracts_usage_from_completed_turn():
+def test_codex_bridge_extracts_usage_from_completed_turn(area):
     usage = codex_exec_mcp._codex_turn_usage([
         {"type": "turn.completed", "usage": {
-            "input_tokens": 23, "output_tokens": 7, "total_tokens": 30,
+            "input_tokens": 23, "cached_input_tokens": 11, "output_tokens": 7,
+            "reasoning_output_tokens": 3,
             "private_field": "ignored",
         }},
     ])
-    assert usage == {"input_tokens": 23, "output_tokens": 7, "total_tokens": 30}
+    assert usage == {"input_tokens": 23, "cached_input_tokens": 11, "output_tokens": 7,
+                    "reasoning_output_tokens": 3}
     response = codex_exec_mcp._tool_result("thread-1", content="Done", usage=usage)
     assert codex._codex_usage(response) == usage
+    jobs = area / "jobs"
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    job_id = "a" * 64
+    server._write_job({"jobId": job_id, "call": "call", "state": "RUNNING",
+                       "acceptedAt": time.time(), "deadlineAt": time.time() + 60})
+    server._finish_job(job_id, "SUCCEEDED", result=response["structuredContent"])
+
+    record = server._read_job(job_id)
+    assert record["usage"] == usage
+    assert server._result_job({"jobId": job_id})["structuredContent"]["usage"] == usage
 
 
 def test_anthropic_spend_cap_is_credit_exhaustion():

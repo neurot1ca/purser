@@ -7813,7 +7813,8 @@ def test_finished_task_persists_code_map_present_and_codex_usage(workspace):
     codex._post_observations(
         {"session_id": "session-1", "duration_ms": 1234,
          "tool_response": {"structuredContent": {"usage": {
-             "input_tokens": 23, "output_tokens": 7, "total_tokens": 30,
+             "input_tokens": 23, "cached_input_tokens": 11, "output_tokens": 7,
+             "reasoning_output_tokens": 3,
          }}}},
         state,
         {"task_id": task_id, "project_key": "unresolved", "agent": "codex",
@@ -7827,10 +7828,67 @@ def test_finished_task_persists_code_map_present_and_codex_usage(workspace):
     assert aggregate["has_code_map"] is True
     assert aggregate["duration_ms"] == 1234
     assert aggregate["usage"]["codex_input_tokens"] == 23
+    assert aggregate["usage"]["codex_cached_input_tokens"] == 11
     assert aggregate["usage"]["codex_output_tokens"] == 7
-    assert aggregate["usage"]["codex_total_tokens"] == 30
+    assert aggregate["usage"]["codex_reasoning_output_tokens"] == 3
     assert (aggregate["served_route"], aggregate["served_model"], aggregate["served_effort"]) == (
         "normal", "served-model", "xhigh")
+
+
+def test_partial_codex_usage_keeps_missing_fields_unknown(workspace, monkeypatch):
+    _repo, state = workspace
+    events = []
+    monkeypatch.setattr(codex, "_observe", lambda *args, **kwargs: events.append((args, kwargs)))
+    codex._post_observations(
+        {"session_id": "session-1", "duration_ms": 1234,
+         "tool_response": {"structuredContent": {"usage": {
+             "input_tokens": 23, "output_tokens": 7, "thinking_tokens": 0,
+         }}}},
+        state,
+        {"task_id": "partial-usage", "project_key": "unresolved", "agent": "codex",
+         "model": "gpt-6-sol", "effort": "high", "phase": "implementation", "route": "normal"},
+        {"delta_files": 0},
+    )
+
+    finished = next(kwargs for args, kwargs in events if args[1] == "IMPLEMENTER_FINISHED")
+    assert finished["codex_usage_known"] is True
+    assert finished["codex_input_tokens"] == 23
+    assert finished["codex_output_tokens"] == 7
+    assert "codex_cached_input_tokens" not in finished
+    assert "codex_reasoning_output_tokens" not in finished
+    assert "codex_thinking_tokens" not in finished
+
+
+def test_async_continuation_count_uses_session_and_job_window(monkeypatch, tmp_path):
+    events = [
+        {"event_type": "CONTEXT_IO_TURN_RECORDED", "session_id": "session-1",
+         "ts_utc": "2026-10-03T10:00:00Z"},
+        {"event_type": "CONTEXT_IO_TURN_RECORDED", "session_id": "session-1",
+         "ts_utc": "2026-10-03T10:01:00Z"},
+        {"event_type": "CONTEXT_IO_TURN_RECORDED", "session_id": "session-1",
+         "ts_utc": "2026-10-03T10:02:00Z"},
+        {"event_type": "CONTEXT_IO_TURN_RECORDED", "session_id": "other-session",
+         "ts_utc": "2026-10-03T10:01:00Z"},
+    ]
+    monkeypatch.setattr(codex.telemetry, "_raw_events", lambda _root: events)
+
+    assert codex._async_continuation_turn_count(
+        tmp_path, "session-1", 1791021630, 1791021690,
+    ) == 1
+
+
+def test_async_continuation_count_is_unknown_without_session_id(monkeypatch, tmp_path):
+    assert codex._async_continuation_turn_count(tmp_path, None, 1, 2) is None
+    events = []
+    monkeypatch.setattr(codex, "_observe", lambda *args, **kwargs: events.append((args, kwargs)))
+    codex._post_observations(
+        {"duration_ms": 1, "tool_response": {"usage": {}}}, tmp_path,
+        {"task_id": "sessionless-job", "project_key": "unresolved", "agent": "codex",
+         "async_call": "call", "claude_continuation_turn_count": None},
+        {},
+    )
+    finished = next(kwargs for args, kwargs in events if args[1] == "IMPLEMENTER_FINISHED")
+    assert finished["claude_continuation_turn_count"] is None
 
 
 @pytest.mark.parametrize(

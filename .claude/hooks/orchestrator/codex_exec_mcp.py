@@ -562,8 +562,7 @@ def _tool_result(thread_id: str | None, *, content: str | None = None, error: st
 
 
 def _codex_turn_usage(events: list[dict[str, Any]]) -> dict[str, int | float]:
-    fields = {"input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens",
-              "cached_tokens", "cache_read_tokens", "cache_write_tokens", "thinking_tokens"}
+    fields = {"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"}
     for event in reversed(events):
         usage = event.get("usage")
         if event.get("type") != "turn.completed" or not isinstance(usage, dict):
@@ -1377,6 +1376,9 @@ class Server:
                         os.fsync(stream.fileno())
                     os.replace(temporary, output)
                     job.update(threadId=result["threadId"], outputFile=output.name)
+                    usage = result.get("usage")
+                    if isinstance(usage, dict):
+                        job["usage"] = _codex_turn_usage([{"type": "turn.completed", "usage": usage}])
                     if "attemptedModels" in result:
                         job.update(attemptedModels=result["attemptedModels"],
                                    servedAgent=result.get("servedAgent"),
@@ -1686,6 +1688,8 @@ class Server:
         if state == "SUCCEEDED":
             try:
                 value.update(threadId=job["threadId"], content=(self.job_dir / job["outputFile"]).read_text(encoding="utf-8"))
+                if isinstance(job.get("usage"), dict) and job["usage"]:
+                    value["usage"] = job["usage"]
             except (OSError, KeyError):
                 value.update(state="FAILED", errorCode="OUTPUT_UNAVAILABLE", message="Job output is unavailable")
         elif state in TERMINAL:

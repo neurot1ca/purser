@@ -740,12 +740,36 @@ def _codex_usage(tool_response: Any) -> dict[str, int | float]:
     return {
         key: value
         for key, value in usage.items()
-        if key in telemetry_schema.TOKEN_FIELDS
+        if key in {"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"}
         and isinstance(value, (int, float))
         and not isinstance(value, bool)
         and value >= 0
         and math.isfinite(value)
     }
+
+
+def _async_continuation_turn_count(
+    state_root: Path, session_id: Any, accepted_at: Any, result_at: Any,
+) -> int | None:
+    if (not isinstance(session_id, str) or not session_id
+            or isinstance(accepted_at, bool) or not isinstance(accepted_at, (int, float))
+            or isinstance(result_at, bool) or not isinstance(result_at, (int, float))
+            or accepted_at > result_at):
+        return None
+    count = 0
+    try:
+        for item in telemetry._raw_events(telemetry._root(state_root)):
+            if (item.get("event_type") != "CONTEXT_IO_TURN_RECORDED"
+                    or item.get("session_id") != session_id):
+                continue
+            try:
+                stamp = datetime.fromisoformat(item["ts_utc"].replace("Z", "+00:00")).timestamp()
+            except (KeyError, TypeError, ValueError):
+                continue
+            count += accepted_at <= stamp <= result_at
+    except (OSError, TypeError, ValueError):
+        return None
+    return count
 
 
 def _load_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -3081,6 +3105,16 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                    and value["threadId"] == job.get("threadId")
                    and isinstance(value.get("content"), str)
                    and not _codex_response_is_error(event.get("tool_response")))
+        if success and job is not None:
+            if "claudeContinuationTurnCount" in job:
+                continuation_turns = job["claudeContinuationTurnCount"]
+            else:
+                continuation_turns = _async_continuation_turn_count(
+                    root, index.get("session_id"), job.get("acceptedAt"), time.time(),
+                )
+                job["claudeContinuationTurnCount"] = continuation_turns
+                _atomic_json_write(root / "codex_exec_mcp" / "jobs" / f"{index['jobId']}.json", job)
+            pending = dict(pending, claude_continuation_turn_count=continuation_turns)
         worktree_path = value.get("worktreePath") if isinstance(value.get("worktreePath"), str) else None
         if worktree_path is None and job is not None and isinstance(job.get("worktreePath"), str):
             worktree_path = job["worktreePath"]
@@ -3837,6 +3871,7 @@ def _post_observations(
         "claude_review_mode": bundle.get("claude_review_mode"),
         "routing_enforced": bundle.get("routing_enforced"),
         "codex_usage_known": bool(codex_tokens),
+        "claude_continuation_turn_count": pending.get("claude_continuation_turn_count"),
         "eta_minutes": pending.get("eta_minutes"),
         "reason": pending.get("reason"),
         "reason_source": pending.get("reason_source"),

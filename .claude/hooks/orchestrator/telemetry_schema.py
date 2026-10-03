@@ -47,7 +47,9 @@ TASK_STATUSES = frozenset({"IN_PROGRESS", *TERMINAL_VERDICTS, "UNKNOWN_OR_IN_PRO
 TOKEN_FIELDS = frozenset(
     {
         "input_tokens",
+        "cached_input_tokens",
         "output_tokens",
+        "reasoning_output_tokens",
         "total_tokens",
         "prompt_tokens",
         "completion_tokens",
@@ -248,6 +250,7 @@ _PAYLOAD_FIELDS = {
             "claude_review_mode",
             "routing_enforced",
             "codex_usage_known",
+            "claude_continuation_turn_count",
             *_CALL_CONTEXT_FIELDS,
             *(f"codex_{name}" for name in TOKEN_FIELDS),
             *CLAUDE_USAGE_PAYLOAD_FIELDS,
@@ -433,6 +436,8 @@ def _payload_value(name: str, value: Any) -> Any:
         if isinstance(value, int) and not isinstance(value, bool) and value in (0, 1):
             return value
         raise ValueError("telemetry reviewer retry count is invalid")
+    if name == "claude_continuation_turn_count":
+        return _number(value, integer=True)
     if name == "reviewer1_initial_finding_count":
         return _number(value, integer=True)
     if name in {"advice_written", "compaction_observed"}:
