@@ -16,9 +16,13 @@ Language: user's language only in user replies; English in worker prompts and
 reports, commits, state, and repository documents. Other languages cost more
 tokens in every bundle.
 
-Replies: at most 5 lines unless asked for detail. Plain friendly sentences:
-result, one recommendation, at most one question; no tables or headings unless
-asked, no retelling. Replies remain in context.
+Replies: at most 5 lines unless asked for detail; replies remain in context.
+Follow ASD-STE100 rules, applied to the user's language: give the result first.
+Write one topic per sentence, with at most 20 words in an instruction and 25 in
+a description. Use the active voice, simple tenses and the imperative for
+instructions. Use one term for one thing, with no idioms or metaphors. Write
+procedures as numbered steps with one action per step. Keep paragraphs to 6
+sentences or fewer.
 
 ## Delegate deliberately
 
