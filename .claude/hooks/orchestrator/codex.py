@@ -354,6 +354,42 @@ def _append_worker_validation_instruction(
     return f"{prompt}{separator}{instruction}"
 
 
+_FULL_SUITE_REQUEST = re.compile(
+    r"\b(?:full\s+(?:test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b",
+    re.IGNORECASE,
+)
+_NEGATED_FULL_SUITE_REQUEST = re.compile(
+    r"\b(?:do\s+not|don't|never|avoid)\s+(?:run|execute)\s+"
+    r"(?:the\s+)?(?:full\s+(?:test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b",
+    re.IGNORECASE,
+)
+
+
+def _claude_runs_full_suite_at_acceptance(repository: Path | None) -> bool:
+    if repository is None:
+        return False
+    try:
+        instructions = (repository / "AGENTS.md").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(re.search(
+        r"Claude\s+runs\s+(?:the\s+full\s+suite|it)\s+once\s+"
+        r"(?:at|before)\s+acceptance",
+        instructions,
+        re.IGNORECASE,
+    ))
+
+
+def _asks_worker_to_run_full_suite(prompt: str) -> bool:
+    requested = _FULL_SUITE_REQUEST.sub(
+        lambda match: "" if _NEGATED_FULL_SUITE_REQUEST.search(
+            prompt[max(0, match.start() - 32):match.end()]
+        ) else match.group(),
+        prompt,
+    )
+    return bool(_FULL_SUITE_REQUEST.search(requested))
+
+
 def _canonical_unknown_validation(summary: str | None = None) -> dict[str, Any]:
     """Return the canonical, fixed-shape UNKNOWN validation record within IMPLEMENTER_REPORT_LIMIT bytes."""
     default_summary = "No verifiable validation evidence was provided."
@@ -1822,6 +1858,17 @@ def pre_tool_use(
                 raise WiringError(route.message)
             return _observed_denial(
                 event, route.code, route.message, state_root=state_root, task_id=parsed.task_id
+            )
+        prompt_text = tool_input.get("prompt")
+        if (
+            parsed.phase != "operation"
+            and isinstance(prompt_text, str)
+            and _claude_runs_full_suite_at_acceptance(repository)
+            and _asks_worker_to_run_full_suite(prompt_text)
+        ):
+            return _deny(
+                "FULL_SUITE_REQUEST",
+                "Ask the worker for focused tests only.",
             )
         requested = _requested_thread(parsed, route)
         agent = loaded_config.get("coder_agent", "codex")

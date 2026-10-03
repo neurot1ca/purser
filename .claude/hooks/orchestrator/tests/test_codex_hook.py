@@ -4400,6 +4400,66 @@ def test_project_profile_can_require_one_full_suite(workspace, config):
     assert "do not run the full test suite unless the task asks for it" not in prompt
 
 
+def test_full_suite_request_denied_when_claude_owns_acceptance_suite(workspace, config):
+    repo, state = workspace
+    (repo / "AGENTS.md").write_text(
+        "Claude runs the full suite once before acceptance.\n", encoding="utf-8"
+    )
+    response = codex.pre_tool_use(
+        event(prompt=orch() + "\nRun the full test suite."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "FULL_SUITE_REQUEST" in response["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Ask the worker for focused tests only." in response["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_full_suite_request_allowed_without_acceptance_suite_policy(workspace, config):
+    repo, state = workspace
+    response = codex.pre_tool_use(
+        event(prompt=orch() + "\nRun the full test suite."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert "updatedInput" in response["hookSpecificOutput"]
+
+
+def test_negated_full_suite_request_allowed_with_acceptance_suite_policy(workspace, config):
+    repo, state = workspace
+    (repo / "AGENTS.md").write_text(
+        "Claude runs the full suite once before acceptance.\n", encoding="utf-8"
+    )
+    response = codex.pre_tool_use(
+        event(prompt=orch() + "\nDo not run the full test suite; run focused tests only."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert "updatedInput" in response["hookSpecificOutput"]
+
+
+def test_operation_full_suite_request_is_exempt(workspace, config):
+    repo, state = workspace
+    (repo / "AGENTS.md").write_text(
+        "Claude runs the full suite once before acceptance.\n", encoding="utf-8"
+    )
+    response = codex.pre_tool_use(
+        event(prompt=orch(phase="operation", route="operation", scope=None)
+              + "\nRun the full test suite to inspect the current state."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert "updatedInput" in response["hookSpecificOutput"]
+
+
 @pytest.mark.parametrize("tool_name", [codex.CODEX_TOOL, codex.CODEX_REPLY_TOOL])
 def test_operation_prompt_does_not_include_worker_validation_instruction(
     workspace, config, tool_name
