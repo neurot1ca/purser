@@ -1063,6 +1063,9 @@ func number(value any) int {
 		return int(n)
 	case int:
 		return n
+	case json.Number:
+		value, _ := n.Int64()
+		return int(value)
 	default:
 		return 0
 	}

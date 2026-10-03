@@ -43,5 +43,9 @@ func main() {
 		}
 	case "PreCompact":
 		contextio.PreCompact(event)
+	case "Stop":
+		if output := contextio.Stop(event, started); len(output) > 0 {
+			_, _ = os.Stdout.Write(output)
+		}
 	}
 }

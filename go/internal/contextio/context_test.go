@@ -38,6 +38,34 @@ func TestJournalWriteRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStopEventAppendRecoversOwnPartialRecord(t *testing.T) {
+	root := filepath.Join("..", "..", "..", ".tmp")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(root, "go-stop-recovery-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "events.jsonl")
+	event := map[string]any{"event_id": "one", "payload": map[string]any{"read_count": 1}}
+	data, _ := json.Marshal(event)
+	if err := os.WriteFile(path, data[:len(data)/2], 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !appendEventOnce(path, event) || !appendEventOnce(path, event) {
+		t.Fatal("append failed")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(data)+"\n" {
+		t.Fatalf("unexpected log: %q", got)
+	}
+}
+
 func TestReadEdgeCases(t *testing.T) {
 	turn := newTurn("")
 	setReason(turn, "")

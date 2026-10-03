@@ -738,6 +738,154 @@ def test_stop_silent_and_fallback_block_contract(isolated):
     assert event["payload"] == {"reason_kinds": ["fallback"], "reason_count": 1}
 
 
+def test_stop_combines_pending_receipt_dispatch_and_version(isolated):
+    _root, repo, state = isolated
+    session = "combined-stop"
+    path = _advisor_state(state, repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "session_id": session,
+        "receipt_pending": {"model": "gpt-6-sol", "effort": "high", "blocked": False},
+        "dispatch_pending": {"lines": ["task=review-1 threadId=thread-1"], "board": "BOARD: ready", "board_job_ids": [], "blocked": False},
+        "version_pending": {"version": "9.8.7", "blocked": False, "delivered": True},
+    }), encoding="utf-8")
+    result = _run("Stop", repo, state, session_id=session, last_assistant_message="Done.")
+    assert result.returncode == 0 and result.stderr == b""
+    reason = json.loads(result.stdout)["reason"]
+    assert reason.startswith("Write one line in the user's language as `> ⚓ **Codex done: ...**`")
+    assert "task=review-1 threadId=thread-1" in reason
+    assert "BOARD: ready" in reason
+    assert "`9.8.7`" in reason
+    pending = json.loads(path.read_text(encoding="utf-8"))
+    assert all(pending[key]["blocked"] is True for key in ("receipt_pending", "dispatch_pending", "version_pending"))
+    second = _run("Stop", repo, state, session_id=session, last_assistant_message="Done.")
+    assert (second.returncode, second.stdout, second.stderr) == (0, b"", b"")
+
+
+def test_stop_consumes_visible_pending_lines(isolated):
+    _root, repo, state = isolated
+    session = "visible-stop"
+    path = _advisor_state(state, repo)
+    path.parent.mkdir(parents=True)
+    active = state / "projects" / _project_key(repo) / "active-coder.json"
+    active.write_text(json.dumps({
+        "active_coder": "primary", "triggering_evidence": {"question_session": session, "question_shown": False},
+        "reset_cycle_marker": None, "last_probe_time": None,
+    }), encoding="utf-8")
+    job_id = "b" * 64
+    job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    job_path.parent.mkdir(parents=True)
+    job_path.write_text(json.dumps({"jobId": job_id, "state": "SUCCEEDED", "repoRoot": str(repo),
+                                    "boardDisplayCount": 0}), encoding="utf-8")
+    path.write_text(json.dumps({
+        "session_id": session,
+        "receipt_pending": {"model": "gpt-6-sol", "effort": "high", "blocked": False},
+        "dispatch_pending": {"lines": ["task=review-1 threadId=thread-1"], "board": "BOARD: ready", "board_job_ids": [job_id], "blocked": False},
+        "version_pending": {"version": "9.8.7", "blocked": False, "delivered": True},
+        "fallback_pending": {"line": "> ⚓ **Switched to `model-x`.**", "project": str(repo), "model": "model-x", "blocked": False, "notice": True},
+    }), encoding="utf-8")
+    message = "> ⚓ **Switched to `model-x`.**\nmodel gpt-6-sol effort high\ntask=review-1 threadId=thread-1\nBOARD: ready\n⚓ 9.8.7"
+    result = _run("Stop", repo, state, session_id=session, last_assistant_message=message)
+    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
+    pending = json.loads(path.read_text(encoding="utf-8"))
+    assert all(pending[key] is None for key in ("receipt_pending", "dispatch_pending", "version_pending", "fallback_pending"))
+    assert json.loads(active.read_text(encoding="utf-8"))["triggering_evidence"]["question_shown"] is True
+    assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == 1
+
+
+def test_stop_closes_journal_once_and_records_version_block(isolated):
+    _root, repo, state = isolated
+    session = "journal-stop"
+    prompt = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Continue.")
+    assert prompt.returncode == 0
+    journal = state / "context_io" / "turns" / f"{_session_key(session)}.json"
+    assert journal.is_file()
+    turn = json.loads(journal.read_text(encoding="utf-8"))
+    turn["read_count"] = turn["full_read_count"] = 1
+    journal.write_text(json.dumps(turn), encoding="utf-8")
+    path = _advisor_state(state, repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "session_id": session,
+        "version_pending": {"version": "9.8.7", "blocked": False, "delivered": True},
+    }), encoding="utf-8")
+    result = _run("Stop", repo, state, session_id=session, last_assistant_message="Done.")
+    assert json.loads(result.stdout)["decision"] == "block"
+    assert not journal.exists()
+    assert (state / "context_io" / "completed" / _session_key(session)).is_file()
+    events = [json.loads(line) for file in (state / "telemetry" / "events").glob("????-??/*.jsonl")
+              for line in file.read_text(encoding="utf-8").splitlines()]
+    [turn_event] = [event for event in events if event["event_type"] == "CONTEXT_IO_TURN_RECORDED"]
+    assert turn_event["payload"]["read_count"] == turn_event["payload"]["full_read_count"] == 1
+    assert turn_event["event_id"] == str(uuid.uuid5(uuid.NAMESPACE_URL, "context-io:" + turn["turn_nonce"]))
+    assert json.loads((state / "plugin-version.json").read_text(encoding="utf-8")) == {"announced_version": "9.8.7"}
+    again = _run("Stop", repo, state, session_id=session, last_assistant_message="Done.")
+    assert (again.returncode, again.stdout, again.stderr) == (0, b"", b"")
+    events = [json.loads(line) for file in (state / "telemetry" / "events").glob("????-??/*.jsonl")
+              for line in file.read_text(encoding="utf-8").splitlines()]
+    assert len([event for event in events if event["event_type"] == "CONTEXT_IO_TURN_RECORDED"]) == 1
+
+
+def test_stop_model_notice_shown_and_active_stop_silent(isolated):
+    _root, repo, state = isolated
+    session = "model-stop"
+    model_path = state / "model-version-notice.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text(json.dumps({"pending": {
+        "current": "openai/gpt-5.5", "new": "openai/gpt-5.6", "blocked": False,
+    }}), encoding="utf-8")
+    active = _run("Stop", repo, state, session_id=session, stop_hook_active=True,
+                  last_assistant_message="Not shown.")
+    assert (active.returncode, active.stdout, active.stderr) == (0, b"", b"")
+    assert json.loads(model_path.read_text(encoding="utf-8"))["pending"]["blocked"] is False
+    shown = _run("Stop", repo, state, session_id=session,
+                 last_assistant_message="> ⚓ **New model version available: `openai/gpt-5.6` (you are on `openai/gpt-5.5`).**")
+    assert (shown.returncode, shown.stdout, shown.stderr) == (0, b"", b"")
+    saved = json.loads(model_path.read_text(encoding="utf-8"))
+    assert saved["pending"] is None and saved["asked"] == ["openai/gpt-5.6"]
+
+
+def test_stop_compaction_and_maintenance_notice(isolated):
+    _root, repo, state = isolated
+    session = "advice-stop"
+    path = _advisor_state(state, repo)
+    path.parent.mkdir(parents=True)
+    notice_file = state / "maintenance" / "consent.json"
+    notice_file.parent.mkdir(parents=True)
+    notice_file.write_text(json.dumps({"pending": True}), encoding="utf-8")
+    path.write_text(json.dumps({
+        "session_id": session,
+        "notice_pending": {"notice_id": "a" * 32, "context": 120000, "percentage": 40,
+                           "handoff": "handoff.md", "blocked": False},
+        "maintenance_pending": {"notice_file": str(notice_file), "text": "> ⚓ **Run scan?**",
+                                "evidence": ["Run scan?"], "blocked": False},
+    }), encoding="utf-8")
+    blocked = _run("Stop", repo, state, session_id=session, last_assistant_message="Done.")
+    reason = json.loads(blocked.stdout)["reason"]
+    assert "> ⚓ **Context passed 120K." in reason
+    assert "maintenance API-cost consent question" in reason
+    visible = _run("Stop", repo, state, session_id=session,
+                   last_assistant_message="> ⚓ **Context passed 120K.**\n> ⚓ **Run scan?**")
+    assert (visible.returncode, visible.stdout, visible.stderr) == (0, b"", b"")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["notice_pending"] is None and saved["maintenance_pending"] is None
+    assert json.loads(notice_file.read_text(encoding="utf-8")) == {"pending": False, "shown": True}
+
+
+def test_stop_ignores_malformed_pending_state(isolated):
+    _root, repo, state = isolated
+    path = _advisor_state(state, repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "session_id": "malformed-stop",
+        "fallback_pending": {"model": "model-x", "blocked": False},
+        "dispatch_pending": {"lines": ["valid", 9], "board": "BOARD", "blocked": False},
+        "receipt_pending": {"model": "model-x", "blocked": False},
+    }), encoding="utf-8")
+    result = _run("Stop", repo, state, session_id="malformed-stop", last_assistant_message="Done.")
+    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
+
+
 @pytest.mark.parametrize("event", ["UserPromptSubmit", "SessionStart", "PreCompact", "Stop"])
 def test_malformed_input_is_silent_success_for_each_lifecycle_event(isolated, event):
     _root, _repo, state = isolated
