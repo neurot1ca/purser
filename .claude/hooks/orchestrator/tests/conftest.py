@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
@@ -30,7 +31,22 @@ def tmp_path():
 def isolated_purser_state_root(tmp_path, monkeypatch):
     """Keep tests that exercise default paths away from the user's real state."""
     monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path / "purser-state"))
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(__file__).parents[4]))
     monkeypatch.delenv("PURSER_OBSIDIAN_VAULT", raising=False)
+    codex_scratch = tmp_path.parent / f"pytest-codex-{uuid.uuid4().hex}"
+    fake_bin = codex_scratch / "bin"
+    fake_bin.mkdir(parents=True)
+    fake_codex = fake_bin / ("codex.cmd" if os.name == "nt" else "codex")
+    fake_codex.write_text("@exit /b 1\r\n" if os.name == "nt" else "#!/bin/sh\nexit 1\n")
+    if os.name != "nt":
+        fake_codex.chmod(0o755)
+    monkeypatch.setenv("CODEX_HOME", str(codex_scratch / "codex-home"))
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    try:
+        yield
+    finally:
+        if codex_scratch.parent == tmp_path.parent:
+            shutil.rmtree(codex_scratch, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
