@@ -862,6 +862,93 @@ def test_worktree_job_records_snapshot_and_reply_reuses_it(area):
         client.close()
 
 
+def test_grounded_readiness_criteria_are_durable_job_metadata(area):
+    client = Client(area)
+    try:
+        criteria = {"objective": "Add validation", "acceptance_criteria": "Reject empty input"}
+        started = job_call(client, "codex_start", {
+            "call": str(uuid.uuid4()), "prompt": "unchanged worker prompt",
+            "readinessGrounded": True, "readinessCriteria": criteria,
+            "readinessAgent": "agy", "readinessModel": "gemini-3.8-flash-high",
+        })
+        path = area / "root" / "codex_exec_mcp" / "jobs" / f"{started['jobId']}.json"
+        job = read_job_record(path)
+        assert job["readinessCheck"] == {
+            "grounded": True, **criteria, "agent": "agy", "model": "gemini-3.8-flash-high"
+        }
+        assert finish(client, started["jobId"], "SUCCEEDED")["content"] == "Reply from fake Codex"
+    finally:
+        client.close()
+
+
+def _readiness_worker_job(area):
+    import ledger
+
+    repo = _git_repo(area)
+    job_id = uuid.uuid4().hex * 2
+    worktree = ledger.create_job_worktree(repo, job_id, area / "wt")
+    jobs = area / "jobs"
+    jobs.mkdir()
+    job = {
+        "jobId": job_id, "call": str(uuid.uuid4()), "state": "QUEUED",
+        "acceptedAt": time.time(), "deadlineAt": time.time() + 60,
+        "worktreePath": worktree["path"], "snapshot": worktree["snapshot"],
+        "repoRoot": str(repo.resolve()), "model": "claude-sonnet-4-5",
+        "readinessCheck": {
+            "grounded": True, "objective": "Validate names",
+            "acceptance_criteria": "Reject an empty name",
+            "agent": "agy", "model": "gemini-3.8-flash-high",
+        },
+    }
+    server = codex_exec_mcp.Server(job_dir=jobs)
+    server._write_job(job)
+    return server, job_id, Path(worktree["path"])
+
+
+def test_readiness_verdict_is_recorded_before_job_success(area, monkeypatch):
+    import readiness_check
+
+    server, job_id, worktree = _readiness_worker_job(area)
+    observed = []
+    def fake_checker(packet, _encoded, **_kwargs):
+        observed.append((server._read_job(job_id)["state"], packet["attributed_diff"]))
+        return {"verdict": "UNMET", "criterion": "Reject an empty name", "evidence": [
+            {"path": "tracked.txt", "line": 2, "quote": "if not name: raise ValueError()"}
+        ]}
+    monkeypatch.setattr(readiness_check, "run_checker", fake_checker)
+    def fake_worker(*_args, **_kwargs):
+        (worktree / "tracked.txt").write_text(
+            "base\nif not name: raise ValueError()\n", encoding="utf-8")
+        return {"structuredContent": {"threadId": "worker-thread", "content": "report"}}
+    monkeypatch.setattr(server, "_run_tool", fake_worker)
+
+    server._job_worker(job_id, "codex", {})
+
+    job = server._read_job(job_id)
+    assert observed and observed[0][0] == "RUNNING"
+    assert "if not name: raise ValueError()" in observed[0][1]
+    assert job["state"] == "SUCCEEDED"
+    assert job["readinessCheck"]["result"]["verdict"] == "UNMET"
+
+
+def test_readiness_checker_timeout_does_not_fail_job(area, monkeypatch):
+    import readiness_check
+
+    server, job_id, worktree = _readiness_worker_job(area)
+    monkeypatch.setattr(readiness_check, "run_checker", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(subprocess.TimeoutExpired(["agy"], 90)))
+    def fake_worker(*_args, **_kwargs):
+        (worktree / "tracked.txt").write_text("base\nchange\n", encoding="utf-8")
+        return {"structuredContent": {"threadId": "worker-thread", "content": "report"}}
+    monkeypatch.setattr(server, "_run_tool", fake_worker)
+
+    server._job_worker(job_id, "codex", {})
+
+    job = server._read_job(job_id)
+    assert job["state"] == "SUCCEEDED"
+    assert job["readinessCheck"]["result"]["verdict"] == "UNKNOWN"
+
+
 def test_reply_worktree_reuses_thread_baseline_for_full_delta(area):
     import ledger
 

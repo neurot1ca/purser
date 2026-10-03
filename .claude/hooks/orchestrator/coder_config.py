@@ -105,6 +105,16 @@ def load(config_path: Path) -> dict:
         if not isinstance(reviewer_model, str) or not AGY_MODEL.fullmatch(reviewer_model):
             raise ValueError("[coding] reviewer1_model_requested is invalid")
         config["reviewer1_model_requested"] = reviewer_model
+    readiness = coding.get("readiness_check", {})
+    if not isinstance(readiness, dict) or set(readiness) - {"agent", "model"}:
+        raise ValueError("[coding.readiness_check] accepts only agent and model")
+    readiness_agent = readiness.get("agent", config.get("readiness_check", {}).get("agent", "agy"))
+    readiness_model = readiness.get("model", config.get("readiness_check", {}).get("model"))
+    if readiness_agent not in ("agy", "off"):
+        raise ValueError("[coding.readiness_check] agent must be agy or off")
+    if (not isinstance(readiness_model, str) or not AGY_MODEL.fullmatch(readiness_model)):
+        raise ValueError("[coding.readiness_check] model is invalid")
+    config["readiness_check"] = {"agent": readiness_agent, "model": readiness_model}
     reviewer_executable = coding.get("reviewer1_executable")
     if reviewer_executable is not None:
         if not isinstance(reviewer_executable, str) or not os.path.isabs(reviewer_executable):

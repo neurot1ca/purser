@@ -94,6 +94,10 @@
   "operation_report_max_chars": 24000,
   "post_tool_output_field": "updatedToolOutput",
   "reviewer1_model_requested": "gemini-3.8-flash-high",
+  "readiness_check": {
+    "agent": "agy",
+    "model": "gemini-3.8-flash-high"
+  },
   "reviewer1_timeout_seconds": 180,
   "hook_checks_deadline_seconds": 150,
   "reviewer1_packet_max_bytes": 200000,

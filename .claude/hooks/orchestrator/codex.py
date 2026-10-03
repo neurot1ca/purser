@@ -2047,6 +2047,16 @@ def pre_tool_use(
                 task_objective = prior_obj
                 acceptance_criteria = prior_crit
                 task_contract_grounded = bool(live_thread.get("task_contract_grounded", True))
+        if is_start and task_contract_grounded and acceptance_criteria:
+            readiness = loaded_config.get("readiness_check", {})
+            if isinstance(readiness, Mapping):
+                updated["readinessGrounded"] = True
+                updated["readinessCriteria"] = {
+                    "objective": task_objective,
+                    "acceptance_criteria": acceptance_criteria,
+                }
+                updated["readinessAgent"] = readiness.get("agent", "off")
+                updated["readinessModel"] = readiness.get("model", "")
         task_type = (
             _derive_task_type(task_objective, acceptance_criteria, parsed.phase)
             if task_contract_grounded else "unknown"
@@ -2086,6 +2096,7 @@ def pre_tool_use(
             "task_objective": task_objective,
             "acceptance_criteria": acceptance_criteria,
             "task_contract_grounded": task_contract_grounded,
+            "readiness_check": loaded_config.get("readiness_check", {"agent": "off"}),
             "task_type": task_type,
             "suspected_route_mismatch": suspected_route_mismatch,
             "has_code_map": bool(re.search(
@@ -4048,7 +4059,6 @@ def post_tool_use(
             "status": "UNKNOWN",
             "summary": "No report",
         }
-
         try:
             thread_id, report = _extract_codex_result(event.get("tool_response"))
             bundle["thread_id"] = thread_id

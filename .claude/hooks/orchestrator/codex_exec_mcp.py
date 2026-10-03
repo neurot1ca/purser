@@ -153,7 +153,9 @@ TOOL_SCHEMAS += [
             "taskId": {"type": "string"}, "route": {"type": "string"},
             "etaMinutes": {"type": "integer"}, "jobModel": {"type": "string"},
             "jobEffort": {"type": "string"}, "jobLabel": {"type": "string"},
-            "jobPhase": {"type": "string"}},
+            "jobPhase": {"type": "string"}, "readinessCriteria": {"type": "object"},
+            "readinessGrounded": {"type": "boolean"}, "readinessAgent": {"type": "string"},
+            "readinessModel": {"type": "string"}},
         "required": ["prompt"]}},
     {"name": "codex_result", "description": "Read a durable Codex job.", "inputSchema": {
         "type": "object", "properties": {"jobId": {"type": "string"},
@@ -1012,6 +1014,65 @@ class Server:
     def _write_job(self, job: dict[str, Any]) -> None:
         _atomic_json(self._job_path(job["jobId"]), job)
 
+    def _check_readiness_before_success(self, job_id: str, result: dict[str, Any]) -> None:
+        verdict: dict[str, Any] = {"verdict": "UNKNOWN", "criterion": None, "evidence": []}
+        try:
+            job = self._read_job(job_id)
+            readiness = job.get("readinessCheck") if job else None
+            if not isinstance(readiness, dict) or readiness.get("grounded") is not True:
+                return
+            agent = readiness.get("agent")
+            if agent == "off":
+                verdict["verdict"] = "UNAVAILABLE"
+            elif (isinstance(job.get("worktreePath"), str)
+                  and isinstance(job.get("snapshot"), str)
+                  and isinstance(readiness.get("objective"), str)
+                  and isinstance(readiness.get("acceptance_criteria"), str)):
+                import ledger
+                import policy
+                import readiness_check
+                import reviewer
+
+                checker_model = readiness.get("model", "")
+                implementer_family = policy.vendor_family(policy.model_family(job.get("model")))
+                checker_family = policy.vendor_family(policy.model_family(checker_model))
+                if (implementer_family and checker_family
+                        and implementer_family == checker_family):
+                    verdict["verdict"] = "UNAVAILABLE"
+                else:
+                    worktree = Path(job["worktreePath"])
+                    delta = ledger.compute_job_delta(worktree, job["snapshot"])
+                    delta = ledger.filter_job_delta(worktree, delta)
+                    if delta.get("status") == ledger.OK:
+                        _paths, attributed_diff = reviewer._delegated_diff(worktree, delta)
+                        criteria = {
+                            "grounded": True,
+                            "objective": readiness["objective"],
+                            "acceptance_criteria": readiness["acceptance_criteria"],
+                        }
+                        packet, encoded = readiness_check.build_packet(
+                            criteria, attributed_diff,
+                            result.get("content", "") if isinstance(result.get("content"), str) else "",
+                        )
+                        loaded_config = coder_config.load(Path(__file__).with_name("config.json"))
+                        verdict = readiness_check.run_checker(
+                            packet, encoded, agent=agent, model=checker_model,
+                            repo_root=job.get("repoRoot", worktree),
+                            executable=loaded_config.get("reviewer1_executable"),
+                        )
+        except Exception:
+            pass
+        try:
+            with self.jobs_lock:
+                job = self._read_job(job_id)
+                readiness = job.get("readinessCheck") if job else None
+                if job is not None and job.get("state") == "RUNNING" and isinstance(readiness, dict):
+                    readiness["result"] = verdict
+                    readiness["checkedAt"] = time.time()
+                    self._write_job(job)
+        except Exception:
+            pass
+
     def _checkpoint_liveness(self, job_id: str, generation: int, ownership_token: str,
                              activity: dict[str, Any], *, now: float,
                              process_alive: bool, force: bool = False) -> bool:
@@ -1452,6 +1513,17 @@ class Server:
                     value = args.get(supplied, args.get(stored))
                     if value is not None:
                         job[stored] = value
+                if args.get("readinessGrounded") is True and isinstance(args.get("readinessCriteria"), dict):
+                    criteria = args["readinessCriteria"]
+                    if (set(criteria) == {"objective", "acceptance_criteria"}
+                            and all(isinstance(criteria[key], str) for key in criteria)
+                            and sum(len(value.encode("utf-8")) for value in criteria.values()) <= 20_000
+                            and args.get("readinessAgent") in ("agy", "off")
+                            and isinstance(args.get("readinessModel"), str)):
+                        job["readinessCheck"] = {
+                            "grounded": True, **criteria,
+                            "agent": args["readinessAgent"], "model": args["readinessModel"],
+                        }
                 self.job_dir.mkdir(parents=True, exist_ok=True)
                 if os.name != "nt":
                     os.chmod(self.job_dir, 0o700)
@@ -1571,6 +1643,7 @@ class Server:
                     self._finish_job(job_id, "FAILED", result.get("errorCode", "CODEX_FAILED"),
                                      message=detail)
             else:
+                self._check_readiness_before_success(job_id, value)
                 self._finish_job(job_id, "SUCCEEDED", result=value)
         except Exception as exc:
             print(f"Codex job error: {exc}", file=sys.stderr, flush=True)

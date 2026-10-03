@@ -34,3 +34,22 @@ def test_user_reviewer_executable_must_be_absolute(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="reviewer1_executable must be an absolute path"):
         coder_config.load(shipped_config)
+
+
+def test_readiness_checker_is_user_selectable_and_defaults_to_agy(tmp_path, monkeypatch):
+    user_home = tmp_path / "home"
+    monkeypatch.setattr(coder_config.Path, "home", lambda: user_home)
+    shipped_config = Path(__file__).parents[1] / "config.json"
+
+    assert coder_config.load(shipped_config)["readiness_check"] == {
+        "agent": "agy", "model": "gemini-3.8-flash-high"
+    }
+    user_config = user_home / ".orchestrator" / "config.toml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text(
+        '[coding.readiness_check]\nagent = "off"\nmodel = "gemini-3.7-flash"\n',
+        encoding="utf-8",
+    )
+    assert coder_config.load(shipped_config)["readiness_check"] == {
+        "agent": "off", "model": "gemini-3.7-flash"
+    }

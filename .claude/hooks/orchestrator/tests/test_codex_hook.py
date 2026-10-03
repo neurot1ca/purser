@@ -2007,6 +2007,11 @@ def test_async_result_finalizes_once_from_start_baseline(workspace, config, monk
     assert not codex._pending_path(state, start).exists()
 
 
+def test_result_hook_does_not_call_readiness_checker():
+    assert "_run_readiness_check" not in codex.post_tool_use.__code__.co_names
+    assert "run_checker" not in codex.post_tool_use.__code__.co_names
+
+
 def test_recovered_job_reviews_original_baseline_and_releases_lease_after_consumed(workspace, config, monkeypatch):
     repo, state = workspace
     start, job_id, record = async_started(workspace, config, prompt=orch(scope="file0.py,file1.py") + "\nUpdate both files.")
