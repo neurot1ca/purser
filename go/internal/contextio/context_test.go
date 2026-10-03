@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +50,17 @@ func TestReadEdgeCases(t *testing.T) {
 	if got := expand("~"); got != filepath.Clean(home) {
 		t.Fatalf("expand(~) = %q, want %q", got, home)
 	}
+	current, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	usernameHome := home
+	if runtime.GOOS == "windows" {
+		usernameHome = filepath.Join(filepath.Dir(home), current.Username)
+	}
+	if got, want := expand("~"+current.Username+string(filepath.Separator)+"state"), filepath.Join(usernameHome, "state"); got != want {
+		t.Fatalf("expand(~username) = %q, want %q", got, want)
+	}
 	p := filepath.Join(t.TempDir(), "oversized.json")
 	turn["padding"] = strings.Repeat("x", maxJournal)
 	err = writeTurn(p, turn)
@@ -66,6 +79,19 @@ func TestReadEdgeCases(t *testing.T) {
 	obs := scanRead(newTurn(""), binary, info, "FULL", map[string]any{})
 	if obs["line_kind"] != "UNKNOWN" || obs["binary_suspected"] != true || obs["reason"] != "BINARY_SUSPECTED" {
 		t.Fatalf("binary observation = %#v", obs)
+	}
+}
+
+func TestProtectedProfileParseFailure(t *testing.T) {
+	for _, input := range []string{
+		"schema_version = 1\n[paths]\nprotected = [\"private/**\"\n",
+		"schema_version = 1\n[paths]\nprotected = 7\n",
+		"schema_version = 2\n[paths]\nprotected = [\"private/**\"]\n",
+		"schema_version = 1\n[paths]\nprotected = [\"bad\\x2e\"]\n",
+	} {
+		if paths, ok := parseProtectedProfile([]byte(input)); ok || len(paths) != 0 {
+			t.Fatalf("invalid profile accepted: paths=%v", paths)
+		}
 	}
 }
 

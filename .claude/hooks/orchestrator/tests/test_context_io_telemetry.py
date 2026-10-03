@@ -255,6 +255,63 @@ def test_subprocess_malformed_json_is_silent_and_successful(tmp_path):
     assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
 
 
+def test_subprocess_user_and_project_protected_paths(tmp_path, monkeypatch):
+    repo = _contract_repo(tmp_path)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    user_config = home / ".orchestrator" / "config.toml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text('schema_version = 1\n[paths]\nprotected = ["user-secret/**"]\n', encoding="utf-8")
+    project_profile = repo / ".orchestrator" / "profile.toml"
+    project_profile.parent.mkdir()
+    project_profile.write_text('schema_version = 1\n[paths]\nprotected = ["private/**"]\n', encoding="utf-8")
+    state = tmp_path / "state"
+
+    for session, relative in (("project-protected-contract", "private/notes.txt"),
+                              ("user-protected-contract", "user-secret/notes.txt")):
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"protected\n")
+        read = _run_contract_hook("Read", {
+            "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Read",
+            "cwd": str(repo), "tool_input": {"file_path": str(target)},
+        }, state)
+        assert (read.returncode, read.stdout, read.stderr) == (0, b"", b"")
+        journal = json.loads(_journal(state, session).read_text(encoding="utf-8"))
+        assert journal["observations"][0]["reason"] == "PROTECTED_PATH"
+        assert journal["unknown_read_count"] == 1
+
+
+def test_subprocess_malformed_project_profile_uses_engine_protections(tmp_path, monkeypatch):
+    repo = _contract_repo(tmp_path)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    user_config = home / ".orchestrator" / "config.toml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text('schema_version = 1\n[paths]\nprotected = ["user-secret/**"]\n', encoding="utf-8")
+    profile = repo / ".orchestrator" / "profile.toml"
+    profile.parent.mkdir()
+    profile.write_text('schema_version = 1\n[paths]\nprotected = ["private/**"\n', encoding="utf-8")
+    state = tmp_path / "state"
+
+    # A malformed project tier is dropped on its own; the valid user tier still applies.
+    for session, relative, reason in (("malformed-project-contract", "private/notes.txt", None),
+                                      ("malformed-project-user-contract", "user-secret/notes.txt",
+                                       "PROTECTED_PATH")):
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"allowed\n")
+        read = _run_contract_hook("Read", {
+            "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Read",
+            "cwd": str(repo), "tool_input": {"file_path": str(target)},
+        }, state)
+        assert (read.returncode, read.stdout, read.stderr) == (0, b"", b"")
+        journal = json.loads(_journal(state, session).read_text(encoding="utf-8"))
+        assert journal["observations"][0]["reason"] == reason
+
+
 def test_subprocess_lock_contention_is_recorded_for_next_turn(tmp_path):
     repo = _contract_repo(tmp_path)
     state = tmp_path / "state"

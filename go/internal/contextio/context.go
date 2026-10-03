@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -74,13 +75,24 @@ func resolve(p string) string {
 	}
 }
 func expand(p string) string {
-	if p == "~" {
-		if h, e := os.UserHomeDir(); e == nil {
-			p = h
+	if strings.HasPrefix(p, "~") {
+		end := strings.IndexAny(p, `/\`)
+		if end < 0 {
+			end = len(p)
 		}
-	} else if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
-		if h, e := os.UserHomeDir(); e == nil {
-			p = filepath.Join(h, p[2:])
+		name := p[1:end]
+		home := ""
+		if name == "" {
+			home, _ = os.UserHomeDir()
+		} else if runtime.GOOS == "windows" {
+			if current, err := os.UserHomeDir(); err == nil {
+				home = filepath.Join(filepath.Dir(current), name)
+			}
+		} else if account, err := user.Lookup(name); err == nil {
+			home = account.HomeDir
+		}
+		if home != "" {
+			p = filepath.Join(home, p[end:])
 		}
 	}
 	a, e := filepath.Abs(p)
@@ -380,7 +392,7 @@ func observe(t, event map[string]any, root string) map[string]any {
 			p = resolve(p)
 			rel, err := filepath.Rel(absroot, p)
 			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				if isProtected(filepath.ToSlash(rel)) {
+				if isProtected(filepath.ToSlash(rel), profileProtectedPaths(absroot)) {
 					reason = "PROTECTED_PATH"
 				} else {
 					if num(t["stat_operations"]) >= maxStatsPerTurn {
@@ -650,12 +662,13 @@ func scanTargeted(path string, offset, limit, byteBudget, lineBudget int) (scanR
 	}
 	return r, nil
 }
-func isProtected(p string) bool {
+func isProtected(p string, patterns []string) bool {
 	insensitive := os.PathSeparator == '\\'
 	if insensitive {
 		p = strings.ToLower(p)
 	}
-	for _, pat := range protected {
+	for _, pat := range patterns {
+		pat = strings.ReplaceAll(pat, "\\", "/")
 		if insensitive {
 			pat = strings.ToLower(pat)
 		}
