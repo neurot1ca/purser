@@ -203,6 +203,7 @@ def test_subprocess_in_turn_prompt_read_stop_contract(tmp_path):
                      "hook_wall_time_us_total", "hook_wall_time_us_max"):
         payload.pop(volatile, None)
     assert payload == {
+        "runtime": "python",
         "read_count": 3,
         "full_read_count": 2,
         "targeted_read_count": 1,

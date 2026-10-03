@@ -39,6 +39,7 @@ EVENT_TYPES = frozenset(
         "MECHANICAL_EDIT_OBSERVED",
         "MAINTENANCE_REPORT_FINISHED",
         "MAINTENANCE_REPORT_ACTED",
+        "READINESS_CHECK_OUTCOME",
     }
 )
 
@@ -126,7 +127,7 @@ CONTEXT_IO_INTEGER_FIELDS = frozenset(
     }
 )
 CONTEXT_IO_PAYLOAD_FIELDS = frozenset(
-    {*CONTEXT_IO_BOOLEAN_FIELDS, *CONTEXT_IO_INTEGER_FIELDS, "unknown_reason"}
+    {*CONTEXT_IO_BOOLEAN_FIELDS, *CONTEXT_IO_INTEGER_FIELDS, "unknown_reason", "runtime"}
 )
 CONTEXT_IO_UNKNOWN_REASONS = frozenset(
     {
@@ -215,7 +216,7 @@ _VIOLATION_CODES = frozenset(
 _COMMON_CALL_FIELDS = frozenset(
     {
         "phase", "route", "model", "model_source", "effort", "routing_enforced", "fresh_thread", "reply_call",
-        "reason", "reason_source", "previous_route", "new_route", "eta_minutes",
+        "reason", "reason_source", "previous_route", "new_route", "eta_minutes", "worker_prompt_chars",
         "task_type", "suspected_route_mismatch", "agent", "provider",
     }
 )
@@ -322,6 +323,7 @@ _PAYLOAD_FIELDS = {
         "findings_low_count", "line_coverage_pct",
     }),
     "MAINTENANCE_REPORT_ACTED": frozenset({"report_id", "findings_marked_done", "findings_listed"}),
+    "READINESS_CHECK_OUTCOME": frozenset({"verdict", "agent", "duration_ms"}),
 }
 
 
@@ -456,7 +458,9 @@ def _payload_value(name: str, value: Any) -> Any:
         raise ValueError("telemetry shadow agreement is invalid")
     if name in {"input_tokens", "output_tokens", "total_tokens"}:
         return _number(value, integer=True)
-    if name == "action" and value in {"denied", "queued", "promoted", "applied", "discarded"}:
+    if name == "action" and value in {
+        "denied", "queued", "promoted", "applied", "resolved_by_hand", "discarded", "expired"
+    }:
         return value
     if name in {"elapsed_ms", "queue_wait_ms"}:
         return _number(value)
@@ -480,6 +484,7 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name in {
         "changed_paths_count",
+        "worker_prompt_chars",
         "changed_file_count",
         "hunk_count",
         "old_rank",
@@ -576,11 +581,15 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name == "verdict" and value in TERMINAL_VERDICTS:
         return value
+    if name == "verdict" and value in {"UNMET", "NO_UNMET_FOUND", "UNKNOWN", "UNAVAILABLE"}:
+        return value
     if name == "served_model_attestation" and value == "UNAVAILABLE":
         return value
     if name in {"thread_id", "implementer", "reviewer1_provider", "reviewer1_model_requested",
                 "agent", "provider", "served_agent", "served_provider"}:
         return _identifier(value)
+    if name == "runtime" and value in {"go", "python"}:
+        return value
     if name in {"model", "served_model"} and isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", value):
         return value
     raise ValueError("telemetry enum is invalid")

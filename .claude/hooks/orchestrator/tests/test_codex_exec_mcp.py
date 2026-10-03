@@ -907,9 +907,13 @@ def _readiness_worker_job(area):
 
 def test_readiness_verdict_is_recorded_before_job_success(area, monkeypatch):
     import readiness_check
+    import telemetry
 
     server, job_id, worktree = _readiness_worker_job(area)
     observed = []
+    telemetry_events = []
+    monkeypatch.setattr(telemetry, "emit", lambda event_type, **payload:
+                        telemetry_events.append((event_type, payload)))
     def fake_checker(packet, _encoded, **_kwargs):
         observed.append((server._read_job(job_id)["state"], packet["attributed_diff"]))
         return {"verdict": "UNMET", "criterion": "Reject an empty name", "evidence": [
@@ -929,6 +933,10 @@ def test_readiness_verdict_is_recorded_before_job_success(area, monkeypatch):
     assert "if not name: raise ValueError()" in observed[0][1]
     assert job["state"] == "SUCCEEDED"
     assert job["readinessCheck"]["result"]["verdict"] == "UNMET"
+    [(event_type, payload)] = telemetry_events
+    assert event_type == "READINESS_CHECK_OUTCOME"
+    assert (payload["verdict"], payload["agent"]) == ("UNMET", "agy")
+    assert isinstance(payload["duration_ms"], int) and payload["duration_ms"] >= 0
 
 
 def test_readiness_checker_timeout_does_not_fail_job(area, monkeypatch):
@@ -1619,6 +1627,7 @@ def test_codex_apply_records_hand_resolved_conflict(area):
         assert job["applyResult"] == resolved
         assert isinstance(job["appliedAt"], (int, float))
         assert lease.owner_state(owner) == "RELEASED"
+        assert [event["payload"]["action"] for event in scope_outcome_events(area)] == ["resolved_by_hand"]
     finally:
         client.close()
 

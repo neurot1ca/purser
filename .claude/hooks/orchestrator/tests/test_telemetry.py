@@ -144,6 +144,20 @@ def test_reviewer_failure_error_code_schema_and_stderr_evidence(tmp_path):
     assert json.loads(evidence_path.read_text(encoding="utf-8")) == "server stalled"
 
 
+def test_readiness_check_outcome_schema_keeps_unknown_as_verdict():
+    event = schema.build_event(
+        "READINESS_CHECK_OUTCOME", task_id="task-1",
+        payload={"verdict": "UNKNOWN", "agent": "agy", "duration_ms": 0},
+    )
+    assert schema.valid_event(event)
+    assert event["payload"]["verdict"] == "UNKNOWN"
+    with pytest.raises(ValueError, match="telemetry enum"):
+        schema.build_event(
+            "READINESS_CHECK_OUTCOME", task_id="task-1",
+            payload={"verdict": "PASS", "agent": "agy", "duration_ms": 0},
+        )
+
+
 def test_worker_validation_status_schema_accepts_enum_and_rejects_invalid():
     for status in ("PASS", "FAIL", "UNKNOWN"):
         event = schema.build_event(

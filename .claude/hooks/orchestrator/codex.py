@@ -2262,6 +2262,7 @@ def pre_tool_use(
             "reply_call": reply_call,
             "reason": effective_reason,
             "eta_minutes": parsed.eta_minutes,
+            "worker_prompt_chars": len(updated["prompt"]),
             "reason_source": reason_source,
             "previous_route": previous_route if route_changed else None,
             "new_route": parsed.route if route_changed else None,

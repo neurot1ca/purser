@@ -1014,13 +1014,18 @@ class Server:
         _atomic_json(self._job_path(job["jobId"]), job)
 
     def _check_readiness_before_success(self, job_id: str, result: dict[str, Any]) -> None:
+        started_ns = time.perf_counter_ns()
         verdict: dict[str, Any] = {"verdict": "UNKNOWN", "criterion": None, "evidence": []}
+        job = None
+        agent = "unknown"
         try:
             job = self._read_job(job_id)
             readiness = job.get("readinessCheck") if job else None
             if not isinstance(readiness, dict) or readiness.get("grounded") is not True:
                 return
             agent = readiness.get("agent")
+            if not isinstance(agent, str):
+                agent = "unknown"
             if agent == "off":
                 verdict["verdict"] = "UNAVAILABLE"
             elif (isinstance(job.get("worktreePath"), str)
@@ -1060,6 +1065,20 @@ class Server:
                             executable=loaded_config.get("reviewer1_executable"),
                         )
         except Exception:
+            pass
+        try:
+            if job is not None:
+                import telemetry
+                import project_root
+
+                repo = job.get("repoRoot")
+                key = project_root.project_key(Path(repo).resolve()) if isinstance(repo, str) else None
+                telemetry.emit(
+                    "READINESS_CHECK_OUTCOME", task_id=job.get("taskId"), project_key=key,
+                    state_root=purser_state_root.default_state_root(), verdict=verdict["verdict"],
+                    agent=agent, duration_ms=max(0, (time.perf_counter_ns() - started_ns) // 1_000_000),
+                )
+        except BaseException:
             pass
         try:
             with self.jobs_lock:
@@ -1753,7 +1772,7 @@ class Server:
                 if isinstance(job.get("taskId"), str) and job["taskId"]:
                     job["decisionRecorded"] = True
                 self._write_job(job)
-                _record_scope_conflict_outcome(job, "applied")
+                _record_scope_conflict_outcome(job, "resolved_by_hand")
                 _record_claude_decision(job, "accepted", "apply", job["jobId"])
                 self._release_applied_job_lease(job)
                 return _job_result(value)

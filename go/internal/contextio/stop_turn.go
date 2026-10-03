@@ -93,6 +93,7 @@ func contextTurnEvent(turn map[string]any, internal, wall time.Duration, started
 	latency, _ := turn["latency"].([]any)
 	latency = append(latency, []any{max(int64(0), internal.Microseconds()), max(int64(0), wall.Microseconds())})
 	payload := map[string]any{
+		"runtime":    "go",
 		"read_count": number(turn["read_count"]), "full_read_count": number(turn["full_read_count"]),
 		"targeted_read_count": number(turn["targeted_read_count"]), "unknown_read_count": number(turn["unknown_read_count"]),
 		"observed_bytes_total": 0, "exact_line_read_count": 0, "exact_line_count_total": 0,

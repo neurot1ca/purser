@@ -236,6 +236,18 @@ class ScopeLeases:
                 owner["state"] = "RELEASED"
                 owner["released_at"] = now
                 changed = True
+                if isinstance(job_id, str):
+                    try:
+                        import telemetry
+
+                        telemetry.emit(
+                            "SCOPE_CONFLICT_OUTCOME", task_id=owner["task_id"],
+                            project_key=self.path.parent.name,
+                            state_root=self.path.parent.parent.parent, action="expired",
+                            job_id=job_id, queue_wait_ms=_queue_wait_ms(owner),
+                        )
+                    except BaseException:
+                        pass
         return changed
 
     def _promote(self, value: dict[str, Any], now: float) -> bool:

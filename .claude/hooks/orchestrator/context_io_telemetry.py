@@ -654,6 +654,7 @@ def associate_turn(
 def _summary(turn: Mapping[str, Any], *, stop_internal_us: int, stop_wall_us: int) -> dict[str, Any]:
     observations = turn.get("observations") if isinstance(turn.get("observations"), list) else []
     payload: dict[str, Any] = {
+        "runtime": "python",
         "read_count": turn.get("read_count", 0),
         "full_read_count": turn.get("full_read_count", 0),
         "targeted_read_count": turn.get("targeted_read_count", 0),

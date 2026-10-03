@@ -2832,6 +2832,10 @@ def test_owner_state_promotes_waiter_after_blocker_retention_expires(workspace, 
     owners = store._read()["owners"]
     assert owners["blocker"]["state"] == "RELEASED"
     assert owners["waiter"]["acquired_at"] == cutoff
+    expired = [event for event in _all_telemetry_events(workspace[1])
+               if event["event_type"] == "SCOPE_CONFLICT_OUTCOME"
+               and event["payload"].get("action") == "expired"]
+    assert [event["payload"]["job_id"] for event in expired] == [blocker_job_id]
 
 
 def test_released_lease_entries_are_pruned_on_write(workspace, monkeypatch):
@@ -3790,6 +3794,9 @@ def test_eta_is_recorded_from_orch_through_finished_duration(workspace, config):
     finished = next(item["payload"] for item in events if item["event_type"] == "IMPLEMENTER_FINISHED")
     assert finished["duration_ms"] == 1250
     assert finished["route"] == "normal"
+    assert finished["eta_minutes"] == 23
+    selected = next(item["payload"] for item in events if item["event_type"] == "TASK_ROUTE_SELECTED")
+    assert selected["worker_prompt_chars"] == len(forwarded_prompt)
 
 
 @pytest.mark.parametrize("eta", ["eta", "eta=5", "eta=", "eta=0m", "eta=601m", "eta=1.5m", "eta=2h", "eta= 3m", "eta=+3m"])
@@ -8073,7 +8080,7 @@ def test_reviewer_finding_count_stays_separate_from_task_decisions_and_schema_is
         ("REVIEWER1_FINISHED", {"reviewer1_initial_finding_count": True}),
         ("COMPACTION_ADVICE_OUTCOME", {"notice_id": "bad id"}),
         ("SHADOW_FINISHED", {"candidate": "model-a", "status": "partial"}),
-        ("SCOPE_CONFLICT_OUTCOME", {"action": "expired"}),
+        ("SCOPE_CONFLICT_OUTCOME", {"action": "bogus"}),
     )
     for event_type, payload in malformed:
         with pytest.raises(ValueError):

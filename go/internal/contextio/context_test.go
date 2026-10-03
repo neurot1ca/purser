@@ -38,6 +38,14 @@ func TestJournalWriteRoundTrip(t *testing.T) {
 	}
 }
 
+func TestContextTurnEventRecordsGoRuntime(t *testing.T) {
+	event := contextTurnEvent(newTurn(""), 0, 0, time.Now())
+	payload, ok := event["payload"].(map[string]any)
+	if !ok || payload["runtime"] != "go" {
+		t.Fatalf("context turn runtime = %v, want go", payload["runtime"])
+	}
+}
+
 func TestStopEventAppendRecoversOwnPartialRecord(t *testing.T) {
 	root := filepath.Join("..", "..", "..", ".tmp")
 	if err := os.MkdirAll(root, 0700); err != nil {
