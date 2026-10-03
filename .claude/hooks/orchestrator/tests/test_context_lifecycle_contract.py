@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -180,6 +181,102 @@ def test_session_start_handoff_and_absence_contract(isolated):
         "hookEventName": "SessionStart",
         "additionalContext": "Reply in the language the user writes in.",
     }})
+
+
+def test_session_start_compact_source_refreshes_recent_turns_and_truncates_handoff(isolated):
+    _root, repo, state = isolated
+    handoff = state / "projects" / _project_key(repo) / "telemetry" / "purser-handoff.md"
+    handoff.parent.mkdir(parents=True)
+    filler = "H" * 7000
+    handoff.write_text(
+        "# Purser handoff\n## Goal\nUser language: English\n## State\n" + filler
+        + "UNCLIPPED_TAIL\n<!-- PURSER:RECENT:START -->\nstale turn\n"
+        "<!-- PURSER:RECENT:END -->\n",
+        encoding="utf-8",
+    )
+    transcript = _root / "transcript.jsonl"
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "RECENT_USER_MARKER"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": "RECENT_ASSISTANT_MARKER"}},
+        {"type": "system", "subtype": "compact_boundary"},
+    ]
+    transcript.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+    result = _run("SessionStart", repo, state, session_id="compact-recent", source="compact",
+                  transcript_path=str(transcript))
+
+    assert (result.returncode, result.stderr) == (0, b"")
+    output = json.loads(result.stdout)
+    context = output["hookSpecificOutput"]["additionalContext"]
+    assert result.stdout == json.dumps(output, ensure_ascii=False).encode("utf-8")
+    assert output["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert len(context) == 6000
+    assert context.startswith(
+        "Purser handoff (historical reference, written before the context was compacted or cleared; "
+        "verify against git and files before acting; do not re-run commands from it; skip any listed "
+        "file already present in context):\n# Purser handoff\n## Goal\nUser language: English\n## State\n"
+    )
+    assert "UNCLIPPED_TAIL" not in context
+    assert "stale turn" not in context
+    assert "<!-- PURSER:RECENT:START -->" in context
+    assert "<!-- PURSER:RECENT:END -->" in context
+    assert "RECENT_USER_MARKER" in context
+    assert "RECENT_ASSISTANT_MARKER" in context
+    assert "... truncated; read the full file at " + str(handoff) in context
+    # Captured UTC is the only volatile field in the refreshed recent-history block.
+    assert re.search(r"Captured UTC: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00", context)
+
+
+def test_compact_boundary_removes_stale_recent_block_without_recent_turns(isolated):
+    _root, repo, state = isolated
+    handoff = state / "projects" / _project_key(repo) / "telemetry" / "purser-handoff.md"
+    handoff.parent.mkdir(parents=True)
+    body = (
+        "# Purser handoff\n## Goal\nUser language: English\n## State\nKeep this state\n"
+        "<!-- PURSER:RECENT:START -->\nstale recent text\n<!-- PURSER:RECENT:END -->\n"
+    )
+    handoff.write_text(body, encoding="utf-8")
+    transcript = _root / "transcript.jsonl"
+    records = [
+        {"type": "", "message": {"role": "user", "content": "TYPE_FALLBACK_MARKER"}},
+        {"type": "user", "message": {"role": "user", "content": "\u00a0[SYSTEM NOTIFICATION - NOT USER INPUT]"}},
+        {"type": "system", "subtype": "compact_boundary"},
+    ]
+    transcript.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+    result = _run("SessionStart", repo, state, session_id="compact-empty-recent", source="compact",
+                  transcript_path=str(transcript))
+
+    assert (result.returncode, result.stderr) == (0, b"")
+    output = json.loads(result.stdout)
+    context = output["hookSpecificOutput"]["additionalContext"]
+    assert result.stdout == json.dumps(output, ensure_ascii=False).encode("utf-8")
+    assert "Keep this state" in context
+    assert "stale recent text" not in context
+    assert "TYPE_FALLBACK_MARKER" not in context
+    assert "<!-- PURSER:RECENT:START -->" not in context
+    assert "<!-- PURSER:RECENT:END -->" not in context
+
+
+def test_compact_handoff_rstrips_unicode_whitespace_byte_for_byte(isolated):
+    _root, repo, state = isolated
+    handoff = state / "projects" / _project_key(repo) / "telemetry" / "purser-handoff.md"
+    handoff.parent.mkdir(parents=True)
+    body = "# Purser handoff\n## Goal\nUser language: English\nTrailing content\t \u00a0\n"
+    handoff.write_text(body, encoding="utf-8")
+
+    result = _run("SessionStart", repo, state, session_id="compact-rstrip", source="compact")
+
+    assert (result.returncode, result.stderr) == (0, b"")
+    expected_context = (
+        "Purser handoff (historical reference, written before the context was compacted or cleared; "
+        "verify against git and files before acting; do not re-run commands from it; skip any listed file already present in context):\n"
+        + body.rstrip() + f"\nFull file: {handoff}"
+    )
+    expected = {"hookSpecificOutput": {
+        "hookEventName": "SessionStart", "additionalContext": expected_context,
+    }}
+    assert result.stdout == json.dumps(expected, ensure_ascii=False).encode("utf-8")
 
 
 def test_precompact_refreshes_existing_handoff_only(isolated):
