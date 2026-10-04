@@ -9,29 +9,49 @@ import (
 	"unicode/utf8"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/enforce"
 )
 
 func main() {
 	defer func() { _ = recover() }()
 	started := time.Now()
+	enforcementMode := len(os.Args) > 1 && os.Args[1] == "enforce"
 	data, err := io.ReadAll(os.Stdin)
-	if err != nil || !utf8.Valid(data) {
+	if err != nil {
+		return
+	}
+	if !utf8.Valid(data) {
+		malformed("UnicodeDecodeError", enforcementMode)
 		return
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	var event map[string]any
-	if decoder.Decode(&event) != nil || event == nil {
+	var value any
+	if decoder.Decode(&value) != nil {
+		malformed("JSONDecodeError", enforcementMode)
 		return
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
+		malformed("JSONDecodeError", enforcementMode)
+		return
+	}
+	event, ok := value.(map[string]any)
+	if !ok {
+		if enforcementMode {
+			writeJSON(map[string]any{})
+		}
 		return
 	}
 	switch event["hook_event_name"] {
 	case "PreToolUse":
 		if event["tool_name"] == "Read" {
 			_ = contextio.Read(event, started)
+		} else if response, failure := enforce.Pre(event, stateRoot()); response != nil {
+			if failure != nil {
+				_, _ = os.Stderr.WriteString("orchestrator hook internal error: " + errorName(failure) + "\n")
+			}
+			writeJSON(response)
 		}
 	case "SessionStart":
 		if output := contextio.SessionStart(event); len(output) > 0 {
@@ -48,4 +68,34 @@ func main() {
 			_, _ = os.Stdout.Write(output)
 		}
 	}
+}
+
+func stateRoot() string {
+	if root := os.Getenv("PURSER_STATE_DIR"); root != "" {
+		return root
+	}
+	if config := os.Getenv("CLAUDE_CONFIG_DIR"); config != "" {
+		return config + string(os.PathSeparator) + "purser"
+	}
+	home, _ := os.UserHomeDir()
+	return home + string(os.PathSeparator) + ".claude" + string(os.PathSeparator) + "purser"
+}
+
+func writeJSON(value any) {
+	data, err := json.Marshal(value)
+	if err == nil {
+		_, _ = os.Stdout.Write(append(data, '\n'))
+	}
+}
+
+func malformed(kind string, enforcementMode bool) {
+	if !enforcementMode {
+		return
+	}
+	_, _ = os.Stderr.WriteString("orchestrator hook internal error: " + kind + ": malformed hook input\n")
+	_, _ = os.Stdout.WriteString("{}\n")
+}
+
+func errorName(err error) string {
+	return "RuntimeError: " + err.Error()
 }

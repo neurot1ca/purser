@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -171,7 +172,37 @@ def test_async_start_internal_error_denies_without_durable_route(repo, process):
     }}
     assert not list((state / "pending").glob("*.json"))
     assert not list((state / "pre_bypass").glob("*.json"))
-    assert "injected config failure" in result.stderr.decode("utf-8")
+    diagnostic = result.stderr.decode("utf-8")
+    assert "injected config failure" in diagnostic
+    assert '"phase": "PreToolUse"' in diagnostic
+    assert '"tool_use_id": "async-call"' in diagnostic
+
+
+def test_go_pretooluse_tools_cover_hooks_json(repo):
+    sys.path.insert(0, str(PACKAGE))
+    import codex
+
+    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    go_source = (REPO_ROOT / "go" / "internal" / "enforce" / "pre.go").read_text(encoding="utf-8")
+    go_map = go_source.split("var codexTools = map[string]bool{", 1)[1].split("}", 1)[0]
+    go_names = set(re.findall(r'"(mcp__[^" ]+)"\s*:', go_map))
+    hooked_names = set()
+    for entry in hooks["hooks"]["PreToolUse"]:
+        matcher = re.fullmatch(r"\^([^()]+)\(([^()]+)\)\$", entry["matcher"])
+        assert matcher, entry["matcher"]
+        prefix, alternatives = matcher.groups()
+        names = {prefix + suffix for suffix in alternatives.split("|")}
+        assert names <= codex.CODEX_TOOLS
+        hooked_names.update(names)
+    assert hooked_names <= go_names
+
+
+def test_malformed_json_uses_outer_recovery(repo, process):
+    _, run = process
+    result = run("PreToolUse", b'{"hook_event_name":')
+    assert result.returncode == 0
+    assert result.stdout == b"{}\n"
+    assert b"JSONDecodeError" in result.stderr
 
 
 def test_posttool_reviewed_output_keeps_route_attribution(repo, process):
