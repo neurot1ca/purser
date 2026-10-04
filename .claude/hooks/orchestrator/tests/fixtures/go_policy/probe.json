@@ -13,5 +13,14 @@
     {"name":"p38_missing_events_output_file","stdout":"","stderr":"","output_data":true,"started":true,"returncode":1,"timed_out":false,"expected":{"ok":false,"failure":{"type":"AMBIGUOUS","retryAfterSeconds":null,"noWorkProof":false}}},
     {"name":"p38_process_not_started","stdout":"","stderr":"executable not found","output_data":false,"started":false,"returncode":-1,"timed_out":false,"expected":{"ok":false,"failure":{"type":"AMBIGUOUS","retryAfterSeconds":null,"noWorkProof":false,"proof":"PROCESS_NOT_STARTED"}}},
     {"name":"p38_timeout","stdout":"","stderr":"","output_data":false,"started":true,"returncode":-1,"timed_out":true,"expected":{"ok":false,"failure":{"type":"NO_RESPONSE","retryAfterSeconds":null,"noWorkProof":false}}},
-    {"name":"p38_nonzero_after_completion","stdout":"{\"type\":\"turn.completed\"}\n","stderr":"","output_data":false,"started":true,"returncode":2,"timed_out":false,"expected":{"ok":false,"failure":{"type":"AMBIGUOUS","retryAfterSeconds":null,"noWorkProof":false}}}
+    {"name":"p38_nonzero_after_completion","stdout":"{\"type\":\"turn.completed\"}\n","stderr":"","output_data":false,"started":true,"returncode":2,"timed_out":false,"expected":{"ok":false,"failure":{"type":"AMBIGUOUS","retryAfterSeconds":null,"noWorkProof":false}}},
+    {"name":"p39_success","stdout":"{\"type\":\"turn.completed\"}\n","stderr":"","output_data":false,"started":true,"returncode":0,"timed_out":false,"expected":{"ok":true}},
+    {"name":"p39_failure_exit","stdout":"","stderr":"insufficient account balance","output_data":false,"started":true,"returncode":1,"timed_out":false,"expected":{"ok":false,"failure":{"type":"CREDIT_EXHAUSTED","retryAfterSeconds":null,"noWorkProof":false}}},
+    {"name":"p39_timeout","stdout":"","stderr":"","output_data":false,"started":true,"returncode":-1,"timed_out":true,"expected":{"ok":false,"failure":{"type":"NO_RESPONSE","retryAfterSeconds":null,"noWorkProof":false}}},
+    {"name":"p39_launch_failure","stdout":"","stderr":"executable not found","output_data":false,"started":false,"returncode":-1,"timed_out":false,"expected":{"ok":false,"failure":{"type":"AMBIGUOUS","retryAfterSeconds":null,"noWorkProof":false,"proof":"PROCESS_NOT_STARTED"}}}
+  ], "runtime_cases": [
+    {"name":"p39_success","script":"import json\nprint(json.dumps({'type':'turn.completed'}), flush=True)\n","timeout_seconds":1,"expected":{"ok":true}},
+    {"name":"p39_failure_exit","script":"import sys\nsys.stderr.write('insufficient account balance')\nsys.exit(1)\n","timeout_seconds":1,"expected":{"ok":false,"failure":{"type":"CREDIT_EXHAUSTED","retryAfterSeconds":null,"noWorkProof":false}}},
+    {"name":"p39_timeout","script":"import time\ntime.sleep(30)\n","timeout_seconds":0.1,"expected":{"ok":false,"failure":{"type":"NO_RESPONSE","retryAfterSeconds":null,"noWorkProof":false}}},
+    {"name":"p39_launch_failure","launch_failure":true,"timeout_seconds":1,"expected":{"ok":false,"failure":{"type":"AMBIGUOUS","retryAfterSeconds":null,"noWorkProof":false,"proof":"PROCESS_NOT_STARTED"}}}
   ]}

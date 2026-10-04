@@ -55,3 +55,22 @@ def test_p38_python_oracle_golden_fixture():
     for item in fixture["cases"]:
         case = {"stdout": item["stdout"], "stderr": item["stderr"], "output_data": item["output_data"], "started": item["started"], "returncode": item["returncode"], "timed_out": item["timed_out"]}
         assert _oracle("result", case) == item["expected"], item["name"]
+
+
+def test_p39_runtime_probe_matches_python(tmp_path):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    for item in fixture["runtime_cases"]:
+        if item.get("launch_failure"):
+            prefix = [str(tmp_path / "missing-p39-cli")]
+        else:
+            fake = tmp_path / f"{item['name']}.py"
+            fake.write_text(item["script"], encoding="utf-8")
+            prefix = [sys.executable, str(fake)]
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        code = "import json,sys; from codex_exec_mcp import probe_api_primary; print(json.dumps(probe_api_primary('codex','gpt-probe',codex_bin=json.dumps(json.loads(sys.argv[1])),timeout=float(sys.argv[2]))))"
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", code, json.dumps(prefix), str(item["timeout_seconds"])],
+            text=True, capture_output=True, cwd=SOURCE.parent, env=env, check=True,
+        )
+        assert json.loads(result.stdout) == item["expected"], item["name"]

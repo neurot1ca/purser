@@ -1,12 +1,86 @@
 package enforce
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"math"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
+
+	"purser-hook/internal/contextio"
 )
+
+const probeTimeout = 25 * time.Second
+
+// RunProbe invokes a configured fakeable CLI prefix in a fresh empty directory.
+// timeout is an explicit seam for focused tests; production uses probeTimeout.
+func RunProbe(prefix []string, model string, timeout time.Duration) map[string]any {
+	if timeout <= 0 || len(prefix) == 0 {
+		return ProbeResult(nil, "invalid probe command", false, false, -1, false)
+	}
+	cwd, err := os.MkdirTemp("", "purser-api-probe-")
+	if err != nil {
+		return ProbeResult(nil, err.Error(), false, false, -1, false)
+	}
+	defer os.RemoveAll(cwd)
+	outputPath := filepath.Join(cwd, "last-message.txt")
+	command := ProbeCommand(prefix, cwd, model, outputPath)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd.Dir = cwd
+	cmd.Stdin = strings.NewReader("Reply with OK.")
+	configureProbeLaunch(cmd)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err = cmd.Start()
+	if err != nil {
+		return ProbeResult(stdout.Bytes(), err.Error(), false, false, -1, false)
+	}
+	err = cmd.Wait() // Wait reaps the child after normal exit or timeout kill.
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return ProbeResult(stdout.Bytes(), stderr.String(), probeOutputHasData(outputPath), true, -1, true)
+	}
+	code := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			code = exit.ExitCode()
+		} else {
+			return ProbeResult(stdout.Bytes(), err.Error(), probeOutputHasData(outputPath), true, -1, false)
+		}
+	}
+	return ProbeResult(stdout.Bytes(), stderr.String(), probeOutputHasData(outputPath), true, code, false)
+}
+
+func probeOutputHasData(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Size() > 0
+}
+
+// ProbeFallback claims and probes one current trigger, returning to primary
+// only if the same trigger remains active when the probe completes.
+func ProbeFallback(project, root, kind string, triggerID any, event map[string]any,
+	prefix []string, model string) (bool, error) {
+	if kind != "CREDIT_EXHAUSTED" && kind != "NO_RESPONSE" {
+		return false, nil
+	}
+	claimed, err := contextio.ClaimFallbackProbe(project, root, kind, triggerID, float64(time.Now().UnixNano())/1e9)
+	if err != nil || !claimed {
+		return false, err
+	}
+	result := RunProbe(prefix, model, probeTimeout)
+	if result["ok"] != true {
+		return false, nil
+	}
+	return contextio.CompleteFallbackProbe(project, root, kind, triggerID, event, model)
+}
 
 // ProbeCommand builds the Codex API probe invocation without starting a process.
 func ProbeCommand(prefix []string, cwd, model, outputPath string) []string {

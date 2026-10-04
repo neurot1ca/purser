@@ -190,6 +190,25 @@ func ClaimFallbackProbe(project, root, kind string, triggerID any, now float64) 
 	return claimed, err
 }
 
+// CompleteFallbackProbe returns to primary only when the claimed trigger is
+// still current, and queues Python's credit-restored notice for credit probes.
+func CompleteFallbackProbe(project, root, kind string, triggerID any, event map[string]any, model string) (bool, error) {
+	returned := false
+	_, err := UpdateFallbackTrigger(project, root, kind, triggerID, func(state map[string]any) {
+		state["active_coder"], state["triggering_evidence"] = "primary", nil
+		state["reset_cycle_marker"], state["last_probe_time"] = nil, nil
+		returned = true
+	})
+	if err != nil || !returned {
+		return false, err
+	}
+	if kind == "CREDIT_EXHAUSTED" {
+		line := fmt.Sprintf("> ⚓ **%s's credits have been replenished; returned to the primary coder.**", model)
+		queueFallbackQuestion(event, project, line, model, true)
+	}
+	return true, nil
+}
+
 // ApplyPrimaryReturnConsent applies a shown, trigger-bound return answer under the active-coder lock.
 func ApplyPrimaryReturnConsent(project, root, session, kind string, triggerID any, approve bool) (bool, error) {
 	changed := false
