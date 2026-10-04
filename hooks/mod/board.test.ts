@@ -22,9 +22,11 @@ const files = {
   bundles: { 'run-bundle': { reviewer1_result: 'PASS' } },
 }
 
-test('renders running, queued behind, and done/applied project jobs with the existing columns', () => {
+test('summarizes mixed job states and keeps the current per-job table for details', () => {
   const board = renderJobBoard(files, 1000)
-  expect(board).toBe([
+  expect(board?.summary.map(part => part.text).join('')).toBe('⚓ ● 1 running · ◌ 1 queued · ✓ 1 done · next 3m')
+  expect(board?.summary.filter(part => part.text === ' · ').every(part => part.dimColor)).toBe(true)
+  expect(board?.detail).toBe([
     '| ⚓ Task | Model | State | ETA | Review | Apply |',
     '| --- | --- | --- | --- | --- | --- |',
     '| api fix | gpt-6-sol (high) | running · codex-main active 3s ago | 2m elapsed, 3m left | reviewed | n/a |',
@@ -36,14 +38,21 @@ test('renders running, queued behind, and done/applied project jobs with the exi
 test('shows an overdue duration against the job ETA', () => {
   const job = { ...files.jobs[0], startedAt: 100, etaMinutes: 5, activeAgent: undefined, liveness: undefined }
   const board = renderJobBoard({ indexes: [files.indexes[0]], jobs: [job] }, 1000)
-  expect(board).toContain('| api fix | gpt-6-sol (high) | running | 15m elapsed, overdue +10 min |')
+  expect(board?.detail).toContain('| api fix | gpt-6-sol (high) | running | 15m elapsed, overdue +10 min |')
+  expect(board?.summary.some(part => part.text === 'overdue +10m' && part.color === 'yellow')).toBe(true)
+})
+
+test('shows a dim quiet hint from an old running-job activity timestamp', () => {
+  const job = { ...files.jobs[0], startedAt: 900, acceptedAt: 900, activeAgent: undefined, liveness: { lastActivityAt: 100 } }
+  const board = renderJobBoard({ indexes: [files.indexes[0]], jobs: [job] }, 1000)
+  expect(board?.summary.some(part => part.text === 'quiet 15m' && part.dimColor)).toBe(true)
 })
 
 test('omits activity text when the job has no activity or checkpoint timestamp', () => {
   const job = { ...files.jobs[0], activeAgent: undefined, liveness: undefined }
   const board = renderJobBoard({ indexes: [files.indexes[0]], jobs: [job] }, 1000)
-  expect(board).toContain('| running |')
-  expect(board).not.toContain('active')
+  expect(board?.detail).toContain('| running |')
+  expect(board?.detail).not.toContain('active')
 })
 
 test('draws fixture job records in AbovePrompt and keeps the prior mod drawing', async ($, on) => {
@@ -51,6 +60,7 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
   const repoRoot = '/repo'
   mock.env(on, { OS: 'Linux', HOME: '/home/test', OSTYPE: 'linux-gnu', HOSTTYPE: 'x86_64' })
   const logs: string[] = []
+  const opened: string[] = []
   const now = Date.now() / 1000
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(repoRoot))
   const projectKey = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
@@ -83,19 +93,38 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
     return values[relative] === undefined ? { deny: 'unexpected fixture path' } : { value: values[relative] }
   })
   on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
+  on('ui.open', (_$, e) => { opened.push(e.id); return { value: { isPlaced: true } } })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return Text({ children: 'Other mod status' })
   })
+  on('ui.render', { component: 'Pane' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: 'Other mod pane status' })
+  })
   const ui = await $.ui.mount({
-    plugin: 'board-plugin-test', surface: 'terminal', component: 'AbovePrompt',
+    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100, scroll: { offset: 0, bodyRows: 12 }, view: {} },
   })
   expect(logs).toEqual([])
-  const board = await ui.find({ type: 'Markdown' })
-  expect(board).toBeDefined()
-  expect(board?.text).toContain('queued behind api fix')
+  const summary = await ui.find({ type: 'Text', text: '⚓' })
+  expect(summary?.props.color).toBe('cyan')
+  expect(summary?.props.wrap).toBe('truncate-end')
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', key: 'purser-board-details' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: 'Other mod status' }))?.text).toBe('Other mod status')
+  await ui.press({ key: 'purser-board-details' })
+  expect(opened).toEqual(['purser-job-board'])
+  const pane = await $.ui.mount({
+    plugin: 'purser', surface: 'terminal', component: 'Pane', requestId: 'purser-job-board',
+    props: { title: 'Jobs', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 12 }, view: {} },
+  })
+  const detail = await pane.find({ type: 'Markdown' })
+  expect(detail?.text).toContain('| api fix | gpt-6-sol (high) |')
+  expect(detail?.text).toContain('| test update | gpt-6-sol (medium) |')
+  expect(detail?.text).toContain('| docs | gpt-6-sol (low) |')
+  expect((await pane.find({ type: 'Text', text: 'Other mod pane status' }))?.text).toBe('Other mod pane status')
+  await pane.unmount()
   await ui.unmount()
 })
 
@@ -118,10 +147,12 @@ test('leaves another mod drawing intact when Purser has no board', async ($, on)
     return Text({ children: 'Other mod status' })
   })
   const ui = await $.ui.mount({
-    plugin: 'board-plugin-test', surface: 'terminal', component: 'AbovePrompt',
+    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
   expect((await ui.find({ type: 'Text', text: 'Other mod status' }))?.text).toBe('Other mod status')
+  expect(await ui.find({ type: 'Button', key: 'purser-board-details' })).toBeUndefined()
+  expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -140,7 +171,7 @@ test('a missing async jobs directory is empty and does not log a refresh failure
     return Text({ children: 'Other mod status' })
   })
   const ui = await $.ui.mount({
-    plugin: 'board-plugin-test', surface: 'terminal', component: 'AbovePrompt',
+    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
   expect(logs).toEqual([])
@@ -173,7 +204,7 @@ test('board read errors fail silently, preserve the turn, and log once per sessi
 
   const result = await $.classic.UserPromptSubmit({ session_id: 'board-error', cwd: '/repo', prompt: 'Continue' })
   const ui = await $.ui.mount({
-    plugin: 'board-plugin-test', surface: 'terminal', component: 'AbovePrompt',
+    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
   await didLog
@@ -181,7 +212,7 @@ test('board read errors fail silently, preserve the turn, and log once per sessi
   expect((await ui.find({ type: 'Text', text: 'Other mod status' }))?.text).toBe('Other mod status')
   expect(await ui.find({ text: /Purser jobs/ })).toBeUndefined()
   const nextUi = await $.ui.mount({
-    plugin: 'board-plugin-test', surface: 'terminal', component: 'AbovePrompt',
+    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
   await nextUi.unmount()

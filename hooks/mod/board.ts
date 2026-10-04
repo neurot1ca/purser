@@ -7,6 +7,9 @@ type BoardFiles = {
   bundles?: Record<string, Job>
 }
 
+type SummaryPart = { text: string; color?: string; dimColor?: boolean }
+type JobBoard = { summary: SummaryPart[]; detail: string }
+
 const routeMinutes: Record<string, number> = {
   mechanical: 3, subtle: 5, normal: 5, consequential: 8,
   escalated: 12, operation: 3, plan_standard: 8,
@@ -22,7 +25,7 @@ const duration = (seconds: number) => {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`
 }
 
-export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windows = false): string | undefined {
+export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windows = false): JobBoard | undefined {
   const jobsById = new Map(files.jobs.filter(job => typeof job.jobId === 'string').map(job => [job.jobId, job]))
   const indexed = files.indexes.flatMap(index => {
     const jobId = index.jobId
@@ -69,6 +72,44 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
   const active = visible.filter(({ job }) => job.state === 'QUEUED' || job.state === 'RUNNING')
   const finished = visible.filter(({ job }) => job.state !== 'QUEUED' && job.state !== 'RUNNING')
   if (!active.length && !finished.some(({ job }) => job.boardDisplayCount === 0)) return undefined
+
+  const counts = { running: 0, queued: 0, done: 0, failed: 0, cancelled: 0 }
+  let nearestEta: number | undefined
+  let overdueMinutes = 0
+  let quietSeconds = 0
+  for (const { job } of visible) {
+    if (job.state === 'RUNNING' || job.state === 'UNKNOWN_OR_IN_PROGRESS') {
+      counts.running++
+      const started = finiteTime(job.startedAt) ? job.startedAt : job.acceptedAt
+      const expected = Number.isInteger(job.etaMinutes) ? job.etaMinutes : routeMinutes[job.route]
+      if (finiteTime(started) && Number.isInteger(expected)) {
+        const elapsed = Math.max(0, now - started)
+        if (elapsed > expected * 60) overdueMinutes = Math.max(overdueMinutes, Math.ceil((elapsed - expected * 60) / 60))
+        else nearestEta = Math.min(nearestEta ?? Infinity, expected * 60 - elapsed)
+      }
+      const lastActivity = [job.liveness?.lastActivityAt, job.lastActivityAt, job.liveness?.checkpointAt, job.checkpointAt]
+        .find(finiteTime)
+      if (finiteTime(lastActivity)) quietSeconds = Math.max(quietSeconds, now - lastActivity)
+    } else if (job.state === 'QUEUED') counts.queued++
+    else if (job.state === 'SUCCEEDED') counts.done++
+    else if (job.state === 'CANCELLED') counts.cancelled++
+    else counts.failed++
+  }
+  const summary: SummaryPart[] = [{ text: '⚓', color: 'cyan' }]
+  let firstCount = true
+  const addCount = (count: number, glyph: string, label: string, color: string) => {
+    if (!count) return
+    summary.push({ text: firstCount ? ' ' : ' · ', dimColor: true }, { text: `${glyph} ${count}`, color }, { text: ` ${label}`, dimColor: true })
+    firstCount = false
+  }
+  addCount(counts.running, '●', 'running', 'cyan')
+  addCount(counts.queued, '◌', 'queued', 'yellow')
+  addCount(counts.done, '✓', 'done', 'green')
+  addCount(counts.failed, '!', 'failed', 'red')
+  addCount(counts.cancelled, '−', 'cancelled', 'gray')
+  if (overdueMinutes) summary.push({ text: ' · ', dimColor: true }, { text: `overdue +${overdueMinutes}m`, color: 'yellow' })
+  else if (nearestEta !== undefined) summary.push({ text: ' · ', dimColor: true }, { text: `next ${duration(nearestEta)}`, dimColor: true })
+  if (quietSeconds >= 300) summary.push({ text: ' · ', dimColor: true }, { text: `quiet ${duration(quietSeconds)}`, dimColor: true })
 
   const rows = visible.map(({ job, index }) => {
     const raw = job.state
@@ -126,11 +167,14 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
       job.applyState === 'applied' && finiteTime(job.appliedAt) ? job.appliedAt : job.finishedAt
     return { line, rank: raw === 'RUNNING' ? 0 : raw === 'QUEUED' ? 1 : 2, timestamp: finiteTime(timestamp) ? timestamp : 0 }
   }).sort((a, b) => a.rank - b.rank || b.timestamp - a.timestamp)
-  return ['| ⚓ Task | Model | State | ETA | Review | Apply |',
-    '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => row.line)].join('\n')
+  return {
+    summary,
+    detail: ['| ⚓ Task | Model | State | ETA | Review | Apply |',
+      '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => row.line)].join('\n'),
+  }
 }
 
-async function readBoard($, cwd: string): Promise<string | undefined> {
+async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
   const os = await $.env.get('OS')
   const home = os === 'Windows_NT' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
   if (!home) throw new Error('home directory unavailable')
@@ -178,6 +222,8 @@ async function readBoard($, cwd: string): Promise<string | undefined> {
 
 let timerStarted = false
 const reported = new Set<string>()
+const detailsPaneId = 'purser-job-board'
+let latestBoard: JobBoard | undefined
 
 async function reportOnce($, message: string) {
   const sessionId = await $.session.id().catch(() => '<unknown>')
@@ -197,13 +243,33 @@ export function registerBoard(on) {
       }
       const target = await $.session.cwd()
       const board = await readBoard($, target)
+      latestBoard = board
       if (!board) return prior
-      const { Box, Markdown } = $.ui.resolve(e)
-      const purser = Markdown({ text: board })
-      return Box({ children: prior ? [prior, purser] : [purser] })
+      const { Box, Text, Button } = $.ui.resolve(e)
+      const content = board.summary.map((part, index) => Text({
+        key: `purser-summary-${index}`, children: part.text, color: part.color,
+        dimColor: part.dimColor, wrap: 'truncate-end',
+      }))
+      content.push(Text({ key: 'purser-summary-details-sep', children: ' · ', dimColor: true }))
+      content.push(Button({
+        key: 'purser-board-details', label: 'details', plain: true, dimColor: true,
+        onPress: async () => { await $.ui.open({ id: detailsPaneId, title: 'Jobs' }) },
+      }))
+      return Box({
+        width: e.props.bodyColumns, flexDirection: 'row', flexWrap: 'nowrap',
+        children: prior ? [prior, Text({ children: ' · ', dimColor: true }), ...content] : content,
+      })
     } catch {
       await reportOnce($, 'Purser job board refresh failed; turn continued unchanged.')
       return prior
     }
+  })
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== detailsPaneId) return next(e)
+    const prior = await next(e)
+    if (!latestBoard) return prior
+    const { Box, Markdown } = $.ui.resolve(e)
+    const detail = Markdown({ text: latestBoard.detail })
+    return Box({ flexDirection: 'column', children: prior ? [prior, detail] : [detail] })
   })
 }
