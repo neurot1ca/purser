@@ -1,8 +1,10 @@
 package enforce
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -10,6 +12,138 @@ import (
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/policy"
 )
+
+// CoderSelection mirrors the coder/model/effort choice made by codex.Pre.
+type CoderSelection struct {
+	Agent       string `json:"agent"`
+	Model       string `json:"model"`
+	Effort      string `json:"effort"`
+	ModelSource string `json:"model_source"`
+	Reason      string `json:"reason"`
+	Code        string `json:"code"`
+}
+
+// SelectCoder keeps reply identity ahead of new-call choices, then applies
+// mechanical candidates, active fallback, and explicit Codex overrides in Pre order.
+func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, replyCall bool,
+	config, toolInput, liveThread, active map[string]any, candidates []any) CoderSelection {
+	agent, _ := config["coder_agent"].(string)
+	if agent == "" {
+		agent = "codex"
+	}
+	selection := CoderSelection{Agent: agent, Model: routeModel, Effort: routeEffort, ModelSource: "route", Reason: parsedReason, Code: "VALID"}
+	fallback, _ := config["fallback"].(map[string]any)
+	fallbackActive := newCall && fallback != nil && active != nil && active["active_coder"] == "fallback"
+	mechanicalCandidate := false
+
+	if replyCall && liveThread != nil {
+		threadAgent, ok := liveThread["agent"].(string)
+		if !ok || threadAgent == "" {
+			threadAgent = "codex"
+		}
+		allowed := threadAgent == agent
+		if fallback != nil && threadAgent == fallback["agent"] {
+			allowed = true
+		}
+		mechanicalThread := threadAgent == "opencode" && liveThread["route"] == "mechanical" &&
+			liveThread["phase"] == "implementation" && config["mechanical_opencode_enabled"] != false
+		if !allowed && !mechanicalThread {
+			selection.Code = "THREAD_AGENT_MISMATCH"
+			return selection
+		}
+		selection.Agent = threadAgent
+		if model, ok := liveThread["model"].(string); ok {
+			selection.Model = model
+		}
+		if effort, ok := liveThread["effort"].(string); ok {
+			selection.Effort = effort
+		}
+	} else if newCall && !replyCall && route == "mechanical" && config["mechanical_opencode_enabled"] != false {
+		if model := firstOpenCodeCandidate(candidates); model != "" {
+			selection.Agent, selection.Model = "opencode", model
+			mechanicalCandidate = true
+		}
+	}
+	if fallbackActive {
+		selection.Agent, _ = fallback["agent"].(string)
+		selection.Model, _ = fallback["model"].(string)
+		switch selection.Agent {
+		case "agy":
+			selection.Effort = "medium"
+		case "opencode":
+			selection.Effort = "none"
+		}
+		selection.ModelSource = "route"
+		mechanicalCandidate = false
+	} else if newCall && !replyCall && !mechanicalCandidate && selection.Agent == agent {
+		if model, ok := toolInput["model"].(string); ok && codexModelPattern.MatchString(model) {
+			selection.Model = model
+			selection.ModelSource = "override"
+			if values, ok := toolInput["config"].(map[string]any); ok {
+				if effort, ok := values["model_reasoning_effort"].(string); ok &&
+					(effort == "low" || effort == "medium" || effort == "high" || effort == "xhigh") {
+					selection.Effort = effort
+				}
+			}
+		}
+	}
+	if replyCall && liveThread != nil && parsedReason == "" {
+		if reason, ok := liveThread["reason"].(string); ok {
+			selection.Reason = reason
+		}
+	}
+	return selection
+}
+
+var codexModelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func firstOpenCodeCandidate(candidates []any) string {
+	measured := make([]string, 0)
+	seeded := make([]string, 0)
+	for _, raw := range candidates {
+		item, ok := raw.(map[string]any)
+		if !ok || item["status"] == "failed" {
+			continue
+		}
+		id, ok := item["id"].(string)
+		if !ok || !opencodeCandidatePattern.MatchString(id) {
+			continue
+		}
+		if item["status"] == "measured" {
+			measured = append(measured, id)
+			continue
+		}
+		benchmarks, _ := item["benchmarks"].(map[string]any)
+		result, _ := benchmarks["1"].(map[string]any)
+		passed, passedOK := exactInt(result["passed_count"])
+		total, totalOK := exactInt(result["total"])
+		if passedOK && totalOK && total == 6 && passed >= 5 && passed <= total {
+			seeded = append(seeded, id)
+		}
+	}
+	if len(measured) != 0 {
+		return measured[0]
+	}
+	if len(seeded) != 0 {
+		return seeded[0]
+	}
+	return ""
+}
+
+var opencodeCandidatePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
+
+func exactInt(value any) (int, bool) {
+	switch number := value.(type) {
+	case int:
+		return number, true
+	case int64:
+		return int(number), true
+	case json.Number:
+		integer, err := number.Int64()
+		return int(integer), err == nil
+	}
+	return 0, false
+}
 
 // ReplyRecovery is the synchronous codex-reply recovery decision before routing.
 type ReplyRecovery struct {

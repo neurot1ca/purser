@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"purser-hook/internal/ledger"
@@ -46,6 +48,9 @@ func TestRoutingParityP40(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range fixture.Cases {
+		if !strings.HasPrefix(item.Name, "p40:") {
+			continue
+		}
 		t.Run(item.Name, func(t *testing.T) {
 			temp := t.TempDir()
 			root := filepath.Join(temp, "repo")
@@ -93,6 +98,49 @@ func TestRoutingParityP40(t *testing.T) {
 			}
 			if item.Expected == "VALID" && (got.Label == nil || *got.Label != item.Label) {
 				t.Fatalf("inherited label = %v, want %q", got.Label, item.Label)
+			}
+		})
+	}
+}
+
+func TestCoderSelectionParityP41(t *testing.T) {
+	fixtureBytes, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/routing.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name      string         `json:"name"`
+			Selection map[string]any `json:"selection"`
+			Selected  map[string]any `json:"selected"`
+		} `json:"cases"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(fixtureBytes))
+	decoder.UseNumber()
+	if err := decoder.Decode(&fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range fixture.Cases {
+		if !strings.HasPrefix(item.Name, "p41:") {
+			continue
+		}
+		t.Run(item.Name, func(t *testing.T) {
+			input := item.Selection
+			config, _ := input["config"].(map[string]any)
+			toolInput, _ := input["tool_input"].(map[string]any)
+			live, _ := input["live_thread"].(map[string]any)
+			active, _ := input["active"].(map[string]any)
+			candidates, _ := input["candidates"].([]any)
+			got := SelectCoder(stringValue(input["route"]), stringValue(input["model"]), stringValue(input["effort"]),
+				stringValue(input["reason"]), input["new_call"] == true, input["reply_call"] == true,
+				config, toolInput, live, active, candidates)
+			var actual map[string]any
+			data, _ := json.Marshal(got)
+			if err := json.Unmarshal(data, &actual); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(actual, item.Selected) {
+				t.Fatalf("selection = %#v, want %#v", actual, item.Selected)
 			}
 		})
 	}
