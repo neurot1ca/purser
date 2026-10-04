@@ -1,1 +1,238 @@
-{"oracle":"codex._parse_task_contract","cases":[{"name":"json_precedence_and_list","prompt":"TASK_CONTRACT: {\"objective\":\"  JSON wins  \",\"criteria\":[\" first \",\"\", \"second\"]}\nObjective: header loses\nAcceptance: also loses","task_id":"p26-json","phase":"implementation","scope":["go/internal/enforce/contract.go"],"expected":{"objective":"JSON wins","criteria":"first; second","grounded":true}},{"name":"malformed_json_then_valid_contract","prompt":"TASK_CONTRACT: {not json}\nTASK_CONTRACT: {\"objective\":\"Later objective\",\"criteria\":\"Later criteria\"}","task_id":"p26-later","phase":"implementation","scope":[],"expected":{"objective":"Later objective","criteria":"Later criteria","grounded":true}},{"name":"invalid_json_criteria_falls_through","prompt":"TASK_CONTRACT: {\"objective\":\"bad shape\",\"criteria\":[\"valid\",3]}\nObjective: Header objective\nAcceptance criteria: Keep the fallback","task_id":"p26-shape","phase":"implementation","scope":[],"expected":{"objective":"Header objective","criteria":"Keep the fallback","grounded":true}},{"name":"malformed_json_falls_through_headers_and_stops","prompt":"TASK_CONTRACT: [broken]\nTask objective: Header objective\nAcceptance criteria:\n- Preserve fallback behavior\nVerified context:\nDo not collect this sentence.","task_id":"p26-header","phase":"implementation","scope":["a.go"],"expected":{"objective":"Header objective","criteria":"Preserve fallback behavior","grounded":true}},{"name":"markdown_unrelated_heading_stops_collection","prompt":"# Objective\nUpdate parser.\n# Acceptance criteria\n- Keep this criterion.\n# Notes\nThis is unrelated and excluded.","task_id":"p26-markdown","phase":"implementation","scope":[],"expected":{"objective":"Update parser.","criteria":"Keep this criterion.","grounded":true}},{"name":"incomplete_json_contract_is_not_grounded","prompt":"TASK_CONTRACT: {\"objective\":\"Only objective\"}","task_id":"p26-incomplete","phase":"review","scope":["x.go"],"expected":{"objective":"Task p26-incomplete (review phase) bounded to declared scope.","criteria":"Verify correct implementation within declared scope (x.go) with no material regression or scope expansion.","grounded":false}},{"name":"scalar_json_contract_is_rejected","prompt":"TASK_CONTRACT: [\"not\", \"an object\"]","task_id":"p26-scalar","phase":"review","scope":[],"expected":{"objective":"Task p26-scalar (review phase) bounded to declared scope.","criteria":"Verify correct implementation within declared scope () with no material regression or scope expansion.","grounded":false}}]}
+{
+  "oracle": "codex._parse_task_contract+codex._derive_task_type",
+  "cases": [
+    {
+      "name": "json_precedence_and_list",
+      "prompt": "TASK_CONTRACT: {\"objective\":\"  JSON wins  \",\"criteria\":[\" first \",\"\", \"second\"]}\nObjective: header loses\nAcceptance: also loses",
+      "task_id": "p26-json",
+      "phase": "implementation",
+      "scope": [
+        "go/internal/enforce/contract.go"
+      ],
+      "expected": {
+        "objective": "JSON wins",
+        "criteria": "first; second",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "malformed_json_then_valid_contract",
+      "prompt": "TASK_CONTRACT: {not json}\nTASK_CONTRACT: {\"objective\":\"Later objective\",\"criteria\":\"Later criteria\"}",
+      "task_id": "p26-later",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Later objective",
+        "criteria": "Later criteria",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "invalid_json_criteria_falls_through",
+      "prompt": "TASK_CONTRACT: {\"objective\":\"bad shape\",\"criteria\":[\"valid\",3]}\nObjective: Header objective\nAcceptance criteria: Keep the fallback",
+      "task_id": "p26-shape",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Header objective",
+        "criteria": "Keep the fallback",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "malformed_json_falls_through_headers_and_stops",
+      "prompt": "TASK_CONTRACT: [broken]\nTask objective: Header objective\nAcceptance criteria:\n- Preserve fallback behavior\nVerified context:\nDo not collect this sentence.",
+      "task_id": "p26-header",
+      "phase": "implementation",
+      "scope": [
+        "a.go"
+      ],
+      "expected": {
+        "objective": "Header objective",
+        "criteria": "Preserve fallback behavior",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "markdown_unrelated_heading_stops_collection",
+      "prompt": "# Objective\nUpdate parser.\n# Acceptance criteria\n- Keep this criterion.\n# Notes\nThis is unrelated and excluded.",
+      "task_id": "p26-markdown",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Update parser.",
+        "criteria": "Keep this criterion.",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "incomplete_json_contract_is_not_grounded",
+      "prompt": "TASK_CONTRACT: {\"objective\":\"Only objective\"}",
+      "task_id": "p26-incomplete",
+      "phase": "review",
+      "scope": [
+        "x.go"
+      ],
+      "expected": {
+        "objective": "Task p26-incomplete (review phase) bounded to declared scope.",
+        "criteria": "Verify correct implementation within declared scope (x.go) with no material regression or scope expansion.",
+        "grounded": false,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "scalar_json_contract_is_rejected",
+      "prompt": "TASK_CONTRACT: [\"not\", \"an object\"]",
+      "task_id": "p26-scalar",
+      "phase": "review",
+      "scope": [],
+      "expected": {
+        "objective": "Task p26-scalar (review phase) bounded to declared scope.",
+        "criteria": "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+        "grounded": false,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "fenced_heading_does_not_end_markdown_section",
+      "prompt": "# Objective\nRetain this objective.\n```markdown\n# Acceptance Criteria\nFake criterion.\n```\nContinue objective.\n# Acceptance Criteria\n- Real criterion.",
+      "task_id": "p27-fenced-markdown",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Retain this objective.; Continue objective.",
+        "criteria": "Real criterion.",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "markdown_alias_inline_and_unrelated_section",
+      "prompt": "### Task objective: Update parser\n### Requirements\n- Preserve precedence\n## Notes\nExclude these notes.",
+      "task_id": "p27-aliases",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Update parser",
+        "criteria": "Preserve precedence",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "incomplete_markdown_objective_is_ungrounded",
+      "prompt": "# Objective\nOnly objective.",
+      "task_id": "p27-objective-only",
+      "phase": "review",
+      "scope": [
+        "x.go"
+      ],
+      "expected": {
+        "objective": "Only objective.",
+        "criteria": "Verify correct implementation within declared scope (x.go) with no material regression or scope expansion.",
+        "grounded": false,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "incomplete_markdown_criteria_is_ungrounded",
+      "prompt": "# Acceptance Criteria\nOnly criteria.",
+      "task_id": "p27-criteria-only",
+      "phase": "review",
+      "scope": [
+        "x.go"
+      ],
+      "expected": {
+        "objective": "Task p27-criteria-only (review phase) bounded to declared scope.",
+        "criteria": "Only criteria.",
+        "grounded": false,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "classification_counting_status",
+      "prompt": "TASK_CONTRACT: {\"objective\":\"Count completed items\",\"criteria\":\"Report the number of results.\"}",
+      "task_id": "p27-counting",
+      "phase": "operation",
+      "scope": [],
+      "expected": {
+        "objective": "Count completed items",
+        "criteria": "Report the number of results.",
+        "grounded": true,
+        "task_type": "counting_status"
+      }
+    },
+    {
+      "name": "classification_counting_requires_operation_phase",
+      "prompt": "TASK_CONTRACT: {\"objective\":\"Count completed items\",\"criteria\":\"Report the number of results.\"}",
+      "task_id": "p27-counting-phase",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Count completed items",
+        "criteria": "Report the number of results.",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "classification_runbook_operation",
+      "prompt": "TASK_CONTRACT: {\"objective\":\"Use established runbook\",\"criteria\":\"Deploy with runner control.\"}",
+      "task_id": "p27-runbook",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Use established runbook",
+        "criteria": "Deploy with runner control.",
+        "grounded": true,
+        "task_type": "operation"
+      }
+    },
+    {
+      "name": "classification_runbook_requires_operation_signal",
+      "prompt": "TASK_CONTRACT: {\"objective\":\"Use documented runbook\",\"criteria\":\"Confirm the process.\"}",
+      "task_id": "p27-runbook-incomplete",
+      "phase": "operation",
+      "scope": [],
+      "expected": {
+        "objective": "Use documented runbook",
+        "criteria": "Confirm the process.",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "fenced_markdown_examples_cannot_ground_contract",
+      "prompt": "```markdown\n# Objective\nFake objective.\n# Acceptance Criteria\nFake criteria.\n```",
+      "task_id": "p27-fenced-only",
+      "phase": "implementation",
+      "scope": [
+        "a.go"
+      ],
+      "expected": {
+        "objective": "Task p27-fenced-only (implementation phase) bounded to declared scope.",
+        "criteria": "Verify correct implementation within declared scope (a.go) with no material regression or scope expansion.",
+        "grounded": false,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "fenced_heading_does_not_end_markdown_criteria",
+      "prompt": "# Objective\nReal objective.\n# Acceptance Criteria\n- First criterion.\n```markdown\n# Objective\nFake heading and body.\n```\n- Second criterion.\n# Notes\nExclude this note.",
+      "task_id": "p27-fenced-criteria",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Real objective.",
+        "criteria": "First criterion.; Second criterion.",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    }
+  ]
+}

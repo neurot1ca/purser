@@ -8,9 +8,12 @@ import (
 )
 
 var (
-	contractBullet = regexp.MustCompile(`^([-*+]|\d+[.)])\s+`)
-	contractStop   = regexp.MustCompile(`^(task objective|objective|goal|acceptance criteria|acceptance|verified context|report):`)
-	contractHead   = regexp.MustCompile(`^(#{1,3})[ \t]+(.+?)\s*$`)
+	contractBullet    = regexp.MustCompile(`^([-*+]|\d+[.)])\s+`)
+	contractStop      = regexp.MustCompile(`^(task objective|objective|goal|acceptance criteria|acceptance|verified context|report):`)
+	contractHead      = regexp.MustCompile(`^(#{1,3})[ \t]+(.+?)\s*$`)
+	contractCount     = regexp.MustCompile(`\b(count|counting|number of|how many)\b`)
+	contractRunbook   = regexp.MustCompile(`\b(established|documented) runbook\b`)
+	contractOperation = regexp.MustCompile(`\b(deploy|runner control|fetch|package|packaging)\b`)
 )
 
 type contractSection struct {
@@ -197,4 +200,15 @@ func parseTaskContract(prompt, taskID, phase string, scope []string) (string, st
 		criteria = defaultCriteria
 	}
 	return objective, criteria, false
+}
+
+func deriveTaskType(objective, criteria, phase string) string {
+	text := strings.ToLower(objective + "\n" + criteria)
+	if phase == "operation" && contractCount.MatchString(text) {
+		return "counting_status"
+	}
+	if contractRunbook.MatchString(text) && contractOperation.MatchString(text) {
+		return "operation"
+	}
+	return "unknown"
 }

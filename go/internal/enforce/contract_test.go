@@ -25,20 +25,22 @@ func TestTaskContractMatchesPythonFixture(t *testing.T) {
 				Objective string `json:"objective"`
 				Criteria  string `json:"criteria"`
 				Grounded  bool   `json:"grounded"`
+				TaskType  string `json:"task_type"`
 			} `json:"expected"`
 		} `json:"cases"`
 	}
 	if err = json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.Oracle != "codex._parse_task_contract" || len(fixture.Cases) == 0 {
+	if fixture.Oracle != "codex._parse_task_contract+codex._derive_task_type" || len(fixture.Cases) == 0 {
 		t.Fatalf("invalid Python fixture: %#v", fixture)
 	}
 	for _, test := range fixture.Cases {
 		t.Run(test.Name, func(t *testing.T) {
 			objective, criteria, grounded := parseTaskContract(test.Prompt, test.TaskID, test.Phase, test.Scope)
-			if objective != test.Expected.Objective || criteria != test.Expected.Criteria || grounded != test.Expected.Grounded {
-				t.Fatalf("got (%q, %q, %t), want (%q, %q, %t)", objective, criteria, grounded, test.Expected.Objective, test.Expected.Criteria, test.Expected.Grounded)
+			taskType := deriveTaskType(objective, criteria, test.Phase)
+			if objective != test.Expected.Objective || criteria != test.Expected.Criteria || grounded != test.Expected.Grounded || taskType != test.Expected.TaskType {
+				t.Fatalf("got (%q, %q, %t, %q), want (%q, %q, %t, %q)", objective, criteria, grounded, taskType, test.Expected.Objective, test.Expected.Criteria, test.Expected.Grounded, test.Expected.TaskType)
 			}
 		})
 	}

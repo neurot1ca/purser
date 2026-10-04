@@ -16,12 +16,15 @@ FIXTURE = ROOT / ".claude" / "hooks" / "orchestrator" / "tests" / "fixtures" / "
 
 def test_go_contract_fixture_matches_python_oracle():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert fixture["oracle"] == "codex._parse_task_contract"
+    assert fixture["oracle"] == "codex._parse_task_contract+codex._derive_task_type"
     for case in fixture["cases"]:
-        assert codex._parse_task_contract(
+        parsed = codex._parse_task_contract(
             case["prompt"], case["task_id"], case["phase"], case["scope"]
-        ) == (
+        )
+        assert parsed == (
             case["expected"]["objective"],
             case["expected"]["criteria"],
             case["expected"]["grounded"],
         ), case["name"]
+        task_type = codex._derive_task_type(parsed[0], parsed[1], case["phase"])
+        assert task_type == case["expected"]["task_type"], case["name"]
