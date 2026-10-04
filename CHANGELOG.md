@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.69 — 2026-10-04
+
+- **Fixed:** The band above the prompt disappeared on the desktop app because a usage pill used an invalid drawing property; the pills now draw.
+
 ## 0.1.68 — 2026-10-04
 
 - **Changed:** The job board above the prompt is one summary line (running, queued, done, next ETA); a details button opens the per-job table in a pane.
