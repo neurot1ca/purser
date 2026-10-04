@@ -2,6 +2,7 @@ import { buildReadEvent, platformBinary } from './mod/read.js'
 import { mapHookOutput } from './mod/lifecycle.js'
 import type { LifecycleEvent } from './mod/lifecycle.js'
 import { registerBoard } from './mod/board.js'
+import { registerUsage } from './mod/usage.js'
 
 const reported = new Set<string>()
 const lifecycleReported = new Set<string>()
@@ -58,6 +59,7 @@ async function lifecycle($, e, next, name: LifecycleEvent) {
 
 export function register(on) {
   registerBoard(on)
+  registerUsage(on)
 
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     let sessionId = ''
