@@ -126,7 +126,7 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
       job.applyState === 'applied' && finiteTime(job.appliedAt) ? job.appliedAt : job.finishedAt
     return { line, rank: raw === 'RUNNING' ? 0 : raw === 'QUEUED' ? 1 : 2, timestamp: finiteTime(timestamp) ? timestamp : 0 }
   }).sort((a, b) => a.rank - b.rank || b.timestamp - a.timestamp)
-  return ['Purser jobs:', '| ⚓ Task | Model | State | ETA | Review | Apply |',
+  return ['| ⚓ Task | Model | State | ETA | Review | Apply |',
     '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => row.line)].join('\n')
 }
 

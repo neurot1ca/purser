@@ -25,7 +25,6 @@ const files = {
 test('renders running, queued behind, and done/applied project jobs with the existing columns', () => {
   const board = renderJobBoard(files, 1000)
   expect(board).toBe([
-    'Purser jobs:',
     '| ⚓ Task | Model | State | ETA | Review | Apply |',
     '| --- | --- | --- | --- | --- | --- |',
     '| api fix | gpt-6-sol (high) | running · codex-main active 3s ago | 2m elapsed, 3m left | reviewed | n/a |',
