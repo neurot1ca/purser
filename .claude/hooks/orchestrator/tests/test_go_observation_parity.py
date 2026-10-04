@@ -199,3 +199,35 @@ def test_go_observation_p51_cases():
     env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(["go", "test", "-run", "^TestObservation.*P51", "-count=1", "./internal/enforce"],
                    cwd=ROOT / "go", env=env, check=True)
+
+
+def test_python_observation_p52_aggregate_oracle(monkeypatch):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    monkeypatch.setattr(telemetry, "_policy_hashes", lambda: ({
+        "skill_sha256": None, "config_sha256": None, "hook_sha256": None
+    }, None))
+    monkeypatch.setattr(telemetry, "emit", lambda *_a, **_k: None)
+    for case in fixture["p52_cases"]:
+        aggregate = telemetry._new_aggregate(case["task"], case["project_key"], case.get("existing"))
+        if case.get("existing") is not None:
+            aggregate.update(case["existing"])
+            if isinstance(aggregate.get("usage"), dict):
+                usage = telemetry._usage_defaults()
+                usage.update(aggregate["usage"])
+                aggregate["usage"] = usage
+        decision_conflict = False
+        for event in sorted(case["events"], key=lambda item: (str(item["ts_utc"]), str(item["event_id"]))):
+            decision_conflict = telemetry._fold_event(aggregate, event) or decision_conflict
+        canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        assert canonical(aggregate) == canonical(case["expected"]), case["name"]
+        assert decision_conflict is case["decision_conflict"], case["name"]
+
+
+def test_go_observation_p52_aggregate_cases():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
+    subprocess.run(["go", "test", "-run", "^TestObservation.*P52", "-count=1", "./internal/enforce"],
+                   cwd=ROOT / "go", env=env, check=True)

@@ -466,6 +466,46 @@ func TestObservationP51UsageParity(t *testing.T) {
 	}
 }
 
+func TestObservationP52AggregateParity(t *testing.T) {
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name             string           `json:"name"`
+			Task             any              `json:"task"`
+			ProjectKey       any              `json:"project_key"`
+			Existing         map[string]any   `json:"existing"`
+			Events           []map[string]any `json:"events"`
+			Expected         map[string]any   `json:"expected"`
+			DecisionConflict bool             `json:"decision_conflict"`
+		} `json:"p52_cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fixture.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			got, conflict := foldObservationAggregate(c.Existing, c.Task, c.ProjectKey, c.Events)
+			gotJSON, err := canonicalJSON(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantJSON, err := canonicalJSON(c.Expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotJSON, wantJSON) {
+				t.Fatalf("aggregate mismatch\ngot:  %s\nwant: %s", gotJSON, wantJSON)
+			}
+			if conflict != c.DecisionConflict {
+				t.Fatalf("decision conflict = %v, want %v", conflict, c.DecisionConflict)
+			}
+		})
+	}
+}
+
 func TestObservationP50Process(t *testing.T) {
 	mode, root := os.Getenv("P50_OBSERVATION_MODE"), os.Getenv("P50_OBSERVATION_ROOT")
 	if mode == "" || root == "" {

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,170 @@ import (
 )
 
 const observationSchemaVersion = 1
+
+// observationAggregateDefaults mirrors telemetry._new_aggregate's routing
+// fields. Existing values are overlaid after these defaults by the task fold.
+func observationAggregateDefaults(taskID, projectKey any) map[string]any {
+	usage := map[string]any{
+		"codex_call_count": 0, "codex_duration_ms": nil, "codex_usage_known": false,
+		"gemini_duration_ms": nil, "gemini_usage_known": false, "deepseek_usage_known": false,
+		"claude_5h_start_pct": nil, "claude_5h_end_pct": nil, "claude_5h_delta_pct": nil,
+		"claude_7d_start_pct": nil, "claude_7d_end_pct": nil, "claude_context_used_percentage": nil,
+		"claude_session_estimated_cost_usd": nil, "claude_usage_known": false,
+		"claude_rate_limit_delta_scope": "account_window_observation",
+		"claude_task_usage_source":      nil, "claude_task_usage_known": false, "claude_task_usage_complete": false,
+		"claude_task_input_tokens": nil, "claude_task_output_tokens": nil,
+		"claude_task_cache_creation_input_tokens": nil, "claude_task_cache_read_input_tokens": nil,
+		"claude_task_total_observed_tokens": nil, "claude_task_request_count": nil,
+		"claude_task_usage_boundary": nil, "claude_task_usage_dedup": nil,
+		"claude_task_usage_unknown_reason": nil, "claude_task_subagent_usage_included": false,
+	}
+	for _, provider := range []string{"codex", "gemini", "deepseek"} {
+		for _, field := range []string{"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens", "prompt_tokens", "completion_tokens", "cached_tokens", "cache_read_tokens", "cache_write_tokens", "thinking_tokens"} {
+			usage[provider+"_"+field] = nil
+		}
+	}
+	for _, prefix := range []string{"_claude_5h_start_", "_claude_5h_end_"} {
+		for _, suffix := range []string{"session_id", "captured_at", "resets_at"} {
+			usage[prefix+suffix] = nil
+		}
+	}
+	return map[string]any{
+		"task_id": taskID, "project_key": projectKey, "repo": nil, "branch": nil,
+		"status": "UNKNOWN_OR_IN_PROGRESS", "started_at": nil, "ended_at": nil, "duration_ms": nil,
+		"phase": nil, "task_type": "unknown", "task_type_source": "unknown", "has_code_map": nil,
+		"selected_agent": nil, "selected_provider": nil, "selected_model": nil,
+		"served_agent": nil, "served_provider": nil, "served_model": nil, "served_route": nil, "served_effort": nil,
+		"claude_decision":   nil,
+		"claude_acceptance": map[string]any{"outcome": "unknown", "send_backs": 0, "applied_as_is": false, "sources": []any{}},
+		"route":             nil, "model": nil, "effort": nil, "validation": nil, "thread_id": nil,
+		"fresh_threads": 0, "reply_calls": 0, "routing_enforced": nil,
+		"reviewer1_provider": nil, "reviewer1_model_requested": nil, "served_model_attestation": "UNAVAILABLE",
+		"reviewer1_result": nil, "reviewer1_initial_finding_count": nil, "reviewer1_skipped_reason": nil,
+		"claude_review_mode": nil, "changed_paths_count": nil, "routing_protocol_violations": 0,
+		"thread_continuity_violations": 0, "concurrent_writer": false,
+		"policy_fingerprint": nil,
+		"policy_hashes":      map[string]any{"skill_sha256": nil, "config_sha256": nil, "hook_sha256": nil},
+		"usage":              usage, "context_io": nil,
+	}
+}
+
+// foldObservationAggregate applies the routing-related Python task fold in
+// event order and returns whether terminal Claude decisions conflict.
+func foldObservationAggregate(existing map[string]any, taskID, projectKey any, events []map[string]any) (map[string]any, bool) {
+	defaults := observationAggregateDefaults(taskID, projectKey)
+	aggregate := defaults
+	for key, value := range existing {
+		aggregate[key] = value
+	}
+	usage := defaults["usage"].(map[string]any)
+	if saved, ok := existing["usage"].(map[string]any); ok {
+		for key, value := range saved {
+			usage[key] = value
+		}
+	}
+	aggregate["usage"] = usage
+	ordered := append([]map[string]any(nil), events...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, right := fmt.Sprint(ordered[i]["ts_utc"]), fmt.Sprint(ordered[j]["ts_utc"])
+		if left != right {
+			return left < right
+		}
+		return fmt.Sprint(ordered[i]["event_id"]) < fmt.Sprint(ordered[j]["event_id"])
+	})
+	conflict := false
+	for _, event := range ordered {
+		payload, _ := event["payload"].(map[string]any)
+		for _, field := range []string{"repo", "branch"} {
+			if aggregate[field] == nil && event[field] != nil {
+				aggregate[field] = event[field]
+			}
+		}
+		switch event["event_type"] {
+		case "TASK_ROUTE_SELECTED":
+			for _, field := range []string{"phase", "route", "model", "effort", "routing_enforced"} {
+				if value, ok := payload[field]; ok {
+					aggregate[field] = value
+				}
+			}
+			if value, ok := payload["task_type"]; ok {
+				aggregate["task_type"], aggregate["task_type_source"] = value, "route"
+			}
+			for source, target := range map[string]string{"agent": "selected_agent", "provider": "selected_provider", "model": "selected_model"} {
+				if value, ok := payload[source]; ok {
+					aggregate[target] = value
+				}
+			}
+		case "ROUTING_PROTOCOL_VIOLATION":
+			aggregate["routing_protocol_violations"] = numberOrZero(aggregate["routing_protocol_violations"]) + 1
+		case "THREAD_CONTINUITY_VIOLATION":
+			aggregate["thread_continuity_violations"] = numberOrZero(aggregate["thread_continuity_violations"]) + 1
+		case "CLAUDE_DECISION_RECORDED":
+			acceptance, _ := aggregate["claude_acceptance"].(map[string]any)
+			source, _ := payload["source"].(map[string]any)
+			sources, _ := acceptance["sources"].([]any)
+			duplicate := false
+			for _, raw := range sources {
+				if item, ok := raw.(map[string]any); ok && item["kind"] == source["kind"] && item["job_id"] == source["job_id"] {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			terminalsBefore := map[string]bool{}
+			for _, raw := range sources {
+				if item, ok := raw.(map[string]any); ok {
+					decision := fmt.Sprint(item["decision"])
+					if decision == "accepted" || decision == "rejected" {
+						terminalsBefore[decision] = true
+					}
+				}
+			}
+			decision := payload["decision"]
+			entry := map[string]any{"kind": source["kind"], "job_id": source["job_id"], "decision": decision, "task_type": payload["task_type"], "ts_utc": event["ts_utc"]}
+			sources = append(sources, entry)
+			acceptance["sources"] = sources
+			aggregate["claude_decision"] = map[string]any{"decision": decision, "task_type": payload["task_type"], "source": source, "ts_utc": event["ts_utc"]}
+			if aggregate["task_type"] == "unknown" && payload["task_type"] != "unknown" {
+				aggregate["task_type"], aggregate["task_type_source"] = payload["task_type"], "decision"
+			}
+			if decision == "send_back" {
+				acceptance["send_backs"] = numberOrZero(acceptance["send_backs"]) + 1
+			}
+			terminals := map[string]bool{}
+			for _, raw := range sources {
+				if item, ok := raw.(map[string]any); ok {
+					d := fmt.Sprint(item["decision"])
+					if d == "accepted" || d == "rejected" {
+						terminals[d] = true
+					}
+				}
+			}
+			outcome := "unknown"
+			if len(terminals) == 1 {
+				for d := range terminals {
+					outcome = d
+				}
+			}
+			acceptance["outcome"] = outcome
+			acceptance["applied_as_is"] = outcome == "accepted" && numberOrZero(acceptance["send_backs"]) == 0
+			conflict = conflict || len(terminals) > 1 && len(terminalsBefore) <= 1
+		}
+	}
+	return aggregate, conflict
+}
+
+func numberOrZero(value any) int {
+	switch n := value.(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return 0
+}
 
 func fields(names string) map[string]bool {
 	out := map[string]bool{}
