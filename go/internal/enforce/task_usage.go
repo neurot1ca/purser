@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -17,6 +18,113 @@ const (
 )
 
 var safeTaskUsageID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+
+const (
+	taskUsageLockTimeout = 500 * time.Millisecond
+	taskUsageLockPoll    = 10 * time.Millisecond
+)
+
+func taskUsageLockPath(root, session string) string {
+	return filepath.Join(root, "active_tasks", ".locks", session+".lock")
+}
+
+func taskUsageContentionPath(root, session string) string {
+	return filepath.Join(root, "active_tasks", session+".contention")
+}
+
+// acquireTaskUsageLock mirrors session_lock: OS-owned locking is released if
+// this process exits, and contention waits only until timeout.
+func acquireTaskUsageLock(root, session string, timeout time.Duration) (*os.File, bool) {
+	path := taskUsageLockPath(root, session)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, false
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, false
+	}
+	if info, statErr := file.Stat(); statErr != nil {
+		file.Close()
+		return nil, false
+	} else if info.Size() == 0 {
+		// Python ignores a failed seed write and still tries to lock.
+		_, _ = file.WriteAt([]byte{'0'}, 0)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if err = lockTaskUsageFile(file); err == nil {
+			return file, true
+		}
+		if !time.Now().Before(deadline) {
+			file.Close()
+			return nil, false
+		}
+		time.Sleep(taskUsageLockPoll)
+	}
+}
+
+func releaseTaskUsageLock(file *os.File) {
+	if file != nil {
+		_ = unlockTaskUsageFile(file)
+		_ = file.Close()
+	}
+}
+
+// markTaskUsageContention uses exclusive creation so the first task ID stays
+// authoritative when multiple writers lose the session lock.
+func markTaskUsageContention(root, session, taskID string) string {
+	path := taskUsageContentionPath(root, session)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "FAILED"
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if os.IsExist(err) {
+		return "EXISTS"
+	}
+	if err != nil {
+		return "FAILED"
+	}
+	defer file.Close()
+	if taskID != "" && safeTaskUsageID.MatchString(taskID) {
+		if _, err = file.WriteString(taskID); err != nil {
+			return "FAILED"
+		}
+		if err = file.Sync(); err != nil {
+			return "FAILED"
+		}
+	}
+	return "CREATED"
+}
+
+func readTaskUsageContention(root, session string) (bool, string) {
+	path := taskUsageContentionPath(root, session)
+	if _, err := os.Stat(path); err != nil {
+		return false, ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return true, ""
+	}
+	id := strings.TrimSpace(string(data))
+	if !safeTaskUsageID.MatchString(id) {
+		id = ""
+	}
+	return true, id
+}
+
+func removeTaskUsageContention(root, session string) bool {
+	path := taskUsageContentionPath(root, session)
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return true
+	}
+	if err != nil || info.IsDir() {
+		return false
+	}
+	_ = os.Remove(path)
+	_, err = os.Stat(path)
+	return os.IsNotExist(err)
+}
 
 type transcriptIdentity struct {
 	path string

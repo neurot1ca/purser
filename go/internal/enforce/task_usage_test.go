@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestTaskUsageP59Fixture(t *testing.T) {
@@ -33,6 +34,9 @@ func TestTaskUsageP59Fixture(t *testing.T) {
 		t.Fatal("missing Python oracle")
 	}
 	for _, c := range f.Cases {
+		if len(c.Name) < 3 || c.Name[:3] != "p59" {
+			continue
+		}
 		t.Run(c.Name, func(t *testing.T) {
 			root := t.TempDir()
 			projects := filepath.Join(root, "projects")
@@ -97,6 +101,85 @@ func TestTaskUsageP59Fixture(t *testing.T) {
 			}
 			if reason == "" && c.Op != "anchor" && len(records) != c.Records {
 				t.Fatalf("records %d want %d", len(records), c.Records)
+			}
+		})
+	}
+}
+
+func TestTaskUsageP60Fixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "task_usage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Cases []struct {
+			Name, Op, Session, Task, Other, Reason, Expected string
+			MarkerID                                         string `json:"marker_id"`
+		} `json:"cases"`
+	}
+	if err = json.Unmarshal(data, &f); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.Cases {
+		if len(c.Name) < 3 || c.Name[:3] != "p60" {
+			continue
+		}
+		t.Run(c.Name, func(t *testing.T) {
+			root := t.TempDir()
+			switch c.Op {
+			case "lock":
+				file, acquired := acquireTaskUsageLock(root, c.Session, 20*time.Millisecond)
+				if acquired != (c.Expected == "true") {
+					t.Fatalf("acquired %t want %s", acquired, c.Expected)
+				}
+				releaseTaskUsageLock(file)
+			case "lock-timeout":
+				held, acquired := acquireTaskUsageLock(root, c.Session, 20*time.Millisecond)
+				if !acquired {
+					t.Fatal("first lock not acquired")
+				}
+				defer releaseTaskUsageLock(held)
+				contender, acquired := acquireTaskUsageLock(root, c.Session, 20*time.Millisecond)
+				if acquired != (c.Expected == "true") {
+					t.Fatalf("contender acquired %t want %s", acquired, c.Expected)
+				}
+				releaseTaskUsageLock(contender)
+			case "marker-compete":
+				first := markTaskUsageContention(root, c.Session, c.Task)
+				second := markTaskUsageContention(root, c.Session, c.Other)
+				present, taskID := readTaskUsageContention(root, c.Session)
+				if first+","+second != c.Expected || !present || taskID != c.MarkerID {
+					t.Fatalf("marker %s,%s present=%t id=%q; want %s and %q", first, second, present, taskID, c.Expected, c.MarkerID)
+				}
+			case "marker-existing":
+				if got := markTaskUsageContention(root, c.Session, c.Task); got != "CREATED" {
+					t.Fatal(got)
+				}
+				present, taskID := readTaskUsageContention(root, c.Session)
+				if !present || taskID != c.MarkerID || c.Expected != "true" {
+					t.Fatalf("present=%t id=%q", present, taskID)
+				}
+			case "marker-clear-failure":
+				if err := os.MkdirAll(filepath.Join(root, "active_tasks"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(taskUsageContentionPath(root, c.Session), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if present, taskID := readTaskUsageContention(root, c.Session); !present || taskID != "" {
+					t.Fatalf("unreadable marker present=%t id=%q", present, taskID)
+				}
+				if got := removeTaskUsageContention(root, c.Session); got != (c.Expected == "true") {
+					t.Fatalf("removed %t want %s", got, c.Expected)
+				}
+			case "terminal-preserved":
+				usage := map[string]any{"claude_task_usage_unknown_reason": c.Reason, "claude_task_usage_known": false}
+				foldClaudeTaskUsage(usage, map[string]any{"claude_task_usage_known": true, "claude_task_usage_complete": true, "claude_task_input_tokens": float64(5)})
+				if usage["claude_task_usage_unknown_reason"] != c.Expected || usage["claude_task_usage_known"] != false {
+					t.Fatalf("terminal usage was overwritten: %#v", usage)
+				}
+			default:
+				t.Fatalf("unknown p60 op %q", c.Op)
 			}
 		})
 	}
