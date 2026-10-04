@@ -1,0 +1,193 @@
+{
+  "oracle": "Python codex.py pass 42 rewrite and instruction helpers",
+  "full_suite_cases": [
+    {
+      "name": "p42:acceptance-policy-present",
+      "policy": "Claude runs the full suite once before acceptance.",
+      "prompt": "Run all tests",
+      "acceptance": true,
+      "asks": true,
+      "required": true
+    },
+    {
+      "name": "p42:acceptance-policy-missing",
+      "policy": "Claude handles acceptance.",
+      "prompt": "Run the full test suite",
+      "acceptance": false,
+      "asks": true,
+      "required": false
+    },
+    {
+      "name": "p42:negated-request",
+      "policy": "Claude runs it once at acceptance.",
+      "prompt": "Do not run the full suite",
+      "acceptance": true,
+      "asks": false,
+      "required": false
+    },
+    {
+      "name": "p42:all-tests-request",
+      "policy": "Claude runs it once at acceptance.",
+      "prompt": "Please execute all tests now",
+      "acceptance": true,
+      "asks": true,
+      "required": true
+    },
+    {
+      "name": "p42:bare-full-suite",
+      "policy": "Claude runs it once at acceptance.",
+      "prompt": "Please run the full suite.",
+      "acceptance": true,
+      "asks": true,
+      "required": true
+    },
+    {
+      "name": "p42:whole-test-suite",
+      "policy": "Claude runs it once at acceptance.",
+      "prompt": "Please run the whole test suite.",
+      "acceptance": true,
+      "asks": true,
+      "required": true
+    },
+    {
+      "name": "p42:negation-near-match",
+      "policy": "Claude runs it once at acceptance.",
+      "prompt": "Please do not execute the whole test suite.",
+      "acceptance": true,
+      "asks": false,
+      "required": false
+    }
+  ],
+  "append_cases": [
+    {
+      "name": "p42:caller-text",
+      "prompt": "Keep this caller text exactly.\nSecond line.",
+      "full_suite": false,
+      "expected": "Keep this caller text exactly.\nSecond line.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue."
+    },
+    {
+      "name": "p42:full-suite-instruction",
+      "prompt": "Work on the task.",
+      "full_suite": true,
+      "expected": "Work on the task.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests while working, then run the full test suite once before your final report. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue."
+    },
+    {
+      "name": "p42:already-complete",
+      "prompt": "Task.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.",
+      "full_suite": false,
+      "expected": "Task.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue."
+    },
+    {
+      "name": "p42:partial-idempotence",
+      "prompt": "Worker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Keep existing.",
+      "full_suite": false,
+      "expected": "Worker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Keep existing. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue."
+    },
+    {
+      "name": "p42:partial-idempotence-existing-some",
+      "prompt": "Worker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. preserved.",
+      "full_suite": false,
+      "expected": "Worker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. preserved. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue."
+    },
+    {
+      "name": "p42:all-additions-present",
+      "prompt": "Worker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. | Run focused tests for what you changed; do not run the full test suite unless the task asks for it. | Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. | If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.",
+      "full_suite": false,
+      "expected": "Worker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. | Run focused tests for what you changed; do not run the full test suite unless the task asks for it. | Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. | If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue."
+    }
+  ],
+  "rewrite_cases": [
+    {
+      "name": "p42:implementation-preserves-caller",
+      "phase": "implementation",
+      "new_call": true,
+      "agent": "codex",
+      "full_suite": false,
+      "input": {
+        "prompt": "Caller says: preserve this.\nExact suffix.",
+        "label": "human label",
+        "developer-instructions": "Caller-provided instruction",
+        "config": {
+          "model_reasoning_effort": "high",
+          "caller": "keep"
+        }
+      },
+      "expected": {
+        "prompt": "Caller says: preserve this.\nExact suffix.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.",
+        "label": "human label",
+        "developer-instructions": "Caller-provided instruction",
+        "config": {
+          "model_reasoning_effort": "high",
+          "caller": "keep"
+        }
+      }
+    },
+    {
+      "name": "p42:plan-removes-unsafe-config",
+      "phase": "plan",
+      "new_call": true,
+      "agent": "codex",
+      "full_suite": false,
+      "input": {
+        "prompt": "Plan this.",
+        "config": {
+          "model_reasoning_effort": "high",
+          "sandbox_mode": "danger-full-access",
+          "approval_policy": "never",
+          "sandbox_workspace_write": true,
+          "caller": "keep"
+        }
+      },
+      "expected": {
+        "prompt": "Plan this.",
+        "config": {
+          "model_reasoning_effort": "high",
+          "caller": "keep"
+        },
+        "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts."
+      }
+    },
+    {
+      "name": "p42:non-codex-preserves-developer-input",
+      "phase": "plan",
+      "new_call": true,
+      "agent": "other",
+      "full_suite": false,
+      "input": {
+        "prompt": "Caller text",
+        "developer-instructions": "Caller-owned",
+        "config": {
+          "sandbox_mode": "caller"
+        }
+      },
+      "expected": {
+        "prompt": "Caller text",
+        "developer-instructions": "Caller-owned",
+        "config": {}
+      }
+    },
+    {
+      "name": "p42:old-call-keeps-unsafe-config",
+      "phase": "plan",
+      "new_call": false,
+      "agent": "codex",
+      "full_suite": false,
+      "input": {
+        "prompt": "Caller plan text.",
+        "config": {
+          "sandbox_mode": "keep-on-reply",
+          "approval_policy": "keep-on-reply",
+          "sandbox_workspace_write": true
+        }
+      },
+      "expected": {
+        "prompt": "Caller plan text.",
+        "config": {
+          "sandbox_mode": "keep-on-reply",
+          "approval_policy": "keep-on-reply",
+          "sandbox_workspace_write": true
+        }
+      }
+    }
+  ]
+}
