@@ -231,3 +231,33 @@ def test_go_observation_p52_aggregate_cases():
     env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(["go", "test", "-run", "^TestObservation.*P52", "-count=1", "./internal/enforce"],
                    cwd=ROOT / "go", env=env, check=True)
+
+
+def test_python_observation_p53_aggregate_oracle(tmp_path, monkeypatch):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    monkeypatch.setattr(telemetry, "_policy_hashes", lambda: ({
+        "skill_sha256": None, "config_sha256": None, "hook_sha256": None
+    }, None))
+    monkeypatch.setattr(telemetry, "emit", lambda *_a, **_k: None)
+    canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    for case in fixture["p53_cases"]:
+        root = tmp_path / case["name"] / "telemetry"
+        task_path = root.parent / "projects" / case["project_key"] / "telemetry" / "tasks" / f"{case['task']}.json"
+        task_path.parent.mkdir(parents=True)
+        if case.get("existing") is not None:
+            task_path.write_text(json.dumps(case["existing"]), encoding="utf-8")
+        aggregate = telemetry._build_task(
+            root, case["task"], case["project_key"], case["events"],
+            incremental=case["incremental"],
+        )
+        assert canonical(aggregate) == canonical(case["expected"]), case["name"]
+
+
+def test_go_observation_p53_aggregate_cases():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
+    subprocess.run(["go", "test", "-run", "^TestObservation.*P53", "-count=1", "./internal/enforce"],
+                   cwd=ROOT / "go", env=env, check=True)

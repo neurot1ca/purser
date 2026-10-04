@@ -70,16 +70,23 @@ func observationAggregateDefaults(taskID, projectKey any) map[string]any {
 
 // foldObservationAggregate applies the routing-related Python task fold in
 // event order and returns whether terminal Claude decisions conflict.
-func foldObservationAggregate(existing map[string]any, taskID, projectKey any, events []map[string]any) (map[string]any, bool) {
+func foldObservationAggregate(existing map[string]any, taskID, projectKey any, events []map[string]any, incremental bool) (map[string]any, bool) {
 	defaults := observationAggregateDefaults(taskID, projectKey)
 	aggregate := defaults
-	for key, value := range existing {
-		aggregate[key] = value
+	if hashes, hasHashes := existing["policy_hashes"]; hasHashes {
+		if fingerprint, hasFingerprint := existing["policy_fingerprint"]; hasFingerprint {
+			aggregate["policy_hashes"], aggregate["policy_fingerprint"] = hashes, fingerprint
+		}
 	}
 	usage := defaults["usage"].(map[string]any)
-	if saved, ok := existing["usage"].(map[string]any); ok {
-		for key, value := range saved {
-			usage[key] = value
+	if incremental {
+		for key, value := range existing {
+			aggregate[key] = value
+		}
+		if saved, ok := existing["usage"].(map[string]any); ok {
+			for key, value := range saved {
+				usage[key] = value
+			}
 		}
 	}
 	aggregate["usage"] = usage
@@ -114,10 +121,80 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 					aggregate[target] = value
 				}
 			}
+		case "IMPLEMENTER_STARTED":
+			aggregate["status"] = "IN_PROGRESS"
+			if aggregate["started_at"] == nil || aggregate["started_at"] == "" {
+				aggregate["started_at"] = event["ts_utc"]
+			}
+			if payload["fresh_thread"] == true {
+				aggregate["fresh_threads"] = numberOrZero(aggregate["fresh_threads"]) + 1
+			}
+			if payload["reply_call"] == true {
+				aggregate["reply_calls"] = numberOrZero(aggregate["reply_calls"]) + 1
+			}
+			usage["codex_call_count"] = numberOrZero(usage["codex_call_count"]) + 1
+			foldClaudeUsage(usage, payload, "start")
+		case "IMPLEMENTER_FINISHED", "IMPLEMENTER_FAILED":
+			aggregate["ended_at"] = event["ts_utc"]
+			aggregate["duration_ms"] = addObservationNumber(aggregate["duration_ms"], payload["duration_ms"])
+			usage["codex_duration_ms"] = addObservationNumber(usage["codex_duration_ms"], payload["duration_ms"])
+			for _, field := range []string{"changed_paths_count", "thread_id", "claude_review_mode", "routing_enforced", "served_agent", "served_provider", "served_model", "served_route", "served_effort"} {
+				if value, ok := payload[field]; ok {
+					aggregate[field] = value
+				}
+			}
+			if value, ok := payload["has_code_map"]; ok {
+				aggregate["has_code_map"] = value
+			}
+			if aggregate["validation"] == nil && payload["validation"] != nil {
+				aggregate["validation"] = payload["validation"]
+			}
+			known := payload["codex_usage_known"] == true
+			if numberOrZero(usage["codex_call_count"]) <= 1 {
+				usage["codex_usage_known"] = known
+			} else {
+				usage["codex_usage_known"] = usage["codex_usage_known"] == true && known
+			}
+			for _, field := range observationTokenFields {
+				key := "codex_" + field
+				if value, ok := payload[key]; ok {
+					usage[key] = addObservationNumber(usage[key], value)
+				}
+			}
+			foldClaudeUsage(usage, payload, "end")
+		case "REVIEWER1_STARTED", "REVIEWER1_FINISHED", "REVIEWER1_FAILED":
+			if event["event_type"] == "REVIEWER1_STARTED" {
+				aggregate["reviewer1_result"], aggregate["reviewer1_initial_finding_count"], aggregate["reviewer1_skipped_reason"] = nil, nil, nil
+			} else {
+				aggregate["reviewer1_skipped_reason"] = nil
+			}
+			for _, field := range []string{"reviewer1_provider", "reviewer1_model_requested", "served_model_attestation", "reviewer1_result", "reviewer1_initial_finding_count"} {
+				if value, ok := payload[field]; ok {
+					aggregate[field] = value
+				}
+			}
+			if event["event_type"] != "REVIEWER1_STARTED" {
+				usage["gemini_duration_ms"] = addObservationNumber(usage["gemini_duration_ms"], payload["duration_ms"])
+				if payload["gemini_usage_known"] == true {
+					usage["gemini_usage_known"] = true
+				}
+				for _, field := range observationTokenFields {
+					key := "gemini_" + field
+					if value, ok := payload[key]; ok {
+						usage[key] = addObservationNumber(usage[key], value)
+					}
+				}
+			}
+		case "REVIEWER1_SKIPPED":
+			aggregate["reviewer1_provider"], aggregate["reviewer1_result"], aggregate["reviewer1_initial_finding_count"] = nil, nil, nil
+			aggregate["reviewer1_skipped_reason"] = payload["reviewer1_skipped_reason"]
+			aggregate["reviewer1_model_requested"] = payload["reviewer1_model_requested"]
 		case "ROUTING_PROTOCOL_VIOLATION":
 			aggregate["routing_protocol_violations"] = numberOrZero(aggregate["routing_protocol_violations"]) + 1
 		case "THREAD_CONTINUITY_VIOLATION":
 			aggregate["thread_continuity_violations"] = numberOrZero(aggregate["thread_continuity_violations"]) + 1
+		case "UNKNOWN_CONCURRENT_WRITER":
+			aggregate["concurrent_writer"] = true
 		case "CLAUDE_DECISION_RECORDED":
 			acceptance, _ := aggregate["claude_acceptance"].(map[string]any)
 			source, _ := payload["source"].(map[string]any)
@@ -170,9 +247,156 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 			acceptance["outcome"] = outcome
 			acceptance["applied_as_is"] = outcome == "accepted" && numberOrZero(acceptance["send_backs"]) == 0
 			conflict = conflict || len(terminals) > 1 && len(terminalsBefore) <= 1
+		case "CLAUDE_TASK_USAGE_RECORDED":
+			foldClaudeTaskUsage(usage, payload)
+		case "CONTEXT_IO_TURN_RECORDED":
+			copy := map[string]any{}
+			for key, value := range payload {
+				copy[key] = value
+			}
+			aggregate["context_io"] = copy
 		}
 	}
 	return aggregate, conflict
+}
+
+var observationTokenFields = strings.Fields("input_tokens cached_input_tokens output_tokens reasoning_output_tokens total_tokens prompt_tokens completion_tokens cached_tokens cache_read_tokens cache_write_tokens thinking_tokens")
+
+func addObservationNumber(current, value any) any {
+	var n float64
+	switch x := value.(type) {
+	case int:
+		n = float64(x)
+	case int64:
+		n = float64(x)
+	case float64:
+		n = x
+	default:
+		return current
+	}
+	if math.IsNaN(n) || math.IsInf(n, 0) {
+		return current
+	}
+	if current == nil {
+		return value
+	}
+	switch x := current.(type) {
+	case int:
+		return float64(x) + n
+	case int64:
+		return float64(x) + n
+	case float64:
+		return x + n
+	}
+	return current
+}
+
+func foldClaudeUsage(usage, payload map[string]any, endpoint string) {
+	if payload["claude_usage_known"] == true {
+		usage["claude_usage_known"] = true
+	}
+	if payload["claude_rate_limit_delta_scope"] == "account_window_observation" {
+		usage["claude_rate_limit_delta_scope"] = "account_window_observation"
+	}
+	for _, field := range []string{"claude_context_used_percentage", "claude_session_estimated_cost_usd"} {
+		if n := observationClaudeNumber(payload[field]); n != nil {
+			usage[field] = n
+		}
+	}
+	endpointField := "claude_5h_" + endpoint + "_pct"
+	endpointValue := observationClaudeNumber(payload[endpointField])
+	if endpoint == "start" {
+		if endpointValue != nil && usage["claude_5h_start_pct"] == nil {
+			usage["claude_5h_start_pct"] = endpointValue
+			setClaudeUsageEndpoint(usage, payload, "start")
+		}
+	} else if endpointValue != nil {
+		usage["claude_5h_end_pct"] = endpointValue
+		setClaudeUsageEndpoint(usage, payload, "end")
+	}
+	if n := observationClaudeNumber(payload["claude_7d_"+endpoint+"_pct"]); n != nil {
+		usage["claude_7d_"+endpoint+"_pct"] = n
+	}
+	start, end := observationClaudeNumber(usage["claude_5h_start_pct"]), observationClaudeNumber(usage["claude_5h_end_pct"])
+	if start == nil || end == nil || usage["_claude_5h_start_session_id"] == nil || usage["_claude_5h_start_session_id"] != usage["_claude_5h_end_session_id"] || claudeResetCrossed(usage) {
+		usage["claude_5h_delta_pct"] = nil
+		return
+	}
+	if startAt, ok1 := parseClaudeUsageTimestamp(asString(usage["_claude_5h_start_captured_at"])); ok1 {
+		if endAt, ok2 := parseClaudeUsageTimestamp(asString(usage["_claude_5h_end_captured_at"])); ok2 && endAt.Before(startAt) {
+			usage["claude_5h_delta_pct"] = nil
+			return
+		}
+	}
+	usage["claude_5h_delta_pct"] = end.(float64) - start.(float64)
+}
+
+func setClaudeUsageEndpoint(usage, payload map[string]any, endpoint string) {
+	for suffix, field := range map[string]string{"session_id": "claude_usage_session_id", "captured_at": "claude_usage_captured_at", "resets_at": "claude_5h_resets_at"} {
+		usage["_claude_5h_"+endpoint+"_"+suffix] = payload[field]
+	}
+}
+
+func observationClaudeNumber(value any) any {
+	switch n := value.(type) {
+	case int:
+		if n >= 0 {
+			return float64(n)
+		}
+	case int64:
+		if n >= 0 {
+			return float64(n)
+		}
+	case float64:
+		if n >= 0 && !math.IsNaN(n) && !math.IsInf(n, 0) {
+			return n
+		}
+	}
+	return nil
+}
+
+func claudeResetCrossed(usage map[string]any) bool {
+	startReset, ok1 := parseClaudeUsageTimestamp(asString(usage["_claude_5h_start_resets_at"]))
+	endReset, ok2 := parseClaudeUsageTimestamp(asString(usage["_claude_5h_end_resets_at"]))
+	if ok1 && ok2 && !startReset.Equal(endReset) {
+		return true
+	}
+	startAt, ok3 := parseClaudeUsageTimestamp(asString(usage["_claude_5h_start_captured_at"]))
+	endAt, ok4 := parseClaudeUsageTimestamp(asString(usage["_claude_5h_end_captured_at"]))
+	return ok1 && ok2 && ok3 && ok4 && !startAt.After(endAt) && !startReset.Before(startAt) && !startReset.After(endAt)
+}
+
+func foldClaudeTaskUsage(usage, payload map[string]any) {
+	terminal := fields("OVERLAPPING_TASK_BOUNDARY CONTRADICTORY_USAGE_RECORD TRANSCRIPT_IDENTITY_MISMATCH TRANSCRIPT_ROTATED_OR_TRUNCATED TRANSCRIPT_UNRESOLVED_TAIL BOUNDS_EXCEEDED INVALID_USAGE_RECORD STALE_ACTIVE_TASK ANCHOR_NOT_FOUND TRANSCRIPT_UNAVAILABLE SESSION_MISMATCH WRONG_EXTENSION TRANSCRIPT_PATH_ESCAPE NO_USAGE_RECORDS ACTIVE_TASK_STATE_CONTENTION")
+	currentReason := asString(usage["claude_task_usage_unknown_reason"])
+	if terminal[currentReason] {
+		return
+	}
+	newReason := payload["claude_task_usage_unknown_reason"]
+	known := payload["claude_task_usage_known"] == true && !terminal[asString(newReason)]
+	fieldsToClear := []string{"claude_task_input_tokens", "claude_task_output_tokens", "claude_task_cache_creation_input_tokens", "claude_task_cache_read_input_tokens", "claude_task_total_observed_tokens", "claude_task_request_count"}
+	if terminal[asString(newReason)] || !known {
+		usage["claude_task_usage_known"], usage["claude_task_usage_complete"] = false, false
+		usage["claude_task_usage_unknown_reason"] = newReason
+		usage["claude_task_usage_source"], usage["claude_task_usage_boundary"], usage["claude_task_usage_dedup"] = nil, nil, nil
+		for _, field := range fieldsToClear {
+			usage[field] = nil
+		}
+		usage["claude_task_subagent_usage_included"] = false
+		return
+	}
+	usage["claude_task_usage_known"] = true
+	usage["claude_task_usage_complete"] = payload["claude_task_usage_complete"] == true
+	usage["claude_task_usage_unknown_reason"] = nil
+	for _, field := range []string{"claude_task_usage_source", "claude_task_usage_boundary", "claude_task_usage_dedup"} {
+		usage[field] = payload[field]
+	}
+	usage["claude_task_subagent_usage_included"] = payload["claude_task_subagent_usage_included"] == true
+	for _, field := range fieldsToClear {
+		if n, ok := payload[field].(float64); ok && n >= 0 && math.Trunc(n) == n {
+			usage[field] = n
+		}
+	}
 }
 
 func numberOrZero(value any) int {
