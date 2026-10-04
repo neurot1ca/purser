@@ -909,6 +909,89 @@ def test_stop_consumes_visible_pending_lines(isolated):
     assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == 1
 
 
+def test_p34_fallback_question_is_shown_before_answerable_on_next_turn_with_advice_disabled(isolated, monkeypatch):
+    root, repo, state = isolated
+    home = root / "home"
+    (home / ".orchestrator").mkdir(parents=True)
+    (home / ".orchestrator" / "config.toml").write_text("[compaction]\nenabled = false\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    session = "p34-fallback-lifecycle"
+    question = "> ⚓ **Should Purser switch to `model-x`?**"
+    active = state / "projects" / _project_key(repo) / "active-coder.json"
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_text(json.dumps({
+        "active_coder": "primary",
+        "triggering_evidence": {
+            "question_session": session, "question_shown": False, "answerable": False,
+        },
+        "reset_cycle_marker": None, "last_probe_time": None,
+    }), encoding="utf-8")
+    advisor = _advisor_state(state, repo)
+    advisor.parent.mkdir(parents=True, exist_ok=True)
+    advisor.write_text(json.dumps({
+        "session_id": session,
+        "fallback_pending": {
+            "line": question, "project": str(repo), "model": "model-x",
+            "blocked": False, "notice": False, "delivered": False,
+        },
+    }), encoding="utf-8")
+
+    first = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Continue.")
+    assert first.returncode == 0 and first.stderr == b""
+    assert question in json.loads(first.stdout)["hookSpecificOutput"]["additionalContext"]
+    evidence = json.loads(active.read_text(encoding="utf-8"))["triggering_evidence"]
+    assert evidence["question_shown"] is False and evidence["answerable"] is False
+    assert json.loads(advisor.read_text(encoding="utf-8"))["fallback_pending"]["delivered"] is True
+
+    shown = _run("Stop", repo, state, session_id=session, last_assistant_message=question)
+    assert (shown.returncode, shown.stdout, shown.stderr) == (0, b"", b"")
+    evidence = json.loads(active.read_text(encoding="utf-8"))["triggering_evidence"]
+    assert evidence["question_shown"] is True and evidence["answerable"] is False
+    assert json.loads(advisor.read_text(encoding="utf-8"))["fallback_pending"] is None
+
+    next_turn = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Yes.")
+    assert (next_turn.returncode, next_turn.stdout, next_turn.stderr) == (0, b"", b"")
+    evidence = json.loads(active.read_text(encoding="utf-8"))["triggering_evidence"]
+    assert evidence["question_shown"] is True and evidence["answerable"] is True
+
+
+@pytest.mark.parametrize("answer", [
+    "The reply did not include the consent question.",
+    "> ⚓ **Should Purser switch to `another-model`?**",
+    "> ⚓ **Should Purser switch to `model-x`?**\n> ⚓ **An unrelated notice.**",
+], ids=["p34-no-anchor", "p34-wrong-model", "p34-multiple-anchors"])
+def test_p34_fallback_rejected_delivery_does_not_mark_question_shown(isolated, answer):
+    _root, repo, state = isolated
+    session = "p34-fallback-rejected"
+    active = state / "projects" / _project_key(repo) / "active-coder.json"
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_text(json.dumps({
+        "active_coder": "primary",
+        "triggering_evidence": {
+            "question_session": session, "question_shown": False, "answerable": False,
+        },
+        "reset_cycle_marker": None, "last_probe_time": None,
+    }), encoding="utf-8")
+    advisor = _advisor_state(state, repo)
+    advisor.parent.mkdir(parents=True, exist_ok=True)
+    advisor.write_text(json.dumps({
+        "session_id": session,
+        "fallback_pending": {
+            "line": "> ⚓ **Should Purser switch to `model-x`?**",
+            "project": str(repo), "model": "model-x", "blocked": False,
+            "notice": False, "delivered": True,
+        },
+    }), encoding="utf-8")
+
+    result = _run("Stop", repo, state, session_id=session, last_assistant_message=answer)
+    assert result.returncode == 0 and result.stderr == b""
+    assert json.loads(result.stdout)["decision"] == "block"
+    evidence = json.loads(active.read_text(encoding="utf-8"))["triggering_evidence"]
+    assert evidence["question_shown"] is False and evidence["answerable"] is False
+    assert json.loads(advisor.read_text(encoding="utf-8"))["fallback_pending"]["blocked"] is True
+
+
 def test_stop_closes_journal_once_and_records_version_block(isolated):
     _root, repo, state = isolated
     session = "journal-stop"

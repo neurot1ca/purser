@@ -418,33 +418,7 @@ func markLeaderAnnounced(model string) {
 }
 
 func markFallbackShown(project, session string) {
-	if project == "" {
-		return
-	}
-	path := filepath.Join(stateRoot(), "projects", repositoryProjectKey(resolve(project)), "active-coder.json")
-	if os.MkdirAll(filepath.Dir(path), 0700) != nil {
-		return
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return
-	}
-	defer lock.Close()
-	if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
-		_, _ = lock.WriteAt([]byte("0"), 0)
-	}
-	if tryLock(lock) != nil {
-		return
-	}
-	defer unlock(lock)
-	value, ok := readSmallObject(path)
-	if !ok {
-		value = map[string]any{"active_coder": "primary", "triggering_evidence": nil, "reset_cycle_marker": nil, "last_probe_time": nil}
-	}
-	if evidence, ok := value["triggering_evidence"].(map[string]any); ok && evidence["question_session"] == session {
-		evidence["question_shown"] = true
-	}
-	_ = writeJSONAtomically(path, value)
+	updateFallbackQuestion(project, session, true, false)
 }
 
 func maintenanceGuidance(p map[string]any) string {

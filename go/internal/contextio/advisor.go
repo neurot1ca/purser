@@ -18,6 +18,44 @@ const postCompactContextTokens = 75000
 
 var advisorTask = regexp.MustCompile(`^ORCH\|task=([^|\s]+)\|`)
 
+func queueFallbackQuestion(event map[string]any, repository, line, model string, notice bool) bool {
+	session := str(event["session_id"])
+	if repository == "" || session == "" {
+		return false
+	}
+	path := filepath.Join(stateRoot(), "projects", repositoryProjectKey(repository), "telemetry", "compaction_advisor.json")
+	state := readAdvisorState(path, session)
+	old, _ := state["fallback_pending"].(map[string]any)
+	delivered := old != nil && old["line"] == line && old["model"] == model && old["delivered"] == true
+	state["fallback_pending"] = map[string]any{
+		"line": line, "project": repository, "model": model,
+		"blocked": false, "notice": notice, "delivered": delivered,
+	}
+	return writeAdvisorState(path, state) == nil
+}
+
+func updateFallbackQuestion(project, session string, shown, answerable bool) {
+	if project == "" || session == "" {
+		return
+	}
+	_, _ = updateActiveCoderState(activeCoderPath(project, stateRoot()), func(state map[string]any) {
+		evidence, ok := state["triggering_evidence"].(map[string]any)
+		if !ok || evidence["question_session"] != session {
+			return
+		}
+		if shown {
+			evidence["question_shown"] = true
+		}
+		if answerable && evidence["question_shown"] == true {
+			evidence["answerable"] = true
+		}
+	})
+}
+
+func markFallbackAnswerable(project, session string) {
+	updateFallbackQuestion(project, session, false, true)
+}
+
 func promptRetryContext(path, session string) string {
 	state := readAdvisorState(path, session)
 	pending := state["codex_retry_pending"]

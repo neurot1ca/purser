@@ -32,6 +32,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 	}
 	if statePath != "" {
 		if session, _ := event["session_id"].(string); session != "" {
+			markFallbackAnswerable(repository, session)
 			advice := compactionAdvice(event, repository, statePath, session)
 			retry := promptRetryContext(statePath, session)
 			languageLine, injectPlan := contextInjections(statePath, session, language, planningHint(event["prompt"]))

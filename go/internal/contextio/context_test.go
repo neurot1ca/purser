@@ -143,6 +143,145 @@ func TestP33FailedReplacementKeepsOldFileAndCleansTemp(t *testing.T) {
 	}
 }
 
+func TestP34QueueFallbackQuestion(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "repo")
+	root := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", root)
+	event := map[string]any{"session_id": "session-1"}
+	if !queueFallbackQuestion(event, project, "question", "model-x", false) {
+		t.Fatal("valid fallback question was not queued")
+	}
+	path := filepath.Join(root, "projects", repositoryProjectKey(project), "telemetry", "compaction_advisor.json")
+	state := readAdvisorState(path, "session-1")
+	pending := state["fallback_pending"].(map[string]any)
+	if pending["line"] != "question" || pending["project"] != project || pending["model"] != "model-x" || pending["notice"] != false || pending["blocked"] != false || pending["delivered"] != false {
+		t.Fatalf("queued fallback = %#v", pending)
+	}
+	pending["delivered"] = true
+	state["fallback_pending"] = pending
+	if err := writeAdvisorState(path, state); err != nil {
+		t.Fatal(err)
+	}
+	if !queueFallbackQuestion(event, project, "question", "model-x", true) {
+		t.Fatal("same fallback question was not replaced")
+	}
+	pending = readAdvisorState(path, "session-1")["fallback_pending"].(map[string]any)
+	if pending["delivered"] != true || pending["notice"] != true {
+		t.Fatalf("same question did not preserve delivery: %#v", pending)
+	}
+	if !queueFallbackQuestion(event, project, "new question", "model-y", false) {
+		t.Fatal("changed fallback question was not queued")
+	}
+	pending = readAdvisorState(path, "session-1")["fallback_pending"].(map[string]any)
+	if pending["delivered"] != false || pending["line"] != "new question" || pending["model"] != "model-y" {
+		t.Fatalf("changed question retained stale delivery: %#v", pending)
+	}
+}
+
+func TestP34QueueFallbackQuestionRejectsInvalidAndUndeliverableInputs(t *testing.T) {
+	t.Run("missing repository", func(t *testing.T) {
+		t.Setenv("PURSER_STATE_DIR", t.TempDir())
+		if queueFallbackQuestion(map[string]any{"session_id": "session-1"}, "", "question", "model-x", false) {
+			t.Fatal("empty repository accepted")
+		}
+	})
+	t.Run("missing session", func(t *testing.T) {
+		t.Setenv("PURSER_STATE_DIR", t.TempDir())
+		if queueFallbackQuestion(map[string]any{}, filepath.Join(t.TempDir(), "repo"), "question", "model-x", false) {
+			t.Fatal("missing session accepted")
+		}
+	})
+	t.Run("write failure", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "state")
+		if err := os.WriteFile(root, []byte("file"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PURSER_STATE_DIR", root)
+		if queueFallbackQuestion(map[string]any{"session_id": "session-1"}, filepath.Join(t.TempDir(), "repo"), "question", "model-x", false) {
+			t.Fatal("unwritable state accepted")
+		}
+	})
+}
+
+func TestP34FallbackQuestionShownThenAnswerable(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", root)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	config := filepath.Join(home, ".orchestrator")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "config.toml"), []byte("[compaction]\nenabled = false\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "init", "--quiet", project).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	event := map[string]any{"session_id": "session-1", "cwd": project, "prompt": "Continue."}
+	question := "> ⚓ **Should Purser switch to `model-x`?**"
+	path := activeCoderPath(project, root)
+	if err := writeActiveCoderState(path, map[string]any{
+		"active_coder": "primary", "triggering_evidence": map[string]any{
+			"question_session": "session-1", "question_shown": false, "answerable": false,
+		}, "reset_cycle_marker": nil, "last_probe_time": nil,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !queueFallbackQuestion(event, project, question, "model-x", false) {
+		t.Fatal("fallback question was not queued")
+	}
+	first := UserPromptSubmit(event, time.Now())
+	if !strings.Contains(string(first), question) {
+		t.Fatalf("disabled-advice prompt omitted fallback question: %s", first)
+	}
+	value, err := readActiveCoderState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := value["triggering_evidence"].(map[string]any)
+	if evidence["question_shown"] != false || evidence["answerable"] != false {
+		t.Fatalf("queued question became answerable before it was shown: %#v", evidence)
+	}
+	markFallbackShown(project, "other-session")
+	markFallbackAnswerable(project, "other-session")
+	value, err = readActiveCoderState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence = value["triggering_evidence"].(map[string]any)
+	if evidence["question_shown"] != false || evidence["answerable"] != false {
+		t.Fatalf("other session changed fallback question: %#v", evidence)
+	}
+	stopEvent := map[string]any{"session_id": "session-1", "cwd": project, "last_assistant_message": question}
+	if stop := Stop(stopEvent, time.Now()); len(stop) != 0 {
+		t.Fatalf("displayed question unexpectedly blocked: %s", stop)
+	}
+	value, err = readActiveCoderState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence = value["triggering_evidence"].(map[string]any)
+	if evidence["question_shown"] != true || evidence["answerable"] != false {
+		t.Fatalf("shown question lifecycle = %#v", evidence)
+	}
+	event["prompt"] = "Yes."
+	UserPromptSubmit(event, time.Now())
+	value, err = readActiveCoderState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence = value["triggering_evidence"].(map[string]any)
+	if evidence["question_shown"] != true || evidence["answerable"] != true {
+		t.Fatalf("next-turn question lifecycle = %#v", evidence)
+	}
+}
+
 func TestContextTurnEventRecordsGoRuntime(t *testing.T) {
 	event := contextTurnEvent(newTurn(""), "session-1", 0, 0, time.Now())
 	payload, ok := event["payload"].(map[string]any)
