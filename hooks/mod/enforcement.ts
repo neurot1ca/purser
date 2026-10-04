@@ -2,6 +2,7 @@ export function register(on) {
   const codexTools = new Set([
     'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
     'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
+    'mcp__codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_start',
   ])
   function mapPreToolUse(stdout: string): {
     deny?: string
@@ -81,6 +82,9 @@ export function register(on) {
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
+      if (e.tool.endsWith('__codex_start')) {
+        return { ...prior, deny: `ASYNC_ENFORCEMENT_FAILED: Go PreToolUse failed: ${reason}. Async start lacks a durable route/baseline; FULL review is required.` }
+      }
       return {
         ...prior,
         additionalContext: [...(prior.additionalContext ?? []),

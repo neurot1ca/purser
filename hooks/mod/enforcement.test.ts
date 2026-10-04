@@ -28,6 +28,7 @@ function stubGo(
   env = { OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64' },
   uname = { exitCode: 1, stdout: '' },
   binary = '/bin/purser-hook-windows-amd64.exe',
+  outcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
 ) {
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('session.id', () => ({ value: 'p66-session' }))
@@ -41,7 +42,9 @@ function stubGo(
     calls.push(e.init.stdin)
     expect(e.argv[0].replace(/\\/g, '/').endsWith(binary)).toBe(true)
     expect(e.init.timeoutMs).toBe(60000)
-    return { value: { exitCode: 0, stdout, stderr: '' } }
+    const result = outcome?.()
+    if (result?.deny) return { deny: result.deny }
+    return { value: { exitCode: result?.exitCode ?? 0, stdout: result?.stdout ?? stdout, stderr: '' } }
   })
   on('ui.toast', (_$, e) => { toasts.push(e.text); return { value: undefined } })
 }
@@ -214,4 +217,43 @@ test('fails open when uname platform detection fails', options, async ($, on) =>
     additionalContext: ['Orchestrator routing was NOT enforced for this Codex call because Go PreToolUse failed: platform detection failed. The call is allowed unmodified; FULL Claude review is required.'],
   })
   expect(toolCalls).toHaveLength(1)
+})
+
+test('adapter failures allow sync Codex with FULL context and deny codex_start', options, async ($, on) => {
+  const failures = [
+    { name: 'spawn failure', outcome: { deny: 'spawn failed' }, message: 'spawn failed' },
+    { name: 'nonzero exit', outcome: { exitCode: 1 }, message: 'exited 1' },
+    { name: 'timeout', outcome: { deny: 'timed out' }, message: 'timed out' },
+    { name: 'malformed stdout', outcome: { stdout: '{' }, message: 'JSON Parse error' },
+    { name: 'interruption after pending write', outcome: { deny: 'process killed after pending admission' }, message: 'process killed after pending admission' },
+  ]
+  const calls: string[] = []
+  const toolCalls: unknown[] = []
+  const toasts: string[] = []
+  let currentFailure = failures[0]
+  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => currentFailure.outcome)
+  stubToolCall(on, toolCalls)
+
+  for (const failure of failures) {
+    currentFailure = failure
+    for (const tool of ['mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex_start']) {
+      toasts.length = 0
+      const before = toolCalls.length
+      const result = await $.tool.call({ tool, prompt })
+      const mapped = observed(toasts)
+      if (tool.endsWith('__codex_start')) {
+        expect(mapped.deny).toContain('ASYNC_ENFORCEMENT_FAILED')
+        expect(mapped.deny).toContain(failure.message)
+        expect(result.isError).toBe(true)
+        expect(toolCalls).toHaveLength(before)
+      } else {
+        expect(mapped.additionalContext.join(' ')).toContain(failure.message)
+        expect(mapped.additionalContext.join(' ')).toContain('FULL Claude review is required')
+        expect(result.isError).not.toBe(true)
+        expect(toolCalls).toHaveLength(before + 1)
+        expect(toolCalls.at(-1)).toMatchObject({ prompt })
+      }
+    }
+  }
+  expect(calls).toHaveLength(failures.length * 2)
 })
