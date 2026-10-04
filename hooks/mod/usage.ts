@@ -101,16 +101,32 @@ export function usageGroups(codex: Quota, session: SessionData, now = Date.now()
 
 const escapeXml = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[character]!)
 
+// Monospace advance per character at the given font size; lays each part out after the previous one.
+const textWidth = (value: string, size: number) => Math.ceil([...value].length * size * 0.62)
+
 export function pillSvg(pill: Pill): string {
   const style = `<style>text{font-family:ui-monospace,SFMono-Regular,monospace;fill:#27313b}.pill{fill:${pill.color}22}@media(prefers-color-scheme:dark){text{fill:#f3f5f7}.pill{fill:${pill.color}55}}</style>`
-  if (pill.percent === undefined) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="150" height="34" viewBox="0 0 150 34">${style}<title>${escapeXml(pill.detail)}</title><rect class="pill" x=".5" y=".5" width="149" height="33" rx="16"/><text x="12" y="21" font-size="12">${escapeXml(pill.label)}</text><text x="83" y="21" font-size="12" font-weight="700">${escapeXml(pill.value)}</text></svg>`
+  const height = 24
+  const baseline = 16
+  let x = 10
+  let inner = `<text x="${x}" y="${baseline}" font-size="12">${escapeXml(pill.label)}</text>`
+  x += textWidth(pill.label, 12) + 8
+  if (pill.percent !== undefined) {
+    const barWidth = 46
+    inner += `<rect x="${x}" y="10" width="${barWidth}" height="4" rx="2" fill="#8c96a0" opacity=".35"/><rect x="${x}" y="10" width="${barWidth * pill.percent / 100}" height="4" rx="2" fill="${barColor(pill.percent)}"/><path d="M${x + barWidth * (pill.tick ?? 0)} 7v10" stroke="#252b32" stroke-width="1.4"/>`
+    x += barWidth + 8
   }
-  const width = 204
-  const barStart = 36
-  const barWidth = 46
-  const inner = `<rect x="${barStart}" y="15" width="${barWidth}" height="4" rx="2" fill="#ffffff" opacity=".7"/><rect x="${barStart}" y="15" width="${barWidth * pill.percent / 100}" height="4" rx="2" fill="${barColor(pill.percent)}"/><path d="M${barStart + barWidth * (pill.tick ?? 0)} 12v10" stroke="#252b32" stroke-width="1.4"/><text x="87" y="20" font-size="12" font-weight="700">${escapeXml(pill.value)}</text><path d="M122 8v18" stroke="#66717c" opacity=".5"/><text x="129" y="20" font-size="11">${escapeXml(pill.icon)}</text><text x="145" y="20" font-size="11">${escapeXml(pill.countdown ?? '')}</text>`
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="30" viewBox="0 0 ${width} 30">${style}<title>${escapeXml(pill.detail)}</title><rect class="pill" x=".5" y=".5" width="${width - 1}" height="29" rx="14"/><text x="10" y="20" font-size="12">${escapeXml(pill.label)}</text>${inner}</svg>`
+  inner += `<text x="${x}" y="${baseline}" font-size="12" font-weight="700">${escapeXml(pill.value)}</text>`
+  x += textWidth(pill.value, 12)
+  if (pill.countdown) {
+    x += 7
+    inner += `<path d="M${x} 5v14" stroke="#66717c" opacity=".5"/>`
+    x += 7
+    inner += `<text x="${x}" y="${baseline}" font-size="11">${escapeXml(pill.icon)} ${escapeXml(pill.countdown)}</text>`
+    x += textWidth(`${pill.icon} ${pill.countdown}`, 11)
+  }
+  const width = x + 10
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${style}<title>${escapeXml(pill.detail)}</title><rect class="pill" x=".5" y=".5" width="${width - 1}" height="${height - 1}" rx="${(height - 1) / 2}"/>${inner}</svg>`
 }
 
 async function readCodexQuota($, home: string, now: number): Promise<Quota> {
@@ -168,9 +184,9 @@ export function registerUsage(on) {
       const rendered = groups.map((group, groupIndex) => Box({
         key: `purser-usage-group-${groupIndex}`,
         flexDirection: 'row', gap: 1,
-        children: group.map(pill => terminal ? terminalPill(Text, pill) : Svg({ key: pill.id, source: pillSvg(pill), alt: pill.detail, isInteractive: true })),
+        children: group.map(pill => terminal ? terminalPill(Text, pill) : Svg({ key: pill.id, source: pillSvg(pill), alt: pill.detail })),
       }))
-      const band = Box({ flexDirection: 'row', flexWrap: 'wrap', gap: 3, children: rendered })
+      const band = Box({ flexDirection: 'row', flexWrap: 'wrap', gap: terminal ? 3 : 1, children: rendered })
       return Box({ children: prior ? [prior, band] : [band] })
     } catch { return prior }
   })
