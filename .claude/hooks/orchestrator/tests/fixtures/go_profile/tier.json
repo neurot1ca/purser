@@ -1,0 +1,151 @@
+[
+  {
+    "input": {
+      "tier": "user",
+      "data": {
+        "schema_version": 1,
+        "telemetry": {
+          "vault_root": "/vault"
+        }
+      }
+    },
+    "output": {
+      "status": "ok",
+      "values": {
+        "telemetry.vault_root": "/vault"
+      },
+      "warnings": []
+    }
+  },
+  {
+    "input": {
+      "tier": "project",
+      "data": {
+        "schema_version": 1,
+        "unknown": true,
+        "project": {
+          "id": 7
+        },
+        "authority": {
+          "sources": [
+            "bad"
+          ]
+        },
+        "worktree": {
+          "setup_timeout_seconds": 3601
+        }
+      }
+    },
+    "output": {
+      "status": "ok",
+      "values": {
+        "authority.sources": []
+      },
+      "warnings": [
+        "project: unknown top-level key or section [unknown] ignored",
+        "project: [project] id must be a string; ignored",
+        "project: [authority] sources[0] must be a table; entry ignored",
+        "project: [worktree] setup_timeout_seconds must be an integer from 1 to 3600; ignored"
+      ]
+    }
+  },
+  {
+    "input": {
+      "tier": "user",
+      "data": {
+        "schema_version": 1,
+        "review": {
+          "skip_max_lines": -1
+        }
+      }
+    },
+    "output": {
+      "status": "rejected",
+      "values": {},
+      "warnings": [
+        "user tier rejected: [review] skip_max_lines has an invalid type or value"
+      ]
+    }
+  },
+  {
+    "input": {
+      "tier": "user",
+      "data": {
+        "schema_version": 2
+      }
+    },
+    "output": {
+      "status": "rejected",
+      "values": {},
+      "warnings": [
+        "user tier rejected: schema_version must be 1"
+      ]
+    }
+  },
+  {
+    "input": {
+      "tier": "user",
+      "data": {
+        "schema_version": 1,
+        "checks": []
+      }
+    },
+    "output": {
+      "status": "rejected",
+      "values": {},
+      "warnings": [
+        "user tier rejected: [[checks]] is project-only"
+      ]
+    }
+  },
+  {
+    "input": {
+      "tier": "project",
+      "data": {
+        "schema_version": 1,
+        "checks": [
+          {
+            "name": "lint",
+            "argv": [
+              "go",
+              "vet",
+              "./..."
+            ]
+          }
+        ],
+        "worktree": {
+          "copy": [
+            ".env",
+            "config.toml"
+          ],
+          "setup": "go test ./...",
+          "setup_timeout_seconds": 30
+        }
+      }
+    },
+    "output": {
+      "status": "ok",
+      "values": {
+        "checks": [
+          {
+            "name": "lint",
+            "argv": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "when": null,
+            "timeout_seconds": 60
+          }
+        ],
+        "worktree.copy": [
+          ".env",
+          "config.toml"
+        ],
+        "worktree.setup": "go test ./...",
+        "worktree.setup_timeout_seconds": 30
+      },
+      "warnings": []
+    }
+  }
+]
