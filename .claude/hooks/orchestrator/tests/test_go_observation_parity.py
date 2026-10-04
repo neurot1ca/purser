@@ -261,3 +261,65 @@ def test_go_observation_p53_aggregate_cases():
     env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(["go", "test", "-run", "^TestObservation.*P53", "-count=1", "./internal/enforce"],
                    cwd=ROOT / "go", env=env, check=True)
+
+
+def test_python_observation_p54_update_task_oracle(tmp_path, monkeypatch):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["p54_oracle"] == "Python telemetry.update_task"
+    monkeypatch.setattr(telemetry, "_policy_hashes", lambda: ({
+        "skill_sha256": None, "config_sha256": None, "hook_sha256": None
+    }, None))
+    monkeypatch.setattr(telemetry, "emit", lambda *_a, **_k: None)
+    canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    for case in fixture["p54_cases"]:
+        state = tmp_path / case["name"]
+        root = state / "telemetry"
+        index = root / "events" / "by_task" / f"{case['task']}.jsonl"
+        if case["index_events"]:
+            index.parent.mkdir(parents=True, exist_ok=True)
+            index.write_bytes("".join(canonical(event) + "\n" for event in case["index_events"]).encode("utf-8"))
+        for event in case["spool_events"]:
+            path = root / "events" / "spool" / f"{event['event_id']}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(canonical(event), encoding="utf-8")
+        for event_id in case["merged_ids"]:
+            marker = root / "events" / "spool" / ".merged" / event_id
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("", encoding="utf-8")
+        project = state / "projects" / case["project_key"] / "telemetry"
+        task_path = project / "tasks" / f"{case['task']}.json"
+        cursor_path = project / "tasks" / ".cursors" / f"{case['task']}.json"
+        if case["existing"] is not None:
+            task_path.parent.mkdir(parents=True, exist_ok=True)
+            task_path.write_text(canonical(case["existing"]), encoding="utf-8")
+        if case["cursor"] is not None:
+            cursor_path.parent.mkdir(parents=True, exist_ok=True)
+            cursor_path.write_text(canonical(case["cursor"]), encoding="utf-8")
+        if case["verdict"] is not None:
+            verdict = project / "verdicts" / f"{case['task']}.json"
+            verdict.parent.mkdir(parents=True, exist_ok=True)
+            verdict.write_text(canonical(case["verdict"]), encoding="utf-8")
+        if case["recover_after_failed_replace"]:
+            task_path.parent.mkdir(parents=True, exist_ok=True)
+            task_path.mkdir()
+            telemetry.update_task(case["task"], state_root=state, projection_enabled=False)
+            assert not cursor_path.exists(), case["name"]
+            task_path.rmdir()
+        telemetry.update_task(case["task"], state_root=state, projection_enabled=False)
+        if case["malformed_cursor"]:
+            assert task_path.exists() is case["expected_task_exists"], case["name"]
+            health = json.loads((state / "telemetry" / "telemetry_health.json").read_text(encoding="utf-8"))
+            assert (health["status"], health["last_error_code"]) == ("DEGRADED", "TELEMETRY_UPDATE_TASK_FAILED")
+        else:
+            assert json.loads(task_path.read_text(encoding="utf-8")) == case["expected_task"], case["name"]
+        assert json.loads(cursor_path.read_text(encoding="utf-8")) == case["expected_cursor"], case["name"]
+
+
+def test_go_observation_p54_update_task_cases():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
+    subprocess.run(["go", "test", "-run", "^TestObservation.*P54", "-count=1", "./internal/enforce"],
+                   cwd=ROOT / "go", env=env, check=True)

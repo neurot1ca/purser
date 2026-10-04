@@ -1,6 +1,7 @@
 package enforce
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -717,6 +718,235 @@ func atomicObservationJSON(path string, encoded []byte) error {
 	return os.Rename(tmp, path)
 }
 
+func updateObservationTask(root, taskID, projectKey string) error {
+	indexOffset, consumedSpool, err := readObservationCursor(root, taskID, projectKey)
+	if err != nil {
+		return err
+	}
+	indexEvents, nextOffset, err := readObservationTaskIndex(root, taskID, projectKey, indexOffset)
+	if err != nil {
+		return err
+	}
+	consumedFromIndex := map[string]bool{}
+	events := make([]map[string]any, 0, len(indexEvents))
+	for _, event := range indexEvents {
+		id := asString(event["event_id"])
+		if consumedSpool[id] {
+			delete(consumedSpool, id)
+			consumedFromIndex[id] = true
+		} else {
+			events = append(events, event)
+		}
+	}
+	spoolEvents, err := unmergedObservationEvents(root, taskID, projectKey)
+	if err != nil {
+		return err
+	}
+	for _, event := range spoolEvents {
+		id := asString(event["event_id"])
+		if consumedFromIndex[id] || consumedSpool[id] {
+			continue
+		}
+		events = append(events, event)
+		consumedSpool[id] = true
+	}
+	projectRoot := filepath.Join(filepath.Dir(root), "projects", projectKey, "telemetry")
+	taskPath := filepath.Join(projectRoot, "tasks", taskID+".json")
+	var existing map[string]any
+	if data, readErr := os.ReadFile(taskPath); readErr == nil {
+		_ = json.Unmarshal(data, &existing)
+	}
+	aggregate, _ := foldObservationAggregate(existing, taskID, projectKey, events, true)
+	if verdict := readObservationVerdict(projectRoot, taskID); verdict != nil {
+		aggregate["status"], aggregate["ended_at"] = verdict[0], verdict[1]
+	}
+	taskJSON, err := canonicalJSON(aggregate)
+	if err != nil {
+		return err
+	}
+	if err = atomicObservationJSON(taskPath, taskJSON); err != nil {
+		return err
+	}
+	cursorJSON, err := canonicalJSON(map[string]any{
+		"schema_version": 1, "index_offset": nextOffset, "spool_event_ids": sortedObservationIDs(consumedSpool),
+	})
+	if err != nil {
+		return err
+	}
+	return atomicObservationJSON(filepath.Join(projectRoot, "tasks", ".cursors", taskID+".json"), cursorJSON)
+}
+
+func updateObservationTaskBestEffort(root, taskID, projectKey string) {
+	if err := updateObservationTask(root, taskID, projectKey); err != nil {
+		recordObservationHealth(filepath.Dir(root), "DEGRADED", "TELEMETRY_UPDATE_TASK_FAILED")
+	}
+}
+
+func readObservationCursor(root, taskID, projectKey string) (int64, map[string]bool, error) {
+	path := filepath.Join(filepath.Dir(root), "projects", projectKey, "telemetry", "tasks", ".cursors", taskID+".json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return 0, map[string]bool{}, nil
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	var value map[string]any
+	if json.Unmarshal(data, &value) != nil || len(value) != 3 || value["schema_version"] != float64(1) {
+		return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+	}
+	for key := range value {
+		if key != "schema_version" && key != "index_offset" && key != "spool_event_ids" {
+			return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+		}
+	}
+	offset, ok := value["index_offset"].(float64)
+	if !ok || offset < 0 || math.Trunc(offset) != offset || offset >= float64(math.MaxInt64) {
+		return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+	}
+	ids, ok := value["spool_event_ids"].([]any)
+	if !ok {
+		return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+	}
+	consumed := make(map[string]bool, len(ids))
+	for _, raw := range ids {
+		id, ok := raw.(string)
+		if !ok {
+			return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+		}
+		consumed[id] = true
+	}
+	return int64(offset), consumed, nil
+}
+
+func readObservationTaskIndex(root, taskID, projectKey string, offset int64) ([]map[string]any, int64, error) {
+	path := filepath.Join(root, "events", "by_task", taskID+".jsonl")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		if offset != 0 {
+			return nil, 0, fmt.Errorf("task telemetry index disappeared")
+		}
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	if offset > int64(len(data)) {
+		return nil, 0, fmt.Errorf("task telemetry index was truncated")
+	}
+	var events []map[string]any
+	consumed := offset
+	for remaining := data[offset:]; len(remaining) > 0; {
+		newline := bytes.IndexByte(remaining, '\n')
+		if newline < 0 {
+			break
+		}
+		line := remaining[:newline]
+		consumed += int64(newline + 1)
+		var event map[string]any
+		if json.Unmarshal(line, &event) == nil && validObservationTaskEvent(event) && event["task_id"] == taskID && event["project_key"] == projectKey {
+			events = append(events, event)
+		}
+		remaining = remaining[newline+1:]
+	}
+	return events, consumed, nil
+}
+
+func validObservationTaskEvent(event map[string]any) bool {
+	keys := fields("schema_version event_id ts_utc event_type task_id project_key session_id repo branch agent_id agent_type payload")
+	if event == nil || len(event) != len(keys) || event["schema_version"] != float64(1) || !observationUUID.MatchString(asString(event["event_id"])) {
+		return false
+	}
+	for key := range keys {
+		if _, ok := event[key]; !ok {
+			return false
+		}
+	}
+	ts := asString(event["ts_utc"])
+	parsed, err := time.Parse(time.RFC3339Nano, ts)
+	_, offset := parsed.Zone()
+	_, payloadOK := event["payload"].(map[string]any)
+	if len(ts) > 40 || err != nil || offset != 0 || !observationEventTypes[asString(event["event_type"])] || !payloadOK {
+		return false
+	}
+	for _, field := range []string{"task_id", "project_key", "session_id", "repo", "branch", "agent_id", "agent_type"} {
+		value := event[field]
+		if value == nil {
+			continue
+		}
+		id, ok := value.(string)
+		if !ok || !observationID.MatchString(id) {
+			return false
+		}
+		if field == "project_key" && !observationProjectKey.MatchString(id) {
+			return false
+		}
+	}
+	return true
+}
+
+func unmergedObservationEvents(root, taskID, projectKey string) ([]map[string]any, error) {
+	spool := filepath.Join(root, "events", "spool")
+	entries, err := os.ReadDir(spool)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var events []map[string]any
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		if _, err = os.Stat(filepath.Join(spool, ".merged", id)); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		data, readErr := os.ReadFile(filepath.Join(spool, entry.Name()))
+		var event map[string]any
+		if readErr == nil && json.Unmarshal(data, &event) == nil && validObservationTaskEvent(event) && event["task_id"] == taskID && event["project_key"] == projectKey {
+			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
+func readObservationVerdict(projectRoot, taskID string) []any {
+	data, err := os.ReadFile(filepath.Join(projectRoot, "verdicts", taskID+".json"))
+	var value map[string]any
+	if err != nil || json.Unmarshal(data, &value) != nil || len(value) != 4 || value["schema_version"] != float64(1) || normalizeObservationID(value["task_id"], "unknown") != taskID {
+		return nil
+	}
+	verdict, ok := value["verdict"].(string)
+	if !ok || !strings.Contains("|VERIFIED|NOT_VERIFIED|INCONCLUSIVE|NO_CHANGE|", "|"+verdict+"|") {
+		return nil
+	}
+	recorded, ok := value["recorded_at"].(string)
+	parsed, parseErr := time.Parse(time.RFC3339Nano, recorded)
+	_, zoneOffset := parsed.Zone()
+	if !ok || len(recorded) > 40 || parseErr != nil || zoneOffset != 0 {
+		return nil
+	}
+	for key := range value {
+		if key != "schema_version" && key != "task_id" && key != "verdict" && key != "recorded_at" {
+			return nil
+		}
+	}
+	return []any{verdict, recorded}
+}
+
+func sortedObservationIDs(ids map[string]bool) []string {
+	values := make([]string, 0, len(ids))
+	for id := range ids {
+		values = append(values, id)
+	}
+	sort.Strings(values)
+	return values
+}
+
 func mergeFields(sets ...map[string]bool) map[string]bool {
 	out := map[string]bool{}
 	for _, set := range sets {
@@ -728,6 +958,8 @@ func mergeFields(sets ...map[string]bool) map[string]bool {
 }
 
 var observationRules = map[string]string{}
+
+var observationEventTypes = fields("TASK_ROUTE_SELECTED IMPLEMENTER_STARTED IMPLEMENTER_FINISHED IMPLEMENTER_FAILED MECHANICAL_MODEL_RANK_CHANGED REVIEWER1_STARTED REVIEWER1_FINISHED COMPACTION_ADVICE_OUTCOME STOP_BLOCKED SHADOW_FINISHED SCOPE_CONFLICT_OUTCOME REVIEWER1_SKIPPED REVIEWER1_FAILED ROUTING_PROTOCOL_VIOLATION THREAD_CONTINUITY_VIOLATION UNKNOWN_CONCURRENT_WRITER WORKFLOW_VERDICT_RECORDED TELEMETRY_WARNING CLAUDE_TASK_USAGE_RECORDED CONTEXT_IO_TURN_RECORDED CODEX_RESULT_UNFETCHED CLAUDE_DECISION_RECORDED MECHANICAL_EDIT_OBSERVED MAINTENANCE_REPORT_FINISHED MAINTENANCE_REPORT_ACTED READINESS_CHECK_OUTCOME")
 
 const claudeUsageSnapshotLimit = 16 << 10
 

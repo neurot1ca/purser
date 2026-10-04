@@ -543,6 +543,149 @@ func TestObservationP53AggregateParity(t *testing.T) {
 	}
 }
 
+func TestObservationP54UpdateTaskParity(t *testing.T) {
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name                  string           `json:"name"`
+			Task                  string           `json:"task"`
+			ProjectKey            string           `json:"project_key"`
+			IndexEvents           []map[string]any `json:"index_events"`
+			Cursor                map[string]any   `json:"cursor"`
+			SpoolEvents           []map[string]any `json:"spool_events"`
+			MergedIDs             []string         `json:"merged_ids"`
+			Existing              map[string]any   `json:"existing"`
+			Verdict               map[string]any   `json:"verdict"`
+			Recover               bool             `json:"recover_after_failed_replace"`
+			Malformed             bool             `json:"malformed_cursor"`
+			ExpectedTask          map[string]any   `json:"expected_task"`
+			ExpectedCursor        map[string]any   `json:"expected_cursor"`
+			ExpectedTaskExists    bool             `json:"expected_task_exists"`
+			FailedCursorUnchanged bool             `json:"failed_replace_cursor_unchanged"`
+		} `json:"p54_cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fixture.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			state := t.TempDir()
+			root := filepath.Join(state, "telemetry")
+			project := filepath.Join(state, "projects", c.ProjectKey, "telemetry")
+			taskPath := filepath.Join(project, "tasks", c.Task+".json")
+			cursorPath := filepath.Join(project, "tasks", ".cursors", c.Task+".json")
+			if len(c.IndexEvents) > 0 {
+				var index []byte
+				for _, event := range c.IndexEvents {
+					encoded, marshalErr := canonicalJSON(event)
+					if marshalErr != nil {
+						t.Fatal(marshalErr)
+					}
+					index = append(append(index, encoded...), '\n')
+				}
+				writeObservationFile(t, filepath.Join(root, "events", "by_task", c.Task+".jsonl"), index)
+			}
+			for _, event := range c.SpoolEvents {
+				encoded, marshalErr := canonicalJSON(event)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				writeObservationFile(t, filepath.Join(root, "events", "spool", asString(event["event_id"])+".json"), encoded)
+			}
+			for _, id := range c.MergedIDs {
+				writeObservationFile(t, filepath.Join(root, "events", "spool", ".merged", id), nil)
+			}
+			if c.Existing != nil {
+				encoded, marshalErr := canonicalJSON(c.Existing)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				writeObservationFile(t, taskPath, encoded)
+			}
+			if c.Cursor != nil {
+				encoded, marshalErr := canonicalJSON(c.Cursor)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				writeObservationFile(t, cursorPath, encoded)
+			}
+			if c.Verdict != nil {
+				encoded, marshalErr := canonicalJSON(c.Verdict)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				writeObservationFile(t, filepath.Join(project, "verdicts", c.Task+".json"), encoded)
+			}
+			if c.Recover {
+				if err = os.MkdirAll(filepath.Dir(taskPath), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.Mkdir(taskPath, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if updateErr := updateObservationTask(root, c.Task, c.ProjectKey); updateErr == nil {
+					t.Fatal("task replacement unexpectedly succeeded")
+				}
+				if (os.IsNotExist(statErr(cursorPath))) != c.FailedCursorUnchanged {
+					t.Fatal("failed replacement cursor state differs from Python")
+				}
+				if err = os.Remove(taskPath); err != nil {
+					t.Fatal(err)
+				}
+			} else if c.Malformed {
+				updateObservationTaskBestEffort(root, c.Task, c.ProjectKey)
+				health := readObservation(t, filepath.Join(state, "telemetry", "telemetry_health.json"))
+				if health["status"] != "DEGRADED" || health["last_error_code"] != "TELEMETRY_UPDATE_TASK_FAILED" {
+					t.Fatalf("malformed cursor health marker = %#v", health)
+				}
+			} else if err = updateObservationTask(root, c.Task, c.ProjectKey); err != nil {
+				t.Fatal(err)
+			}
+			if c.Recover {
+				if err = updateObservationTask(root, c.Task, c.ProjectKey); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.Malformed {
+				if _, statErr := os.Stat(taskPath); (statErr == nil) != c.ExpectedTaskExists {
+					t.Fatalf("task exists = %v, want %v", statErr == nil, c.ExpectedTaskExists)
+				}
+			} else {
+				got := readObservation(t, taskPath)
+				gotJSON, _ := canonicalJSON(got)
+				wantJSON, _ := canonicalJSON(c.ExpectedTask)
+				if !bytes.Equal(gotJSON, wantJSON) {
+					t.Fatalf("task mismatch\ngot:  %s\nwant: %s", gotJSON, wantJSON)
+				}
+			}
+			gotCursor := readObservation(t, cursorPath)
+			gotJSON, _ := canonicalJSON(gotCursor)
+			wantJSON, _ := canonicalJSON(c.ExpectedCursor)
+			if !bytes.Equal(gotJSON, wantJSON) {
+				t.Fatalf("cursor mismatch: got %s want %s", gotJSON, wantJSON)
+			}
+		})
+	}
+}
+
+func statErr(path string) error {
+	_, err := os.Stat(path)
+	return err
+}
+
+func writeObservationFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestObservationP50Process(t *testing.T) {
 	mode, root := os.Getenv("P50_OBSERVATION_MODE"), os.Getenv("P50_OBSERVATION_ROOT")
 	if mode == "" || root == "" {
