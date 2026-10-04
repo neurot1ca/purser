@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.71 — 2026-10-04
+
+- **Changed:** PreToolUse for `codex` and `codex-reply` runs in Go through the mod adapter instead of the Python hook; `codex_start`, `codex_result`, `codex_cancel` and every Post/Stop hook stay Python.
+- **Fixed:** If the Go Pre adapter fails after Go wrote routing state, the call is reviewed FULL and its scope lease and pending record are released instead of being treated as routed.
+- **Fixed:** A fix reply starts from the latest unapplied job of its thread, so commits on main no longer turn replies into replay conflicts.
+- **Added:** Telemetry records Reviewer-1 valid/false counts at apply, replay conflicts, the longest silent gap, full-suite denials and the scope path count; a prompt saying "no full suite" is no longer denied.
+- **Internal:** More Go hook code (fallback questions, quota-renewal offer, admission, task usage, projections, recovery) is ported; process contracts run Go Pre against the Python Post, Failure and Stop hooks.
+
 ## 0.1.70 — 2026-10-04
 
 - **Fixed:** Desktop usage pills size to their content and draw as images, so they no longer sit in large white boxes and labels no longer overlap the bar.
