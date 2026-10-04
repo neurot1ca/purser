@@ -207,5 +207,37 @@
       "invalid": true,
       "error": "claude_rate_limit_delta_scope is outside its controlled enum"
     }
+  ],
+  "p57_oracle": "Python obsidian_projection.render_health and _with_marker; path from project_health",
+  "p57_cases": [
+    {
+      "name": "p57-empty-project",
+      "task_files": {},
+      "expected_content": "<!-- orchestrator projection v1 sha256=b522c663f5ff844476eaae31010de551da5cd9395302199d2c1de72e398da388 -->\n# Telemetry Health\n\nThis is observational health for local telemetry and projection; it is not an authority for routing or acceptance.\n\n- Status: unknown\n- Failure count: unknown\n- Last error code: unknown\n- Health updated at (UTC): unknown\n- Last successful projection write (UTC): unknown\n- Aggregate count: n=0\n- Projection mode: local-only, deterministic, no model/network/process access.\n",
+      "expected_path": "${VAULT}/System/Telemetry Health.md"
+    },
+    {
+      "name": "p57-mixed-project-includes-unrelated",
+      "task_files": {
+        "p56-unknown.json": "{\"task_id\": \"p56-unknown\"}",
+        "p56-success.json": "{\"task_id\": \"p56-success\", \"repo\": \"purser\", \"branch\": \"go-migration\", \"status\": \"VERIFIED\", \"started_at\": \"2026-10-04T09:15:00Z\", \"ended_at\": \"2026-10-04T09:18:12.500000Z\", \"duration_ms\": 192500, \"phase\": \"implementation\", \"task_type\": \"implementation\", \"route\": \"normal\", \"model\": \"openai-gpt-5\", \"effort\": \"high\", \"fresh_threads\": 1, \"reply_calls\": 2, \"routing_enforced\": true, \"validation\": \"PASS\", \"thread_id\": \"thread-42\", \"reviewer1_provider\": \"gemini\", \"reviewer1_model_requested\": \"gemini-pro\", \"reviewer1_result\": \"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\", \"served_model_attestation\": \"UNAVAILABLE\", \"claude_review_mode\": \"FULL\", \"changed_paths_count\": 3, \"routing_protocol_violations\": 0, \"thread_continuity_violations\": 0, \"concurrent_writer\": false, \"policy_fingerprint\": \"abcdef01\", \"first_pass\": true, \"repair_count\": 0, \"usage\": {\"codex_call_count\": 3, \"codex_usage_known\": true, \"claude_task_usage_known\": false}}",
+        "p56-skipped.json": "{\"task_id\": \"p56-skipped\", \"status\": \"NOT_VERIFIED\", \"started_at\": \"2026-10-04T10:00:00Z\", \"route\": \"mechanical\", \"effort\": \"low\", \"fresh_threads\": 0, \"reply_calls\": 0, \"routing_enforced\": false, \"validation\": \"FAIL\", \"reviewer1_skipped_reason\": \"BELOW_THRESHOLD\", \"concurrent_writer\": false}"
+      },
+      "expected_content": "<!-- orchestrator projection v1 sha256=8e7fc71d68f68ef1da2a15342b4aed8dd9736885161cddefaa1442f8209b7204 -->\n# Telemetry Health\n\nThis is observational health for local telemetry and projection; it is not an authority for routing or acceptance.\n\n- Status: unknown\n- Failure count: unknown\n- Last error code: unknown\n- Health updated at (UTC): unknown\n- Last successful projection write (UTC): unknown\n- Aggregate count: n=3\n- Projection mode: local-only, deterministic, no model/network/process access.\n",
+      "expected_path": "${VAULT}/System/Telemetry Health.md"
+    },
+    {
+      "name": "p57-unreadable-task-file",
+      "task_files": {},
+      "unreadable_task": "broken.json",
+      "expected_error": "task aggregate cannot be read: broken.json"
+    },
+    {
+      "name": "p57-malformed-aggregate",
+      "task_files": {
+        "broken.json": "{\"task_id\": \"other\"}"
+      },
+      "expected_error": "task aggregate identity is invalid: broken.json"
+    }
   ]
 }

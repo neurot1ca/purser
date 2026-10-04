@@ -5,6 +5,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import pytest
 
 ROOT = Path(__file__).resolve().parents[4]
 ORCHESTRATOR = ROOT / ".claude" / "hooks" / "orchestrator"
@@ -433,4 +434,38 @@ def test_go_observation_p56_run_note_cases():
     cache.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1", "TZ": "Europe/Istanbul"}
     subprocess.run(["go", "test", "-run", "^TestObservationP56RunNoteRendering$", "-count=1", "./internal/enforce"],
+                   cwd=ROOT / "go", env=env, check=True)
+
+
+def test_python_observation_p57_health_note_oracle(tmp_path, monkeypatch):
+    fixture = json.loads(PROJECTION_FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["timezone"] == obsidian_projection.LOCAL_TIMEZONE == "Europe/Istanbul"
+    assert "Python obsidian_projection." in fixture["p57_oracle"]
+    for case in fixture["p57_cases"]:
+        state = tmp_path / case["name"] / "state"
+        tasks = state / "telemetry" / "tasks"
+        tasks.mkdir(parents=True)
+        for name, raw in case.get("task_files", {}).items():
+            (tasks / name).write_text(raw, encoding="utf-8")
+        if case.get("unreadable_task"):
+            (tasks / case["unreadable_task"]).mkdir()
+        vault = tmp_path / case["name"] / "vault"
+        if case.get("expected_error"):
+            with pytest.raises(obsidian_projection.ProjectionError) as exc:
+                obsidian_projection.project_health(state_root=state, vault_root=vault)
+            assert case["expected_error"] in str(exc.value), case["name"]
+            continue
+        path = obsidian_projection.project_health(state_root=state, vault_root=vault)
+        assert path.read_text(encoding="utf-8") == case["expected_content"], case["name"]
+        expected_path = Path(case["expected_path"].replace("${VAULT}", str(vault)))
+        assert path == expected_path, case["name"]
+
+
+def test_go_observation_p57_health_note_cases():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1", "TZ": "Europe/Istanbul"}
+    subprocess.run(["go", "test", "-run", "^TestObservationP57HealthNoteRendering$", "-count=1", "./internal/enforce"],
                    cwd=ROOT / "go", env=env, check=True)

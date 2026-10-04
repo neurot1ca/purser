@@ -985,6 +985,76 @@ func TestObservationP56RunNoteRendering(t *testing.T) {
 	}
 }
 
+func TestObservationP57HealthNoteRendering(t *testing.T) {
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observation_projection.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Timezone string `json:"timezone"`
+		Cases    []struct {
+			Name          string            `json:"name"`
+			TaskFiles     map[string]string `json:"task_files"`
+			Unreadable    string            `json:"unreadable_task"`
+			Expected      string            `json:"expected_content"`
+			ExpectedPath  string            `json:"expected_path"`
+			ExpectedError string            `json:"expected_error"`
+		} `json:"p57_cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.Timezone != "Europe/Istanbul" || observationDisplayTimezone != "Europe/Istanbul" {
+		t.Fatalf("timezone fixture=%q Go=%q", fixture.Timezone, observationDisplayTimezone)
+	}
+	base, err := filepath.Abs(filepath.Join("..", "..", "..", ".tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			caseRoot, err := os.MkdirTemp(base, "p57-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(caseRoot)
+			state := filepath.Join(caseRoot, "state")
+			tasks := filepath.Join(state, "telemetry", "tasks")
+			if err := os.MkdirAll(tasks, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for name, raw := range tc.TaskFiles {
+				if err := os.WriteFile(filepath.Join(tasks, name), []byte(raw), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.Unreadable != "" {
+				if err := os.Mkdir(filepath.Join(tasks, tc.Unreadable), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			vault := filepath.Join(caseRoot, "vault")
+			content, path, renderErr := renderObservationHealthNote(state, vault, nil)
+			if tc.ExpectedError != "" {
+				if renderErr == nil || !strings.Contains(renderErr.Error(), tc.ExpectedError) {
+					t.Fatalf("error = %v, want containing %q", renderErr, tc.ExpectedError)
+				}
+				return
+			}
+			if renderErr != nil {
+				t.Fatal(renderErr)
+			}
+			if content != tc.Expected {
+				t.Fatalf("health note differs:\n got %q\nwant %q", content, tc.Expected)
+			}
+			want := strings.ReplaceAll(tc.ExpectedPath, "${VAULT}", vault)
+			if filepath.Clean(path) != filepath.Clean(want) {
+				t.Fatalf("path = %q, want %q", path, want)
+			}
+		})
+	}
+}
+
 func TestObservationP56AcceptsControlledUsageEnums(t *testing.T) {
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observation_projection.json")
 	if err != nil {

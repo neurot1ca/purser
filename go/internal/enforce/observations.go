@@ -214,6 +214,139 @@ func renderObservationRunNote(aggregate map[string]any, vaultRoot string) (strin
 	return observationWithMarker(fm, body, false), path, nil
 }
 
+// renderObservationHealthNote mirrors project_health's read and render path.
+// It renders only; callers own all writes.
+func renderObservationHealthNote(stateRoot, vaultRoot string, lastProjectionWriteAt *string) (string, string, error) {
+	path, ok := observationSafeVaultPath(vaultRoot, "System", "Telemetry Health.md")
+	if !ok {
+		return "", "", errors.New("projection path escaped the vault root")
+	}
+	root := filepath.Join(stateRoot, "telemetry")
+	health := map[string]any{"status": nil, "failure_count": nil, "last_error_code": nil, "updated_at": nil, "last_projection_write_at": nil}
+	if data, err := os.ReadFile(filepath.Join(root, "telemetry_health.json")); err == nil {
+		if health, err = decodeObservationHealthObject(data); err != nil {
+			return "", "", errors.New("telemetry health is unreadable")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", errors.New("telemetry health is unreadable")
+	}
+	status := health["status"]
+	if status != nil {
+		value, valid := status.(string)
+		if !valid || (value != "OK" && value != "DEGRADED") {
+			return "", "", errors.New("telemetry health status is invalid")
+		}
+	}
+	if value := health["failure_count"]; value != nil {
+		n, err := observationHealthNumber(value)
+		if number, ok := value.(json.Number); ok && strings.ContainsAny(string(number), ".eE") {
+			err = errors.New("not an integer")
+		}
+		if err != nil || n < 0 || math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n {
+			return "", "", errors.New("failure_count is not a non-negative integer")
+		}
+	}
+	if value := health["last_error_code"]; value != nil {
+		if _, ok := value.(string); !ok || !observationSafeText.MatchString(value.(string)) || normalizeObservationID(value, "unknown") != value {
+			return "", "", errors.New("last_error_code is not a sanitized identifier")
+		}
+	}
+	for _, key := range []string{"updated_at", "last_projection_write_at"} {
+		if value := health[key]; value != nil {
+			if err := observationHealthTimestamp(value); err != nil {
+				return "", "", fmt.Errorf("%s is not a UTC timestamp", key)
+			}
+		}
+	}
+	if lastProjectionWriteAt != nil {
+		if err := observationHealthTimestamp(*lastProjectionWriteAt); err != nil {
+			return "", "", errors.New("last_projection_write_at is not a UTC timestamp")
+		}
+		health["last_projection_write_at"] = *lastProjectionWriteAt
+	}
+	count := 0
+	tasksRoot := filepath.Join(root, "tasks")
+	entries, err := os.ReadDir(tasksRoot)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", "", fmt.Errorf("cannot read task aggregates: %w", err)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(tasksRoot, entry.Name()))
+		if readErr != nil {
+			return "", "", fmt.Errorf("task aggregate cannot be read: %s", entry.Name())
+		}
+		aggregate, decodeErr := decodeObservationHealthObject(data)
+		if decodeErr != nil || aggregate["task_id"] != strings.TrimSuffix(entry.Name(), ".json") {
+			return "", "", fmt.Errorf("task aggregate identity is invalid: %s", entry.Name())
+		}
+		if _, err := prepareObservationRun(aggregate); err != nil {
+			return "", "", err
+		}
+		count++
+	}
+	body := "# Telemetry Health\n\n" +
+		"This is observational health for local telemetry and projection; it is not an authority for routing or acceptance.\n\n" +
+		fmt.Sprintf("- Status: %s\n", observationHealthDisplay(status)) +
+		fmt.Sprintf("- Failure count: %s\n", observationHealthDisplay(health["failure_count"])) +
+		fmt.Sprintf("- Last error code: %s\n", observationHealthDisplay(health["last_error_code"])) +
+		fmt.Sprintf("- Health updated at (UTC): %s\n", observationHealthDisplay(health["updated_at"])) +
+		fmt.Sprintf("- Last successful projection write (UTC): %s\n", observationHealthDisplay(health["last_projection_write_at"])) +
+		fmt.Sprintf("- Aggregate count: n=%d\n", count) +
+		"- Projection mode: local-only, deterministic, no model/network/process access.\n"
+	return observationWithMarker("", body, false), path, nil
+}
+
+func observationHealthDisplay(value any) string {
+	if value == nil {
+		return "unknown"
+	}
+	return fmt.Sprint(value)
+}
+
+func observationHealthNumber(value any) (float64, error) {
+	switch n := value.(type) {
+	case json.Number:
+		return n.Float64()
+	case float64:
+		return n, nil
+	default:
+		return 0, errors.New("not numeric")
+	}
+}
+
+func observationHealthTimestamp(value any) error {
+	s, ok := value.(string)
+	if !ok || len(s) > 40 || strings.ContainsAny(s, "\r\n") {
+		return errors.New("not a UTC timestamp")
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return err
+	}
+	_, offset := parsed.Zone()
+	if offset != 0 {
+		return errors.New("not a UTC timestamp")
+	}
+	return nil
+}
+
+func decodeObservationHealthObject(data []byte) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil || value == nil {
+		return nil, errors.New("not an object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("trailing JSON data")
+	}
+	return value, nil
+}
+
 type observationRun struct {
 	values         map[string]any
 	taskID         string
