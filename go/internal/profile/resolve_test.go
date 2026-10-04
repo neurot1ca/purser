@@ -11,6 +11,16 @@ import (
 )
 
 type resolveFixture struct {
+	Loads []struct {
+		Input struct {
+			Name         string  `json:"name"`
+			DefaultUser  bool    `json:"default_user"`
+			User         *string `json:"user"`
+			Project      *string `json:"project"`
+			OuterFailure bool    `json:"outer_failure"`
+		} `json:"input"`
+		Output ResolvedProfile `json:"output"`
+	} `json:"loads"`
 	Profiles []struct {
 		Input struct {
 			User    Tier `json:"user"`
@@ -23,6 +33,84 @@ type resolveFixture struct {
 		Patterns []string `json:"patterns"`
 		Output   bool     `json:"output"`
 	} `json:"protected"`
+}
+
+func TestLoadProfilePythonFixture(t *testing.T) {
+	for _, test := range readResolveFixture(t).Loads {
+		t.Run(test.Input.Name, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, "home")
+			if err := os.MkdirAll(filepath.Join(home, ".orchestrator"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			userPath := filepath.Join(root, test.Input.Name+".toml")
+			if test.Input.DefaultUser {
+				t.Setenv("HOME", home)
+				t.Setenv("USERPROFILE", home)
+				userPath = filepath.Join(home, ".orchestrator", "config.toml")
+			}
+			if test.Input.User != nil {
+				content := strings.ReplaceAll(*test.Input.User, "$ROOT", filepath.ToSlash(root))
+				if err := os.WriteFile(userPath, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			projectPath := filepath.Join(root, ".orchestrator", "profile.toml")
+			if test.Input.Project != nil {
+				if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				content := strings.ReplaceAll(*test.Input.Project, "$ROOT", filepath.ToSlash(root))
+				if err := os.WriteFile(projectPath, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var got ResolvedProfile
+			if test.Input.OuterFailure {
+				got = loadProfileFiles(root, userPath, func(string) ([]byte, error) { panic("forced recovery") })
+			} else if test.Input.DefaultUser {
+				got = LoadProfile(root)
+			} else {
+				got = LoadProfile(root, userPath)
+			}
+			compareResolved(t, got, test.Output)
+		})
+	}
+}
+
+func TestLoadProfileReadAndParseFailuresRejectTheirTier(t *testing.T) {
+	root := t.TempDir()
+	userPath := filepath.Join(root, "unreadable")
+	if err := os.Mkdir(userPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadProfile(root, userPath); got.UserStatus != "rejected" || got.Trusted {
+		t.Fatalf("read failure was trusted: %+v", got)
+	}
+	if err := os.Remove(userPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte("schema_version = [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadProfile(root, userPath); got.UserStatus != "rejected" || got.Trusted || len(got.Warnings) != 1 || !strings.HasPrefix(got.Warnings[0], "user tier rejected: could not parse profile: ") {
+		t.Fatalf("parse failure did not reach its rejection branch: %+v", got)
+	}
+}
+
+func compareResolved(t *testing.T, got, want ResolvedProfile) {
+	t.Helper()
+	gotJSON, _ := json.Marshal(got)
+	wantJSON, _ := json.Marshal(want)
+	var actual, expected any
+	_ = json.Unmarshal(gotJSON, &actual)
+	_ = json.Unmarshal(wantJSON, &expected)
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("LoadProfile: got %s, want %s", gotJSON, wantJSON)
+	}
 }
 
 func TestProfileResolutionPythonFixture(t *testing.T) {

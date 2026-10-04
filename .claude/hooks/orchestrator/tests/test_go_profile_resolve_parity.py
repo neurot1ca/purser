@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[4]
 FIXTURE = ROOT / ".claude" / "hooks" / "orchestrator" / "tests" / "fixtures" / "go_profile" / "resolve.json"
 sys.path.insert(0, str(ROOT / ".claude" / "hooks" / "orchestrator"))
 import project_profile
+import pytest
 
 
 PROFILES = [
@@ -65,6 +66,19 @@ PROTECTED = [
     ("./src//file.go", ["src/file.go"]),
 ]
 
+LOADS = [
+    {"name": "trusted_full", "default_user": True,
+     "user": '''schema_version = 1\n[trust]\npaths = ["$ROOT"]\n[roles]\nreviewer = "opencode"\n[reviewer.selected]\nagent = "codex"\nmodel = "review-model"\n[[reviewer.alternatives]]\nagent = "agy"\nmodel = "backup"\n[review]\nskip_max_lines = 40\nskip_max_files = 3\n[paths]\nprotected = ["user-secret"]\n[telemetry]\nvault_root = "/vault"\n''',
+     "project": '''schema_version = 1\n[project]\nid = "demo"\n[review]\nskip_max_lines = 20\nskip_max_files = 1\nfull_suite_required = true\n[paths]\nprotected = ["project-secret"]\n[authority]\nsources = [{ path = "docs/guide.md", headings = ["Scope"], when_changed = "src/**" }]\n[[checks]]\nname = "lint"\nargv = ["go", "test"]\nwhen = ["go/**"]\ntimeout_seconds = 30\n[worktree]\ncopy = [".env"]\nsetup = "setup"\nsetup_timeout_seconds = 90\n'''},
+    {"name": "missing_project", "default_user": False,
+     "user": "schema_version = 1\n", "project": None},
+    {"name": "missing_user", "default_user": False,
+     "user": None, "project": "schema_version = 1\n"},
+    {"name": "rejected_tiers", "default_user": False,
+     "user": "schema_version = 2\n", "project": "schema_version = 2\n"},
+    {"name": "outer_recovery", "default_user": False, "outer_failure": True},
+]
+
 
 def _resolved_fixture():
     profiles = []
@@ -81,9 +95,46 @@ def _resolved_fixture():
     return json.loads(json.dumps({"profiles": profiles, "protected": protected}))
 
 
+def _loaded_fixture(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    root = tmp_path / "project"
+    (home / ".orchestrator").mkdir(parents=True)
+    root.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    loads = []
+    for case in LOADS:
+        if case.get("outer_failure"):
+            def fail(*args):
+                raise RuntimeError("forced recovery")
+            with monkeypatch.context() as patcher:
+                patcher.setattr(project_profile, "_load_tier", fail)
+                output = asdict(project_profile.load_profile(root))
+        else:
+            user_path = home / ".orchestrator" / "config.toml" if case["default_user"] else tmp_path / (case["name"] + ".toml")
+            user = case.get("user")
+            if user is not None:
+                user_path.write_text(user.replace("$ROOT", root.as_posix()), encoding="utf-8")
+            project_path = root / ".orchestrator" / "profile.toml"
+            if project_path.exists():
+                project_path.unlink()
+            project = case.get("project")
+            if project is not None:
+                project_path.parent.mkdir(parents=True, exist_ok=True)
+                project_path.write_text(project.replace("$ROOT", root.as_posix()), encoding="utf-8")
+            output = asdict(project_profile.load_profile(root, user_config_path=None if case["default_user"] else user_path))
+        loads.append({"input": case, "output": output})
+    return json.loads(json.dumps(loads))
+
+
 def test_python_matches_profile_resolution_golden_fixture():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert fixture == _resolved_fixture()
+    assert {key: fixture[key] for key in ("profiles", "protected")} == _resolved_fixture()
+
+
+def test_python_load_profile_golden_fixture(tmp_path, monkeypatch):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["loads"] == _loaded_fixture(tmp_path, monkeypatch)
 
 
 def test_go_profile_package():
