@@ -1074,6 +1074,31 @@ def _pending_path(root: Path, event: Mapping[str, Any]) -> Path:
     return root / "pending" / f"{_call_key(event)}.json"
 
 
+def _undelivered_marker(root: Path, event: Mapping[str, Any]) -> tuple[Path, dict[str, Any]] | None:
+    try:
+        path = root / "pending" / f"undelivered-{_call_key(event)}.json"
+    except WiringError:
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        value = {}
+    if not isinstance(value, dict):
+        value = {}
+    return path, value
+
+
+def _observe_undelivered(event: Mapping[str, Any], pending: Mapping[str, Any], root: Path) -> None:
+    _observe(
+        "emit", "ROUTING_PROTOCOL_VIOLATION",
+        task_id=pending.get("task_id"), state_root=root,
+        violation_code="CODEX_INPUT_REWRITE_UNDELIVERED",
+        **_telemetry_envelope(event, pending.get("repo_root"), _pending_project_key(pending)),
+    )
+
+
 def _bypass_path(root: Path, event: Mapping[str, Any]) -> Path:
     tool_input = event.get("tool_input")
     encoded_input = json_transport.dumps(
@@ -2930,6 +2955,10 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
                 state_root: str | os.PathLike[str] | None) -> dict[str, Any]:
     root = _state_root(state_root)
     try:
+        marker = _undelivered_marker(root, event)
+        if marker is not None:
+            raise WiringError("PreToolUse input rewrite was not delivered: "
+                              + str(marker[1].get("reason", "adapter failed")))
         pending = _read_pending(root, event)
         call_uuid = pending.get("async_call")
         if pending.get("async_ready") is not True or not isinstance(call_uuid, str):
@@ -4177,6 +4206,7 @@ def post_tool_use(
         return _async_post_followup(event, config=config, state_root=state_root,
                                     repo_root=repo_root, reviewer=reviewer, micro_repair=micro_repair)
     start_time = time.monotonic()
+    undelivered: tuple[Path, dict[str, Any]] | None = None
     try:
         loaded_config = _load_config(config)
         max_total_hook_budget = float(loaded_config.get("max_total_hook_budget_seconds", 240.0))
@@ -4185,7 +4215,11 @@ def post_tool_use(
             _cleanup_stale_pending(runtime_root, event)
         except BaseException:
             pass
+        undelivered = _undelivered_marker(runtime_root, event)
         pending = _read_pending(runtime_root, event)
+        if undelivered is not None:
+            pending = dict(pending, kind="pretool_bypass",
+                           reason=undelivered[1].get("reason", "adapter failed before rewritten input was delivered"))
         try:
             served = _start_value(event.get("tool_response"))
         except WiringError:
@@ -4281,6 +4315,10 @@ def post_tool_use(
                         )
                     )
             _remove_pending(runtime_root, event)
+            if undelivered is not None:
+                _release_scope_lease(runtime_root, pending)
+                _observe_undelivered(event, pending, runtime_root)
+                undelivered[0].unlink(missing_ok=True)
             try:
                 _post_observations(event, runtime_root, pending, bundle)
             except BaseException:
@@ -5148,6 +5186,11 @@ def post_tool_use(
             _remove_pending(runtime_root, event)
         return response
     except Exception as error:
+        if undelivered is not None:
+            try:
+                undelivered[0].unlink(missing_ok=True)
+            except OSError:
+                pass
         return _internal_post_response(
             event,
             error,
@@ -5187,13 +5230,18 @@ def post_tool_use_failure(
             pass
     runtime_root: Path | None = None
     pending: Mapping[str, Any] | None = None
+    undelivered: tuple[Path, dict[str, Any]] | None = None
     try:
         runtime_root = _state_root(state_root)
+        undelivered = _undelivered_marker(runtime_root, event)
         try:
             _cleanup_stale_pending(runtime_root, event)
         except BaseException:
             pass
         pending = _read_pending(runtime_root, event)
+        if undelivered is not None:
+            pending = dict(pending, kind="pretool_bypass",
+                           reason=undelivered[1].get("reason", "adapter failed before rewritten input was delivered"))
         project_namespace = _pending_project_key(pending)
         project_runtime_root = _project_state_root(runtime_root, project_namespace)
         evidence = {
@@ -5249,7 +5297,10 @@ def post_tool_use_failure(
                              old_rank=positions[0], new_rank=positions[1])
             except BaseException:
                 pass
-        if not pending.get("async_call"):
+        if undelivered is not None:
+            _release_scope_lease(runtime_root, pending)
+            _remove_pending(runtime_root, event)
+        elif not pending.get("async_call"):
             _release_scope_lease(runtime_root, pending)
             _remove_pending(runtime_root, event)
         elif event.get("tool_name") in CODEX_START_TOOL_NAMES:
@@ -5288,6 +5339,9 @@ def post_tool_use_failure(
                if isinstance(pending.get("longest_silent_gap_seconds"), (int, float))
                and not isinstance(pending.get("longest_silent_gap_seconds"), bool) else {}),
         )
+        if undelivered is not None:
+            _observe_undelivered(event, pending, runtime_root)
+            undelivered[0].unlink(missing_ok=True)
         _observe(
             "update_task",
             pending.get("task_id"),
@@ -5305,6 +5359,15 @@ def post_tool_use_failure(
             }
         }
     except Exception as error:
+        if undelivered is not None:
+            try:
+                if runtime_root is not None and isinstance(pending, Mapping):
+                    _release_scope_lease(runtime_root, pending)
+                    _remove_pending(runtime_root, event)
+                    _observe_undelivered(event, pending, runtime_root)
+                undelivered[0].unlink(missing_ok=True)
+            except OSError:
+                pass
         if runtime_root is not None and isinstance(pending, Mapping):
             _observe(
                 "emit",

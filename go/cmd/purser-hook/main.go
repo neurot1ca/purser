@@ -68,6 +68,12 @@ func main() {
 			}
 			writeJSON(response)
 		}
+	case "WriteUndeliveredMarker":
+		if err := enforce.WriteUndeliveredMarker(stateRoot(), event); err != nil {
+			_, _ = os.Stderr.WriteString("undelivered marker write failed: " + errorName(err) + "\n")
+			os.Exit(1)
+		}
+		writeJSON(map[string]any{"written": true})
 	case "SessionStart":
 		if output := contextio.SessionStart(event); len(output) > 0 {
 			_, _ = os.Stdout.Write(output)

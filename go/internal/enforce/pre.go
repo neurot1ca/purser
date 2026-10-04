@@ -142,6 +142,52 @@ func writeBypass(root string, event map[string]any, reason string, metadata map[
 	return os.Rename(tmp.Name(), path)
 }
 
+func WriteUndeliveredMarker(root string, event map[string]any) error {
+	if event["hook_event_name"] != "WriteUndeliveredMarker" {
+		return errors.New("invalid undelivered marker event")
+	}
+	tool := stringValue(event["tool_name"])
+	if !codexTools[tool] || strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
+		return errors.New("tool is not eligible for an undelivered marker")
+	}
+	pending, err := pendingPath(root, event)
+	if err != nil {
+		return err
+	}
+	callKey := strings.TrimSuffix(filepath.Base(pending), ".json")
+	reason := stringValue(event["reason"])
+	if len(reason) > 512 {
+		reason = reason[:512]
+	}
+	data, err := json.Marshal(map[string]any{
+		"schema": "purser.undelivered.v1", "call_key": callKey, "tool_name": tool,
+		"reason": reason, "recorded_at": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(root, "pending", "undelivered-"+callKey+".json")
+	dir := filepath.Dir(path)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err = tmp.Write(data); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 func pendingPath(root string, event map[string]any) (string, error) {
 	id, ok := event["tool_use_id"].(string)
 	if !ok || id == "" {

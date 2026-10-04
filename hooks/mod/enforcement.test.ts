@@ -29,6 +29,8 @@ function stubGo(
   uname = { exitCode: 1, stdout: '' },
   binary = '/bin/purser-hook-windows-amd64.exe',
   outcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
+  markerWrites: string[] = [],
+  markerOutcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
 ) {
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('session.id', () => ({ value: 'p66-session' }))
@@ -39,8 +41,16 @@ function stubGo(
       expect(e.init.timeoutMs).toBe(1000)
       return { value: { ...uname, stderr: '' } }
     }
-    calls.push(e.init.stdin)
     expect(e.argv[0].replace(/\\/g, '/').endsWith(binary)).toBe(true)
+    const request = JSON.parse(e.init.stdin)
+    if (request.hook_event_name === 'WriteUndeliveredMarker') {
+      markerWrites.push(e.init.stdin)
+      expect(e.init.timeoutMs).toBe(1000)
+      const result = markerOutcome?.()
+      if (result?.deny) return { deny: result.deny }
+      return { value: { exitCode: result?.exitCode ?? 0, stdout: result?.stdout ?? '{"written":true}', stderr: '' } }
+    }
+    calls.push(e.init.stdin)
     expect(e.init.timeoutMs).toBe(60000)
     const result = outcome?.()
     if (result?.deny) return { deny: result.deny }
@@ -225,13 +235,15 @@ test('adapter failures allow sync Codex with FULL context and deny codex_start',
     { name: 'nonzero exit', outcome: { exitCode: 1 }, message: 'exited 1' },
     { name: 'timeout', outcome: { deny: 'timed out' }, message: 'timed out' },
     { name: 'malformed stdout', outcome: { stdout: '{' }, message: 'JSON Parse error' },
+    { name: 'invalid mapped output', outcome: { stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }) }, message: 'invalid Go PreToolUse decision' },
     { name: 'interruption after pending write', outcome: { deny: 'process killed after pending admission' }, message: 'process killed after pending admission' },
   ]
   const calls: string[] = []
+  const markerWrites: string[] = []
   const toolCalls: unknown[] = []
   const toasts: string[] = []
   let currentFailure = failures[0]
-  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => currentFailure.outcome)
+  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => currentFailure.outcome, markerWrites)
   stubToolCall(on, toolCalls)
 
   for (const failure of failures) {
@@ -256,4 +268,41 @@ test('adapter failures allow sync Codex with FULL context and deny codex_start',
     }
   }
   expect(calls).toHaveLength(failures.length * 2)
+  expect(markerWrites).toHaveLength(failures.length * 2)
+  for (let index = 0; index < markerWrites.length; index++) {
+    const request = JSON.parse(markerWrites[index])
+    const pre = JSON.parse(calls[index])
+    expect(request).toMatchObject({
+      hook_event_name: 'WriteUndeliveredMarker', session_id: pre.session_id,
+      tool_use_id: pre.tool_use_id, tool_name: pre.tool_name,
+    })
+    expect(request.reason).toBeTruthy()
+  }
+})
+
+test('marker write failure preserves sync context and codex_start deny', options, async ($, on) => {
+  const calls: string[] = []
+  const markerWrites: string[] = []
+  const toolCalls: unknown[] = []
+  const toasts: string[] = []
+  stubGo(on, success, calls, toasts, undefined, undefined, undefined,
+    () => ({ exitCode: 1 }), markerWrites, () => ({ deny: 'marker write failed' }))
+  stubToolCall(on, toolCalls)
+
+  for (const tool of ['mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex_start']) {
+    toasts.length = 0
+    const before = toolCalls.length
+    const result = await $.tool.call({ tool, prompt })
+    const mapped = observed(toasts)
+    if (tool.endsWith('__codex_start')) {
+      expect(mapped.deny).toContain('ASYNC_ENFORCEMENT_FAILED')
+      expect(result.isError).toBe(true)
+      expect(toolCalls).toHaveLength(before)
+    } else {
+      expect(mapped.additionalContext.join(' ')).toContain('FULL Claude review is required')
+      expect(result.isError).not.toBe(true)
+      expect(toolCalls).toHaveLength(before + 1)
+    }
+  }
+  expect(markerWrites).toHaveLength(2)
 })

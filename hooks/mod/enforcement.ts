@@ -38,6 +38,9 @@ export function register(on) {
     const prior = await next(e)
     if (!codexTools.has(e.tool) || prior.deny !== undefined) return prior
 
+    let helperBinary = ''
+    let helperCwd = ''
+    let helperSessionId = ''
     try {
       const os = await $.env.get('OS')
       const ostype = await $.env.get('OSTYPE')
@@ -60,9 +63,13 @@ export function register(on) {
       if (!['windows/amd64', 'windows/arm64', 'linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64'].includes(`${osName}/${archName}`)) {
         throw new Error(`unsupported platform: ${goos}/${goarch}`)
       }
-      const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
+      const sessionId = await $.session.id()
+      helperBinary = `${$.plugin.root}/bin/purser-hook-${osName}-${archName}${osName === 'windows' ? '.exe' : ''}`
+      helperSessionId = sessionId
+      const cwd = await $.session.cwd()
+      helperCwd = cwd
       const { tool, tool_use_id, agentId: _agentId, ...tool_input } = e
-      const result = await $.process.run([`${$.plugin.root}/bin/purser-hook-${osName}-${archName}${osName === 'windows' ? '.exe' : ''}`], {
+      const result = await $.process.run([helperBinary], {
         cwd,
         stdin: JSON.stringify({
           session_id: sessionId, cwd, hook_event_name: 'PreToolUse',
@@ -82,6 +89,18 @@ export function register(on) {
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
+      if (helperBinary && typeof e.tool_use_id === 'string') {
+        try {
+          await $.process.run([helperBinary], {
+            cwd: helperCwd,
+            stdin: JSON.stringify({
+              hook_event_name: 'WriteUndeliveredMarker', session_id: helperSessionId,
+              tool_use_id: e.tool_use_id, tool_name: e.tool, reason,
+            }),
+            timeoutMs: 1000,
+          })
+        } catch { /* Marker persistence is best-effort; preserve the existing deny/FULL context. */ }
+      }
       if (e.tool.endsWith('__codex_start')) {
         return { ...prior, deny: `ASYNC_ENFORCEMENT_FAILED: Go PreToolUse failed: ${reason}. Async start lacks a durable route/baseline; FULL review is required.` }
       }
