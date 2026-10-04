@@ -136,9 +136,7 @@ next one or to new work until the user has answered on the current one.
 
 ## Craft the prompt
 
-For implementation, plan, and investigation calls, run `node "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js" mcp "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/code_map.py" --repo <project root>` outside the hook before delegation and paste its one `CODE_MAP=... STATUS=...` line into the worker prompt only when the task scope does not already name the files or symbols to change (discovery work); otherwise omit it and give the paths.
-Treat the map as navigation only; workers verify current source before acting.
-
+For implementation and plan calls, the pre-hook adds exactly one `CODE_MAP=<path> STATUS=<FRESH|STALE|UNAVAILABLE>` line automatically. Do not generate or add this line by hand. The bounded refresh reuses a fresh map and leaves a stale map in place when refresh is not quick; map generation failure never blocks dispatch. The map is navigation only: workers verify current source and open relevant sections on demand. Operation calls do not receive a code map.
 Write worker prompts with an `Objective:` line and an `Acceptance criteria:`
 list; missing labels force FULL review because the hook cannot ground the
 contract. Keep the ORCH line and bounded scope.

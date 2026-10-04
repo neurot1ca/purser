@@ -61,11 +61,11 @@ class WorktreeSetupError(RuntimeError):
 
 
 @contextmanager
-def _lease_lock(path: Path):
+def _lease_lock(path: Path, *, timeout_seconds: float = 10):
     """Serialize admissions across hook processes, including on Windows."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + max(0, timeout_seconds)
         while True:
             try:
                 if os.name == "nt":

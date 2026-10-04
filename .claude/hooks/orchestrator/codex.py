@@ -1372,6 +1372,29 @@ def _inherited_reply_parse(
     )
 
 
+def _append_code_map(prompt: str, repository: Path | None) -> str:
+    if re.search(r"(?m)^CODE_MAP=", prompt):
+        return prompt
+    if repository is None:
+        status = "UNAVAILABLE"
+    else:
+        try:
+            import code_map
+
+            path, status = code_map.refresh(repository, budget_seconds=0.2)
+            if status not in {"FRESH", "STALE"}:
+                status = "UNAVAILABLE"
+        except Exception:
+            status = "UNAVAILABLE"
+    if status == "UNAVAILABLE":
+        try:
+            path = (purser_state_root.default_state_root() / "projects"
+                    / project_root.project_key(repository) / "code-map" / "map.txt")
+        except Exception:
+            path = Path("unavailable")
+    return f"{prompt.rstrip()}\nCODE_MAP={path} STATUS={status}"
+
+
 def internal_pre_error_response(
     event: Mapping[str, Any],
     error: BaseException,
@@ -2040,6 +2063,8 @@ def pre_tool_use(
                     if resolved_profile is not None else False
                 ),
             )
+        if parsed.phase in {"implementation", "plan"}:
+            updated["prompt"] = _append_code_map(updated["prompt"], repository)
         worktree_start = is_start and mode == "new" and parsed.phase == "implementation"
         worktree_reply_path = (_thread_worktree_path(tool_input.get("threadId"))
                                if is_start and mode == "reply" and parsed.phase == "implementation"

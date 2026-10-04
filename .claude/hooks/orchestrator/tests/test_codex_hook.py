@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 sys.path.insert(0, str(Path(__file__).parents[4] / "scripts"))
 import active_coder_state
 import codex
+import code_map
 import async_session_maintenance
 import codex_exec_mcp
 import coder_config
@@ -2527,6 +2528,46 @@ def test_code_map_line_survives_worker_prompt(workspace, config):
     assert line in pre["hookSpecificOutput"]["updatedInput"]["prompt"].splitlines()
 
 
+@pytest.mark.parametrize(("phase", "route"), (("implementation", "normal"), ("plan", "plan_standard")))
+def test_code_map_is_appended_to_worker_prompt(workspace, config, monkeypatch, phase, route):
+    repo, state = workspace
+    monkeypatch.setattr(code_map, "refresh", lambda root, **kwargs: (Path("C:/map.txt"), "FRESH"))
+    call = event(prompt=orch(phase=phase, route=route) + "\nDo the work.", tool_use_id=f"map-added-{phase}")
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]["prompt"]
+    assert updated.splitlines().count("CODE_MAP=C:\\map.txt STATUS=FRESH") == 1
+
+
+def test_code_map_line_is_not_duplicated(workspace, config, monkeypatch):
+    repo, state = workspace
+    line = "CODE_MAP=/existing/map.txt STATUS=STALE"
+    monkeypatch.setattr(code_map, "refresh", lambda *_args, **_kwargs: pytest.fail("map was regenerated"))
+    call = event(prompt=orch() + "\nDo the work.\n" + line, tool_use_id="map-not-duplicated")
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]["prompt"]
+    assert updated.splitlines().count(line) == 1
+
+
+def test_code_map_failure_is_unavailable_and_dispatch_continues(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(code_map, "refresh", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("index failed")))
+    call = event(prompt=orch() + "\nDo the work.", tool_use_id="map-unavailable")
+    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    updated = result["hookSpecificOutput"]["updatedInput"]["prompt"]
+    assert "CODE_MAP=" in updated and updated.endswith("STATUS=UNAVAILABLE")
+    assert "permissionDecision" not in result["hookSpecificOutput"]
+
+
+def test_operation_prompt_does_not_get_a_code_map(workspace, config, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setattr(code_map, "refresh", lambda *_args, **_kwargs: pytest.fail("operation generated a map"))
+    prompt = orch(phase="operation", route="operation", scope=None) + "\nInspect."
+    call = event(prompt=prompt, tool_use_id="operation-no-map")
+    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]["prompt"]
+    assert updated == "Inspect."
+
+
 def test_code_map_stale_after_mutating_job(workspace, config):
     repo, state = workspace
     call = _attribution_call("map-mutation", "file0.py", "map-mutation")
@@ -2537,13 +2578,14 @@ def test_code_map_stale_after_mutating_job(workspace, config):
     assert bundle["code_map"] == "STALE"
 
 
-def test_code_map_field_absent_without_map_line(workspace, config):
+def test_code_map_field_present_after_automatic_injection(workspace, config, monkeypatch):
     repo, state = workspace
+    monkeypatch.setattr(code_map, "refresh", lambda root, **kwargs: (Path("C:/map.txt"), "FRESH"))
     call = _attribution_call("no-map", "file0.py", "no-map")
     codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
     bundle = _finish_attribution_call(call, workspace, config, [])
-    assert "code_map" not in bundle
+    assert bundle["code_map"] == "STALE"
 
 
 def test_known_concurrent_scope_summary_bounds_task_ids(config):

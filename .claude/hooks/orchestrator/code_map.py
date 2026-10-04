@@ -228,7 +228,7 @@ def _render(entries: dict[str, dict], backend_name: str) -> bytes:
     return data
 
 
-def refresh(repo: Path, state: Path | None = None) -> tuple[Path, str]:
+def refresh(repo: Path, state: Path | None = None, *, budget_seconds: float = MAX_SECONDS) -> tuple[Path, str]:
     """Return the fixed map path and its honest freshness status."""
     import project_root
     import state_root
@@ -240,9 +240,9 @@ def refresh(repo: Path, state: Path | None = None) -> tuple[Path, str]:
     directory = root / "projects" / project_root.project_key(repo) / "code-map"
     target = directory / "map.txt"
     manifest_path = directory / "manifest.json"
-    deadline = time.monotonic() + MAX_SECONDS
+    deadline = time.monotonic() + min(MAX_SECONDS, max(0, budget_seconds))
     try:
-        with _lease_lock(directory / "index.lock"):
+        with _lease_lock(directory / "index.lock", timeout_seconds=max(0, deadline - time.monotonic())):
             _check(deadline)
             backend_name, backend = _backend()
             try:
