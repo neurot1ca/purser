@@ -27,6 +27,7 @@ const (
 	syncLeaseFallbackSeconds      = 2 * 60 * 60
 	missingJobOrphanSeconds       = 10 * 60
 	maxConflictPaths              = 50
+	ownerOrderKey                 = "\x00purser_owner_order"
 )
 
 type Result struct{ Status, Code string }
@@ -91,11 +92,14 @@ func (s *Store) Acquire(ownerKey, taskID string, scope []string, options Acquire
 		hotConflict := options.HotPathQueue && !options.ReadOnly && options.JobID != nil &&
 			s.hotAdmissionConflict(value, scope, *options.JobID, now)
 		var conflict map[string]any
-		keys := make([]string, 0, len(owners))
-		for key := range owners {
-			keys = append(keys, key)
+		keys, _ := value[ownerOrderKey].([]string)
+		if keys == nil {
+			keys = make([]string, 0, len(owners))
+			for key := range owners {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
 		}
-		sort.Strings(keys)
 		for _, key := range keys {
 			other := owners[key].(map[string]any)
 			if (other["state"] == "ACTIVE" || other["state"] == "QUEUED") &&
@@ -105,7 +109,7 @@ func (s *Store) Acquire(ownerKey, taskID string, scope []string, options Acquire
 			}
 		}
 		if conflict != nil && !options.AllowOverlap &&
-			!(options.QueueConflict && options.JobID != nil && !options.ReadOnly) {
+			!(options.QueueConflict && options.JobID != nil && *options.JobID != "" && !options.ReadOnly) {
 			result = AdmissionResult{"UNKNOWN", "SCOPE_LEASE_CONFLICT", conflict["task_id"].(string)}
 			return changed
 		}
@@ -328,12 +332,44 @@ func (s *Store) read() (map[string]any, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return nil, err
 	}
+	var record struct {
+		Owners json.RawMessage `json:"owners"`
+	}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return nil, err
+	}
+	value[ownerOrderKey] = jsonObjectKeys(record.Owners)
 	return value, nil
+}
+
+func jsonObjectKeys(raw json.RawMessage) []string {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := decoder.Token(); err != nil {
+		return nil
+	}
+	keys := make([]string, 0)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil
+		}
+		key, ok := token.(string)
+		if !ok {
+			return nil
+		}
+		keys = append(keys, key)
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil
+		}
+	}
+	return keys
 }
 
 var replaceLeaseFile = os.Rename
 
 func (s *Store) write(value map[string]any, now float64) error {
+	delete(value, ownerOrderKey)
 	cutoff := now - releasedLeaseRetentionSeconds
 	owners := value["owners"].(map[string]any)
 	activeStarts := make([]float64, 0, len(owners))

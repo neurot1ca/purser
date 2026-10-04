@@ -41,7 +41,7 @@ def _root(base):
 
 def _prepare(root, case):
     (root / "scope_leases.json").write_text(json.dumps(
-        {"version": 1, "owners": case["owners"]}, sort_keys=True,
+        {"version": 1, "owners": case["owners"]},
     ), encoding="utf-8")
     if case.get("lock_failure"):
         (root / "scope_leases.lock").mkdir()
@@ -69,9 +69,8 @@ def _go(root, case):
     env = GO_ENV.copy()
     env.update(
         PURSER_LEASE_ADMISSION_ROOT=str(root),
-        PURSER_LEASE_ADMISSION_INPUT=json.dumps({
-            "now": case["now"], "requests": case["requests"], "fail_write": case.get("fail_write", False),
-        }),
+        PURSER_LEASE_ADMISSION_FIXTURE=str(FIXTURE),
+        PURSER_LEASE_ADMISSION_CASE=case["name"],
     )
     result = subprocess.run(
         ["go", "test", "-run", "^TestAdmissionParityOutcome$", "-count=1", "-v", "./internal/lease"],
@@ -95,6 +94,8 @@ def test_python_and_go_admission_match_golden_cases(tmp_path, monkeypatch):
         go = _go(go_root, case)
         assert go == python, case["name"]
         assert [result["code"] for result in python["results"]] == case["codes"], case["name"]
+        if "expected_results" in case:
+            assert python["results"] == case["expected_results"], case["name"]
         assert {key: owner["state"] for key, owner in python["owners"].items()} == case["states"], case["name"]
         if case.get("fail_write") or case.get("lock_failure"):
             for root in (python_root, go_root):

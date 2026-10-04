@@ -44,7 +44,18 @@ func TestAdmissionParityOutcome(t *testing.T) {
 	if root == "" {
 		t.Skip("parity helper")
 	}
+	var fixture struct {
+		Cases []json.RawMessage `json:"cases"`
+	}
+	rawFixture, err := os.ReadFile(os.Getenv("PURSER_LEASE_ADMISSION_FIXTURE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rawFixture, &fixture); err != nil {
+		t.Fatal(err)
+	}
 	var input struct {
+		Name      string  `json:"name"`
 		Now       float64 `json:"now"`
 		FailWrite bool    `json:"fail_write"`
 		Requests  []struct {
@@ -61,8 +72,22 @@ func TestAdmissionParityOutcome(t *testing.T) {
 			} `json:"options"`
 		} `json:"requests"`
 	}
-	if err := json.Unmarshal([]byte(os.Getenv("PURSER_LEASE_ADMISSION_INPUT")), &input); err != nil {
-		t.Fatal(err)
+	for _, rawCase := range fixture.Cases {
+		var candidate struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(rawCase, &candidate); err != nil {
+			t.Fatal(err)
+		}
+		if candidate.Name == os.Getenv("PURSER_LEASE_ADMISSION_CASE") {
+			if err := json.Unmarshal(rawCase, &input); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if input.Name == "" {
+		t.Fatalf("admission case %q missing from fixture", os.Getenv("PURSER_LEASE_ADMISSION_CASE"))
 	}
 	if input.FailWrite {
 		oldReplace := replaceLeaseFile
