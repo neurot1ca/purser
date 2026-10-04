@@ -40,15 +40,87 @@ func TestTierPythonFixture(t *testing.T) {
 	if err := decoder.Decode(&fixture); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range fixture {
-		got := ValidateTier(test.Input.Tier, test.Input.Data)
+	rawCases := []struct {
+		tier string
+		toml string
+	}{
+		{"user", `schema_version = 1
+[telemetry]
+vault_root = "/vault"
+`},
+		{"project", `schema_version = 1
+[unknown]
+"quoted.key" = "quoted"
+dotted.key = "dotted"
+multiline = """first line
+second line"""
+mixed = [1, 1.5, true]
+inline = { integer = 2, float = 2.5, boolean = false }
+[[unknown.rows]]
+name = "row"
+[project]
+id = 7
+[authority]
+sources = ["bad"]
+[worktree]
+setup_timeout_seconds = 3601
+`},
+		{"user", `schema_version = 1
+[review]
+skip_max_lines = -1
+`},
+		{"user", "schema_version = 2\n"},
+		{"user", "schema_version = 1\nchecks = []\n"},
+		{"project", `schema_version = 1
+[[checks]]
+name = "lint"
+argv = ["go", "vet", "./..."]
+[worktree]
+copy = [".env", "config.toml"]
+setup = "go test ./..."
+setup_timeout_seconds = 30
+`},
+	}
+	if len(rawCases) != len(fixture) {
+		t.Fatalf("got %d raw cases, want %d golden cases", len(rawCases), len(fixture))
+	}
+	for i, test := range fixture {
+		data, err := DecodeTOML([]byte(rawCases[i].toml))
+		if err != nil {
+			t.Fatalf("case %d TOML: %v", i, err)
+		}
+		got := ValidateTier(rawCases[i].tier, data)
 		gotJSON, _ := json.Marshal(got)
 		wantJSON, _ := json.Marshal(test.Output)
 		var actual, want any
 		_ = json.Unmarshal(gotJSON, &actual)
 		_ = json.Unmarshal(wantJSON, &want)
 		if !reflect.DeepEqual(actual, want) {
-			t.Errorf("%s (%#v): got %s, want %s", test.Input.Tier, test.Input.Data, gotJSON, wantJSON)
+			t.Errorf("case %d (%s): got %s, want %s", i, rawCases[i].tier, gotJSON, wantJSON)
+		}
+		if i == 1 {
+			unknown := data["unknown"].(map[string]any)
+			if unknown["quoted.key"] != "quoted" || unknown["dotted"].(map[string]any)["key"] != "dotted" ||
+				unknown["multiline"] != "first line\nsecond line" {
+				t.Errorf("quoted, dotted, or multiline TOML values decoded incorrectly: %#v", unknown)
+			}
+			mixed := unknown["mixed"].([]any)
+			inline := unknown["inline"].(map[string]any)
+			if _, ok := mixed[0].(int64); !ok {
+				t.Errorf("integer decoded as %T", mixed[0])
+			}
+			if _, ok := mixed[1].(float64); !ok {
+				t.Errorf("float decoded as %T", mixed[1])
+			}
+			if _, ok := mixed[2].(bool); !ok {
+				t.Errorf("boolean decoded as %T", mixed[2])
+			}
+			if _, ok := inline["integer"].(int64); !ok {
+				t.Errorf("inline integer decoded as %T", inline["integer"])
+			}
+			if rows := unknown["rows"].([]any); len(rows) != 1 || rows[0].(map[string]any)["name"] != "row" {
+				t.Errorf("table array decoded incorrectly: %#v", unknown["rows"])
+			}
 		}
 	}
 }

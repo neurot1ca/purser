@@ -11,7 +11,23 @@ FIXTURE = ROOT / ".claude" / "hooks" / "orchestrator" / "tests" / "fixtures" / "
 PROFILE = ROOT / ".claude" / "hooks" / "orchestrator" / "project_profile.py"
 CASES = [
     {"tier": "user", "toml": 'schema_version = 1\n[telemetry]\nvault_root = "/vault"\n'},
-    {"tier": "project", "toml": 'schema_version = 1\nunknown = true\n[project]\nid = 7\n[authority]\nsources = ["bad"]\n[worktree]\nsetup_timeout_seconds = 3601\n'},
+    {"tier": "project", "toml": '''schema_version = 1
+[unknown]
+"quoted.key" = "quoted"
+dotted.key = "dotted"
+multiline = """first line
+second line"""
+mixed = [1, 1.5, true]
+inline = { integer = 2, float = 2.5, boolean = false }
+[[unknown.rows]]
+name = "row"
+[project]
+id = 7
+[authority]
+sources = ["bad"]
+[worktree]
+setup_timeout_seconds = 3601
+'''},
     {"tier": "user", "toml": 'schema_version = 1\n[review]\nskip_max_lines = -1\n'},
     {"tier": "user", "toml": 'schema_version = 2\n'},
     {"tier": "user", "toml": 'schema_version = 1\nchecks = []\n'},
@@ -27,7 +43,7 @@ from project_profile import _load_tier, _USER_SECURITY, _USER_NON_SECURITY, _PRO
 case = json.load(sys.stdin)
 data = tomllib.loads(case['toml'])
 security, non_security = (_USER_SECURITY, _USER_NON_SECURITY) if case['tier'] == 'user' else (_PROJECT_SECURITY, _PROJECT_NON_SECURITY)
-path = Path.cwd().parents[2] / '.tmp' / 'm3-p16' / ('oracle-' + str(__import__('os').getpid()) + '.toml')
+path = Path.cwd().parents[2] / '.tmp' / 'm3-p28' / ('oracle-' + str(__import__('os').getpid()) + '.toml')
 path.write_text(case['toml'], encoding='utf-8')
 try:
     result = _load_tier(path, case['tier'], security, non_security)
@@ -48,12 +64,20 @@ def _oracle(case):
 
 
 def test_python_matches_tier_golden_fixture():
-    (ROOT / ".tmp" / "m3-p16").mkdir(parents=True, exist_ok=True)
-    expected = []
-    for case in CASES:
+    (ROOT / ".tmp" / "m3-p28").mkdir(parents=True, exist_ok=True)
+    golden = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert len(CASES) == len(golden)
+    for index, case in enumerate(CASES):
         oracle = _oracle(case)
-        expected.append({"input": {"tier": case["tier"], "data": oracle["data"]}, "output": oracle["output"]})
-    assert json.loads(FIXTURE.read_text(encoding="utf-8")) == expected
+        assert oracle["output"] == golden[index]["output"]
+        if index == 1:
+            unknown = oracle["data"]["unknown"]
+            assert unknown["quoted.key"] == "quoted"
+            assert unknown["dotted"]["key"] == "dotted"
+            assert unknown["multiline"] == "first line\nsecond line"
+            assert unknown["mixed"] == [1, 1.5, True]
+            assert unknown["inline"] == {"integer": 2, "float": 2.5, "boolean": False}
+            assert unknown["rows"] == [{"name": "row"}]
 
 
 def test_go_profile_package():
