@@ -1,0 +1,25 @@
+{
+  "oracle": "Python .claude/hooks/orchestrator/code_map.py inventory and refresh cache",
+  "version": 5,
+  "parser": "unavailable",
+  "limits": {
+    "max_files": 5000,
+    "max_file_bytes": 524288,
+    "max_total_bytes": 33554432,
+    "max_map_bytes": 262144,
+    "max_seconds": 10
+  },
+  "cases": [
+    {"name":"p43_symlink_internal","op":"inventory","kind":"symlink-internal","expected_entry":"unknown","expected_contained":false,"expected_regular":false},
+    {"name":"p43_symlink_escape","op":"inventory","kind":"symlink-escape","expected_entry":"unknown","expected_contained":false,"expected_regular":false},
+    {"name":"p43_nonregular","op":"inventory","kind":"tracked-directory","expected_entry":"unknown","expected_contained":false,"expected_regular":false},
+    {"name":"p43_cache_version_mismatch","op":"cache","version":4,"parser":"unavailable","expected_valid":false,"refresh_status":"FRESH"},
+    {"name":"p43_cache_parser_mismatch","op":"cache","version":5,"parser":"different-parser","expected_valid":false,"refresh_status":"FRESH"},
+    {"name":"p43_cache_key_same_metadata","op":"cache-key","size":9,"same_mtime":true,"expected_hit":true},
+    {"name":"p43_cache_key_size_changed","op":"cache-key","size":10,"same_mtime":true,"expected_hit":false},
+    {"name":"p43_limits_file_size_boundary","op":"limit","size":524288,"total":524288,"expected_skip":false},
+    {"name":"p43_limits_file_size_over","op":"limit","size":524289,"total":524289,"expected_skip":true},
+    {"name":"p43_limits_total_over","op":"limit","size":1,"total":33554432,"expected_error":"total size","refresh_status":"UNAVAILABLE"},
+    {"name":"p43_limits_file_count_over","op":"file-count","count":5001,"expected_error":"file count","refresh_status":"UNAVAILABLE"}
+  ]
+}
