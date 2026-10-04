@@ -78,6 +78,63 @@ func decideFallbackPre(parsed policy.OrchParseResult, session string, active map
 	return fallbackPreDecision{Action: "continue"}
 }
 
+// decideFallbackReturn mirrors the Python fallback return-to-primary branch.
+func decideFallbackReturn(active map[string]any, session, reason string, quota map[string]any, now time.Time) string {
+	evidence, _ := active["triggering_evidence"].(map[string]any)
+	if active["active_coder"] != "fallback" || evidence == nil {
+		return "continue"
+	}
+	if hasKey(evidence, "question_session") {
+		if evidence["question_session"] != session || evidence["question_shown"] != true || evidence["answerable"] != true {
+			return "deny"
+		}
+		if reason == "user_override" {
+			return "accept"
+		}
+		return "decline"
+	}
+	switch evidence["type"] {
+	case "QUOTA":
+		marker, markerOK := evidence["reset_cycle_marker"].(string)
+		if marker == "" {
+			marker, markerOK = active["reset_cycle_marker"].(string)
+		}
+		reset, _ := quota["5h_resets_at"].(string)
+		markerAt, markerErr := time.Parse(time.RFC3339Nano, marker)
+		resetAt, resetErr := time.Parse(time.RFC3339Nano, reset)
+		if markerOK && markerErr == nil && resetErr == nil && resetAt.After(markerAt) &&
+			evidence["declined_reset_cycle_marker"] != reset && session != "" {
+			return "offer"
+		}
+	case "CREDIT_EXHAUSTED", "NO_RESPONSE":
+		interval := float64(15 * 60)
+		if evidence["type"] == "NO_RESPONSE" {
+			interval = 5 * 60
+		}
+		last := interval
+		if value, ok := active["last_probe_time"].(string); ok {
+			if stamp, err := strconv.ParseFloat(value, 64); err == nil {
+				last = float64(now.UnixNano())/1e9 - stamp
+			} else {
+				last = 0
+			}
+		}
+		if last >= interval {
+			return "claim_probe"
+		}
+	case "RATE_LIMITED":
+		delay, ok := fallbackNumber(evidence["retryAfterSeconds"])
+		if !ok || delay < 0 {
+			delay = 5 * 60
+		}
+		started, err := strconv.ParseFloat(stringValue(evidence["switched_at"]), 64)
+		if err == nil && float64(now.UnixNano())/1e9 >= started+delay {
+			return "cooldown_return"
+		}
+	}
+	return "continue"
+}
+
 func fallbackQuestion(trigger map[string]any, model string, quota map[string]any, now time.Time) (string, string) {
 	switch triggerValue(trigger, "type") {
 	case "QUOTA":
@@ -120,7 +177,9 @@ func triggerValue(value map[string]any, key string) any {
 }
 func quotaNumber(value any) float64 {
 	number, ok := fallbackNumber(value)
-	if !ok { return -1 }
+	if !ok {
+		return -1
+	}
 	return number
 }
 

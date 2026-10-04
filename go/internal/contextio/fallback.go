@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 )
 
 func activeCoderPath(project, root string) string {
@@ -143,6 +145,105 @@ func ApplyFallbackConsent(project, root, session string, approve bool, resetMark
 			delete(evidence, key)
 		}
 		evidence["switched_at"] = switchedAt
+		changed = true
+	})
+	return changed, err
+}
+
+// UpdateFallbackTrigger mutates fallback state only while the triggering failure is current.
+func UpdateFallbackTrigger(project, root, kind string, triggerID any, change func(map[string]any)) (bool, error) {
+	changed := false
+	_, err := updateActiveCoderState(activeCoderPath(project, root), func(state map[string]any) {
+		evidence, ok := state["triggering_evidence"].(map[string]any)
+		if state["active_coder"] != "fallback" || !ok || evidence["type"] != kind || !reflect.DeepEqual(evidence["trigger_id"], triggerID) {
+			return
+		}
+		change(state)
+		changed = true
+	})
+	return changed, err
+}
+
+// ClaimFallbackProbe atomically claims a due probe for the current trigger.
+func ClaimFallbackProbe(project, root, kind string, triggerID any, now float64) (bool, error) {
+	interval := float64(15 * 60)
+	if kind == "NO_RESPONSE" {
+		interval = 5 * 60
+	} else if kind != "CREDIT_EXHAUSTED" {
+		return false, nil
+	}
+	claimed := false
+	_, err := UpdateFallbackTrigger(project, root, kind, triggerID, func(state map[string]any) {
+		last := interval
+		if raw, ok := state["last_probe_time"].(string); ok {
+			if parsed, parseErr := strconv.ParseFloat(raw, 64); parseErr == nil {
+				last = now - parsed
+			} else {
+				last = 0
+			}
+		}
+		if last >= interval {
+			state["last_probe_time"] = strconv.FormatFloat(now, 'f', -1, 64)
+			claimed = true
+		}
+	})
+	return claimed, err
+}
+
+// ApplyPrimaryReturnConsent applies a shown, trigger-bound return answer under the active-coder lock.
+func ApplyPrimaryReturnConsent(project, root, session, kind string, triggerID any, approve bool) (bool, error) {
+	changed := false
+	_, err := UpdateFallbackTrigger(project, root, kind, triggerID, func(state map[string]any) {
+		evidence := state["triggering_evidence"].(map[string]any)
+		if evidence["question_session"] != session || evidence["question_shown"] != true || evidence["answerable"] != true {
+			return
+		}
+		if approve {
+			state["active_coder"], state["triggering_evidence"] = "primary", nil
+			state["reset_cycle_marker"], state["last_probe_time"] = nil, nil
+		} else {
+			marker := evidence["question_reset_marker"]
+			for _, key := range []string{"question", "question_session", "question_shown", "answerable", "question_reset_marker"} {
+				delete(evidence, key)
+			}
+			evidence["declined_reset_cycle_marker"] = marker
+		}
+		changed = true
+	})
+	return changed, err
+}
+
+// RecordPrimaryReturnQuestion stores a quota renewal offer only for the current trigger.
+func RecordPrimaryReturnQuestion(project, root, kind string, triggerID any, session, question string, resetMarker any) (bool, error) {
+	recorded := false
+	_, err := UpdateFallbackTrigger(project, root, kind, triggerID, func(state map[string]any) {
+		evidence := state["triggering_evidence"].(map[string]any)
+		if hasQuestion, _ := evidence["question_session"].(string); hasQuestion != "" || session == "" {
+			return
+		}
+		evidence["question"], evidence["question_session"] = question, session
+		evidence["question_reset_marker"] = resetMarker
+		evidence["question_shown"], evidence["answerable"] = false, false
+		recorded = true
+	})
+	return recorded, err
+}
+
+// ApplyPrimaryReturnCooldown returns to primary once the current rate-limit cooldown expires.
+func ApplyPrimaryReturnCooldown(project, root string, triggerID any, now float64) (bool, error) {
+	changed := false
+	_, err := UpdateFallbackTrigger(project, root, "RATE_LIMITED", triggerID, func(state map[string]any) {
+		evidence := state["triggering_evidence"].(map[string]any)
+		delay, ok := evidence["retryAfterSeconds"].(float64)
+		if !ok || delay < 0 {
+			delay = 5 * 60
+		}
+		started, parseErr := strconv.ParseFloat(fmt.Sprint(evidence["switched_at"]), 64)
+		if parseErr != nil || now < started+delay {
+			return
+		}
+		state["active_coder"], state["triggering_evidence"] = "primary", nil
+		state["reset_cycle_marker"], state["last_probe_time"] = nil, nil
 		changed = true
 	})
 	return changed, err

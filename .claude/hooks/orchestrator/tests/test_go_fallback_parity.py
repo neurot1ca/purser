@@ -128,3 +128,151 @@ def test_p36_python_pre_fallback_oracle(tmp_path, monkeypatch):
                 "last_probe_time": None,
             }, tmp_path / "runtime")
             assert not active_coder_state.approve_fallback(project, case["session"], tmp_path / "runtime")
+
+
+def test_p37_python_fallback_return_oracle(tmp_path):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+    def oracle(case):
+        if case.get("update_trigger"):
+            return "guarded"
+        active = case["active"]
+        evidence = active.get("triggering_evidence")
+        if active.get("active_coder") != "fallback" or not isinstance(evidence, dict):
+            return "continue"
+        if "question_session" in evidence:
+            if (evidence.get("question_session") != case["session"]
+                    or evidence.get("question_shown") is not True
+                    or evidence.get("answerable") is not True):
+                return "deny"
+            return "accept" if case["reason"] == "user_override" else "decline"
+        if evidence.get("type") == "QUOTA":
+            from datetime import datetime
+            marker = active.get("reset_cycle_marker")
+            reset = (case.get("quota") or {}).get("5h_resets_at")
+            if (marker and reset and datetime.fromisoformat(reset.replace("Z", "+00:00"))
+                    > datetime.fromisoformat(marker.replace("Z", "+00:00"))
+                    and evidence.get("declined_reset_cycle_marker") != reset and case["session"]):
+                return "offer"
+        if evidence.get("type") in {"CREDIT_EXHAUSTED", "NO_RESPONSE"}:
+            return "claim_probe"
+        if evidence.get("type") == "RATE_LIMITED":
+            delay = evidence.get("retryAfterSeconds", 300)
+            if isinstance(delay, bool) or not isinstance(delay, (int, float)) or delay < 0:
+                delay = 300
+            if float(case["now_epoch"]) >= float(evidence.get("switched_at", "nan")) + delay:
+                return "cooldown_return"
+        return "continue"
+
+    for case in fixture["fallback_return_cases"]:
+        assert "p37" in case["name"]
+        from datetime import datetime
+        case["now_epoch"] = datetime.fromisoformat(case["now"].replace("Z", "+00:00")).timestamp()
+        assert oracle(case) == case["expected"], case["name"]
+        project = tmp_path / case["name"]
+        runtime = tmp_path / "runtime"
+        if case["expected"] == "offer":
+            active_coder_state.write(project, case["active"], runtime)
+            def record(state):
+                evidence = state.get("triggering_evidence")
+                trigger = case["active"]["triggering_evidence"]
+                if (state.get("active_coder") == "fallback" and isinstance(evidence, dict)
+                        and evidence.get("type") == "QUOTA" and evidence.get("trigger_id") == trigger["trigger_id"]
+                        and not evidence.get("question_session")):
+                    evidence.update(question="quota renewed", question_session=case["session"],
+                                   question_reset_marker=case["quota"]["5h_resets_at"],
+                                   question_shown=False, answerable=False)
+            active_coder_state.update(project, record, runtime)
+            assert active_coder_state.read(project, runtime)["triggering_evidence"]["question_session"] == case["session"]
+        if case["expected"] in {"accept", "decline"}:
+            active_coder_state.write(project, case["active"], runtime)
+            evidence = case["active"]["triggering_evidence"]
+            changed = active_coder_state.update(
+                project,
+                lambda state: state.update(active_coder="primary", triggering_evidence=None)
+                if state.get("active_coder") == "fallback"
+                and state.get("triggering_evidence", {}).get("trigger_id") == evidence["trigger_id"]
+                and evidence.get("question_session") == case["session"]
+                and evidence.get("question_shown") is True and evidence.get("answerable") is True
+                and case["reason"] == "user_override" else None,
+                runtime,
+            )
+            if case["expected"] == "accept":
+                assert active_coder_state.read(project, runtime)["active_coder"] == "primary"
+            else:
+                def decline(state):
+                    evidence = state.get("triggering_evidence")
+                    if (state.get("active_coder") == "fallback" and isinstance(evidence, dict)
+                            and evidence.get("trigger_id") == case["active"]["triggering_evidence"]["trigger_id"]
+                            and evidence.get("question_session") == case["session"]
+                            and evidence.get("question_shown") is True and evidence.get("answerable") is True):
+                        marker = evidence.pop("question_reset_marker", None)
+                        for key in ("question", "question_session", "question_shown", "answerable"):
+                            evidence.pop(key, None)
+                        evidence["declined_reset_cycle_marker"] = marker
+                active_coder_state.update(project, decline, runtime)
+                result = active_coder_state.read(project, runtime)
+                assert result["active_coder"] == "fallback"
+                assert "question_session" not in result["triggering_evidence"]
+        elif case["expected"] == "claim_probe":
+            active_coder_state.write(project, case["active"], runtime)
+            interval = 900 if case["active"]["triggering_evidence"]["type"] == "CREDIT_EXHAUSTED" else 300
+            def claim():
+                claimed = False
+                def change(state):
+                    nonlocal claimed
+                    evidence = state.get("triggering_evidence")
+                    if (state.get("active_coder") != "fallback" or not isinstance(evidence, dict)
+                            or evidence.get("type") != case["active"]["triggering_evidence"]["type"]
+                            or evidence.get("trigger_id") != case["active"]["triggering_evidence"]["trigger_id"]):
+                        return
+                    try:
+                        elapsed = (case["now_epoch"] - float(state["last_probe_time"])
+                                   if state.get("last_probe_time") is not None else interval)
+                    except (TypeError, ValueError):
+                        elapsed = 0
+                    if elapsed >= interval:
+                        state["last_probe_time"] = str(case["now_epoch"])
+                        claimed = True
+                active_coder_state.update(project, change, runtime)
+                return claimed
+            assert claim()
+            assert not claim()
+        elif case["expected"] == "guarded":
+            active_coder_state.write(project, case["active"], runtime)
+            changed = False
+            def stale_update(state):
+                nonlocal changed
+                evidence = state.get("triggering_evidence")
+                trigger = case["update_trigger"]
+                if state.get("active_coder") == "fallback" and isinstance(evidence, dict) \
+                        and evidence.get("type") == trigger["type"] and evidence.get("trigger_id") == trigger["trigger_id"]:
+                    state["active_coder"] = "primary"
+                    changed = True
+            active_coder_state.update(project, stale_update, runtime)
+            assert not changed
+            assert active_coder_state.read(project, runtime) == case["active"]
+        elif case["expected"] == "deny":
+            active_coder_state.write(project, case["active"], runtime)
+            active_coder_state.update(
+                project,
+                lambda state: state.update(active_coder="primary", triggering_evidence=None)
+                if state.get("active_coder") == "fallback"
+                and state.get("triggering_evidence", {}).get("question_session") == case["session"]
+                else None,
+                runtime,
+            )
+            assert active_coder_state.read(project, runtime) == case["active"]
+        elif case["expected"] in {"cooldown_return", "continue"} and case["active"]["triggering_evidence"].get("type") == "RATE_LIMITED":
+            active_coder_state.write(project, case["active"], runtime)
+            def cooldown(state):
+                evidence = state.get("triggering_evidence")
+                if (state.get("active_coder") == "fallback" and isinstance(evidence, dict)
+                        and evidence.get("type") == "RATE_LIMITED"
+                        and evidence.get("trigger_id") == case["active"]["triggering_evidence"]["trigger_id"]
+                        and case["now_epoch"] >= float(evidence["switched_at"]) + evidence["retryAfterSeconds"]):
+                    state.update(active_coder="primary", triggering_evidence=None,
+                                 reset_cycle_marker=None, last_probe_time=None)
+            active_coder_state.update(project, cooldown, runtime)
+            expected_coder = "primary" if case["expected"] == "cooldown_return" else "fallback"
+            assert active_coder_state.read(project, runtime)["active_coder"] == expected_coder

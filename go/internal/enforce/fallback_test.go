@@ -103,6 +103,128 @@ func TestFallbackPreP36Fixture(t *testing.T) {
 	}
 }
 
+func TestFallbackReturnP37Fixture(t *testing.T) {
+	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "fallback.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name          string         `json:"name"`
+			Session       string         `json:"session"`
+			Reason        string         `json:"reason"`
+			Now           string         `json:"now"`
+			Active        map[string]any `json:"active"`
+			Quota         map[string]any `json:"quota"`
+			UpdateTrigger map[string]any `json:"update_trigger"`
+			Expected      string         `json:"expected"`
+		} `json:"fallback_return_cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range fixture.Cases {
+		t.Run(item.Name, func(t *testing.T) {
+			if !strings.Contains(item.Name, "p37") {
+				t.Fatalf("case name lacks p37: %s", item.Name)
+			}
+			now, err := time.Parse(time.RFC3339, item.Now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if item.UpdateTrigger == nil {
+				if got := decideFallbackReturn(item.Active, item.Session, item.Reason, item.Quota, now); got != item.Expected {
+					t.Fatalf("decision = %q, want %q", got, item.Expected)
+				}
+			}
+			if item.Expected == "accept" || item.Expected == "decline" {
+				project, root := filepath.Join(t.TempDir(), item.Name), t.TempDir()
+				writeFallbackFixtureState(t, project, root, item.Active)
+				evidence := item.Active["triggering_evidence"].(map[string]any)
+				changed, err := contextio.ApplyPrimaryReturnConsent(project, root, item.Session,
+					evidence["type"].(string), evidence["trigger_id"], item.Expected == "accept")
+				if err != nil || !changed {
+					t.Fatalf("return consent transition = %v, %v", changed, err)
+				}
+				state := readFallbackFixtureState(t, project, root)
+				if item.Expected == "accept" && state["active_coder"] != "primary" {
+					t.Fatalf("accepted return state = %#v", state)
+				}
+				if item.Expected == "decline" && state["active_coder"] != "fallback" {
+					t.Fatalf("declined return state = %#v", state)
+				}
+			}
+			if item.Expected == "offer" {
+				project, root := filepath.Join(t.TempDir(), item.Name), t.TempDir()
+				writeFallbackFixtureState(t, project, root, item.Active)
+				evidence := item.Active["triggering_evidence"].(map[string]any)
+				changed, err := contextio.RecordPrimaryReturnQuestion(project, root, "QUOTA", evidence["trigger_id"],
+					item.Session, "quota renewed", item.Quota["5h_resets_at"])
+				if err != nil || !changed {
+					t.Fatalf("return question record = %v, %v", changed, err)
+				}
+				state := readFallbackFixtureState(t, project, root)
+				if state["triggering_evidence"].(map[string]any)["question_session"] != item.Session {
+					t.Fatalf("return question state = %#v", state)
+				}
+			}
+			if item.Expected == "deny" {
+				project, root := filepath.Join(t.TempDir(), item.Name), t.TempDir()
+				writeFallbackFixtureState(t, project, root, item.Active)
+				evidence := item.Active["triggering_evidence"].(map[string]any)
+				changed, err := contextio.ApplyPrimaryReturnConsent(project, root, item.Session,
+					evidence["type"].(string), evidence["trigger_id"], true)
+				if err != nil || changed {
+					t.Fatalf("stale return consent = %v, %v", changed, err)
+				}
+				if state := readFallbackFixtureState(t, project, root); state["active_coder"] != "fallback" {
+					t.Fatalf("stale consent changed active coder: %#v", state)
+				}
+			}
+			if item.Expected == "claim_probe" {
+				project, root := filepath.Join(t.TempDir(), item.Name), t.TempDir()
+				evidence := item.Active["triggering_evidence"].(map[string]any)
+				writeFallbackFixtureState(t, project, root, item.Active)
+				id := evidence["trigger_id"]
+				stamp := float64(now.UnixNano()) / 1e9
+				claimed, err := contextio.ClaimFallbackProbe(project, root, evidence["type"].(string), id, stamp)
+				if err != nil || !claimed {
+					t.Fatalf("first probe claim = %v, %v", claimed, err)
+				}
+				claimed, err = contextio.ClaimFallbackProbe(project, root, evidence["type"].(string), id, stamp)
+				if err != nil || claimed {
+					t.Fatalf("second probe claim = %v, %v", claimed, err)
+				}
+			}
+			if item.Expected == "cooldown_return" || item.Name == "p37-rate-limit-cooldown-wait" {
+				project, root := filepath.Join(t.TempDir(), item.Name), t.TempDir()
+				writeFallbackFixtureState(t, project, root, item.Active)
+				evidence := item.Active["triggering_evidence"].(map[string]any)
+				changed, err := contextio.ApplyPrimaryReturnCooldown(project, root, evidence["trigger_id"], float64(now.UnixNano())/1e9)
+				want := item.Expected == "cooldown_return"
+				if err != nil || changed != want {
+					t.Fatalf("cooldown transition = %v, %v; want %v", changed, err, want)
+				}
+			}
+			if item.Expected == "guarded" {
+				project, root := filepath.Join(t.TempDir(), item.Name), t.TempDir()
+				writeFallbackFixtureState(t, project, root, item.Active)
+				changed, err := contextio.UpdateFallbackTrigger(project, root,
+					item.UpdateTrigger["type"].(string), item.UpdateTrigger["trigger_id"],
+					func(state map[string]any) { state["active_coder"] = "primary" })
+				if err != nil || changed {
+					t.Fatalf("stale trigger update = %v, %v", changed, err)
+				}
+				state := readFallbackFixtureState(t, project, root)
+				if state["active_coder"] != "fallback" || state["triggering_evidence"].(map[string]any)["trigger_id"] != "new-credit" {
+					t.Fatalf("stale trigger overwrote current state: %#v", state)
+				}
+			}
+		})
+	}
+}
+
 func fallbackFixtureStatePath(project, runtimeRoot string) string {
 	project, _ = filepath.Abs(project)
 	if runtime.GOOS == "windows" {
@@ -114,7 +236,7 @@ func fallbackFixtureStatePath(project, runtimeRoot string) string {
 
 func writeFallbackFixtureState(t *testing.T, project, runtimeRoot string, input map[string]any) {
 	t.Helper()
-	state := map[string]any{"active_coder": input["active_coder"], "triggering_evidence": input["triggering_evidence"], "reset_cycle_marker": nil, "last_probe_time": nil}
+	state := map[string]any{"active_coder": input["active_coder"], "triggering_evidence": input["triggering_evidence"], "reset_cycle_marker": input["reset_cycle_marker"], "last_probe_time": input["last_probe_time"]}
 	data, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)
