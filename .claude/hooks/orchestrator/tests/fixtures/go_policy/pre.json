@@ -1,0 +1,32 @@
+{
+  "oracle": "Python project_root and codex indexed reply helpers",
+  "project_keys": [
+    {"input":"c:\\fixture\\project","expected":"0bb944d27cd15af3"},
+    {"input":null,"expected":"unresolved"}
+  ],
+  "root_cases": [
+    {"name":"explicit","explicit":"explicit_repo","input":"missing_repo","event":"event_repo","expected":"explicit_repo","reason":""},
+    {"name":"invalid-explicit","explicit":"invalid","expected":null,"reason":"project root unresolved: explicit root is invalid"},
+    {"name":"input-cwd","input":"input_repo","event":"event_repo","expected":"input_repo","reason":""},
+    {"name":"event-cwd-fallback","event":"event_repo","expected":"event_repo","reason":""},
+    {"name":"missing-cwd","expected":null,"reason":"project root unresolved: hook input has no cwd"},
+    {"name":"outside-worktree","input":"outside","expected":null,"reason":"project root unresolved: cwd is not inside a git work tree"}
+  ],
+  "thread_cases": [
+    {"thread_id":"thread-1","expected":"4b0a5fefc328e6b9257bc535e3c5d26fec36b52f92e277618bf5b30fc3885e58.json"},
+    {"thread_id":"A","expected":"559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd.json"},
+    {"thread_id":"","expected":null},
+    {"thread_id":"../escape","expected":null},
+    {"thread_id":"é","expected":null},
+    {"thread_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expected":null}
+  ],
+  "index_cases": [
+    {"name":"missing","thread_id":"thread-1","index":"missing","expected":null,"reason":""},
+    {"name":"invalid-id","thread_id":"../escape","index":"missing","expected":null,"reason":"INVALID_THREAD_ID"},
+    {"name":"malformed","thread_id":"thread-1","index":"{","expected":null,"reason":"RECORDED_PROJECT_UNRESOLVED"},
+    {"name":"stale-thread","thread_id":"thread-1","index":{"thread_id":"other-thread","project_root":"__REPO__"},"expected":null,"reason":"RECORDED_PROJECT_UNRESOLVED"},
+    {"name":"relative-root","thread_id":"thread-1","index":{"thread_id":"thread-1","project_root":"relative"},"expected":null,"reason":"RECORDED_PROJECT_UNRESOLVED"},
+    {"name":"non-git-root","thread_id":"thread-1","index":{"thread_id":"thread-1","project_root":"__OUTSIDE__"},"expected":null,"reason":"RECORDED_PROJECT_UNRESOLVED"},
+    {"name":"valid","thread_id":"thread-1","index":{"thread_id":"thread-1","project_root":"__REPO__"},"expected":"__REPO__","reason":""}
+  ]
+}

@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"purser-hook/internal/ledger"
 )
 
 var codexTools = map[string]bool{
@@ -192,4 +196,118 @@ func canonicalJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(strings.TrimSuffix(output.String(), "\n")), nil
+}
+
+var validThreadID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func projectKey(root *string) string {
+	if root == nil {
+		return "unresolved"
+	}
+	normalized := filepath.Clean(*root)
+	if os.PathSeparator == '\\' {
+		normalized = strings.ToLower(normalized)
+	}
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func threadIndexPath(runtimeRoot string, threadID any) (string, bool) {
+	id, ok := threadID.(string)
+	if !ok || !validThreadID.MatchString(id) {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(id))
+	return filepath.Join(runtimeRoot, "threads", hex.EncodeToString(sum[:])+".json"), true
+}
+
+func resolvePath(value string) (string, error) {
+	if strings.ContainsRune(value, 0) {
+		return "", errors.New("invalid path")
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = resolved
+	}
+	return filepath.Clean(absolute), nil
+}
+
+func resolveCandidate(candidate string) (*string, string) {
+	if strings.TrimSpace(candidate) == "" {
+		return nil, "project root unresolved: hook input has no cwd"
+	}
+	directory, err := resolvePath(candidate)
+	if err != nil {
+		return nil, "project root unresolved: cwd is invalid"
+	}
+	root, err := ledger.GitTopLevel(directory)
+	if err != nil {
+		var failure *ledger.InspectionError
+		errors.As(err, &failure)
+		if failure != nil && failure.Code == "GIT_UNAVAILABLE" {
+			return nil, "project root unresolved: git executable is unavailable"
+		}
+		if failure != nil && failure.Code == "GIT_FAILED" {
+			return nil, "project root unresolved: cwd is not inside a git work tree"
+		}
+		return nil, "project root unresolved: git top-level lookup failed"
+	}
+	return &root, ""
+}
+
+func resolveProjectRoot(event map[string]any, explicitRoot *string) (*string, string) {
+	if explicitRoot != nil {
+		root, err := resolvePath(*explicitRoot)
+		if err != nil {
+			return nil, "project root unresolved: explicit root is invalid"
+		}
+		return &root, ""
+	}
+	var candidate string
+	if input, ok := event["tool_input"].(map[string]any); ok {
+		candidate, _ = input["cwd"].(string)
+	}
+	if strings.TrimSpace(candidate) == "" {
+		candidate, _ = event["cwd"].(string)
+	}
+	return resolveCandidate(candidate)
+}
+
+func indexedReplyRoot(runtimeRoot string, threadID any) (*string, string) {
+	path, ok := threadIndexPath(runtimeRoot, threadID)
+	if !ok {
+		return nil, "INVALID_THREAD_ID"
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ""
+	}
+	if err != nil || !utf8.Valid(raw) {
+		return nil, "RECORDED_PROJECT_UNRESOLVED"
+	}
+	var entry map[string]any
+	if json.Unmarshal(raw, &entry) != nil || entry == nil || entry["thread_id"] != threadID {
+		return nil, "RECORDED_PROJECT_UNRESOLVED"
+	}
+	stored, ok := entry["project_root"].(string)
+	if !ok || stored == "" || !filepath.IsAbs(stored) {
+		return nil, "RECORDED_PROJECT_UNRESOLVED"
+	}
+	resolved, reason := resolveCandidate(stored)
+	want, pathErr := resolvePath(stored)
+	if resolved == nil || reason != "" || pathErr != nil || !samePath(*resolved, want) {
+		return nil, "RECORDED_PROJECT_UNRESOLVED"
+	}
+	return resolved, ""
+}
+
+func samePath(left, right string) bool {
+	left, right = filepath.Clean(left), filepath.Clean(right)
+	if os.PathSeparator == '\\' {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }

@@ -25,6 +25,8 @@ type inspectionError struct {
 	Message string
 }
 
+type InspectionError = inspectionError
+
 func (e *inspectionError) Error() string { return e.Code + ": " + e.Message }
 
 func runGit(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
@@ -71,6 +73,23 @@ func runGit(root string, args []string, timeout time.Duration, operation string,
 		return nil, &inspectionError{"GIT_UNAVAILABLE", "Git could not run while " + operation + "."}
 	}
 	return []byte(stdout.String()), nil
+}
+
+// GitTopLevel resolves a directory through Git's work-tree semantics.
+func GitTopLevel(directory string) (string, error) {
+	raw, err := runGit(directory, []string{"rev-parse", "--show-toplevel"}, 10*time.Second, "resolving Git top-level", nil, nil)
+	if err != nil {
+		return "", err
+	}
+	root := strings.TrimSpace(string(raw))
+	if root == "" {
+		return "", &inspectionError{"GIT_FAILED", "Git returned an empty top-level."}
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", &inspectionError{"GIT_OUTPUT_INVALID", "Git returned an invalid top-level."}
+	}
+	return filepath.Abs(resolved)
 }
 
 func findGit(pathValue, pathExt string) (string, bool) {
