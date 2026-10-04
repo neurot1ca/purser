@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.68 — 2026-10-04
+
+- **Changed:** The job board above the prompt is one summary line (running, queued, done, next ETA); a details button opens the per-job table in a pane.
+- **Added:** An alternative usage band shows Claude and Codex 5h/7d quota pills and the session cost; a pill without a data source is hidden.
+- **Fixed:** Compaction advice, Codex retry context and the maintenance notice are back on every prompt; they were lost when the prompt hook moved to Go in 0.1.65.
+- **Changed:** Implementation and plan prompts get the code map line automatically; the map skips oversized and binary files.
+- **Internal:** More Go hook code (enforcement, leases, review, ledger) is ported but not yet active.
 ## 0.1.67 — 2026-10-04
 
 - **Added:** The Purser job board is drawn above the prompt by the mod, with elapsed and remaining time, overdue, queue wait and last agent activity; it costs no Claude tokens. Chat receipts stay for now.
