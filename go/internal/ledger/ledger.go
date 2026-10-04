@@ -409,6 +409,15 @@ func equalStrings(a, b []string) bool {
 }
 
 func stringList(value any) ([]string, bool) {
+	if stringsValue, ok := value.([]string); ok {
+		out := append([]string(nil), stringsValue...)
+		for _, item := range out {
+			if item == "" {
+				return nil, false
+			}
+		}
+		return out, true
+	}
 	items, ok := value.([]any)
 	if !ok {
 		return nil, false

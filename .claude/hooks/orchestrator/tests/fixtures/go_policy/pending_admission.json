@@ -1,0 +1,55 @@
+{
+  "oracle": "codex._reconcile_rejected_starts+ledger.ScopeLeases.acquire+pending/session/thread-index writes",
+  "cases": [
+    {
+      "name": "p47_clean_admission",
+      "setup": "clean",
+      "expected": {"status": "OK", "code": "LEASE_ACQUIRED", "queued": false, "pending": true, "session": true, "thread_index": true}
+    },
+    {
+      "name": "p47_stale_rejected_start_reconciled",
+      "setup": "stale",
+      "expected": {"status": "OK", "code": "LEASE_ACQUIRED", "queued": false, "pending": true, "session": true, "thread_index": true, "stale_pending": false}
+    },
+    {
+      "name": "p47_lease_conflict_denied",
+      "setup": "conflict",
+      "expected": {"status": "UNKNOWN", "code": "SCOPE_LEASE_CONFLICT", "queued": false, "pending": false, "session": false, "thread_index": false}
+    },
+    {
+      "name": "p47_lease_admission_uncertain",
+      "setup": "lease_uncertain",
+      "expected": {"status": "UNKNOWN", "code": "LEASE_ADMISSION_UNCERTAIN", "queued": false, "pending": false, "session": false, "thread_index": false}
+    },
+    {
+      "name": "p47_queued_admission",
+      "setup": "queued",
+      "expected": {"status": "OK", "code": "LEASE_QUEUED", "queued": true, "pending": true, "session": true, "thread_index": true}
+    },
+    {
+      "name": "p47_unresolved_root",
+      "setup": "unresolved",
+      "expected": {"status": "OK", "code": "LEASE_ACQUIRED", "queued": false, "pending": true, "session": true, "thread_index": false}
+    },
+    {
+      "name": "p47_plan_phase",
+      "setup": "plan",
+      "expected": {"status": "OK", "code": "LEASE_ACQUIRED", "queued": false, "pending": true, "session": true, "thread_index": true}
+    },
+    {
+      "name": "p47_pending_write_failure",
+      "setup": "fail_pending",
+      "expected": {"status": "UNKNOWN", "code": "PENDING_WRITE_FAILED", "queued": false, "pending": false, "session": false, "thread_index": false}
+    },
+    {
+      "name": "p47_session_write_failure",
+      "setup": "fail_session",
+      "expected": {"status": "UNKNOWN", "code": "LEDGER_WRITE_FAILED", "queued": false, "pending": false, "session": false, "thread_index": false}
+    },
+    {
+      "name": "p47_thread_index_write_failure",
+      "setup": "fail_index",
+      "expected": {"status": "UNKNOWN", "code": "THREAD_INDEX_WRITE_FAILED", "queued": false, "pending": false, "session": true, "thread_index": false}
+    }
+  ]
+}

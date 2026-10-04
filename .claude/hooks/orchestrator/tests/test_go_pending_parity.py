@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -95,3 +96,115 @@ def test_p46_go_pending_fixture():
     cache.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GOCACHE": str(cache), "TMP": str(scratch), "TEMP": str(scratch), "TMPDIR": str(scratch), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(["go", "test", "-run", "^TestPendingCallPythonFixture$", "-count=1", "./internal/enforce"], cwd=ROOT / "go", env=env, check=True)
+
+
+def test_p47_python_admission_oracle(tmp_path, monkeypatch):
+    fixture_path = ORCH / "tests" / "fixtures" / "go_policy" / "pending_admission.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert fixture["oracle"] == "codex._reconcile_rejected_starts+ledger.ScopeLeases.acquire+pending/session/thread-index writes"
+    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
+    for case in fixture["cases"]:
+        setup = case["setup"]
+        root = tmp_path / case["name"]
+        root.mkdir()
+        project = root / "projects" / "project-p47"
+        project.mkdir(parents=True)
+        pending_dir = root / "pending"
+        pending_dir.mkdir()
+        pending_path = pending_dir / "current.json"
+        if setup in {"conflict", "stale"}:
+            old_call = "call-old"
+            old_job = hashlib.sha256(old_call.encode()).hexdigest()
+            seeded = ledger.ScopeLeases(project).acquire("oldowner", "old-task", ["src"], job_id=old_job)
+            assert seeded["status"] == ledger.OK
+            if setup == "stale":
+                codex._atomic_json_write(pending_dir / "stale.json", {
+                    "start_rejected": True, "project_key": "project-p47",
+                    "async_call": old_call, "lease_owner": "oldowner",
+                })
+        elif setup == "queued":
+            store = ledger.ScopeLeases(project)
+            assert store.acquire("blocker", "blocking-task", ["src"], job_id="blocker-job")["status"] == ledger.OK
+            assert store.acquire("owner-p47", "task-p47", ["src"], job_id="job-p47", queue_conflict=True)["code"] == "LEASE_QUEUED"
+        elif setup == "lease_uncertain":
+            (project / "scope_leases.json").write_text("{", encoding="utf-8")
+        if setup == "fail_pending":
+            pending_dir.rmdir()
+            pending_dir.write_text("blocked", encoding="utf-8")
+        elif setup == "fail_session":
+            (project / "sessions").write_text("blocked", encoding="utf-8")
+        elif setup == "fail_index":
+            (root / "threads").write_text("blocked", encoding="utf-8")
+
+        scope = [] if setup == "plan" else ["src"]
+        repository = None if setup == "unresolved" else tmp_path / "repo"
+        if repository is not None:
+            repository.mkdir(exist_ok=True)
+        pending = {"task_id": "task-p47", "project_key": "project-p47",
+                   "phase": "plan" if setup == "plan" else "implementation",
+                   "baseline": {"status": "OK", "head": "base"}}
+        session = ledger.build_session_record(
+            "task-p47", "thread-p47" if repository is not None else None,
+            "operation", "model", "high", phase=pending["phase"], scope=scope,
+            pending_call_baseline=pending["baseline"], task_contract_grounded=True,
+            task_objective="fixture objective", acceptance_criteria="fixture acceptance",
+        )
+        owner = "owner-p47"
+        admission = {"status": ledger.OK, "code": "LEASE_ACQUIRED"}
+        if repository is not None:
+            if setup in {"implementation", "plan", "stale", "conflict", "queued"}:
+                codex._reconcile_rejected_starts(root, "project-p47")
+            admission = ledger.ScopeLeases(project).acquire(
+                owner, "task-p47", scope, read_only=setup == "plan",
+            )
+        actual = {"status": admission["status"], "code": admission["code"], "queued": False}
+        if admission["status"] == ledger.OK:
+            pending["lease_owner"] = owner if repository is not None else None
+            if repository is None:
+                pending.pop("lease_owner")
+            if admission["code"] == "LEASE_QUEUED":
+                queued = {"status": ledger.UNKNOWN, "code": "QUEUED"}
+                pending.update(lease_queued=True, baseline=queued)
+                session["pending_call_baseline"] = queued
+                actual["queued"] = True
+            try:
+                codex._atomic_json_write(pending_path, pending)
+                saved = ledger.SessionLedger(project).save(session)
+                if saved["status"] != ledger.OK:
+                    actual.update(status=saved["status"], code=saved["code"])
+                    raise OSError("session write failed")
+                if repository is not None:
+                    codex._record_thread_root(root, "thread-p47", repository)
+            except OSError:
+                if repository is not None:
+                    ledger.ScopeLeases(project).release(owner)
+                try:
+                    pending_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                if setup == "fail_pending":
+                    actual.update(status=ledger.UNKNOWN, code="PENDING_WRITE_FAILED")
+                elif setup == "fail_session":
+                    actual.update(status=ledger.UNKNOWN, code="LEDGER_WRITE_FAILED")
+                elif setup == "fail_index":
+                    actual.update(status=ledger.UNKNOWN, code="THREAD_INDEX_WRITE_FAILED")
+                else:
+                    raise
+        actual.update(
+            pending=pending_path.is_file(),
+            session=ledger.SessionLedger(project).path_for_task("task-p47").is_file(),
+            thread_index=(codex._thread_index_path(root, "thread-p47").is_file()
+                          if repository is not None else False),
+        )
+        if setup == "stale":
+            actual["stale_pending"] = (pending_dir / "stale.json").exists()
+        assert actual == case["expected"], case["name"]
+
+
+def test_p47_go_admission_fixture():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "TMP": str(scratch), "TEMP": str(scratch), "TMPDIR": str(scratch), "PYTHONDONTWRITEBYTECODE": "1"}
+    subprocess.run(["go", "test", "-run", "^TestPendingAdmissionP47Fixture$", "-count=1", "./internal/enforce"], cwd=ROOT / "go", env=env, check=True)
