@@ -219,6 +219,7 @@ _COMMON_CALL_FIELDS = frozenset(
     {
         "phase", "route", "model", "model_source", "effort", "routing_enforced", "fresh_thread", "reply_call",
         "reason", "reason_source", "previous_route", "new_route", "eta_minutes", "worker_prompt_chars",
+        "scope_path_count",
         "task_type", "suspected_route_mismatch", "agent", "provider",
     }
 )
@@ -494,6 +495,7 @@ def _payload_value(name: str, value: Any) -> Any:
         "reviewer1_valid_count",
         "reviewer1_false_count",
         "worker_prompt_chars",
+        "scope_path_count",
         "changed_file_count",
         "hunk_count",
         "old_rank",

@@ -555,6 +555,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	obs := map[string]any{"phase": phase, "route": routeName, "model": selection.Model, "model_source": selection.ModelSource,
 		"effort": selection.Effort, "routing_enforced": true, "fresh_thread": !reply, "reply_call": reply,
 		"reason": optionalString(reason), "eta_minutes": eta, "worker_prompt_chars": len([]rune(stringValue(updated["prompt"]))),
+		"scope_path_count": len(parsed.Scope),
 		"reason_source": observedReasonSource, "previous_route": optionalString(previousRoute), "new_route": optionalString(newRoute),
 		"task_type": observationTaskType, "suspected_route_mismatch": suspected,
 		"agent": selection.Agent, "provider": provider(selection.Agent, selection.Model)}

@@ -103,6 +103,55 @@ func TestPreDecisionsP63Fixture(t *testing.T) {
 	}
 }
 
+func TestPreTelemetryScopePathCount(t *testing.T) {
+	scratch := preTempDir(t)
+	repo, runtimeRoot := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	home, _ := filepath.Abs(filepath.Join(scratch, "home"))
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PURSER_STATE_DIR", runtimeRoot)
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("CODEX_HOME", filepath.Join(scratch, "codex"))
+	const prompt = "ORCH|task=scope-count|phase=implementation|route=normal|reason=new_task|basis=specific boundary|scope=src/a.go,src/b.go\nImplement."
+	event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex", "tool_use_id": "scope-count-call",
+		"session_id": "scope-count-session", "cwd": repo, "tool_input": map[string]any{"prompt": prompt, "label": "scope count"}}
+	if _, err := Pre(event, runtimeRoot); err != nil {
+		t.Fatalf("Pre: %v", err)
+	}
+	path := filepath.Join(runtimeRoot, "telemetry", "events", "by_task", "scope-count.jsonl")
+	file, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(file), []byte{'\n'}) {
+		var observation map[string]any
+		if err := json.Unmarshal(line, &observation); err != nil {
+			t.Fatal(err)
+		}
+		if observation["event_type"] == "TASK_ROUTE_SELECTED" {
+			payload := mapValue(observation["payload"])
+			if payload["scope_path_count"] != float64(2) || payload["scope"] != nil {
+				t.Fatalf("unexpected scope telemetry: %#v", payload)
+			}
+			return
+		}
+	}
+	t.Fatal("TASK_ROUTE_SELECTED observation missing")
+}
+
 func replaceFixtureProjectKey(value any, project string) any {
 	switch value := value.(type) {
 	case string:
