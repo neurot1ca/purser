@@ -4,11 +4,202 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"path/filepath"
+
+	"purser-hook/internal/profile"
 )
+
+// LoadCoderConfig loads shipped defaults and the initial Codex user overlay.
+func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+	config := map[string]any{}
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&config); err != nil {
+		return nil, err
+	}
+	userRaw, err := os.ReadFile(userPath)
+	if os.IsNotExist(err) {
+		return config, validateHookConfig(config)
+	}
+	if err != nil {
+		return nil, err
+	}
+	user, _, err := profile.DecodeTOML(userRaw)
+	if err != nil {
+		return nil, err
+	}
+	mechanical, ok := user["mechanical"]
+	if ok {
+		table, valid := mechanical.(map[string]any)
+		if !valid {
+			return nil, fmt.Errorf("[mechanical] opencode_enabled must be a boolean")
+		}
+		enabled, exists := table["opencode_enabled"]
+		if exists {
+			if _, valid := enabled.(bool); !valid {
+				return nil, fmt.Errorf("[mechanical] opencode_enabled must be a boolean")
+			}
+		} else {
+			enabled = true
+		}
+		config["mechanical_opencode_enabled"] = enabled
+	} else {
+		config["mechanical_opencode_enabled"] = true
+	}
+	coding, exists := user["coding"]
+	table := map[string]any{}
+	if exists {
+		var valid bool
+		table, valid = coding.(map[string]any)
+		if !valid {
+			return nil, fmt.Errorf("[coding] must be a table")
+		}
+		if model, exists := table["reviewer1_model_requested"]; exists && model != nil {
+			text, valid := model.(string)
+			if !valid || !agyModel.MatchString(text) {
+				return nil, fmt.Errorf("[coding] reviewer1_model_requested is invalid")
+			}
+			config["reviewer1_model_requested"] = text
+		}
+	}
+	if err := loadReadiness(config, table); err != nil {
+		return nil, err
+	}
+	if exists {
+		agent := "codex"
+		if value, exists := table["coder_agent"]; exists {
+			var valid bool
+			agent, valid = value.(string)
+			if !valid || (agent != "codex" && agent != "opencode" && agent != "agy") {
+				return nil, fmt.Errorf("[coding] coder_agent is invalid")
+			}
+		}
+		if agent != "codex" {
+			return nil, fmt.Errorf("[coding] coder_agent is invalid")
+		}
+		if executable, exists := table["reviewer1_executable"]; exists && executable != nil {
+			text, valid := executable.(string)
+			if !valid || !filepath.IsAbs(text) {
+				return nil, fmt.Errorf("[coding] reviewer1_executable must be an absolute path")
+			}
+			config["reviewer1_executable"] = text
+		}
+		if routes, exists := table["routes"]; exists {
+			routeMap, valid := routes.(map[string]any)
+			required, _ := config["required_routes"].([]any)
+			if !valid || (len(routeMap) != 0 && (len(routeMap) != len(required) || !hasRouteKeys(routeMap, required))) {
+				return nil, fmt.Errorf("[coding] coder routes or role are invalid")
+			}
+			if len(routeMap) != 0 {
+				for _, route := range required {
+					name := route.(string)
+					entry, valid := routeMap[name].(map[string]any)
+					model, modelOK := entry["model"].(string)
+					effort, effortOK := entry["effort"].(string)
+					allowed, _ := config["allowed_efforts"].([]any)
+					if !valid || len(entry) != 2 || !modelOK || !codexModel.MatchString(model) || !effortOK || !containsString(allowed, effort) {
+						return nil, fmt.Errorf("[coding] Codex route model or effort is invalid")
+					}
+				}
+				config["routes"] = routeMap
+			}
+		}
+		config["coder_agent"] = agent
+	}
+	return config, validateHookConfig(config)
+}
+
+func validateHookConfig(config map[string]any) error {
+	if err := ValidateConfig(config); err != nil {
+		return err
+	}
+	if field, _ := config["post_tool_output_field"].(string); field != "updatedToolOutput" && field != "updatedMCPToolOutput" {
+		return fmt.Errorf("post_tool_output_field is not a supported hook field")
+	}
+	model, ok := config["reviewer1_model_requested"].(string)
+	if !ok || model == "" {
+		return fmt.Errorf("reviewer1_model_requested must be a non-empty string")
+	}
+	deadline, exists := config["hook_checks_deadline_seconds"]
+	if !exists {
+		deadline = 150
+	}
+	if !positiveFiniteNumber(deadline) {
+		return fmt.Errorf("hook_checks_deadline_seconds must be positive")
+	}
+	return nil
+}
+
+var codexModel = regexp.MustCompile(`\A[A-Za-z0-9._-]+\z`)
+
+func loadReadiness(config, coding map[string]any) error {
+	readiness, ok := coding["readiness_check"]
+	if !ok {
+		readiness = map[string]any{}
+	}
+	table, valid := readiness.(map[string]any)
+	if !valid {
+		return fmt.Errorf("[coding.readiness_check] accepts only agent and model")
+	}
+	for key := range table {
+		if key != "agent" && key != "model" {
+			return fmt.Errorf("[coding.readiness_check] accepts only agent and model")
+		}
+	}
+	agent := "agy"
+	model, _ := config["readiness_check"].(map[string]any)
+	modelValue := model["model"]
+	if value, ok := table["agent"]; ok {
+		var valid bool
+		agent, valid = value.(string)
+		if !valid {
+			return fmt.Errorf("[coding.readiness_check] agent must be agy or off")
+		}
+	}
+	if value, ok := table["model"]; ok {
+		modelValue = value
+	}
+	if agent != "agy" && agent != "off" {
+		return fmt.Errorf("[coding.readiness_check] agent must be agy or off")
+	}
+	modelText, ok := modelValue.(string)
+	if !ok || !agyModel.MatchString(modelText) {
+		return fmt.Errorf("[coding.readiness_check] model is invalid")
+	}
+	config["readiness_check"] = map[string]any{"agent": agent, "model": modelText}
+	return nil
+}
+
+func hasRouteKeys(routes map[string]any, required []any) bool {
+	for _, key := range required {
+		name, ok := key.(string)
+		if !ok {
+			return false
+		}
+		if _, ok := routes[name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+func containsString(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 var (
 	opencodeModel  = regexp.MustCompile(`\A[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z`)

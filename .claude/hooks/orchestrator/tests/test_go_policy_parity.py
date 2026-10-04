@@ -10,6 +10,7 @@ import policy
 
 ROOT = Path(__file__).parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "go_policy" / "config_cases.json"
+CODER_CONFIG = ROOT / "config.json"
 ORCH_FIXTURE = ROOT / "tests" / "fixtures" / "go_policy" / "orch.json"
 ROUTE_THREAD_FIXTURE = ROOT / "tests" / "fixtures" / "go_policy" / "route_thread.json"
 
@@ -155,7 +156,7 @@ def oracle_results():
 
 def test_python_policy_golden_fixture():
     actual = oracle_results()
-    expected = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    expected = [case for case in json.loads(FIXTURE.read_text(encoding="utf-8")) if case.get("mode") not in ("coder", "hook")]
     assert actual == expected
     for case in actual:
         if case["name"].startswith("valid-"):
@@ -169,6 +170,60 @@ def test_python_policy_golden_fixture():
             assert expected_error in case["error"], (
                 f"{case['name']} failed on the wrong branch: {case['error']}"
             )
+
+
+def _coder_cases():
+    return [case for case in json.loads(FIXTURE.read_text(encoding="utf-8")) if case.get("mode") in ("coder", "hook")]
+
+
+def _coder_oracle_results(tmp_path, monkeypatch):
+    import coder_config
+    import codex
+
+    results = []
+    shipped = json.loads(CODER_CONFIG.read_text(encoding="utf-8"))
+    for case in _coder_cases():
+        item = dict(case)
+        try:
+            if case["mode"] == "hook":
+                loaded = dict(shipped)
+                loaded.update(case["changes"])
+                result = dict(codex._load_config(loaded))
+            else:
+                home = tmp_path / case["name"]
+                monkeypatch.setenv("HOME", str(home))
+                monkeypatch.setenv("USERPROFILE", str(home))
+                user = home / ".orchestrator" / "config.toml"
+                if case["user_toml"] is not None:
+                    user.parent.mkdir(parents=True)
+                    user.write_text(case["user_toml"], encoding="utf-8")
+                result = coder_config.load(CODER_CONFIG)
+            item.update(ok=True, error="", loaded=result)
+        except (ValueError, codex.WiringError) as exc:
+            item.update(ok=False, error=str(exc), loaded=None)
+        results.append(item)
+    return results
+
+
+def test_python_coder_config_golden_fixture(tmp_path, monkeypatch):
+    actual = _coder_oracle_results(tmp_path, monkeypatch)
+    assert actual == [case for case in _coder_cases() if case["mode"] in ("coder", "hook")]
+    for case in actual:
+        if "expected_error" in case:
+            assert not case["ok"] and case["expected_error"] in case["error"], case["name"]
+        else:
+            assert case["ok"] and case["loaded"], case["name"]
+
+
+def test_go_coder_config_golden_parity():
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["GOCACHE"] = str(ROOT.parents[2] / ".tmp" / "go-build-cache")
+    result = subprocess.run(
+        ["go", "test", "./internal/policy", "-run", "^TestPythonCoderConfigGoldenParity$", "-count=1"],
+        cwd=ROOT.parents[2] / "go", text=True, capture_output=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _orch_config():
@@ -258,6 +313,7 @@ def test_python_orch_golden_fixture():
 def test_go_orch_golden_parity():
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["GOCACHE"] = str(ROOT.parents[2] / ".tmp" / "go-build-cache")
     result = subprocess.run(
         ["go", "test", "./internal/policy", "-run", "^TestPythonOrchGoldenParity$", "-count=1"],
         cwd=ROOT.parents[2] / "go", text=True, capture_output=True, check=False, env=env,
@@ -338,6 +394,7 @@ def test_python_route_thread_golden_fixture():
 def test_go_route_thread_golden_parity():
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["GOCACHE"] = str(ROOT.parents[2] / ".tmp" / "go-build-cache")
     result = subprocess.run(
         ["go", "test", "./internal/policy", "-run", "^TestPythonRouteThreadGoldenParity$", "-count=1"],
         cwd=ROOT.parents[2] / "go", text=True, capture_output=True, check=False, env=env,
