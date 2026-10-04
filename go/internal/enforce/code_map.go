@@ -44,24 +44,28 @@ func refreshCodeMapForPre(repo string) (string, string) {
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	node, err := exec.LookPath("node")
-	if err != nil {
-		return "", "UNAVAILABLE"
-	}
 	locator := filepath.Join(pluginRoot, "bin", "python-locator.js")
-	cmd := exec.CommandContext(ctx, node, locator, "--resolve-json")
-	cmd.Env = os.Environ()
-	data, err := cmd.Output()
-	if err != nil || ctx.Err() != nil {
-		return "", "UNAVAILABLE"
+	pythonPath := ""
+	if err == nil {
+		cmd := exec.CommandContext(ctx, node, locator, "--resolve-json")
+		cmd.Env = os.Environ()
+		if data, callErr := cmd.Output(); callErr == nil {
+			var python codeMapPython
+			if json.Unmarshal(data, &python) == nil {
+				pythonPath = python.Path
+			}
+		}
 	}
-	var python codeMapPython
-	if err = json.Unmarshal(data, &python); err != nil || python.Path == "" {
+	if pythonPath == "" {
+		pythonPath, _ = exec.LookPath("python")
+	}
+	if pythonPath == "" || ctx.Err() != nil {
 		return "", "UNAVAILABLE"
 	}
 	if !time.Now().Before(deadline) {
 		return "", "UNAVAILABLE"
 	}
-	cmd = exec.CommandContext(ctx, python.Path, filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "code_map.py"), "--repo", repo, "--budget-seconds", "0.2")
+	cmd := exec.CommandContext(ctx, pythonPath, filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "code_map.py"), "--repo", repo, "--budget-seconds", "0.2")
 	cmd.Dir = repo
 	output, err := cmd.Output()
 	if ctx.Err() != nil {

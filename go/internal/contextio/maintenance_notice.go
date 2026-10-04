@@ -181,6 +181,12 @@ func latestQuotaAt(home string, now time.Time) (map[string]any, *[3]any, bool) {
 	return snapshot, nil, true
 }
 
+// LatestQuota exposes the quota snapshot used by synchronous Pre decisions.
+func LatestQuota(home string, now time.Time) (map[string]any, bool) {
+	quota, _, ok := latestQuotaAt(home, now)
+	return quota, ok
+}
+
 func maintenanceShow(notice, quota map[string]any, window *[3]any) (bool, string, bool) {
 	if window == nil {
 		return false, "", false

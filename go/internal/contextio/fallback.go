@@ -112,6 +112,11 @@ func readProjectActiveCoder(project, root string) (map[string]any, error) {
 	return readActiveCoderState(path)
 }
 
+// ReadProjectActiveCoder exposes the locked active-coder snapshot to Pre policy.
+func ReadProjectActiveCoder(project, root string) (map[string]any, error) {
+	return readProjectActiveCoder(project, root)
+}
+
 func writeProjectActiveCoder(project, root string, value map[string]any) error {
 	path := activeCoderPath(project, root)
 	unlock, err := LockFile(path + ".lock")

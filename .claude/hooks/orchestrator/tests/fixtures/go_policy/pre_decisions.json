@@ -1,0 +1,320 @@
+{
+  "oracle": "Python codex.pre_tool_use",
+  "cases": [
+    {
+      "name": "p63_missing_orch",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "missing ORCH",
+        "cwd": "__REPO__",
+        "prompt": "Do the work"
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "MISSING_ORCH_LINE: The prompt must start with an ORCH line.\n\nPrepend this as the FIRST line of the prompt; the hook removes it before Codex sees it:\n  ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>\n  Add |scope=<path[,path...]> for implementation; omit it for operation.\n  route  mechanical -> luna/high | subtle -> luna/high | normal -> sol/medium | consequential -> sol/high | escalated -> sol/xhigh | operation -> luna/high\n  reason is optional; basis is required for normal, consequential, and escalated, and optional otherwise. eta=<N>m is optional; N must be an integer from 1..600. Reason, when supplied, is one of new_task | continue | fix | route_change | reanchor | repeated_failure | user_override.\n  phase  'operation' for deploy, runner control, status, or read-only investigation; it skips Reviewer-1. 'implementation' for anything that changes code.\n  scope  required for implementation; the paths the delegation may touch. It bounds the baseline scan, so it cannot be the whole repository.\n  codex-reply may omit ORCH only when its threadId identifies a recorded thread; otherwise the reply is denied.\nSee .claude/skills/codex-orchestrator/SKILL.md for how to choose the route."
+        }
+      }
+    },
+    {
+      "name": "p63_malformed_orch",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "malformed ORCH",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=x|phase\nDo the work"
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "MALFORMED_ORCH_LINE: Each ORCH field must use key=value syntax.\n\nPrepend this as the FIRST line of the prompt; the hook removes it before Codex sees it:\n  ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>\n  Add |scope=<path[,path...]> for implementation; omit it for operation.\n  route  mechanical -> luna/high | subtle -> luna/high | normal -> sol/medium | consequential -> sol/high | escalated -> sol/xhigh | operation -> luna/high\n  reason is optional; basis is required for normal, consequential, and escalated, and optional otherwise. eta=<N>m is optional; N must be an integer from 1..600. Reason, when supplied, is one of new_task | continue | fix | route_change | reanchor | repeated_failure | user_override.\n  phase  'operation' for deploy, runner control, status, or read-only investigation; it skips Reviewer-1. 'implementation' for anything that changes code.\n  scope  required for implementation; the paths the delegation may touch. It bounds the baseline scan, so it cannot be the whole repository.\n  codex-reply may omit ORCH only when its threadId identifies a recorded thread; otherwise the reply is denied.\nSee .claude/skills/codex-orchestrator/SKILL.md for how to choose the route."
+        }
+      }
+    },
+    {
+      "name": "p63_unknown_key",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "unknown key",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=x|phase=implementation|route=subtle|scope=src/a.go|wat=1\nDo the work"
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "UNKNOWN_KEY: Unknown ORCH key 'wat'.\n\nPrepend this as the FIRST line of the prompt; the hook removes it before Codex sees it:\n  ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>\n  Add |scope=<path[,path...]> for implementation; omit it for operation.\n  route  mechanical -> luna/high | subtle -> luna/high | normal -> sol/medium | consequential -> sol/high | escalated -> sol/xhigh | operation -> luna/high\n  reason is optional; basis is required for normal, consequential, and escalated, and optional otherwise. eta=<N>m is optional; N must be an integer from 1..600. Reason, when supplied, is one of new_task | continue | fix | route_change | reanchor | repeated_failure | user_override.\n  phase  'operation' for deploy, runner control, status, or read-only investigation; it skips Reviewer-1. 'implementation' for anything that changes code.\n  scope  required for implementation; the paths the delegation may touch. It bounds the baseline scan, so it cannot be the whole repository.\n  codex-reply may omit ORCH only when its threadId identifies a recorded thread; otherwise the reply is denied.\nSee .claude/skills/codex-orchestrator/SKILL.md for how to choose the route."
+        }
+      }
+    },
+    {
+      "name": "p63_invalid_scope",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "invalid scope",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=x|phase=implementation|route=subtle|scope=../secret\nDo the work"
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "INVALID_SCOPE: Scope must contain repository-relative paths without traversal."
+        }
+      }
+    },
+    {
+      "name": "p63_full_suite_request",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "full suite",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=x|phase=implementation|route=subtle|scope=src/a.go\nRun the full suite now."
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "FULL_SUITE_REQUEST: Ask the worker for focused tests only."
+        }
+      }
+    },
+    {
+      "name": "p63_no full-suite_negation",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "negated full suite",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=x|phase=implementation|route=subtle|scope=src/a.go\nPlease run no full suite; run focused tests."
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "updatedInput": {
+            "cwd": "__TMP_ROOT__\\repo",
+            "prompt": "Please run no full suite; run focused tests.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "model": "gpt-6-luna",
+            "config": {
+              "model_reasoning_effort": "high",
+              "tool_output_token_limit": 8000
+            },
+            "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts."
+          }
+        },
+        "systemMessage": "Purser: route=subtle -> gpt-6-luna / high"
+      }
+    },
+    {
+      "name": "p63_reply_thread_mismatch",
+      "tool": "mcp__codex-main__codex-reply",
+      "input": {
+        "threadId": "thread-p63",
+        "prompt": "ORCH|task=task-other|phase=implementation|route=subtle|scope=src/a.go\nContinue"
+      },
+      "state": "thread",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "THREAD_TASK_MISMATCH: task id differs from thread thread-p63's task task-recorded; this codex-reply requests task-other. Reuse that task or start a fresh thread."
+        }
+      }
+    },
+    {
+      "name": "p63_reply_recovery",
+      "tool": "mcp__codex-main__codex-reply",
+      "input": {
+        "threadId": "thread-p63",
+        "prompt": "Continue from the recorded thread."
+      },
+      "state": "thread",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "updatedInput": {
+            "threadId": "thread-p63",
+            "prompt": "Continue from the recorded thread.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH"
+          }
+        },
+        "systemMessage": "Purser: route=subtle -> gpt-6-luna / high"
+      }
+    },
+    {
+      "name": "p63_subtle_route_rewrite",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "subtle route",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=subtle|phase=implementation|route=subtle|scope=src/a.go\nChange the file carefully."
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "updatedInput": {
+            "cwd": "__TMP_ROOT__\\repo",
+            "prompt": "Change the file carefully.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "model": "gpt-6-luna",
+            "config": {
+              "model_reasoning_effort": "high",
+              "tool_output_token_limit": 8000
+            },
+            "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts."
+          }
+        },
+        "systemMessage": "Purser: route=subtle -> gpt-6-luna / high"
+      }
+    },
+    {
+      "name": "p63_mechanical_route_rewrite",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "mechanical route",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=mechanical|phase=implementation|route=mechanical|scope=src/a.go\nRename a local variable."
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "updatedInput": {
+            "cwd": "__TMP_ROOT__\\repo",
+            "prompt": "Rename a local variable.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "model": "gpt-6-luna",
+            "config": {
+              "model_reasoning_effort": "high",
+              "tool_output_token_limit": 8000
+            },
+            "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts."
+          }
+        },
+        "systemMessage": "Purser: route=mechanical -> gpt-6-luna / high"
+      }
+    },
+    {
+      "name": "p63_explicit_model_override",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "model override",
+        "cwd": "__REPO__",
+        "model": "gpt-6-test-override",
+        "config": {
+          "model_reasoning_effort": "medium"
+        },
+        "prompt": "ORCH|task=override|phase=implementation|route=subtle|scope=src/a.go\nMake the change."
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "updatedInput": {
+            "cwd": "__TMP_ROOT__\\repo",
+            "model": "gpt-6-test-override",
+            "config": {
+              "model_reasoning_effort": "medium",
+              "tool_output_token_limit": 8000
+            },
+            "prompt": "Make the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts."
+          }
+        },
+        "systemMessage": "Purser: route=subtle -> gpt-6-test-override / medium"
+      }
+    },
+    {
+      "name": "p63_fallback_active_coder",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "fallback route",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=fallback|phase=implementation|route=subtle|scope=src/a.go\nMake the change."
+      },
+      "state": "fallback",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "updatedInput": {
+            "cwd": "__TMP_ROOT__\\repo",
+            "prompt": "Make the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "agent": "agy",
+            "model": "gemini-3.8-flash-high",
+            "config": {
+              "model_reasoning_effort": "medium"
+            }
+          }
+        },
+        "systemMessage": "Purser: route=subtle -> gemini-3.8-flash-high / medium"
+      }
+    },
+    {
+      "name": "p63_code_map_line_appended",
+      "tool": "mcp__codex-main__codex",
+      "input": {
+        "label": "code map",
+        "cwd": "__REPO__",
+        "prompt": "ORCH|task=code-map|phase=implementation|route=subtle|scope=src/a.go\nRead the code."
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "updatedInput": {
+            "cwd": "__TMP_ROOT__\\repo",
+            "prompt": "Read the code.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "model": "gpt-6-luna",
+            "config": {
+              "model_reasoning_effort": "high",
+              "tool_output_token_limit": 8000
+            },
+            "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts."
+          }
+        },
+        "systemMessage": "Purser: route=subtle -> gpt-6-luna / high"
+      }
+    },
+    {
+      "name": "p63_async_start_still_denied",
+      "tool": "mcp__codex-main__codex_start",
+      "input": {
+        "mode": "new",
+        "label": "async",
+        "prompt": "ORCH|task=async|phase=implementation|route=subtle|scope=src/a.go\nWork."
+      },
+      "state": "",
+      "expected": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "updatedInput": {
+            "mode": "new",
+            "prompt": "Work.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "worktree": true,
+            "cwd": "__TMP_ROOT__\\repo",
+            "model": "gpt-6-luna",
+            "config": {
+              "model_reasoning_effort": "high",
+              "tool_output_token_limit": 8000
+            },
+            "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts.",
+            "call": "a6e55df7-8cb0-5264-bfd3-c390a6833cba",
+            "taskId": "async",
+            "route": "subtle",
+            "jobModel": "gpt-6-luna",
+            "jobEffort": "high",
+            "jobLabel": "async",
+            "jobPhase": "implementation",
+            "etaMinutes": 5
+          }
+        },
+        "systemMessage": "Purser: route=subtle -> gpt-6-luna / high"
+      }
+    }
+  ]
+}

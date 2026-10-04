@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -146,10 +145,6 @@ func TestPreParityFixture(t *testing.T) {
 		if !sameOptional(got, expected) || reason != item.Reason {
 			t.Fatalf("%s = %v, %q; want %q, %q", item.Name, got, reason, expected, item.Reason)
 		}
-	}
-	result, err := Pre(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex"}, "")
-	if err == nil || !strings.Contains(err.Error(), "not yet ported") || result == nil {
-		t.Fatalf("normal Pre became active: %#v %v", result, err)
 	}
 }
 
