@@ -26,6 +26,8 @@ that holds: not needed at all; already in this codebase; standard library;
 platform feature; one line; only then the minimum new code. Fix the root cause
 in the shared function, not each caller. No unrequested abstractions,
 dependencies, flags, or boilerplate; deletion over addition, fewest files.
+Approved dependency exception: `github.com/BurntSushi/toml` is the single
+Go-only decoder for profile and coder configuration loading.
 Edit with small targeted changes; never rewrite a whole file unless it is new
 or tiny.
 Never cut corners on durability, locking, recovery, security, or input at trust
