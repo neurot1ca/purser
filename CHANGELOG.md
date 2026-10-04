@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.70 — 2026-10-04
+
+- **Fixed:** Desktop usage pills size to their content and draw as images, so they no longer sit in large white boxes and labels no longer overlap the bar.
+- **Fixed:** After a manual /compact, compaction advice no longer repeats the pre-compact token count and banner on every prompt.
+
 ## 0.1.69 — 2026-10-04
 
 - **Fixed:** The band above the prompt disappeared on the desktop app because a usage pill used an invalid drawing property; the pills now draw.
