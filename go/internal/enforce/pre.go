@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
 
@@ -155,6 +156,13 @@ func WriteUndeliveredMarker(root string, event map[string]any) error {
 		return err
 	}
 	callKey := strings.TrimSuffix(filepath.Base(pending), ".json")
+	markerPath := filepath.Join(root, "pending", "undelivered-"+callKey+".json")
+	if strings.HasSuffix(tool, "__codex_start") {
+		if err := cleanupUndeliveredAsyncStart(root, pending, markerPath); err != nil {
+			return err
+		}
+		return nil
+	}
 	reason := stringValue(event["reason"])
 	if len(reason) > 512 {
 		reason = reason[:512]
@@ -166,7 +174,7 @@ func WriteUndeliveredMarker(root string, event map[string]any) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(root, "pending", "undelivered-"+callKey+".json")
+	path := markerPath
 	dir := filepath.Dir(path)
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -186,6 +194,29 @@ func WriteUndeliveredMarker(root string, event map[string]any) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+func cleanupUndeliveredAsyncStart(root, pendingPath, markerPath string) error {
+	defer os.Remove(markerPath)
+	data, err := os.ReadFile(pendingPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil {
+		var pending map[string]any
+		if err := json.Unmarshal(data, &pending); err != nil || pending == nil {
+			return errors.New("async pending record is invalid")
+		}
+		if owner := stringValue(pending["lease_owner"]); owner != "" {
+			project := stringValue(pending["project_key"])
+			if project == "" {
+				project = "unresolved"
+			}
+			_ = lease.New(filepath.Join(root, "projects", project)).Release(owner, float64(time.Now().UnixNano())/1e9)
+		}
+		_ = os.Remove(pendingPath)
+	}
+	return nil
 }
 
 func pendingPath(root string, event map[string]any) (string, error) {
