@@ -32,16 +32,6 @@ func Pre(event map[string]any, root string) (map[string]any, error) {
 	}
 	// Contract process tests require building the hook with -tags contracttest.
 	internal := contractFault()
-	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") {
-		if internal == nil {
-			internal = errors.New("Go PreToolUse enforcement is not yet ported")
-		}
-		_, _ = os.Stderr.Write(append(diagnosticJSON(diagnostic(event, internal)), '\n'))
-		return map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "PreToolUse", "permissionDecision": "deny",
-			"permissionDecisionReason": "ASYNC_ENFORCEMENT_FAILED: Async start lacked a durable route/baseline; FULL review is required.",
-		}}, internal
-	}
 	tool := stringValue(event["tool_name"])
 	if strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
 		if internal == nil {
@@ -55,6 +45,17 @@ func Pre(event map[string]any, root string) (map[string]any, error) {
 			return decision, nil
 		}
 		internal = err
+	}
+	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") {
+		if root != "" {
+			_ = writeDiagnostic(root, event, internal)
+		} else {
+			_, _ = os.Stderr.Write(append(diagnosticJSON(diagnostic(event, internal)), '\n'))
+		}
+		return map[string]any{"hookSpecificOutput": map[string]any{
+			"hookEventName": "PreToolUse", "permissionDecision": "deny",
+			"permissionDecisionReason": "ASYNC_ENFORCEMENT_FAILED: Async start lacked a durable route/baseline; FULL review is required.",
+		}}, internal
 	}
 	return syncBypass(event, root, internal), internal
 }

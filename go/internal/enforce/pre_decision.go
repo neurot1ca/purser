@@ -2,6 +2,9 @@ package enforce
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/policy"
 	"purser-hook/internal/profile"
@@ -27,7 +31,20 @@ func preDecision(event map[string]any, runtimeRoot string) (map[string]any, erro
 	if !ok {
 		return denyPre("MALFORMED_TOOL_INPUT", "tool_input must be an object"), nil
 	}
-	reply := strings.HasSuffix(stringValue(event["tool_name"]), "__codex-reply")
+	tool := stringValue(event["tool_name"])
+	isStart := strings.HasSuffix(tool, "__codex_start")
+	reply := strings.HasSuffix(tool, "__codex-reply")
+	mode := "new"
+	if isStart {
+		mode = stringValue(input["mode"])
+		if mode == "" {
+			mode = "new"
+		}
+		reply = mode == "reply"
+		if mode != "new" && mode != "reply" {
+			return denyPre("INVALID_ASYNC_MODE", "codex_start mode must be new or reply."), nil
+		}
+	}
 	parsed := policy.ParseOrchPrompt(input["prompt"], config)
 	bareReply := reply && parsed.Code == "MISSING_ORCH_LINE" && stringValue(input["prompt"]) != ""
 	if !parsed.Valid && !bareReply {
@@ -212,8 +229,503 @@ func preDecision(event map[string]any, runtimeRoot string) (map[string]any, erro
 		}
 		updated["config"] = updatedConfig
 	}
+	callID := ""
+	inputHash := ""
+	var pendingETA *int
+	worktreeStart := isStart && mode == "new" && pointerValue(parsed.Phase) == "implementation"
+	var worktreeReplyPath *string
+	if isStart && mode == "reply" && pointerValue(parsed.Phase) == "implementation" {
+		if path := preThreadWorktreePath(runtimeRoot, input["threadId"]); path != "" {
+			worktreeReplyPath = &path
+		}
+	}
+	worktreeReply := worktreeReplyPath != nil
+	if isStart {
+		pendingETA = parsed.ETAMinutes
+		if supplied, ok := intValue(input["etaMinutes"]); ok {
+			pendingETA = &supplied
+		}
+		if pendingETA == nil {
+			if fallback := routeDurationDefault(pointerValue(parsed.Route)); fallback > 0 {
+				pendingETA = &fallback
+			}
+		}
+		callKey, keyErr := callKey(event)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		callID = codexCallUUID(callKey)
+		withoutCall := make(map[string]any, len(input))
+		for key, value := range input {
+			if key != "call" {
+				withoutCall[key] = value
+			}
+		}
+		encoded, encodeErr := pythonJSON(withoutCall)
+		if encodeErr != nil {
+			return nil, encodeErr
+		}
+		sum := sha256.Sum256(encoded)
+		inputHash = hex.EncodeToString(sum[:])
+		updated["mode"], updated["call"], updated["taskId"], updated["route"] = mode, callID, *parsed.TaskID, *parsed.Route
+		updated["jobModel"], updated["jobEffort"] = selection.Model, selection.Effort
+		if label, ok := input["label"]; ok {
+			updated["jobLabel"] = label
+		}
+		updated["jobPhase"] = *parsed.Phase
+		if pendingETA != nil {
+			updated["etaMinutes"] = *pendingETA
+		}
+		if worktreeStart {
+			updated["worktree"] = true
+			if root != nil {
+				requested, _ := input["cwd"].(string)
+				if requested == "" {
+					requested = stringValue(event["cwd"])
+				}
+				launch := *root
+				if requested != "" {
+					candidate := requested
+					if !filepath.IsAbs(candidate) {
+						candidate = filepath.Join(*root, candidate)
+					}
+					if resolved, resolveErr := filepath.Abs(candidate); resolveErr == nil {
+						if relative, relErr := filepath.Rel(*root, resolved); relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+							launch = resolved
+						}
+					}
+				}
+				updated["cwd"] = launch
+			}
+		}
+	}
+	return persistPreSuccess(event, runtimeRoot, root, live, parsed, selection, updated,
+		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, config)
+}
+
+func persistPreSuccess(event map[string]any, runtimeRoot string, repository *string, live map[string]any,
+	parsed policy.OrchParseResult, selection CoderSelection, updated map[string]any,
+	callID, inputHash string, pendingETA *int, worktreeReplyPath *string, isStart, reply, worktreeStart, worktreeReply bool, config map[string]any) (result map[string]any, retErr error) {
+	phase, taskID, routeName := pointerValue(parsed.Phase), pointerValue(parsed.TaskID), pointerValue(parsed.Route)
+	project := projectKey(repository)
+	input, _ := event["tool_input"].(map[string]any)
+	var priorThread *string
+	if reply && live != nil {
+		if id, ok := live["thread_id"].(string); ok {
+			priorThread = &id
+		}
+	}
+	reason := parsed.Reason
+	reasonSource := (*string)(nil)
+	if reason != nil {
+		value := "explicit"
+		reasonSource = &value
+	}
+	if reply && reason == nil && live != nil {
+		if inherited, ok := live["reason"].(string); ok {
+			reason = &inherited
+			source := "inherited"
+			reasonSource = &source
+		}
+	}
+	var previousRoute, newRoute *string
+	if live != nil {
+		if oldRoute, ok := live["route"].(string); ok && oldRoute != "" && oldRoute != routeName {
+			previousRoute, newRoute = &oldRoute, &routeName
+		}
+	}
+	objective, criteria, grounded := parseTaskContract(stringValue(input["prompt"]), taskID, phase, parsed.Scope)
+	if !grounded && reply && live != nil {
+		if oldObjective, ok := live["task_objective"].(string); ok && oldObjective != "" {
+			if oldCriteria, ok := live["acceptance_criteria"].(string); ok && oldCriteria != "" {
+				objective, criteria = oldObjective, oldCriteria
+				grounded, _ = live["task_contract_grounded"].(bool)
+			}
+		}
+	}
+	taskType := "unknown"
+	if grounded {
+		taskType = deriveTaskType(objective, criteria, phase)
+	}
+	observationTaskType := taskType
+	if observationTaskType == "unknown" {
+		observationTaskType = phase
+	}
+	var suspected any
+	if derived := deriveTaskType(objective, criteria, phase); derived == "counting_status" || derived == "operation" {
+		if derived != routeName {
+			suspected = map[string]any{"declared_route": routeName, "derived_type": derived}
+		}
+	}
+	fallbackFamily := (*string)(nil)
+	if fallback := mapValue(config["fallback"]); fallback != nil && selection.Agent == stringValue(fallback["agent"]) && selection.Model == stringValue(fallback["model"]) {
+		if family, ok := fallback["family"].(string); ok {
+			fallbackFamily = &family
+		}
+	}
+	profileValue := (*profile.ResolvedProfile)(nil)
+	if repository != nil {
+		resolved := profile.LoadProfile(*repository)
+		profileValue = &resolved
+	}
+	readiness := any(map[string]any{"agent": "off"})
+	if value, ok := config["readiness_check"]; ok {
+		readiness = value
+	}
+	mechanicalEnabled := config["mechanical_opencode_enabled"] != false
+	baseline, pending := BuildPendingCall(PendingCallInput{
+		TaskID: taskID, ProjectKey: project, Phase: phase, Route: routeName, Model: selection.Model,
+		Effort: selection.Effort, Label: stringValue(inputLabel(event)), Agent: selection.Agent,
+		FallbackFamily: fallbackFamily, Scope: parsed.Scope, Prompt: stringValue(updated["prompt"]), WorktreeReplyPath: worktreeReplyPath,
+		TaskObjective: objective, AcceptanceCriteria: criteria, TaskContractGrounded: grounded,
+		TaskType: taskType, SuspectedRouteMismatch: suspected, HasCodeMap: strings.Contains(stringValue(updated["prompt"]), "CODE_MAP="),
+		Reason: reason, ETAMinutes: pendingETA, ReplyCall: reply, Repository: repository,
+		ReasonSource: reasonSource, PreviousRoute: previousRoute, NewRoute: newRoute,
+		ManifestBudgetSeconds: numberValue(config["manifest_budget_seconds"]), LiveThread: live,
+		Profile: profileValue, ReadinessCheck: readiness, MechanicalOpenCodeEnabled: &mechanicalEnabled,
+	})
+	if priorThread != nil {
+		pending["prior_thread_id"] = *priorThread
+	}
+	var jobID *string
+	if isStart {
+		pending["async_call"], pending["async_mode"], pending["async_input_hash"] = callID, stringValue(updated["mode"]), inputHash
+		pending["async_updated_input"], pending["async_ready"] = updated, false
+		pending["job_id"] = nil
+		pending["session_id"], pending["tool_use_id"] = event["session_id"], event["tool_use_id"]
+		if _, ok := updated["label"]; ok {
+			pending["label"] = updated["label"]
+		}
+		if grounded && criteria != "" {
+			updated["readinessGrounded"] = true
+			updated["readinessCriteria"] = map[string]any{"objective": objective, "acceptance_criteria": criteria}
+			readinessMap := mapValue(readiness)
+			updated["readinessAgent"] = fallbackValue(stringValue(readinessMap["agent"]))
+			updated["readinessModel"] = stringValue(readinessMap["model"])
+			pending["async_updated_input"] = updated
+		}
+		digest := sha256.Sum256([]byte(callID))
+		value := hex.EncodeToString(digest[:])
+		jobID = &value
+	}
+	path, err := pendingPath(runtimeRoot, event)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := callKey(event)
+	if err != nil {
+		return nil, err
+	}
+	var threadID *string
+	if priorThread != nil {
+		threadID = priorThread
+	}
+	session := ledger.BuildSessionRecord(taskID, threadID, routeName, selection.Model, selection.Effort, map[string]any{
+		"agent": selection.Agent, "phase": phase, "scope": stringSliceAny(parsed.Scope), "pending_call_baseline": baseline,
+		"reason": optionalString(reason), "label": inputLabel(event), "task_contract_grounded": grounded,
+		"task_objective": objective, "acceptance_criteria": criteria, "profile_checks": anySlice(pending["profile_checks"]),
+	})
+	var leaseRoot string
+	leased := false
+	if (phase == "implementation" || phase == "plan") && repository != nil {
+		leaseScope := parsed.Scope
+		if phase == "plan" {
+			leaseScope = []string{}
+		}
+		timeout := numberValue(updated["timeoutSeconds"])
+		admitted := AdmitPending(PendingAdmission{RuntimeRoot: runtimeRoot, ProjectKey: project, OwnerKey: owner,
+			TaskID: taskID, Pending: pending, Session: session, PendingPath: path, Scope: leaseScope, JobID: jobID,
+			TimeoutSeconds: timeout, Now: float64(time.Now().UnixNano()) / 1e9,
+			ReadOnly: phase == "plan", AllowOverlap: worktreeStart || worktreeReply, HotPathQueue: worktreeStart,
+			ThreadID: threadID, Repository: repository, OnAdmission: func(status, code string) {
+				if code == "SCOPE_LEASE_CONFLICT" {
+					preEmit(runtimeRoot, event, repository, taskID, project, "SCOPE_CONFLICT_OUTCOME", map[string]any{"action": "denied", "job_id": observationJobID(jobID)})
+				}
+				if code == "LEASE_QUEUED" {
+					updated["leaseQueued"] = true
+					preEmit(runtimeRoot, event, repository, taskID, project, "SCOPE_CONFLICT_OUTCOME", map[string]any{"action": "queued", "job_id": observationJobID(jobID)})
+				}
+			}})
+		if admitted.Status != "OK" {
+			if admitted.Code == "SCOPE_LEASE_CONFLICT" {
+				preEmit(runtimeRoot, event, repository, taskID, project, "ROUTING_PROTOCOL_VIOLATION", map[string]any{"violation_code": admitted.Code})
+				return denyPre(admitted.Code, fmt.Sprintf("Scope is leased by task %s. To release a stuck lease, run: python .claude/hooks/orchestrator/purser_leases.py --release <task-id>", admitted.TaskID)), nil
+			}
+			switch admitted.Code {
+			case "LEASE_ADMISSION_UNCERTAIN", "LEASE_OWNER_CONFLICT", "LEASE_INVALID":
+				preEmit(runtimeRoot, event, repository, taskID, project, "ROUTING_PROTOCOL_VIOLATION", map[string]any{"violation_code": admitted.Code})
+				return denyPre(admitted.Code, "Scope ownership could not be established."), nil
+			default:
+				return nil, errors.New(admitted.Code)
+			}
+		}
+		pending = admitted.Pending
+		leased, leaseRoot = true, filepath.Join(runtimeRoot, "projects", project)
+	} else {
+		admitted := AdmitPending(PendingAdmission{RuntimeRoot: runtimeRoot, ProjectKey: project, OwnerKey: owner,
+			TaskID: taskID, Pending: pending, Session: session, PendingPath: path, Now: float64(time.Now().UnixNano()) / 1e9,
+			ThreadID: threadID, Repository: repository, SkipLease: true})
+		if admitted.Status != "OK" {
+			return nil, errors.New(admitted.Code)
+		}
+		pending = admitted.Pending
+	}
+	pendingWritten := true
+	defer func() {
+		if retErr != nil {
+			if pendingWritten {
+				_ = os.Remove(path)
+			}
+			if leased {
+				_ = lease.New(leaseRoot).Release(owner, float64(time.Now().UnixNano())/1e9)
+			}
+		}
+	}()
+	if isStart {
+		pending["async_ready"] = true
+		if err := atomicAdmissionJSON(path, pending); err != nil {
+			return nil, err
+		}
+	}
+	var eta any
+	if parsed.ETAMinutes != nil {
+		eta = *parsed.ETAMinutes
+	}
+	var observedReasonSource any
+	if reasonSource != nil {
+		observedReasonSource = *reasonSource
+	}
+	obs := map[string]any{"phase": phase, "route": routeName, "model": selection.Model, "model_source": selection.ModelSource,
+		"effort": selection.Effort, "routing_enforced": true, "fresh_thread": !reply, "reply_call": reply,
+		"reason": optionalString(reason), "eta_minutes": eta, "worker_prompt_chars": len([]rune(stringValue(updated["prompt"]))),
+		"reason_source": observedReasonSource, "previous_route": optionalString(previousRoute), "new_route": optionalString(newRoute),
+		"task_type": observationTaskType, "suspected_route_mismatch": suspected,
+		"agent": selection.Agent, "provider": provider(selection.Agent, selection.Model)}
+	preEmit(runtimeRoot, event, repository, taskID, project, "TASK_ROUTE_SELECTED", obs)
+	started := make(map[string]any, len(obs)+1)
+	for key, value := range obs {
+		started[key] = value
+	}
+	started["implementer"] = selection.Agent
+	preEmit(runtimeRoot, event, repository, taskID, project, "IMPLEMENTER_STARTED", started)
+	if sessionID, _ := event["session_id"].(string); sessionID != "" {
+		home, _ := os.UserHomeDir()
+		if userProfile := os.Getenv("USERPROFILE"); userProfile != "" {
+			home = userProfile
+		}
+		projects := filepath.Join(home, ".claude", "projects")
+		started := startActiveTask(runtimeRoot, sessionID, taskID, project, stringValue(event["tool_use_id"]), stringValue(event["transcript_path"]), projects, time.Now().UTC())
+		if started["status"] == "UNKNOWN" {
+			recordObservationHealth(runtimeRoot, "DEGRADED", "CLAUDE_TRANSCRIPT_PARSER_FAILED")
+		}
+	}
+	contextio.AssociateTurn(runtimeRoot, stringValue(event["session_id"]), taskID, project)
+	if reply && !isStart {
+		preEmit(runtimeRoot, event, repository, taskID, project, "CLAUDE_DECISION_RECORDED", map[string]any{
+			"decision": "send_back", "task_type": observationTaskType, "source": map[string]any{"kind": "reply", "job_id": owner},
+		})
+	}
+	pendingWritten = false
+	leased = false
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated},
-		"systemMessage": fmt.Sprintf("Purser: route=%s -> %s / %s", *parsed.Route, selection.Model, selection.Effort)}, nil
+		"systemMessage": fmt.Sprintf("Purser: route=%s -> %s / %s", fallbackValue(routeName), fallbackValue(selection.Model), fallbackValue(selection.Effort))}, nil
+}
+
+func inputLabel(event map[string]any) any {
+	input, _ := event["tool_input"].(map[string]any)
+	return input["label"]
+}
+
+func stringSliceAny(values []string) []any {
+	out := make([]any, len(values))
+	for i, value := range values {
+		out[i] = value
+	}
+	return out
+}
+
+func anySlice(value any) any {
+	switch values := value.(type) {
+	case []map[string]any:
+		out := make([]any, len(values))
+		for i := range values {
+			out[i] = values[i]
+		}
+		return out
+	case []string:
+		return stringSliceAny(values)
+	default:
+		return value
+	}
+}
+
+func observationJobID(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func preEmit(root string, event map[string]any, repository *string, taskID, project, eventType string, payload map[string]any) {
+	defer func() {
+		if recover() != nil {
+			recordObservationHealth(root, "DEGRADED", "TELEMETRY_ENTRYPOINT_FAILURE")
+		}
+	}()
+	envelope := map[string]any{"session_id": event["session_id"], "project_key": project, "agent_id": event["agent_id"], "agent_type": event["agent_type"]}
+	if repository != nil {
+		envelope["repo"] = filepath.Base(*repository)
+		head, err := os.ReadFile(filepath.Join(*repository, ".git", "HEAD"))
+		if err == nil && len(head) <= 4096 {
+			value := strings.TrimSpace(string(head))
+			if strings.HasPrefix(value, "ref: refs/heads/") && len(value) > len("ref: refs/heads/") {
+				envelope["branch"] = strings.TrimPrefix(value, "ref: refs/heads/")
+			}
+		}
+	} else {
+		if event["repo"] != nil {
+			envelope["repo"] = event["repo"]
+		}
+		if event["branch"] != nil {
+			envelope["branch"] = event["branch"]
+		}
+	}
+	if observation, err := buildObservationAtStateRoot(eventType, envelope, payload, taskID, root); err == nil {
+		telemetryRoot := filepath.Join(root, "telemetry")
+		if code, err := persistObservation(telemetryRoot, observation); err == nil {
+			updateObservationTaskBestEffort(telemetryRoot, taskID, project)
+		} else {
+			recordObservationHealth(root, "DEGRADED", code)
+		}
+	} else {
+		recordObservationHealth(root, "DEGRADED", "TELEMETRY_EMIT_FAILED")
+	}
+}
+
+func provider(agent, model string) any {
+	if i := strings.IndexByte(model, '/'); i > 0 {
+		return model[:i]
+	}
+	switch agent {
+	case "codex":
+		return "openai"
+	case "agy":
+		return "google"
+	}
+	return nil
+}
+func fallbackValue(value string) string {
+	if value == "" {
+		return "unknown"
+	}
+	return value
+}
+func numberValue(value any) float64 {
+	switch n := value.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	}
+	return 0
+}
+
+func intValue(value any) (int, bool) {
+	switch n := value.(type) {
+	case int:
+		return n, true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	}
+	return 0, false
+}
+func codexCallUUID(name string) string {
+	namespace := []byte{0x6b, 0xa7, 0xb8, 0x12, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8}
+	hash := sha1.Sum(append(namespace, []byte(name)...))
+	raw := hash[:16]
+	raw[6] = raw[6]&0x0f | 0x50
+	raw[8] = raw[8]&0x3f | 0x80
+	encoded := hex.EncodeToString(raw)
+	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:]
+}
+
+func routeDurationDefault(route string) int {
+	switch route {
+	case "mechanical":
+		return 3
+	case "subtle", "normal":
+		return 5
+	case "consequential":
+		return 8
+	case "escalated":
+		return 12
+	case "operation":
+		return 3
+	case "plan_standard":
+		return 8
+	}
+	return 0
+}
+
+func preThreadWorktreePath(runtimeRoot string, threadID any) string {
+	id, ok := threadID.(string)
+	if !ok || !validThreadID.MatchString(id) {
+		return ""
+	}
+	root := os.Getenv("PURSER_CODEX_SHIM_STATE")
+	if root == "" {
+		root = filepath.Join(runtimeRoot, "codex_exec_mcp", "threads")
+	}
+	sum := sha256.Sum256([]byte(id))
+	data, err := os.ReadFile(filepath.Join(root, hex.EncodeToString(sum[:])+".json"))
+	if err != nil {
+		return ""
+	}
+	var record map[string]any
+	if json.Unmarshal(data, &record) != nil || record["thread_id"] != id {
+		return ""
+	}
+	if _, ok := record["cwd"].(string); !ok {
+		return ""
+	}
+	if _, ok := record["config_args"].([]any); !ok {
+		return ""
+	}
+	path, _ := record["worktreePath"].(string)
+	return path
+}
+
+func pythonJSON(value any) ([]byte, error) {
+	compact, err := canonicalJSON(value)
+	if err != nil {
+		return nil, err
+	}
+	formatted := make([]byte, 0, len(compact)+16)
+	quoted, escaped := false, false
+	for _, char := range compact {
+		if quoted {
+			formatted = append(formatted, char)
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == '"' {
+				quoted = false
+			}
+			continue
+		}
+		formatted = append(formatted, char)
+		if char == '"' {
+			quoted = true
+		} else if char == ':' || char == ',' {
+			formatted = append(formatted, ' ')
+		}
+	}
+	return formatted, nil
 }
 
 func preOpenCodeCandidates(runtimeRoot string) []any {

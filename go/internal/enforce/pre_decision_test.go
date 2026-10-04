@@ -83,8 +83,12 @@ func TestPreDecisionsP63Fixture(t *testing.T) {
 			got, gotErr := Pre(event, runtimeRoot)
 			if item.Tool == "mcp__codex-main__codex_start" {
 				output := mapValue(got["hookSpecificOutput"])
-				if gotErr == nil || output["permissionDecision"] != "deny" {
-					t.Fatalf("async start did not retain fail-closed denial: %#v %v", got, gotErr)
+				if gotErr != nil || mapValue(output["updatedInput"]) == nil || output["permissionDecision"] != nil {
+					t.Fatalf("async start was not durably admitted: %#v %v", got, gotErr)
+				}
+				pending, _ := pendingPath(runtimeRoot, event)
+				if raw, readErr := os.ReadFile(pending); readErr != nil || !strings.Contains(string(raw), `"async_ready":true`) {
+					t.Fatalf("async start pending record is not ready: %v %s", readErr, raw)
 				}
 				return
 			}

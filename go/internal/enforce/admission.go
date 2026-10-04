@@ -23,14 +23,19 @@ type PendingAdmission struct {
 	JobID                                     *string
 	TimeoutSeconds, Now                       float64
 	ReadOnly, AllowOverlap, HotPathQueue      bool
+	SkipLease                                 bool
 	ThreadID, Repository                      *string
+	OnAdmission                               func(status, code string)
 }
 
 type AdmissionResult struct {
 	Status, Code string
 	Queued       bool
+	TaskID       string
 	Pending      map[string]any
 }
+
+var saveAdmissionSession = ledger.Save
 
 // AdmitPending mirrors Python's sync-reachable rejected-start reconciliation,
 // lease admission, then pending -> session -> thread-index writes.
@@ -38,13 +43,17 @@ func AdmitPending(in PendingAdmission) AdmissionResult {
 	result := AdmissionResult{Status: "OK", Code: "LEASE_ACQUIRED", Pending: in.Pending}
 	projectRoot := filepath.Join(in.RuntimeRoot, "projects", in.ProjectKey)
 	leased := false
-	if in.Repository != nil {
+	if in.Repository != nil && !in.SkipLease {
 		reconcileRejectedStarts(in.RuntimeRoot, projectRoot, in.ProjectKey, in.Now)
 		admitted := lease.New(projectRoot).Acquire(in.OwnerKey, in.TaskID, in.Scope, lease.AcquireOptions{
 			JobID: in.JobID, TimeoutSeconds: in.TimeoutSeconds, ReadOnly: in.ReadOnly,
 			AllowOverlap: in.AllowOverlap, HotPathQueue: in.HotPathQueue,
 		}, in.Now)
 		result.Status, result.Code = admitted.Status, admitted.Code
+		result.TaskID = admitted.TaskID
+		if in.OnAdmission != nil {
+			in.OnAdmission(admitted.Status, admitted.Code)
+		}
 		if admitted.Status != "OK" {
 			return result
 		}
@@ -65,7 +74,7 @@ func AdmitPending(in PendingAdmission) AdmissionResult {
 		}
 		return result
 	}
-	if saved := ledger.Save(projectRoot, in.Session); saved.Status != ledger.OK {
+	if saved := saveAdmissionSession(projectRoot, in.Session); saved.Status != ledger.OK {
 		result.Status, result.Code = "UNKNOWN", saved.Code
 		if leased {
 			_ = lease.New(projectRoot).Release(in.OwnerKey, in.Now)

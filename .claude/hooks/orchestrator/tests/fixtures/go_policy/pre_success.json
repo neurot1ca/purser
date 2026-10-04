@@ -1,0 +1,951 @@
+{
+  "cases": [
+    {
+      "event_types": [
+        "TASK_ROUTE_SELECTED",
+        "IMPLEMENTER_STARTED"
+      ],
+      "failure": null,
+      "input": {
+        "label": "P64 implementation",
+        "mode": "new",
+        "prompt": "ORCH|task=p64-impl|phase=implementation|route=subtle|scope=src/a.go\nImplement the change.",
+        "timeoutSeconds": 90
+      },
+      "lease": {
+        "conflicts": [],
+        "owners": {
+          "9f3fdaa8cd4de8fb98234529dcad60bfcba58a91bf0e68897b6e2a2c2159f732": {
+            "acquired_at": "__TIME__",
+            "job_id": "d9b1ad74a81f84a0370d06db3ff81a09ae6bfe6b5774701902a1b329185c3fd9",
+            "queued_at": "__TIME__",
+            "retention_after": "__TIME__",
+            "scope": [
+              "src/a.go"
+            ],
+            "state": "ACTIVE",
+            "task_id": "p64-impl"
+          }
+        },
+        "version": 1
+      },
+      "lease_setup": null,
+      "name": "p64_implementation_start_admitted",
+      "pending": {
+        "acceptance_criteria": "Verify correct implementation within declared scope (src/a.go) with no material regression or scope expansion.",
+        "agent": "codex",
+        "async_call": "196df642-49c6-52e3-af7b-affe1932b1a4",
+        "async_input_hash": "64f7e3fe68b1ed43d27580be917f8ebe2f29981f0813d02271a7631cbee8e31d",
+        "async_mode": "new",
+        "async_ready": true,
+        "async_updated_input": {
+          "call": "196df642-49c6-52e3-af7b-affe1932b1a4",
+          "config": {
+            "model_reasoning_effort": "high",
+            "tool_output_token_limit": 8000
+          },
+          "cwd": "__REPO__",
+          "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts.",
+          "etaMinutes": 5,
+          "jobEffort": "high",
+          "jobLabel": "P64 implementation",
+          "jobModel": "gpt-6-luna",
+          "jobPhase": "implementation",
+          "mode": "new",
+          "model": "gpt-6-luna",
+          "prompt": "Implement the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "route": "subtle",
+          "taskId": "p64-impl",
+          "timeoutSeconds": 90,
+          "worktree": true
+        },
+        "authority_sources": [
+          {
+            "headings": [
+              "Authority",
+              "Working scope",
+              "Proportional validation",
+              "Test and comment quality"
+            ],
+            "path": "AGENTS.md",
+            "when_changed": null
+          }
+        ],
+        "baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "43fb7888ca1dfdfd60e2c1e297d05017a72edd23",
+          "manifest_enabled": true,
+          "scope": [
+            "src/a.go"
+          ],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured": false,
+        "effort": "high",
+        "eta_minutes": 5,
+        "fallback_family": null,
+        "first_warning": null,
+        "force_full_review": false,
+        "has_code_map": true,
+        "job_id": null,
+        "kind": "call",
+        "label": "P64 implementation",
+        "lease_owner": "9f3fdaa8cd4de8fb98234529dcad60bfcba58a91bf0e68897b6e2a2c2159f732",
+        "mechanical_opencode": false,
+        "model": "gpt-6-luna",
+        "new_route": null,
+        "phase": "implementation",
+        "previous_route": null,
+        "prior_thread_id": null,
+        "profile_checks": [],
+        "project_key": "__PROJECT_KEY__",
+        "project_root_reason": null,
+        "project_status": "missing",
+        "protected_paths": [
+          "*.key",
+          "*.pem",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          ".env",
+          ".env.*",
+          ".git",
+          ".git/**",
+          ".orchestrator/**",
+          "AGENTS.md",
+          "CLAUDE.md",
+          "credentials.*",
+          "secrets.*"
+        ],
+        "readiness_check": {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        "reason": null,
+        "reason_source": null,
+        "repo_root": "__REPO__",
+        "reviewer": "agy",
+        "reviewer_candidates": [
+          {
+            "agent": "agy",
+            "model": "gemini-3.8-flash-high"
+          }
+        ],
+        "reviewer_executable": null,
+        "route": "subtle",
+        "scope": [
+          "src/a.go"
+        ],
+        "session_id": "p64-session",
+        "shadow_prompt": null,
+        "skip_max_files": 2,
+        "skip_max_lines": 50,
+        "suspected_route_mismatch": null,
+        "task_contract_grounded": false,
+        "task_id": "p64-impl",
+        "task_objective": "Task p64-impl (implementation phase) bounded to declared scope.",
+        "task_type": "unknown",
+        "tool_use_id": "p64_implementation_start_admitted",
+        "user_status": "missing",
+        "vault_root": null
+      },
+      "response": {
+        "systemMessage": "Purser: route=subtle -> gpt-6-luna / high",
+        "updatedInput": {
+          "call": "196df642-49c6-52e3-af7b-affe1932b1a4",
+          "config": {
+            "model_reasoning_effort": "high",
+            "tool_output_token_limit": 8000
+          },
+          "cwd": "__REPO__",
+          "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts.",
+          "etaMinutes": 5,
+          "jobEffort": "high",
+          "jobLabel": "P64 implementation",
+          "jobModel": "gpt-6-luna",
+          "jobPhase": "implementation",
+          "mode": "new",
+          "model": "gpt-6-luna",
+          "prompt": "Implement the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "route": "subtle",
+          "taskId": "p64-impl",
+          "timeoutSeconds": 90,
+          "worktree": true
+        }
+      },
+      "session": {
+        "last_outcome": null,
+        "live_thread": null,
+        "pending_call_baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "43fb7888ca1dfdfd60e2c1e297d05017a72edd23",
+          "manifest_enabled": true,
+          "scope": [
+            "src/a.go"
+          ],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "task_id": "p64-impl"
+      },
+      "task_id": "p64-impl",
+      "thread_id": null,
+      "tool": "mcp__codex-main__codex_start"
+    },
+    {
+      "event_types": [
+        "SCOPE_CONFLICT_OUTCOME",
+        "TASK_ROUTE_SELECTED",
+        "IMPLEMENTER_STARTED"
+      ],
+      "failure": null,
+      "input": {
+        "label": "P64 queued",
+        "mode": "new",
+        "prompt": "ORCH|task=p64-queued|phase=implementation|route=subtle|scope=src/a.go\nImplement after the conflict clears.",
+        "timeoutSeconds": 90
+      },
+      "lease": {
+        "conflicts": [
+          {
+            "path": "src/a.go",
+            "recorded_at": "__TIME__"
+          }
+        ],
+        "owners": {
+          "8cfeb5a14f7b6cbb08b21ca6ceec1ebce0dbf76e73b0ff0f4a4ad113f03f2e30": {
+            "hot_path_queue": true,
+            "job_id": "f979b3a8c4b1243be190bf983bb4e5cc05e829687264ddacb63a977023de61b7",
+            "queued_at": "__TIME__",
+            "retention_after": "__TIME__",
+            "scope": [
+              "src/a.go"
+            ],
+            "state": "QUEUED",
+            "task_id": "p64-queued"
+          },
+          "existing-owner": {
+            "acquired_at": "__TIME__",
+            "job_id": "existing-job",
+            "queued_at": "__TIME__",
+            "retention_after": "__TIME__",
+            "scope": [
+              "src/a.go"
+            ],
+            "state": "ACTIVE",
+            "task_id": "p64-existing"
+          }
+        },
+        "version": 1
+      },
+      "lease_setup": "hot_conflict",
+      "name": "p64_implementation_start_queued",
+      "pending": {
+        "acceptance_criteria": "Verify correct implementation within declared scope (src/a.go) with no material regression or scope expansion.",
+        "agent": "codex",
+        "async_call": "8579cdcf-022f-599b-9001-6df6f96817ab",
+        "async_input_hash": "ab83e9008c286e977b82a0e1fec561a02604b843c9433a39a13d59e0da238bf4",
+        "async_mode": "new",
+        "async_ready": true,
+        "async_updated_input": {
+          "call": "8579cdcf-022f-599b-9001-6df6f96817ab",
+          "config": {
+            "model_reasoning_effort": "high",
+            "tool_output_token_limit": 8000
+          },
+          "cwd": "__REPO__",
+          "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts.",
+          "etaMinutes": 5,
+          "jobEffort": "high",
+          "jobLabel": "P64 queued",
+          "jobModel": "gpt-6-luna",
+          "jobPhase": "implementation",
+          "leaseQueued": true,
+          "mode": "new",
+          "model": "gpt-6-luna",
+          "prompt": "Implement after the conflict clears.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "route": "subtle",
+          "taskId": "p64-queued",
+          "timeoutSeconds": 90,
+          "worktree": true
+        },
+        "authority_sources": [
+          {
+            "headings": [
+              "Authority",
+              "Working scope",
+              "Proportional validation",
+              "Test and comment quality"
+            ],
+            "path": "AGENTS.md",
+            "when_changed": null
+          }
+        ],
+        "baseline": {
+          "code": "QUEUED",
+          "status": "UNKNOWN"
+        },
+        "configured": false,
+        "effort": "high",
+        "eta_minutes": 5,
+        "fallback_family": null,
+        "first_warning": null,
+        "force_full_review": false,
+        "has_code_map": true,
+        "job_id": null,
+        "kind": "call",
+        "label": "P64 queued",
+        "lease_owner": "8cfeb5a14f7b6cbb08b21ca6ceec1ebce0dbf76e73b0ff0f4a4ad113f03f2e30",
+        "lease_queued": true,
+        "mechanical_opencode": false,
+        "model": "gpt-6-luna",
+        "new_route": null,
+        "phase": "implementation",
+        "previous_route": null,
+        "prior_thread_id": null,
+        "profile_checks": [],
+        "project_key": "__PROJECT_KEY__",
+        "project_root_reason": null,
+        "project_status": "missing",
+        "protected_paths": [
+          "*.key",
+          "*.pem",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          ".env",
+          ".env.*",
+          ".git",
+          ".git/**",
+          ".orchestrator/**",
+          "AGENTS.md",
+          "CLAUDE.md",
+          "credentials.*",
+          "secrets.*"
+        ],
+        "readiness_check": {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        "reason": null,
+        "reason_source": null,
+        "repo_root": "__REPO__",
+        "reviewer": "agy",
+        "reviewer_candidates": [
+          {
+            "agent": "agy",
+            "model": "gemini-3.8-flash-high"
+          }
+        ],
+        "reviewer_executable": null,
+        "route": "subtle",
+        "scope": [
+          "src/a.go"
+        ],
+        "session_id": "p64-session",
+        "shadow_prompt": null,
+        "skip_max_files": 2,
+        "skip_max_lines": 50,
+        "suspected_route_mismatch": null,
+        "task_contract_grounded": false,
+        "task_id": "p64-queued",
+        "task_objective": "Task p64-queued (implementation phase) bounded to declared scope.",
+        "task_type": "unknown",
+        "tool_use_id": "p64_implementation_start_queued",
+        "user_status": "missing",
+        "vault_root": null
+      },
+      "response": {
+        "systemMessage": "Purser: route=subtle -> gpt-6-luna / high",
+        "updatedInput": {
+          "call": "8579cdcf-022f-599b-9001-6df6f96817ab",
+          "config": {
+            "model_reasoning_effort": "high",
+            "tool_output_token_limit": 8000
+          },
+          "cwd": "__REPO__",
+          "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts.",
+          "etaMinutes": 5,
+          "jobEffort": "high",
+          "jobLabel": "P64 queued",
+          "jobModel": "gpt-6-luna",
+          "jobPhase": "implementation",
+          "leaseQueued": true,
+          "mode": "new",
+          "model": "gpt-6-luna",
+          "prompt": "Implement after the conflict clears.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "route": "subtle",
+          "taskId": "p64-queued",
+          "timeoutSeconds": 90,
+          "worktree": true
+        }
+      },
+      "session": {
+        "last_outcome": null,
+        "live_thread": null,
+        "pending_call_baseline": {
+          "code": "QUEUED",
+          "status": "UNKNOWN"
+        },
+        "task_id": "p64-queued"
+      },
+      "task_id": "p64-queued",
+      "thread_id": null,
+      "tool": "mcp__codex-main__codex_start"
+    },
+    {
+      "event_types": [
+        "SCOPE_CONFLICT_OUTCOME",
+        "ROUTING_PROTOCOL_VIOLATION"
+      ],
+      "failure": null,
+      "input": {
+        "label": "P64 conflict",
+        "prompt": "ORCH|task=p64-conflict|phase=implementation|route=subtle|scope=src/a.go\nImplement now."
+      },
+      "lease": {
+        "owners": {
+          "existing-owner": {
+            "acquired_at": "__TIME__",
+            "job_id": "existing-job",
+            "queued_at": "__TIME__",
+            "retention_after": "__TIME__",
+            "scope": [
+              "src/a.go"
+            ],
+            "state": "ACTIVE",
+            "task_id": "p64-existing"
+          }
+        },
+        "version": 1
+      },
+      "lease_setup": "conflict",
+      "name": "p64_scope_conflict_denial",
+      "pending": null,
+      "response": {
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "SCOPE_LEASE_CONFLICT: Scope is leased by task p64-existing. To release a stuck lease, run: python .claude/hooks/orchestrator/purser_leases.py --release <task-id>"
+      },
+      "session": null,
+      "task_id": "p64-conflict",
+      "thread_id": null,
+      "tool": "mcp__codex-main__codex"
+    },
+    {
+      "event_types": [
+        "TASK_ROUTE_SELECTED",
+        "IMPLEMENTER_STARTED"
+      ],
+      "failure": null,
+      "input": {
+        "label": "P64 plan",
+        "mode": "new",
+        "prompt": "ORCH|task=p64-plan|phase=plan|route=plan_standard\nPlan the change."
+      },
+      "lease": {
+        "conflicts": [],
+        "owners": {
+          "ee3520b089321d6920965fe4be85ab2e763d17ce37830bdd63ff1ab73a6c429d": {
+            "acquired_at": "__TIME__",
+            "job_id": "60abb950b08aed953578c977525fedb0c7dc4f89ef0dc8571400e01d3c5cb0b2",
+            "queued_at": "__TIME__",
+            "read_only": true,
+            "retention_after": "__TIME__",
+            "scope": [],
+            "state": "ACTIVE",
+            "task_id": "p64-plan"
+          }
+        },
+        "version": 1
+      },
+      "lease_setup": null,
+      "name": "p64_plan_start_read_only",
+      "pending": {
+        "acceptance_criteria": "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+        "agent": "codex",
+        "async_call": "fa861fb4-a597-534b-88eb-235c4f29a85d",
+        "async_input_hash": "2f8bac09f29cf1530eaddc24aea2f84601407f308ae4d9ce6d3216f4c69008fa",
+        "async_mode": "new",
+        "async_ready": true,
+        "async_updated_input": {
+          "approval-policy": "never",
+          "call": "fa861fb4-a597-534b-88eb-235c4f29a85d",
+          "config": {
+            "model_reasoning_effort": "high",
+            "tool_output_token_limit": 8000
+          },
+          "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts.",
+          "etaMinutes": 8,
+          "jobEffort": "high",
+          "jobLabel": "P64 plan",
+          "jobModel": "gpt-6-sol",
+          "jobPhase": "plan",
+          "mode": "new",
+          "model": "gpt-6-sol",
+          "prompt": "Plan the change.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "route": "plan_standard",
+          "sandbox": "read-only",
+          "taskId": "p64-plan"
+        },
+        "authority_sources": [
+          {
+            "headings": [
+              "Authority",
+              "Working scope",
+              "Proportional validation",
+              "Test and comment quality"
+            ],
+            "path": "AGENTS.md",
+            "when_changed": null
+          }
+        ],
+        "baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "43fb7888ca1dfdfd60e2c1e297d05017a72edd23",
+          "manifest_enabled": false,
+          "scope": [],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured": false,
+        "effort": "high",
+        "eta_minutes": 8,
+        "fallback_family": null,
+        "first_warning": null,
+        "force_full_review": false,
+        "has_code_map": true,
+        "job_id": null,
+        "kind": "call",
+        "label": "P64 plan",
+        "lease_owner": "ee3520b089321d6920965fe4be85ab2e763d17ce37830bdd63ff1ab73a6c429d",
+        "mechanical_opencode": false,
+        "model": "gpt-6-sol",
+        "new_route": null,
+        "phase": "plan",
+        "previous_route": null,
+        "prior_thread_id": null,
+        "profile_checks": [],
+        "project_key": "__PROJECT_KEY__",
+        "project_root_reason": null,
+        "project_status": "missing",
+        "protected_paths": [
+          "*.key",
+          "*.pem",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          ".env",
+          ".env.*",
+          ".git",
+          ".git/**",
+          ".orchestrator/**",
+          "AGENTS.md",
+          "CLAUDE.md",
+          "credentials.*",
+          "secrets.*"
+        ],
+        "readiness_check": {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        "reason": null,
+        "reason_source": null,
+        "repo_root": "__REPO__",
+        "reviewer": "agy",
+        "reviewer_candidates": [
+          {
+            "agent": "agy",
+            "model": "gemini-3.8-flash-high"
+          }
+        ],
+        "reviewer_executable": null,
+        "route": "plan_standard",
+        "scope": [],
+        "session_id": "p64-session",
+        "shadow_prompt": null,
+        "skip_max_files": 2,
+        "skip_max_lines": 50,
+        "suspected_route_mismatch": null,
+        "task_contract_grounded": false,
+        "task_id": "p64-plan",
+        "task_objective": "Task p64-plan (plan phase) bounded to declared scope.",
+        "task_type": "unknown",
+        "tool_use_id": "p64_plan_start_read_only",
+        "user_status": "missing",
+        "vault_root": null
+      },
+      "response": {
+        "systemMessage": "Purser: route=plan_standard -> gpt-6-sol / high",
+        "updatedInput": {
+          "approval-policy": "never",
+          "call": "fa861fb4-a597-534b-88eb-235c4f29a85d",
+          "config": {
+            "model_reasoning_effort": "high",
+            "tool_output_token_limit": 8000
+          },
+          "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts.",
+          "etaMinutes": 8,
+          "jobEffort": "high",
+          "jobLabel": "P64 plan",
+          "jobModel": "gpt-6-sol",
+          "jobPhase": "plan",
+          "mode": "new",
+          "model": "gpt-6-sol",
+          "prompt": "Plan the change.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "route": "plan_standard",
+          "sandbox": "read-only",
+          "taskId": "p64-plan"
+        }
+      },
+      "session": {
+        "last_outcome": null,
+        "live_thread": null,
+        "pending_call_baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "43fb7888ca1dfdfd60e2c1e297d05017a72edd23",
+          "manifest_enabled": false,
+          "scope": [],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "task_id": "p64-plan"
+      },
+      "task_id": "p64-plan",
+      "thread_id": null,
+      "tool": "mcp__codex-main__codex_start"
+    },
+    {
+      "event_types": [
+        "TASK_ROUTE_SELECTED",
+        "IMPLEMENTER_STARTED"
+      ],
+      "failure": null,
+      "input": {
+        "label": "P64 operation",
+        "prompt": "ORCH|task=p64-operation|phase=operation|route=operation\nInspect the status."
+      },
+      "lease": null,
+      "lease_setup": null,
+      "name": "p64_operation_no_lease",
+      "pending": {
+        "acceptance_criteria": "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+        "agent": "codex",
+        "authority_sources": [
+          {
+            "headings": [
+              "Authority",
+              "Working scope",
+              "Proportional validation",
+              "Test and comment quality"
+            ],
+            "path": "AGENTS.md",
+            "when_changed": null
+          }
+        ],
+        "baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "43fb7888ca1dfdfd60e2c1e297d05017a72edd23",
+          "manifest_enabled": false,
+          "scope": [],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured": false,
+        "effort": "high",
+        "eta_minutes": null,
+        "fallback_family": null,
+        "first_warning": null,
+        "force_full_review": false,
+        "has_code_map": false,
+        "kind": "call",
+        "label": "P64 operation",
+        "mechanical_opencode": false,
+        "model": "gpt-6-luna",
+        "new_route": null,
+        "phase": "operation",
+        "previous_route": null,
+        "prior_thread_id": null,
+        "profile_checks": [],
+        "project_key": "__PROJECT_KEY__",
+        "project_root_reason": null,
+        "project_status": "missing",
+        "protected_paths": [
+          "*.key",
+          "*.pem",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          ".env",
+          ".env.*",
+          ".git",
+          ".git/**",
+          ".orchestrator/**",
+          "AGENTS.md",
+          "CLAUDE.md",
+          "credentials.*",
+          "secrets.*"
+        ],
+        "readiness_check": {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        "reason": null,
+        "reason_source": null,
+        "repo_root": "__REPO__",
+        "reviewer": "agy",
+        "reviewer_candidates": [
+          {
+            "agent": "agy",
+            "model": "gemini-3.8-flash-high"
+          }
+        ],
+        "reviewer_executable": null,
+        "route": "operation",
+        "scope": [],
+        "shadow_prompt": null,
+        "skip_max_files": 2,
+        "skip_max_lines": 50,
+        "suspected_route_mismatch": null,
+        "task_contract_grounded": false,
+        "task_id": "p64-operation",
+        "task_objective": "Task p64-operation (operation phase) bounded to declared scope.",
+        "task_type": "unknown",
+        "user_status": "missing",
+        "vault_root": null
+      },
+      "response": {
+        "systemMessage": "Purser: route=operation -> gpt-6-luna / high",
+        "updatedInput": {
+          "config": {
+            "model_reasoning_effort": "high",
+            "tool_output_token_limit": 8000
+          },
+          "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts.",
+          "model": "gpt-6-luna",
+          "prompt": "Inspect the status."
+        }
+      },
+      "session": {
+        "last_outcome": null,
+        "live_thread": null,
+        "pending_call_baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "43fb7888ca1dfdfd60e2c1e297d05017a72edd23",
+          "manifest_enabled": false,
+          "scope": [],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "task_id": "p64-operation"
+      },
+      "task_id": "p64-operation",
+      "thread_id": null,
+      "tool": "mcp__codex-main__codex"
+    },
+    {
+      "event_types": [
+        "TASK_ROUTE_SELECTED",
+        "IMPLEMENTER_STARTED",
+        "CLAUDE_DECISION_RECORDED"
+      ],
+      "failure": null,
+      "input": {
+        "label": "P64 reply",
+        "prompt": "ORCH|task=p64-reply|phase=operation|route=operation\nContinue the investigation.",
+        "threadId": "p64-thread"
+      },
+      "lease": null,
+      "lease_setup": null,
+      "name": "p64_sync_reply_send_back",
+      "pending": {
+        "acceptance_criteria": "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+        "agent": "codex",
+        "authority_sources": [
+          {
+            "headings": [
+              "Authority",
+              "Working scope",
+              "Proportional validation",
+              "Test and comment quality"
+            ],
+            "path": "AGENTS.md",
+            "when_changed": null
+          }
+        ],
+        "baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "43fb7888ca1dfdfd60e2c1e297d05017a72edd23",
+          "manifest_enabled": false,
+          "scope": [],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "configured": false,
+        "effort": "high",
+        "eta_minutes": null,
+        "fallback_family": null,
+        "first_warning": null,
+        "force_full_review": false,
+        "has_code_map": false,
+        "kind": "call",
+        "label": "P64 reply",
+        "mechanical_opencode": false,
+        "model": "gpt-6-luna",
+        "new_route": null,
+        "phase": "operation",
+        "previous_route": null,
+        "prior_thread_id": "p64-thread",
+        "profile_checks": [],
+        "project_key": "__PROJECT_KEY__",
+        "project_root_reason": null,
+        "project_status": "missing",
+        "protected_paths": [
+          "*.key",
+          "*.pem",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          ".env",
+          ".env.*",
+          ".git",
+          ".git/**",
+          ".orchestrator/**",
+          "AGENTS.md",
+          "CLAUDE.md",
+          "credentials.*",
+          "secrets.*"
+        ],
+        "readiness_check": {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        "reason": null,
+        "reason_source": null,
+        "repo_root": "__REPO__",
+        "reviewer": "agy",
+        "reviewer_candidates": [
+          {
+            "agent": "agy",
+            "model": "gemini-3.8-flash-high"
+          }
+        ],
+        "reviewer_executable": null,
+        "route": "operation",
+        "scope": [],
+        "shadow_prompt": null,
+        "skip_max_files": 2,
+        "skip_max_lines": 50,
+        "suspected_route_mismatch": null,
+        "task_contract_grounded": false,
+        "task_id": "p64-reply",
+        "task_objective": "Task p64-reply (operation phase) bounded to declared scope.",
+        "task_type": "unknown",
+        "user_status": "missing",
+        "vault_root": null
+      },
+      "response": {
+        "systemMessage": "Purser: route=operation -> gpt-6-luna / high",
+        "updatedInput": {
+          "prompt": "Continue the investigation.",
+          "threadId": "p64-thread"
+        }
+      },
+      "session": {
+        "last_outcome": null,
+        "live_thread": {
+          "acceptance_criteria": "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+          "effort": "high",
+          "label": "P64 reply",
+          "model": "gpt-6-luna",
+          "phase": "operation",
+          "profile_checks": [],
+          "route": "operation",
+          "scope": [],
+          "task_contract_grounded": false,
+          "task_id": "p64-reply",
+          "task_objective": "Task p64-reply (operation phase) bounded to declared scope.",
+          "thread_id": "p64-thread"
+        },
+        "pending_call_baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "43fb7888ca1dfdfd60e2c1e297d05017a72edd23",
+          "manifest_enabled": false,
+          "scope": [],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "task_id": "p64-reply"
+      },
+      "task_id": "p64-reply",
+      "thread_id": "p64-thread",
+      "tool": "mcp__codex-main__codex-reply"
+    },
+    {
+      "event_types": [],
+      "failure": "session_save",
+      "input": {
+        "label": "P64 failure",
+        "mode": "new",
+        "prompt": "ORCH|task=p64-failure|phase=implementation|route=subtle|scope=src/a.go\nImplement then fail saving."
+      },
+      "lease": {
+        "conflicts": [],
+        "owners": {
+          "21ca46a6fec3df1f7011dbf1e8321f921e315865323930ed9c2d94db1e087187": {
+            "acquired_at": "__TIME__",
+            "job_id": "350a9eb06df4e4ceab7b860e572d2297319e314536e2114407bb0eadb45613d6",
+            "queued_at": "__TIME__",
+            "released_at": "__TIME__",
+            "retention_after": "__TIME__",
+            "scope": [
+              "src/a.go"
+            ],
+            "state": "RELEASED",
+            "task_id": "p64-failure"
+          }
+        },
+        "version": 1
+      },
+      "lease_setup": null,
+      "name": "p64_failure_after_pending_write",
+      "pending": null,
+      "response": {
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "ASYNC_ENFORCEMENT_FAILED: Async start lacked a durable route/baseline; FULL review is required."
+      },
+      "session": null,
+      "task_id": "p64-failure",
+      "thread_id": null,
+      "tool": "mcp__codex-main__codex_start"
+    }
+  ],
+  "oracle": "codex.pre_tool_use durable success path"
+}
