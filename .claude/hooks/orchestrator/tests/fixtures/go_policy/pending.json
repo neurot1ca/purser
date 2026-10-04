@@ -1,0 +1,669 @@
+{
+  "oracle": "codex._handoff_matches+ledger.capture_baseline+codex.Pre pending fields",
+  "cases": [
+    {
+      "name": "p46_new_call_fresh",
+      "input": {
+        "name": "p46_new_call_fresh",
+        "repository": "__REPO__"
+      },
+      "expected": {
+        "baseline": {
+          "status": "OK",
+          "code": "BASELINE_CAPTURED",
+          "head": "ff9179a2dfd94443547365fe97112695e8ad6098",
+          "scope": [],
+          "manifest_enabled": false,
+          "status_entries": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "tracked_snapshots": {},
+          "scoped_manifest": []
+        },
+        "pending": {
+          "kind": "call",
+          "task_id": "task-p46",
+          "project_key": "repo-p46",
+          "phase": "implementation",
+          "route": "operation",
+          "model": "gpt-test",
+          "effort": "high",
+          "label": "pending parity",
+          "agent": "codex",
+          "fallback_family": null,
+          "mechanical_opencode": false,
+          "shadow_prompt": null,
+          "scope": [],
+          "repo_root": "__REPO__",
+          "project_root_reason": null,
+          "baseline": {
+            "status": "OK",
+            "code": "BASELINE_CAPTURED",
+            "head": "ff9179a2dfd94443547365fe97112695e8ad6098",
+            "scope": [],
+            "manifest_enabled": false,
+            "status_entries": [],
+            "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "tracked_snapshots": {},
+            "scoped_manifest": []
+          },
+          "prior_thread_id": null,
+          "task_objective": "Inspect pending construction",
+          "acceptance_criteria": "Every field matches Python",
+          "task_contract_grounded": true,
+          "readiness_check": {
+            "agent": "off"
+          },
+          "task_type": "operation",
+          "suspected_route_mismatch": null,
+          "has_code_map": false,
+          "reason": "verification",
+          "eta_minutes": null,
+          "reason_source": "explicit",
+          "previous_route": null,
+          "new_route": null,
+          "profile_checks": [
+            {
+              "name": "build",
+              "argv": [
+                "go",
+                "test"
+              ],
+              "when": null,
+              "timeout_seconds": 30
+            }
+          ],
+          "protected_paths": [
+            "AGENTS.md"
+          ],
+          "force_full_review": true,
+          "skip_max_lines": 50,
+          "skip_max_files": 2,
+          "reviewer_executable": null,
+          "reviewer": "agy",
+          "reviewer_candidates": [
+            {
+              "agent": "agy",
+              "model": "reviewer-model"
+            }
+          ],
+          "authority_sources": [
+            {
+              "path": "AGENTS.md",
+              "headings": [
+                "Authority"
+              ],
+              "when_changed": null
+            }
+          ],
+          "vault_root": null,
+          "configured": true,
+          "user_status": "ok",
+          "project_status": "ok",
+          "first_warning": null
+        }
+      }
+    },
+    {
+      "name": "p46_reply_matching_handoff",
+      "input": {
+        "name": "p46_reply_matching_handoff",
+        "repository": "__REPO__",
+        "reply": true,
+        "handoff": "match"
+      },
+      "expected": {
+        "baseline": {
+          "status": "OK",
+          "origin": "p46_reply_matching_handoff"
+        },
+        "pending": {
+          "kind": "call",
+          "task_id": "task-p46",
+          "project_key": "repo-p46",
+          "phase": "implementation",
+          "route": "operation",
+          "model": "gpt-test",
+          "effort": "high",
+          "label": "pending parity",
+          "agent": "codex",
+          "fallback_family": null,
+          "mechanical_opencode": false,
+          "shadow_prompt": null,
+          "scope": [],
+          "repo_root": "__REPO__",
+          "project_root_reason": null,
+          "baseline": {
+            "status": "OK",
+            "origin": "p46_reply_matching_handoff"
+          },
+          "prior_thread_id": "thread-p46",
+          "task_objective": "Inspect pending construction",
+          "acceptance_criteria": "Every field matches Python",
+          "task_contract_grounded": true,
+          "readiness_check": {
+            "agent": "off"
+          },
+          "task_type": "operation",
+          "suspected_route_mismatch": null,
+          "has_code_map": false,
+          "reason": "verification",
+          "eta_minutes": null,
+          "reason_source": "explicit",
+          "previous_route": null,
+          "new_route": null,
+          "profile_checks": [
+            {
+              "name": "inherited"
+            }
+          ],
+          "protected_paths": [
+            "AGENTS.md"
+          ],
+          "force_full_review": true,
+          "skip_max_lines": 50,
+          "skip_max_files": 2,
+          "reviewer_executable": null,
+          "reviewer": "agy",
+          "reviewer_candidates": [
+            {
+              "agent": "agy",
+              "model": "reviewer-model"
+            }
+          ],
+          "authority_sources": [
+            {
+              "path": "AGENTS.md",
+              "headings": [
+                "Authority"
+              ],
+              "when_changed": null
+            }
+          ],
+          "vault_root": null,
+          "configured": true,
+          "user_status": "ok",
+          "project_status": "ok",
+          "first_warning": null
+        }
+      }
+    },
+    {
+      "name": "p46_reply_mismatching_handoff",
+      "input": {
+        "name": "p46_reply_mismatching_handoff",
+        "repository": "__REPO__",
+        "reply": true,
+        "handoff": "mismatch"
+      },
+      "expected": {
+        "baseline": {
+          "status": "OK",
+          "code": "BASELINE_CAPTURED",
+          "head": "ff9179a2dfd94443547365fe97112695e8ad6098",
+          "scope": [],
+          "manifest_enabled": false,
+          "status_entries": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "tracked_snapshots": {},
+          "scoped_manifest": []
+        },
+        "pending": {
+          "kind": "call",
+          "task_id": "task-p46",
+          "project_key": "repo-p46",
+          "phase": "implementation",
+          "route": "operation",
+          "model": "gpt-test",
+          "effort": "high",
+          "label": "pending parity",
+          "agent": "codex",
+          "fallback_family": null,
+          "mechanical_opencode": false,
+          "shadow_prompt": null,
+          "scope": [],
+          "repo_root": "__REPO__",
+          "project_root_reason": null,
+          "baseline": {
+            "status": "OK",
+            "code": "BASELINE_CAPTURED",
+            "head": "ff9179a2dfd94443547365fe97112695e8ad6098",
+            "scope": [],
+            "manifest_enabled": false,
+            "status_entries": [],
+            "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "tracked_snapshots": {},
+            "scoped_manifest": []
+          },
+          "prior_thread_id": "thread-p46",
+          "task_objective": "Inspect pending construction",
+          "acceptance_criteria": "Every field matches Python",
+          "task_contract_grounded": true,
+          "readiness_check": {
+            "agent": "off"
+          },
+          "task_type": "operation",
+          "suspected_route_mismatch": null,
+          "has_code_map": false,
+          "reason": "verification",
+          "eta_minutes": null,
+          "reason_source": "explicit",
+          "previous_route": null,
+          "new_route": null,
+          "profile_checks": [
+            {
+              "name": "inherited"
+            }
+          ],
+          "protected_paths": [
+            "AGENTS.md"
+          ],
+          "force_full_review": true,
+          "skip_max_lines": 50,
+          "skip_max_files": 2,
+          "reviewer_executable": null,
+          "reviewer": "agy",
+          "reviewer_candidates": [
+            {
+              "agent": "agy",
+              "model": "reviewer-model"
+            }
+          ],
+          "authority_sources": [
+            {
+              "path": "AGENTS.md",
+              "headings": [
+                "Authority"
+              ],
+              "when_changed": null
+            }
+          ],
+          "vault_root": null,
+          "configured": true,
+          "user_status": "ok",
+          "project_status": "ok",
+          "first_warning": null
+        }
+      }
+    },
+    {
+      "name": "p46_worktree_reply_path",
+      "input": {
+        "name": "p46_worktree_reply_path",
+        "repository": "__REPO__",
+        "worktree": "__WORKTREE__",
+        "reply": true
+      },
+      "expected": {
+        "baseline": {
+          "status": "OK",
+          "code": "BASELINE_CAPTURED",
+          "head": "d3dcab75291293d8b2875fe4aa73f26ff0e14eaf",
+          "scope": [],
+          "manifest_enabled": false,
+          "status_entries": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "tracked_snapshots": {},
+          "scoped_manifest": []
+        },
+        "pending": {
+          "kind": "call",
+          "task_id": "task-p46",
+          "project_key": "repo-p46",
+          "phase": "implementation",
+          "route": "operation",
+          "model": "gpt-test",
+          "effort": "high",
+          "label": "pending parity",
+          "agent": "codex",
+          "fallback_family": null,
+          "mechanical_opencode": false,
+          "shadow_prompt": null,
+          "scope": [],
+          "repo_root": "__REPO__",
+          "project_root_reason": null,
+          "baseline": {
+            "status": "OK",
+            "code": "BASELINE_CAPTURED",
+            "head": "d3dcab75291293d8b2875fe4aa73f26ff0e14eaf",
+            "scope": [],
+            "manifest_enabled": false,
+            "status_entries": [],
+            "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "tracked_snapshots": {},
+            "scoped_manifest": []
+          },
+          "prior_thread_id": "thread-p46",
+          "task_objective": "Inspect pending construction",
+          "acceptance_criteria": "Every field matches Python",
+          "task_contract_grounded": true,
+          "readiness_check": {
+            "agent": "off"
+          },
+          "task_type": "operation",
+          "suspected_route_mismatch": null,
+          "has_code_map": false,
+          "reason": "verification",
+          "eta_minutes": null,
+          "reason_source": "explicit",
+          "previous_route": null,
+          "new_route": null,
+          "profile_checks": [
+            {
+              "name": "build",
+              "argv": [
+                "go",
+                "test"
+              ],
+              "when": null,
+              "timeout_seconds": 30
+            }
+          ],
+          "protected_paths": [
+            "AGENTS.md"
+          ],
+          "force_full_review": true,
+          "skip_max_lines": 50,
+          "skip_max_files": 2,
+          "reviewer_executable": null,
+          "reviewer": "agy",
+          "reviewer_candidates": [
+            {
+              "agent": "agy",
+              "model": "reviewer-model"
+            }
+          ],
+          "authority_sources": [
+            {
+              "path": "AGENTS.md",
+              "headings": [
+                "Authority"
+              ],
+              "when_changed": null
+            }
+          ],
+          "vault_root": null,
+          "configured": true,
+          "user_status": "ok",
+          "project_status": "ok",
+          "first_warning": null,
+          "worktree_path": "__WORKTREE__"
+        }
+      }
+    },
+    {
+      "name": "p46_skipped_unknown_baseline",
+      "input": {
+        "name": "p46_skipped_unknown_baseline",
+        "repository": null,
+        "project_root_reason": "unresolved"
+      },
+      "expected": {
+        "baseline": {
+          "status": "UNKNOWN",
+          "code": "PROJECT_ROOT_UNRESOLVED",
+          "message": "unresolved",
+          "baseline_head": null
+        },
+        "pending": {
+          "kind": "call",
+          "task_id": "task-p46",
+          "project_key": "repo-p46",
+          "phase": "implementation",
+          "route": "operation",
+          "model": "gpt-test",
+          "effort": "high",
+          "label": "pending parity",
+          "agent": "codex",
+          "fallback_family": null,
+          "mechanical_opencode": false,
+          "shadow_prompt": null,
+          "scope": [],
+          "repo_root": null,
+          "project_root_reason": "unresolved",
+          "baseline": {
+            "status": "UNKNOWN",
+            "code": "PROJECT_ROOT_UNRESOLVED",
+            "message": "unresolved",
+            "baseline_head": null
+          },
+          "prior_thread_id": null,
+          "task_objective": "Inspect pending construction",
+          "acceptance_criteria": "Every field matches Python",
+          "task_contract_grounded": true,
+          "readiness_check": {
+            "agent": "off"
+          },
+          "task_type": "operation",
+          "suspected_route_mismatch": null,
+          "has_code_map": false,
+          "reason": "verification",
+          "eta_minutes": null,
+          "reason_source": "explicit",
+          "previous_route": null,
+          "new_route": null,
+          "profile_checks": [
+            {
+              "name": "build",
+              "argv": [
+                "go",
+                "test"
+              ],
+              "when": null,
+              "timeout_seconds": 30
+            }
+          ],
+          "protected_paths": [
+            "AGENTS.md"
+          ],
+          "force_full_review": true,
+          "skip_max_lines": 50,
+          "skip_max_files": 2,
+          "reviewer_executable": null,
+          "reviewer": "agy",
+          "reviewer_candidates": [
+            {
+              "agent": "agy",
+              "model": "reviewer-model"
+            }
+          ],
+          "authority_sources": [
+            {
+              "path": "AGENTS.md",
+              "headings": [
+                "Authority"
+              ],
+              "when_changed": null
+            }
+          ],
+          "vault_root": null,
+          "configured": true,
+          "user_status": "ok",
+          "project_status": "ok",
+          "first_warning": null
+        }
+      }
+    },
+    {
+      "name": "p46_queued_baseline",
+      "input": {
+        "name": "p46_queued_baseline",
+        "repository": "__REPO__",
+        "queued": true
+      },
+      "expected": {
+        "baseline": {
+          "status": "UNKNOWN",
+          "code": "QUEUED"
+        },
+        "pending": {
+          "kind": "call",
+          "task_id": "task-p46",
+          "project_key": "repo-p46",
+          "phase": "implementation",
+          "route": "operation",
+          "model": "gpt-test",
+          "effort": "high",
+          "label": "pending parity",
+          "agent": "codex",
+          "fallback_family": null,
+          "mechanical_opencode": false,
+          "shadow_prompt": null,
+          "scope": [],
+          "repo_root": "__REPO__",
+          "project_root_reason": null,
+          "baseline": {
+            "status": "UNKNOWN",
+            "code": "QUEUED"
+          },
+          "prior_thread_id": null,
+          "task_objective": "Inspect pending construction",
+          "acceptance_criteria": "Every field matches Python",
+          "task_contract_grounded": true,
+          "readiness_check": {
+            "agent": "off"
+          },
+          "task_type": "operation",
+          "suspected_route_mismatch": null,
+          "has_code_map": false,
+          "reason": "verification",
+          "eta_minutes": null,
+          "reason_source": "explicit",
+          "previous_route": null,
+          "new_route": null,
+          "profile_checks": [
+            {
+              "name": "build",
+              "argv": [
+                "go",
+                "test"
+              ],
+              "when": null,
+              "timeout_seconds": 30
+            }
+          ],
+          "protected_paths": [
+            "AGENTS.md"
+          ],
+          "force_full_review": true,
+          "skip_max_lines": 50,
+          "skip_max_files": 2,
+          "reviewer_executable": null,
+          "reviewer": "agy",
+          "reviewer_candidates": [
+            {
+              "agent": "agy",
+              "model": "reviewer-model"
+            }
+          ],
+          "authority_sources": [
+            {
+              "path": "AGENTS.md",
+              "headings": [
+                "Authority"
+              ],
+              "when_changed": null
+            }
+          ],
+          "vault_root": null,
+          "configured": true,
+          "user_status": "ok",
+          "project_status": "ok",
+          "first_warning": null,
+          "lease_queued": true
+        }
+      }
+    },
+    {
+      "name": "p46_reply_matching_handoff_disk",
+      "input": {
+        "name": "p46_reply_matching_handoff_disk",
+        "repository": "__REPO__",
+        "reply": true,
+        "handoff": "match",
+        "live_from_disk": true,
+        "nil_scope": true
+      },
+      "expected": {
+        "baseline": {
+          "status": "OK",
+          "origin": "p46_reply_matching_handoff_disk"
+        },
+        "pending": {
+          "kind": "call",
+          "task_id": "task-p46",
+          "project_key": "repo-p46",
+          "phase": "implementation",
+          "route": "operation",
+          "model": "gpt-test",
+          "effort": "high",
+          "label": "pending parity",
+          "agent": "codex",
+          "fallback_family": null,
+          "mechanical_opencode": false,
+          "shadow_prompt": null,
+          "scope": [],
+          "repo_root": "__REPO__",
+          "project_root_reason": null,
+          "baseline": {
+            "status": "OK",
+            "origin": "p46_reply_matching_handoff_disk"
+          },
+          "prior_thread_id": "thread-p46",
+          "task_objective": "Inspect pending construction",
+          "acceptance_criteria": "Every field matches Python",
+          "task_contract_grounded": true,
+          "readiness_check": {
+            "agent": "off"
+          },
+          "task_type": "operation",
+          "suspected_route_mismatch": null,
+          "has_code_map": false,
+          "reason": "verification",
+          "eta_minutes": null,
+          "reason_source": "explicit",
+          "previous_route": null,
+          "new_route": null,
+          "profile_checks": [
+            {
+              "name": "inherited"
+            }
+          ],
+          "protected_paths": [
+            "AGENTS.md"
+          ],
+          "force_full_review": true,
+          "skip_max_lines": 50,
+          "skip_max_files": 2,
+          "reviewer_executable": null,
+          "reviewer": "agy",
+          "reviewer_candidates": [
+            {
+              "agent": "agy",
+              "model": "reviewer-model"
+            }
+          ],
+          "authority_sources": [
+            {
+              "path": "AGENTS.md",
+              "headings": [
+                "Authority"
+              ],
+              "when_changed": null
+            }
+          ],
+          "vault_root": null,
+          "configured": true,
+          "user_status": "ok",
+          "project_status": "ok",
+          "first_warning": null
+        }
+      }
+    }
+  ]
+}

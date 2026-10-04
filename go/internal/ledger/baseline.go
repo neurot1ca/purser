@@ -71,6 +71,11 @@ func captureBaseline(repoRoot string, scope []string, timeout time.Duration, man
 	return map[string]any{"status": "OK", "code": "BASELINE_CAPTURED", "head": head, "scope": normalized, "manifest_enabled": len(normalized) > 0, "status_entries": statuses, "staged_diff_fingerprint": staged, "unstaged_diff_fingerprint": unstaged, "tracked_snapshots": snapshots, "scoped_manifest": manifest}
 }
 
+// CaptureBaseline exposes the existing baseline capture for enforcement builders.
+func CaptureBaseline(repoRoot string, scope []string, manifestBudgetSeconds float64) map[string]any {
+	return captureBaseline(repoRoot, scope, 10*time.Second, manifestBudgetSeconds)
+}
+
 func baselineError(err error) map[string]any {
 	if failure, ok := err.(*inspectionError); ok {
 		return unknownBaseline(failure.Code, failure.Message)
