@@ -41,6 +41,107 @@ func PathForTask(root, taskID string) (string, error) {
 	return filepath.Join(root, "sessions", hex.EncodeToString(digest[:])+".json"), nil
 }
 
+// BuildSessionRecord mirrors Python build_session_record. Optional fields are
+// supplied by their Python keyword names; nil values retain Python's defaults.
+func BuildSessionRecord(taskID string, threadID *string, route, model, effort string, options map[string]any) map[string]any {
+	record := map[string]any{
+		"task_id": taskID, "live_thread": nil,
+		"pending_call_baseline": options["pending_call_baseline"],
+		"last_outcome":          options["last_outcome"],
+	}
+	if threadID == nil {
+		return record
+	}
+	agent, ok := options["agent"]
+	if !ok {
+		agent = "codex"
+	}
+	thread := map[string]any{
+		"task_id": taskID, "thread_id": *threadID, "route": route,
+		"model": model, "effort": effort,
+	}
+	if agent != "codex" {
+		thread["agent"] = agent
+	}
+	for _, key := range []string{"reason", "label", "task_objective", "acceptance_criteria"} {
+		if value, exists := options[key]; exists && value != nil {
+			thread[key] = value
+		}
+	}
+	if phase, exists := options["phase"]; exists && phase != nil {
+		thread["phase"] = phase
+		if scope, exists := options["scope"]; exists && scope != nil {
+			thread["scope"] = scope
+		} else {
+			thread["scope"] = []any{}
+		}
+	}
+	grounded, exists := options["task_contract_grounded"]
+	if !exists {
+		grounded = false
+	}
+	thread["task_contract_grounded"] = grounded
+	if checks, exists := options["profile_checks"]; exists && checks != nil {
+		thread["profile_checks"] = checks
+	}
+	origin, hasOrigin := options["origin_baseline"].(map[string]any)
+	post, hasPost := options["post_state"].(map[string]any)
+	if hasOrigin && origin != nil && hasPost && post != nil {
+		thread["origin_baseline"] = cloneMap(origin)
+		thread["origin_scope"] = optionOrEmpty(options, "origin_scope")
+		thread["post_state"] = cloneMap(post)
+	}
+	record["live_thread"] = thread
+	return record
+}
+
+func optionOrEmpty(options map[string]any, key string) any {
+	if value, exists := options[key]; exists && value != nil {
+		return value
+	}
+	return []any{}
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	cloned := make(map[string]any, len(value))
+	for key, item := range value {
+		cloned[key] = item
+	}
+	return cloned
+}
+
+// FindByThreadID returns the sole valid record for threadID. Invalid entries
+// are ignored, and ambiguous matches return nil like Python SessionLedger.
+func FindByThreadID(root, threadID string) map[string]any {
+	if threadID == "" {
+		return nil
+	}
+	paths, err := filepath.Glob(filepath.Join(root, "sessions", "*.json"))
+	if err != nil {
+		return nil
+	}
+	var match map[string]any
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		record, ok := decodeRecord(raw, "")
+		if !ok {
+			continue
+		}
+		thread, ok := record["live_thread"].(map[string]any)
+		if !ok || thread["thread_id"] != threadID {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = record
+	}
+	return match
+}
+
 // Save validates and atomically writes a checksummed Python-compatible record.
 func Save(root string, record map[string]any) Result {
 	taskID, ok := record["task_id"].(string)
@@ -95,25 +196,33 @@ func Load(path, taskID string) Result {
 		}
 		return corrupt()
 	}
-	var envelope map[string]any
-	if json.Unmarshal(raw, &envelope) != nil || !keys(envelope, "schema_version", "checksum", "payload") || number(envelope["schema_version"]) != 1 {
-		return corrupt()
-	}
-	payload, ok := envelope["payload"].(map[string]any)
+	payload, ok := decodeRecord(raw, taskID)
 	if !ok {
 		return corrupt()
 	}
+	return Result{Status: OK, Code: "LEDGER_LOADED", Record: payload}
+}
+
+func decodeRecord(raw []byte, expectedTaskID string) (map[string]any, bool) {
+	var envelope map[string]any
+	if json.Unmarshal(raw, &envelope) != nil || !keys(envelope, "schema_version", "checksum", "payload") || number(envelope["schema_version"]) != 1 {
+		return nil, false
+	}
+	payload, ok := envelope["payload"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
 	canonical, err := canonicalJSON(payload)
 	if err != nil {
-		return corrupt()
+		return nil, false
 	}
 	checksum, ok := envelope["checksum"].(string)
 	digest := sha256.Sum256(canonical)
 	expected := hex.EncodeToString(digest[:])
-	if !ok || len(checksum) != len(expected) || subtle.ConstantTimeCompare([]byte(checksum), []byte(expected)) != 1 || !validRecord(payload, taskID) {
-		return corrupt()
+	if !ok || len(checksum) != len(expected) || subtle.ConstantTimeCompare([]byte(checksum), []byte(expected)) != 1 || !validRecord(payload, expectedTaskID) {
+		return nil, false
 	}
-	return Result{Status: OK, Code: "LEDGER_LOADED", Record: payload}
+	return payload, true
 }
 
 func canonicalJSON(value any) ([]byte, error) {

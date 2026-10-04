@@ -8,9 +8,115 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 )
+
+func TestSessionLookupParityFixture(t *testing.T) {
+	_, source, _, _ := runtime.Caller(0)
+	repo := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
+	fixturePath := filepath.Join(repo, ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "session_lookup.json")
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Oracle       string `json:"oracle"`
+		Construction []struct {
+			Input  map[string]any `json:"input"`
+			Output map[string]any `json:"output"`
+		} `json:"construction"`
+		Lookup []struct {
+			Name     string                     `json:"name"`
+			ThreadID string                     `json:"thread_id"`
+			Files    map[string]json.RawMessage `json:"files"`
+			Output   map[string]any             `json:"output"`
+		} `json:"lookup"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.Oracle != "Python ledger.build_session_record and SessionLedger.find_by_thread_id" {
+		t.Fatalf("unexpected oracle: %q", fixture.Oracle)
+	}
+	var roundTrip map[string]any
+	for _, test := range fixture.Construction {
+		input := test.Input
+		var threadID *string
+		if value, ok := input["thread_id"].(string); ok {
+			threadID = &value
+		}
+		options, _ := input["options"].(map[string]any)
+		got := BuildSessionRecord(input["task_id"].(string), threadID, input["route"].(string), input["model"].(string), input["effort"].(string), options)
+		if !reflect.DeepEqual(got, test.Output) {
+			t.Fatalf("BuildSessionRecord(%v) = %#v, want %#v", input, got, test.Output)
+		}
+		if roundTrip == nil && got["live_thread"] != nil {
+			roundTrip = got
+		}
+	}
+	if roundTrip == nil {
+		t.Fatal("fixture has no constructed live-thread record")
+	}
+	root := t.TempDir()
+	if saved := Save(root, roundTrip); saved.Status != OK || saved.Code != "LEDGER_WRITTEN" {
+		t.Fatalf("save constructed record: %#v", saved)
+	}
+	path, _ := PathForTask(root, roundTrip["task_id"].(string))
+	loaded := Load(path, roundTrip["task_id"].(string))
+	if loaded.Status != OK || !reflect.DeepEqual(loaded.Record, roundTrip) {
+		t.Fatalf("Go round trip: %#v", loaded)
+	}
+	moduleDir := filepath.Join(repo, ".claude", "hooks", "orchestrator")
+	expected, _ := json.Marshal(roundTrip)
+	script := "import json,sys; sys.path.insert(0,sys.argv[1]); from ledger import SessionLedger; result=SessionLedger(sys.argv[2]).load(sys.argv[3]); assert result['status']=='OK' and result['record']==json.loads(sys.argv[4]), result"
+	python, err := exec.LookPath("python")
+	if err != nil {
+		python, err = exec.LookPath("python3")
+	}
+	if err != nil {
+		t.Fatal("Python interpreter unavailable")
+	}
+	command := exec.Command(python, "-B", "-c", script, moduleDir, root, roundTrip["task_id"].(string), string(expected))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("Python could not load constructed Go record: %v: %s", err, output)
+	}
+	for _, test := range fixture.Lookup {
+		sessions := filepath.Join(root, "sessions")
+		if err := os.RemoveAll(sessions); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(sessions, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for name, envelope := range test.Files {
+			if err := os.WriteFile(filepath.Join(sessions, name), envelope, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if test.Name == "invalid-record-ignored" || test.Name == "checksum-failure-ignored" {
+				var decoded struct {
+					Checksum string         `json:"checksum"`
+					Payload  map[string]any `json:"payload"`
+				}
+				if err := json.Unmarshal(envelope, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				thread := decoded.Payload["live_thread"].(map[string]any)
+				canonical, _ := canonicalJSON(decoded.Payload)
+				digest := sha256.Sum256(canonical)
+				checksumValid := decoded.Checksum == hex.EncodeToString(digest[:])
+				recordValid := validRecord(decoded.Payload, "")
+				if thread["thread_id"] != test.ThreadID || (test.Name == "invalid-record-ignored" && (!checksumValid || recordValid)) || (test.Name == "checksum-failure-ignored" && (checksumValid || !recordValid)) {
+					t.Fatalf("%s does not isolate its rejection branch", test.Name)
+				}
+			}
+		}
+		if got := FindByThreadID(root, test.ThreadID); !reflect.DeepEqual(got, test.Output) {
+			t.Fatalf("FindByThreadID(%q), case %s = %#v, want %#v", test.ThreadID, test.Name, got, test.Output)
+		}
+	}
+}
 
 func TestPythonLedgerFixtures(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("testdata", "valid.json"))
