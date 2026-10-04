@@ -1,6 +1,7 @@
 package contextio
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,9 +26,14 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 		}
 		statePath = filepath.Join(filepath.Dir(handoff), "compaction_advisor.json")
 		recordMaintenanceActivity(stateRoot(), repository, key)
+		if session, _ := event["session_id"].(string); session != "" {
+			queueMaintenanceNotice(statePath, repository, key, session)
+		}
 	}
 	if statePath != "" {
 		if session, _ := event["session_id"].(string); session != "" {
+			advice := compactionAdvice(event, repository, statePath, session)
+			retry := promptRetryContext(statePath, session)
 			languageLine, injectPlan := contextInjections(statePath, session, language, planningHint(event["prompt"]))
 			planLine := ""
 			if injectPlan {
@@ -35,7 +41,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 			}
 			state := readAdvisorState(statePath, session)
 			lifecycle := lifecycleGuidance(state)
-			additional := joinContext(languageLine, planLine, lifecycle)
+			additional := joinContext(languageLine, advice, retry, planLine, lifecycle)
 			if additional == "" {
 				return nil
 			}
@@ -57,6 +63,35 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 		return nil
 	}
 	return []byte(`{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ` + jsonString(additional) + `}}`)
+}
+
+// RecordAdviceWritten records delivery only after the caller has written the
+// returned hook output successfully.
+func RecordAdviceWritten(event map[string]any, output []byte) {
+	defer func() { _ = recover() }()
+	repository := projectRoot(event)
+	session, _ := event["session_id"].(string)
+	if repository == "" || session == "" || len(output) == 0 {
+		return
+	}
+	var response map[string]any
+	if json.Unmarshal(output, &response) != nil {
+		return
+	}
+	hook, _ := response["hookSpecificOutput"].(map[string]any)
+	context, _ := hook["additionalContext"].(string)
+	if context == "" {
+		return
+	}
+	path := filepath.Join(stateRoot(), "projects", repositoryProjectKey(repository), "telemetry", "compaction_advisor.json")
+	state := readAdvisorState(path, session)
+	notice, ok := state["notice_pending"].(map[string]any)
+	if !ok || !validNoticePending(notice) || notice["advice_written"] == true {
+		return
+	}
+	if strings.Contains(context, compactionNoticeAdvice(notice, stringSlice(notice["triggers"]))) {
+		recordAdviceWritten(path, session)
+	}
 }
 
 func planningHint(value any) bool {

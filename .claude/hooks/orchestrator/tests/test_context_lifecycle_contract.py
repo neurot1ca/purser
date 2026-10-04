@@ -8,6 +8,7 @@ import stat
 import subprocess
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -100,6 +101,121 @@ def test_user_prompt_nudge_throttle_and_lifecycle_delivery(isolated):
     assert marked["version_pending"]["delivered"] is True
     again = _run("UserPromptSubmit", repo, state, session_id=lifecycle_session, prompt="Continue.")
     assert (again.returncode, again.stdout, again.stderr) == (0, b"", b"")
+
+
+def test_user_prompt_compaction_advice_and_regrow_contract(isolated):
+    root, repo, state = isolated
+    session = "compaction-advice-contract"
+    transcript = root / "transcript.jsonl"
+    initial_timestamp = datetime.now(timezone.utc) + timedelta(hours=1)
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "Continue the task."}},
+        {"type": "assistant", "timestamp": initial_timestamp.isoformat().replace("+00:00", "Z"), "message": {
+            "role": "assistant", "content": "Working.", "usage": {"input_tokens": 260000},
+        }},
+    ]
+    transcript.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+    first = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Continue.",
+                 transcript_path=str(transcript))
+    assert first.returncode == 0 and first.stderr == b""
+    advice = json.loads(first.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "Purser: 260,000 context tokens; trigger(s): threshold." in advice
+    assert "Context passed 260K." in advice
+    saved = json.loads(_advisor_state(state, repo).read_text(encoding="utf-8"))
+    notice = saved["notice_pending"]
+    assert saved["last_suggested_context"] == 260000
+    assert notice["context"] == 260000 and notice["triggers"] == ["threshold"]
+    assert notice["advice_written"] is True and notice["advice_turn"] == 2
+    assert saved["compaction_outcome_pending"] == {
+        "notice_id": notice["notice_id"], "pre_context_tokens": 260000,
+        "advice_turn": 2, "compaction_observed": False,
+    }
+
+    saved["notice_pending"] = None
+    saved["compaction_outcome_pending"] = None
+    _advisor_state(state, repo).write_text(json.dumps(saved), encoding="utf-8")
+    records[-1]["timestamp"] = (initial_timestamp - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+    records[-1]["message"]["usage"]["input_tokens"] = 319999
+    transcript.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    suppressed = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Continue.",
+                      transcript_path=str(transcript))
+    assert (suppressed.returncode, suppressed.stdout, suppressed.stderr) == (0, b"", b"")
+    records[-1]["message"]["usage"]["input_tokens"] = 320000
+    transcript.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    regrown = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Continue.",
+                   transcript_path=str(transcript))
+    assert regrown.returncode == 0 and regrown.stderr == b""
+    assert "Purser: 320,000 context tokens; trigger(s): idle." in json.loads(regrown.stdout)["hookSpecificOutput"]["additionalContext"]
+
+
+def test_user_prompt_retry_context_is_consumed_and_reset(isolated):
+    _root, repo, state = isolated
+    session = "prompt-retry-contract"
+    path = _advisor_state(state, repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"session_id": session, "codex_retry_count": 2,
+                                "codex_retry_pending": "Retry the denied codex_result call."}),
+                    encoding="utf-8")
+    result = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Continue.")
+    assert result.returncode == 0 and result.stderr == b""
+    assert json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"] == (
+        "Previous turn ended with an unfinished Purser step: Retry the denied codex_result call."
+    )
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["codex_retry_count"] == 0 and saved["codex_retry_pending"] is False
+
+
+def test_user_prompt_queues_eligible_maintenance_notice_like_python(isolated, monkeypatch):
+    root, repo, state = isolated
+    go_command = os.environ.get("PURSER_HOOK_CMD_USERPROMPTSUBMIT")
+    if not go_command:
+        pytest.skip("set PURSER_HOOK_CMD_USERPROMPTSUBMIT to the Go hook to run the dual-runtime contract")
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(__file__).parents[4]))
+    codex_home = root / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    now = datetime.now(timezone.utc)
+    rollout = codex_home / "sessions" / now.strftime("%Y/%m/%d") / "rollout-maintenance-contract.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(json.dumps({
+        "timestamp": now.isoformat().replace("+00:00", "Z"),
+        "payload": {"rate_limits": {"primary": {
+            "window_minutes": 300, "used_percent": 40,
+            "resets_at": (now + timedelta(hours=2)).timestamp(),
+        }}},
+    }) + "\n", encoding="utf-8")
+    session = "maintenance-prompt-contract"
+    maintenance = state / "projects" / _project_key(repo) / "maintenance"
+    reports = maintenance / "reports" / "cleanup"
+    reports.mkdir(parents=True)
+    (maintenance / "opt-in.json").write_text(json.dumps({
+        "project_root": str(repo.resolve()), "enabled": True,
+    }), encoding="utf-8")
+    report = reports / "maintenance.notice.json"
+    report.write_text(json.dumps({
+        "report_type": "cleanup", "report_path": str(reports / "maintenance.md"),
+        "finding_count": 1, "findings": [{"path_line": "src/unused.py:12", "symbol": "unused", "confidence": "high", "evidence": "No references found."}],
+        "cycles": {}, "done": False, "pending": False,
+    }), encoding="utf-8")
+    original_report = report.read_text(encoding="utf-8")
+    monkeypatch.delenv("PURSER_HOOK_CMD_USERPROMPTSUBMIT", raising=False)
+    python_result = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Continue.")
+    assert python_result.returncode == 0 and python_result.stderr == b""
+    python_state = json.loads(_advisor_state(state, repo).read_text(encoding="utf-8"))
+    python_report = json.loads(report.read_text(encoding="utf-8"))
+
+    _advisor_state(state, repo).unlink()
+    report.write_text(original_report, encoding="utf-8")
+    monkeypatch.setenv("PURSER_HOOK_CMD_USERPROMPTSUBMIT", go_command)
+    go_result = _run("UserPromptSubmit", repo, state, session_id=session, prompt="Continue.")
+    assert go_result.returncode == 0 and go_result.stderr == b""
+    if go_result.stdout != python_result.stdout:
+        for index, (expected, actual) in enumerate(zip(python_result.stdout, go_result.stdout)):
+            if expected != actual:
+                pytest.fail(f"runtime output differs at {index}: Python={python_result.stdout[max(0, index-100):index+250]!r}; Go={go_result.stdout[max(0, index-100):index+250]!r}")
+        pytest.fail(f"runtime output lengths differ: Python={len(python_result.stdout)}, Go={len(go_result.stdout)}")
+    assert json.loads(_advisor_state(state, repo).read_text(encoding="utf-8")) == python_state
+    assert json.loads(report.read_text(encoding="utf-8")) == python_report
 
 
 def test_session_start_handoff_and_absence_contract(isolated):

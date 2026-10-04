@@ -74,7 +74,9 @@ func main() {
 		}
 	case "UserPromptSubmit":
 		if output := contextio.UserPromptSubmit(event, started); len(output) > 0 {
-			_, _ = os.Stdout.Write(output)
+			if written, err := os.Stdout.Write(output); err == nil && written == len(output) {
+				contextio.RecordAdviceWritten(event, output)
+			}
 		}
 	case "PreCompact":
 		contextio.PreCompact(event)

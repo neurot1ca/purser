@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -811,6 +812,9 @@ func exactInteger(value any) (int, bool) {
 		return n, true
 	case float64:
 		return int(n), n == math.Trunc(n)
+	case json.Number:
+		parsed, err := strconv.Atoi(n.String())
+		return parsed, err == nil
 	}
 	return 0, false
 }
@@ -1216,7 +1220,9 @@ func lifecycleGuidance(state map[string]any) string {
 				}
 				script := maintenanceScriptPath()
 				cli := `"` + python + `" "` + script + `"`
-				if strings.HasSuffix(noticeFile, "consent.json") {
+				if !strings.HasSuffix(noticeFile, "consent.json") {
+					parts = append(parts, promptMaintenanceGuidance(pending))
+				} else {
 					parts = append(parts, fmt.Sprintf("Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. If the user says yes, run `%s consent yes --repo \"<repository-root>\"`; if no, run `%s consent no --repo \"<repository-root>\"`. Do not infer consent.\n%s", cli, cli, text))
 				}
 			}
