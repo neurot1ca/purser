@@ -1,0 +1,211 @@
+{
+  "oracle": "Python obsidian_projection._prepare_aggregate, render_run_note, _with_marker, and _safe_run_path",
+  "timezone": "Europe/Istanbul",
+  "p56_cases": [
+    {
+      "name": "p56-unknown",
+      "aggregate": {
+        "task_id": "p56-unknown"
+      },
+      "expected_content": "---\ntype: \"orch-run\"\nschema_version: 1\nprojection_schema_version: 1\ntask_id: \"p56-unknown\"\nrepo: null\nbranch: null\ntimezone: \"Europe/Istanbul\"\nstarted_at: null\nstarted_at_utc: null\nended_at: null\nended_at_utc: null\nstatus: null\nphase: null\nroute: null\nmodel: null\neffort: null\nfresh_threads: null\nreply_calls: null\nrouting_enforced: null\nvalidation: null\nduration_ms: null\nthread_id: null\nreviewer1_provider: null\nreviewer1_model_requested: null\nreviewer1_result: null\nreviewer1_skipped_reason: null\nserved_model_attestation: null\nclaude_review_mode: null\nchanged_paths_count: null\nrouting_protocol_violations: null\nthread_continuity_violations: null\nconcurrent_writer: null\npolicy_fingerprint: null\nusage:\n  codex_call_count: null\n  codex_duration_ms: null\n  codex_usage_known: null\n  gemini_duration_ms: null\n  gemini_usage_known: null\n  deepseek_usage_known: null\n  claude_usage_session_id: null\n  claude_usage_captured_at: null\n  claude_5h_start_pct: null\n  claude_5h_end_pct: null\n  claude_5h_delta_pct: null\n  claude_5h_resets_at: null\n  claude_7d_start_pct: null\n  claude_7d_end_pct: null\n  claude_7d_resets_at: null\n  claude_context_used_percentage: null\n  claude_context_window_size: null\n  claude_context_total_tokens: null\n  claude_context_input_tokens: null\n  claude_context_output_tokens: null\n  claude_cache_creation_input_tokens: null\n  claude_cache_read_input_tokens: null\n  claude_session_estimated_cost_usd: null\n  claude_session_total_duration_ms: null\n  claude_usage_known: null\n  claude_rate_limit_delta_scope: null\n  claude_task_usage_source: null\n  claude_task_usage_known: null\n  claude_task_usage_complete: null\n  claude_task_input_tokens: null\n  claude_task_output_tokens: null\n  claude_task_cache_creation_input_tokens: null\n  claude_task_cache_read_input_tokens: null\n  claude_task_total_observed_tokens: null\n  claude_task_request_count: null\n  claude_task_usage_boundary: null\n  claude_task_usage_dedup: null\n  claude_task_usage_unknown_reason: null\n  claude_task_subagent_usage_included: null\n  codex_cache_read_tokens: null\n  codex_cache_write_tokens: null\n  codex_cached_input_tokens: null\n  codex_cached_tokens: null\n  codex_completion_tokens: null\n  codex_input_tokens: null\n  codex_output_tokens: null\n  codex_prompt_tokens: null\n  codex_reasoning_output_tokens: null\n  codex_thinking_tokens: null\n  codex_total_tokens: null\n  gemini_cache_read_tokens: null\n  gemini_cache_write_tokens: null\n  gemini_cached_input_tokens: null\n  gemini_cached_tokens: null\n  gemini_completion_tokens: null\n  gemini_input_tokens: null\n  gemini_output_tokens: null\n  gemini_prompt_tokens: null\n  gemini_reasoning_output_tokens: null\n  gemini_thinking_tokens: null\n  gemini_total_tokens: null\n  deepseek_cache_read_tokens: null\n  deepseek_cache_write_tokens: null\n  deepseek_cached_input_tokens: null\n  deepseek_cached_tokens: null\n  deepseek_completion_tokens: null\n  deepseek_input_tokens: null\n  deepseek_output_tokens: null\n  deepseek_prompt_tokens: null\n  deepseek_reasoning_output_tokens: null\n  deepseek_thinking_tokens: null\n  deepseek_total_tokens: null\n---\n<!-- orchestrator projection v1 sha256=60ea408fbaebe7d0f31c97ea9ed2079afa1692b514deb5d70ae03cc38be87a09 -->\n# Run: p56-unknown\n\nFlow: unknown / unknown (unknown), phase=unknown; fresh_threads=unknown, reply_calls=unknown\nDuration: unknown\nValidation: unknown\nReview: unknown\n\n## Notes\n\n- Status: unknown\n- Concurrent writer: unknown\n- Projection source: telemetry aggregate only; local timezone: Europe/Istanbul.\n",
+      "expected_path": "${VAULT}/Runs/0000/00/p56-unknown.md"
+    },
+    {
+      "name": "p56-full-success",
+      "aggregate": {
+        "task_id": "p56-success",
+        "repo": "purser",
+        "branch": "go-migration",
+        "status": "VERIFIED",
+        "started_at": "2026-10-04T09:15:00Z",
+        "ended_at": "2026-10-04T09:18:12.500000Z",
+        "duration_ms": 192500,
+        "phase": "implementation",
+        "task_type": "implementation",
+        "route": "normal",
+        "model": "openai-gpt-5",
+        "effort": "high",
+        "fresh_threads": 1,
+        "reply_calls": 2,
+        "routing_enforced": true,
+        "validation": "PASS",
+        "thread_id": "thread-42",
+        "reviewer1_provider": "gemini",
+        "reviewer1_model_requested": "gemini-pro",
+        "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "served_model_attestation": "UNAVAILABLE",
+        "claude_review_mode": "FULL",
+        "changed_paths_count": 3,
+        "routing_protocol_violations": 0,
+        "thread_continuity_violations": 0,
+        "concurrent_writer": false,
+        "policy_fingerprint": "abcdef01",
+        "first_pass": true,
+        "repair_count": 0,
+        "usage": {
+          "codex_call_count": 3,
+          "codex_usage_known": true,
+          "claude_task_usage_known": false
+        }
+      },
+      "expected_content": "---\ntype: \"orch-run\"\nschema_version: 1\nprojection_schema_version: 1\ntask_id: \"p56-success\"\nrepo: \"purser\"\nbranch: \"go-migration\"\ntimezone: \"Europe/Istanbul\"\nstarted_at: \"2026-10-04T12:15:00+03:00\"\nstarted_at_utc: \"2026-10-04T09:15:00Z\"\nended_at: \"2026-10-04T12:18:12.500000+03:00\"\nended_at_utc: \"2026-10-04T09:18:12.500000Z\"\nstatus: \"VERIFIED\"\nphase: \"implementation\"\nroute: \"normal\"\nmodel: \"openai-gpt-5\"\neffort: \"high\"\nfresh_threads: 1\nreply_calls: 2\nrouting_enforced: true\nvalidation: \"PASS\"\nduration_ms: 192500\nthread_id: \"thread-42\"\nreviewer1_provider: \"gemini\"\nreviewer1_model_requested: \"gemini-pro\"\nreviewer1_result: \"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\"\nreviewer1_skipped_reason: null\nserved_model_attestation: \"UNAVAILABLE\"\nclaude_review_mode: \"FULL\"\nchanged_paths_count: 3\nrouting_protocol_violations: 0\nthread_continuity_violations: 0\nconcurrent_writer: false\npolicy_fingerprint: \"abcdef01\"\nfirst_pass: true\nrepair_count: 0\nusage:\n  codex_call_count: 3\n  codex_duration_ms: null\n  codex_usage_known: true\n  gemini_duration_ms: null\n  gemini_usage_known: null\n  deepseek_usage_known: null\n  claude_usage_session_id: null\n  claude_usage_captured_at: null\n  claude_5h_start_pct: null\n  claude_5h_end_pct: null\n  claude_5h_delta_pct: null\n  claude_5h_resets_at: null\n  claude_7d_start_pct: null\n  claude_7d_end_pct: null\n  claude_7d_resets_at: null\n  claude_context_used_percentage: null\n  claude_context_window_size: null\n  claude_context_total_tokens: null\n  claude_context_input_tokens: null\n  claude_context_output_tokens: null\n  claude_cache_creation_input_tokens: null\n  claude_cache_read_input_tokens: null\n  claude_session_estimated_cost_usd: null\n  claude_session_total_duration_ms: null\n  claude_usage_known: null\n  claude_rate_limit_delta_scope: null\n  claude_task_usage_source: null\n  claude_task_usage_known: false\n  claude_task_usage_complete: null\n  claude_task_input_tokens: null\n  claude_task_output_tokens: null\n  claude_task_cache_creation_input_tokens: null\n  claude_task_cache_read_input_tokens: null\n  claude_task_total_observed_tokens: null\n  claude_task_request_count: null\n  claude_task_usage_boundary: null\n  claude_task_usage_dedup: null\n  claude_task_usage_unknown_reason: null\n  claude_task_subagent_usage_included: null\n  codex_cache_read_tokens: null\n  codex_cache_write_tokens: null\n  codex_cached_input_tokens: null\n  codex_cached_tokens: null\n  codex_completion_tokens: null\n  codex_input_tokens: null\n  codex_output_tokens: null\n  codex_prompt_tokens: null\n  codex_reasoning_output_tokens: null\n  codex_thinking_tokens: null\n  codex_total_tokens: null\n  gemini_cache_read_tokens: null\n  gemini_cache_write_tokens: null\n  gemini_cached_input_tokens: null\n  gemini_cached_tokens: null\n  gemini_completion_tokens: null\n  gemini_input_tokens: null\n  gemini_output_tokens: null\n  gemini_prompt_tokens: null\n  gemini_reasoning_output_tokens: null\n  gemini_thinking_tokens: null\n  gemini_total_tokens: null\n  deepseek_cache_read_tokens: null\n  deepseek_cache_write_tokens: null\n  deepseek_cached_input_tokens: null\n  deepseek_cached_tokens: null\n  deepseek_completion_tokens: null\n  deepseek_input_tokens: null\n  deepseek_output_tokens: null\n  deepseek_prompt_tokens: null\n  deepseek_reasoning_output_tokens: null\n  deepseek_thinking_tokens: null\n  deepseek_total_tokens: null\n---\n<!-- orchestrator projection v1 sha256=3ea93a6e37d3f199b85614cd16618ef89de1e502899c8389c4aa3f5e3319d269 -->\n# Run: p56-success\n\nFlow: normal / openai-gpt-5 (high), phase=implementation; fresh_threads=1, reply_calls=2\nDuration: 3m 12.5s\nValidation: PASS\nReview: NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\n\n## Notes\n\n- Status: VERIFIED\n- Concurrent writer: False\n- Projection source: telemetry aggregate only; local timezone: Europe/Istanbul.\n",
+      "expected_path": "${VAULT}/Runs/2026/10/p56-success.md"
+    },
+    {
+      "name": "p56-skipped-reviewer1",
+      "aggregate": {
+        "task_id": "p56-skipped",
+        "status": "NOT_VERIFIED",
+        "started_at": "2026-10-04T10:00:00Z",
+        "route": "mechanical",
+        "effort": "low",
+        "fresh_threads": 0,
+        "reply_calls": 0,
+        "routing_enforced": false,
+        "validation": "FAIL",
+        "reviewer1_skipped_reason": "BELOW_THRESHOLD",
+        "concurrent_writer": false
+      },
+      "expected_content": "---\ntype: \"orch-run\"\nschema_version: 1\nprojection_schema_version: 1\ntask_id: \"p56-skipped\"\nrepo: null\nbranch: null\ntimezone: \"Europe/Istanbul\"\nstarted_at: \"2026-10-04T13:00:00+03:00\"\nstarted_at_utc: \"2026-10-04T10:00:00Z\"\nended_at: null\nended_at_utc: null\nstatus: \"NOT_VERIFIED\"\nphase: null\nroute: \"mechanical\"\nmodel: null\neffort: \"low\"\nfresh_threads: 0\nreply_calls: 0\nrouting_enforced: false\nvalidation: \"FAIL\"\nduration_ms: null\nthread_id: null\nreviewer1_provider: null\nreviewer1_model_requested: null\nreviewer1_result: null\nreviewer1_skipped_reason: \"BELOW_THRESHOLD\"\nserved_model_attestation: null\nclaude_review_mode: null\nchanged_paths_count: null\nrouting_protocol_violations: null\nthread_continuity_violations: null\nconcurrent_writer: false\npolicy_fingerprint: null\nusage:\n  codex_call_count: null\n  codex_duration_ms: null\n  codex_usage_known: null\n  gemini_duration_ms: null\n  gemini_usage_known: null\n  deepseek_usage_known: null\n  claude_usage_session_id: null\n  claude_usage_captured_at: null\n  claude_5h_start_pct: null\n  claude_5h_end_pct: null\n  claude_5h_delta_pct: null\n  claude_5h_resets_at: null\n  claude_7d_start_pct: null\n  claude_7d_end_pct: null\n  claude_7d_resets_at: null\n  claude_context_used_percentage: null\n  claude_context_window_size: null\n  claude_context_total_tokens: null\n  claude_context_input_tokens: null\n  claude_context_output_tokens: null\n  claude_cache_creation_input_tokens: null\n  claude_cache_read_input_tokens: null\n  claude_session_estimated_cost_usd: null\n  claude_session_total_duration_ms: null\n  claude_usage_known: null\n  claude_rate_limit_delta_scope: null\n  claude_task_usage_source: null\n  claude_task_usage_known: null\n  claude_task_usage_complete: null\n  claude_task_input_tokens: null\n  claude_task_output_tokens: null\n  claude_task_cache_creation_input_tokens: null\n  claude_task_cache_read_input_tokens: null\n  claude_task_total_observed_tokens: null\n  claude_task_request_count: null\n  claude_task_usage_boundary: null\n  claude_task_usage_dedup: null\n  claude_task_usage_unknown_reason: null\n  claude_task_subagent_usage_included: null\n  codex_cache_read_tokens: null\n  codex_cache_write_tokens: null\n  codex_cached_input_tokens: null\n  codex_cached_tokens: null\n  codex_completion_tokens: null\n  codex_input_tokens: null\n  codex_output_tokens: null\n  codex_prompt_tokens: null\n  codex_reasoning_output_tokens: null\n  codex_thinking_tokens: null\n  codex_total_tokens: null\n  gemini_cache_read_tokens: null\n  gemini_cache_write_tokens: null\n  gemini_cached_input_tokens: null\n  gemini_cached_tokens: null\n  gemini_completion_tokens: null\n  gemini_input_tokens: null\n  gemini_output_tokens: null\n  gemini_prompt_tokens: null\n  gemini_reasoning_output_tokens: null\n  gemini_thinking_tokens: null\n  gemini_total_tokens: null\n  deepseek_cache_read_tokens: null\n  deepseek_cache_write_tokens: null\n  deepseek_cached_input_tokens: null\n  deepseek_cached_tokens: null\n  deepseek_completion_tokens: null\n  deepseek_input_tokens: null\n  deepseek_output_tokens: null\n  deepseek_prompt_tokens: null\n  deepseek_reasoning_output_tokens: null\n  deepseek_thinking_tokens: null\n  deepseek_total_tokens: null\n---\n<!-- orchestrator projection v1 sha256=624647eb4e578f8c1f2f2de39df9334c5506080165c49ca2c6666fce692dd3b5 -->\n# Run: p56-skipped\n\nFlow: mechanical / unknown (low), phase=unknown; fresh_threads=0, reply_calls=0\nDuration: unknown\nValidation: FAIL\nReview: SKIPPED (BELOW_THRESHOLD)\n\n## Notes\n\n- Status: NOT_VERIFIED\n- Concurrent writer: False\n- Projection source: telemetry aggregate only; local timezone: Europe/Istanbul.\n",
+      "expected_path": "${VAULT}/Runs/2026/10/p56-skipped.md"
+    },
+    {
+      "name": "p56-reviewer1-findings-claude-attribution",
+      "aggregate": {
+        "task_id": "p56-findings",
+        "status": "INCONCLUSIVE",
+        "started_at": "2026-10-04T11:00:00Z",
+        "ended_at": "2026-10-04T11:02:00Z",
+        "phase": "implementation",
+        "route": "consequential",
+        "model": "claude-sonnet",
+        "effort": "xhigh",
+        "fresh_threads": 1,
+        "reply_calls": 1,
+        "validation": "UNKNOWN",
+        "reviewer1_provider": "gemini",
+        "reviewer1_model_requested": "gemini-pro",
+        "reviewer1_result": "CHANGES_REQUIRED",
+        "claude_review_mode": "AUDIT",
+        "concurrent_writer": true,
+        "repo": "true",
+        "branch": "null",
+        "claude_acceptance": {
+          "outcome": "accepted",
+          "send_backs": 1,
+          "applied_as_is": false,
+          "sources": [
+            {
+              "kind": "reply",
+              "job_id": "claude-job-1",
+              "decision": "accepted",
+              "task_type": "implementation",
+              "ts_utc": "2026-10-04T11:03:00Z"
+            }
+          ]
+        }
+      },
+      "expected_content": "---\ntype: \"orch-run\"\nschema_version: 1\nprojection_schema_version: 1\ntask_id: \"p56-findings\"\nrepo: \"true\"\nbranch: \"null\"\ntimezone: \"Europe/Istanbul\"\nstarted_at: \"2026-10-04T14:00:00+03:00\"\nstarted_at_utc: \"2026-10-04T11:00:00Z\"\nended_at: \"2026-10-04T14:02:00+03:00\"\nended_at_utc: \"2026-10-04T11:02:00Z\"\nstatus: \"INCONCLUSIVE\"\nphase: \"implementation\"\nroute: \"consequential\"\nmodel: \"claude-sonnet\"\neffort: \"xhigh\"\nfresh_threads: 1\nreply_calls: 1\nrouting_enforced: null\nvalidation: \"UNKNOWN\"\nduration_ms: null\nthread_id: null\nreviewer1_provider: \"gemini\"\nreviewer1_model_requested: \"gemini-pro\"\nreviewer1_result: \"CHANGES_REQUIRED\"\nreviewer1_skipped_reason: null\nserved_model_attestation: null\nclaude_review_mode: \"AUDIT\"\nchanged_paths_count: null\nrouting_protocol_violations: null\nthread_continuity_violations: null\nconcurrent_writer: true\npolicy_fingerprint: null\nusage:\n  codex_call_count: null\n  codex_duration_ms: null\n  codex_usage_known: null\n  gemini_duration_ms: null\n  gemini_usage_known: null\n  deepseek_usage_known: null\n  claude_usage_session_id: null\n  claude_usage_captured_at: null\n  claude_5h_start_pct: null\n  claude_5h_end_pct: null\n  claude_5h_delta_pct: null\n  claude_5h_resets_at: null\n  claude_7d_start_pct: null\n  claude_7d_end_pct: null\n  claude_7d_resets_at: null\n  claude_context_used_percentage: null\n  claude_context_window_size: null\n  claude_context_total_tokens: null\n  claude_context_input_tokens: null\n  claude_context_output_tokens: null\n  claude_cache_creation_input_tokens: null\n  claude_cache_read_input_tokens: null\n  claude_session_estimated_cost_usd: null\n  claude_session_total_duration_ms: null\n  claude_usage_known: null\n  claude_rate_limit_delta_scope: null\n  claude_task_usage_source: null\n  claude_task_usage_known: null\n  claude_task_usage_complete: null\n  claude_task_input_tokens: null\n  claude_task_output_tokens: null\n  claude_task_cache_creation_input_tokens: null\n  claude_task_cache_read_input_tokens: null\n  claude_task_total_observed_tokens: null\n  claude_task_request_count: null\n  claude_task_usage_boundary: null\n  claude_task_usage_dedup: null\n  claude_task_usage_unknown_reason: null\n  claude_task_subagent_usage_included: null\n  codex_cache_read_tokens: null\n  codex_cache_write_tokens: null\n  codex_cached_input_tokens: null\n  codex_cached_tokens: null\n  codex_completion_tokens: null\n  codex_input_tokens: null\n  codex_output_tokens: null\n  codex_prompt_tokens: null\n  codex_reasoning_output_tokens: null\n  codex_thinking_tokens: null\n  codex_total_tokens: null\n  gemini_cache_read_tokens: null\n  gemini_cache_write_tokens: null\n  gemini_cached_input_tokens: null\n  gemini_cached_tokens: null\n  gemini_completion_tokens: null\n  gemini_input_tokens: null\n  gemini_output_tokens: null\n  gemini_prompt_tokens: null\n  gemini_reasoning_output_tokens: null\n  gemini_thinking_tokens: null\n  gemini_total_tokens: null\n  deepseek_cache_read_tokens: null\n  deepseek_cache_write_tokens: null\n  deepseek_cached_input_tokens: null\n  deepseek_cached_tokens: null\n  deepseek_completion_tokens: null\n  deepseek_input_tokens: null\n  deepseek_output_tokens: null\n  deepseek_prompt_tokens: null\n  deepseek_reasoning_output_tokens: null\n  deepseek_thinking_tokens: null\n  deepseek_total_tokens: null\n---\n<!-- orchestrator projection v1 sha256=20d8524b6118dd31e107ebcd35016377f6543273c4797fdddbf506d28df440bf -->\n# Run: p56-findings\n\nFlow: consequential / claude-sonnet (xhigh), phase=implementation; fresh_threads=1, reply_calls=1\nDuration: unknown\nValidation: UNKNOWN\nReview: CHANGES_REQUIRED\n\n## Notes\n\n- Status: INCONCLUSIVE\n- Concurrent writer: True\n- Projection source: telemetry aggregate only; local timezone: Europe/Istanbul.\n",
+      "expected_path": "${VAULT}/Runs/2026/10/p56-findings.md"
+    },
+    {
+      "name": "p56-invalid-identifier",
+      "aggregate": {
+        "task_id": "bad id"
+      },
+      "invalid": true,
+      "error": "task_id is not a sanitized identifier"
+    },
+    {
+      "name": "p56-invalid-enum",
+      "aggregate": {
+        "task_id": "p56-invalid-enum",
+        "status": "FINISHED"
+      },
+      "invalid": true,
+      "error": "status is outside its controlled enum"
+    },
+    {
+      "name": "p56-invalid-number",
+      "aggregate": {
+        "task_id": "p56-invalid-number",
+        "fresh_threads": -1
+      },
+      "invalid": true,
+      "error": "fresh_threads is not a finite non-negative number"
+    },
+    {
+      "name": "p56-invalid-boolean",
+      "aggregate": {
+        "task_id": "p56-invalid-boolean",
+        "concurrent_writer": "yes"
+      },
+      "invalid": true,
+      "error": "concurrent_writer is not boolean"
+    },
+    {
+      "name": "p56-invalid-timestamp",
+      "aggregate": {
+        "task_id": "p56-invalid-timestamp",
+        "started_at": "yesterday"
+      },
+      "invalid": true,
+      "error": "started_at is not a UTC timestamp"
+    },
+    {
+      "name": "p56-invalid-usage",
+      "aggregate": {
+        "task_id": "p56-invalid-usage",
+        "usage": {
+          "codex_call_count": "unknown"
+        }
+      },
+      "invalid": true,
+      "error": "codex_call_count is not numeric"
+    },
+    {
+      "name": "p56-invalid-usage-boolean",
+      "aggregate": {
+        "task_id": "p56-invalid-usage-boolean",
+        "usage": {
+          "claude_usage_known": "yes"
+        }
+      },
+      "invalid": true,
+      "error": "claude_usage_known is not boolean"
+    },
+    {
+      "name": "p56-invalid-usage-timestamp",
+      "aggregate": {
+        "task_id": "p56-invalid-usage-timestamp",
+        "usage": {
+          "claude_usage_captured_at": "yesterday"
+        }
+      },
+      "invalid": true,
+      "error": "claude_usage_captured_at is not a UTC timestamp"
+    },
+    {
+      "name": "p56-invalid-usage-identifier",
+      "aggregate": {
+        "task_id": "p56-invalid-usage-identifier",
+        "usage": {
+          "claude_usage_session_id": "bad id"
+        }
+      },
+      "invalid": true,
+      "error": "claude_usage_session_id is not a sanitized identifier"
+    },
+    {
+      "name": "p56-invalid-usage-enum",
+      "aggregate": {
+        "task_id": "p56-invalid-usage-enum",
+        "usage": {
+          "claude_rate_limit_delta_scope": "task"
+        }
+      },
+      "invalid": true,
+      "error": "claude_rate_limit_delta_scope is outside its controlled enum"
+    }
+  ]
+}

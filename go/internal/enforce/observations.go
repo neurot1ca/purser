@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -185,6 +186,555 @@ func observationMarkerFor(content string, yamlComment bool) string {
 
 func observationWithMarker(prefix, body string, yamlComment bool) string {
 	return prefix + observationMarkerFor(prefix+body, yamlComment) + body
+}
+
+// renderObservationRunNote mirrors obsidian_projection.render_run_note and
+// project_task's path calculation. It renders only; callers own all IO.
+func renderObservationRunNote(aggregate map[string]any, vaultRoot string) (string, string, error) {
+	p, err := prepareObservationRun(aggregate)
+	if err != nil {
+		return "", "", err
+	}
+	zone, _ := observationResolveDisplayZone()
+	year, month := "0000", "00"
+	anchor := p.started
+	if anchor == nil {
+		anchor = p.ended
+	}
+	if anchor != nil {
+		local := anchor.In(zone)
+		year, month = fmt.Sprintf("%04d", local.Year()), fmt.Sprintf("%02d", local.Month())
+	}
+	path, ok := observationSafeRunPath(vaultRoot, year, month, p.taskID)
+	if !ok {
+		return "", "", errors.New("run note path escaped the Runs tree")
+	}
+	fm := observationRunFrontmatter(p)
+	body := observationRunBody(p)
+	return observationWithMarker(fm, body, false), path, nil
+}
+
+type observationRun struct {
+	values         map[string]any
+	taskID         string
+	started, ended *time.Time
+}
+
+var observationUsageKeys = []string{
+	"codex_call_count", "codex_duration_ms", "codex_usage_known", "gemini_duration_ms", "gemini_usage_known", "deepseek_usage_known",
+	"claude_usage_session_id", "claude_usage_captured_at", "claude_5h_start_pct", "claude_5h_end_pct", "claude_5h_delta_pct", "claude_5h_resets_at",
+	"claude_7d_start_pct", "claude_7d_end_pct", "claude_7d_resets_at", "claude_context_used_percentage", "claude_context_window_size", "claude_context_total_tokens",
+	"claude_context_input_tokens", "claude_context_output_tokens", "claude_cache_creation_input_tokens", "claude_cache_read_input_tokens", "claude_session_estimated_cost_usd",
+	"claude_session_total_duration_ms", "claude_usage_known", "claude_rate_limit_delta_scope", "claude_task_usage_source", "claude_task_usage_known",
+	"claude_task_usage_complete", "claude_task_input_tokens", "claude_task_output_tokens", "claude_task_cache_creation_input_tokens",
+	"claude_task_cache_read_input_tokens", "claude_task_total_observed_tokens", "claude_task_request_count", "claude_task_usage_boundary",
+	"claude_task_usage_dedup", "claude_task_usage_unknown_reason", "claude_task_subagent_usage_included",
+}
+
+func observationAllUsageKeys() []string {
+	keys := append([]string(nil), observationUsageKeys...)
+	for _, provider := range []string{"codex", "gemini", "deepseek"} {
+		fields := strings.Fields("input_tokens cached_input_tokens output_tokens reasoning_output_tokens total_tokens prompt_tokens completion_tokens cached_tokens cache_read_tokens cache_write_tokens thinking_tokens")
+		sort.Strings(fields)
+		for _, field := range fields {
+			keys = append(keys, provider+"_"+field)
+		}
+	}
+	return keys
+}
+
+var observationContextKeys = strings.Fields(`read_count full_read_count targeted_read_count unknown_read_count observed_bytes_total exact_line_read_count exact_line_count_total lower_bound_line_read_count lower_bound_line_count_total oversized_read_count binary_suspected_read_count threshold_200_known_count threshold_200_candidate_count threshold_350_known_count threshold_350_candidate_count threshold_500_known_count threshold_500_candidate_count repeat_count repeat_known pre_codex_read_count post_codex_read_count task_association_known hook_sample_count internal_processing_us_total internal_processing_us_max hook_wall_time_us_total hook_wall_time_us_max unknown_reason`)
+
+var observationRunOptionalBooleans = strings.Fields("first_pass first_pass_success repair repair_attempted repaired accepted blocked")
+var observationRunOptionalCounts = []string{"repair_count"}
+var observationSafeText = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+var observationRunFrontmatterKeys = strings.Fields("type schema_version projection_schema_version task_id repo branch timezone started_at started_at_utc ended_at ended_at_utc status phase route model effort fresh_threads reply_calls routing_enforced validation duration_ms thread_id reviewer1_provider reviewer1_model_requested reviewer1_result reviewer1_skipped_reason served_model_attestation claude_review_mode changed_paths_count routing_protocol_violations thread_continuity_violations concurrent_writer policy_fingerprint first_pass first_pass_success repair repair_attempted repaired accepted blocked repair_count")
+var observationRunBaseFrontmatterKeys = strings.Fields("repo branch started_at started_at_utc ended_at ended_at_utc status phase route model effort fresh_threads reply_calls routing_enforced validation duration_ms thread_id reviewer1_provider reviewer1_model_requested reviewer1_result reviewer1_skipped_reason served_model_attestation claude_review_mode changed_paths_count routing_protocol_violations thread_continuity_violations concurrent_writer policy_fingerprint")
+
+func observationResolveDisplayZone() (*time.Location, string) {
+	if zone, err := time.LoadLocation("Europe/Istanbul"); err == nil {
+		return zone, "Europe/Istanbul"
+	}
+	return time.FixedZone("UTC+03:00", 3*60*60), "Europe/Istanbul"
+}
+
+var observationDisplayZone, observationDisplayTimezone = observationResolveDisplayZone()
+
+func prepareObservationRun(a map[string]any) (observationRun, error) {
+	bad := func(name, why string) (observationRun, error) {
+		return observationRun{}, fmt.Errorf("%s %s", name, why)
+	}
+	identifier := func(name string, v any, nullable bool) (any, error) {
+		if v == nil && nullable {
+			return nil, nil
+		}
+		s, ok := v.(string)
+		if !ok || !observationSafeText.MatchString(s) || normalizeObservationID(s, "unknown") != s {
+			return nil, fmt.Errorf("%s is not a sanitized identifier", name)
+		}
+		return s, nil
+	}
+	number := func(name string, v any, integer, nullable bool) (any, error) {
+		if v == nil && nullable {
+			return nil, nil
+		}
+		var n float64
+		switch x := v.(type) {
+		case int:
+			n = float64(x)
+		case int64:
+			n = float64(x)
+		case float64:
+			n = x
+		case json.Number:
+			parsed, e := x.Float64()
+			if e != nil {
+				return nil, fmt.Errorf("%s is not numeric", name)
+			}
+			n = parsed
+		default:
+			return nil, fmt.Errorf("%s is not numeric", name)
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
+			return nil, fmt.Errorf("%s is not a finite non-negative number", name)
+		}
+		if integer {
+			switch x := v.(type) {
+			case int, int64:
+			case json.Number:
+				if strings.ContainsAny(string(x), ".eE") {
+					return nil, fmt.Errorf("%s is not an integer", name)
+				}
+			default:
+				return nil, fmt.Errorf("%s is not an integer", name)
+			}
+		}
+		return v, nil
+	}
+	boolean := func(name string, v any, nullable bool) (any, error) {
+		if v == nil && nullable {
+			return nil, nil
+		}
+		if _, ok := v.(bool); !ok {
+			return nil, fmt.Errorf("%s is not boolean", name)
+		}
+		return v, nil
+	}
+	v := map[string]any{}
+	id, err := identifier("task_id", a["task_id"], false)
+	if err != nil {
+		return bad("task_id", "is not a sanitized identifier")
+	}
+	taskID := id.(string)
+	copyID := func(key string) error {
+		x, e := identifier(key, a[key], true)
+		if e == nil {
+			v[key] = x
+		}
+		return e
+	}
+	for _, key := range []string{"repo", "branch", "model", "thread_id", "reviewer1_provider", "reviewer1_model_requested", "policy_fingerprint"} {
+		if err = copyID(key); err != nil {
+			return bad(key, "is not a sanitized identifier")
+		}
+	}
+	for _, key := range observationRunBaseFrontmatterKeys {
+		if _, ok := v[key]; !ok {
+			v[key] = nil
+		}
+	}
+	var started, ended *time.Time
+	for _, key := range []string{"started_at", "ended_at"} {
+		raw := a[key]
+		utcKey := key + "_utc"
+		if raw == nil {
+			v[key], v[utcKey] = nil, nil
+			continue
+		}
+		s, ok := raw.(string)
+		if !ok || len(s) > 40 || strings.ContainsAny(s, "\r\n") {
+			return bad(key, "is not a UTC timestamp")
+		}
+		t, e := time.Parse(time.RFC3339Nano, s)
+		if e != nil || !strings.HasSuffix(s, "Z") && !strings.HasSuffix(s, "+00:00") && !strings.HasSuffix(s, "-00:00") {
+			return bad(key, "is not a UTC timestamp")
+		}
+		if key == "started_at" {
+			started = &t
+		} else {
+			ended = &t
+		}
+		t = t.Truncate(time.Microsecond)
+		v[key] = observationPythonLocalTime(t)
+		v[utcKey] = s
+	}
+	setEnum := func(key string, allowed string) error {
+		x := a[key]
+		if x == nil {
+			v[key] = nil
+			return nil
+		}
+		s, ok := x.(string)
+		if !ok || !oneOf(s, allowed) {
+			return fmt.Errorf("%s is outside its controlled enum", key)
+		}
+		v[key] = s
+		return nil
+	}
+	for _, enum := range []struct{ key, allowed string }{
+		{"status", "UNKNOWN_OR_IN_PROGRESS IN_PROGRESS VERIFIED NOT_VERIFIED INCONCLUSIVE NO_CHANGE"},
+		{"phase", "implementation operation"}, {"task_type", "implementation operation plan unknown"},
+		{"route", "mechanical subtle normal consequential escalated operation"}, {"effort", "low medium high xhigh"},
+		{"validation", "PASS FAIL UNKNOWN"}, {"claude_review_mode", "AUDIT FULL"},
+		{"reviewer1_result", "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE CHANGES_REQUIRED UNCERTAIN REVIEWER1_UNAVAILABLE"},
+		{"reviewer1_skipped_reason", "PHASE_OPERATION NO_DELTA BELOW_THRESHOLD REVIEWER_UNAVAILABLE"},
+	} {
+		key, allowed := enum.key, enum.allowed
+		if key == "task_type" {
+			if _, exists := a[key]; !exists {
+				v[key] = "unknown"
+				continue
+			}
+		}
+		if err = setEnum(key, allowed); err != nil {
+			return bad(key, "is outside its controlled enum")
+		}
+	}
+	att := a["served_model_attestation"]
+	if att != nil && att != "UNAVAILABLE" {
+		return bad("served_model_attestation", "is outside its controlled enum")
+	}
+	v["served_model_attestation"] = att
+	for _, key := range []string{"fresh_threads", "reply_calls", "duration_ms", "changed_paths_count", "routing_protocol_violations", "thread_continuity_violations"} {
+		x, e := number(key, a[key], key != "duration_ms", true)
+		if e != nil {
+			return observationRun{}, e
+		}
+		v[key] = x
+	}
+	for _, key := range []string{"routing_enforced", "concurrent_writer"} {
+		x, e := boolean(key, a[key], true)
+		if e != nil {
+			return bad(key, "is not boolean")
+		}
+		v[key] = x
+	}
+	for _, key := range observationRunOptionalBooleans {
+		if x, ok := a[key]; ok {
+			z, e := boolean(key, x, false)
+			if e != nil {
+				return bad(key, "is not boolean")
+			}
+			v[key] = z
+		}
+	}
+	for _, key := range observationRunOptionalCounts {
+		if x, ok := a[key]; ok {
+			z, e := number(key, x, true, false)
+			if e != nil {
+				return observationRun{}, e
+			}
+			v[key] = z
+		}
+	}
+	usage, _ := a["usage"].(map[string]any)
+	if a["usage"] != nil && usage == nil {
+		return bad("usage", "is not an object")
+	}
+	if usage == nil {
+		usage = map[string]any{}
+	}
+	allUsage := observationAllUsageKeys()
+	known := map[string]bool{}
+	for _, k := range allUsage {
+		known[k] = true
+	}
+	for _, k := range []string{"_claude_5h_start_session_id", "_claude_5h_start_captured_at", "_claude_5h_start_resets_at", "_claude_5h_end_session_id", "_claude_5h_end_captured_at", "_claude_5h_end_resets_at"} {
+		known[k] = true
+	}
+	for k := range usage {
+		if !known[k] {
+			return bad("usage", "contains an unregistered field")
+		}
+	}
+	u := map[string]any{}
+	for _, k := range allUsage {
+		x := usage[k]
+		var z any
+		var e error
+		allowed := map[string]string{"claude_rate_limit_delta_scope": "account_window_observation", "claude_task_usage_source": "desktop_jsonl_observed", "claude_task_usage_boundary": "anchored_pre_tool_to_stop", "claude_task_usage_dedup": "message_id_request_id"}
+		choice, isEnum := allowed[k]
+		switch {
+		case isEnum:
+			z = x
+		case strings.HasSuffix(k, "_usage_known") || k == "claude_task_usage_complete" || k == "claude_task_subagent_usage_included":
+			z, e = boolean(k, x, false)
+		case strings.Contains(k, "session_id") || k == "claude_task_usage_unknown_reason":
+			z, e = identifier(k, x, false)
+		case strings.Contains(k, "captured_at") || strings.Contains(k, "resets_at"):
+			z, e = observationUsageTimestamp(k, x)
+		default:
+			z, e = number(k, x, strings.HasPrefix(k, "claude_task_") && (strings.HasSuffix(k, "_tokens") || strings.HasSuffix(k, "_count")), false)
+		}
+		if x == nil {
+			z = nil
+			e = nil
+		}
+		if isEnum && x != nil && x != choice {
+			e = fmt.Errorf("%s is outside its controlled enum", k)
+		}
+		if e != nil {
+			return observationRun{}, e
+		}
+		u[k] = z
+	}
+	v["usage"] = u
+	v["task_id"] = taskID
+	v["timezone"] = observationDisplayTimezone
+	v["schema_version"] = 1
+	v["projection_schema_version"] = 1
+	if acceptance, exists := a["claude_acceptance"]; exists {
+		if err := validateObservationAcceptance(acceptance); err != nil {
+			return bad("claude_acceptance", "is invalid")
+		}
+	}
+	ctx := a["context_io"]
+	if ctx == nil {
+		v["context_io"] = nil
+	} else {
+		m, ok := ctx.(map[string]any)
+		if !ok {
+			return bad("context_io", "contains an unregistered field")
+		}
+		c := map[string]any{}
+		allow := map[string]bool{}
+		for _, k := range observationContextKeys {
+			allow[k] = true
+		}
+		for k := range m {
+			if !allow[k] {
+				return bad("context_io", "contains an unregistered field")
+			}
+		}
+		for _, k := range observationContextKeys {
+			x := m[k]
+			if k == "unknown_reason" {
+				if x != nil && !oneOf(x, "BINARY_SUSPECTED BOUNDED_SCAN CORRUPT_STATE DIRECTORY INVALID_INPUT JOURNAL_LIMIT MISSING_FILE MISSING_USER_PROMPT OBSERVATION_LIMIT OUTSIDE_ROOT PRIOR_TURN_MISSING_STOP PROTECTED_PATH RESOURCE_LIMIT STALE_STATE STATE_CONTENTION STAT_UNAVAILABLE") {
+					return bad("context_io", "unknown_reason is outside its controlled enum")
+				}
+				c[k] = x
+			} else if k == "repeat_known" || k == "task_association_known" {
+				z, e := boolean(k, x, true)
+				if e != nil {
+					return bad(k, "is not boolean")
+				}
+				c[k] = z
+			} else {
+				z, e := number(k, x, true, true)
+				if e != nil {
+					return observationRun{}, e
+				}
+				c[k] = z
+			}
+		}
+		v["context_io"] = c
+	}
+	return observationRun{values: v, taskID: taskID, started: started, ended: ended}, nil
+}
+
+func validateObservationAcceptance(value any) error {
+	if value == nil {
+		return fmt.Errorf("invalid")
+	}
+	m, ok := value.(map[string]any)
+	if !ok || len(m) != 4 {
+		return fmt.Errorf("invalid")
+	}
+	if !oneOf(m["outcome"], "accepted rejected unknown") || !validNumber(m["send_backs"], true) {
+		return fmt.Errorf("invalid")
+	}
+	if _, ok := m["applied_as_is"].(bool); !ok {
+		return fmt.Errorf("invalid")
+	}
+	sources, ok := m["sources"].([]any)
+	if !ok {
+		return fmt.Errorf("invalid")
+	}
+	for _, item := range sources {
+		src, ok := item.(map[string]any)
+		if !ok || len(src) != 5 || !oneOf(src["kind"], "apply reply discard") || !oneOf(src["decision"], "accepted send_back rejected") {
+			return fmt.Errorf("invalid")
+		}
+		if id := src["job_id"]; id != nil {
+			s, ok := id.(string)
+			if !ok || !observationSafeText.MatchString(s) || normalizeObservationID(s, "unknown") != s {
+				return fmt.Errorf("invalid")
+			}
+		}
+		if src["task_type"] != nil && !oneOf(src["task_type"], "implementation operation plan unknown") {
+			return fmt.Errorf("invalid")
+		}
+		ts, ok := src["ts_utc"].(string)
+		if !ok {
+			return fmt.Errorf("invalid")
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, ts)
+		_, offset := parsed.Zone()
+		if err != nil || offset != 0 || !(strings.HasSuffix(ts, "Z") || strings.HasSuffix(ts, "+00:00")) {
+			return fmt.Errorf("invalid")
+		}
+	}
+	return nil
+}
+
+func observationPythonLocalTime(t time.Time) string {
+	local := t.In(observationDisplayZone)
+	base := local.Format("2006-01-02T15:04:05")
+	if local.Nanosecond() != 0 {
+		base += fmt.Sprintf(".%06d", local.Nanosecond()/1000)
+	}
+	return base + local.Format("-07:00")
+}
+func observationUsageTimestamp(name string, v any) (any, error) {
+	s, ok := v.(string)
+	if !ok {
+		return nil, fmt.Errorf("%s is not a UTC timestamp", name)
+	}
+	t, e := time.Parse(time.RFC3339Nano, s)
+	_, offset := t.Zone()
+	if e != nil || !(strings.HasSuffix(s, "Z") || strings.HasSuffix(s, "+00:00")) || offset != 0 || len(s) > 40 || strings.ContainsAny(s, "\r\n") {
+		return nil, fmt.Errorf("%s is not a UTC timestamp", name)
+	}
+	return s, nil
+}
+
+func observationRunFrontmatter(p observationRun) string {
+	v := p.values
+	lines := []string{"---"}
+	for _, k := range observationRunFrontmatterKeys {
+		x, ok := v[k]
+		if !ok {
+			switch k {
+			case "type":
+				x = "orch-run"
+			case "started_at_utc":
+				x = nil
+			case "ended_at_utc":
+				x = nil
+			default:
+				continue
+			}
+		}
+		lines = append(lines, k+": "+observationYAMLScalar(x))
+	}
+	lines = append(lines, "usage:")
+	u := v["usage"].(map[string]any)
+	for _, k := range observationAllUsageKeys() {
+		lines = append(lines, "  "+k+": "+observationYAMLScalar(u[k]))
+	}
+	if v["context_io"] != nil {
+		lines = append(lines, "context_io:")
+		for _, k := range observationContextKeys {
+			lines = append(lines, "  "+k+": "+observationYAMLScalar(v["context_io"].(map[string]any)[k]))
+		}
+	}
+	lines = append(lines, "---", "")
+	return strings.Join(lines, "\n")
+}
+func observationYAMLScalar(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "null"
+	case string:
+		b, _ := json.Marshal(x)
+		s := string(b)
+		for _, pair := range [][2]string{{"\\u003c", "<"}, {"\\u003e", ">"}, {"\\u0026", "&"}, {"\\u2028", " "}, {"\\u2029", " "}} {
+			s = strings.ReplaceAll(s, pair[0], pair[1])
+		}
+		return s
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return observationPythonFloat(x)
+	case json.Number:
+		if _, err := x.Int64(); err == nil {
+			return string(x)
+		}
+		f, err := x.Float64()
+		if err != nil {
+			return string(x)
+		}
+		return observationPythonFloat(f)
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+func observationPythonFloat(value float64) string {
+	if math.Trunc(value) == value && math.Abs(value) < 1e16 {
+		return strconv.FormatFloat(value, 'f', 1, 64)
+	}
+	abs := math.Abs(value)
+	if value != 0 && (abs < 1e-4 || abs >= 1e16) {
+		s := strconv.FormatFloat(value, 'e', -1, 64)
+		i := strings.LastIndexByte(s, 'e')
+		mantissa, exp := s[:i], s[i+1:]
+		sign := "+"
+		if strings.HasPrefix(exp, "-") {
+			sign = "-"
+			exp = strings.TrimPrefix(exp, "-")
+		} else {
+			exp = strings.TrimPrefix(exp, "+")
+		}
+		if len(exp) < 2 {
+			exp = "0" + exp
+		}
+		return mantissa + "e" + sign + exp
+	}
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+func observationRunBody(p observationRun) string {
+	v := p.values
+	disp := func(x any) string {
+		if x == nil {
+			return "unknown"
+		}
+		if b, ok := x.(bool); ok {
+			if b {
+				return "True"
+			}
+			return "False"
+		}
+		return fmt.Sprint(x)
+	}
+	duration := "unknown"
+	if x := v["duration_ms"]; x != nil {
+		var ms float64
+		switch n := x.(type) {
+		case float64:
+			ms = n
+		case int:
+			ms = float64(n)
+		case int64:
+			ms = float64(n)
+		case json.Number:
+			ms, _ = n.Float64()
+		}
+		seconds := ms / 1000
+		if seconds < 60 {
+			duration = fmt.Sprintf("%.1fs", seconds)
+		} else {
+			duration = fmt.Sprintf("%dm %.1fs", int(seconds/60), math.Mod(seconds, 60))
+		}
+	}
+	review := disp(v["reviewer1_result"])
+	if v["reviewer1_skipped_reason"] != nil {
+		review = "SKIPPED (" + fmt.Sprint(v["reviewer1_skipped_reason"]) + ")"
+	}
+	return fmt.Sprintf("# Run: %s\n\nFlow: %s / %s (%s), phase=%s; fresh_threads=%s, reply_calls=%s\nDuration: %s\nValidation: %s\nReview: %s\n\n## Notes\n\n- Status: %s\n- Concurrent writer: %s\n- Projection source: telemetry aggregate only; local timezone: %s.\n", p.taskID, disp(v["route"]), disp(v["model"]), disp(v["effort"]), disp(v["phase"]), disp(v["fresh_threads"]), disp(v["reply_calls"]), duration, disp(v["validation"]), review, disp(v["status"]), disp(v["concurrent_writer"]), v["timezone"])
 }
 
 func observationGeneratedContentIsIntact(content string) bool {
@@ -1336,6 +1886,12 @@ func optionalObservationID(value any, fallback string) any {
 func validNumber(value any, integer bool) bool {
 	var n float64
 	switch x := value.(type) {
+	case json.Number:
+		parsed, err := x.Float64()
+		if err != nil {
+			return false
+		}
+		n = parsed
 	case float64:
 		n = x
 	case int:

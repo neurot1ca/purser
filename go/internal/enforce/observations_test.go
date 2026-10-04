@@ -924,3 +924,104 @@ func TestObservationP55ProjectionBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestObservationP56RunNoteRendering(t *testing.T) {
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observation_projection.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name            string         `json:"name"`
+			Aggregate       map[string]any `json:"aggregate"`
+			ExpectedContent string         `json:"expected_content"`
+			ExpectedPath    string         `json:"expected_path"`
+			Invalid         bool           `json:"invalid"`
+			Error           string         `json:"error"`
+		} `json:"p56_cases"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err = decoder.Decode(&fixture); err != nil {
+		t.Fatal(err)
+	}
+	base, err := filepath.Abs(filepath.Join("..", "..", "..", ".tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			vault := filepath.Join(base, tc.Name, "vault")
+			if err := os.MkdirAll(vault, 0700); err != nil {
+				t.Fatal(err)
+			}
+			content, path, renderErr := renderObservationRunNote(tc.Aggregate, vault)
+			if tc.Invalid {
+				if renderErr == nil {
+					t.Fatal("invalid aggregate rendered")
+				}
+				if !strings.Contains(renderErr.Error(), tc.Error) {
+					t.Fatalf("error %q does not contain %q", renderErr, tc.Error)
+				}
+				return
+			}
+			if renderErr != nil {
+				t.Fatal(renderErr)
+			}
+			if content != tc.ExpectedContent {
+				gotLines, wantLines := strings.Split(content, "\n"), strings.Split(tc.ExpectedContent, "\n")
+				for i := 0; i < len(gotLines) && i < len(wantLines); i++ {
+					if gotLines[i] != wantLines[i] {
+						t.Fatalf("rendered note differs at line %d: got %q, want %q", i+1, gotLines[i], wantLines[i])
+					}
+				}
+				t.Fatalf("rendered note line count differs: got %d, want %d", len(gotLines), len(wantLines))
+			}
+			want := strings.ReplaceAll(tc.ExpectedPath, "${VAULT}", vault)
+			if filepath.Clean(path) != filepath.Clean(want) {
+				t.Fatalf("path = %q, want %q", path, want)
+			}
+		})
+	}
+}
+
+func TestObservationP56AcceptsControlledUsageEnums(t *testing.T) {
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observation_projection.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Aggregate map[string]any `json:"aggregate"`
+			Invalid   bool           `json:"invalid"`
+		} `json:"p56_cases"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err = decoder.Decode(&fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixture.Cases {
+		usage, ok := tc.Aggregate["usage"].(map[string]any)
+		if tc.Invalid || !ok {
+			continue
+		}
+		usage["claude_rate_limit_delta_scope"] = "account_window_observation"
+		usage["claude_task_usage_source"] = "desktop_jsonl_observed"
+		usage["claude_task_usage_boundary"] = "anchored_pre_tool_to_stop"
+		usage["claude_task_usage_dedup"] = "message_id_request_id"
+		run, err := prepareObservationRun(tc.Aggregate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := run.values["usage"].(map[string]any)["claude_task_usage_source"]; got != "desktop_jsonl_observed" {
+			t.Fatalf("enum value not preserved: %v", got)
+		}
+		usage["claude_task_usage_dedup"] = "other"
+		if _, err = prepareObservationRun(tc.Aggregate); err == nil || !strings.Contains(err.Error(), "controlled enum") {
+			t.Fatalf("out-of-enum value accepted: %v", err)
+		}
+		return
+	}
+	t.Fatal("no valid fixture aggregate with usage")
+}

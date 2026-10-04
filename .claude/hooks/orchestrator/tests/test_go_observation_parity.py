@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 ROOT = Path(__file__).resolve().parents[4]
 ORCHESTRATOR = ROOT / ".claude" / "hooks" / "orchestrator"
 FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_policy" / "observations.json"
+PROJECTION_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_policy" / "observation_projection.json"
 sys.path.insert(0, str(ORCHESTRATOR))
 import codex
 import telemetry
@@ -393,4 +394,43 @@ def test_go_observation_p55_projection_cases():
     cache.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(["go", "test", "-run", "^TestObservationP55ProjectionBoundaries$", "-count=1", "./internal/enforce"],
+                   cwd=ROOT / "go", env=env, check=True)
+
+
+def test_python_observation_p56_run_note_oracle(tmp_path):
+    fixture = json.loads(PROJECTION_FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["timezone"] == obsidian_projection.LOCAL_TIMEZONE == "Europe/Istanbul"
+    assert "Python obsidian_projection." in fixture["oracle"]
+    for case in fixture["p56_cases"]:
+        if "p56" not in case["name"]:
+            continue
+        if case.get("invalid"):
+            try:
+                obsidian_projection.render_run_note(case["aggregate"])
+            except obsidian_projection.ProjectionError as exc:
+                assert case["error"] in str(exc), case["name"]
+            else:
+                raise AssertionError(f"{case['name']} unexpectedly rendered")
+            continue
+        prepared = obsidian_projection._prepare_aggregate(case["aggregate"])
+        note = obsidian_projection._with_marker(
+            obsidian_projection._frontmatter(prepared), obsidian_projection._run_body(prepared)
+        )
+        assert obsidian_projection.render_run_note(case["aggregate"]) == (
+            obsidian_projection._frontmatter(prepared) + obsidian_projection._run_body(prepared)
+        ), case["name"]
+        assert note == case["expected_content"], case["name"]
+        vault = tmp_path / case["name"] / "vault"
+        vault.mkdir(parents=True)
+        expected_path = Path(case["expected_path"].replace("${VAULT}", str(vault)))
+        assert obsidian_projection._safe_run_path(vault, prepared) == expected_path, case["name"]
+
+
+def test_go_observation_p56_run_note_cases():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1", "TZ": "Europe/Istanbul"}
+    subprocess.run(["go", "test", "-run", "^TestObservationP56RunNoteRendering$", "-count=1", "./internal/enforce"],
                    cwd=ROOT / "go", env=env, check=True)
