@@ -2,14 +2,17 @@ package lease
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"purser-hook/internal/contextio"
 )
@@ -20,19 +23,22 @@ func Lock(path string) (func() error, error) { return contextio.LockFile(path) }
 const (
 	releasedLeaseRetentionSeconds = 7 * 24 * 60 * 60
 	conflictRetentionSeconds      = 7 * 24 * 60 * 60
+	syncLeaseFallbackSeconds      = 2 * 60 * 60
+	missingJobOrphanSeconds       = 10 * 60
 	maxConflictPaths              = 50
 )
 
 type Result struct{ Status, Code string }
 
 // Store applies the non-admission scope lease transitions for a project root.
-type Store struct{ path, lockPath string }
+type Store struct{ path, lockPath, jobsRoot string }
 
 // New creates a scope lease store using Python's project-state layout.
 func New(projectStateRoot string) *Store {
 	return &Store{
 		path:     filepath.Join(projectStateRoot, "scope_leases.json"),
 		lockPath: filepath.Join(projectStateRoot, "scope_leases.lock"),
+		jobsRoot: filepath.Clean(filepath.Join(projectStateRoot, "..", "..", "codex_exec_mcp", "jobs")),
 	}
 }
 
@@ -71,10 +77,76 @@ func (s *Store) releaseOwner(value map[string]any, ownerKey string, now float64)
 func (s *Store) Reconcile(now float64) (bool, error) {
 	changed := false
 	err := s.mutate(now, func(value map[string]any) bool {
-		changed = s.promote(value, now)
+		changed = s.expire(value, now)
+		changed = s.promote(value, now) || changed
 		return changed
 	})
 	return changed, err
+}
+
+func (s *Store) jobState(jobID string) string {
+	raw, err := os.ReadFile(filepath.Join(s.jobsRoot, jobID+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "MISSING"
+	}
+	if err != nil {
+		return "UNREADABLE"
+	}
+	var job map[string]any
+	if !utf8.Valid(raw) || json.Unmarshal(raw, &job) != nil || job == nil || job["jobId"] != jobID {
+		return "UNREADABLE"
+	}
+	call, ok := job["call"].(string)
+	if !ok {
+		return "UNREADABLE"
+	}
+	sum := sha256.Sum256([]byte(call))
+	if fmt.Sprintf("%x", sum) != jobID {
+		return "UNREADABLE"
+	}
+	state, ok := job["state"].(string)
+	if state == "EXPIRED" || (state == "FAILED" && job["errorCode"] == "JOB_EXPIRED") {
+		return "JOB_EXPIRED"
+	}
+	if !ok {
+		return "UNREADABLE"
+	}
+	return state
+}
+
+func (s *Store) expire(value map[string]any, now float64) bool {
+	changed := false
+	for _, raw := range value["owners"].(map[string]any) {
+		owner := raw.(map[string]any)
+		if owner["state"] != "ACTIVE" && owner["state"] != "QUEUED" {
+			continue
+		}
+		jobID, hasJobID := owner["job_id"]
+		expired := false
+		if !hasJobID || jobID == nil {
+			acquired, hasAcquired := pythonFloat(owner["acquired_at"])
+			deadline, hasDeadline := pythonFloat(owner["deadline_at"])
+			if !hasDeadline && hasAcquired {
+				deadline, hasDeadline = acquired+syncLeaseFallbackSeconds, true
+			}
+			expired = hasDeadline && now >= deadline
+		} else if id, ok := jobID.(string); ok {
+			state := s.jobState(id)
+			started, hasStarted := pythonFloat(owner["acquired_at"])
+			if !hasStarted {
+				started, hasStarted = pythonFloat(owner["queued_at"])
+			}
+			orphaned := state == "MISSING" && hasStarted && now >= started+missingJobOrphanSeconds
+			cutoff, hasCutoff := pythonFloat(owner["retention_after"])
+			expired = orphaned || state == "JOB_EXPIRED" ||
+				(state != "UNREADABLE" && state != "QUEUED" && state != "RUNNING" && hasCutoff && now >= cutoff)
+		}
+		if expired {
+			owner["state"], owner["released_at"] = "RELEASED", now
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (s *Store) mutate(now float64, apply func(map[string]any) bool) error {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -119,6 +120,25 @@ func TestFailedReleaseWritePreservesPriorRecord(t *testing.T) {
 	}
 }
 
+func TestFailedReconcileWritePreservesPriorRecord(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "scope_leases.json")
+	prior := `{"version":1,"owners":{"expired":{"state":"ACTIVE","scope":["src"],"task_id":"expired","acquired_at":1,"deadline_at":2}}}`
+	if err := os.WriteFile(path, []byte(prior), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldReplace := replaceLeaseFile
+	replaceLeaseFile = func(string, string) error { return os.ErrPermission }
+	t.Cleanup(func() { replaceLeaseFile = oldReplace })
+	if _, err := New(root).Reconcile(2); err == nil {
+		t.Fatal("failed replacement reported successful reconciliation")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != prior {
+		t.Fatalf("prior record not recoverable after failed reconcile: err=%v content=%s", err, after)
+	}
+}
+
 func TestPromoteThenReleaseReadsFloatTimestampsInMemory(t *testing.T) {
 	store := New(t.TempDir())
 	value := map[string]any{"owners": map[string]any{
@@ -155,6 +175,54 @@ func TestHotPathPromotionHonorsConflictOverlap(t *testing.T) {
 	if readErr != nil || string(after) != fixture {
 		t.Fatalf("no-transition reconcile pruned data: %v data=%s", readErr, after)
 	}
+}
+
+func TestReconcileExpiresBeforePromotingQueuedOwner(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "scope_leases.json")
+	fixture := `{"version":1,"owners":{"expired":{"acquired_at":1,"deadline_at":99,"scope":["src"],"state":"ACTIVE","task_id":"expired"},"queued":{"job_id":"job","queued_at":99,"scope":["src/sub"],"state":"QUEUED","task_id":"queued"}}}`
+	if err := os.WriteFile(path, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := New(root).Reconcile(100)
+	if err != nil || !changed {
+		t.Fatalf("expired owner did not trigger reconciliation: changed=%v err=%v", changed, err)
+	}
+	value, err := New(root).read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := value["owners"].(map[string]any)
+	if owners["expired"].(map[string]any)["state"] != "RELEASED" {
+		t.Fatal("synchronous owner was not expired")
+	}
+	if owner := owners["queued"].(map[string]any); owner["state"] != "ACTIVE" || owner["acquired_at"] != json.Number("100") {
+		t.Fatalf("queued owner was not promoted after expiry: %#v", owner)
+	}
+}
+
+func TestReconcileParityOutcome(t *testing.T) {
+	root := os.Getenv("PURSER_LEASE_RECONCILE_ROOT")
+	if root == "" {
+		t.Skip("parity helper")
+	}
+	now, err := strconv.ParseFloat(os.Getenv("PURSER_LEASE_RECONCILE_NOW"), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := New(root).Reconcile(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := New(root).read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(map[string]any{"changed": changed, "owners": value["owners"]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("LEASE_RECONCILE_RESULT:" + string(result))
 }
 
 func TestWritePrunesExpiredPythonLeaseEntries(t *testing.T) {
