@@ -1,0 +1,59 @@
+{
+  "oracle": "codex_quota.read_latest_quota and codex._last_launch_failure",
+  "quota_now": "2026-09-24T12:00:00+00:00",
+  "quota_cases": [
+    {
+      "name": "p35_quota_bounded_scan",
+      "files": [
+        {"day": 0, "name": "rollout-bounded.jsonl", "mtime": 100, "prefix_event": {"timestamp": "2026-09-24T11:00:00Z", "payload": {"rate_limits": {"primary": {"window_minutes": 300, "used_percent": 15, "resets_at": 1790263742}}}}, "padding_bytes": 262144}
+      ],
+      "expected": null
+    },
+    {
+      "name": "p35_quota_latest_record_wins",
+      "files": [
+        {"day": 0, "name": "rollout-latest.jsonl", "mtime": 100, "events": [
+          {"timestamp": "2026-09-24T11:58:00Z", "payload": {"rate_limits": {"primary": {"window_minutes": 300, "used_percent": 15, "resets_at": 1790263742}}}},
+          {"timestamp": "2026-09-24T11:59:00Z", "payload": {"rate_limits": {"primary": {"window_minutes": 301, "used_percent": 99, "resets_at": 1790263742}}}}
+        ]}
+      ],
+      "expected": {"snapshot_at": "2026-09-24T11:59:00Z", "windows_seen": false}
+    },
+    {
+      "name": "p35_quota_expired_windows",
+      "files": [
+        {"day": 0, "name": "rollout-expired.jsonl", "mtime": 100, "events": [
+          {"timestamp": "2026-09-24T11:59:00Z", "payload": {"rate_limits": {"primary": {"window_minutes": 300, "used_percent": 91, "resets_at": 1790251190}, "secondary": {"window_minutes": 10080, "used_percent": 82, "resets_at": 1790251180}}}}
+        ]}
+      ],
+      "expected": {"snapshot_at": "2026-09-24T11:59:00Z", "windows_seen": true}
+    },
+    {
+      "name": "p35_quota_unknown_and_missing_windows",
+      "files": [
+        {"day": 0, "name": "rollout-unknown.jsonl", "mtime": 100, "events": [
+          {"timestamp": "2026-09-24T11:59:00Z", "payload": {"rate_limits": {"primary": {"window_minutes": 301, "used_percent": 55, "resets_at": 1790263742}}}}
+        ]}
+      ],
+      "expected": {"snapshot_at": "2026-09-24T11:59:00Z", "windows_seen": false}
+    }
+  ],
+  "launch_cases": [
+    {
+      "name": "p35_launch_failure_superseded_by_success",
+      "records": [
+        {"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "project_key": "project", "job": {"jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "phase": "implementation", "finishedAt": 100, "state": "FAILED", "launchFailureEvidence": {"type": "CREDIT_EXHAUSTED"}}},
+        {"id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "project_key": "project", "job": {"jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "phase": "implementation", "finishedAt": 200, "state": "SUCCEEDED"}}
+      ],
+      "expected": null
+    },
+    {
+      "name": "p35_launch_latest_failure_returned",
+      "records": [
+        {"id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "project_key": "project", "job": {"jobId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "phase": "implementation", "finishedAt": 100, "state": "SUCCEEDED"}},
+        {"id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "project_key": "project", "job": {"jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "phase": "implementation", "finishedAt": 200, "state": "TIMED_OUT", "launchFailureEvidence": {"type": "RATE_LIMITED", "retryAfterSeconds": 30}}}
+      ],
+      "expected": {"type": "RATE_LIMITED", "retryAfterSeconds": 30, "job_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "trigger_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+    }
+  ]
+}

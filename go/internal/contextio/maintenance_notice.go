@@ -94,7 +94,11 @@ func latestMaintenanceQuota() (map[string]any, *[3]any, bool) {
 		}
 		home = filepath.Join(userHome, ".codex")
 	}
-	now := time.Now().UTC()
+	return latestQuotaAt(home, time.Now().UTC())
+}
+
+func latestQuotaAt(home string, now time.Time) (map[string]any, *[3]any, bool) {
+	now = now.UTC()
 	paths := []string{}
 	for _, day := range []time.Time{now, now.AddDate(0, 0, -1)} {
 		matches, _ := filepath.Glob(filepath.Join(home, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"), "rollout-*.jsonl"))
@@ -129,7 +133,7 @@ func latestMaintenanceQuota() (map[string]any, *[3]any, bool) {
 			continue
 		}
 		payload, _ := candidate["payload"].(map[string]any)
-		if payload["rate_limits"] != nil {
+		if _, ok := payload["rate_limits"].(map[string]any); ok {
 			event = candidate
 			break
 		}
@@ -137,14 +141,13 @@ func latestMaintenanceQuota() (map[string]any, *[3]any, bool) {
 	if event == nil {
 		return nil, nil, false
 	}
-	stamp, ok := event["timestamp"].(string)
-	at, err := time.Parse(time.RFC3339Nano, stamp)
-	if !ok || err != nil || at.After(now) || now.Sub(at) > 30*time.Minute {
-		return nil, nil, false
-	}
+	stamp, hasStamp := event["timestamp"].(string)
 	payload, _ := event["payload"].(map[string]any)
 	limits, _ := payload["rate_limits"].(map[string]any)
-	snapshot := map[string]any{"snapshot_at": stamp, "windows_seen": false}
+	snapshot := map[string]any{"windows_seen": false}
+	if hasStamp {
+		snapshot["snapshot_at"] = stamp
+	}
 	for _, entry := range []struct {
 		source, label string
 		minutes       int
@@ -154,6 +157,7 @@ func latestMaintenanceQuota() (map[string]any, *[3]any, bool) {
 		used, uok := raw["used_percent"].(float64)
 		reset, rok := raw["resets_at"].(float64)
 		if mok && minutes == entry.minutes && uok && !math.IsNaN(used) && !math.IsInf(used, 0) && rok && !math.IsNaN(reset) && !math.IsInf(reset, 0) {
+			snapshot["windows_seen"] = true
 			resetAt := time.UnixMicro(int64(math.Round(reset * 1e6))).UTC()
 			if resetAt.After(now) {
 				snapshot[entry.label+"_used_pct"] = used
@@ -162,7 +166,6 @@ func latestMaintenanceQuota() (map[string]any, *[3]any, bool) {
 					layout = "2006-01-02T15:04:05.000000Z"
 				}
 				snapshot[entry.label+"_resets_at"] = resetAt.Format(layout)
-				snapshot["windows_seen"] = true
 			}
 		}
 	}
