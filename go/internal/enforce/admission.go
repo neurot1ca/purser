@@ -36,6 +36,10 @@ type AdmissionResult struct {
 }
 
 var saveAdmissionSession = ledger.Save
+var afterPreLease = func() error { return nil }
+var afterPrePending = func() error { return nil }
+var afterPreSession = func() error { return nil }
+var writeAsyncReady = atomicAdmissionJSON
 
 // AdmitPending mirrors Python's sync-reachable rejected-start reconciliation,
 // lease admission, then pending -> session -> thread-index writes.
@@ -43,6 +47,18 @@ func AdmitPending(in PendingAdmission) AdmissionResult {
 	result := AdmissionResult{Status: "OK", Code: "LEASE_ACQUIRED", Pending: in.Pending}
 	projectRoot := filepath.Join(in.RuntimeRoot, "projects", in.ProjectKey)
 	leased := false
+	pendingWritten := false
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if leased {
+				_ = lease.New(projectRoot).Release(in.OwnerKey, in.Now)
+			}
+			if pendingWritten {
+				_ = os.Remove(in.PendingPath)
+			}
+			panic(recovered)
+		}
+	}()
 	if in.Repository != nil && !in.SkipLease {
 		reconcileRejectedStarts(in.RuntimeRoot, projectRoot, in.ProjectKey, in.Now)
 		admitted := lease.New(projectRoot).Acquire(in.OwnerKey, in.TaskID, in.Scope, lease.AcquireOptions{
@@ -59,6 +75,10 @@ func AdmitPending(in PendingAdmission) AdmissionResult {
 		}
 		leased = true
 		in.Pending["lease_owner"] = in.OwnerKey
+		if err := afterPreLease(); err != nil {
+			_ = lease.New(projectRoot).Release(in.OwnerKey, in.Now)
+			return AdmissionResult{Status: "UNKNOWN", Code: err.Error(), Pending: in.Pending}
+		}
 		if admitted.Code == "LEASE_QUEUED" {
 			in.Pending["lease_queued"] = true
 			queued := map[string]any{"status": "UNKNOWN", "code": "QUEUED"}
@@ -74,8 +94,25 @@ func AdmitPending(in PendingAdmission) AdmissionResult {
 		}
 		return result
 	}
+	pendingWritten = true
+	if err := afterPrePending(); err != nil {
+		result.Status, result.Code = "UNKNOWN", err.Error()
+		if leased {
+			_ = lease.New(projectRoot).Release(in.OwnerKey, in.Now)
+		}
+		_ = os.Remove(in.PendingPath)
+		return result
+	}
 	if saved := saveAdmissionSession(projectRoot, in.Session); saved.Status != ledger.OK {
 		result.Status, result.Code = "UNKNOWN", saved.Code
+		if leased {
+			_ = lease.New(projectRoot).Release(in.OwnerKey, in.Now)
+		}
+		_ = os.Remove(in.PendingPath)
+		return result
+	}
+	if err := afterPreSession(); err != nil {
+		result.Status, result.Code = "UNKNOWN", err.Error()
 		if leased {
 			_ = lease.New(projectRoot).Release(in.OwnerKey, in.Now)
 		}

@@ -1,0 +1,174 @@
+{
+  "oracle": "Python codex.pre_tool_use recovery",
+  "cases": [
+    {
+      "name": "p65_after_lease_sync",
+      "tool": "mcp__codex-main__codex",
+      "failure": "after_lease",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "Orchestrator routing was NOT enforced for this Codex call because of an internal error: RuntimeError: p65 injected failure. The call is allowed unmodified. The bypass was recorded for PostToolUse."
+      },
+      "bypass": {
+        "task_id": "p65_after_lease_sync",
+        "project_key": "__PROJECT_KEY__",
+        "phase": "implementation",
+        "route": "subtle",
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "scope": [
+          "src/a.go"
+        ],
+        "repo_root": "__REPO__",
+        "prior_thread_id": null
+      },
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "RELEASED"
+    },
+    {
+      "name": "p65_after_lease_async",
+      "tool": "mcp__codex-main__codex_start",
+      "failure": "after_lease",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "ASYNC_ENFORCEMENT_FAILED: Async start lacked a durable route/baseline; FULL review is required."
+      },
+      "bypass": null,
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "RELEASED"
+    },
+    {
+      "name": "p65_after_pending_sync",
+      "tool": "mcp__codex-main__codex",
+      "failure": "after_pending",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "Orchestrator routing was NOT enforced for this Codex call because of an internal error: RuntimeError: p65 injected failure. The call is allowed unmodified. The bypass was recorded for PostToolUse."
+      },
+      "bypass": {
+        "task_id": "p65_after_pending_sync",
+        "project_key": "__PROJECT_KEY__",
+        "phase": "implementation",
+        "route": "subtle",
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "scope": [
+          "src/a.go"
+        ],
+        "repo_root": "__REPO__",
+        "prior_thread_id": null
+      },
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "RELEASED"
+    },
+    {
+      "name": "p65_after_pending_async",
+      "tool": "mcp__codex-main__codex_start",
+      "failure": "after_pending",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "ASYNC_ENFORCEMENT_FAILED: Async start lacked a durable route/baseline; FULL review is required."
+      },
+      "bypass": null,
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "RELEASED"
+    },
+    {
+      "name": "p65_after_session_save",
+      "tool": "mcp__codex-main__codex",
+      "failure": "after_session",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "Orchestrator routing was NOT enforced for this Codex call because of an internal error: RuntimeError: p65 injected failure. The call is allowed unmodified. The bypass was recorded for PostToolUse."
+      },
+      "bypass": {
+        "task_id": "p65_after_session_save",
+        "project_key": "__PROJECT_KEY__",
+        "phase": "implementation",
+        "route": "subtle",
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "scope": [
+          "src/a.go"
+        ],
+        "repo_root": "__REPO__",
+        "prior_thread_id": null
+      },
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "RELEASED"
+    },
+    {
+      "name": "p65_async_ready_rewrite",
+      "tool": "mcp__codex-main__codex_start",
+      "failure": "async_ready",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "ASYNC_ENFORCEMENT_FAILED: Async start lacked a durable route/baseline; FULL review is required."
+      },
+      "bypass": null,
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "RELEASED"
+    },
+    {
+      "name": "p65_bypass_persistence_failure",
+      "tool": "mcp__codex-main__codex",
+      "failure": "bypass_persist",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "Orchestrator routing was NOT enforced for this Codex call because of an internal error: RuntimeError: p65 injected failure; bypass persistence failed: RuntimeError: p65 injected failure. The call is allowed unmodified. The bypass record could not be persisted; this PreToolUse context is the only warning."
+      },
+      "bypass": null,
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "RELEASED"
+    },
+    {
+      "name": "p65_injected_panic_sync",
+      "tool": "mcp__codex-main__codex",
+      "failure": "panic",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "Orchestrator routing was NOT enforced for this Codex call because of an internal error: RuntimeError: panic: p65 injected panic. The call is allowed unmodified. The bypass was recorded for PostToolUse."
+      },
+      "bypass": {
+        "task_id": "p65_injected_panic_sync",
+        "project_key": "__PROJECT_KEY__",
+        "phase": "implementation",
+        "route": "subtle",
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "scope": [
+          "src/a.go"
+        ],
+        "repo_root": "__REPO__",
+        "prior_thread_id": null
+      },
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "NONE"
+    },
+    {
+      "name": "p65_injected_panic_async",
+      "tool": "mcp__codex-main__codex_start",
+      "failure": "panic",
+      "output": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "ASYNC_ENFORCEMENT_FAILED: Async start lacked a durable route/baseline; FULL review is required."
+      },
+      "bypass": null,
+      "diagnostic": true,
+      "pending_absent": true,
+      "lease_state": "NONE"
+    }
+  ]
+}

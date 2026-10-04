@@ -24,12 +24,22 @@ var codexTools = map[string]bool{
 	"mcp__plugin_purser_codex-main__codex_result": true, "mcp__plugin_purser_codex-main__codex_cancel": true,
 }
 
+var runPreDecision = preDecision
+var writePreBypass = writeBypass
+
 // Pre dispatches Codex PreToolUse and recovers internal failures with Python's
 // synchronous bypass / async-start deny contract. Normal policy remains Python-owned.
-func Pre(event map[string]any, root string) (map[string]any, error) {
+func Pre(event map[string]any, root string) (response map[string]any, failure error) {
 	if event["hook_event_name"] != "PreToolUse" || !codexTools[stringValue(event["tool_name"])] {
 		return nil, nil
 	}
+	metadata := map[string]any{}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			failure = fmt.Errorf("panic: %v", recovered)
+			response = preFailure(event, root, failure, metadata)
+		}
+	}()
 	// Contract process tests require building the hook with -tags contracttest.
 	internal := contractFault()
 	tool := stringValue(event["tool_name"])
@@ -37,15 +47,19 @@ func Pre(event map[string]any, root string) (map[string]any, error) {
 		if internal == nil {
 			internal = errors.New("Go PreToolUse enforcement is not yet ported")
 		}
-		return syncBypass(event, root, internal), internal
+		return syncBypass(event, root, internal, metadata), internal
 	}
 	if internal == nil {
-		decision, err := preDecision(event, root)
+		decision, err := runPreDecision(event, root, metadata)
 		if err == nil {
 			return decision, nil
 		}
 		internal = err
 	}
+	return preFailure(event, root, internal, metadata), internal
+}
+
+func preFailure(event map[string]any, root string, internal error, metadata map[string]any) map[string]any {
 	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") {
 		if root != "" {
 			_ = writeDiagnostic(root, event, internal)
@@ -55,16 +69,16 @@ func Pre(event map[string]any, root string) (map[string]any, error) {
 		return map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "PreToolUse", "permissionDecision": "deny",
 			"permissionDecisionReason": "ASYNC_ENFORCEMENT_FAILED: Async start lacked a durable route/baseline; FULL review is required.",
-		}}, internal
+		}}
 	}
-	return syncBypass(event, root, internal), internal
+	return syncBypass(event, root, internal, metadata)
 }
 
-func syncBypass(event map[string]any, root string, cause error) map[string]any {
+func syncBypass(event map[string]any, root string, cause error, metadata map[string]any) map[string]any {
 	reason := safeError(cause)
 	recorded := false
 	if root != "" {
-		if err := writeBypass(root, event, reason); err == nil {
+		if err := writePreBypass(root, event, reason, metadata); err == nil {
 			recorded = true
 		} else {
 			reason += "; bypass persistence failed: " + safeError(err)
@@ -87,7 +101,7 @@ func syncBypass(event map[string]any, root string, cause error) map[string]any {
 	}}
 }
 
-func writeBypass(root string, event map[string]any, reason string) error {
+func writeBypass(root string, event map[string]any, reason string, metadata map[string]any) error {
 	path, err := pendingPath(root, event)
 	if err != nil {
 		path = bypassPath(root, event)
@@ -97,6 +111,11 @@ func writeBypass(root string, event map[string]any, reason string) error {
 		"reason": reason, "task_id": nil, "project_key": "unresolved", "phase": nil,
 		"route": nil, "model": nil, "effort": nil, "scope": []any{}, "repo_root": nil,
 		"prior_thread_id": nil,
+	}
+	for _, key := range []string{"task_id", "project_key", "phase", "route", "model", "effort", "scope", "repo_root", "prior_thread_id"} {
+		if value, ok := metadata[key]; ok {
+			record[key] = value
+		}
 	}
 	data, err := json.Marshal(record)
 	if err != nil {

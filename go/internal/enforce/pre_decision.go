@@ -20,9 +20,11 @@ import (
 	"purser-hook/internal/profile"
 )
 
+var afterPreMetadata = func() {}
+
 // preDecision assembles the existing Pre policy pieces. Success persistence is
 // intentionally left to pass 64.
-func preDecision(event map[string]any, runtimeRoot string) (map[string]any, error) {
+func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[string]any) (map[string]any, error) {
 	config, err := loadPreConfig()
 	if err != nil {
 		return nil, err
@@ -55,6 +57,7 @@ func preDecision(event map[string]any, runtimeRoot string) (map[string]any, erro
 	}
 
 	var root *string
+	rootReason := ""
 	var live map[string]any
 	if reply {
 		recovery := RecoverReply(event, runtimeRoot, nil, config)
@@ -63,7 +66,7 @@ func preDecision(event map[string]any, runtimeRoot string) (map[string]any, erro
 		}
 		parsed, root, live = recovery.Parsed, recovery.Root, recovery.LiveThread
 	} else {
-		root, _ = resolveProjectRoot(event, nil)
+		root, rootReason = resolveProjectRoot(event, nil)
 	}
 	if !parsed.Valid {
 		return denyPre(parsed.Code, parsed.Message), nil
@@ -79,6 +82,23 @@ func preDecision(event map[string]any, runtimeRoot string) (map[string]any, erro
 		}
 		return denyPre(route.Code, route.Message), nil
 	}
+	bypassMetadata["task_id"], bypassMetadata["phase"], bypassMetadata["route"] = *parsed.TaskID, *parsed.Phase, *parsed.Route
+	bypassMetadata["model"], bypassMetadata["effort"], bypassMetadata["scope"] = *route.Model, *route.Effort, stringSliceAny(parsed.Scope)
+	var bypassETA any
+	if parsed.ETAMinutes != nil {
+		bypassETA = *parsed.ETAMinutes
+	}
+	bypassMetadata["reason"], bypassMetadata["eta_minutes"] = optionalString(parsed.Reason), bypassETA
+	bypassMetadata["repo_root"], bypassMetadata["project_key"] = root, projectKey(root)
+	if rootReason != "" {
+		bypassMetadata["project_root_reason"] = rootReason
+	} else {
+		bypassMetadata["project_root_reason"] = nil
+	}
+	if reply && live != nil {
+		bypassMetadata["prior_thread_id"] = live["thread_id"]
+	}
+	afterPreMetadata()
 	requested := map[string]any{"task_id": *parsed.TaskID, "route": *parsed.Route, "model": *route.Model, "effort": *route.Effort}
 	if reply {
 		compat := policy.ThreadCompatibility(requested, live)
@@ -300,12 +320,12 @@ func preDecision(event map[string]any, runtimeRoot string) (map[string]any, erro
 		}
 	}
 	return persistPreSuccess(event, runtimeRoot, root, live, parsed, selection, updated,
-		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, config)
+		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, config, bypassMetadata)
 }
 
 func persistPreSuccess(event map[string]any, runtimeRoot string, repository *string, live map[string]any,
 	parsed policy.OrchParseResult, selection CoderSelection, updated map[string]any,
-	callID, inputHash string, pendingETA *int, worktreeReplyPath *string, isStart, reply, worktreeStart, worktreeReply bool, config map[string]any) (result map[string]any, retErr error) {
+	callID, inputHash string, pendingETA *int, worktreeReplyPath *string, isStart, reply, worktreeStart, worktreeReply bool, config map[string]any, bypassMetadata map[string]any) (result map[string]any, retErr error) {
 	phase, taskID, routeName := pointerValue(parsed.Phase), pointerValue(parsed.TaskID), pointerValue(parsed.Route)
 	project := projectKey(repository)
 	input, _ := event["tool_input"].(map[string]any)
@@ -386,6 +406,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	})
 	if priorThread != nil {
 		pending["prior_thread_id"] = *priorThread
+		bypassMetadata["prior_thread_id"] = *priorThread
 	}
 	var jobID *string
 	if isStart {
@@ -472,18 +493,25 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	}
 	pendingWritten := true
 	defer func() {
+		recovered := recover()
+		if recovered != nil {
+			retErr = fmt.Errorf("panic: %v", recovered)
+		}
 		if retErr != nil {
-			if pendingWritten {
-				_ = os.Remove(path)
-			}
 			if leased {
 				_ = lease.New(leaseRoot).Release(owner, float64(time.Now().UnixNano())/1e9)
 			}
+			if pendingWritten {
+				_ = os.Remove(path)
+			}
+		}
+		if recovered != nil {
+			panic(recovered)
 		}
 	}()
 	if isStart {
 		pending["async_ready"] = true
-		if err := atomicAdmissionJSON(path, pending); err != nil {
+		if err := writeAsyncReady(path, pending); err != nil {
 			return nil, err
 		}
 	}
