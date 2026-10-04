@@ -1,0 +1,138 @@
+{
+  "oracle": "Python telemetry._project_task, _record_projection_success, and obsidian_projection atomic writers",
+  "clock": "2026-10-04T12:00:00Z",
+  "aggregate": {
+    "task_id": "p58-task",
+    "repo": "purser",
+    "branch": "go-migration",
+    "status": "VERIFIED",
+    "started_at": "2026-10-04T09:15:00Z",
+    "ended_at": "2026-10-04T09:18:12.500000Z",
+    "duration_ms": 192500,
+    "phase": "implementation",
+    "task_type": "implementation",
+    "route": "normal",
+    "model": "openai-gpt-5",
+    "effort": "high",
+    "fresh_threads": 1,
+    "reply_calls": 2,
+    "routing_enforced": true,
+    "validation": "PASS",
+    "thread_id": "thread-42",
+    "reviewer1_provider": "gemini",
+    "reviewer1_model_requested": "gemini-pro",
+    "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+    "served_model_attestation": "UNAVAILABLE",
+    "claude_review_mode": "FULL",
+    "changed_paths_count": 3,
+    "routing_protocol_violations": 0,
+    "thread_continuity_violations": 0,
+    "concurrent_writer": false,
+    "policy_fingerprint": "abcdef01",
+    "first_pass": true,
+    "repair_count": 0,
+    "usage": {
+      "codex_call_count": 3,
+      "codex_usage_known": true,
+      "claude_task_usage_known": false
+    }
+  },
+  "cases": [
+    {
+      "name": "p58-disabled",
+      "enabled": false,
+      "initial_health": {
+        "status": "OK",
+        "failure_count": 0,
+        "last_error_code": null
+      }
+    },
+    {
+      "name": "p58-success",
+      "initial_health": {
+        "status": "OK",
+        "failure_count": 0,
+        "last_error_code": null,
+        "updated_at": "2026-10-04T11:00:00Z"
+      }
+    },
+    {
+      "name": "p58-run-note-write-failure",
+      "run_note_directory": true,
+      "initial_health": {
+        "status": "OK",
+        "failure_count": 0,
+        "last_error_code": null
+      }
+    },
+    {
+      "name": "p58-health-json-unreadable",
+      "health_directory": true
+    },
+    {
+      "name": "p58-health-note-write-failure",
+      "health_note_directory": true,
+      "initial_health": {
+        "status": "OK",
+        "failure_count": 0,
+        "last_error_code": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "name": "p58-disabled",
+      "run_note": null,
+      "health_json": {
+        "status": "OK",
+        "failure_count": 0,
+        "last_error_code": null
+      },
+      "health_note": null
+    },
+    {
+      "name": "p58-success",
+      "run_note": "---\ntype: \"orch-run\"\nschema_version: 1\nprojection_schema_version: 1\ntask_id: \"p58-task\"\nrepo: \"purser\"\nbranch: \"go-migration\"\ntimezone: \"Europe/Istanbul\"\nstarted_at: \"2026-10-04T12:15:00+03:00\"\nstarted_at_utc: \"2026-10-04T09:15:00Z\"\nended_at: \"2026-10-04T12:18:12.500000+03:00\"\nended_at_utc: \"2026-10-04T09:18:12.500000Z\"\nstatus: \"VERIFIED\"\nphase: \"implementation\"\nroute: \"normal\"\nmodel: \"openai-gpt-5\"\neffort: \"high\"\nfresh_threads: 1\nreply_calls: 2\nrouting_enforced: true\nvalidation: \"PASS\"\nduration_ms: 192500\nthread_id: \"thread-42\"\nreviewer1_provider: \"gemini\"\nreviewer1_model_requested: \"gemini-pro\"\nreviewer1_result: \"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\"\nreviewer1_skipped_reason: null\nserved_model_attestation: \"UNAVAILABLE\"\nclaude_review_mode: \"FULL\"\nchanged_paths_count: 3\nrouting_protocol_violations: 0\nthread_continuity_violations: 0\nconcurrent_writer: false\npolicy_fingerprint: \"abcdef01\"\nfirst_pass: true\nrepair_count: 0\nusage:\n  codex_call_count: 3\n  codex_duration_ms: null\n  codex_usage_known: true\n  gemini_duration_ms: null\n  gemini_usage_known: null\n  deepseek_usage_known: null\n  claude_usage_session_id: null\n  claude_usage_captured_at: null\n  claude_5h_start_pct: null\n  claude_5h_end_pct: null\n  claude_5h_delta_pct: null\n  claude_5h_resets_at: null\n  claude_7d_start_pct: null\n  claude_7d_end_pct: null\n  claude_7d_resets_at: null\n  claude_context_used_percentage: null\n  claude_context_window_size: null\n  claude_context_total_tokens: null\n  claude_context_input_tokens: null\n  claude_context_output_tokens: null\n  claude_cache_creation_input_tokens: null\n  claude_cache_read_input_tokens: null\n  claude_session_estimated_cost_usd: null\n  claude_session_total_duration_ms: null\n  claude_usage_known: null\n  claude_rate_limit_delta_scope: null\n  claude_task_usage_source: null\n  claude_task_usage_known: false\n  claude_task_usage_complete: null\n  claude_task_input_tokens: null\n  claude_task_output_tokens: null\n  claude_task_cache_creation_input_tokens: null\n  claude_task_cache_read_input_tokens: null\n  claude_task_total_observed_tokens: null\n  claude_task_request_count: null\n  claude_task_usage_boundary: null\n  claude_task_usage_dedup: null\n  claude_task_usage_unknown_reason: null\n  claude_task_subagent_usage_included: null\n  codex_cache_read_tokens: null\n  codex_cache_write_tokens: null\n  codex_cached_input_tokens: null\n  codex_cached_tokens: null\n  codex_completion_tokens: null\n  codex_input_tokens: null\n  codex_output_tokens: null\n  codex_prompt_tokens: null\n  codex_reasoning_output_tokens: null\n  codex_thinking_tokens: null\n  codex_total_tokens: null\n  gemini_cache_read_tokens: null\n  gemini_cache_write_tokens: null\n  gemini_cached_input_tokens: null\n  gemini_cached_tokens: null\n  gemini_completion_tokens: null\n  gemini_input_tokens: null\n  gemini_output_tokens: null\n  gemini_prompt_tokens: null\n  gemini_reasoning_output_tokens: null\n  gemini_thinking_tokens: null\n  gemini_total_tokens: null\n  deepseek_cache_read_tokens: null\n  deepseek_cache_write_tokens: null\n  deepseek_cached_input_tokens: null\n  deepseek_cached_tokens: null\n  deepseek_completion_tokens: null\n  deepseek_input_tokens: null\n  deepseek_output_tokens: null\n  deepseek_prompt_tokens: null\n  deepseek_reasoning_output_tokens: null\n  deepseek_thinking_tokens: null\n  deepseek_total_tokens: null\n---\n<!-- orchestrator projection v1 sha256=e1b7a44b075423107d2511543d8c71726bc7916d72f6201b749bbd176ca3661b -->\n# Run: p58-task\n\nFlow: normal / openai-gpt-5 (high), phase=implementation; fresh_threads=1, reply_calls=2\nDuration: 3m 12.5s\nValidation: PASS\nReview: NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\n\n## Notes\n\n- Status: VERIFIED\n- Concurrent writer: False\n- Projection source: telemetry aggregate only; local timezone: Europe/Istanbul.\n",
+      "health_json": {
+        "failure_count": 0,
+        "last_error_code": null,
+        "last_projection_write_at": "2026-10-04T12:00:00Z",
+        "schema_version": 1,
+        "status": "OK",
+        "updated_at": "2026-10-04T11:00:00Z"
+      },
+      "health_note": "<!-- orchestrator projection v1 sha256=50e1d50fbacefceb41a080349fb5b3ec835bcddfdb60c2f9f0d4334a6740c1e9 -->\n# Telemetry Health\n\nThis is observational health for local telemetry and projection; it is not an authority for routing or acceptance.\n\n- Status: OK\n- Failure count: 0\n- Last error code: unknown\n- Health updated at (UTC): 2026-10-04T11:00:00Z\n- Last successful projection write (UTC): 2026-10-04T12:00:00Z\n- Aggregate count: n=0\n- Projection mode: local-only, deterministic, no model/network/process access.\n"
+    },
+    {
+      "name": "p58-run-note-write-failure",
+      "run_note": null,
+      "health_json": {
+        "failure_count": 1,
+        "last_error_code": "TELEMETRY_PROJECTION_FAILED",
+        "schema_version": 1,
+        "status": "DEGRADED",
+        "updated_at": "2026-10-04T12:00:00Z"
+      },
+      "health_note": "<!-- orchestrator projection v1 sha256=50348065d70deca1482ddc5a1d6b02a8ad484c264a09cbe95945b89e190e336c -->\n# Telemetry Health\n\nThis is observational health for local telemetry and projection; it is not an authority for routing or acceptance.\n\n- Status: DEGRADED\n- Failure count: 1\n- Last error code: TELEMETRY_PROJECTION_FAILED\n- Health updated at (UTC): 2026-10-04T12:00:00Z\n- Last successful projection write (UTC): unknown\n- Aggregate count: n=0\n- Projection mode: local-only, deterministic, no model/network/process access.\n"
+    },
+    {
+      "name": "p58-health-json-unreadable",
+      "run_note": "---\ntype: \"orch-run\"\nschema_version: 1\nprojection_schema_version: 1\ntask_id: \"p58-task\"\nrepo: \"purser\"\nbranch: \"go-migration\"\ntimezone: \"Europe/Istanbul\"\nstarted_at: \"2026-10-04T12:15:00+03:00\"\nstarted_at_utc: \"2026-10-04T09:15:00Z\"\nended_at: \"2026-10-04T12:18:12.500000+03:00\"\nended_at_utc: \"2026-10-04T09:18:12.500000Z\"\nstatus: \"VERIFIED\"\nphase: \"implementation\"\nroute: \"normal\"\nmodel: \"openai-gpt-5\"\neffort: \"high\"\nfresh_threads: 1\nreply_calls: 2\nrouting_enforced: true\nvalidation: \"PASS\"\nduration_ms: 192500\nthread_id: \"thread-42\"\nreviewer1_provider: \"gemini\"\nreviewer1_model_requested: \"gemini-pro\"\nreviewer1_result: \"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\"\nreviewer1_skipped_reason: null\nserved_model_attestation: \"UNAVAILABLE\"\nclaude_review_mode: \"FULL\"\nchanged_paths_count: 3\nrouting_protocol_violations: 0\nthread_continuity_violations: 0\nconcurrent_writer: false\npolicy_fingerprint: \"abcdef01\"\nfirst_pass: true\nrepair_count: 0\nusage:\n  codex_call_count: 3\n  codex_duration_ms: null\n  codex_usage_known: true\n  gemini_duration_ms: null\n  gemini_usage_known: null\n  deepseek_usage_known: null\n  claude_usage_session_id: null\n  claude_usage_captured_at: null\n  claude_5h_start_pct: null\n  claude_5h_end_pct: null\n  claude_5h_delta_pct: null\n  claude_5h_resets_at: null\n  claude_7d_start_pct: null\n  claude_7d_end_pct: null\n  claude_7d_resets_at: null\n  claude_context_used_percentage: null\n  claude_context_window_size: null\n  claude_context_total_tokens: null\n  claude_context_input_tokens: null\n  claude_context_output_tokens: null\n  claude_cache_creation_input_tokens: null\n  claude_cache_read_input_tokens: null\n  claude_session_estimated_cost_usd: null\n  claude_session_total_duration_ms: null\n  claude_usage_known: null\n  claude_rate_limit_delta_scope: null\n  claude_task_usage_source: null\n  claude_task_usage_known: false\n  claude_task_usage_complete: null\n  claude_task_input_tokens: null\n  claude_task_output_tokens: null\n  claude_task_cache_creation_input_tokens: null\n  claude_task_cache_read_input_tokens: null\n  claude_task_total_observed_tokens: null\n  claude_task_request_count: null\n  claude_task_usage_boundary: null\n  claude_task_usage_dedup: null\n  claude_task_usage_unknown_reason: null\n  claude_task_subagent_usage_included: null\n  codex_cache_read_tokens: null\n  codex_cache_write_tokens: null\n  codex_cached_input_tokens: null\n  codex_cached_tokens: null\n  codex_completion_tokens: null\n  codex_input_tokens: null\n  codex_output_tokens: null\n  codex_prompt_tokens: null\n  codex_reasoning_output_tokens: null\n  codex_thinking_tokens: null\n  codex_total_tokens: null\n  gemini_cache_read_tokens: null\n  gemini_cache_write_tokens: null\n  gemini_cached_input_tokens: null\n  gemini_cached_tokens: null\n  gemini_completion_tokens: null\n  gemini_input_tokens: null\n  gemini_output_tokens: null\n  gemini_prompt_tokens: null\n  gemini_reasoning_output_tokens: null\n  gemini_thinking_tokens: null\n  gemini_total_tokens: null\n  deepseek_cache_read_tokens: null\n  deepseek_cache_write_tokens: null\n  deepseek_cached_input_tokens: null\n  deepseek_cached_tokens: null\n  deepseek_completion_tokens: null\n  deepseek_input_tokens: null\n  deepseek_output_tokens: null\n  deepseek_prompt_tokens: null\n  deepseek_reasoning_output_tokens: null\n  deepseek_thinking_tokens: null\n  deepseek_total_tokens: null\n---\n<!-- orchestrator projection v1 sha256=e1b7a44b075423107d2511543d8c71726bc7916d72f6201b749bbd176ca3661b -->\n# Run: p58-task\n\nFlow: normal / openai-gpt-5 (high), phase=implementation; fresh_threads=1, reply_calls=2\nDuration: 3m 12.5s\nValidation: PASS\nReview: NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\n\n## Notes\n\n- Status: VERIFIED\n- Concurrent writer: False\n- Projection source: telemetry aggregate only; local timezone: Europe/Istanbul.\n",
+      "health_json": null,
+      "health_note": null
+    },
+    {
+      "name": "p58-health-note-write-failure",
+      "run_note": "---\ntype: \"orch-run\"\nschema_version: 1\nprojection_schema_version: 1\ntask_id: \"p58-task\"\nrepo: \"purser\"\nbranch: \"go-migration\"\ntimezone: \"Europe/Istanbul\"\nstarted_at: \"2026-10-04T12:15:00+03:00\"\nstarted_at_utc: \"2026-10-04T09:15:00Z\"\nended_at: \"2026-10-04T12:18:12.500000+03:00\"\nended_at_utc: \"2026-10-04T09:18:12.500000Z\"\nstatus: \"VERIFIED\"\nphase: \"implementation\"\nroute: \"normal\"\nmodel: \"openai-gpt-5\"\neffort: \"high\"\nfresh_threads: 1\nreply_calls: 2\nrouting_enforced: true\nvalidation: \"PASS\"\nduration_ms: 192500\nthread_id: \"thread-42\"\nreviewer1_provider: \"gemini\"\nreviewer1_model_requested: \"gemini-pro\"\nreviewer1_result: \"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\"\nreviewer1_skipped_reason: null\nserved_model_attestation: \"UNAVAILABLE\"\nclaude_review_mode: \"FULL\"\nchanged_paths_count: 3\nrouting_protocol_violations: 0\nthread_continuity_violations: 0\nconcurrent_writer: false\npolicy_fingerprint: \"abcdef01\"\nfirst_pass: true\nrepair_count: 0\nusage:\n  codex_call_count: 3\n  codex_duration_ms: null\n  codex_usage_known: true\n  gemini_duration_ms: null\n  gemini_usage_known: null\n  deepseek_usage_known: null\n  claude_usage_session_id: null\n  claude_usage_captured_at: null\n  claude_5h_start_pct: null\n  claude_5h_end_pct: null\n  claude_5h_delta_pct: null\n  claude_5h_resets_at: null\n  claude_7d_start_pct: null\n  claude_7d_end_pct: null\n  claude_7d_resets_at: null\n  claude_context_used_percentage: null\n  claude_context_window_size: null\n  claude_context_total_tokens: null\n  claude_context_input_tokens: null\n  claude_context_output_tokens: null\n  claude_cache_creation_input_tokens: null\n  claude_cache_read_input_tokens: null\n  claude_session_estimated_cost_usd: null\n  claude_session_total_duration_ms: null\n  claude_usage_known: null\n  claude_rate_limit_delta_scope: null\n  claude_task_usage_source: null\n  claude_task_usage_known: false\n  claude_task_usage_complete: null\n  claude_task_input_tokens: null\n  claude_task_output_tokens: null\n  claude_task_cache_creation_input_tokens: null\n  claude_task_cache_read_input_tokens: null\n  claude_task_total_observed_tokens: null\n  claude_task_request_count: null\n  claude_task_usage_boundary: null\n  claude_task_usage_dedup: null\n  claude_task_usage_unknown_reason: null\n  claude_task_subagent_usage_included: null\n  codex_cache_read_tokens: null\n  codex_cache_write_tokens: null\n  codex_cached_input_tokens: null\n  codex_cached_tokens: null\n  codex_completion_tokens: null\n  codex_input_tokens: null\n  codex_output_tokens: null\n  codex_prompt_tokens: null\n  codex_reasoning_output_tokens: null\n  codex_thinking_tokens: null\n  codex_total_tokens: null\n  gemini_cache_read_tokens: null\n  gemini_cache_write_tokens: null\n  gemini_cached_input_tokens: null\n  gemini_cached_tokens: null\n  gemini_completion_tokens: null\n  gemini_input_tokens: null\n  gemini_output_tokens: null\n  gemini_prompt_tokens: null\n  gemini_reasoning_output_tokens: null\n  gemini_thinking_tokens: null\n  gemini_total_tokens: null\n  deepseek_cache_read_tokens: null\n  deepseek_cache_write_tokens: null\n  deepseek_cached_input_tokens: null\n  deepseek_cached_tokens: null\n  deepseek_completion_tokens: null\n  deepseek_input_tokens: null\n  deepseek_output_tokens: null\n  deepseek_prompt_tokens: null\n  deepseek_reasoning_output_tokens: null\n  deepseek_thinking_tokens: null\n  deepseek_total_tokens: null\n---\n<!-- orchestrator projection v1 sha256=e1b7a44b075423107d2511543d8c71726bc7916d72f6201b749bbd176ca3661b -->\n# Run: p58-task\n\nFlow: normal / openai-gpt-5 (high), phase=implementation; fresh_threads=1, reply_calls=2\nDuration: 3m 12.5s\nValidation: PASS\nReview: NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\n\n## Notes\n\n- Status: VERIFIED\n- Concurrent writer: False\n- Projection source: telemetry aggregate only; local timezone: Europe/Istanbul.\n",
+      "health_json": {
+        "failure_count": 1,
+        "last_error_code": "TELEMETRY_PROJECTION_FAILED",
+        "last_projection_write_at": "2026-10-04T12:00:00Z",
+        "schema_version": 1,
+        "status": "DEGRADED",
+        "updated_at": "2026-10-04T12:00:00Z"
+      },
+      "health_note": null
+    }
+  ]
+}

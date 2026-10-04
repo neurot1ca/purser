@@ -3,6 +3,7 @@ package enforce
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1053,6 +1054,159 @@ func TestObservationP57HealthNoteRendering(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestObservationP58ProjectionWrites(t *testing.T) {
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/projection_writes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Clock     string         `json:"clock"`
+		Aggregate map[string]any `json:"aggregate"`
+		Cases     []struct {
+			Name                string         `json:"name"`
+			Enabled             *bool          `json:"enabled"`
+			InitialHealth       map[string]any `json:"initial_health"`
+			RunNoteDirectory    bool           `json:"run_note_directory"`
+			HealthDirectory     bool           `json:"health_directory"`
+			HealthNoteDirectory bool           `json:"health_note_directory"`
+		} `json:"cases"`
+		Expected []struct {
+			Name       string         `json:"name"`
+			RunNote    *string        `json:"run_note"`
+			HealthJSON map[string]any `json:"health_json"`
+			HealthNote *string        `json:"health_note"`
+		} `json:"expected"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err = decoder.Decode(&fixture); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.Cases) != len(fixture.Expected) {
+		t.Fatalf("fixture cases=%d expected=%d", len(fixture.Cases), len(fixture.Expected))
+	}
+	parsedClock, err := time.Parse(time.RFC3339Nano, fixture.Clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldClock := observationProjectionNow
+	observationProjectionNow = func() time.Time { return parsedClock }
+	defer func() { observationProjectionNow = oldClock }()
+	base, err := filepath.Abs(filepath.Join("..", "..", "..", ".tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, tc := range fixture.Cases {
+		want := fixture.Expected[index]
+		if tc.Name != want.Name || !strings.HasPrefix(tc.Name, "p58-") {
+			t.Fatalf("case/expected names differ: %q %q", tc.Name, want.Name)
+		}
+		t.Run(tc.Name, func(t *testing.T) {
+			caseRoot := filepath.Join(base, tc.Name)
+			if err := os.RemoveAll(caseRoot); err != nil {
+				t.Fatal(err)
+			}
+			state := filepath.Join(caseRoot, "state")
+			root := filepath.Join(state, "telemetry")
+			vault := filepath.Join(caseRoot, "vault")
+			projectTasks := filepath.Join(state, "projects", "p58-project", "telemetry", "tasks")
+			if err := os.MkdirAll(projectTasks, 0700); err != nil {
+				t.Fatal(err)
+			}
+			aggregate, err := json.Marshal(fixture.Aggregate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(projectTasks, "p58-task.json"), aggregate, 0600); err != nil {
+				t.Fatal(err)
+			}
+			healthPath := filepath.Join(root, "telemetry_health.json")
+			if tc.HealthDirectory {
+				if err = os.MkdirAll(healthPath, 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else if tc.InitialHealth != nil {
+				health, _ := json.Marshal(tc.InitialHealth)
+				if err = os.MkdirAll(root, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(healthPath, health, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			started, _ := fixture.Aggregate["started_at"].(string)
+			runDate, _ := time.Parse(time.RFC3339Nano, started)
+			runPath := filepath.Join(vault, "Runs", runDate.In(observationDisplayZone).Format("2006"), runDate.In(observationDisplayZone).Format("01"), "p58-task.md")
+			if tc.RunNoteDirectory {
+				if err = os.MkdirAll(runPath, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			healthNotePath := filepath.Join(vault, "System", "Telemetry Health.md")
+			if tc.HealthNoteDirectory {
+				if err = os.MkdirAll(healthNotePath, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			enabled := true
+			if tc.Enabled != nil {
+				enabled = *tc.Enabled
+			}
+			config := map[string]any{"obsidian_projection": map[string]any{"enabled": enabled, "vault_root": vault}}
+			configData, _ := json.Marshal(config)
+			configPath := filepath.Join(caseRoot, "config.json")
+			if err = os.MkdirAll(caseRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(configPath, configData, 0600); err != nil {
+				t.Fatal(err)
+			}
+			projectObservationTask(root, "p58-task", "p58-project", configPath, nil)
+			if got := readObservationFixtureFile(t, runPath); want.RunNote != nil && got != *want.RunNote {
+				t.Fatalf("run note differs\n got: %q\nwant: %q", got, *want.RunNote)
+			} else if want.RunNote == nil && got != "" && !tc.RunNoteDirectory {
+				t.Fatalf("unexpected run note: %q", got)
+			}
+			if got, err := os.ReadFile(healthPath); err == nil {
+				var gotHealth map[string]any
+				gotDecoder := json.NewDecoder(bytes.NewReader(got))
+				gotDecoder.UseNumber()
+				if gotDecoder.Decode(&gotHealth) != nil || !reflect.DeepEqual(gotHealth, want.HealthJSON) {
+					t.Fatalf("health JSON = %#v, want %#v", gotHealth, want.HealthJSON)
+				}
+			} else if want.HealthJSON != nil {
+				t.Fatalf("health JSON read: %v", err)
+			}
+			if got := readObservationFixtureFile(t, healthNotePath); want.HealthNote != nil && got != *want.HealthNote {
+				t.Fatalf("health note differs\n got: %q\nwant: %q", got, *want.HealthNote)
+			} else if want.HealthNote == nil && got != "" && !tc.HealthNoteDirectory {
+				t.Fatalf("unexpected health note: %q", got)
+			}
+			err = filepath.WalkDir(caseRoot, func(path string, entry os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tmp") {
+					return fmt.Errorf("temporary file left after projection: %s", path)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func readObservationFixtureFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func TestObservationP56AcceptsControlledUsageEnums(t *testing.T) {

@@ -1587,6 +1587,141 @@ func atomicObservationJSON(path string, encoded []byte) error {
 	return os.Rename(tmp, path)
 }
 
+var observationProjectionNow = time.Now
+
+func atomicObservationNote(path, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	if data, err := os.ReadFile(path); err == nil && !observationGeneratedContentIsIntact(string(data)) {
+		return fmt.Errorf("refusing to overwrite non-projection note")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err = io.WriteString(f, content); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(tmp, path)
+}
+
+func recordObservationProjectionFailure(root string, now time.Time) {
+	defer func() { _ = recover() }()
+	path := filepath.Join(root, "telemetry", "telemetry_health.json")
+	data, err := os.ReadFile(path)
+	health := map[string]any{"schema_version": 1, "status": "OK", "failure_count": 0, "last_error_code": nil}
+	if err == nil {
+		var saved map[string]any
+		if json.Unmarshal(data, &saved) == nil && saved != nil {
+			health = saved
+		}
+	}
+	count, ok := health["failure_count"].(float64)
+	if !ok {
+		if n, yes := health["failure_count"].(int); yes {
+			count, ok = float64(n), true
+		} else if value, yes := health["failure_count"].(bool); yes {
+			if value {
+				count = 1
+			}
+			ok = true
+		}
+	}
+	if !ok || count < 0 || math.Trunc(count) != count {
+		count = 0
+	}
+	health["schema_version"], health["status"], health["failure_count"], health["last_error_code"] = 1, "DEGRADED", count+1, "TELEMETRY_PROJECTION_FAILED"
+	health["updated_at"] = now.UTC().Format(time.RFC3339Nano)
+	encoded, err := json.Marshal(health)
+	if err == nil {
+		_ = atomicObservationJSON(path, encoded)
+	}
+}
+
+func projectObservationTask(root, taskID, projectKey, configPath string, envVault *string) {
+	state, vault := filepath.Dir(root), ""
+	defer func() {
+		if recover() != nil {
+			recordObservationProjectionFailure(state, observationProjectionNow())
+			if vault != "" {
+				writeObservationHealthFallback(state, vault)
+			}
+		}
+	}()
+	config, _ := os.ReadFile(configPath)
+	enabled, resolvedVault := observationProjectionSettings(config, envVault, nil)
+	if !enabled || resolvedVault == "" {
+		return
+	}
+	vault = resolvedVault
+	projectState := filepath.Join(state, "projects", projectKey)
+	aggregatePath := filepath.Join(projectState, "telemetry", "tasks", taskID+".json")
+	var aggregate map[string]any
+	if data, err := os.ReadFile(aggregatePath); err == nil {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+		_ = decoder.Decode(&aggregate)
+	}
+	content, path, err := renderObservationRunNote(aggregate, vault)
+	if err == nil {
+		err = atomicObservationNote(path, content)
+	}
+	var now string
+	if err == nil {
+		now = observationProjectionNow().UTC().Format(time.RFC3339Nano)
+		healthPath := filepath.Join(root, "telemetry_health.json")
+		data, readErr := os.ReadFile(healthPath)
+		health := map[string]any{"schema_version": 1, "status": "OK", "failure_count": 0, "last_error_code": nil}
+		if readErr == nil {
+			var saved map[string]any
+			if json.Unmarshal(data, &saved) == nil && saved != nil {
+				health = saved
+			}
+		}
+		health["schema_version"], health["last_projection_write_at"] = 1, now
+		encoded, marshalErr := json.Marshal(health)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			err = readErr
+		} else if marshalErr != nil {
+			err = marshalErr
+		} else {
+			err = atomicObservationJSON(healthPath, encoded)
+		}
+	}
+	if err == nil {
+		var writtenAt *string = &now
+		var healthNote string
+		var healthPath string
+		healthNote, healthPath, err = renderObservationHealthNote(state, vault, writtenAt)
+		if err == nil {
+			err = atomicObservationNote(healthPath, healthNote)
+		}
+	}
+	if err != nil {
+		recordObservationProjectionFailure(state, observationProjectionNow())
+		writeObservationHealthFallback(state, vault)
+	}
+}
+
+func writeObservationHealthFallback(state, vault string) {
+	defer func() { _ = recover() }()
+	if content, path, err := renderObservationHealthNote(state, vault, nil); err == nil {
+		_ = atomicObservationNote(path, content)
+	}
+}
+
 func updateObservationTask(root, taskID, projectKey string) error {
 	indexOffset, consumedSpool, err := readObservationCursor(root, taskID, projectKey)
 	if err != nil {
@@ -1642,7 +1777,34 @@ func updateObservationTask(root, taskID, projectKey string) error {
 	if err != nil {
 		return err
 	}
-	return atomicObservationJSON(filepath.Join(projectRoot, "tasks", ".cursors", taskID+".json"), cursorJSON)
+	if err = atomicObservationJSON(filepath.Join(projectRoot, "tasks", ".cursors", taskID+".json"), cursorJSON); err != nil {
+		return err
+	}
+	configPath := observationConfigPath()
+	envVault, hasEnv := os.LookupEnv("PURSER_OBSIDIAN_VAULT")
+	var envVaultPtr *string
+	if hasEnv {
+		envVaultPtr = &envVault
+	}
+	projectObservationTask(root, taskID, projectKey, configPath, envVaultPtr)
+	return nil
+}
+
+func observationConfigPath() string {
+	working, err := os.Getwd()
+	if err != nil {
+		return filepath.Join(".claude", "hooks", "orchestrator", "config.json")
+	}
+	for dir := working; ; dir = filepath.Dir(dir) {
+		candidate := filepath.Join(dir, ".claude", "hooks", "orchestrator", "config.json")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return candidate
+		}
+	}
 }
 
 func updateObservationTaskBestEffort(root, taskID, projectKey string) {
