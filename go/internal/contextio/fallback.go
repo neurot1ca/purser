@@ -119,3 +119,31 @@ func writeProjectActiveCoder(project, root string, value map[string]any) error {
 	defer unlock()
 	return writeActiveCoderState(path, value)
 }
+
+// ApplyFallbackConsent applies a current, shown answer while holding the active-coder lock.
+// A stale answer cannot approve or decline a newer question.
+func ApplyFallbackConsent(project, root, session string, approve bool, resetMarker, switchedAt any) (bool, error) {
+	changed := false
+	_, err := updateActiveCoderState(activeCoderPath(project, root), func(state map[string]any) {
+		evidence, ok := state["triggering_evidence"].(map[string]any)
+		if state["active_coder"] != "primary" || !ok || evidence["question_session"] != session ||
+			evidence["question_shown"] != true || evidence["answerable"] != true {
+			return
+		}
+		if !approve {
+			state["triggering_evidence"] = map[string]any{
+				"declined": true, "trigger_id": evidence["trigger_id"], "type": evidence["type"],
+			}
+			changed = true
+			return
+		}
+		state["active_coder"], state["reset_cycle_marker"] = "fallback", resetMarker
+		state["last_probe_time"] = switchedAt
+		for _, key := range []string{"question", "question_session", "question_shown", "answerable"} {
+			delete(evidence, key)
+		}
+		evidence["switched_at"] = switchedAt
+		changed = true
+	})
+	return changed, err
+}
