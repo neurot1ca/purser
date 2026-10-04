@@ -3,6 +3,7 @@ import { mapHookOutput } from './mod/lifecycle.js'
 import type { LifecycleEvent } from './mod/lifecycle.js'
 import { registerBoard } from './mod/board.js'
 import { registerUsage } from './mod/usage.js'
+import { register as registerEnforcement } from './mod/enforcement.js'
 
 const reported = new Set<string>()
 const lifecycleReported = new Set<string>()
@@ -60,6 +61,7 @@ async function lifecycle($, e, next, name: LifecycleEvent) {
 export function register(on) {
   registerBoard(on)
   registerUsage(on)
+  registerEnforcement(on)
 
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     let sessionId = ''

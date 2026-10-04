@@ -279,6 +279,7 @@ def test_export_only_uses_committed_tree_and_local_manifest(tmp_path):
     assert (exported / "hooks" / "register.ts").is_file()
     assert (exported / "hooks" / "mod" / "read.ts").is_file()
     assert (exported / "hooks" / "mod" / "usage.ts").is_file()
+    assert (exported / "hooks" / "mod" / "enforcement.ts").is_file()
     manifest = json.loads((marketplace / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "purser-local"
     assert manifest["owner"]["name"] == "Purser"

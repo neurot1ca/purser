@@ -1,5 +1,4 @@
 import { expect, test } from 'claude-code/testing'
-import { register as registerEnforcement } from './enforcement.js'
 
 const prompt = 'ORCH|task=t1|phase=implementation|route=normal'
 const success = JSON.stringify({
@@ -20,19 +19,19 @@ const options = { plugins: [
       })
     },
   },
-  { name: 'p66-enforcement', register: registerEnforcement },
 ] }
 
 function stubGo(
   on, stdout: string, calls: string[], toasts: string[],
-  env = { OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64' },
+  env: Record<string, string> = { OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64' },
   uname = { exitCode: 1, stdout: '' },
   binary = '/bin/purser-hook-windows-amd64.exe',
   outcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
   markerWrites: string[] = [],
   markerOutcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
 ) {
-  on('env.get', (_$, e) => ({ value: env[e.name] }))
+  // The plugin's own register.ts installs the adapter; the flag enables its codex_start path.
+  on('env.get', (_$, e) => ({ value: e.name === 'PURSER_MOD_ASYNC_START' ? '1' : env[e.name] }))
   on('session.id', () => ({ value: 'p66-session' }))
   on('session.cwd', () => ({ value: 'C:/p66-repo' }))
   on('process.run', (_$, e) => {

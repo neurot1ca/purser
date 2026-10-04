@@ -22,6 +22,15 @@ PLUGIN_TOOLS = {
     "mcp__plugin_purser_codex-main__codex_cancel",
 }
 PLUGIN_APPLY_TOOL = "mcp__plugin_purser_codex-main__codex_apply"
+SYNC_PLUGIN_TOOLS = {
+    "mcp__plugin_purser_codex-main__codex",
+    "mcp__plugin_purser_codex-main__codex-reply",
+}
+ASYNC_PLUGIN_TOOLS = {
+    "mcp__plugin_purser_codex-main__codex_start",
+    "mcp__plugin_purser_codex-main__codex_result",
+    "mcp__plugin_purser_codex-main__codex_cancel",
+}
 
 
 def test_session_start_maintenance_keeps_python_cleanup(monkeypatch, tmp_path):
@@ -55,6 +64,8 @@ def test_plugin_hooks_match_manual_installer():
                 matcher = matcher.replace(
                     "mcp__codex-main__", "mcp__plugin_purser_codex-main__"
                 )
+            if event == "PreToolUse" and matcher == r"^mcp__plugin_purser_codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$":
+                matcher = r"^mcp__plugin_purser_codex-main__(codex_start|codex_result|codex_cancel)$"
             expected.add((event, matcher, script, entry["hooks"][0]["timeout"]))
 
     hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
@@ -121,7 +132,8 @@ def test_plugin_manifest_paths_and_registration():
             matched = {
                 tool for tool in PLUGIN_TOOLS if re.fullmatch(entry["matcher"], tool)
             }
-            assert matched == PLUGIN_TOOLS
+            expected_python = ASYNC_PLUGIN_TOOLS if name == "PreToolUse" else PLUGIN_TOOLS
+            assert matched == expected_python
             if name == "PostToolUse":
                 assert re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
             else:
@@ -132,6 +144,15 @@ def test_plugin_manifest_paths_and_registration():
         assert command["type"] == "command"
         assert command["command"] == "node"
         assert command["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "pre-codex" if name == "PreToolUse" else "hook", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"]
+    register_source = (ROOT / "hooks/register.ts").read_text(encoding="utf-8")
+    assert re.search(r"^  registerEnforcement\(on\)$", register_source, re.M)
+    enforcement_source = (ROOT / "hooks/mod/enforcement.ts").read_text(encoding="utf-8")
+    sync_set = re.search(r"const syncTools = new Set\(\[([\s\S]*?)\]\)", enforcement_source)
+    assert sync_set
+    mod_tools = set(re.findall(r"'([^']+)'", sync_set.group(1)))
+    assert {tool for tool in mod_tools if tool in PLUGIN_TOOLS} == SYNC_PLUGIN_TOOLS
+    # codex_start stays on Python unless the adapter's async flag is set.
+    assert "startTools.has(e.tool) && await $.env.get('PURSER_MOD_ASYNC_START') === '1'" in enforcement_source
     bridge = mcp["mcpServers"]["codex-main"]
     assert bridge["command"] == "node"
     assert bridge["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "mcp", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]

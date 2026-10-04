@@ -1,9 +1,11 @@
 export function register(on) {
-  const codexTools = new Set([
+  const syncTools = new Set([
     'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
     'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
-    'mcp__codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_start',
   ])
+  // Async codex_start Pre stays on the Python command hook until its own move;
+  // PURSER_MOD_ASYNC_START=1 enables this adapter's codex_start path.
+  const startTools = new Set(['mcp__codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_start'])
   function mapPreToolUse(stdout: string): {
     deny?: string
     updatedInput?: Record<string, unknown>
@@ -36,7 +38,8 @@ export function register(on) {
 
   on('classic.PreToolUse', async ($, e, next) => {
     const prior = await next(e)
-    if (!codexTools.has(e.tool) || prior.deny !== undefined) return prior
+    if (prior.deny !== undefined) return prior
+    if (!syncTools.has(e.tool) && !(startTools.has(e.tool) && await $.env.get('PURSER_MOD_ASYNC_START') === '1')) return prior
 
     let helperBinary = ''
     let helperCwd = ''
