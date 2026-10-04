@@ -341,6 +341,7 @@ def refresh(repo: Path, state: Path | None = None, *, budget_seconds: float = MA
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--budget-seconds", type=float, default=MAX_SECONDS)
     args = parser.parse_args()
     repo = args.repo.resolve()
     try:
@@ -355,7 +356,7 @@ def main() -> int:
         target = state_root.default_state_root() / "projects" / project_root.project_key(repo) / "code-map" / "map.txt"
         print(f"CODE_MAP={target} STATUS=UNAVAILABLE")
         return 1
-    path, status = refresh(repo)
+    path, status = refresh(repo, budget_seconds=args.budget_seconds)
     print(f"CODE_MAP={path} STATUS={status}")
     return 0
 

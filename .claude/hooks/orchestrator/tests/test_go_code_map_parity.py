@@ -21,6 +21,23 @@ def _repo(path):
     return path
 
 
+@pytest.mark.parametrize("status", ["FRESH", "STALE", "UNAVAILABLE"])
+def test_p44_python_cli_preserves_pre_status_line(tmp_path, monkeypatch, capsys, status):
+    repo = _repo(tmp_path / f"p44_{status.lower()}")
+    map_path = Path("C:/Users/test/code map/map.txt")
+    calls = []
+
+    def refresh(root, **kwargs):
+        calls.append((root, kwargs))
+        return map_path, status
+
+    monkeypatch.setattr(code_map, "refresh", refresh)
+    monkeypatch.setattr(sys, "argv", ["code_map.py", "--repo", str(repo), "--budget-seconds", "0.2"])
+    assert code_map.main() == 0
+    assert calls == [(repo.resolve(), {"budget_seconds": 0.2})]
+    assert capsys.readouterr().out == f"CODE_MAP={map_path.resolve()} STATUS={status}\n"
+
+
 def test_p43_python_oracle_inventory_cache_and_bounds(tmp_path, monkeypatch):
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture["oracle"] == "Python .claude/hooks/orchestrator/code_map.py inventory and refresh cache"

@@ -23,7 +23,69 @@ const (
 	codeMapMaxTotal     = 32 * 1024 * 1024
 	codeMapMaxBytes     = 256 * 1024
 	codeMapMaxSeconds   = 10 * time.Second
+	codeMapProcessLimit = 2 * time.Second
 )
+
+type codeMapPython struct {
+	Path string `json:"path"`
+}
+
+// refreshCodeMapForPre delegates all symbol parsing to the Python oracle.
+func refreshCodeMapForPre(repo string) (string, string) {
+	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
+	if pluginRoot == "" {
+		executable, err := os.Executable()
+		if err != nil {
+			return "", "UNAVAILABLE"
+		}
+		pluginRoot = filepath.Dir(filepath.Dir(executable))
+	}
+	deadline := time.Now().Add(codeMapProcessLimit)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		return "", "UNAVAILABLE"
+	}
+	locator := filepath.Join(pluginRoot, "bin", "python-locator.js")
+	cmd := exec.CommandContext(ctx, node, locator, "--resolve-json")
+	cmd.Env = os.Environ()
+	data, err := cmd.Output()
+	if err != nil || ctx.Err() != nil {
+		return "", "UNAVAILABLE"
+	}
+	var python codeMapPython
+	if err = json.Unmarshal(data, &python); err != nil || python.Path == "" {
+		return "", "UNAVAILABLE"
+	}
+	if !time.Now().Before(deadline) {
+		return "", "UNAVAILABLE"
+	}
+	cmd = exec.CommandContext(ctx, python.Path, filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "code_map.py"), "--repo", repo, "--budget-seconds", "0.2")
+	cmd.Dir = repo
+	output, err := cmd.Output()
+	if ctx.Err() != nil {
+		return "", "UNAVAILABLE"
+	}
+	path, status, parseErr := parseCodeMapLine(output)
+	if parseErr != nil || (err != nil && status != "UNAVAILABLE") {
+		return "", "UNAVAILABLE"
+	}
+	return path, status
+}
+
+func parseCodeMapLine(output []byte) (string, string, error) {
+	line := strings.TrimSuffix(string(output), "\n")
+	line = strings.TrimSuffix(line, "\r")
+	if line == "" || strings.ContainsAny(line, "\r\n") || !strings.HasPrefix(line, "CODE_MAP=") {
+		return "", "", errors.New("malformed code map output")
+	}
+	parts := strings.SplitN(strings.TrimPrefix(line, "CODE_MAP="), " STATUS=", 2)
+	if len(parts) != 2 || parts[0] == "" || (parts[1] != "FRESH" && parts[1] != "STALE" && parts[1] != "UNAVAILABLE") {
+		return "", "", errors.New("malformed code map output")
+	}
+	return parts[0], parts[1], nil
+}
 
 type codeMapFile struct {
 	Path      string

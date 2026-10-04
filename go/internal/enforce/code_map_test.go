@@ -14,6 +14,88 @@ import (
 	"purser-hook/internal/contextio"
 )
 
+func TestCodeMapP44Subprocess(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		python, err = exec.LookPath("python3")
+	}
+	if err != nil {
+		t.Fatal("Python 3.11+ required by python-locator")
+	}
+	if _, err = exec.LookPath("node"); err != nil {
+		t.Fatal("Node required by python-locator")
+	}
+	pluginRoot := t.TempDir()
+	if err = os.MkdirAll(filepath.Join(pluginRoot, "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	locatorPath := filepath.Join(pluginRoot, "bin", "python-locator.js")
+	locator := "process.stdout.write(JSON.stringify({path: process.env.P44_PYTHON}) + '\\n');\n"
+	if err = os.WriteFile(locatorPath, []byte(locator), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mapDir := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator")
+	if err = os.MkdirAll(mapDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	mapScript := "import os, sys, time\n"
+	mapScript += "assert sys.argv[1:] == ['--repo', os.environ['P44_REPO'], '--budget-seconds', '0.2']\n"
+	mapScript += "mode = os.environ['P44_MODE']\n"
+	mapScript += "if mode == 'timeout': time.sleep(5)\n"
+	mapScript += "print(os.environ['P44_OUTPUT'])\n"
+	mapScript += "raise SystemExit(2 if mode == 'failure' else 1 if mode == 'unavailable' else 0)\n"
+	if err = os.WriteFile(filepath.Join(mapDir, "code_map.py"), []byte(mapScript), 0600); err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("P44_PYTHON", python)
+	t.Setenv("P44_REPO", repo)
+	t.Setenv("P44_MODE", "golden")
+	const mapPath = `C:\Users\test\code map\map.txt`
+	for _, item := range []struct{ name, status string }{{"fresh", "FRESH"}, {"stale", "STALE"}, {"unavailable", "UNAVAILABLE"}} {
+		t.Run("p44_golden_"+item.name, func(t *testing.T) {
+			t.Setenv("P44_MODE", item.name)
+			t.Setenv("P44_OUTPUT", "CODE_MAP="+mapPath+" STATUS="+item.status)
+			gotPath, gotStatus := refreshCodeMapForPre(repo)
+			if gotPath != mapPath || gotStatus != item.status {
+				t.Fatalf("got %q %q", gotPath, gotStatus)
+			}
+		})
+	}
+	for _, item := range []struct{ name, output string }{
+		{"failure", "CODE_MAP=" + mapPath + " STATUS=FRESH"},
+		{"malformed", "not a code map line"},
+	} {
+		t.Run("p44_unavailable_"+item.name, func(t *testing.T) {
+			t.Setenv("P44_MODE", item.name)
+			t.Setenv("P44_OUTPUT", item.output)
+			if path, status := refreshCodeMapForPre(repo); status != "UNAVAILABLE" || path != "" {
+				t.Fatalf("failure became %q %q", path, status)
+			}
+		})
+	}
+	t.Run("p44_unavailable_timeout", func(t *testing.T) {
+		t.Setenv("P44_MODE", "timeout")
+		t.Setenv("P44_OUTPUT", "CODE_MAP="+mapPath+" STATUS=FRESH")
+		started := time.Now()
+		if path, status := refreshCodeMapForPre(repo); status != "UNAVAILABLE" || path != "" {
+			t.Fatalf("timeout became %q %q", path, status)
+		}
+		if elapsed := time.Since(started); elapsed >= codeMapProcessLimit+time.Second {
+			t.Fatalf("deadline exceeded: %s", elapsed)
+		}
+	})
+	t.Run("p44_unavailable_missing_interpreter", func(t *testing.T) {
+		if err := os.WriteFile(locatorPath, []byte("process.stdout.write('null\\n'); process.exit(1);\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if path, status := refreshCodeMapForPre(repo); status != "UNAVAILABLE" || path != "" {
+			t.Fatalf("missing interpreter became %q %q", path, status)
+		}
+	})
+}
+
 func TestCodeMapP43Fixture(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "code_map.json"))
 	if err != nil {
