@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
+import re
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -4193,7 +4194,16 @@ def test_each_route_sets_exact_model_and_effort(workspace, config, route, model,
 
     assert updated["model"] == model
     assert updated["config"]["model_reasoning_effort"] == effort
-    assert updated["prompt"] == codex._append_worker_validation_instruction("Implement.")
+    expected_prompt = codex._append_worker_validation_instruction("Implement.")
+    assert updated["prompt"] == _assert_code_map_appended(updated["prompt"], expected_prompt)
+
+
+def _assert_code_map_appended(prompt, expected_body):
+    lines = [line for line in prompt.splitlines() if line.startswith("CODE_MAP=")]
+    assert len(lines) == 1
+    assert re.fullmatch(r"CODE_MAP=.+ STATUS=(?:FRESH|STALE|UNAVAILABLE)", lines[0])
+    assert prompt == f"{expected_body}\n{lines[0]}"
+    return prompt
 
 
 def test_new_call_model_override_reaches_worker_receipt_and_telemetry(workspace, config):
@@ -4690,9 +4700,12 @@ def test_compatible_reply_only_strips_orch(workspace, config):
     )
     updated = result["hookSpecificOutput"]["updatedInput"]
 
+    expected_prompt = _assert_code_map_appended(
+        updated["prompt"], codex._append_worker_validation_instruction("Continue.")
+    )
     assert updated == {
         "threadId": "thread-1",
-        "prompt": codex._append_worker_validation_instruction("Continue."),
+        "prompt": expected_prompt,
     }
 
 
@@ -4711,11 +4724,13 @@ def test_reply_without_orch_inherits_recorded_thread_context(workspace, config):
     output = result["hookSpecificOutput"]
 
     assert "permissionDecision" not in output
+    expected_prompt = _assert_code_map_appended(
+        output["updatedInput"]["prompt"],
+        codex._append_worker_validation_instruction("Continue without repeating routing."),
+    )
     assert output["updatedInput"] == {
         "threadId": "thread-1",
-        "prompt": codex._append_worker_validation_instruction(
-            "Continue without repeating routing."
-        ),
+        "prompt": expected_prompt,
     }
     pending = next((state / "pending").glob("*.json"))
     assert json.loads(pending.read_text(encoding="utf-8"))["scope"] == [
@@ -4758,8 +4773,9 @@ def test_pretool_strips_minimal_orch_and_pins_consequential_route(workspace, con
     output = result["hookSpecificOutput"]
 
     assert "permissionDecision" not in output
-    assert output["updatedInput"]["prompt"] == codex._append_worker_validation_instruction(
-        "\nbody text"
+    expected_prompt = codex._append_worker_validation_instruction("\nbody text")
+    assert output["updatedInput"]["prompt"] == _assert_code_map_appended(
+        output["updatedInput"]["prompt"], expected_prompt
     )
     assert output["updatedInput"]["model"] == "gpt-6-sol"
     assert output["updatedInput"]["config"]["model_reasoning_effort"] == "high"

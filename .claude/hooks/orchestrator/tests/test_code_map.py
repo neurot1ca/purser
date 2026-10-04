@@ -56,14 +56,18 @@ def test_deleted_file_drops_from_map(tmp_path):
     assert "gone.py" not in entries and "gone.py" not in path.read_text(encoding="utf-8")
 
 
-def test_limit_preserves_complete_map(tmp_path, monkeypatch):
+def test_oversized_and_binary_files_are_skipped_and_map_stays_fresh(tmp_path):
     repo = _repo(tmp_path)
     (repo / "small.py").write_text("def okay():\n    pass\n", encoding="utf-8")
-    path, _ = _entries(repo)
-    before = path.read_bytes()
-    monkeypatch.setattr(code_map, "MAX_FILE_BYTES", 1)
-    assert code_map.refresh(repo) == (path, "STALE")
-    assert path.read_bytes() == before
+    (repo / "large.bin").write_bytes(b"x" * (code_map.MAX_FILE_BYTES + 1))
+    (repo / "binary.bin").write_bytes(b"\x00\xff")
+    path, status = code_map.refresh(repo)
+    manifest = json.loads(path.with_name("manifest.json").read_text(encoding="utf-8"))
+    data = path.read_text(encoding="utf-8")
+
+    assert status == "FRESH"
+    assert "small.py" in data and "large.bin" not in data and "binary.bin" not in data
+    assert manifest["skipped_files"] == 2
 
 
 def test_unsupported_language_without_parser_is_listed(tmp_path, monkeypatch):

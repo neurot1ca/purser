@@ -14,7 +14,7 @@ import subprocess
 import time
 
 
-VERSION = 4
+VERSION = 5
 MAX_FILES = 5_000
 MAX_FILE_BYTES = 512 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
@@ -256,6 +256,7 @@ def refresh(repo: Path, state: Path | None = None, *, budget_seconds: float = MA
                 old = {}
             entries: dict[str, dict] = {}
             total = 0
+            skipped_files = 0
             for relative in _inventory(repo, deadline):
                 _check(deadline)
                 path = repo / relative
@@ -267,14 +268,27 @@ def refresh(repo: Path, state: Path | None = None, *, budget_seconds: float = MA
                     entries[relative] = {"mtime_ns": info.st_mtime_ns, "size": info.st_size,
                                          "language": "unknown", "coverage": "unavailable", "symbols": []}
                     continue
-                if info.st_size > MAX_FILE_BYTES:
-                    raise MapLimit("file size")
                 total += info.st_size
                 if total > MAX_TOTAL_BYTES:
                     raise MapLimit("total size")
+                if info.st_size > MAX_FILE_BYTES:
+                    skipped_files += 1
+                    continue
                 prior = old.get(relative)
                 if isinstance(prior, dict) and prior.get("mtime_ns") == info.st_mtime_ns and prior.get("size") == info.st_size:
                     entries[relative] = prior
+                    continue
+                source = path.read_bytes()
+                after = path.stat()
+                if after.st_mtime_ns != info.st_mtime_ns or after.st_size != info.st_size:
+                    raise OSError("file changed during indexing")
+                if b"\0" in source:
+                    skipped_files += 1
+                    continue
+                try:
+                    source.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    skipped_files += 1
                     continue
                 language = "python" if path.suffix.lower() in {".py", ".pyi"} else LANGUAGES.get(path.suffix.lower(), "unknown")
                 symbols: list[list[object]] = []
@@ -283,12 +297,6 @@ def refresh(repo: Path, state: Path | None = None, *, budget_seconds: float = MA
                 test_file = _is_test_file(relative)
                 tests = 0
                 if test_file or language == "python" or (backend is not None and language != "unknown"):
-                    source = path.read_bytes()
-                    if len(source) > MAX_FILE_BYTES:
-                        raise MapLimit("file size")
-                    after = path.stat()
-                    if after.st_mtime_ns != info.st_mtime_ns or after.st_size != info.st_size:
-                        raise OSError("file changed during indexing")
                     if test_file:
                         try:
                             tests = _test_count(source, language)
@@ -319,10 +327,12 @@ def refresh(repo: Path, state: Path | None = None, *, budget_seconds: float = MA
                     entries[relative]["tests"] = tests
             data = _render(entries, backend_name)
             _check(deadline)
-            if not manifest or entries != old or not target.is_file():
+            if (not manifest or entries != old or manifest.get("skipped_files") != skipped_files
+                    or not target.is_file()):
                 _atomic_write(target, data)
                 _atomic_write(manifest_path, json.dumps({"version": VERSION, "parser": backend_name,
-                            "entries": entries}, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+                            "entries": entries, "skipped_files": skipped_files},
+                            ensure_ascii=False, sort_keys=True).encode("utf-8"))
             return target.resolve(), "FRESH"
     except (OSError, ValueError, subprocess.SubprocessError, MapLimit):
         return target.resolve(), "STALE" if target.is_file() else "UNAVAILABLE"
