@@ -51,6 +51,7 @@ func SessionStart(event map[string]any) []byte {
 	if validSession && statePath != "" {
 		state = readAdvisorState(statePath, session)
 		if source == "compact" || source == "clear" {
+			state["last_suggested_context"], state["reminder_messages"], state["reminder_wasted_tokens"] = 0, 0, 0
 			if notice, ok := state["notice_pending"].(map[string]any); !ok || !validNoticePending(notice) {
 				state["notice_pending"] = nil
 			}
@@ -80,8 +81,8 @@ func SessionStart(event map[string]any) []byte {
 							}
 						}
 						outcome["post_context_tokens"] = postContext
-						state["compaction_outcome_pending"] = nil
 					}
+					state["compaction_outcome_pending"] = nil
 					emitCompactionOutcome(session, outcome)
 				} else {
 					state["compaction_outcome_pending"] = nil

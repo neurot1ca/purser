@@ -93,13 +93,21 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 		state["receipt_pending"] = nil
 		_ = writeAdvisorState(statePath, state)
 	}
-	if outcome, ok := state["compaction_outcome_pending"].(map[string]any); ok && outcome["compaction_observed"] == true {
-		if post, exists := compactedContext(event["transcript_path"]); exists {
+	if outcome, ok := state["compaction_outcome_pending"].(map[string]any); ok {
+		adviceTurn, turnOK := exactInteger(outcome["advice_turn"])
+		if turnOK && (outcome["compaction_observed"] == true || compactBoundaryAfterAdvice(records, number(state["context_prompt_count"]), adviceTurn)) {
+			outcome["compaction_observed"] = true
+			if post, exists := compactedContext(event["transcript_path"]); exists {
+				outcome["post_context_tokens"] = post
+			}
 			count := number(state["context_prompt_count"])
-			turn, _ := exactInteger(outcome["advice_turn"])
-			outcome["post_context_tokens"], outcome["elapsed_turns"] = post, max(0, count+1-turn)
+			outcome["elapsed_turns"] = max(0, count-adviceTurn)
 			emitCompactionOutcome(session, outcome)
 			state["compaction_outcome_pending"] = nil
+			state["last_suggested_context"], state["reminder_messages"], state["reminder_wasted_tokens"] = 0, 0, 0
+			if notice, ok := state["notice_pending"].(map[string]any); ok && notice["notice_id"] == outcome["notice_id"] {
+				state["notice_pending"] = nil
+			}
 			_ = writeAdvisorState(statePath, state)
 		}
 	}
@@ -223,6 +231,9 @@ func formatThousands(value int) string {
 
 func transcriptUsageContext(records []map[string]any) int {
 	for i := len(records) - 1; i >= 0; i-- {
+		if records[i]["subtype"] == "compact_boundary" {
+			return 0
+		}
 		if transcriptRecordType(records[i]) != "assistant" {
 			continue
 		}
@@ -240,6 +251,25 @@ func transcriptUsageContext(records []map[string]any) int {
 		return total
 	}
 	return 0
+}
+
+func compactBoundaryAfterAdvice(records []map[string]any, promptCount, adviceTurn int) bool {
+	boundary := -1
+	for i, record := range records {
+		if record["subtype"] == "compact_boundary" {
+			boundary = i
+		}
+	}
+	if boundary < 0 {
+		return false
+	}
+	postBoundaryPrompts := 0
+	for _, record := range records[boundary+1:] {
+		if genuineTranscriptUser(record) {
+			postBoundaryPrompts++
+		}
+	}
+	return promptCount-postBoundaryPrompts >= adviceTurn
 }
 
 type advisorSettings struct {

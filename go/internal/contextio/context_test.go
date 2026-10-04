@@ -535,3 +535,90 @@ func TestSessionStartFailsOpenWhenAdvisorStateCannotBeWritten(t *testing.T) {
 		t.Fatalf("SessionStart output after state write failure = %q, want %q", output, want)
 	}
 }
+
+func TestCompactionAdviceUsesPostBoundaryUsage(t *testing.T) {
+	t.Setenv("USERPROFILE", t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeAdvisorTranscript(t, transcript, []map[string]any{
+		{"type": "assistant", "message": map[string]any{"usage": map[string]any{"input_tokens": 319608}}},
+		{"type": "system", "subtype": "compact_boundary"},
+	})
+	statePath := filepath.Join(t.TempDir(), "telemetry", "compaction_advisor.json")
+	got := compactionAdvice(map[string]any{"transcript_path": transcript}, t.TempDir(), statePath, "post-compact-small")
+	if got != "" {
+		t.Fatalf("advice after compact boundary without post-boundary assistant usage = %q, want none", got)
+	}
+}
+
+func TestCompactionAdviceThresholdUsesPostBoundaryUsage(t *testing.T) {
+	t.Setenv("USERPROFILE", t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	writeAdvisorTranscript(t, transcript, []map[string]any{
+		{"type": "assistant", "message": map[string]any{"usage": map[string]any{"input_tokens": 319608}}},
+		{"type": "system", "subtype": "compact_boundary"},
+		{"type": "assistant", "message": map[string]any{"usage": map[string]any{"input_tokens": 287321}}},
+	})
+	statePath := filepath.Join(t.TempDir(), "telemetry", "compaction_advisor.json")
+	got := compactionAdvice(map[string]any{"transcript_path": transcript}, t.TempDir(), statePath, "post-compact-large")
+	if !strings.Contains(got, "287,321 context tokens") {
+		t.Fatalf("advice after compact boundary did not use 287,321 post-boundary tokens: %q", got)
+	}
+}
+
+func TestCompactionAdviceResolvesPendingOutcomeFromNewBoundary(t *testing.T) {
+	t.Setenv("USERPROFILE", t.TempDir())
+	stateRoot := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", stateRoot)
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	records := make([]map[string]any, 0, 482)
+	for i := 0; i < 469; i++ {
+		records = append(records, map[string]any{"type": "user", "message": map[string]any{"content": "prompt"}})
+	}
+	records = append(records, map[string]any{"type": "system", "subtype": "compact_boundary"})
+	for i := 0; i < 12; i++ {
+		records = append(records, map[string]any{"type": "user", "message": map[string]any{"content": "prompt"}})
+	}
+	records = append(records, map[string]any{"type": "assistant", "message": map[string]any{"usage": map[string]any{"input_tokens": 74714}}})
+	writeAdvisorTranscript(t, transcript, records)
+	statePath := filepath.Join(t.TempDir(), "telemetry", "compaction_advisor.json")
+	state := map[string]any{
+		"session_id": "post-compact-pending", "context_prompt_count": 481,
+		"last_suggested_context": 319608,
+		"notice_pending": map[string]any{
+			"notice_id": "05c3c9ce0123456789abcdef01234567", "context": 319608,
+			"percentage": 77, "handoff": "handoff", "triggers": []any{"idle", "commit"},
+			"advice_written": true, "advice_turn": 469,
+		},
+		"compaction_outcome_pending": map[string]any{
+			"advice_turn": 469, "compaction_observed": false,
+			"notice_id": "05c3c9ce0123456789abcdef01234567", "pre_context_tokens": 319608,
+		},
+	}
+	if err := writeAdvisorState(statePath, state); err != nil {
+		t.Fatal(err)
+	}
+	got := compactionAdvice(map[string]any{"transcript_path": transcript}, t.TempDir(), statePath, "post-compact-pending")
+	if got != "" {
+		t.Fatalf("stale advice was replayed after compact boundary: %q", got)
+	}
+	updated := readAdvisorState(statePath, "post-compact-pending")
+	if updated["compaction_outcome_pending"] != nil || updated["notice_pending"] != nil {
+		t.Fatalf("compaction state was not resolved: outcome=%#v notice=%#v", updated["compaction_outcome_pending"], updated["notice_pending"])
+	}
+}
+
+func writeAdvisorTranscript(t *testing.T, path string, records []map[string]any) {
+	t.Helper()
+	var data []byte
+	for _, record := range records {
+		line, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, line...)
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
