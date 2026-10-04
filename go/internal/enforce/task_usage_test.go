@@ -5,10 +5,168 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestTaskUsageP61ActiveTaskFixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "active_task_start.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Now   string `json:"now"`
+		Cases []struct {
+			Name                string         `json:"name"`
+			SessionID           string         `json:"session_id"`
+			TaskID              string         `json:"task_id"`
+			ToolUseID           string         `json:"tool_use_id"`
+			ProjectKey          string         `json:"project_key"`
+			Transcript          string         `json:"transcript"`
+			OversizedTranscript bool           `json:"oversized_transcript"`
+			ExpectedStatus      string         `json:"expected_status"`
+			ExpectedReason      string         `json:"expected_reason"`
+			Existing            map[string]any `json:"existing"`
+			ExpectedRecord      map[string]any `json:"expected_record"`
+			LockContention      bool           `json:"lock_contention"`
+		} `json:"cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	now, err := time.Parse(time.RFC3339Nano, fixture.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fixture.Cases {
+		if !strings.Contains(c.Name, "p61") {
+			continue
+		}
+		t.Run(c.Name, func(t *testing.T) {
+			root := t.TempDir()
+			projects := filepath.Join(root, "projects")
+			if err := os.Mkdir(projects, 0700); err != nil {
+				t.Fatal(err)
+			}
+			activePath := activeTaskPath(root, c.SessionID)
+			if c.Existing != nil {
+				existing := replaceFixtureNow(c.Existing, fixture.Now)
+				if err := writeActiveTaskJSON(activePath, existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var transcript string
+			if c.Transcript != "" || c.OversizedTranscript {
+				transcript = filepath.Join(projects, c.SessionID+".jsonl")
+				content := c.Transcript
+				if c.OversizedTranscript {
+					content = strings.Repeat("x", maxTaskUsageLine+1) + "\n"
+				}
+				if err := os.WriteFile(transcript, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var got map[string]any
+			if c.LockContention {
+				held, ok := acquireTaskUsageLock(root, c.SessionID, 20*time.Millisecond)
+				if !ok {
+					t.Fatal("failed to establish lock contention")
+				}
+				defer releaseTaskUsageLock(held)
+				got = startActiveTask(root, c.SessionID, c.TaskID, c.ProjectKey, c.ToolUseID, transcript, projects, now)
+			} else {
+				got = startActiveTask(root, c.SessionID, c.TaskID, c.ProjectKey, c.ToolUseID, transcript, projects, now)
+			}
+			if got["status"] != c.ExpectedStatus || got["reason"] != nullableString(c.ExpectedReason) {
+				t.Fatalf("result %#v; want status=%s reason=%s", got, c.ExpectedStatus, c.ExpectedReason)
+			}
+			expected := replaceFixtureNow(c.ExpectedRecord, fixture.Now)
+			encoded, readErr := os.ReadFile(activePath)
+			if expected == nil {
+				if !os.IsNotExist(readErr) {
+					t.Fatalf("active record exists or read failed: %v", readErr)
+				}
+				if _, ok := got["active_task"]; ok {
+					t.Fatal("unexpected active_task return")
+				}
+				return
+			}
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			var written map[string]any
+			if err := json.Unmarshal(encoded, &written); err != nil {
+				t.Fatal(err)
+			}
+			if !sameJSON(written, expected) {
+				t.Fatalf("written record %#v; want %#v", written, expected)
+			}
+			if c.ExpectedStatus == "STARTED" || c.ExpectedStatus == "RETAINED" {
+				if !sameJSON(got["active_task"], written) {
+					t.Fatalf("return active_task %#v differs from file %#v", got["active_task"], written)
+				}
+			}
+		})
+	}
+}
+
+func TestTaskUsageP61PythonFinalizerReadsGoRecord(t *testing.T) {
+	root := t.TempDir()
+	projects := filepath.Join(root, "projects")
+	if err := os.Mkdir(projects, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const session, task, tool = "p61-crosscheck", "p61-cross-task", "p61-cross-tool"
+	transcript := filepath.Join(projects, session+".jsonl")
+	row := `{"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"p61-cross-tool"}],"usage":{"input_tokens":7,"output_tokens":3}}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(row), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := startActiveTask(root, session, task, "project-cross", tool, transcript, projects, time.Now().UTC().Truncate(time.Microsecond))
+	if result["status"] != "STARTED" {
+		t.Fatalf("Go start result: %#v", result)
+	}
+	_, source, _, _ := runtime.Caller(0)
+	repo := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
+	pythonRoot := filepath.Join(repo, ".claude", "hooks", "orchestrator")
+	python, err := exec.LookPath("python")
+	if err != nil {
+		python, err = exec.LookPath("python3")
+	}
+	if err != nil {
+		t.Fatal("Python interpreter required for Go-to-Python finalizer cross-check")
+	}
+	script := `import sys; sys.path.insert(0, sys.argv[1]); import claude_transcript_usage as u; import telemetry; telemetry.emit=lambda *a,**k: None; telemetry.update_task=lambda *a,**k: None; result=u.finalize_stop_task(sys.argv[2], session_id=sys.argv[3], allowed_projects_root=sys.argv[4]); assert result["status"] == "COMPLETED" and result["usage"]["claude_task_input_tokens"] == 7, result`
+	cmd := exec.Command(python, "-c", script, pythonRoot, root, session, projects)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Python finalize_stop_task failed reading Go record: %v\n%s", err, output)
+	}
+}
+
+func replaceFixtureNow(value map[string]any, now string) map[string]any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		if item == "$NOW" {
+			out[key] = now
+		} else {
+			out[key] = item
+		}
+	}
+	return out
+}
+
+func sameJSON(left, right any) bool {
+	a, errA := json.Marshal(left)
+	b, errB := json.Marshal(right)
+	return errA == nil && errB == nil && bytes.Equal(a, b)
+}
 
 func TestTaskUsageP59Fixture(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "task_usage.json"))
