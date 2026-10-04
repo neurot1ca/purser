@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"purser-hook/internal/contextio"
 )
@@ -393,6 +394,75 @@ func TestObservationP50CrashRecoveryAndConcurrentMerge(t *testing.T) {
 		if countObservationID(t, filepath.Join(concurrentRoot, "events", "2026-10", "session_"+c.Event["session_id"].(string)+".jsonl"), id) != 1 {
 			t.Fatalf("concurrent canonical count for %s is not one", id)
 		}
+	}
+}
+
+func TestObservationP51UsageParity(t *testing.T) {
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name, Type, Malformed string
+			Task                  any
+			Envelope, Payload     map[string]any
+			Snapshot, Expected    map[string]any
+		} `json:"p51_cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fixture.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			root := t.TempDir()
+			var capturedAt string
+			if c.Snapshot != nil {
+				snapshot := make(map[string]any, len(c.Snapshot)+1)
+				for key, value := range c.Snapshot {
+					if key != "age_seconds" {
+						snapshot[key] = value
+					}
+				}
+				age, _ := c.Snapshot["age_seconds"].(float64)
+				capturedAt = time.Now().UTC().Truncate(time.Second).Add(-time.Duration(age) * time.Second).Format(time.RFC3339Nano)
+				snapshot["captured_at"] = capturedAt
+				path := filepath.Join(root, "telemetry", "latest", "claude_usage.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				data, err := json.Marshal(snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if c.Malformed != "" {
+				path := filepath.Join(root, "telemetry", "latest", "claude_usage.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(c.Malformed), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := buildObservationAtStateRoot(c.Type, c.Envelope, c.Payload, c.Task, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := make(map[string]any, len(c.Expected))
+			for key, value := range c.Expected {
+				if key == "claude_usage_captured_at" && value == "$CAPTURED_AT" {
+					expected[key] = capturedAt
+				} else {
+					expected[key] = value
+				}
+			}
+			if !reflect.DeepEqual(got["payload"], expected) {
+				t.Fatalf("payload = %#v, want %#v", got["payload"], expected)
+			}
+		})
 	}
 }
 

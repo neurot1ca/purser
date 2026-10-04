@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[4]
 ORCHESTRATOR = ROOT / ".claude" / "hooks" / "orchestrator"
@@ -158,4 +159,43 @@ def test_go_observation_p50_cases():
     cache.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(["go", "test", "-run", "^TestObservation.*P50", "-count=1", "./internal/enforce"],
+                   cwd=ROOT / "go", env=env, check=True)
+
+
+def test_python_observation_p51_usage_oracle(tmp_path):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    for case in fixture["p51_cases"]:
+        state = tmp_path / case["name"]
+        snapshot_path = state / "telemetry" / "latest" / "claude_usage.json"
+        captured_at = None
+        if "snapshot" in case:
+            snapshot = dict(case["snapshot"])
+            captured_at = (datetime.now(timezone.utc).replace(microsecond=0)
+                           - timedelta(seconds=snapshot.pop("age_seconds")))
+            snapshot["captured_at"] = captured_at.isoformat().replace("+00:00", "Z")
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+        elif "malformed" in case:
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text(case["malformed"], encoding="utf-8")
+
+        telemetry.emit(case["type"], task_id=case["task"], state_root=state,
+                       **case["envelope"], **case["payload"])
+        events = telemetry._root(state) / "events"
+        path = next(events.glob("????-??/session_p51-session.jsonl"))
+        event = json.loads(path.read_text(encoding="utf-8"))
+        expected = dict(case["expected"])
+        if "$CAPTURED_AT" in expected.values():
+            expected["claude_usage_captured_at"] = captured_at.isoformat().replace("+00:00", "Z")
+        assert event["payload"] == expected, case["name"]
+        assert telemetry_schema.valid_event(event), case["name"]
+
+
+def test_go_observation_p51_cases():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
+    subprocess.run(["go", "test", "-run", "^TestObservation.*P51", "-count=1", "./internal/enforce"],
                    cwd=ROOT / "go", env=env, check=True)

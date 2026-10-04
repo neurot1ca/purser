@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -339,6 +340,86 @@ func mergeFields(sets ...map[string]bool) map[string]bool {
 
 var observationRules = map[string]string{}
 
+const claudeUsageSnapshotLimit = 16 << 10
+
+var claudeUsagePayloadFields = fields("claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
+
+func readClaudeUsagePayload(stateRoot string, now time.Time) map[string]any {
+	unknown := map[string]any{"claude_usage_known": false, "claude_rate_limit_delta_scope": "account_window_observation"}
+	file, err := os.Open(filepath.Join(stateRoot, "telemetry", "latest", "claude_usage.json"))
+	if err != nil {
+		return unknown
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, claudeUsageSnapshotLimit+1))
+	if err != nil || len(data) > claudeUsageSnapshotLimit {
+		return unknown
+	}
+	var snapshot map[string]any
+	if json.Unmarshal(data, &snapshot) != nil || snapshot == nil || snapshot["schema_version"] != float64(1) {
+		return unknown
+	}
+	capturedText, ok := snapshot["captured_at"].(string)
+	capturedAt, valid := parseClaudeUsageTimestamp(capturedText)
+	if !ok || !valid || capturedAt.After(now) || now.Sub(capturedAt) > 5*time.Minute {
+		return unknown
+	}
+	payload := map[string]any{"claude_usage_captured_at": capturedText, "claude_usage_known": false, "claude_rate_limit_delta_scope": "account_window_observation"}
+	if session, ok := snapshot["session_id"].(string); ok && observationID.MatchString(session) {
+		payload["claude_usage_session_id"] = session
+	}
+	for _, field := range []struct{ source, target string }{
+		{"context_used_percentage", "claude_context_used_percentage"},
+		{"context_window_size", "claude_context_window_size"},
+		{"context_total_tokens", "claude_context_total_tokens"},
+		{"context_input_tokens", "claude_context_input_tokens"},
+		{"context_output_tokens", "claude_context_output_tokens"},
+		{"cache_creation_input_tokens", "claude_cache_creation_input_tokens"},
+		{"cache_read_input_tokens", "claude_cache_read_input_tokens"},
+		{"session_estimated_cost_usd", "claude_session_estimated_cost_usd"},
+		{"session_total_duration_ms", "claude_session_total_duration_ms"},
+	} {
+		if number := validClaudeNumber(snapshot[field.source]); number != nil {
+			payload[field.target], payload["claude_usage_known"] = number, true
+		}
+	}
+	for _, window := range []struct{ name, prefix string }{{"five_hour", "claude_5h"}, {"seven_day", "claude_7d"}} {
+		values, _ := snapshot[window.name].(map[string]any)
+		if values == nil {
+			continue
+		}
+		if number := validClaudeNumber(values["used_percentage"]); number != nil {
+			payload[window.prefix+"_start_pct"], payload["claude_usage_known"] = number, true
+		}
+		if reset, ok := values["resets_at"].(string); ok {
+			if _, valid := parseClaudeUsageTimestamp(reset); valid {
+				payload[window.prefix+"_resets_at"] = reset
+			}
+		}
+	}
+	return payload
+}
+
+func parseClaudeUsageTimestamp(value string) (time.Time, bool) {
+	if len(value) > 40 {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	_, offset := parsed.Zone()
+	return parsed, offset == 0
+}
+
+func validClaudeNumber(value any) any {
+	number, ok := value.(float64)
+	if !ok || number < 0 || math.IsNaN(number) || math.IsInf(number, 0) {
+		return nil
+	}
+	return number
+}
+
 func init() {
 	setObservationRule("bool", "routing_enforced fresh_thread reply_call claude_usage_known")
 	setObservationRule("int", "worker_prompt_chars")
@@ -387,9 +468,26 @@ func normalizeObservationID(value any, fallback string) string {
 }
 
 func buildObservation(eventType string, envelope, payload map[string]any, taskID any) (map[string]any, error) {
+	return buildObservationAtStateRoot(eventType, envelope, payload, taskID, "")
+}
+
+func buildObservationAtStateRoot(eventType string, envelope, payload map[string]any, taskID any, stateRoot string) (map[string]any, error) {
 	allowed, ok := observationFields[eventType]
 	if !ok {
 		return nil, fmt.Errorf("unknown telemetry event type")
+	}
+	if eventType == "IMPLEMENTER_STARTED" && stateRoot != "" {
+		callerPayload := payload
+		payload = make(map[string]any, len(callerPayload)+2)
+		for name, value := range callerPayload {
+			payload[name] = value
+		}
+		for name := range claudeUsagePayloadFields {
+			delete(payload, name)
+		}
+		for name, value := range readClaudeUsagePayload(stateRoot, time.Now().UTC()) {
+			payload[name] = value
+		}
 	}
 	clean := map[string]any{}
 	for name, value := range payload {
