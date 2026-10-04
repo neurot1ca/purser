@@ -11,6 +11,7 @@ import policy
 ROOT = Path(__file__).parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "go_policy" / "config_cases.json"
 ORCH_FIXTURE = ROOT / "tests" / "fixtures" / "go_policy" / "orch.json"
+ROUTE_THREAD_FIXTURE = ROOT / "tests" / "fixtures" / "go_policy" / "route_thread.json"
 
 
 def _valid():
@@ -259,6 +260,86 @@ def test_go_orch_golden_parity():
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
         ["go", "test", "./internal/policy", "-run", "^TestPythonOrchGoldenParity$", "-count=1"],
+        cwd=ROOT.parents[2] / "go", text=True, capture_output=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _route_thread_cases():
+    config = _valid()
+    request = {"task_id": "task-1", "route": "normal", "model": "gpt-5", "effort": "low"}
+    cases = []
+
+    def add(name, kind, inputs, *, expected_code=None):
+        case = {"name": name, "kind": kind, "input": inputs}
+        if expected_code is not None:
+            case["expected_code"] = expected_code
+        cases.append(case)
+
+    add("valid-route", "route", {"route": "normal", "config": config})
+    add("invalid-route-no-fallback", "route", {"route": "future", "config": config}, expected_code="INVALID_ENUM_VALUE")
+    add("non-string-route", "route", {"route": 7, "config": config}, expected_code="INVALID_ENUM_VALUE")
+    bad_config = _valid()
+    bad_config["allowed_phases"] = []
+    add("invalid-route-config", "route", {"route": "normal", "config": bad_config}, expected_code="CONFIG_INVALID")
+
+    add("valid-thread", "compatibility", {"requested": request, "recorded": request})
+    add("invalid-request-identity", "compatibility", {"requested": {"task_id": ""}, "recorded": request}, expected_code="INVALID_REQUEST")
+    add("missing-live-thread", "compatibility", {"requested": request, "recorded": None}, expected_code="NO_LIVE_THREAD")
+    add("corrupt-live-thread", "compatibility", {"requested": request, "recorded": {"task_id": "task-1"}}, expected_code="INVALID_LIVE_THREAD")
+    for field, code in (("task_id", "TASK_ID_MISMATCH"), ("route", "ROUTE_MISMATCH"), ("model", "MODEL_MISMATCH"), ("effort", "EFFORT_MISMATCH")):
+        recorded = dict(request)
+        recorded[field] = "different"
+        add(f"{field}-mismatch", "compatibility", {"requested": request, "recorded": recorded}, expected_code=code)
+    add("mismatch-precedence", "compatibility", {
+        "requested": request,
+        "recorded": {key: "different" for key in request},
+    }, expected_code="TASK_ID_MISMATCH")
+
+    add("fresh-compatible-denied", "fresh", {"requested": request, "recorded": request, "reason": None}, expected_code="USE_CODEX_REPLY")
+    for reason in ("user_override", "reanchor"):
+        add(f"fresh-{reason}-override", "fresh", {"requested": request, "recorded": request, "reason": reason}, expected_code="FRESH_THREAD_OVERRIDE")
+    add("fresh-invalid-request", "fresh", {"requested": {"task_id": ""}, "recorded": request, "reason": None}, expected_code="INVALID_REQUEST")
+    add("fresh-missing-live-thread", "fresh", {"requested": request, "recorded": None, "reason": None}, expected_code="NO_LIVE_THREAD")
+    add("fresh-corrupt-live-thread", "fresh", {"requested": request, "recorded": {"task_id": "task-1"}, "reason": None}, expected_code="INVALID_LIVE_THREAD")
+    add("fresh-mismatch", "fresh", {"requested": request, "recorded": {**request, "task_id": "different"}, "reason": None}, expected_code="TASK_ID_MISMATCH")
+    return cases
+
+
+def _route_thread_oracle_results():
+    from dataclasses import asdict
+
+    results = []
+    for case in _route_thread_cases():
+        item = dict(case)
+        inputs = case["input"]
+        if case["kind"] == "route":
+            result = policy.resolve_route(inputs["route"], inputs["config"])
+        elif case["kind"] == "compatibility":
+            result = policy.thread_compatibility(inputs["requested"], inputs["recorded"])
+        else:
+            result = policy.fresh_codex_decision(inputs["requested"], inputs["recorded"], inputs["reason"])
+        item["result"] = asdict(result)
+        results.append(item)
+    return results
+
+
+def test_python_route_thread_golden_fixture():
+    actual = _route_thread_oracle_results()
+    assert actual == json.loads(ROUTE_THREAD_FIXTURE.read_text(encoding="utf-8"))
+    for case in actual:
+        result = case["result"]
+        if case["name"].startswith("valid-"):
+            assert result.get("valid", result.get("compatible")) is True, case["name"]
+        if "expected_code" in case:
+            assert result["code"] == case["expected_code"], case["name"]
+
+
+def test_go_route_thread_golden_parity():
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(
+        ["go", "test", "./internal/policy", "-run", "^TestPythonRouteThreadGoldenParity$", "-count=1"],
         cwd=ROOT.parents[2] / "go", text=True, capture_output=True, check=False, env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr

@@ -1,0 +1,618 @@
+[
+  {
+    "name": "valid-route",
+    "kind": "route",
+    "input": {
+      "route": "normal",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan"
+        ],
+        "allowed_reasons": [
+          "normal"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "result": {
+      "valid": true,
+      "code": "VALID",
+      "message": "Route is valid.",
+      "route": "normal",
+      "model": "gpt-5",
+      "effort": "low"
+    }
+  },
+  {
+    "name": "invalid-route-no-fallback",
+    "kind": "route",
+    "input": {
+      "route": "future",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan"
+        ],
+        "allowed_reasons": [
+          "normal"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "INVALID_ENUM_VALUE",
+    "result": {
+      "valid": false,
+      "code": "INVALID_ENUM_VALUE",
+      "message": "Unknown route 'future'; no model or effort was selected.",
+      "route": "future",
+      "model": null,
+      "effort": null
+    }
+  },
+  {
+    "name": "non-string-route",
+    "kind": "route",
+    "input": {
+      "route": 7,
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan"
+        ],
+        "allowed_reasons": [
+          "normal"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "INVALID_ENUM_VALUE",
+    "result": {
+      "valid": false,
+      "code": "INVALID_ENUM_VALUE",
+      "message": "Unknown route 7; no model or effort was selected.",
+      "route": null,
+      "model": null,
+      "effort": null
+    }
+  },
+  {
+    "name": "invalid-route-config",
+    "kind": "route",
+    "input": {
+      "route": "normal",
+      "config": {
+        "allowed_phases": [],
+        "allowed_reasons": [
+          "normal"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "CONFIG_INVALID",
+    "result": {
+      "valid": false,
+      "code": "CONFIG_INVALID",
+      "message": "allowed_phases must be a non-empty list of unique non-empty strings",
+      "route": "normal",
+      "model": null,
+      "effort": null
+    }
+  },
+  {
+    "name": "valid-thread",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      }
+    },
+    "result": {
+      "action": "reuse via codex-reply",
+      "compatible": true,
+      "code": "COMPATIBLE",
+      "message": "The live thread is compatible; use codex-reply."
+    }
+  },
+  {
+    "name": "invalid-request-identity",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": ""
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      }
+    },
+    "expected_code": "INVALID_REQUEST",
+    "result": {
+      "action": "require a fresh thread",
+      "compatible": false,
+      "code": "INVALID_REQUEST",
+      "message": "Requested thread identity is incomplete; a fresh thread is required."
+    }
+  },
+  {
+    "name": "missing-live-thread",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": null
+    },
+    "expected_code": "NO_LIVE_THREAD",
+    "result": {
+      "action": "require a fresh thread",
+      "compatible": false,
+      "code": "NO_LIVE_THREAD",
+      "message": "No compatible live thread was recorded."
+    }
+  },
+  {
+    "name": "corrupt-live-thread",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1"
+      }
+    },
+    "expected_code": "INVALID_LIVE_THREAD",
+    "result": {
+      "action": "require a fresh thread",
+      "compatible": false,
+      "code": "INVALID_LIVE_THREAD",
+      "message": "Recorded live thread identity is incomplete; a fresh thread is required."
+    }
+  },
+  {
+    "name": "task_id-mismatch",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "different",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      }
+    },
+    "expected_code": "TASK_ID_MISMATCH",
+    "result": {
+      "action": "require a fresh thread",
+      "compatible": false,
+      "code": "TASK_ID_MISMATCH",
+      "message": "The recorded live thread has a different task id; use a fresh thread."
+    }
+  },
+  {
+    "name": "route-mismatch",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "different",
+        "model": "gpt-5",
+        "effort": "low"
+      }
+    },
+    "expected_code": "ROUTE_MISMATCH",
+    "result": {
+      "action": "require a fresh thread",
+      "compatible": false,
+      "code": "ROUTE_MISMATCH",
+      "message": "The recorded live thread has a different route; use a fresh thread."
+    }
+  },
+  {
+    "name": "model-mismatch",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "different",
+        "effort": "low"
+      }
+    },
+    "expected_code": "MODEL_MISMATCH",
+    "result": {
+      "action": "require a fresh thread",
+      "compatible": false,
+      "code": "MODEL_MISMATCH",
+      "message": "The recorded live thread has a different model; use a fresh thread."
+    }
+  },
+  {
+    "name": "effort-mismatch",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "different"
+      }
+    },
+    "expected_code": "EFFORT_MISMATCH",
+    "result": {
+      "action": "require a fresh thread",
+      "compatible": false,
+      "code": "EFFORT_MISMATCH",
+      "message": "The recorded live thread has a different effort; use a fresh thread."
+    }
+  },
+  {
+    "name": "mismatch-precedence",
+    "kind": "compatibility",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "different",
+        "route": "different",
+        "model": "different",
+        "effort": "different"
+      }
+    },
+    "expected_code": "TASK_ID_MISMATCH",
+    "result": {
+      "action": "require a fresh thread",
+      "compatible": false,
+      "code": "TASK_ID_MISMATCH",
+      "message": "The recorded live thread has a different task id; use a fresh thread."
+    }
+  },
+  {
+    "name": "fresh-compatible-denied",
+    "kind": "fresh",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "reason": null
+    },
+    "expected_code": "USE_CODEX_REPLY",
+    "result": {
+      "action": "deny fresh codex",
+      "allowed": false,
+      "code": "USE_CODEX_REPLY",
+      "message": "A compatible live thread exists; use codex-reply instead."
+    }
+  },
+  {
+    "name": "fresh-user_override-override",
+    "kind": "fresh",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "reason": "user_override"
+    },
+    "expected_code": "FRESH_THREAD_OVERRIDE",
+    "result": {
+      "action": "allow fresh codex",
+      "allowed": true,
+      "code": "FRESH_THREAD_OVERRIDE",
+      "message": "Explicit reason=user_override allows a fresh thread despite a compatible live thread."
+    }
+  },
+  {
+    "name": "fresh-reanchor-override",
+    "kind": "fresh",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "reason": "reanchor"
+    },
+    "expected_code": "FRESH_THREAD_OVERRIDE",
+    "result": {
+      "action": "allow fresh codex",
+      "allowed": true,
+      "code": "FRESH_THREAD_OVERRIDE",
+      "message": "Explicit reason=reanchor allows a fresh thread despite a compatible live thread."
+    }
+  },
+  {
+    "name": "fresh-invalid-request",
+    "kind": "fresh",
+    "input": {
+      "requested": {
+        "task_id": ""
+      },
+      "recorded": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "reason": null
+    },
+    "expected_code": "INVALID_REQUEST",
+    "result": {
+      "action": "allow fresh codex",
+      "allowed": true,
+      "code": "INVALID_REQUEST",
+      "message": "Requested thread identity is malformed; allowing a fresh codex call and surfacing the anomaly."
+    }
+  },
+  {
+    "name": "fresh-missing-live-thread",
+    "kind": "fresh",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": null,
+      "reason": null
+    },
+    "expected_code": "NO_LIVE_THREAD",
+    "result": {
+      "action": "allow fresh codex",
+      "allowed": true,
+      "code": "NO_LIVE_THREAD",
+      "message": "No compatible live thread exists; a fresh codex call is allowed."
+    }
+  },
+  {
+    "name": "fresh-corrupt-live-thread",
+    "kind": "fresh",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "task-1"
+      },
+      "reason": null
+    },
+    "expected_code": "INVALID_LIVE_THREAD",
+    "result": {
+      "action": "allow fresh codex",
+      "allowed": true,
+      "code": "INVALID_LIVE_THREAD",
+      "message": "Recorded live thread identity is corrupt; allowing a fresh codex call and surfacing the anomaly."
+    }
+  },
+  {
+    "name": "fresh-mismatch",
+    "kind": "fresh",
+    "input": {
+      "requested": {
+        "task_id": "task-1",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "recorded": {
+        "task_id": "different",
+        "route": "normal",
+        "model": "gpt-5",
+        "effort": "low"
+      },
+      "reason": null
+    },
+    "expected_code": "TASK_ID_MISMATCH",
+    "result": {
+      "action": "allow fresh codex",
+      "allowed": true,
+      "code": "TASK_ID_MISMATCH",
+      "message": "No compatible live thread exists; a fresh codex call is allowed."
+    }
+  }
+]
