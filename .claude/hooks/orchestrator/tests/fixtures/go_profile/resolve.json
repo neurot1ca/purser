@@ -1,0 +1,412 @@
+{
+  "profiles": [
+    {
+      "input": {
+        "user": {
+          "status": "ok",
+          "values": {
+            "review.skip_max_lines": 40,
+            "review.skip_max_files": 3,
+            "roles.reviewer": "none",
+            "reviewer.selected": {
+              "agent": "opencode",
+              "model": "review-1"
+            },
+            "reviewer.alternatives": [
+              {
+                "agent": "codex",
+                "model": "review-2"
+              },
+              {
+                "agent": "agy",
+                "model": "review-3"
+              }
+            ],
+            "paths.protected": [
+              "user-secret"
+            ],
+            "trust.paths": [
+              "$ROOT"
+            ],
+            "telemetry.vault_root": "/vault"
+          },
+          "warnings": [
+            "user warning"
+          ]
+        },
+        "project": {
+          "status": "ok",
+          "values": {
+            "project.id": "demo",
+            "paths.protected": [
+              "project-secret"
+            ],
+            "review.skip_max_lines": 20,
+            "review.skip_max_files": 1,
+            "review.force_full": false,
+            "review.full_suite_required": true,
+            "checks": [
+              {
+                "name": "lint",
+                "argv": [
+                  "go",
+                  "test"
+                ],
+                "when": null,
+                "timeout_seconds": 30
+              }
+            ],
+            "worktree.copy": [
+              ".env"
+            ],
+            "worktree.setup": "setup",
+            "worktree.setup_timeout_seconds": 90
+          },
+          "warnings": [
+            "project warning"
+          ]
+        }
+      },
+      "output": {
+        "configured": true,
+        "project_id": "demo",
+        "protected_paths": [
+          "*.key",
+          "*.pem",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          ".env",
+          ".env.*",
+          ".git",
+          ".git/**",
+          ".orchestrator/**",
+          "AGENTS.md",
+          "CLAUDE.md",
+          "credentials.*",
+          "project-secret",
+          "secrets.*",
+          "user-secret"
+        ],
+        "force_full_review": false,
+        "full_suite_required": true,
+        "skip_max_lines": 20,
+        "skip_max_files": 1,
+        "trusted": true,
+        "reviewer_executable": null,
+        "reviewer_candidates": [
+          {
+            "agent": "opencode",
+            "model": "review-1"
+          },
+          {
+            "agent": "codex",
+            "model": "review-2"
+          },
+          {
+            "agent": "agy",
+            "model": "review-3"
+          }
+        ],
+        "roles": {
+          "orchestrator": "claude-code",
+          "coder": "codex",
+          "reviewer": "none"
+        },
+        "authority_sources": [
+          {
+            "path": "AGENTS.md",
+            "headings": [
+              "Authority",
+              "Working scope",
+              "Proportional validation",
+              "Test and comment quality"
+            ],
+            "when_changed": null
+          }
+        ],
+        "checks": [
+          {
+            "name": "lint",
+            "argv": [
+              "go",
+              "test"
+            ],
+            "when": null,
+            "timeout_seconds": 30
+          }
+        ],
+        "worktree": {
+          "copy": [
+            ".env"
+          ],
+          "setup": "setup",
+          "setup_timeout_seconds": 90
+        },
+        "vault_root": "/vault",
+        "loosenings_ignored": 0,
+        "user_status": "ok",
+        "project_status": "ok",
+        "warnings": [
+          "user warning",
+          "project warning"
+        ]
+      }
+    },
+    {
+      "input": {
+        "user": {
+          "status": "ok",
+          "values": {
+            "review.skip_max_lines": 40,
+            "review.skip_max_files": 3,
+            "trust.paths": [
+              "$ROOT/child"
+            ]
+          },
+          "warnings": []
+        },
+        "project": {
+          "status": "ok",
+          "values": {
+            "review.skip_max_lines": 41,
+            "review.skip_max_files": 2,
+            "paths.protected": [
+              "project-secret"
+            ],
+            "checks": [],
+            "worktree.setup": "setup"
+          },
+          "warnings": []
+        }
+      },
+      "output": {
+        "configured": true,
+        "project_id": null,
+        "protected_paths": [
+          "*.key",
+          "*.pem",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          ".env",
+          ".env.*",
+          ".git",
+          ".git/**",
+          ".orchestrator/**",
+          "AGENTS.md",
+          "CLAUDE.md",
+          "credentials.*",
+          "project-secret",
+          "secrets.*"
+        ],
+        "force_full_review": false,
+        "full_suite_required": false,
+        "skip_max_lines": 40,
+        "skip_max_files": 2,
+        "trusted": false,
+        "reviewer_executable": null,
+        "reviewer_candidates": [
+          {
+            "agent": "agy",
+            "model": "gemini-3.8-flash-high"
+          }
+        ],
+        "roles": {
+          "orchestrator": "claude-code",
+          "coder": "codex",
+          "reviewer": "agy"
+        },
+        "authority_sources": [
+          {
+            "path": "AGENTS.md",
+            "headings": [
+              "Authority",
+              "Working scope",
+              "Proportional validation",
+              "Test and comment quality"
+            ],
+            "when_changed": null
+          }
+        ],
+        "checks": [],
+        "worktree": {
+          "copy": [],
+          "setup": null,
+          "setup_timeout_seconds": 600
+        },
+        "vault_root": null,
+        "loosenings_ignored": 1,
+        "user_status": "ok",
+        "project_status": "ok",
+        "warnings": [
+          "project: [[checks]] ignored because the project is not trusted",
+          "project: [worktree] ignored because the project is not trusted"
+        ]
+      }
+    },
+    {
+      "input": {
+        "user": {
+          "status": "missing",
+          "values": {},
+          "warnings": []
+        },
+        "project": {
+          "status": "rejected",
+          "values": {
+            "review.skip_max_lines": 1
+          },
+          "warnings": [
+            "project tier rejected: bad"
+          ]
+        }
+      },
+      "output": {
+        "configured": true,
+        "project_id": null,
+        "protected_paths": [
+          "*.key",
+          "*.pem",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          ".env",
+          ".env.*",
+          ".git",
+          ".git/**",
+          ".orchestrator/**",
+          "AGENTS.md",
+          "CLAUDE.md",
+          "credentials.*",
+          "secrets.*"
+        ],
+        "force_full_review": true,
+        "full_suite_required": false,
+        "skip_max_lines": 50,
+        "skip_max_files": 2,
+        "trusted": false,
+        "reviewer_executable": null,
+        "reviewer_candidates": [
+          {
+            "agent": "agy",
+            "model": "gemini-3.8-flash-high"
+          }
+        ],
+        "roles": {
+          "orchestrator": "claude-code",
+          "coder": "codex",
+          "reviewer": "agy"
+        },
+        "authority_sources": [
+          {
+            "path": "AGENTS.md",
+            "headings": [
+              "Authority",
+              "Working scope",
+              "Proportional validation",
+              "Test and comment quality"
+            ],
+            "when_changed": null
+          }
+        ],
+        "checks": [],
+        "worktree": {
+          "copy": [],
+          "setup": null,
+          "setup_timeout_seconds": 600
+        },
+        "vault_root": null,
+        "loosenings_ignored": 0,
+        "user_status": "missing",
+        "project_status": "rejected",
+        "warnings": [
+          "project tier rejected: bad"
+        ]
+      }
+    }
+  ],
+  "protected": [
+    {
+      "path": "src/deep/file.go",
+      "patterns": [
+        "src/**/file.go"
+      ],
+      "output": true
+    },
+    {
+      "path": "src/deep/file.go",
+      "patterns": [
+        "src/*.go"
+      ],
+      "output": true
+    },
+    {
+      "path": "src/file.go",
+      "patterns": [
+        "src/f[ai]le.go"
+      ],
+      "output": true
+    },
+    {
+      "path": "src/FILE.go",
+      "patterns": [
+        "src/file.go"
+      ],
+      "output": true
+    },
+    {
+      "path": "/src/file.go",
+      "patterns": [
+        "src/file.go"
+      ],
+      "output": false
+    },
+    {
+      "path": "src/file.go",
+      "patterns": [
+        "/src/file.go"
+      ],
+      "output": false
+    },
+    {
+      "path": ".\\SRC\\deep\\file.go",
+      "patterns": [
+        "src/**"
+      ],
+      "output": true
+    },
+    {
+      "path": ".orchestrator",
+      "patterns": [
+        ".orchestrator/**"
+      ],
+      "output": true
+    },
+    {
+      "path": "foobar/file.go",
+      "patterns": [
+        "foo/**"
+      ],
+      "output": false
+    },
+    {
+      "path": "nested/SECRET.PEM",
+      "patterns": [
+        "*.pem"
+      ],
+      "output": true
+    },
+    {
+      "path": "nested/a/file.go",
+      "patterns": [
+        "file.go"
+      ],
+      "output": true
+    },
+    {
+      "path": "./src//file.go",
+      "patterns": [
+        "src/file.go"
+      ],
+      "output": false
+    }
+  ]
+}
