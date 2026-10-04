@@ -1,0 +1,12 @@
+{
+  "oracle": "Python codex.Pre synchronous reply recovery",
+  "cases": [
+    {"name":"p40: bare reply","kind":"bare","thread_id":"thread-bare","task_id":"task-bare","prompt":"Continue from the last checkpoint.","label":"Recovered label","expected":"VALID"},
+    {"name":"p40: forbidden inputs","kind":"forbidden","thread_id":"thread-forbidden","task_id":"task-forbidden","prompt":"ORCH|task=task-forbidden|phase=operation|route=operation\nContinue.","input":{"model":"forbidden"},"expected":"CODEX_REPLY_INPUT_INVALID"},
+    {"name":"p40: inherited labels","kind":"bare","thread_id":"thread-label","task_id":"task-label","prompt":"Continue.","label":"Inherited task label","expected":"VALID"},
+    {"name":"p40: corrupt ledger","kind":"corrupt","thread_id":"thread-corrupt","task_id":"task-corrupt","prompt":"ORCH|task=task-corrupt|phase=operation|route=operation\nContinue.","expected":"INTERNAL_LEDGER_CORRUPT"},
+    {"name":"p40: task mismatch before phase and route","kind":"mismatch","thread_id":"thread-task","task_id":"new-task","recorded_task":"old-task","recorded_phase":"implementation","recorded_route":"normal","phase":"operation","route":"operation","expected":"THREAD_TASK_MISMATCH"},
+    {"name":"p40: phase mismatch before route","kind":"mismatch","thread_id":"thread-phase","task_id":"task-phase","recorded_task":"task-phase","recorded_phase":"implementation","recorded_route":"normal","phase":"operation","route":"operation","expected":"THREAD_PHASE_MISMATCH"},
+    {"name":"p40: route mismatch","kind":"mismatch","thread_id":"thread-route","task_id":"task-route","recorded_task":"task-route","recorded_phase":"operation","recorded_route":"normal","phase":"operation","route":"subtle","expected":"THREAD_ROUTE_MISMATCH"}
+  ]
+}
