@@ -1382,13 +1382,16 @@ def test_apply_and_reply_emit_decisions_but_conflict_does_not(area):
                 for event in events] == [("send_back", {"kind": "reply", "job_id": reply["jobId"]})]
 
         finish(client, reply["jobId"], "SUCCEEDED")
-        applied = job_call(client, "codex_apply", {"jobId": reply["jobId"]})
+        applied = job_call(client, "codex_apply", {"jobId": reply["jobId"],
+                                                      "reviewer1Valid": 3, "reviewer1False": 1})
         assert applied["applied"] is True
         outcome, = [event for event in scope_outcome_events(area)
                     if event["payload"].get("action") == "applied"]
         assert outcome["payload"]["job_id"] == reply["jobId"]
         assert "queue_wait_ms" not in outcome["payload"]
         accepted = decision_events(area)
+        assert accepted[-1]["payload"]["reviewer1_valid_count"] == 3
+        assert accepted[-1]["payload"]["reviewer1_false_count"] == 1
         assert [(event["payload"]["decision"], event["payload"]["source"])
                 for event in accepted] == [
                     ("send_back", {"kind": "reply", "job_id": reply["jobId"]}),
@@ -1399,6 +1402,26 @@ def test_apply_and_reply_emit_decisions_but_conflict_does_not(area):
         conflict = job_call(client, "codex_apply", {"jobId": started["jobId"]})
         assert conflict["applied"] is False
         assert len(decision_events(area)) == 2
+    finally:
+        client.close()
+
+
+def test_apply_drops_invalid_reviewer1_counts(area):
+    repo = _git_repo(area)
+    client = Client(area, extra_env={"FAKE_WRITE_FILE": "tracked.txt", "FAKE_WRITE_CONTENT": "job\n"})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True,
+                                                    "taskId": "review-count-task"})
+        finish(client, started["jobId"], "SUCCEEDED")
+        assert job_call(client, "codex_apply", {"jobId": started["jobId"]})["applied"] is True
+        assert job_call(client, "codex_apply", {"jobId": started["jobId"],
+                                                "reviewer1Valid": -1, "reviewer1False": True})["applied"] is True
+
+        decisions = decision_events(area)
+        assert len(decisions) == 2
+        assert all("reviewer1_valid_count" not in item["payload"]
+                   and "reviewer1_false_count" not in item["payload"] for item in decisions)
     finally:
         client.close()
 

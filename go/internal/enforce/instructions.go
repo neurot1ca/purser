@@ -19,7 +19,7 @@ const unrelatedHangInstruction = "If an unrelated test hangs or runs far too lon
 
 var (
 	fullSuitePattern    = regexp.MustCompile(`(?i)\b(full\s+(?:test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b`)
-	negatedSuitePattern = regexp.MustCompile(`(?i)\b(do\s+not|don't|never|avoid)\s+(run|execute)\s+(the\s+)?(full\s+(test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b`)
+	negatedSuitePattern = regexp.MustCompile(`(?i)\b(?:(?:do\s+not|don't|never|avoid)\s+(?:run|execute)\s+|(?:no|without)\s+)(the\s+)?(full\s+(test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b`)
 	claudeSuitePattern  = regexp.MustCompile(`(?i)Claude\s+runs\s+(the\s+full\s+suite|it)\s+once\s+(at|before)\s+acceptance`)
 )
 

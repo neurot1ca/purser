@@ -369,7 +369,7 @@ _FULL_SUITE_REQUEST = re.compile(
     re.IGNORECASE,
 )
 _NEGATED_FULL_SUITE_REQUEST = re.compile(
-    r"\b(?:do\s+not|don't|never|avoid)\s+(?:run|execute)\s+"
+    r"\b(?:(?:do\s+not|don't|never|avoid)\s+(?:run|execute)\s+|(?:no|without)\s+)"
     r"(?:the\s+)?(?:full\s+(?:test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b",
     re.IGNORECASE,
 )
@@ -1902,9 +1902,12 @@ def pre_tool_use(
             and _claude_runs_full_suite_at_acceptance(repository)
             and _asks_worker_to_run_full_suite(prompt_text)
         ):
-            return _deny(
+            return _observed_denial(
+                event,
                 "FULL_SUITE_REQUEST",
                 "Ask the worker for focused tests only.",
+                state_root=state_root,
+                task_id=parsed.task_id,
             )
         requested = _requested_thread(parsed, route)
         agent = loaded_config.get("coder_agent", "codex")
@@ -3179,6 +3182,11 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
         index["stage"] = "FINALIZING"
         _atomic_json_write(path, index)
         job = _async_job(root, index)
+        liveness = job.get("liveness") if isinstance(job, Mapping) else None
+        silent_gap = liveness.get("longestSilentGapSeconds") if isinstance(liveness, Mapping) else None
+        if (isinstance(silent_gap, (int, float)) and not isinstance(silent_gap, bool)
+                and math.isfinite(silent_gap) and silent_gap >= 0):
+            pending = dict(pending, longest_silent_gap_seconds=silent_gap)
         duration = _async_duration(job)
         try:
             value = {} if failed else _start_value(event.get("tool_response"))
@@ -3256,6 +3264,9 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                     job["applyState"] = "conflict"
                     job["applyConflictReason"] = "worker_replay"
                     _atomic_json_write(root / "codex_exec_mcp" / "jobs" / f"{index['jobId']}.json", job)
+                    _observe("emit", "WORKER_REPLAY_CONFLICT", task_id=pending.get("task_id"),
+                             state_root=root, **_telemetry_envelope(event, job.get("repoRoot"), index["project_key"]),
+                             paths_count=len(prepared["paths"]))
                     try:
                         ledger.ScopeLeases(root / "projects" / index["project_key"]).record_conflicts(
                             prepared["paths"]
@@ -3966,6 +3977,9 @@ def _post_observations(
         "reason_source": pending.get("reason_source"),
         "previous_route": pending.get("previous_route"),
         "new_route": pending.get("new_route"),
+        **({"longest_silent_gap_seconds": pending["longest_silent_gap_seconds"]}
+           if isinstance(pending.get("longest_silent_gap_seconds"), (int, float))
+           and not isinstance(pending.get("longest_silent_gap_seconds"), bool) else {}),
     }
     finished_payload.update({f"codex_{key}": value for key, value in codex_tokens.items()})
     _observe("emit", "IMPLEMENTER_FINISHED", task_id=task_id, **finished_payload)
@@ -5270,6 +5284,9 @@ def post_tool_use_failure(
             reason_source=pending.get("reason_source"),
             previous_route=pending.get("previous_route"),
             new_route=pending.get("new_route"),
+            **({"longest_silent_gap_seconds": pending["longest_silent_gap_seconds"]}
+               if isinstance(pending.get("longest_silent_gap_seconds"), (int, float))
+               and not isinstance(pending.get("longest_silent_gap_seconds"), bool) else {}),
         )
         _observe(
             "update_task",
@@ -5310,6 +5327,9 @@ def post_tool_use_failure(
                 reason_source=pending.get("reason_source"),
                 previous_route=pending.get("previous_route"),
                 new_route=pending.get("new_route"),
+                **({"longest_silent_gap_seconds": pending["longest_silent_gap_seconds"]}
+                   if isinstance(pending.get("longest_silent_gap_seconds"), (int, float))
+                   and not isinstance(pending.get("longest_silent_gap_seconds"), bool) else {}),
             )
             _observe(
                 "update_task",

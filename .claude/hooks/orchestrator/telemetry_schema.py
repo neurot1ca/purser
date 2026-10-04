@@ -36,6 +36,7 @@ EVENT_TYPES = frozenset(
         "CONTEXT_IO_TURN_RECORDED",
         "CODEX_RESULT_UNFETCHED",
         "CLAUDE_DECISION_RECORDED",
+        "WORKER_REPLAY_CONFLICT",
         "MECHANICAL_EDIT_OBSERVED",
         "MAINTENANCE_REPORT_FINISHED",
         "MAINTENANCE_REPORT_ACTED",
@@ -210,6 +211,7 @@ _VIOLATION_CODES = frozenset(
         "LEASE_ADMISSION_UNCERTAIN",
         "LEASE_OWNER_CONFLICT",
         "LEASE_INVALID",
+        "FULL_SUITE_REQUEST",
     }
 )
 
@@ -232,6 +234,7 @@ _PAYLOAD_FIELDS = {
     "IMPLEMENTER_FINISHED": frozenset(
         {
             "duration_ms",
+            "longest_silent_gap_seconds",
             "implementer",
             "served_model",
             "served_route",
@@ -258,7 +261,7 @@ _PAYLOAD_FIELDS = {
         }
     ),
     "IMPLEMENTER_FAILED": (
-        frozenset({"failure_code", "duration_ms"})
+        frozenset({"failure_code", "duration_ms", "longest_silent_gap_seconds"})
         | _CALL_CONTEXT_FIELDS
         | CLAUDE_USAGE_PAYLOAD_FIELDS
     ),
@@ -313,7 +316,10 @@ _PAYLOAD_FIELDS = {
     "CLAUDE_TASK_USAGE_RECORDED": CLAUDE_TASK_USAGE_PAYLOAD_FIELDS,
     "CONTEXT_IO_TURN_RECORDED": CONTEXT_IO_PAYLOAD_FIELDS,
     "CODEX_RESULT_UNFETCHED": frozenset({"route", "code"}),
-    "CLAUDE_DECISION_RECORDED": frozenset({"decision", "task_type", "source"}),
+    "CLAUDE_DECISION_RECORDED": frozenset({
+        "decision", "task_type", "source", "reviewer1_valid_count", "reviewer1_false_count"
+    }),
+    "WORKER_REPLAY_CONFLICT": frozenset({"paths_count"}),
     "MECHANICAL_EDIT_OBSERVED": frozenset(
         {"thread_id", "classification", "fingerprint", "changed_file_count", "hunk_count"}
     ),
@@ -484,6 +490,9 @@ def _payload_value(name: str, value: Any) -> Any:
         return value
     if name in {
         "changed_paths_count",
+        "paths_count",
+        "reviewer1_valid_count",
+        "reviewer1_false_count",
         "worker_prompt_chars",
         "changed_file_count",
         "hunk_count",
@@ -529,7 +538,7 @@ def _payload_value(name: str, value: Any) -> Any:
         return _identifier(value)
     if name == "unknown_reason" and value in CONTEXT_IO_UNKNOWN_REASONS:
         return value
-    if name == "duration_ms":
+    if name in {"duration_ms", "longest_silent_gap_seconds"}:
         return _number(value)
     if name == "code":
         return _identifier(value)

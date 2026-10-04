@@ -48,7 +48,8 @@ import model_listing
 import project_root
 
 
-def _record_claude_decision(job: dict[str, Any], decision: str, kind: str, source_job_id: str) -> None:
+def _record_claude_decision(job: dict[str, Any], decision: str, kind: str, source_job_id: str,
+                            reviewer1_valid: Any = None, reviewer1_false: Any = None) -> None:
     task_id = job.get("taskId")
     if not isinstance(task_id, str) or not task_id:
         return
@@ -58,9 +59,13 @@ def _record_claude_decision(job: dict[str, Any], decision: str, kind: str, sourc
         import telemetry
         repo = job.get("repoRoot")
         key = project_root.project_key(Path(repo).resolve()) if isinstance(repo, str) else None
-        telemetry.emit("CLAUDE_DECISION_RECORDED", task_id=task_id, project_key=key,
-                       decision=decision, task_type=task_type,
-                       source={"kind": kind, "job_id": source_job_id})
+        payload = {"decision": decision, "task_type": task_type,
+                   "source": {"kind": kind, "job_id": source_job_id}}
+        for field, value in (("reviewer1_valid_count", reviewer1_valid),
+                             ("reviewer1_false_count", reviewer1_false)):
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                payload[field] = value
+        telemetry.emit("CLAUDE_DECISION_RECORDED", task_id=task_id, project_key=key, **payload)
     except BaseException:
         pass
 
@@ -177,7 +182,9 @@ TOOL_SCHEMAS += [
         "type": "object", "properties": {"jobId": {"type": "string"}, "reason": {"type": "string"}}, "required": ["jobId"]}},
     {"name": "codex_apply", "description": "Apply a job worktree patch.", "inputSchema": {
         "type": "object", "properties": {"jobId": {"type": "string"},
-            "resolved": {"type": "boolean", "description": "Record a hand-resolved conflict after verifying the repository."}},
+            "resolved": {"type": "boolean", "description": "Record a hand-resolved conflict after verifying the repository."},
+            "reviewer1Valid": {"type": "integer", "minimum": 0},
+            "reviewer1False": {"type": "integer", "minimum": 0}},
         "required": ["jobId"]}},
 ]
 
@@ -1771,7 +1778,8 @@ class Server:
         with ledger._lease_lock(lock_path):
             job = self._read_job(job["jobId"])
             if job.get("applyState") == "applied" and isinstance(job.get("applyResult"), dict):
-                _record_claude_decision(job, "accepted", "apply", job["jobId"])
+                _record_claude_decision(job, "accepted", "apply", job["jobId"],
+                                        args.get("reviewer1Valid"), args.get("reviewer1False"))
                 self._release_applied_job_lease(job)
                 return _job_result(job["applyResult"])
             if args.get("resolved") is True:
@@ -1808,7 +1816,8 @@ class Server:
                     job["decisionRecorded"] = True
                 self._write_job(job)
                 _record_scope_conflict_outcome(job, "resolved_by_hand")
-                _record_claude_decision(job, "accepted", "apply", job["jobId"])
+                _record_claude_decision(job, "accepted", "apply", job["jobId"],
+                                        args.get("reviewer1Valid"), args.get("reviewer1False"))
                 self._release_applied_job_lease(job)
                 return _job_result(value)
             if "applyResult" in job:
@@ -1829,7 +1838,8 @@ class Server:
                     job["decisionRecorded"] = True
                 self._write_job(job)
                 _record_scope_conflict_outcome(job, "applied")
-                _record_claude_decision(job, "accepted", "apply", job["jobId"])
+                _record_claude_decision(job, "accepted", "apply", job["jobId"],
+                                        args.get("reviewer1Valid"), args.get("reviewer1False"))
                 self._release_applied_job_lease(job)
                 return _job_result(value)
             reviewed = job.get("reviewedSnapshot")
@@ -1874,7 +1884,8 @@ class Server:
             self._write_job(job)
             if outcome["applied"]:
                 _record_scope_conflict_outcome(job, "applied")
-                _record_claude_decision(job, "accepted", "apply", job["jobId"])
+                _record_claude_decision(job, "accepted", "apply", job["jobId"],
+                                        args.get("reviewer1Valid"), args.get("reviewer1False"))
                 self._release_applied_job_lease(job)
             return _job_result(value)
 

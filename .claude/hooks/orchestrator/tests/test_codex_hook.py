@@ -1216,6 +1216,10 @@ def test_async_worktree_replay_conflict_blocks_reviewer_and_forces_full(workspac
     bundle = response_bundle(response, config)
     assert bundle["claude_review_mode"] == policy.FULL
     assert reviewer_calls == []
+    replay_events = [item for item in _all_telemetry_events(state)
+                     if item["event_type"] == "WORKER_REPLAY_CONFLICT"]
+    assert len(replay_events) == 1
+    assert replay_events[0]["payload"] == {"paths_count": 1}
     learned = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))._read()["conflicts"]
     assert any(item["path"] == "file1.py" for item in learned)
 
@@ -1231,7 +1235,8 @@ def test_async_worktree_replay_resolves_same_codex_thread_before_review(workspac
     (repo / "file1.py").write_text("checkout = True\n", encoding="utf-8")
     job = json.loads(job_path.read_text(encoding="utf-8"))
     job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
-               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo))
+               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo),
+               liveness={"longestSilentGapSeconds": 91.5})
     job_path.write_text(json.dumps(job), encoding="utf-8")
     monkeypatch.setattr(policy, "reviewer1_gate",
                         lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
@@ -1258,6 +1263,9 @@ def test_async_worktree_replay_resolves_same_codex_thread_before_review(workspac
     assert prepared_state["snapshot"] in resolver_calls[0][1]["prompt"]
     assert reviewer_calls
     assert bundle["changed_paths"] == ["file1.py"]
+    finished, = [item for item in _all_telemetry_events(state)
+                 if item["event_type"] == "IMPLEMENTER_FINISHED"]
+    assert finished["payload"]["longest_silent_gap_seconds"] == 91.5
     learned = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))._read()["conflicts"]
     assert any(item["path"] == "file1.py" for item in learned)
 
@@ -4467,6 +4475,26 @@ def test_full_suite_request_denied_when_claude_owns_acceptance_suite(workspace, 
     assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "FULL_SUITE_REQUEST" in response["hookSpecificOutput"]["permissionDecisionReason"]
     assert "Ask the worker for focused tests only." in response["hookSpecificOutput"]["permissionDecisionReason"]
+    denial, = [item for item in _all_telemetry_events(state)
+               if item["event_type"] == "ROUTING_PROTOCOL_VIOLATION"]
+    assert denial["payload"]["violation_code"] == "FULL_SUITE_REQUEST"
+
+
+def test_no_full_suite_request_allowed_with_acceptance_suite_policy(workspace, config):
+    repo, state = workspace
+    (repo / "AGENTS.md").write_text(
+        "Claude runs the full suite once before acceptance.\n", encoding="utf-8"
+    )
+    response = codex.pre_tool_use(
+        event(prompt=orch() + "\nNo full suite."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+
+    assert "updatedInput" in response["hookSpecificOutput"]
+    assert not [item for item in _all_telemetry_events(state)
+                if item["event_type"] == "ROUTING_PROTOCOL_VIOLATION"]
 
 
 def test_full_suite_request_allowed_without_acceptance_suite_policy(workspace, config):

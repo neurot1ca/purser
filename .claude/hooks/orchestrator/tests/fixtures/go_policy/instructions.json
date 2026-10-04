@@ -56,6 +56,22 @@
       "acceptance": true,
       "asks": false,
       "required": false
+    },
+    {
+      "name": "p43:no-full-suite",
+      "policy": "Claude runs it once at acceptance.",
+      "prompt": "No full suite.",
+      "acceptance": true,
+      "asks": false,
+      "required": false
+    },
+    {
+      "name": "p43:positive-full-suite",
+      "policy": "Claude runs it once at acceptance.",
+      "prompt": "Run the full suite.",
+      "acceptance": true,
+      "asks": true,
+      "required": true
     }
   ],
   "append_cases": [
