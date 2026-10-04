@@ -1,0 +1,13 @@
+{
+  "oracle": "Python .claude/hooks/orchestrator/ledger.py ScopeLeases.acquire",
+  "cases": [
+    {"name":"free-owner","now":100,"owners":{},"requests":[{"owner_key":"owner","task_id":"task","scope":["src"]}],"codes":["LEASE_ACQUIRED"],"states":{"owner":"ACTIVE"}},
+    {"name":"overlap-queued","now":100,"owners":{"blocker":{"state":"ACTIVE","scope":["src"],"task_id":"blocker-task","acquired_at":90}},"requests":[{"owner_key":"waiter","task_id":"waiter-task","scope":["src/file"],"options":{"job_id":"job","queue_conflict":true}}],"codes":["LEASE_QUEUED"],"states":{"blocker":"ACTIVE","waiter":"QUEUED"}},
+    {"name":"disjoint-owner","now":100,"owners":{"blocker":{"state":"ACTIVE","scope":["src"],"task_id":"blocker-task","acquired_at":90}},"requests":[{"owner_key":"docs","task_id":"docs-task","scope":["docs"]}],"codes":["LEASE_ACQUIRED"],"states":{"blocker":"ACTIVE","docs":"ACTIVE"}},
+    {"name":"expired-owner-reconciled","now":100,"owners":{"expired":{"state":"ACTIVE","scope":["src"],"task_id":"old-task","acquired_at":1,"deadline_at":99}},"requests":[{"owner_key":"new","task_id":"new-task","scope":["src"]}],"codes":["LEASE_ACQUIRED"],"states":{"expired":"RELEASED","new":"ACTIVE"}},
+    {"name":"same-job-idempotent","now":100,"owners":{},"requests":[{"owner_key":"owner","task_id":"task","scope":["src"]},{"owner_key":"owner","task_id":"task","scope":["src"]}],"codes":["LEASE_ACQUIRED","LEASE_ACQUIRED"],"states":{"owner":"ACTIVE"}},
+    {"name":"malformed-empty-scope","now":100,"owners":{},"requests":[{"owner_key":"owner","task_id":"task","scope":[]}],"codes":["LEASE_INVALID"],"states":{}},
+    {"name":"lock-failure","now":100,"owners":{},"lock_failure":true,"requests":[{"owner_key":"owner","task_id":"task","scope":["src"]}],"codes":["LEASE_ADMISSION_UNCERTAIN"],"states":{}},
+    {"name":"failed-write-preserves-state","now":100,"owners":{},"fail_write":true,"requests":[{"owner_key":"owner","task_id":"task","scope":["src"]}],"codes":["LEASE_ADMISSION_UNCERTAIN"],"states":{}}
+  ]
+}

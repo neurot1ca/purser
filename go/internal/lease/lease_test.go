@@ -28,6 +28,68 @@ func TestPythonLeaseRecords(t *testing.T) {
 	}
 }
 
+func TestAdmissionHelper(t *testing.T) {
+	root := os.Getenv("PURSER_LEASE_ADMISSION_ROOT")
+	if root == "" {
+		t.Skip("parity helper")
+	}
+	got := New(root).Acquire("owner", "task", []string{"src"}, AcquireOptions{}, 100)
+	if got.Status != "OK" || got.Code != "LEASE_ACQUIRED" {
+		t.Fatalf("free scope admission: %#v", got)
+	}
+}
+
+func TestAdmissionParityOutcome(t *testing.T) {
+	root := os.Getenv("PURSER_LEASE_ADMISSION_ROOT")
+	if root == "" {
+		t.Skip("parity helper")
+	}
+	var input struct {
+		Now       float64 `json:"now"`
+		FailWrite bool    `json:"fail_write"`
+		Requests  []struct {
+			OwnerKey string   `json:"owner_key"`
+			TaskID   string   `json:"task_id"`
+			Scope    []string `json:"scope"`
+			Options  struct {
+				JobID          *string `json:"job_id"`
+				TimeoutSeconds float64 `json:"timeout_seconds"`
+				ReadOnly       bool    `json:"read_only"`
+				QueueConflict  bool    `json:"queue_conflict"`
+				AllowOverlap   bool    `json:"allow_overlap"`
+				HotPathQueue   bool    `json:"hot_path_queue"`
+			} `json:"options"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal([]byte(os.Getenv("PURSER_LEASE_ADMISSION_INPUT")), &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.FailWrite {
+		oldReplace := replaceLeaseFile
+		replaceLeaseFile = func(string, string) error { return os.ErrPermission }
+		t.Cleanup(func() { replaceLeaseFile = oldReplace })
+	}
+	store := New(root)
+	results := make([]AdmissionResult, 0, len(input.Requests))
+	for _, request := range input.Requests {
+		results = append(results, store.Acquire(request.OwnerKey, request.TaskID, request.Scope,
+			AcquireOptions(request.Options), input.Now))
+	}
+	value, err := store.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners, err := json.Marshal(value["owners"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := json.Marshal(map[string]any{"results": results, "owners": json.RawMessage(owners)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("LEASE_ADMISSION_RESULT:" + string(output))
+}
+
 func TestLockContentionAcrossProcesses(t *testing.T) {
 	if path := os.Getenv("PURSER_LEASE_LOCK_HELPER"); path != "" {
 		release, err := Lock(path)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,23 @@ const (
 
 type Result struct{ Status, Code string }
 
+// AdmissionResult reports lease admission, including the blocking task when present.
+type AdmissionResult struct {
+	Status string `json:"status"`
+	Code   string `json:"code"`
+	TaskID string `json:"task_id,omitempty"`
+}
+
+// AcquireOptions mirrors the optional arguments accepted by Python ScopeLeases.acquire.
+type AcquireOptions struct {
+	JobID          *string
+	TimeoutSeconds float64
+	ReadOnly       bool
+	QueueConflict  bool
+	AllowOverlap   bool
+	HotPathQueue   bool
+}
+
 // Store applies the non-admission scope lease transitions for a project root.
 type Store struct{ path, lockPath, jobsRoot string }
 
@@ -40,6 +58,134 @@ func New(projectStateRoot string) *Store {
 		lockPath: filepath.Join(projectStateRoot, "scope_leases.lock"),
 		jobsRoot: filepath.Clean(filepath.Join(projectStateRoot, "..", "..", "codex_exec_mcp", "jobs")),
 	}
+}
+
+// Acquire reconciles expiry and promotion, then admits or queues a scoped owner under one lock.
+func (s *Store) Acquire(ownerKey, taskID string, scope []string, options AcquireOptions, now float64) AdmissionResult {
+	if ownerKey == "" || taskID == "" || (len(scope) == 0 && !options.ReadOnly) ||
+		(len(scope) != 0 && options.ReadOnly) {
+		return AdmissionResult{"UNKNOWN", "LEASE_INVALID", ""}
+	}
+	result := AdmissionResult{"OK", "LEASE_ACQUIRED", ""}
+	err := s.mutate(now, func(value map[string]any) bool {
+		changed := s.expire(value, now)
+		changed = s.promote(value, now) || changed
+		owners := value["owners"].(map[string]any)
+		if priorRaw, exists := owners[ownerKey]; exists {
+			prior := priorRaw.(map[string]any)
+			if (prior["state"] == "ACTIVE" || prior["state"] == "QUEUED") && prior["task_id"] == taskID &&
+				sameScope(prior["scope"].([]any), scope) {
+				result.Code = "LEASE_ACQUIRED"
+				if prior["state"] == "QUEUED" {
+					result.Code = "LEASE_QUEUED"
+				}
+				return changed
+			}
+			result = AdmissionResult{"UNKNOWN", "LEASE_OWNER_CONFLICT", ""}
+			return changed
+		}
+		var jobID any
+		if options.JobID != nil {
+			jobID = *options.JobID
+		}
+		hotConflict := options.HotPathQueue && !options.ReadOnly && options.JobID != nil &&
+			s.hotAdmissionConflict(value, scope, *options.JobID, now)
+		var conflict map[string]any
+		keys := make([]string, 0, len(owners))
+		for key := range owners {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			other := owners[key].(map[string]any)
+			if (other["state"] == "ACTIVE" || other["state"] == "QUEUED") &&
+				scopesOverlap(toAnyScope(scope), other["scope"].([]any)) {
+				conflict = other
+				break
+			}
+		}
+		if conflict != nil && !options.AllowOverlap &&
+			!(options.QueueConflict && options.JobID != nil && !options.ReadOnly) {
+			result = AdmissionResult{"UNKNOWN", "SCOPE_LEASE_CONFLICT", conflict["task_id"].(string)}
+			return changed
+		}
+		state := "ACTIVE"
+		if hotConflict || (conflict != nil && !options.AllowOverlap) {
+			state, result.Code = "QUEUED", "LEASE_QUEUED"
+		}
+		owner := map[string]any{"task_id": taskID, "scope": toAnyScope(scope), "state": state,
+			"job_id": jobID, "queued_at": now}
+		if state == "ACTIVE" {
+			owner["acquired_at"] = now
+		} else if hotConflict {
+			owner["hot_path_queue"] = true
+		}
+		if options.ReadOnly {
+			owner["read_only"] = true
+		}
+		if options.JobID == nil {
+			deadline := float64(syncLeaseFallbackSeconds)
+			if options.TimeoutSeconds > 0 && finite(options.TimeoutSeconds) {
+				deadline = options.TimeoutSeconds + 60.0
+			}
+			owner["deadline_at"] = now + deadline
+		} else {
+			timeout := options.TimeoutSeconds
+			if timeout <= 0 || !finite(timeout) {
+				timeout = 24 * 60 * 60
+			}
+			owner["retention_after"] = now + timeout + 7*24*60*60
+		}
+		owners[ownerKey] = owner
+		return true
+	})
+	if err != nil {
+		return AdmissionResult{"UNKNOWN", "LEASE_ADMISSION_UNCERTAIN", ""}
+	}
+	return result
+}
+
+func toAnyScope(scope []string) []any {
+	result := make([]any, len(scope))
+	for i, path := range scope {
+		result[i] = path
+	}
+	return result
+}
+
+func sameScope(left []any, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i, path := range right {
+		if left[i] != path {
+			return false
+		}
+	}
+	return true
+}
+
+func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+
+func (s *Store) hotAdmissionConflict(value map[string]any, scope []string, jobID string, now float64) bool {
+	owners := value["owners"].(map[string]any)
+	conflicts, _ := value["conflicts"].([]any)
+	for _, raw := range owners {
+		other := raw.(map[string]any)
+		if other["state"] != "ACTIVE" && other["state"] != "QUEUED" || other["job_id"] == jobID {
+			continue
+		}
+		for _, conflictRaw := range conflicts {
+			conflict := conflictRaw.(map[string]any)
+			at, _ := pythonFloat(conflict["recorded_at"])
+			path := conflict["path"].(string)
+			if at >= now-7*24*60*60 && scopeCovers(toAnyScope(scope), path) &&
+				scopeCovers(other["scope"].([]any), path) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Release releases one active or queued owner and promotes eligible queued owners.
