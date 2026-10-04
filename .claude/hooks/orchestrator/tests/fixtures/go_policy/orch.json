@@ -1,0 +1,1913 @@
+[
+  {
+    "name": "valid-implementation",
+    "input": {
+      "prompt": "ORCH|task=ship|phase=implementation|route=normal|reason=normal|basis=choice|scope=src\\pkg, docs/guide.md|eta=600m\r\nbody\n",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "ok": true,
+    "result": {
+      "valid": true,
+      "code": "VALID",
+      "message": "ORCH metadata is valid.",
+      "prompt": "body\n",
+      "task_id": "ship",
+      "phase": "implementation",
+      "route": "normal",
+      "reason": "normal",
+      "basis": "choice",
+      "scope": [
+        "docs/guide.md",
+        "src/pkg"
+      ],
+      "eta_minutes": 600
+    }
+  },
+  {
+    "name": "valid-plan",
+    "input": {
+      "prompt": "ORCH|task=design|phase=plan|route=plan_standard|scope=docs,docs/./docs2\nplan body",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "ok": true,
+    "result": {
+      "valid": true,
+      "code": "VALID",
+      "message": "ORCH metadata is valid.",
+      "prompt": "plan body",
+      "task_id": "design",
+      "phase": "plan",
+      "route": "plan_standard",
+      "reason": null,
+      "basis": null,
+      "scope": [
+        "docs",
+        "docs/docs2"
+      ],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "valid-operation",
+    "input": {
+      "prompt": "ORCH|task=inspect|phase=operation|route=subtle|reason=incident\r\n\r\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "ok": true,
+    "result": {
+      "valid": true,
+      "code": "VALID",
+      "message": "ORCH metadata is valid.",
+      "prompt": "\r\nbody",
+      "task_id": "inspect",
+      "phase": "operation",
+      "route": "subtle",
+      "reason": "incident",
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "missing-prefix",
+    "input": {
+      "prompt": "  ORCH|task=x\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MISSING_ORCH_LINE",
+    "expected_message": "The prompt must start with an ORCH line.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MISSING_ORCH_LINE",
+      "message": "The prompt must start with an ORCH line.",
+      "prompt": "  ORCH|task=x\nbody",
+      "task_id": null,
+      "phase": null,
+      "route": null,
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "non-string-prompt",
+    "input": {
+      "prompt": null,
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MISSING_ORCH_LINE",
+    "expected_message": "The prompt must start with an ORCH line.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MISSING_ORCH_LINE",
+      "message": "The prompt must start with an ORCH line.",
+      "prompt": "",
+      "task_id": null,
+      "phase": null,
+      "route": null,
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "malformed-prefix",
+    "input": {
+      "prompt": "ORCHx|task=x\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MALFORMED_ORCH_LINE",
+    "expected_message": "The ORCH line has an invalid prefix.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MALFORMED_ORCH_LINE",
+      "message": "The ORCH line has an invalid prefix.",
+      "prompt": "body",
+      "task_id": null,
+      "phase": null,
+      "route": null,
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "missing-field-value-syntax",
+    "input": {
+      "prompt": "ORCH|task=x|phase\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MALFORMED_ORCH_LINE",
+    "expected_message": "Each ORCH field must use key=value syntax.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MALFORMED_ORCH_LINE",
+      "message": "Each ORCH field must use key=value syntax.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": null,
+      "route": null,
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "eta-without-value-syntax",
+    "input": {
+      "prompt": "ORCH|eta\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MALFORMED_ORCH_LINE",
+    "expected_message": "ORCH eta must use eta=<N>m with N an integer from 1..600.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MALFORMED_ORCH_LINE",
+      "message": "ORCH eta must use eta=<N>m with N an integer from 1..600.",
+      "prompt": "body",
+      "task_id": null,
+      "phase": null,
+      "route": null,
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "empty-key",
+    "input": {
+      "prompt": "ORCH|=x\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MALFORMED_ORCH_LINE",
+    "expected_message": "An ORCH field has an empty key.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MALFORMED_ORCH_LINE",
+      "message": "An ORCH field has an empty key.",
+      "prompt": "body",
+      "task_id": null,
+      "phase": null,
+      "route": null,
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "unknown-key",
+    "input": {
+      "prompt": "ORCH|task=x|phase=operation|route=normal|mystery=x\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "UNKNOWN_KEY",
+    "expected_message": "Unknown ORCH key 'mystery'.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "UNKNOWN_KEY",
+      "message": "Unknown ORCH key 'mystery'.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "operation",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "duplicate-key",
+    "input": {
+      "prompt": "ORCH|task=x|task=y\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MALFORMED_ORCH_LINE",
+    "expected_message": "ORCH key 'task' occurs more than once.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MALFORMED_ORCH_LINE",
+      "message": "ORCH key 'task' occurs more than once.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": null,
+      "route": null,
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "empty-task",
+    "input": {
+      "prompt": "ORCH|task= |phase=operation|route=normal\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MALFORMED_ORCH_LINE",
+    "expected_message": "The ORCH task value cannot be empty.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MALFORMED_ORCH_LINE",
+      "message": "The ORCH task value cannot be empty.",
+      "prompt": "body",
+      "task_id": null,
+      "phase": null,
+      "route": null,
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "invalid-eta",
+    "input": {
+      "prompt": "ORCH|task=x|phase=operation|route=normal|eta=0m\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MALFORMED_ORCH_LINE",
+    "expected_message": "ORCH eta must use eta=<N>m with N an integer from 1..600.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MALFORMED_ORCH_LINE",
+      "message": "ORCH eta must use eta=<N>m with N an integer from 1..600.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "operation",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "missing-phase",
+    "input": {
+      "prompt": "ORCH|task=x|route=normal\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MISSING_REQUIRED_KEY",
+    "expected_message": "Missing required ORCH key 'phase'.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MISSING_REQUIRED_KEY",
+      "message": "Missing required ORCH key 'phase'.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": null,
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "missing-implementation-scope",
+    "input": {
+      "prompt": "ORCH|task=x|phase=implementation|route=normal\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "MISSING_REQUIRED_KEY",
+    "expected_message": "Missing required ORCH key 'scope' for implementation phase.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "MISSING_REQUIRED_KEY",
+      "message": "Missing required ORCH key 'scope' for implementation phase.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "implementation",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "invalid-config",
+    "input": {
+      "prompt": "ORCH|task=x|phase=operation|route=normal\nbody",
+      "config": {
+        "allowed_phases": [],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "CONFIG_INVALID",
+    "expected_message": "Policy configuration is invalid: allowed_phases must be a non-empty list of unique non-empty strings",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "CONFIG_INVALID",
+      "message": "Policy configuration is invalid: allowed_phases must be a non-empty list of unique non-empty strings",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "operation",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "invalid-phase-enum",
+    "input": {
+      "prompt": "ORCH|task=x|phase=bogus|route=normal\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "INVALID_ENUM_VALUE",
+    "expected_message": "ORCH phase value 'bogus' is not allowed.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "INVALID_ENUM_VALUE",
+      "message": "ORCH phase value 'bogus' is not allowed.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "bogus",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "invalid-scope-traversal",
+    "input": {
+      "prompt": "ORCH|task=x|phase=implementation|route=normal|scope=src/../secret\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "INVALID_SCOPE",
+    "expected_message": "Scope must contain repository-relative paths without traversal.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "INVALID_SCOPE",
+      "message": "Scope must contain repository-relative paths without traversal.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "implementation",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "unbounded-scope",
+    "input": {
+      "prompt": "ORCH|task=x|phase=implementation|route=normal|scope=.\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "UNBOUNDED_SCOPE",
+    "expected_message": "Scope cannot resolve to the whole repository.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "UNBOUNDED_SCOPE",
+      "message": "Scope cannot resolve to the whole repository.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "implementation",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "invalid-plan-pairing",
+    "input": {
+      "prompt": "ORCH|task=x|phase=plan|route=normal\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "INVALID_ENUM_VALUE",
+    "expected_message": "The valid plan pairing is phase=plan with route=plan_standard; phase=plan cannot use other routes and route=plan_standard cannot use other phases.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "INVALID_ENUM_VALUE",
+      "message": "The valid plan pairing is phase=plan with route=plan_standard; phase=plan cannot use other routes and route=plan_standard cannot use other phases.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "plan",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "missing-sol-basis",
+    "input": {
+      "prompt": "ORCH|task=x|phase=operation|route=normal\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "subtle": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "consequential": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "escalated": {
+            "model": "gpt-5",
+            "effort": "low"
+          },
+          "plan_standard": {
+            "model": "gpt-5",
+            "effort": "low"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ]
+      }
+    },
+    "expected_code": "SOL_ROUTE_NEEDS_BASIS",
+    "expected_message": "route=normal runs gpt-6-sol. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle (gpt-6-luna) instead.",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "SOL_ROUTE_NEEDS_BASIS",
+      "message": "route=normal runs gpt-6-sol. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle (gpt-6-luna) instead.",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "operation",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  },
+  {
+    "name": "missing-agy-basis",
+    "input": {
+      "prompt": "ORCH|task=x|phase=operation|route=normal\nbody",
+      "config": {
+        "allowed_phases": [
+          "implementation",
+          "plan",
+          "operation"
+        ],
+        "allowed_reasons": [
+          "normal",
+          "incident"
+        ],
+        "allowed_efforts": [
+          "low",
+          "high"
+        ],
+        "required_routes": [
+          "normal",
+          "subtle",
+          "consequential",
+          "escalated",
+          "plan_standard"
+        ],
+        "routes": {
+          "normal": {
+            "model": "gemini-3.8-pro",
+            "effort": "max"
+          },
+          "subtle": {
+            "model": "gemini-3.8-pro",
+            "effort": "max"
+          },
+          "consequential": {
+            "model": "gemini-3.8-pro",
+            "effort": "max"
+          },
+          "escalated": {
+            "model": "gemini-3.8-pro",
+            "effort": "max"
+          },
+          "plan_standard": {
+            "model": "gemini-3.8-pro",
+            "effort": "max"
+          }
+        },
+        "always_full_routes": [
+          "normal"
+        ],
+        "reviewer_gate": {
+          "small_delta_max_lines": 2,
+          "small_delta_max_files": 1
+        },
+        "manifest_budget_seconds": 2.5,
+        "reviewer_skip_reasons": [
+          "PHASE_OPERATION",
+          "PHASE_PLAN",
+          "NO_DELTA",
+          "BELOW_THRESHOLD",
+          "REVIEWER_UNAVAILABLE"
+        ],
+        "reviewer_results": [
+          "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "CHANGES_REQUIRED",
+          "UNCERTAIN",
+          "REVIEWER1_UNAVAILABLE"
+        ],
+        "coder_agent": "agy"
+      }
+    },
+    "expected_code": "SOL_ROUTE_NEEDS_BASIS",
+    "expected_message": "route=normal requires basis=<the design choice left to the worker> (for escalated: the concrete miss).",
+    "ok": false,
+    "result": {
+      "valid": false,
+      "code": "SOL_ROUTE_NEEDS_BASIS",
+      "message": "route=normal requires basis=<the design choice left to the worker> (for escalated: the concrete miss).",
+      "prompt": "body",
+      "task_id": "x",
+      "phase": "operation",
+      "route": "normal",
+      "reason": null,
+      "basis": null,
+      "scope": [],
+      "eta_minutes": null
+    }
+  }
+]

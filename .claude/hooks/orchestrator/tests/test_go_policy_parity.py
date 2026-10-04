@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import policy
 
 ROOT = Path(__file__).parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "go_policy" / "config_cases.json"
+ORCH_FIXTURE = ROOT / "tests" / "fixtures" / "go_policy" / "orch.json"
 
 
 def _valid():
@@ -165,3 +168,97 @@ def test_python_policy_golden_fixture():
             assert expected_error in case["error"], (
                 f"{case['name']} failed on the wrong branch: {case['error']}"
             )
+
+
+def _orch_config():
+    config = _valid()
+    config["allowed_phases"] = ["implementation", "plan", "operation"]
+    config["allowed_reasons"] = ["normal", "incident"]
+    config["required_routes"] = ["normal", "subtle", "consequential", "escalated", "plan_standard"]
+    config["routes"] = {
+        route: {"model": "gpt-5", "effort": "low"}
+        for route in config["required_routes"]
+    }
+    return config
+
+
+def _orch_cases():
+    config = _orch_config()
+    cases = []
+
+    def add(name, prompt, *, case_config=None, expected_code=None, expected_message=None):
+        case = {"name": name, "input": {"prompt": prompt, "config": case_config or config}}
+        if expected_code is not None:
+            case["expected_code"] = expected_code
+        if expected_message is not None:
+            case["expected_message"] = expected_message
+        cases.append(case)
+
+    add("valid-implementation", "ORCH|task=ship|phase=implementation|route=normal|reason=normal|basis=choice|scope=src\\pkg, docs/guide.md|eta=600m\r\nbody\n")
+    add("valid-plan", "ORCH|task=design|phase=plan|route=plan_standard|scope=docs,docs/./docs2\nplan body")
+    add("valid-operation", "ORCH|task=inspect|phase=operation|route=subtle|reason=incident\r\n\r\nbody")
+    add("missing-prefix", "  ORCH|task=x\nbody", expected_code="MISSING_ORCH_LINE", expected_message="The prompt must start with an ORCH line.")
+    add("non-string-prompt", None, expected_code="MISSING_ORCH_LINE", expected_message="The prompt must start with an ORCH line.")
+    add("malformed-prefix", "ORCHx|task=x\nbody", expected_code="MALFORMED_ORCH_LINE", expected_message="The ORCH line has an invalid prefix.")
+    add("missing-field-value-syntax", "ORCH|task=x|phase\nbody", expected_code="MALFORMED_ORCH_LINE", expected_message="Each ORCH field must use key=value syntax.")
+    add("eta-without-value-syntax", "ORCH|eta\nbody", expected_code="MALFORMED_ORCH_LINE", expected_message="ORCH eta must use eta=<N>m with N an integer from 1..600.")
+    add("empty-key", "ORCH|=x\nbody", expected_code="MALFORMED_ORCH_LINE", expected_message="An ORCH field has an empty key.")
+    add("unknown-key", "ORCH|task=x|phase=operation|route=normal|mystery=x\nbody", expected_code="UNKNOWN_KEY", expected_message="Unknown ORCH key 'mystery'.")
+    add("duplicate-key", "ORCH|task=x|task=y\nbody", expected_code="MALFORMED_ORCH_LINE", expected_message="ORCH key 'task' occurs more than once.")
+    add("empty-task", "ORCH|task= |phase=operation|route=normal\nbody", expected_code="MALFORMED_ORCH_LINE", expected_message="The ORCH task value cannot be empty.")
+    add("invalid-eta", "ORCH|task=x|phase=operation|route=normal|eta=0m\nbody", expected_code="MALFORMED_ORCH_LINE", expected_message="ORCH eta must use eta=<N>m with N an integer from 1..600.")
+    add("missing-phase", "ORCH|task=x|route=normal\nbody", expected_code="MISSING_REQUIRED_KEY", expected_message="Missing required ORCH key 'phase'.")
+    add("missing-implementation-scope", "ORCH|task=x|phase=implementation|route=normal\nbody", expected_code="MISSING_REQUIRED_KEY", expected_message="Missing required ORCH key 'scope' for implementation phase.")
+    bad_config = _orch_config()
+    bad_config["allowed_phases"] = []
+    add("invalid-config", "ORCH|task=x|phase=operation|route=normal\nbody", case_config=bad_config, expected_code="CONFIG_INVALID", expected_message="Policy configuration is invalid: allowed_phases must be a non-empty list of unique non-empty strings")
+    add("invalid-phase-enum", "ORCH|task=x|phase=bogus|route=normal\nbody", expected_code="INVALID_ENUM_VALUE", expected_message="ORCH phase value 'bogus' is not allowed.")
+    add("invalid-scope-traversal", "ORCH|task=x|phase=implementation|route=normal|scope=src/../secret\nbody", expected_code="INVALID_SCOPE", expected_message="Scope must contain repository-relative paths without traversal.")
+    add("unbounded-scope", "ORCH|task=x|phase=implementation|route=normal|scope=.\nbody", expected_code="UNBOUNDED_SCOPE", expected_message="Scope cannot resolve to the whole repository.")
+    add("invalid-plan-pairing", "ORCH|task=x|phase=plan|route=normal\nbody", expected_code="INVALID_ENUM_VALUE", expected_message="The valid plan pairing is phase=plan with route=plan_standard; phase=plan cannot use other routes and route=plan_standard cannot use other phases.")
+    add("missing-sol-basis", "ORCH|task=x|phase=operation|route=normal\nbody", expected_code="SOL_ROUTE_NEEDS_BASIS", expected_message="route=normal runs gpt-6-sol. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle (gpt-6-luna) instead.")
+    agy = _orch_config()
+    agy["coder_agent"] = "agy"
+    for route in agy["routes"].values():
+        route.update(model="gemini-3.8-pro", effort="max")
+    add("missing-agy-basis", "ORCH|task=x|phase=operation|route=normal\nbody", case_config=agy, expected_code="SOL_ROUTE_NEEDS_BASIS", expected_message="route=normal requires basis=<the design choice left to the worker> (for escalated: the concrete miss).")
+    return cases
+
+
+def _orch_oracle_results():
+    from dataclasses import asdict
+
+    results = []
+    for case in _orch_cases():
+        item = dict(case)
+        parsed = policy.parse_orch_prompt(**case["input"])
+        item["ok"] = parsed.valid
+        item["result"] = json.loads(json.dumps(asdict(parsed)))
+        results.append(item)
+    return results
+
+
+def test_python_orch_golden_fixture():
+    actual = _orch_oracle_results()
+    expected = json.loads(ORCH_FIXTURE.read_text(encoding="utf-8"))
+    assert actual == expected
+    for case in actual:
+        result = case["result"]
+        if case["name"].startswith("valid-"):
+            assert case["ok"] is True and result["code"] == policy.VALID, case["name"]
+        else:
+            assert case.get("expected_code"), f"{case['name']} must declare its expected code"
+            assert case["ok"] is False and result["code"] == case["expected_code"], case["name"]
+            assert result["message"] == case["expected_message"], (
+                f"{case['name']} failed on the wrong branch: {result['message']}"
+            )
+
+
+def test_go_orch_golden_parity():
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(
+        ["go", "test", "./internal/policy", "-run", "^TestPythonOrchGoldenParity$", "-count=1"],
+        cwd=ROOT.parents[2] / "go", text=True, capture_output=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
