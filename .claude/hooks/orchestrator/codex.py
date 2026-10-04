@@ -3228,6 +3228,9 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                             pass
                 elif prepared["status"] == "conflict":
                     preparation_error = "Worker replay conflict paths: " + ", ".join(prepared["paths"])
+                    job["applyState"] = "conflict"
+                    job["applyConflictReason"] = "worker_replay"
+                    _atomic_json_write(root / "codex_exec_mcp" / "jobs" / f"{index['jobId']}.json", job)
                     try:
                         ledger.ScopeLeases(root / "projects" / index["project_key"]).record_conflicts(
                             prepared["paths"]

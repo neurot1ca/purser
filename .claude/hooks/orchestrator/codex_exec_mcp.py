@@ -1528,16 +1528,16 @@ class Server:
                         lock_path = self.job_dir.parent / "apply" / (lock_key + ".lock")
                         try:
                             with ledger._lease_lock(lock_path):
-                                snapshot = ledger.checkout_snapshot(repo_root)
                                 head = ledger._decode_path(ledger._run_git(
                                     repo_root, ["rev-parse", "--verify", "HEAD"], 30.0,
                                     "reading reply repository HEAD")).strip()
-                                ledger._run_git(worktree, ["read-tree", "--reset", snapshot], 30.0,
-                                                "resetting applied reply worktree index")
+                                snapshot = ledger._decode_path(ledger._run_git(
+                                    repo_root, ["rev-parse", f"{head}^{{tree}}"], 30.0,
+                                    "reading reply repository tree")).strip()
                                 ledger._run_git(worktree, ["clean", "-fd"], 30.0,
                                                 "clearing applied reply worktree changes")
-                                ledger._run_git(worktree, ["checkout-index", "--all", "--force"], 30.0,
-                                                "restoring applied reply worktree baseline")
+                                ledger._run_git(worktree, ["reset", "--hard", head], 30.0,
+                                                "resetting applied reply worktree HEAD")
                         except (OSError, ledger._InspectionError):
                             return _job_result({"state": "FAILED", "errorCode": "WORKTREE_REBASE_FAILED",
                                                 "message": "Applied thread worktree could not be rebased to the current checkout"})
@@ -1757,7 +1757,12 @@ class Server:
                                 "message": "This job was discarded and cannot be applied."})
         if not job.get("worktreePath"):
             return _job_result({"state": "FAILED", "errorCode": "NOT_WORKTREE_JOB", "message": "Job has no worktree"})
-        if job.get("state") != "SUCCEEDED":
+        hand_resolvable_replay_failure = (
+            args.get("resolved") is True
+            and job.get("state") == "FAILED"
+            and job.get("applyConflictReason") == "worker_replay"
+        )
+        if job.get("state") != "SUCCEEDED" and not hand_resolvable_replay_failure:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_READY", "message": "Job has not succeeded"})
         import ledger
         repo_root = Path(job["repoRoot"]).resolve()
@@ -1770,7 +1775,8 @@ class Server:
                 self._release_applied_job_lease(job)
                 return _job_result(job["applyResult"])
             if args.get("resolved") is True:
-                if job.get("applyState") != "conflict":
+                if (job.get("applyState") != "conflict"
+                        and job.get("applyConflictReason") != "worker_replay"):
                     return _job_result({"applied": False,
                                         "reason": "Job is not in conflict state."})
                 patch = ledger.job_patch(job["worktreePath"], job["snapshot"])

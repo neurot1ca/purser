@@ -1063,7 +1063,9 @@ def test_reply_resets_thread_worktree_after_earlier_change_was_applied(area):
         tracked.write_text("thread change and reply\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(repo), "add", "tracked.txt", "advance.txt"], check=True)
         subprocess.run(["git", "-C", str(repo), "commit", "-qm", "advance main"], check=True)
-        expected = ledger.checkout_snapshot(repo)
+        (repo / "main-local.txt").write_text("must stay in main\n", encoding="utf-8")
+        expected = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"],
+                                  capture_output=True, check=True, text=True).stdout.strip()
 
         next_reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
                                                        "threadId": "thread-123", "prompt": "continue"})
@@ -1072,8 +1074,25 @@ def test_reply_resets_thread_worktree_after_earlier_change_was_applied(area):
                               (next_reply["jobId"] + ".json"))
 
         assert job["snapshot"] == expected
+        assert job["baselineSnapshot"] == expected
+        assert subprocess.run(["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                              capture_output=True, check=True, text=True).stdout.strip() == \
+            subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                           capture_output=True, check=True, text=True).stdout.strip()
+        assert subprocess.run(["git", "-C", str(worktree), "status", "--porcelain"],
+                              capture_output=True, check=True, text=True).stdout == ""
+        assert not (worktree / "main-local.txt").exists()
         assert (worktree / "tracked.txt").read_text(encoding="utf-8") == tracked.read_text(encoding="utf-8")
-        assert ledger.prepare_job_replay(repo, worktree, job["snapshot"], area / "applied-reply-check")["status"] == "unchanged"
+
+        (worktree / "reply-only.txt").write_text("reply delta\n", encoding="utf-8")
+        (repo / "later-main-only.txt").write_text("later main commit\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "later-main-only.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "later unrelated commit"], check=True)
+        replay = ledger.prepare_job_replay(
+            repo, worktree, job["snapshot"], area / "applied-reply-check"
+        )
+        assert replay["status"] == "prepared"
+        assert replay["paths"] == ["reply-only.txt"]
     finally:
         client.close()
 
@@ -1713,13 +1732,26 @@ def test_codex_apply_hand_resolution_records_accepted_decision(area):
         job = read_job_record(job_path)
         job["taskId"] = "hand-resolved-task"
         job_path.write_text(json.dumps(job), encoding="utf-8")
+        project = codex_exec_mcp.project_root.project_key(repo.resolve())
+        lease = __import__("ledger").ScopeLeases(area / "root" / "projects" / project)
+        owner = "replay-conflict-owner"
+        lease.acquire(owner, "hand-resolved-task", ["tracked.txt"], job_id=started["jobId"])
+        (area / "root" / "async_jobs").mkdir(parents=True, exist_ok=True)
+        (area / "root" / "async_jobs" / f"{started['jobId']}.json").write_text(json.dumps({
+            "jobId": started["jobId"], "call_key": owner, "project_key": project,
+        }), encoding="utf-8")
         (repo / "tracked.txt").write_text("repository change\n", encoding="utf-8")
         assert job_call(client, "codex_apply", {"jobId": started["jobId"]})["applied"] is False
+        job = read_job_record(job_path)
+        job.update(state="FAILED", errorCode="JOB_REPLAY_PREPARATION_FAILED",
+                   applyConflictReason="worker_replay")
+        job_path.write_text(json.dumps(job), encoding="utf-8")
         (repo / "tracked.txt").write_text("hand merged result\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
         subprocess.run(["git", "-C", str(repo), "commit", "-qm", "resolve job conflict"], check=True)
 
-        job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True})
+        result = job_call(client, "codex_apply", {"jobId": started["jobId"], "resolved": True})
+        assert result["applied"] is True
 
         events = [json.loads(line) for path in (area / "root").rglob("*.jsonl")
                   for line in path.read_text(encoding="utf-8").splitlines() if line]
@@ -1727,6 +1759,7 @@ def test_codex_apply_hand_resolution_records_accepted_decision(area):
                    and event.get("task_id") == "hand-resolved-task"
                    and event.get("payload", {}).get("decision") == "accepted"
                    for event in events)
+        assert lease.owner_state(owner) == "RELEASED"
     finally:
         client.close()
 
