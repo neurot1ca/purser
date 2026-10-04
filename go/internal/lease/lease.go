@@ -18,7 +18,9 @@ import (
 func Lock(path string) (func() error, error) { return contextio.LockFile(path) }
 
 const (
-	conflictRetentionSeconds = 7 * 24 * 60 * 60
+	releasedLeaseRetentionSeconds = 7 * 24 * 60 * 60
+	conflictRetentionSeconds      = 7 * 24 * 60 * 60
+	maxConflictPaths              = 50
 )
 
 type Result struct{ Status, Code string }
@@ -37,7 +39,7 @@ func New(projectStateRoot string) *Store {
 // Release releases one active or queued owner and promotes eligible queued owners.
 func (s *Store) Release(ownerKey string, now float64) Result {
 	missing := false
-	err := s.mutate(func(value map[string]any) bool {
+	err := s.mutate(now, func(value map[string]any) bool {
 		changed, absent := s.releaseOwner(value, ownerKey, now)
 		missing = absent
 		return changed
@@ -68,14 +70,14 @@ func (s *Store) releaseOwner(value map[string]any, ownerKey string, now float64)
 // Reconcile expires owners and promotes newly unblocked queued owners.
 func (s *Store) Reconcile(now float64) (bool, error) {
 	changed := false
-	err := s.mutate(func(value map[string]any) bool {
+	err := s.mutate(now, func(value map[string]any) bool {
 		changed = s.promote(value, now)
 		return changed
 	})
 	return changed, err
 }
 
-func (s *Store) mutate(apply func(map[string]any) bool) error {
+func (s *Store) mutate(now float64, apply func(map[string]any) bool) error {
 	release, err := Lock(s.lockPath)
 	if err != nil {
 		return err
@@ -86,7 +88,7 @@ func (s *Store) mutate(apply func(map[string]any) bool) error {
 		return err
 	}
 	if apply(value) {
-		return s.write(value)
+		return s.write(value, now)
 	}
 	return nil
 }
@@ -113,10 +115,55 @@ func (s *Store) read() (map[string]any, error) {
 
 var replaceLeaseFile = os.Rename
 
-func (s *Store) write(value map[string]any) error {
-	if value["conflicts"] == nil {
-		value["conflicts"] = []any{}
+func (s *Store) write(value map[string]any, now float64) error {
+	cutoff := now - releasedLeaseRetentionSeconds
+	owners := value["owners"].(map[string]any)
+	activeStarts := make([]float64, 0, len(owners))
+	for _, raw := range owners {
+		owner := raw.(map[string]any)
+		if owner["state"] == "ACTIVE" {
+			if acquired, ok := pythonFloat(owner["acquired_at"]); ok {
+				activeStarts = append(activeStarts, acquired)
+			}
+		}
 	}
+	for key, raw := range owners {
+		owner := raw.(map[string]any)
+		if owner["state"] != "RELEASED" {
+			continue
+		}
+		released, ok := pythonFloat(owner["released_at"])
+		if !ok || released >= cutoff {
+			continue
+		}
+		retain := false
+		for _, started := range activeStarts {
+			if started <= released {
+				retain = true
+				break
+			}
+		}
+		if !retain {
+			delete(owners, key)
+		}
+	}
+	conflicts, _ := value["conflicts"].([]any)
+	recent := make([]any, 0, len(conflicts))
+	for _, raw := range conflicts {
+		conflict := raw.(map[string]any)
+		if recorded, ok := pythonFloat(conflict["recorded_at"]); ok && recorded >= now-conflictRetentionSeconds {
+			recent = append(recent, conflict)
+		}
+	}
+	sort.SliceStable(recent, func(i, j int) bool {
+		left, _ := pythonFloat(recent[i].(map[string]any)["recorded_at"])
+		right, _ := pythonFloat(recent[j].(map[string]any)["recorded_at"])
+		return left > right
+	})
+	if len(recent) > maxConflictPaths {
+		recent = recent[:maxConflictPaths]
+	}
+	value["conflicts"] = recent
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return err

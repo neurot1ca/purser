@@ -156,3 +156,42 @@ func TestHotPathPromotionHonorsConflictOverlap(t *testing.T) {
 		t.Fatalf("no-transition reconcile pruned data: %v data=%s", readErr, after)
 	}
 }
+
+func TestWritePrunesExpiredPythonLeaseEntries(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "scope_leases.json")
+	now := float64(time.Now().UnixNano()) / 1e9
+	staleAt := now - 7*24*60*60 - 12*60*60
+	fixture, err := json.Marshal(map[string]any{
+		"version": 1,
+		"owners": map[string]any{
+			"release": map[string]any{"state": "ACTIVE", "scope": []string{"src"}, "task_id": "release", "acquired_at": now - 60},
+			"expired": map[string]any{"state": "RELEASED", "scope": []string{"old"}, "task_id": "expired", "released_at": staleAt},
+		},
+		"conflicts": []any{
+			map[string]any{"path": "stale", "recorded_at": staleAt},
+			map[string]any{"path": "recent", "recorded_at": now - conflictRetentionSeconds + 60},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fixture, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := New(root).Release("release", now); got.Code != "LEASE_RELEASED" {
+		t.Fatalf("state-changing release: %#v", got)
+	}
+	value, err := New(root).read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := value["owners"].(map[string]any)
+	if _, exists := owners["expired"]; exists {
+		t.Fatal("expired released owner survived next state-changing write")
+	}
+	conflicts := value["conflicts"].([]any)
+	if len(conflicts) != 1 || conflicts[0].(map[string]any)["path"] != "recent" {
+		t.Fatalf("Python conflict retention mismatch: %#v", conflicts)
+	}
+}
