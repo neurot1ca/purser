@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ var (
 	startObservationFields = fields("implementer claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
 	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code")}
 	observationID          = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+	observationUUID        = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	unsafeObservationID    = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 	observationProjectKey  = regexp.MustCompile(`^(?:[0-9a-f]{16}|unresolved)$`)
 	modelValue             = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,128}$`)
@@ -73,6 +75,9 @@ func persistObservation(root string, event map[string]any) (string, error) {
 		return "", nil
 	}
 	defer contextio.Unlock(lock)
+	if err = mergeObservationSpool(root); err != nil {
+		return "TELEMETRY_SPOOL_MERGE_FAILED", err
+	}
 	month := ""
 	if timestamp, valid := event["ts_utc"].(string); valid && len(timestamp) >= 7 {
 		month = timestamp[:7]
@@ -91,6 +96,192 @@ func persistObservation(root string, event map[string]any) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+const observationSpoolMergeLimit = 16
+
+// mergeObservationSpool mirrors telemetry._merge_spool. The marker is created
+// before writes, as in Python; on recovery each destination is checked by
+// event ID so a crash between either append resumes without duplicates.
+func mergeObservationSpool(root string) error {
+	spool := filepath.Join(root, "events", "spool")
+	entries, err := os.ReadDir(spool)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	merged := filepath.Join(spool, ".merged")
+	if err = os.MkdirAll(merged, 0700); err != nil {
+		return err
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if count == observationSpoolMergeLimit {
+			break
+		}
+		count++
+		path := filepath.Join(spool, entry.Name())
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			recordObservationHealth(root, "DEGRADED", "MALFORMED_SPOOL_EVENT")
+			_ = os.Remove(path)
+			continue
+		}
+		var event map[string]any
+		if json.Unmarshal(raw, &event) != nil {
+			recordObservationHealth(root, "DEGRADED", "MALFORMED_SPOOL_EVENT")
+			_ = os.Remove(path)
+			continue
+		}
+		if !validObservationSpoolEvent(event) {
+			recordObservationHealth(root, "DEGRADED", "MALFORMED_SPOOL_EVENT")
+			_ = os.Remove(path)
+			continue
+		}
+		eventID := event["event_id"].(string)
+		marker := filepath.Join(merged, eventID)
+		if _, statErr := os.Stat(marker); os.IsNotExist(statErr) {
+			file, createErr := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if createErr != nil && !os.IsExist(createErr) {
+				return createErr
+			}
+			if createErr == nil {
+				if closeErr := file.Close(); closeErr != nil {
+					return closeErr
+				}
+			}
+		} else if statErr != nil {
+			return statErr
+		}
+		line := append(append([]byte(nil), raw...), '\n')
+		ts := event["ts_utc"].(string)
+		session, _ := event["session_id"].(string)
+		if session == "" {
+			session = "unknown"
+		}
+		canonical := filepath.Join(root, "events", ts[:7], "session_"+session+".jsonl")
+		if err = appendObservationOnce(canonical, line, eventID); err != nil {
+			return err
+		}
+		if task, ok := event["task_id"].(string); ok {
+			if err = appendObservationOnce(filepath.Join(root, "events", "by_task", task+".jsonl"), line, eventID); err != nil {
+				return err
+			}
+		}
+		if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func validObservationSpoolEvent(event map[string]any) bool {
+	keys := []string{"schema_version", "event_id", "ts_utc", "event_type", "task_id", "project_key", "session_id", "repo", "branch", "agent_id", "agent_type", "payload"}
+	if len(event) != len(keys) || !observationUUID.MatchString(asString(event["event_id"])) || event["schema_version"] != float64(observationSchemaVersion) {
+		return false
+	}
+	for _, key := range keys {
+		if _, ok := event[key]; !ok {
+			return false
+		}
+	}
+	ts, ok := event["ts_utc"].(string)
+	if !ok || len(ts) > 40 {
+		return false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return false
+	}
+	_, offset := parsed.Zone()
+	if offset != 0 {
+		return false
+	}
+	task := event["task_id"]
+	envelope := map[string]any{}
+	for _, name := range []string{"project_key", "session_id", "repo", "branch", "agent_id", "agent_type"} {
+		envelope[name] = event[name]
+	}
+	payload, ok := event["payload"].(map[string]any)
+	if !ok {
+		return false
+	}
+	built, err := buildObservation(asString(event["event_type"]), envelope, payload, task)
+	if err != nil || !reflect.DeepEqual(built["payload"], payload) {
+		return false
+	}
+	for _, name := range []string{"task_id", "project_key", "session_id", "repo", "branch", "agent_id", "agent_type"} {
+		if !reflect.DeepEqual(built[name], event[name]) {
+			return false
+		}
+	}
+	return true
+}
+
+func asString(value any) string {
+	s, _ := value.(string)
+	return s
+}
+
+// appendObservationOnce repairs a torn final line and de-duplicates by event
+// identity before appending. A valid prior record also covers crash recovery
+// when its marker was persisted before the spool file was removed.
+func appendObservationOnce(path string, line []byte, eventID string) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if len(data) > 0 && data[len(data)-1] != '\n' {
+			lastLine := strings.LastIndexByte(string(data), '\n') + 1
+			tail := data[lastLine:]
+			var prior map[string]any
+			if json.Unmarshal(tail, &prior) == nil && prior["event_id"] == eventID {
+				f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
+				if openErr != nil {
+					return openErr
+				}
+				if _, openErr = f.Write([]byte{'\n'}); openErr == nil {
+					openErr = f.Sync()
+				}
+				closeErr := f.Close()
+				if openErr != nil {
+					return openErr
+				}
+				if closeErr != nil {
+					return closeErr
+				}
+				return nil
+			}
+			f, openErr := os.OpenFile(path, os.O_WRONLY, 0600)
+			if openErr != nil {
+				return openErr
+			}
+			if openErr = f.Truncate(int64(lastLine)); openErr == nil {
+				openErr = f.Sync()
+			}
+			closeErr := f.Close()
+			if openErr != nil {
+				return openErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			data = data[:lastLine]
+		}
+		for _, record := range strings.Split(string(data), "\n") {
+			var prior map[string]any
+			if record != "" && json.Unmarshal([]byte(record), &prior) == nil && prior["event_id"] == eventID {
+				return nil
+			}
+		}
+	}
+	return appendObservationRecord(path, line[:len(line)-1])
 }
 
 func appendObservationRecord(path string, encoded []byte) error {

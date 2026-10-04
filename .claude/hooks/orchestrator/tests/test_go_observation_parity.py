@@ -112,3 +112,50 @@ def test_go_observation_p49_cases():
     env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(["go", "test", "-run", "^TestObservation.*P49", "-count=1", "./internal/enforce"],
                    cwd=ROOT / "go", env=env, check=True)
+
+
+def test_python_observation_p50_spool_merge_oracle(tmp_path):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    cases = fixture["p50_cases"]
+    merge_cases = [case for case in cases if case["mode"] == "merge"]
+    state = tmp_path / "python-merge"
+    root = telemetry._root(state)
+    assert all(telemetry_schema.valid_event(case["event"]) for case in merge_cases)
+    assert all(telemetry._encoded_event(case["event"]).decode("utf-8") == case["python_line"] for case in merge_cases)
+    for case in merge_cases:
+        telemetry._spool_event(root, case["event"])
+    telemetry.emit("TELEMETRY_WARNING", state_root=state, session_id="p50-trigger", warning_code="MALFORMED_VERDICT")
+
+    session_log = root / "events" / "2026-10" / "session_p50-session.jsonl"
+    assert session_log.read_bytes() == "".join(case["python_line"] for case in merge_cases).encode("utf-8")
+    spool = root / "events" / "spool"
+    for case in merge_cases:
+        event = case["event"]
+        assert (spool / ".merged" / event["event_id"]).is_file()
+        assert not (spool / f"{event['event_id']}.json").exists()
+        index = root / "events" / "by_task" / f"{event['task_id']}.jsonl"
+        assert index.read_bytes() == case["python_line"].encode("utf-8")
+
+    for case in (item for item in cases if item["mode"] == "reject"):
+        rejected_state = tmp_path / case["name"]
+        rejected_root = telemetry._root(rejected_state)
+        rejected_spool = rejected_root / "events" / "spool"
+        rejected_spool.mkdir(parents=True, exist_ok=True)
+        raw = case.get("raw")
+        if raw is None:
+            raw = json.dumps(case["event"], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        (rejected_spool / case["filename"]).write_text(raw, encoding="utf-8")
+        telemetry._merge_spool(rejected_root)
+        assert not (rejected_spool / case["filename"]).exists(), case["name"]
+        health = json.loads((rejected_root / "telemetry_health.json").read_text(encoding="utf-8"))
+        assert health["last_error_code"] == case["health_code"], case["name"]
+
+
+def test_go_observation_p50_cases():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
+    subprocess.run(["go", "test", "-run", "^TestObservation.*P50", "-count=1", "./internal/enforce"],
+                   cwd=ROOT / "go", env=env, check=True)
