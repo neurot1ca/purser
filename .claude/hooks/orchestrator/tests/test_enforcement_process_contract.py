@@ -305,10 +305,19 @@ def test_reviewer_unavailable_is_not_a_pass(repo, process):
 def test_posttool_internal_error_replaces_output_with_full_bundle(repo, process):
     state, run = process
     decision(run("PreToolUse", pre(repo)))
-    output = bundle(run("PostToolUse", event("PostToolUse", repo, tool_response=THREAD), "post-error"))
+    pending = pending_record(state)
+    result = run("PostToolUse", event("PostToolUse", repo, tool_response=THREAD), "post-error")
+    assert result.stderr.replace(b"\r\n", b"\n") == b"orchestrator hook internal error: RuntimeError: injected post failure\n"
+    assert result.stdout.endswith(b"\n") and result.stdout.count(b"\n") == 1
+    output = bundle(result)
     assert any(finding["code"] == "INTERNAL_POST_ERROR" for finding in output["findings"])
     assert output["claude_review_mode"] == "FULL"
     artifact = json.loads(Path(output["full_bundle_path"]).read_text(encoding="utf-8"))
     assert artifact["claude_review_mode"] == "FULL"
     assert any(finding["code"] == "INTERNAL_POST_ERROR" for finding in artifact["findings"])
     assert "injected post failure" in (state / "diagnostics.jsonl").read_text(encoding="utf-8")
+    raw_path = Path(output["raw_output_path"])
+    assert json.loads(raw_path.read_text(encoding="utf-8")) == {"structuredContent": THREAD["structuredContent"]}
+    assert not list((state / "pending").glob("*.json"))
+    leases = json.loads((state / "projects" / pending["project_key"] / "scope_leases.json").read_text(encoding="utf-8"))
+    assert leases["owners"][pending["lease_owner"]]["state"] == "RELEASED"

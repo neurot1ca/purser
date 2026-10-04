@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
+
+	"purser-hook/internal/lease"
 )
 
 // decodeCodexResult mirrors codex.py's text/structuredContent result decoder.
@@ -138,4 +141,115 @@ func persistRawOutputAs(root, name string, value any) (string, error) {
 		return "", fmt.Errorf("resolve raw output path: %w", err)
 	}
 	return absolute, nil
+}
+
+// PostInternalError replaces an unreviewed raw result only when the Go Post
+// handler has failed. Normal PostToolUse review remains owned by Python.
+func PostInternalError(event map[string]any, root string) (map[string]any, error) {
+	if event["hook_event_name"] != "PostToolUse" || !codexTools[stringValue(event["tool_name"])] {
+		return nil, nil
+	}
+	cause := postFault()
+	if cause == nil {
+		return nil, nil
+	}
+	bundle := baseBundle(safeError(cause))
+	var pending map[string]any
+	var pendingFile string
+	if root != "" {
+		if rawPath, err := persistRawOutput(root, event, event["tool_response"]); err == nil {
+			bundle["raw_output_path"] = rawPath
+		}
+		if key, err := callKey(event); err == nil {
+			pendingFile = filepath.Join(root, "pending", key+".json")
+			data, readErr := os.ReadFile(pendingFile)
+			if readErr != nil {
+				pendingFile = bypassPath(root, event)
+				data, readErr = os.ReadFile(pendingFile)
+			}
+			if readErr == nil && json.Unmarshal(data, &pending) != nil {
+				pending = nil
+			}
+		}
+		if pending != nil {
+			agent := stringValue(pending["agent"])
+			if agent == "" {
+				agent = "codex"
+			}
+			bundle["implementer"] = agent + "-main"
+			for target, source := range map[string]string{
+				"task_id": "task_id", "phase": "phase", "route": "route", "model": "model", "effort": "effort",
+			} {
+				bundle[target] = pending[source]
+			}
+			bundle["routing_enforced"] = pending["kind"] != "pretool_bypass"
+			if pending["kind"] == "pretool_bypass" {
+				bundle["findings"] = append(bundle["findings"].([]any), map[string]any{
+					"code":    "PRETOOL_BYPASS_ROUTING_NOT_ENFORCED",
+					"message": "Routing was NOT enforced for this call and no usable baseline was captured. Internal PreToolUse reason: " + stringValue(pending["reason"]),
+				})
+				if thread, report, decodeErr := decodeCodexResult(event["tool_response"]); decodeErr == nil {
+					bundle["thread_id"], bundle["implementer_report"] = thread, report
+				} else {
+					bundle["findings"] = append(bundle["findings"].([]any), map[string]any{"code": "THREAD_ID_UNRECOVERABLE", "message": decodeErr.Error()})
+				}
+				_ = os.Remove(pendingFile)
+			}
+		}
+		if err := writePostDiagnostic(root, event, cause); err != nil {
+			_, _ = os.Stderr.Write(append(diagnosticJSON(postDiagnostic(event, cause)), '\n'))
+		}
+		if _, _, err := finalizeBundle(root, event, bundle, 8000, 1200); err != nil {
+			// Keep the replacement fail-closed even when durable artifact writing fails.
+			bundle["findings"] = append(bundle["findings"].([]any), map[string]any{"code": "INTERNAL_POST_ERROR", "message": safeError(err)})
+		}
+		if pending != nil && pending["kind"] != "pretool_bypass" && pending["async_call"] != true {
+			cleanupErr := error(nil)
+			if owner := stringValue(pending["lease_owner"]); owner != "" {
+				project := stringValue(pending["project_key"])
+				if project == "" {
+					project = "unresolved"
+				}
+				result := lease.New(filepath.Join(root, "projects", project)).Release(owner, float64(time.Now().UnixNano())/1e9)
+				if result.Status != "OK" {
+					cleanupErr = fmt.Errorf("scope lease cleanup failed: %s", result.Code)
+				}
+			}
+			if cleanupErr == nil {
+				if err := os.Remove(pendingFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+					cleanupErr = fmt.Errorf("pending cleanup failed: %w", err)
+				}
+			}
+			if cleanupErr != nil {
+				_ = writePostDiagnostic(root, event, cleanupErr)
+			}
+		}
+	}
+	response, err := replacement(bundle, "updatedToolOutput")
+	if err != nil {
+		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse", "updatedToolOutput": []any{map[string]any{"type": "text", "text": `{}`}}}}, cause
+	}
+	return response, cause
+}
+
+func postDiagnostic(event map[string]any, cause error) map[string]any {
+	return map[string]any{"at": time.Now().UTC().Format(time.RFC3339Nano), "phase": "PostToolUse",
+		"hook_event_name": event["hook_event_name"], "tool_name": event["tool_name"],
+		"tool_use_id": event["tool_use_id"], "error": safeError(cause)}
+}
+
+func writePostDiagnostic(root string, event map[string]any, cause error) error {
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(root, "diagnostics.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.Write(append(diagnosticJSON(postDiagnostic(event, cause)), '\n'))
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }

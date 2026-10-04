@@ -44,6 +44,15 @@ func main() {
 		return
 	}
 	switch event["hook_event_name"] {
+	case "PostToolUse":
+		if enforcementMode {
+			if response, failure := enforce.PostInternalError(event, stateRoot()); response != nil {
+				if failure != nil {
+					_, _ = os.Stderr.WriteString("orchestrator hook internal error: " + errorName(failure) + "\n")
+				}
+				writeJSON(response)
+			}
+		}
 	case "PostToolUseFailure":
 		if enforcementMode {
 			if response := enforce.PostToolUseFailure(event, stateRoot()); response != nil {

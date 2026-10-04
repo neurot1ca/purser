@@ -13,3 +13,10 @@ func contractFault() error {
 	}
 	return nil
 }
+
+func postFault() error {
+	if os.Getenv("PURSER_CONTRACT_SEAM") == "post-error" {
+		return errors.New("injected post failure")
+	}
+	return nil
+}
