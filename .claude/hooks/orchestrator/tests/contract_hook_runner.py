@@ -38,6 +38,7 @@ def run_contract_hook(event, payload, state, *, entrypoint="context"):
         cwd=(payload.get("cwd", Path(__file__).parents[4])
              if isinstance(payload, dict) else Path(__file__).parents[4]),
         env=env,
-        timeout=15,
+        # Go's synchronous fallback path can run the real 25-second API probe.
+        timeout=45,
         check=False,
     )

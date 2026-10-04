@@ -1,4 +1,5 @@
 import hashlib
+import ast
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,69 @@ TOOL = "mcp__codex-main__codex"
 START = "mcp__codex-main__codex_start"
 ORCH = "ORCH|task=contract-task|phase=implementation|route=normal|reason=new_task|basis=bounded process contract|scope=changed.py"
 THREAD = {"structuredContent": {"threadId": "contract-thread", "content": "Implemented the change."}}
+
+# Each direct/indirect Python call in synchronous pre_tool_use maps to an
+# existing process contract or a source-branch exclusion. New callees fail closed.
+PRE_CALL_CONTRACTS = {
+    name: "C1" for name in "_append_code_map _append_worker_validation_instruction _asks_worker_to_run_full_suite _atomic_json_write _baseline_state_fields _bypass_path _call_key _check_snapshot _claude_runs_full_suite_at_acceptance _cleanup_stale_pending _derive_task_type _fallback_question _handoff_matches _implementer_provider _indexed_reply_root _inherited_reply_parse _last_launch_failure _load_config _observe _observed_denial _parse_task_contract _pending_candidates _pending_path _pending_project_key _project_state_root _read_pending _reconcile_rejected_starts _record_thread_root _repo_root _requested_thread _route_duration_percentiles _route_eta_minutes _safe_error _start_job_terminal_or_absent _state_root _telemetry_envelope _thread_index_path _thread_worktree_path".split()
+}
+PRE_CALL_CONTRACTS.update({"_deny": "C2", "_internal_pre_allow": "C3", "_record_diagnostic": "C3",
+                           "_release_scope_lease": "C3", "_remove_pending": "C3", "_write_pre_bypass": "C3"})
+PRE_CALL_EXCLUSIONS = {
+    "_async_pre_followup": "EXCLUDED: async codex_result/codex_cancel branch in pre_tool_use",
+    "codex_quota.read_latest_quota": "C1: quota snapshot is optional and failures are explicitly ignored",
+    "codex_exec_mcp.probe_api_primary": "EXCLUDED: fallback-only 25-second branch",
+}
+PRE_IMPORTED_CALLS = {
+    name: "C1" for name in "active_coder_state.approve_fallback active_coder_state.read active_coder_state.record_fallback_question active_coder_state.update coder_config.load coder_config.opencode_candidates codex_exec_mcp._load_record codex_exec_mcp._state_dir compaction_advisor.queue_fallback_question datetime.datetime.fromisoformat datetime.datetime.now hashlib.sha256 json.loads json_transport.dumps ledger.ScopeLeases ledger.SessionLedger ledger.build_session_record ledger.capture_baseline math.ceil math.isfinite os.fsync os.replace policy.OrchParseResult policy.fresh_codex_decision policy.parse_orch_prompt policy.resolve_route policy.thread_compatibility policy.validate_config project_profile.load_profile project_root.project_key project_root.resolve_candidate project_root.resolve_project_root re.escape re.fullmatch re.match re.search re.sub state_root.default_state_root telemetry.record_health tempfile.NamedTemporaryFile time.time uuid.uuid5".split()
+}
+PRE_IMPORTED_CALLS.update({"codex_quota.read_latest_quota": "C1: optional quota read; errors are ignored",
+                          "codex_exec_mcp.probe_api_primary": "EXCLUDED: fallback recovery branch can wait 25 seconds"})
+PRE_METHOD_CALLS = {name: "C1" for name in "acquire add append associate_turn casefold decode duration_hint encode end endswith exists fileno find find_by_thread_id flush fullmatch get glob group hexdigest intersection is_absolute isoformat isprintable items join load lower mkdir open partition pop read read_text refresh relative_to replace resolve rstrip save search split splitlines start start_active_task startswith stat strip sub timestamp total_seconds unlink update upper write".split()}
+PRE_METHOD_CALLS.update({"release": "C3: lease cleanup after failure or undelivered adapter result"})
+PRE_BUILTIN_CALLS = {name: "C1" for name in "all any bool dict enumerate float getattr int isinstance len list max next set sorted str tuple type".split()}
+PRE_BUILTIN_CALLS.update({"finish_section": "C1: nested task-contract parser helper",
+                          "return_to_primary": "C1: nested fallback policy helper",
+                          "WiringError": "C1: validation and durable-state failure path"})
+
+
+def test_sync_pre_call_diff_is_mapped():
+    source = (PACKAGE / "codex.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    reached, todo = set(), ["pre_tool_use"]
+    while todo:
+        name = todo.pop()
+        if name in reached or name not in functions:
+            continue
+        reached.add(name)
+        for node in ast.walk(functions[name]):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in functions and node.func.id != "_async_pre_followup"):
+                todo.append(node.func.id)
+    calls = {node.func.id for name in reached for node in ast.walk(functions[name])
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in functions}
+    calls.add("_async_pre_followup")
+    assert calls <= set(PRE_CALL_CONTRACTS) | set(PRE_CALL_EXCLUSIONS), f"unmapped Python callees: {sorted(calls - set(PRE_CALL_CONTRACTS) - set(PRE_CALL_EXCLUSIONS))}"
+    aliases = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            aliases.update({item.asname or item.name.split(".")[0]: item.name for item in node.names})
+        elif isinstance(node, ast.ImportFrom):
+            aliases.update({item.asname or item.name: f"{node.module}.{item.name}" for item in node.names})
+    imported = {f"{aliases[node.func.value.id]}.{node.func.attr}"
+                for name in reached for node in ast.walk(functions[name])
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id in aliases}
+    assert imported <= set(PRE_IMPORTED_CALLS), f"unmapped imported calls: {sorted(imported - set(PRE_IMPORTED_CALLS))}"
+    methods = {node.func.attr for name in reached for node in ast.walk(functions[name])
+               if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and not (isinstance(node.func.value, ast.Name) and node.func.value.id in aliases)}
+    assert methods <= set(PRE_METHOD_CALLS), f"unmapped method calls: {sorted(methods - set(PRE_METHOD_CALLS))}"
+    bare = {node.func.id for name in reached for node in ast.walk(functions[name])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id not in functions and node.func.id not in aliases}
+    assert bare <= set(PRE_BUILTIN_CALLS), f"unmapped builtin/nested calls: {sorted(bare - set(PRE_BUILTIN_CALLS))}"
 
 
 @pytest.fixture
@@ -84,6 +148,32 @@ def process(tmp_path, monkeypatch):
     return state, run
 
 
+@pytest.fixture
+def go_pre_binary(tmp_path):
+    binary = tmp_path / ("purser-hook.exe" if os.name == "nt" else "purser-hook")
+    cache = REPO_ROOT / ".tmp" / "m3-p68-go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache)}
+    result = subprocess.run(["go", "build", "-tags", "contracttest", "-o", str(binary), "./cmd/purser-hook"],
+                            cwd=REPO_ROOT / "go", env=env, capture_output=True, timeout=120)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    return binary
+
+
+def run_go_pre(binary, state, repo, payload, seam=None):
+    env = os.environ.copy()
+    env.update(PURSER_STATE_DIR=str(state), CLAUDE_PLUGIN_ROOT=str(REPO_ROOT),
+               HOME=str(state.parent / "home"), USERPROFILE=str(state.parent / "home"),
+               CODEX_HOME=str(state.parent / "codex"))
+    if seam:
+        env["PURSER_CONTRACT_SEAM"] = seam
+    else:
+        env.pop("PURSER_CONTRACT_SEAM", None)
+    (state.parent / "home").mkdir(exist_ok=True)
+    return subprocess.run([str(binary), "enforce"], input=json.dumps(payload).encode(),
+                          capture_output=True, cwd=repo, env=env, timeout=45)
+
+
 def event(event_name, repo, tool_use_id="contract-call", tool=TOOL, **fields):
     return {"session_id": "process-contract", "hook_event_name": event_name,
             "tool_name": tool, "tool_use_id": tool_use_id, "cwd": str(repo), **fields}
@@ -109,6 +199,73 @@ def bundle(result):
     output = decision(result)["hookSpecificOutput"]
     assert output["hookEventName"] == "PostToolUse"
     return json.loads(output["updatedToolOutput"][0]["text"])
+
+
+@pytest.mark.parametrize("contract,consumer", [("C1", "PostToolUse"), ("C3", "PostToolUse"),
+                                                ("C4", "PostToolUseFailure")])
+def test_mixed_go_pre_python_consumers(repo, process, go_pre_binary, contract, consumer, monkeypatch):
+    state, run = process
+    call = pre(repo)
+    started = run_go_pre(go_pre_binary, state, repo, call)
+    output = decision(started)["hookSpecificOutput"]
+    assert "updatedInput" in output
+    record = pending_record(state)
+    assert record["baseline"]["status"] == "OK"
+    if contract == "C1":
+        python_state = state.parent / "python-reference"
+        isolated_home = state.parent / "home"
+        monkeypatch.setenv("HOME", str(isolated_home))
+        monkeypatch.setenv("USERPROFILE", str(isolated_home))
+        python_result = run_contract_hook("PreToolUse", call, python_state, entrypoint="enforcement")
+        python_record = pending_record(python_state)
+        assert "updatedInput" in decision(python_result)["hookSpecificOutput"]
+        assert record["baseline"] == python_record["baseline"]
+        for key in ("kind", "task_id", "route", "model", "effort", "scope", "repo_root", "project_key"):
+            assert record[key] == python_record[key], key
+        go_leases = json.loads((state / "projects" / record["project_key"] / "scope_leases.json").read_text())
+        py_leases = json.loads((python_state / "projects" / record["project_key"] / "scope_leases.json").read_text())
+        assert {k: {x: v[x] for x in ("task_id", "scope", "state")} for k, v in go_leases["owners"].items()} == {
+            k: {x: v[x] for x in ("task_id", "scope", "state")} for k, v in py_leases["owners"].items()}
+    if contract != "C1":
+        marker_event = dict(call, hook_event_name="WriteUndeliveredMarker", reason="adapter could not deliver rewritten input")
+        marked = subprocess.run([str(go_pre_binary)], input=json.dumps(marker_event).encode(), capture_output=True,
+                                cwd=repo, env={**os.environ, "PURSER_STATE_DIR": str(state)}, timeout=45)
+        assert marked.returncode == 0 and json.loads(marked.stdout)["written"] is True
+    if consumer == "PostToolUse":
+        (repo / "changed.py").write_text("".join(f"value_{i} = {i}\n" for i in range(80)), encoding="utf-8")
+        result = run(consumer, event(consumer, repo, tool_response=THREAD), "reviewer-ok")
+        reviewed = bundle(result)
+        assert reviewed["claude_review_mode"] == "FULL"
+        if contract == "C1":
+            assert isinstance(reviewed["changed_paths_sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", reviewed["changed_paths_sha256"])
+        if contract == "C3":
+            assert reviewed["routing_enforced"] is False
+            assert any(item["code"] == "PRETOOL_BYPASS_ROUTING_NOT_ENFORCED" for item in reviewed["findings"])
+    else:
+        result = run(consumer, event(consumer, repo, error="adapter delivery failed", is_interrupt=False,
+                                     duration_ms=1))
+        message = decision(result)["hookSpecificOutput"]["additionalContext"]
+        assert "work_performed is UNKNOWN" in message and "FULL Claude review is required" in message
+        evidence = json.loads(next((state / "raw_tool_outputs").glob("*-failure.json")).read_text(encoding="utf-8"))
+        assert evidence["pending_call"]["kind"] == "pretool_bypass"
+        assert not list((state / "pending").glob("undelivered-*.json"))
+    assert not list((state / "pending").glob("*.json"))
+    leases = json.loads((state / "projects" / record["project_key"] / "scope_leases.json").read_text())
+    assert leases["owners"][record["lease_owner"]]["state"] == "RELEASED"
+    stopped = run("Stop", {"hook_event_name": "Stop", "session_id": "process-contract",
+                            "cwd": str(repo), "stop_hook_active": False})
+    assert stopped.returncode == 0
+
+
+def test_mixed_go_pre_policy_deny_then_python_stop(repo, process, go_pre_binary):
+    state, run = process
+    result = run_go_pre(go_pre_binary, state, repo, pre(repo, prompt="missing routing contract"))
+    denied = decision(result)["hookSpecificOutput"]
+    assert denied["permissionDecision"] == "deny"
+    assert not list(state.glob("pending/*.json"))
+    stopped = run("Stop", {"hook_event_name": "Stop", "session_id": "process-contract",
+                            "cwd": str(repo), "stop_hook_active": False})
+    assert stopped.returncode == 0
 
 
 def test_pretool_allow_process_contract(repo, process):
