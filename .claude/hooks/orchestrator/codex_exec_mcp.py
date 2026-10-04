@@ -97,6 +97,7 @@ def _record_scope_conflict_outcome(job: dict[str, Any], action: str) -> None:
 
 
 def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | None:
+    latest = None
     try:
         for path in sorted(job_dir.glob("*.json")):
             try:
@@ -106,10 +107,17 @@ def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | Non
             if (isinstance(job, dict) and job.get("threadId") == thread_id
                     and job.get("state") == "SUCCEEDED" and job.get("applyState") != "applied"
                     and job.get("worktreePath")):
-                return job
+                timestamp = job.get("finishedAt")
+                if timestamp is None:
+                    timestamp = job.get("acceptedAt", 0)
+                latest_timestamp = latest.get("finishedAt") if latest is not None else None
+                if latest_timestamp is None and latest is not None:
+                    latest_timestamp = latest.get("acceptedAt", 0)
+                if latest is None or timestamp > latest_timestamp:
+                    latest = job
     except OSError:
         pass
-    return None
+    return latest
 
 
 def _same_worktree_content(worktree: Path, repo_root: Path, path: str) -> bool:
@@ -1510,6 +1518,11 @@ class Server:
                     if reply_record is None:
                         return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
                     send_back_from = _unapplied_thread_job(self.job_dir, args["threadId"])
+                    if send_back_from is not None and isinstance(send_back_from.get("snapshot"), str):
+                        # Replay preparation advances the worker baseline, while the
+                        # thread record may still describe the original worktree tree.
+                        reply_record["snapshot"] = send_back_from["snapshot"]
+                        reply_record["baselineSnapshot"] = send_back_from["snapshot"]
                     if send_back_from is not None and reply_record.get("worktreePath"):
                         import ledger
                         repo_root = Path(reply_record["repoRoot"]).resolve()

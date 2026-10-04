@@ -1165,6 +1165,100 @@ def test_reply_replay_reports_conflict_against_main_same_line_change(area):
         client.close()
 
 
+def test_reply_uses_prepared_snapshot_after_unrelated_main_commit(area, monkeypatch):
+    repo = _git_repo(area)
+    tracked = repo / "tracked.txt"
+    (repo / "main-only.txt").write_text("main base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "main-only.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "add unrelated tracked file"], check=True)
+    client = Client(area)
+    state_root = area / "root"
+    monkeypatch.setattr(codex_exec_mcp, "_state_dir", lambda: area / "state")
+    config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    session_id = uuid.uuid4().hex
+
+    def start_job(mode, prompt, *, thread_id=None):
+        tool_input = {"prompt": f"ORCH|task=reply-replay|phase=implementation|route=normal|"
+                               f"reason=new_task|basis=tracked edit|scope=tracked.txt\n{prompt}",
+                      "mode": mode, "label": "Reply replay test"}
+        if mode == "new":
+            tool_input["cwd"] = str(repo)
+        if thread_id:
+            tool_input["threadId"] = thread_id
+        event = {"session_id": session_id, "hook_event_name": "PreToolUse",
+                 "tool_name": "mcp__plugin_purser_codex-main__codex_start",
+                 "tool_use_id": uuid.uuid4().hex, "tool_input": tool_input}
+        admission = codex.pre_tool_use(event, config=config, state_root=state_root, repo_root=repo)
+        assert "updatedInput" in admission.get("hookSpecificOutput", {}), admission
+        updated = admission["hookSpecificOutput"]["updatedInput"]
+        response = job_call(client, "codex_start", updated)
+        codex.post_tool_use({**event, "hook_event_name": "PostToolUse",
+                             "tool_response": {"structuredContent": response}},
+                            config=config, state_root=state_root, repo_root=repo)
+        return response
+
+    def result_hook(result):
+        event = {"session_id": session_id, "hook_event_name": "PostToolUse",
+                 "tool_name": "mcp__plugin_purser_codex-main__codex_result",
+                 "tool_use_id": uuid.uuid4().hex, "tool_input": {"jobId": result["jobId"]},
+                 "tool_response": {"structuredContent": result}}
+        codex.pre_tool_use(event, config=config, state_root=state_root, repo_root=repo)
+        codex.post_tool_use(event, config=config, state_root=state_root, repo_root=repo)
+
+    try:
+        first = start_job("new", "Implement the first change.")
+        first = finish(client, first["jobId"], "SUCCEEDED")
+        job_path = state_root / "codex_exec_mcp" / "jobs" / f"{first['jobId']}.json"
+        original_snapshot = read_job_record(job_path)["snapshot"]
+        worktree = Path(first["worktreePath"])
+        (worktree / "tracked.txt").write_text("first worker edit\n", encoding="utf-8")
+        (repo / "main-only.txt").write_text("main commit\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "main-only.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "unrelated main commit"], check=True)
+        result_hook(first)
+        finalized_first = read_job_record(job_path)
+        thread = codex_exec_mcp._load_record(area / "state", first["threadId"])
+        assert finalized_first["snapshot"] != original_snapshot
+        assert thread["snapshot"] == original_snapshot
+        assert (worktree / "main-only.txt").read_text(encoding="utf-8") == "main commit\n"
+
+        reply = start_job("reply", "Fix the first change.", thread_id=first["threadId"])
+        reply_job = read_job_record(state_root / "codex_exec_mcp" / "jobs" /
+                                    f"{reply['jobId']}.json")
+        assert reply_job["snapshot"] == finalized_first["snapshot"]
+        reply_result = finish(client, reply["jobId"], "SUCCEEDED")
+        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "first worker edit\n"
+        with (worktree / "tracked.txt").open("a", encoding="utf-8") as stream:
+            stream.write("reply worker edit\n")
+        result_hook(reply_result)
+        finalized_reply = read_job_record(state_root / "codex_exec_mcp" / "jobs" /
+                                          f"{reply['jobId']}.json")
+        assert finalized_reply.get("applyState") != "conflict"
+        assert finalized_reply["snapshot"] != original_snapshot
+
+        assert job_call(client, "codex_apply", {"jobId": reply["jobId"]}) == {
+            "applied": True, "paths": ["tracked.txt"]}
+        assert tracked.read_text(encoding="utf-8") == "first worker edit\nreply worker edit\n"
+        assert (repo / "main-only.txt").read_text(encoding="utf-8") == "main commit\n"
+    finally:
+        client.close()
+
+
+def test_unapplied_thread_job_falls_back_to_accepted_at_when_finish_time_is_null(tmp_path):
+    jobs = tmp_path / "jobs"
+    jobs.mkdir()
+    for filename, accepted, finished in (("a.json", 1, 2), ("z.json", 3, None)):
+        (jobs / filename).write_text(json.dumps({
+            "threadId": "thread", "state": "SUCCEEDED", "applyState": "pending",
+            "worktreePath": str(tmp_path / "worktree"), "acceptedAt": accepted,
+            "finishedAt": finished,
+        }), encoding="utf-8")
+
+    latest = codex_exec_mcp._unapplied_thread_job(jobs, "thread")
+
+    assert latest["acceptedAt"] == 3
+
+
 def test_worktree_job_falls_back_when_requested_cwd_is_missing(area):
     repo = _git_repo(area)
     (repo / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
