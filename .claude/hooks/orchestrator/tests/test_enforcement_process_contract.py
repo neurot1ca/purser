@@ -1,8 +1,10 @@
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -243,8 +245,45 @@ def test_tool_failure_is_unknown_full_and_skips_reviewer(repo, process):
     pending = evidence["pending_call"]
     assert pending["route"] == "normal" and pending["task_id"] == "contract-task"
     assert not list((state / "pending").glob("*.json"))
+    project_state = state / "projects" / pending["project_key"]
+    ledger_path = project_state / "sessions" / (hashlib.sha256(b"contract-task").hexdigest() + ".json")
+    ledger_record = json.loads(ledger_path.read_text(encoding="utf-8"))["payload"]
+    assert ledger_record["last_outcome"] == {
+        "status": "AMBIGUOUS_TOOL_FAILURE", "ambiguous_outcome": True,
+        "work_performed": "UNKNOWN", "routing_enforced": True,
+        "evidence_path": str(files[0]), "claude_review_mode": "FULL",
+    }
+    assert ledger_record["live_thread"] is None
+    leases = json.loads((project_state / "scope_leases.json").read_text(encoding="utf-8"))
+    assert leases["owners"][pending["lease_owner"]]["state"] == "RELEASED"
     events = [path.read_text(encoding="utf-8") for path in state.rglob("*.jsonl")]
+    assert any('"event_type":"IMPLEMENTER_FAILED"' in contents for contents in events)
+    sys.path.insert(0, str(PACKAGE))
+    import telemetry_schema
+    failed_events = [json.loads(line) for path in state.rglob("*.jsonl")
+                     for line in path.read_text(encoding="utf-8").splitlines()
+                     if '"event_type":"IMPLEMENTER_FAILED"' in line]
+    assert len(failed_events) >= 1 and len({item["event_id"] for item in failed_events}) == 1
+    assert all(telemetry_schema.valid_event(item) for item in failed_events)
     assert not any("REVIEWER1_STARTED" in contents for contents in events)
+
+
+def test_tool_failure_ledger_error_is_visible_and_preserves_pending(repo, process):
+    state, run = process
+    decision(run("PreToolUse", pre(repo)))
+    pending = pending_record(state)
+    sessions = state / "projects" / pending["project_key"] / "sessions"
+    shutil.rmtree(sessions)
+    sessions.write_text("blocked", encoding="utf-8")
+    result = run("PostToolUseFailure", event("PostToolUseFailure", repo,
+                 error="worker exited", is_interrupt=False, duration_ms=23))
+    output = decision(result)["hookSpecificOutput"]["additionalContext"]
+    assert "work_performed is UNKNOWN" in output and "FULL Claude review is required" in output
+    assert "Evidence cleanup error" in output
+    assert len(list((state / "raw_tool_outputs").glob("*-failure.json"))) == 1
+    assert len(list((state / "pending").glob("*.json"))) == 1
+    events = [path.read_text(encoding="utf-8") for path in state.rglob("*.jsonl")]
+    assert any('"event_type":"IMPLEMENTER_FAILED"' in contents for contents in events)
 
 
 def test_reviewer_unavailable_is_not_a_pass(repo, process):

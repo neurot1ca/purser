@@ -103,7 +103,11 @@ func persistRawOutput(root string, event map[string]any, value any) (string, err
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(root, "raw_tool_outputs", key+".json")
+	return persistRawOutputAs(root, key+".json", value)
+}
+
+func persistRawOutputAs(root, name string, value any) (string, error) {
+	path := filepath.Join(root, "raw_tool_outputs", name)
 	data, err := canonicalJSON(value)
 	if err != nil {
 		return "", err

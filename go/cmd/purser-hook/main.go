@@ -44,6 +44,12 @@ func main() {
 		return
 	}
 	switch event["hook_event_name"] {
+	case "PostToolUseFailure":
+		if enforcementMode {
+			if response := enforce.PostToolUseFailure(event, stateRoot()); response != nil {
+				writeJSON(response)
+			}
+		}
 	case "PreToolUse":
 		if event["tool_name"] == "Read" {
 			_ = contextio.Read(event, started)
