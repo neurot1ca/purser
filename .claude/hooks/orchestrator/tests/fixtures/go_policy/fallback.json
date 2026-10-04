@@ -1,0 +1,11 @@
+{
+  "oracle": "Python active_coder_state.read",
+  "cases": [
+    {"name": "p33-missing-default", "raw": null, "expected": {"active_coder": "primary", "triggering_evidence": null, "reset_cycle_marker": null, "last_probe_time": null}},
+    {"name": "p33-valid-state", "raw": "{\"active_coder\":\"fallback\",\"triggering_evidence\":{\"note\":\"café\"},\"reset_cycle_marker\":\"cycle-1\",\"last_probe_time\":\"now\"}", "expected": {"active_coder": "fallback", "triggering_evidence": {"note": "café"}, "reset_cycle_marker": "cycle-1", "last_probe_time": "now"}},
+    {"name": "p33-corrupt-json", "raw": "{\"active_coder\":", "error": true},
+    {"name": "p33-invalid-fields", "raw": "{}", "error": true},
+    {"name": "p33-invalid-evidence", "raw": "{\"active_coder\":\"primary\",\"triggering_evidence\":[],\"reset_cycle_marker\":null,\"last_probe_time\":null}", "error": true},
+    {"name": "p33-invalid-coder", "raw": "{\"active_coder\":\"other\",\"triggering_evidence\":null,\"reset_cycle_marker\":null,\"last_probe_time\":null}", "error": true}
+  ]
+}

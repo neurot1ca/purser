@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -35,6 +36,110 @@ func TestJournalWriteRoundTrip(t *testing.T) {
 		if _, ok := decoded[key]; !ok {
 			t.Errorf("missing journal field %q", key)
 		}
+	}
+}
+
+func TestP33ActiveCoderOracleFixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "fallback.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Oracle string `json:"oracle"`
+		Cases  []struct {
+			Name     string         `json:"name"`
+			Raw      *string        `json:"raw"`
+			Expected map[string]any `json:"expected"`
+			Error    bool           `json:"error"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil || fixture.Oracle != "Python active_coder_state.read" {
+		t.Fatalf("invalid Python oracle fixture: %v", err)
+	}
+	for _, test := range fixture.Cases {
+		t.Run(test.Name, func(t *testing.T) {
+			project := filepath.Join(t.TempDir(), test.Name)
+			root := filepath.Join(t.TempDir(), "runtime")
+			path := activeCoderPath(project, root)
+			if test.Raw != nil {
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(*test.Raw), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			actual, err := readProjectActiveCoder(project, root)
+			if err != nil && !test.Error {
+				t.Fatalf("read: %v", err)
+			}
+			if err == nil && test.Error {
+				t.Fatal("corrupt state was accepted")
+			}
+			if err == nil && !reflect.DeepEqual(actual, test.Expected) {
+				t.Fatalf("state = %#v, want %#v", actual, test.Expected)
+			}
+		})
+	}
+}
+
+func TestP33ProcessWriter(t *testing.T) {
+	if os.Getenv("P33_CHILD") != "1" {
+		return
+	}
+	path := os.Getenv("P33_PATH")
+	_, err := updateActiveCoderState(path, func(state map[string]any) {
+		evidence := state["triggering_evidence"].(map[string]any)
+		evidence["count"] = evidence["count"].(float64) + 1
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestP33ConcurrentProcessWritersSerialize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "active-coder.json")
+	if err := writeActiveCoderState(path, map[string]any{"active_coder": "primary", "triggering_evidence": map[string]any{"count": float64(0)}, "reset_cycle_marker": nil, "last_probe_time": nil}); err != nil {
+		t.Fatal(err)
+	}
+	var commands []*exec.Cmd
+	for i := 0; i < 8; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestP33ProcessWriter$")
+		cmd.Env = append(os.Environ(), "P33_CHILD=1", "P33_PATH="+path)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		commands = append(commands, cmd)
+	}
+	for _, cmd := range commands {
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("writer: %v", err)
+		}
+	}
+	got, err := readActiveCoderState(path)
+	if err != nil || got["triggering_evidence"].(map[string]any)["count"] != float64(len(commands)) {
+		t.Fatalf("serialized state = %#v, %v", got, err)
+	}
+}
+
+func TestP33FailedReplacementKeepsOldFileAndCleansTemp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "active-coder.json")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "keep"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	value := map[string]any{"active_coder": "fallback", "triggering_evidence": "new", "reset_cycle_marker": nil, "last_probe_time": nil}
+	if err := writeActiveCoderState(path, value); err == nil {
+		t.Fatal("replacement over directory succeeded")
+	}
+	if got, err := os.ReadFile(filepath.Join(path, "keep")); err != nil || string(got) != "old" {
+		t.Fatalf("old destination changed: %q, %v", got, err)
+	}
+	if matches, _ := filepath.Glob(path + ".*.tmp"); len(matches) != 0 {
+		t.Fatalf("temporary files remain: %v", matches)
 	}
 }
 
