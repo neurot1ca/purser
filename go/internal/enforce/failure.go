@@ -176,40 +176,8 @@ func failureObservation(root string, event map[string]any, pending map[string]an
 	if taskID != "" {
 		observation["task_id"] = taskID
 	}
-	encoded, err := canonicalJSON(observation)
-	if err != nil {
-		return
-	}
-	if err = os.MkdirAll(filepath.Join(root, "events"), 0700); err != nil {
-		return
-	}
-	release, err := lease.Lock(filepath.Join(root, "events", ".append.lock"))
-	if err != nil {
-		return
-	}
-	defer release()
-	line := append(encoded, '\n')
-	month := now.Format("2006-01")
-	paths := []string{filepath.Join(root, "events", month, "session_"+sessionID+".jsonl")}
-	if taskID != "" {
-		paths = append(paths, filepath.Join(root, "events", "by_task", taskID+".jsonl"))
-	}
-	for _, path := range paths {
-		if os.MkdirAll(filepath.Dir(path), 0700) != nil {
-			return
-		}
-		f, openErr := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		if openErr != nil {
-			return
-		}
-		_, writeErr := f.Write(line)
-		if writeErr == nil {
-			writeErr = f.Sync()
-		}
-		closeErr := f.Close()
-		if writeErr != nil || closeErr != nil {
-			return
-		}
+	if code, err := persistObservation(root, observation); err != nil {
+		recordObservationHealth(root, "DEGRADED", code)
 	}
 }
 

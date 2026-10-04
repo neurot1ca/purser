@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"purser-hook/internal/contextio"
 )
 
 const observationSchemaVersion = 1
@@ -33,6 +35,106 @@ var (
 	observationProjectKey  = regexp.MustCompile(`^(?:[0-9a-f]{16}|unresolved)$`)
 	modelValue             = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,128}$`)
 )
+
+// persistObservation mirrors telemetry.emit's best-effort append contract.
+// On lock contention the complete event is atomically spooled and is not
+// written to the task index until a later recovery pass merges it.
+func persistObservation(root string, event map[string]any) (string, error) {
+	eventID, ok := event["event_id"].(string)
+	if !ok || !observationID.MatchString(eventID) {
+		return "TELEMETRY_EMIT_FAILED", fmt.Errorf("invalid telemetry event id")
+	}
+	encoded, err := canonicalJSON(event)
+	if err != nil {
+		return "TELEMETRY_EMIT_FAILED", err
+	}
+	events := filepath.Join(root, "events")
+	if err = os.MkdirAll(events, 0700); err != nil {
+		return "TELEMETRY_EMIT_FAILED", err
+	}
+	lockPath := filepath.Join(events, ".append.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return "TELEMETRY_EMIT_FAILED", err
+	}
+	defer lock.Close()
+	if info, statErr := lock.Stat(); statErr != nil {
+		return "TELEMETRY_EMIT_FAILED", statErr
+	} else if info.Size() == 0 {
+		if _, err = lock.WriteAt([]byte("0"), 0); err != nil {
+			return "TELEMETRY_EMIT_FAILED", err
+		}
+	}
+	if err = contextio.TryLock(lock); err != nil {
+		spool := filepath.Join(events, "spool", eventID+".json")
+		if err = atomicObservationJSON(spool, encoded); err != nil {
+			return "TELEMETRY_EMIT_FAILED", err
+		}
+		return "", nil
+	}
+	defer contextio.Unlock(lock)
+	month := ""
+	if timestamp, valid := event["ts_utc"].(string); valid && len(timestamp) >= 7 {
+		month = timestamp[:7]
+	}
+	session, _ := event["session_id"].(string)
+	if session == "" {
+		session = "unknown"
+	}
+	path := filepath.Join(events, month, "session_"+session+".jsonl")
+	if err = appendObservationRecord(path, encoded); err != nil {
+		return "TELEMETRY_EMIT_FAILED", err
+	}
+	if task, ok := event["task_id"].(string); ok {
+		if err = appendObservationRecord(filepath.Join(events, "by_task", task+".jsonl"), encoded); err != nil {
+			return "TELEMETRY_EMIT_FAILED", err
+		}
+	}
+	return "", nil
+}
+
+func appendObservationRecord(path string, encoded []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	line := append(append([]byte(nil), encoded...), '\n')
+	_, err = f.Write(line)
+	if err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
+}
+
+func atomicObservationJSON(path string, encoded []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err = f.Write(encoded); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(tmp, path)
+}
 
 func mergeFields(sets ...map[string]bool) map[string]bool {
 	out := map[string]bool{}
