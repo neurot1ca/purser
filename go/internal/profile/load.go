@@ -6,14 +6,25 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// DecodeTOML returns the generic table shape consumed by the profile tier validators.
-func DecodeTOML(raw []byte) (map[string]any, error) {
+// DecodeTOML returns the generic table and source-ordered key paths used by tier validation.
+func DecodeTOML(raw []byte) (map[string]any, []toml.Key, error) {
 	data := map[string]any{}
-	_, err := toml.NewDecoder(bytes.NewReader(raw)).Decode(&data)
+	metadata, err := toml.NewDecoder(bytes.NewReader(raw)).Decode(&data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return normalizeDecodedValue(data).(map[string]any), nil
+	return normalizeDecodedValue(data).(map[string]any), metadata.Keys(), nil
+}
+
+// ValidateTierTOML decodes and validates a raw profile while preserving source order.
+func ValidateTierTOML(tier string, raw []byte) Tier {
+	data, keys, err := DecodeTOML(raw)
+	if err != nil {
+		return Tier{Status: "rejected", Values: map[string]any{}, Warnings: []string{
+			tier + " tier rejected: could not parse profile: " + err.Error(),
+		}}
+	}
+	return ValidateTier(tier, data, keys)
 }
 
 func normalizeDecodedValue(value any) any {

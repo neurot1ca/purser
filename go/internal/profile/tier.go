@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Tier is the result of validating an already-decoded profile table.
@@ -21,8 +23,48 @@ var projectNonSecurity = map[string]map[string]bool{
 	"worktree": {"copy": true, "setup": true, "setup_timeout_seconds": true},
 }
 
-// ValidateTier mirrors project_profile._load_tier after TOML decoding.
-func ValidateTier(tier string, data map[string]any) Tier {
+// ValidateTier mirrors project_profile._load_tier after TOML decoding. Pass
+// decoder key paths to retain source order; map-only callers retain sorted order.
+func ValidateTier(tier string, data map[string]any, sourceKeys ...[]toml.Key) Tier {
+	if len(sourceKeys) == 0 {
+		return validateTier(tier, data, nil)
+	}
+	rootOrder, sectionOrder := keyOrders(sourceKeys[0])
+	return validateTier(tier, data, &tierKeyOrder{root: rootOrder, sections: sectionOrder})
+}
+
+type tierKeyOrder struct {
+	root     []string
+	sections map[string][]string
+}
+
+func keyOrders(keys []toml.Key) ([]string, map[string][]string) {
+	root := []string{}
+	sections := map[string][]string{}
+	seenRoot := map[string]bool{}
+	seenSections := map[string]map[string]bool{}
+	for _, key := range keys {
+		if len(key) == 0 {
+			continue
+		}
+		if !seenRoot[key[0]] {
+			seenRoot[key[0]] = true
+			root = append(root, key[0])
+		}
+		if len(key) > 1 {
+			if seenSections[key[0]] == nil {
+				seenSections[key[0]] = map[string]bool{}
+			}
+			if !seenSections[key[0]][key[1]] {
+				seenSections[key[0]][key[1]] = true
+				sections[key[0]] = append(sections[key[0]], key[1])
+			}
+		}
+	}
+	return root, sections
+}
+
+func validateTier(tier string, data map[string]any, order *tierKeyOrder) Tier {
 	reject := func(reason string, warnings []string) Tier {
 		warnings = append(warnings, tier+" tier rejected: "+reason)
 		return Tier{Status: "rejected", Values: map[string]any{}, Warnings: warnings}
@@ -60,7 +102,7 @@ func ValidateTier(tier string, data map[string]any) Tier {
 	if tier == "project" {
 		known["checks"] = true
 	}
-	for _, key := range sortedKeys(data) {
+	for _, key := range orderedKeys(data, order, "") {
 		if !known[key] {
 			warnings = append(warnings, fmt.Sprintf("%s: unknown top-level key or section [%s] ignored", tier, key))
 		}
@@ -84,7 +126,7 @@ func ValidateTier(tier string, data map[string]any) Tier {
 		if !ok {
 			return reject(fmt.Sprintf("[%s] security section must be a table", sectionName), warnings)
 		}
-		for _, key := range sortedKeys(table) {
+		for _, key := range orderedKeys(table, order, sectionName) {
 			value := table[key]
 			if !security[sectionName][key] {
 				return reject(fmt.Sprintf("[%s] unknown security key '%s'", sectionName, strings.ReplaceAll(key, "'", "\\'")), warnings)
@@ -106,7 +148,7 @@ func ValidateTier(tier string, data map[string]any) Tier {
 			warnings = append(warnings, fmt.Sprintf("%s: [%s] must be a table; ignored", tier, sectionName))
 			continue
 		}
-		for _, key := range sortedKeys(table) {
+		for _, key := range orderedKeys(table, order, sectionName) {
 			value := table[key]
 			if !nonSecurity[sectionName][key] {
 				warnings = append(warnings, fmt.Sprintf("%s: [%s] unknown key '%s' ignored", tier, sectionName, strings.ReplaceAll(key, "'", "\\'")))
@@ -149,6 +191,28 @@ func ValidateTier(tier string, data map[string]any) Tier {
 		}
 	}
 	return Tier{Status: "ok", Values: values, Warnings: warnings}
+}
+
+func orderedKeys(values map[string]any, order *tierKeyOrder, section string) []string {
+	if order == nil {
+		return sortedKeys(values)
+	}
+	keys := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	ordered := order.root
+	if section != "" {
+		ordered = order.sections[section]
+	}
+	for _, key := range ordered {
+		if _, exists := values[key]; exists && !seen[key] {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+	}
+	if len(seen) < len(values) {
+		return sortedKeys(values)
+	}
+	return keys
 }
 
 func isSchemaVersionOne(value any) bool {

@@ -32,6 +32,11 @@ setup_timeout_seconds = 3601
     {"tier": "user", "toml": 'schema_version = 2\n'},
     {"tier": "user", "toml": 'schema_version = 1\nchecks = []\n'},
     {"tier": "project", "toml": 'schema_version = 1\n[[checks]]\nname = "lint"\nargv = ["go", "vet", "./..."]\n[worktree]\ncopy = [".env", "config.toml"]\nsetup = "go test ./..."\nsetup_timeout_seconds = 30\n'},
+    {"tier": "user", "toml": 'schema_version = 1\n[z_unknown]\n[a_unknown]\n[review]\nz_invalid = true\na_invalid = true\n'},
+    {"tier": "project", "toml": 'schema_version = 1\n[worktree]\nsetup_timeout_seconds = 3601\ncopy = [1]\nsetup = ""\n'},
+    {"tier": "project", "toml": 'schema_version = 1\n[[checks]]\nname = "broken"\n'},
+    {"tier": "user", "toml": 'schema_version = 1\nbroken = [\n'},
+    {"tier": "user", "toml": 'schema_version = 1\nfoo =\n'},
 ]
 
 ORACLE = r"""
@@ -41,9 +46,14 @@ from pathlib import Path
 import tomllib
 from project_profile import _load_tier, _USER_SECURITY, _USER_NON_SECURITY, _PROJECT_SECURITY, _PROJECT_NON_SECURITY
 case = json.load(sys.stdin)
-data = tomllib.loads(case['toml'])
+try:
+    data = tomllib.loads(case['toml'])
+except Exception as exc:
+    prefix = case['tier'] + ' tier rejected: could not parse profile: '
+    print(json.dumps({'output': {'status': 'rejected', 'values': {}, 'warnings': [prefix + str(exc)]}}))
+    raise SystemExit(0)
 security, non_security = (_USER_SECURITY, _USER_NON_SECURITY) if case['tier'] == 'user' else (_PROJECT_SECURITY, _PROJECT_NON_SECURITY)
-path = Path.cwd().parents[2] / '.tmp' / 'm3-p28' / ('oracle-' + str(__import__('os').getpid()) + '.toml')
+path = Path.cwd().parents[2] / '.tmp' / 'm3-p29' / ('oracle-' + str(__import__('os').getpid()) + '.toml')
 path.write_text(case['toml'], encoding='utf-8')
 try:
     result = _load_tier(path, case['tier'], security, non_security)
@@ -64,11 +74,20 @@ def _oracle(case):
 
 
 def test_python_matches_tier_golden_fixture():
-    (ROOT / ".tmp" / "m3-p28").mkdir(parents=True, exist_ok=True)
+    (ROOT / ".tmp" / "m3-p29").mkdir(parents=True, exist_ok=True)
     golden = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert len(CASES) == len(golden)
     for index, case in enumerate(CASES):
         oracle = _oracle(case)
+        if "warning_prefix" in golden[index]:
+            output = oracle["output"]
+            expected = golden[index]["output"]
+            assert output["status"] == expected["status"] == "rejected"
+            assert output["values"] == expected["values"] == {}
+            warnings = output["warnings"]
+            assert len(warnings) == 1 and warnings[0].startswith(golden[index]["warning_prefix"])
+            assert warnings[0][len(golden[index]["warning_prefix"]):]
+            continue
         assert oracle["output"] == golden[index]["output"]
         if index == 1:
             unknown = oracle["data"]["unknown"]

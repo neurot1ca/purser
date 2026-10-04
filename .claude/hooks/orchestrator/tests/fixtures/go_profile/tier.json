@@ -147,5 +147,96 @@
       },
       "warnings": []
     }
+  },
+  {
+    "input": {
+      "tier": "user",
+      "data": {
+        "schema_version": 1,
+        "z_unknown": {},
+        "a_unknown": {},
+        "review": {
+          "z_invalid": true,
+          "a_invalid": true
+        }
+      }
+    },
+    "output": {
+      "status": "rejected",
+      "values": {},
+      "warnings": [
+        "user: unknown top-level key or section [z_unknown] ignored",
+        "user: unknown top-level key or section [a_unknown] ignored",
+        "user tier rejected: [review] unknown security key 'z_invalid'"
+      ]
+    }
+  },
+  {
+    "input": {
+      "tier": "project",
+      "data": {
+        "schema_version": 1,
+        "worktree": {
+          "setup_timeout_seconds": 3601,
+          "copy": [
+            1
+          ],
+          "setup": ""
+        }
+      }
+    },
+    "output": {
+      "status": "ok",
+      "values": {},
+      "warnings": [
+        "project: [worktree] setup_timeout_seconds must be an integer from 1 to 3600; ignored",
+        "project: [worktree] copy must be a list of non-empty strings; ignored",
+        "project: [worktree] setup must be a non-empty string; ignored"
+      ]
+    }
+  },
+  {
+    "input": {
+      "tier": "project",
+      "data": {
+        "schema_version": 1,
+        "checks": [
+          {
+            "name": "broken"
+          }
+        ]
+      }
+    },
+    "output": {
+      "status": "rejected",
+      "values": {},
+      "warnings": [
+        "project tier rejected: [[checks]] entry 0 argv must be a non-empty array of non-empty strings"
+      ]
+    }
+  },
+  {
+    "input": {
+      "tier": "user",
+      "toml": "schema_version = 1\nbroken = [\n"
+    },
+    "output": {
+      "status": "rejected",
+      "values": {},
+      "warnings": []
+    },
+    "warning_prefix": "user tier rejected: could not parse profile: "
+  },
+  {
+    "input": {
+      "tier": "user",
+      "toml": "schema_version = 1\nfoo =\n"
+    },
+    "output": {
+      "status": "rejected",
+      "values": {},
+      "warnings": []
+    },
+    "warning_prefix": "user tier rejected: could not parse profile: "
   }
 ]

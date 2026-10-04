@@ -6,15 +6,18 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 type tierFixtureCase struct {
 	Input struct {
 		Tier string         `json:"tier"`
+		TOML string         `json:"toml"`
 		Data map[string]any `json:"data"`
 	} `json:"input"`
-	Output Tier `json:"output"`
+	Output        Tier   `json:"output"`
+	WarningPrefix string `json:"warning_prefix"`
 }
 
 func TestValidateTierRetainsWarningsAndFlattenedValues(t *testing.T) {
@@ -80,16 +83,42 @@ copy = [".env", "config.toml"]
 setup = "go test ./..."
 setup_timeout_seconds = 30
 `},
+		{"user", `schema_version = 1
+[z_unknown]
+[a_unknown]
+[review]
+z_invalid = true
+a_invalid = true
+`},
+		{"project", `schema_version = 1
+[worktree]
+setup_timeout_seconds = 3601
+copy = [1]
+setup = ""
+`},
+		{"project", "schema_version = 1\n[[checks]]\nname = \"broken\"\n"},
+		{"user", "schema_version = 1\nbroken = [\n"},
+		{"user", "schema_version = 1\nfoo =\n"},
 	}
 	if len(rawCases) != len(fixture) {
 		t.Fatalf("got %d raw cases, want %d golden cases", len(rawCases), len(fixture))
 	}
 	for i, test := range fixture {
-		data, err := DecodeTOML([]byte(rawCases[i].toml))
+		raw := []byte(rawCases[i].toml)
+		data, keys, err := DecodeTOML(raw)
+		if test.WarningPrefix != "" {
+			got := ValidateTierTOML(rawCases[i].tier, raw)
+			if err == nil || got.Status != test.Output.Status || !reflect.DeepEqual(got.Values, test.Output.Values) ||
+				len(got.Warnings) != 1 || !strings.HasPrefix(got.Warnings[0], test.WarningPrefix) ||
+				strings.TrimPrefix(got.Warnings[0], test.WarningPrefix) == "" {
+				t.Errorf("case %d malformed TOML rejection shape differs: %#v (decode error %v)", i, got, err)
+			}
+			continue
+		}
 		if err != nil {
 			t.Fatalf("case %d TOML: %v", i, err)
 		}
-		got := ValidateTier(rawCases[i].tier, data)
+		got := ValidateTier(rawCases[i].tier, data, keys)
 		gotJSON, _ := json.Marshal(got)
 		wantJSON, _ := json.Marshal(test.Output)
 		var actual, want any
