@@ -75,46 +75,134 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 	if err := loadReadiness(config, table); err != nil {
 		return nil, err
 	}
-	if exists {
-		agent := "codex"
-		if value, exists := table["coder_agent"]; exists {
-			var valid bool
-			agent, valid = value.(string)
-			if !valid || (agent != "codex" && agent != "opencode" && agent != "agy") {
-				return nil, fmt.Errorf("[coding] coder_agent is invalid")
-			}
-		}
-		if agent != "codex" {
+	agent := "codex"
+	if value, exists := table["coder_agent"]; exists {
+		var valid bool
+		agent, valid = value.(string)
+		if !valid || (agent != "codex" && agent != "opencode" && agent != "agy") {
 			return nil, fmt.Errorf("[coding] coder_agent is invalid")
 		}
-		if executable, exists := table["reviewer1_executable"]; exists && executable != nil {
-			text, valid := executable.(string)
-			if !valid || !filepath.IsAbs(text) {
-				return nil, fmt.Errorf("[coding] reviewer1_executable must be an absolute path")
-			}
-			config["reviewer1_executable"] = text
+	}
+	if executable, exists := table["reviewer1_executable"]; exists && executable != nil {
+		text, valid := executable.(string)
+		if !valid || !filepath.IsAbs(text) {
+			return nil, fmt.Errorf("[coding] reviewer1_executable must be an absolute path")
 		}
-		if routes, exists := table["routes"]; exists {
-			routeMap, valid := routes.(map[string]any)
-			required, _ := config["required_routes"].([]any)
-			if !valid || (len(routeMap) != 0 && (len(routeMap) != len(required) || !hasRouteKeys(routeMap, required))) {
+		config["reviewer1_executable"] = text
+	}
+	role := "codex"
+	if roles, exists := user["roles"]; exists {
+		roleTable, valid := roles.(map[string]any)
+		if !valid {
+			return nil, fmt.Errorf("'%s' object has no attribute 'get'", pythonTypeName(roles))
+		}
+		if value, exists := roleTable["coder"]; exists {
+			role, valid = value.(string)
+			if !valid {
 				return nil, fmt.Errorf("[coding] coder routes or role are invalid")
 			}
-			if len(routeMap) != 0 {
-				for _, route := range required {
-					name := route.(string)
-					entry, valid := routeMap[name].(map[string]any)
-					model, modelOK := entry["model"].(string)
-					effort, effortOK := entry["effort"].(string)
-					allowed, _ := config["allowed_efforts"].([]any)
-					if !valid || len(entry) != 2 || !modelOK || !codexModel.MatchString(model) || !effortOK || !containsString(allowed, effort) {
-						return nil, fmt.Errorf("[coding] Codex route model or effort is invalid")
-					}
-				}
-				config["routes"] = routeMap
-			}
 		}
-		config["coder_agent"] = agent
+	}
+	if family, exists := table["family"]; exists {
+		text, valid := family.(string)
+		if (agent != "opencode" && agent != "agy") || !valid || !coderFamily.MatchString(text) {
+			return nil, fmt.Errorf("[coding] family is invalid")
+		}
+		config["coder_family"] = text
+	}
+	routes, routesExist := table["routes"]
+	if agent == "opencode" || agent == "agy" {
+		routeMap, valid := routes.(map[string]any)
+		required, _ := config["required_routes"].([]any)
+		if role != agent || !routesExist || !valid || len(routeMap) != len(required) || !hasRouteKeys(routeMap, required) {
+			return nil, fmt.Errorf("[coding] coder routes or role are invalid")
+		}
+		models := map[string]bool{}
+		for _, route := range required {
+			name := route.(string)
+			if agent == "opencode" {
+				model, valid := routeMap[name].(string)
+				if !valid || !opencodeModel.MatchString(model) {
+					return nil, fmt.Errorf("[coding] coder route model is invalid")
+				}
+				models[model] = true
+				continue
+			}
+			entry, valid := routeMap[name].(map[string]any)
+			model, modelOK := entry["model"].(string)
+			_effort, effortOK := entry["effort"].(string)
+			if !valid || len(entry) != 2 || !modelOK || !agyModel.MatchString(model) || !effortOK || !containsString([]any{"low", "medium", "high", "max"}, _effort) {
+				return nil, fmt.Errorf("[coding] Antigravity route model or effort is invalid")
+			}
+			models[model] = true
+		}
+		if len(models) != 1 {
+			return nil, fmt.Errorf("[coding] coder routes must use one model")
+		}
+		if agent == "opencode" {
+			converted := map[string]any{}
+			for name, raw := range routeMap {
+				converted[name] = map[string]any{"model": raw, "effort": "none"}
+			}
+			routeMap = converted
+		}
+		config["routes"] = routeMap
+	} else {
+		if role == "opencode" || role == "agy" {
+			return nil, fmt.Errorf("[coding] coder agent and routes disagree")
+		}
+		routeMap, valid := routes.(map[string]any)
+		required, _ := config["required_routes"].([]any)
+		if routesExist && (!valid || (len(routeMap) > 0 && (role != "codex" || len(routeMap) != len(required) || !hasRouteKeys(routeMap, required)))) {
+			return nil, fmt.Errorf("[coding] coder routes or role are invalid")
+		}
+		if len(routeMap) > 0 {
+			for _, route := range required {
+				name := route.(string)
+				entry, valid := routeMap[name].(map[string]any)
+				model, modelOK := entry["model"].(string)
+				effort, effortOK := entry["effort"].(string)
+				allowed, _ := config["allowed_efforts"].([]any)
+				if !valid || len(entry) != 2 || !modelOK || !codexModel.MatchString(model) || !effortOK || !containsString(allowed, effort) {
+					return nil, fmt.Errorf("[coding] Codex route model or effort is invalid")
+				}
+			}
+			config["routes"] = routeMap
+		}
+	}
+	config["coder_agent"] = agent
+	if fallback, exists := user["fallback"]; exists {
+		table, valid := fallback.(map[string]any)
+		if !valid || len(table) != 3 || !hasStringKeys(table, []string{"agent", "model", "family"}) {
+			return nil, fmt.Errorf("[fallback] agent, model, or family is invalid")
+		}
+		fallbackAgent, agentOK := table["agent"].(string)
+		model, modelOK := table["model"].(string)
+		family, familyOK := table["family"].(string)
+		if !agentOK || (fallbackAgent != "codex" && fallbackAgent != "opencode" && fallbackAgent != "agy") || !modelOK || !familyOK || !coderFamily.MatchString(family) {
+			return nil, fmt.Errorf("[fallback] agent, model, or family is invalid")
+		}
+		pattern := codexModel
+		if fallbackAgent == "opencode" {
+			pattern = opencodeModel
+		} else if fallbackAgent == "agy" {
+			pattern = agyModel
+		}
+		if !pattern.MatchString(model) {
+			return nil, fmt.Errorf("[fallback] model is invalid")
+		}
+		routes, _ := config["routes"].(map[string]any)
+		primary := routes["normal"]
+		primaryModel := ""
+		if entry, ok := primary.(map[string]any); ok {
+			primaryModel, _ = entry["model"].(string)
+		} else if text, ok := primary.(string); ok {
+			primaryModel = text
+		}
+		if model == primaryModel {
+			return nil, fmt.Errorf("[fallback] model must differ from the primary coder model")
+		}
+		config["fallback"] = map[string]any{"agent": fallbackAgent, "model": model, "family": family}
 	}
 	return config, validateHookConfig(config)
 }
@@ -141,6 +229,7 @@ func validateHookConfig(config map[string]any) error {
 }
 
 var codexModel = regexp.MustCompile(`\A[A-Za-z0-9._-]+\z`)
+var coderFamily = regexp.MustCompile(`\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z`)
 
 func loadReadiness(config, coding map[string]any) error {
 	readiness, ok := coding["readiness_check"]
@@ -206,6 +295,32 @@ var (
 	agyModel       = regexp.MustCompile(`\Agemini-[A-Za-z0-9._-]+\z`)
 	opencodeEffort = regexp.MustCompile(`\A[A-Za-z0-9._-]+\z`)
 )
+
+func hasStringKeys(values map[string]any, keys []string) bool {
+	for _, key := range keys {
+		if _, ok := values[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func pythonTypeName(value any) string {
+	switch value.(type) {
+	case string:
+		return "str"
+	case bool:
+		return "bool"
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, json.Number:
+		return "int"
+	case float32, float64:
+		return "float"
+	case []any:
+		return "list"
+	default:
+		return "NoneType"
+	}
+}
 
 var reviewerSkipReasons = map[string]bool{
 	"PHASE_OPERATION": true, "PHASE_PLAN": true, "NO_DELTA": true,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,14 @@ func TestPythonConfigGoldenParity(t *testing.T) {
 }
 
 func TestPythonCoderConfigGoldenParity(t *testing.T) {
+	testPythonCoderConfigGoldenParity(t, false)
+}
+
+func TestPythonCoderConfigGoldenParityP32(t *testing.T) {
+	testPythonCoderConfigGoldenParity(t, true)
+}
+
+func testPythonCoderConfigGoldenParity(t *testing.T, p32Only bool) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "config_cases.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -74,12 +83,19 @@ func TestPythonCoderConfigGoldenParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json")
-	testRoot := filepath.Join("..", "..", "..", ".tmp", "m3-p31-go")
+	testRootName := "m3-p31-go"
+	if p32Only {
+		testRootName = "m3-p32-go"
+	}
+	testRoot := filepath.Join("..", "..", "..", ".tmp", testRootName)
 	if err := os.MkdirAll(testRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range cases {
 		if tc.Mode != "coder" && tc.Mode != "hook" {
+			continue
+		}
+		if p32Only && !strings.Contains(tc.Name, "p32") {
 			continue
 		}
 		t.Run(tc.Name, func(t *testing.T) {

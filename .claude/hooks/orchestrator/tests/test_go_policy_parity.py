@@ -176,13 +176,13 @@ def _coder_cases():
     return [case for case in json.loads(FIXTURE.read_text(encoding="utf-8")) if case.get("mode") in ("coder", "hook")]
 
 
-def _coder_oracle_results(tmp_path, monkeypatch):
+def _coder_oracle_results(tmp_path, monkeypatch, cases=None):
     import coder_config
     import codex
 
     results = []
     shipped = json.loads(CODER_CONFIG.read_text(encoding="utf-8"))
-    for case in _coder_cases():
+    for case in _coder_cases() if cases is None else cases:
         item = dict(case)
         try:
             if case["mode"] == "hook":
@@ -199,7 +199,7 @@ def _coder_oracle_results(tmp_path, monkeypatch):
                     user.write_text(case["user_toml"], encoding="utf-8")
                 result = coder_config.load(CODER_CONFIG)
             item.update(ok=True, error="", loaded=result)
-        except (ValueError, codex.WiringError) as exc:
+        except (ValueError, AttributeError, codex.WiringError) as exc:
             item.update(ok=False, error=str(exc), loaded=None)
         results.append(item)
     return results
@@ -221,6 +221,20 @@ def test_go_coder_config_golden_parity():
     env["GOCACHE"] = str(ROOT.parents[2] / ".tmp" / "go-build-cache")
     result = subprocess.run(
         ["go", "test", "./internal/policy", "-run", "^TestPythonCoderConfigGoldenParity$", "-count=1"],
+        cwd=ROOT.parents[2] / "go", text=True, capture_output=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_p32_coder_config_golden_parity(tmp_path, monkeypatch):
+    cases = [case for case in _coder_cases() if "p32" in case["name"]]
+    assert cases
+    assert _coder_oracle_results(tmp_path, monkeypatch, cases) == cases
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["GOCACHE"] = str(ROOT.parents[2] / ".tmp" / "go-build-cache")
+    result = subprocess.run(
+        ["go", "test", "./internal/policy", "-run", "^TestPythonCoderConfigGoldenParityP32$", "-count=1"],
         cwd=ROOT.parents[2] / "go", text=True, capture_output=True, check=False, env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
