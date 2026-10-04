@@ -13,6 +13,7 @@ sys.path.insert(0, str(ORCHESTRATOR))
 import codex
 import telemetry
 import telemetry_schema
+import obsidian_projection
 
 
 def test_python_observation_p48_oracle(tmp_path, monkeypatch):
@@ -322,4 +323,74 @@ def test_go_observation_p54_update_task_cases():
     cache.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(["go", "test", "-run", "^TestObservation.*P54", "-count=1", "./internal/enforce"],
+                   cwd=ROOT / "go", env=env, check=True)
+
+
+def test_python_observation_p55_projection_oracle(tmp_path, monkeypatch):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["p55_oracle"] == "Python telemetry._projection_settings and obsidian_projection boundary functions"
+    for case in fixture["p55_cases"]:
+        root = tmp_path / case["name"] / "vault"
+        root.mkdir(parents=True)
+        outside = tmp_path / case["name"] / "outside"
+        outside.mkdir()
+        config_value = json.loads(case["config"])
+        def replace_roots(value):
+            if isinstance(value, dict):
+                return {key: replace_roots(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [replace_roots(item) for item in value]
+            if isinstance(value, str):
+                return value.replace("${ROOT}", str(root)).replace("${OUTSIDE}", str(outside))
+            return value
+        config_text = json.dumps(replace_roots(config_value))
+        config_path = tmp_path / case["name"] / "config.json"
+        config_path.write_text(config_text, encoding="utf-8")
+        monkeypatch.setattr(telemetry, "_CONFIG_PATH", config_path)
+        monkeypatch.setattr(obsidian_projection, "_CONFIG_PATH", config_path)
+        if case.get("env_root") is not None:
+            monkeypatch.setenv("PURSER_OBSIDIAN_VAULT", case["env_root"].replace("${ROOT}", str(root)))
+        else:
+            monkeypatch.delenv("PURSER_OBSIDIAN_VAULT", raising=False)
+        if case.get("symlink"):
+            link = root / case["symlink"]
+            try:
+                link.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        enabled, configured = telemetry._projection_settings()
+        assert enabled is case["expected"]["enabled"], case["name"]
+        expected_root = str(root) if case["expected"]["root"] == "${ROOT}" else None
+        assert (str(configured) if configured is not None else None) == expected_root, case["name"]
+        parts = [str(outside / "note.md") if part == "@ABS" else part for part in case["parts"]]
+        try:
+            obsidian_projection._safe_vault_path(root, *parts)
+            contained = True
+        except obsidian_projection.ProjectionError:
+            contained = False
+        assert contained is case["expected"]["contained"], case["name"]
+        if case["run"]:
+            try:
+                obsidian_projection._safe_run_path(root, {"_started_dt": None, "_ended_dt": None, "task_id": "task"})
+                run_contained = True
+            except obsidian_projection.ProjectionError:
+                run_contained = False
+            assert run_contained is case["expected"]["run_contained"], case["name"]
+        marked = obsidian_projection._with_marker("", case["content"], yaml_comment=case["yaml"])
+        if case["edited"]:
+            marked += "edited"
+        assert obsidian_projection._marker_for(case["content"], yaml_comment=case["yaml"]) == case["expected"]["marker"]
+        intact = obsidian_projection._generated_content_is_intact(marked)
+        assert intact is case["expected"]["intact"], case["name"]
+        assert (not case["exists"] or intact) is case["expected"]["replaceable"], case["name"]
+
+
+def test_go_observation_p55_projection_cases():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cache = scratch / "go-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GOCACHE": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
+    subprocess.run(["go", "test", "-run", "^TestObservationP55ProjectionBoundaries$", "-count=1", "./internal/enforce"],
                    cwd=ROOT / "go", env=env, check=True)

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -21,6 +22,191 @@ import (
 )
 
 const observationSchemaVersion = 1
+
+const (
+	observationMarkerPrefix     = "<!-- orchestrator projection v1 sha256="
+	observationYAMLMarkerPrefix = "# orchestrator projection v1 sha256="
+)
+
+var observationMarker = regexp.MustCompile(`(?m)^(?:<!-- orchestrator projection v1 sha256=([0-9a-f]{64}) -->|# orchestrator projection v1 sha256=([0-9a-f]{64}))\n`)
+
+// observationProjectionSettings mirrors telemetry._projection_settings and
+// obsidian_projection._vault_root. Invalid or absent settings disable output.
+func observationProjectionSettings(configData []byte, envVault, explicitVault *string) (bool, string) {
+	var config map[string]any
+	if json.Unmarshal(configData, &config) != nil || config == nil {
+		return false, ""
+	}
+	setting, hasSetting := config["obsidian_projection"]
+	enabled, configured := false, ""
+	switch value := setting.(type) {
+	case map[string]any:
+		enabled, _ = value["enabled"].(bool)
+		configured, _ = value["vault_root"].(string)
+	case bool:
+		enabled = value
+		configured, _ = config["obsidian_vault_root"].(string)
+	default:
+		enabled, _ = config["obsidian_projection_enabled"].(bool)
+		configured, _ = config["obsidian_vault_root"].(string)
+	}
+	if explicitVault != nil {
+		return true, observationAbsoluteVault(*explicitVault)
+	}
+	if !enabled {
+		return false, ""
+	}
+	if envVault != nil {
+		configured = *envVault
+	} else if hasSetting {
+		if nested, ok := setting.(map[string]any); ok {
+			if nested["vault_root"] == nil {
+				configured, _ = config["obsidian_vault_root"].(string)
+			}
+		}
+	}
+	root := observationAbsoluteVault(configured)
+	return root != "", root
+}
+
+func observationAbsoluteVault(value string) string {
+	if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) {
+		return ""
+	}
+	return filepath.Clean(value)
+}
+
+// observationResolvedPath follows existing symlinks while allowing missing
+// suffixes, matching pathlib.Path.resolve()'s default strict=False behavior.
+func observationResolvedPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return observationResolvedPathDepth(abs, 0)
+}
+
+func observationResolvedPathDepth(abs string, depth int) (string, error) {
+	if depth > 32 {
+		return "", fmt.Errorf("too many path links")
+	}
+	volume := filepath.VolumeName(abs)
+	current := volume + string(filepath.Separator)
+	rest := strings.TrimLeft(strings.TrimPrefix(abs, volume), `\\/`)
+	parts := strings.Split(rest, string(filepath.Separator))
+	for index, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		candidate := filepath.Join(current, part)
+		if target, err := os.Readlink(candidate); err == nil {
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(candidate), target)
+			}
+			resolved, resolveErr := observationResolvedPathDepth(filepath.Clean(target), depth+1)
+			if resolveErr != nil {
+				return "", resolveErr
+			}
+			current = resolved
+		} else {
+			if _, statErr := os.Lstat(candidate); statErr != nil {
+				if !errors.Is(statErr, os.ErrNotExist) {
+					return "", statErr
+				}
+				for _, suffix := range parts[index:] {
+					if suffix != "" && suffix != "." {
+						current = filepath.Join(current, suffix)
+					}
+				}
+				return filepath.Clean(current), nil
+			}
+			current = candidate
+		}
+	}
+	return filepath.Clean(current), nil
+}
+
+func observationWithin(root, candidate string) bool {
+	r, err := observationResolvedPath(root)
+	if err != nil {
+		return false
+	}
+	c, err := observationResolvedPath(candidate)
+	if err != nil {
+		return false
+	}
+	return observationRelativeWithin(r, c)
+}
+
+func observationRelativeWithin(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func observationSafeVaultPath(root string, parts ...string) (string, bool) {
+	candidate := root
+	for _, part := range parts {
+		if filepath.IsAbs(part) {
+			candidate = part
+		} else {
+			candidate = filepath.Join(candidate, part)
+		}
+	}
+	return candidate, observationWithin(root, candidate)
+}
+
+func observationSafeRunPath(root, year, month, taskID string) (string, bool) {
+	runs := filepath.Join(root, "Runs")
+	candidate := filepath.Join(runs, year, month, taskID+".md")
+	resolvedRoot, err := observationResolvedPath(root)
+	if err != nil {
+		return candidate, false
+	}
+	resolvedRuns, err := observationResolvedPath(runs)
+	if err != nil {
+		return candidate, false
+	}
+	resolvedCandidate, err := observationResolvedPath(candidate)
+	if err != nil {
+		return candidate, false
+	}
+	return candidate, observationRelativeWithin(resolvedRoot, resolvedRuns) && observationRelativeWithin(resolvedRoot, resolvedCandidate) && observationRelativeWithin(resolvedRuns, resolvedCandidate)
+}
+
+func observationMarkerFor(content string, yamlComment bool) string {
+	digest := sha256.Sum256([]byte(content))
+	prefix := observationMarkerPrefix
+	suffix := " -->"
+	if yamlComment {
+		prefix, suffix = observationYAMLMarkerPrefix, ""
+	}
+	return prefix + hex.EncodeToString(digest[:]) + suffix + "\n"
+}
+
+func observationWithMarker(prefix, body string, yamlComment bool) string {
+	return prefix + observationMarkerFor(prefix+body, yamlComment) + body
+}
+
+func observationGeneratedContentIsIntact(content string) bool {
+	match := observationMarker.FindStringSubmatchIndex(content)
+	if match == nil {
+		return false
+	}
+	marker := content[match[0]:match[1]]
+	digest := ""
+	if match[2] >= 0 {
+		digest = content[match[2]:match[3]]
+	} else {
+		digest = content[match[4]:match[5]]
+	}
+	without := content[:match[0]] + content[match[1]:]
+	actual := sha256.Sum256([]byte(without))
+	return hex.EncodeToString(actual[:]) == digest && marker != ""
+}
+
+func observationMayReplaceExisting(exists bool, content string) bool {
+	return !exists || observationGeneratedContentIsIntact(content)
+}
 
 // observationAggregateDefaults mirrors telemetry._new_aggregate's routing
 // fields. Existing values are overlaid after these defaults by the task fold.

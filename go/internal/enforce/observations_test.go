@@ -803,3 +803,124 @@ func sameObservation(t *testing.T, left, right map[string]any) bool {
 	}
 	return string(a) == string(b)
 }
+
+func TestObservationP55ProjectionBoundaries(t *testing.T) {
+	scratchBase, err := filepath.Abs(filepath.Join("..", "..", "..", ".tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(scratchBase, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name         string   `json:"name"`
+			Config       string   `json:"config"`
+			EnvRoot      *string  `json:"env_root"`
+			ExplicitRoot *string  `json:"explicit_root"`
+			Parts        []string `json:"parts"`
+			Symlink      string   `json:"symlink"`
+			Run          bool     `json:"run"`
+			Content      string   `json:"content"`
+			Edited       bool     `json:"edited"`
+			Exists       bool     `json:"exists"`
+			YAML         bool     `json:"yaml"`
+			Expected     struct {
+				Enabled      bool   `json:"enabled"`
+				Root         string `json:"root"`
+				Contained    bool   `json:"contained"`
+				Marker       string `json:"marker"`
+				Intact       bool   `json:"intact"`
+				Replaceable  bool   `json:"replaceable"`
+				RunContained bool   `json:"run_contained"`
+			} `json:"expected"`
+		} `json:"p55_cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			scratch, err := os.MkdirTemp(scratchBase, "p55-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(scratch)
+			root, outside := filepath.Join(scratch, "vault"), filepath.Join(scratch, "outside")
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(outside, 0700); err != nil {
+				t.Fatal(err)
+			}
+			rootJSON, _ := json.Marshal(root)
+			outsideJSON, _ := json.Marshal(outside)
+			config := strings.ReplaceAll(tc.Config, "${ROOT}", string(rootJSON[1:len(rootJSON)-1]))
+			config = strings.ReplaceAll(config, "${OUTSIDE}", string(outsideJSON[1:len(outsideJSON)-1]))
+			var env, explicit *string
+			if tc.EnvRoot != nil {
+				v := strings.ReplaceAll(*tc.EnvRoot, "${ROOT}", root)
+				env = &v
+			}
+			if tc.ExplicitRoot != nil {
+				v := strings.ReplaceAll(*tc.ExplicitRoot, "${ROOT}", root)
+				explicit = &v
+			}
+			if tc.Symlink != "" {
+				link := filepath.Join(root, tc.Symlink)
+				if err := os.Symlink(outside, link); err != nil {
+					if junctionErr := exec.Command("cmd", "/c", "mklink", "/J", link, outside).Run(); junctionErr != nil {
+						t.Fatalf("symlink/junction unavailable: %v; %v", err, junctionErr)
+					}
+				}
+			}
+			enabled, vault := observationProjectionSettings([]byte(config), env, explicit)
+			if enabled != tc.Expected.Enabled {
+				t.Fatalf("enabled=%v want %v", enabled, tc.Expected.Enabled)
+			}
+			if tc.Expected.Root == "${ROOT}" && vault != root {
+				t.Fatalf("vault=%q want %q", vault, root)
+			}
+			if tc.Expected.Root == "" && vault != "" {
+				t.Fatalf("vault=%q want empty", vault)
+			}
+			parts := append([]string(nil), tc.Parts...)
+			for i := range parts {
+				if parts[i] == "@ABS" {
+					parts[i] = filepath.Join(outside, "note.md")
+				}
+			}
+			candidate, contained := observationSafeVaultPath(root, parts...)
+			if contained != tc.Expected.Contained {
+				t.Fatalf("contained=%v want %v (%s)", contained, tc.Expected.Contained, candidate)
+			}
+			if tc.Run {
+				_, runContained := observationSafeRunPath(root, "0000", "00", "task")
+				if runContained != tc.Expected.RunContained {
+					t.Fatalf("run containment=%v want %v", runContained, tc.Expected.RunContained)
+				}
+			}
+			marked := observationWithMarker("", tc.Content, tc.YAML)
+			if observationMarkerFor(tc.Content, tc.YAML) != tc.Expected.Marker {
+				t.Fatalf("marker mismatch: %q", observationMarkerFor(tc.Content, tc.YAML))
+			}
+			if tc.Edited {
+				marked += "edited"
+			}
+			intact := observationGeneratedContentIsIntact(marked)
+			if intact != tc.Expected.Intact {
+				t.Fatalf("intact=%v want %v", intact, tc.Expected.Intact)
+			}
+			if observationMayReplaceExisting(tc.Exists, marked) != tc.Expected.Replaceable {
+				t.Fatal("generated replacement decision mismatch")
+			}
+			if tc.Exists && observationMayReplaceExisting(true, observationWithMarker("", tc.Content, tc.YAML)+"edited") {
+				t.Fatal("edited generated content was replaceable")
+			}
+		})
+	}
+}
