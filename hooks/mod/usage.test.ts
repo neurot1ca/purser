@@ -83,6 +83,27 @@ test('steps aside for surveys before reading usage or artifacts', async ($, on) 
   await ui.unmount()
 })
 
+test('draws valid Svg pills on desktop and keeps another mod drawing', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, { OS: 'Linux', HOME: '/home/test' })
+  on('session.usage', () => ({ value: usage }))
+  on('fs.list', () => ({ deny: 'ENOENT' }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: 'Other mod status' })
+  })
+  registerUsage(on)
+  const ui = await $.ui.mount({
+    plugin: 'usage-desktop-test', surface: 'desktop', component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} },
+  })
+  expect((await ui.find({ type: 'Text', text: 'Other mod status' }))?.text).toBe('Other mod status')
+  const svg = await ui.find({ type: 'Svg' })
+  expect(svg?.props.source.startsWith('<svg')).toBe(true)
+  expect(svg?.props.alt.length > 0).toBe(true)
+  await ui.unmount()
+})
+
 test('keeps another mod drawing and uses the terminal fallback', async ($, on) => {
   mock.clock(on)
   mock.env(on, { OS: 'Linux', HOME: '/home/test' })

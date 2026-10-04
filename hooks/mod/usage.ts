@@ -168,7 +168,7 @@ export function registerUsage(on) {
       const rendered = groups.map((group, groupIndex) => Box({
         key: `purser-usage-group-${groupIndex}`,
         flexDirection: 'row', gap: 1,
-        children: group.map(pill => terminal ? terminalPill(Text, pill) : Svg({ svg: pillSvg(pill), isInteractive: true })),
+        children: group.map(pill => terminal ? terminalPill(Text, pill) : Svg({ key: pill.id, source: pillSvg(pill), alt: pill.detail, isInteractive: true })),
       }))
       const band = Box({ flexDirection: 'row', flexWrap: 'wrap', gap: 3, children: rendered })
       return Box({ children: prior ? [prior, band] : [band] })
