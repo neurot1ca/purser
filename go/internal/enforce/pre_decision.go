@@ -139,7 +139,11 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	if !reply && stringValue(config["coder_agent"]) == "codex" {
 		fallback := mapValue(config["fallback"])
-		decision := decideFallbackPre(parsed, stringValue(event["session_id"]), active, fallback, quota, nil, time.Now())
+		var launchFailure map[string]any
+		if root != nil {
+			launchFailure = contextio.LastLaunchFailure(defaultPreStateRoot(runtimeRoot), projectKey(root))
+		}
+		decision := decideFallbackPre(parsed, stringValue(event["session_id"]), active, fallback, quota, launchFailure, time.Now())
 		switch decision.Action {
 		case "deny":
 			return denyPre(decision.Code, strings.TrimPrefix(decision.Message, decision.Code+": ")), nil
@@ -161,7 +165,19 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			}
 			selection = SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, nil)
 		case "question":
-			return nil, errors.New("fallback question recording and delivery are not yet wired")
+			evidence := make(map[string]any, len(decision.Trigger)+2)
+			for key, value := range decision.Trigger {
+				evidence[key] = value
+			}
+			evidence["kind"], evidence["question"] = decision.Kind, decision.Question
+			recorded, recordErr := contextio.RecordFallbackQuestion(*root, runtimeRoot, evidence, stringValue(event["session_id"]))
+			if recordErr != nil {
+				return nil, recordErr
+			}
+			if recorded {
+				contextio.QueueFallbackQuestion(event, *root, decision.Question, stringValue(fallback["model"]), false, runtimeRoot)
+			}
+			return denyPre(decision.Code, decision.Message), nil
 		}
 		if root != nil && fallback != nil && active != nil && active["active_coder"] == "fallback" && parsed.Phase != nil && *parsed.Phase == "implementation" {
 			action := decideFallbackReturn(active, stringValue(event["session_id"]), reason(parsed), quota, time.Now())
@@ -171,7 +187,20 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			case "deny":
 				return denyPre("PRIMARY_RETURN_CONSENT_REQUIRED", "Wait for the return question to be shown and answered before dispatch."), nil
 			case "offer":
-				return nil, errors.New("quota-renewal return question recording and delivery are not yet wired")
+				primaryRoute := policy.ResolveRoute(*parsed.Route, config)
+				if !primaryRoute.Valid {
+					return denyPre("PRIMARY_RETURN_ROUTE_INVALID", primaryRoute.Message), nil
+				}
+				line := fmt.Sprintf("> ⚓ **%s's quota has renewed. Return to the primary coder?**", *primaryRoute.Model)
+				recorded, recordErr := contextio.RecordPrimaryReturnQuestion(*root, runtimeRoot, kind, triggerID,
+					stringValue(event["session_id"]), line, quota["5h_resets_at"])
+				if recordErr != nil {
+					return nil, recordErr
+				}
+				if recorded {
+					contextio.QueueFallbackQuestion(event, *root, line, *primaryRoute.Model, false, runtimeRoot)
+				}
+				return denyPre("PRIMARY_RETURN_CONSENT_REQUIRED", "A return-to-primary question must be shown before another implementation dispatch."), nil
 			case "accept", "decline":
 				changed, applyErr := contextio.ApplyPrimaryReturnConsent(*root, runtimeRoot, stringValue(event["session_id"]), kind, triggerID, action == "accept")
 				if applyErr != nil {

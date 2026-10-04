@@ -19,11 +19,15 @@ const postCompactContextTokens = 75000
 var advisorTask = regexp.MustCompile(`^ORCH\|task=([^|\s]+)\|`)
 
 func queueFallbackQuestion(event map[string]any, repository, line, model string, notice bool) bool {
+	return queueFallbackQuestionAtRoot(event, repository, line, model, notice, stateRoot())
+}
+
+func queueFallbackQuestionAtRoot(event map[string]any, repository, line, model string, notice bool, root string) bool {
 	session := str(event["session_id"])
 	if repository == "" || session == "" {
 		return false
 	}
-	path := filepath.Join(stateRoot(), "projects", repositoryProjectKey(repository), "telemetry", "compaction_advisor.json")
+	path := filepath.Join(root, "projects", repositoryProjectKey(repository), "telemetry", "compaction_advisor.json")
 	state := readAdvisorState(path, session)
 	old, _ := state["fallback_pending"].(map[string]any)
 	delivered := old != nil && old["line"] == line && old["model"] == model && old["delivered"] == true
@@ -32,6 +36,11 @@ func queueFallbackQuestion(event map[string]any, repository, line, model string,
 		"blocked": false, "notice": notice, "delivered": delivered,
 	}
 	return writeAdvisorState(path, state) == nil
+}
+
+// QueueFallbackQuestion persists the question for SessionStart delivery.
+func QueueFallbackQuestion(event map[string]any, repository, line, model string, notice bool, root string) bool {
+	return queueFallbackQuestionAtRoot(event, repository, line, model, notice, root)
 }
 
 func updateFallbackQuestion(project, session string, shown, answerable bool) {

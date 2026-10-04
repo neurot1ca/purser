@@ -76,6 +76,11 @@ func lastLaunchFailure(root, projectKey string) map[string]any {
 	return result
 }
 
+// LastLaunchFailure exposes the latest typed implementation launch failure to Pre.
+func LastLaunchFailure(root, projectKey string) map[string]any {
+	return lastLaunchFailure(root, projectKey)
+}
+
 func validLaunchJobID(id string) bool {
 	if len(id) != 64 {
 		return false

@@ -1,0 +1,74 @@
+{
+  "oracle": "Python codex.pre_tool_use",
+  "fallback": {
+    "agent": "opencode",
+    "family": "anthropic",
+    "model": "anthropic/claude-sonnet"
+  },
+  "cases": [
+    {
+      "name": "p63b_launch_failure_present",
+      "launch": [{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "FAILED", "finishedAt": 100, "type": "CREDIT_EXHAUSTED"}],
+      "active": "primary",
+      "outcome": "fallback_question",
+      "trigger_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "question": "> ⚓ **Your API credits are exhausted, so the next task can't start. Would you like to add credits or switch to the fallback coder (anthropic/claude-sonnet)?**",
+      "record": {
+        "type": "CREDIT_EXHAUSTED",
+        "job_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "trigger_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "credit",
+        "question": "> ⚓ **Your API credits are exhausted, so the next task can't start. Would you like to add credits or switch to the fallback coder (anthropic/claude-sonnet)?**",
+        "question_session": "session-1",
+        "question_shown": false,
+        "answerable": false
+      },
+      "observations": []
+    },
+    {
+      "name": "p63b_launch_failure_absent",
+      "launch": [],
+      "active": "primary",
+      "outcome": "allow",
+      "observations": ["TASK_ROUTE_SELECTED", "IMPLEMENTER_STARTED"]
+    },
+    {
+      "name": "p63b_launch_failure_stale",
+      "launch": [{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "FAILED", "finishedAt": 100, "type": "CREDIT_EXHAUSTED"}, {"id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "state": "SUCCEEDED", "finishedAt": 200}],
+      "active": "primary",
+      "outcome": "allow",
+      "observations": ["TASK_ROUTE_SELECTED", "IMPLEMENTER_STARTED"]
+    },
+    {
+      "name": "p63b_fallback_question_already_asked",
+      "launch": [],
+      "active": "primary_asked",
+      "outcome": "deny_asked",
+      "observations": []
+    },
+    {
+      "name": "p63b_quota_return_offer_shown",
+      "launch": [],
+      "active": "fallback_quota",
+      "quota": "renewed",
+      "outcome": "return_offer",
+      "question": "> ⚓ **gpt-6-sol's quota has renewed. Return to the primary coder?**",
+      "observations": []
+    },
+    {
+      "name": "p63b_quota_return_offer_not_eligible",
+      "launch": [],
+      "active": "fallback_quota",
+      "quota": "same_cycle",
+      "outcome": "allow",
+      "observations": ["TASK_ROUTE_SELECTED", "IMPLEMENTER_STARTED"]
+    },
+    {
+      "name": "p63b_malformed_state",
+      "launch": [],
+      "active": "malformed",
+      "outcome": "internal_failure",
+      "observations": []
+    }
+  ]
+}

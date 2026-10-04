@@ -14,11 +14,12 @@ import (
 // fallbackPreDecision mirrors the fallback and low-quota entry in codex.py Pre.
 // State persistence and question delivery remain owned by contextio.
 type fallbackPreDecision struct {
-	Action   string `json:"action"`
-	Code     string `json:"code"`
-	Message  string `json:"message"`
-	Question string `json:"question"`
-	Kind     string `json:"kind"`
+	Action   string         `json:"action"`
+	Code     string         `json:"code"`
+	Message  string         `json:"message"`
+	Question string         `json:"question"`
+	Kind     string         `json:"kind"`
+	Trigger  map[string]any `json:"-"`
 }
 
 func decideFallbackPre(parsed policy.OrchParseResult, session string, active map[string]any,
@@ -53,7 +54,7 @@ func decideFallbackPre(parsed policy.OrchParseResult, session string, active map
 		declined := evidence != nil && evidence["declined"] == true && evidence["trigger_id"] == triggerValue(trigger, "trigger_id")
 		if parsed.Phase != nil && *parsed.Phase == "implementation" && trigger != nil && !declined && session != "" {
 			kind, question := fallbackQuestion(trigger, model, quota, now)
-			return fallbackPreDecision{Action: "question", Code: "FALLBACK_CONSENT_REQUIRED", Message: "A fallback question must be shown before another implementation dispatch.", Question: question, Kind: kind}
+			return fallbackPreDecision{Action: "question", Code: "FALLBACK_CONSENT_REQUIRED", Message: "A fallback question must be shown before another implementation dispatch.", Question: question, Kind: kind, Trigger: trigger}
 		}
 	}
 	if quota != nil && (active == nil || active["active_coder"] == "primary") && reason(parsed) != "user_override" {

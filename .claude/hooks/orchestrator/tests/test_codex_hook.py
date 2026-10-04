@@ -7647,6 +7647,102 @@ def _record_launch_failure(workspace, kind, *, retry_after=None):
     return job_id
 
 
+def test_p63b_fallback_gaps_python_oracle(workspace, config, monkeypatch):
+    fixture_path = Path(__file__).parent / "fixtures" / "go_policy" / "pre_fallback_gaps.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert fixture["oracle"] == "Python codex.pre_tool_use"
+    repo, state_root = workspace
+    project = project_root.project_key(repo.resolve())
+    config["fallback"] = fixture["fallback"]
+    now = datetime.now(timezone.utc)
+    for case in fixture["cases"]:
+        shutil.rmtree(state_root / "async_jobs", ignore_errors=True)
+        shutil.rmtree(state_root / "codex_exec_mcp" / "jobs", ignore_errors=True)
+        active_path = active_coder_state.state_path(repo, state_root)
+        active_path.parent.mkdir(parents=True, exist_ok=True)
+        if case["active"] == "malformed":
+            active_path.write_text("{", encoding="utf-8")
+        elif case["active"] == "primary_asked":
+            active_coder_state.write(repo, {
+                "active_coder": "primary", "triggering_evidence": {
+                    "type": "CREDIT_EXHAUSTED", "trigger_id": "asked",
+                    "question": "already asked", "question_session": "session-1",
+                    "question_shown": False, "answerable": False,
+                }, "reset_cycle_marker": None, "last_probe_time": None,
+            }, state_root)
+        elif case["active"] == "fallback_quota":
+            marker = now - timedelta(days=1)
+            reset = now + timedelta(days=1)
+            marker_text = marker.isoformat().replace("+00:00", "Z")
+            reset_text = reset.isoformat().replace("+00:00", "Z")
+            evidence = {"type": "QUOTA", "trigger_id": "old-cycle", "reset_cycle_marker": marker_text}
+            if case.get("quota") == "same_cycle":
+                evidence["declined_reset_cycle_marker"] = reset_text
+            active_coder_state.write(repo, {
+                "active_coder": "fallback", "triggering_evidence": evidence,
+                "reset_cycle_marker": marker_text, "last_probe_time": None,
+            }, state_root)
+            monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda value=reset_text: {
+                "5h_used_pct": 96, "5h_resets_at": value,
+            })
+        else:
+            active_path.unlink(missing_ok=True)
+            monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: None)
+
+        indexes = state_root / "async_jobs"
+        jobs = state_root / "codex_exec_mcp" / "jobs"
+        for launch in case["launch"]:
+            indexes.mkdir(parents=True, exist_ok=True)
+            jobs.mkdir(parents=True, exist_ok=True)
+            job_id = launch["id"]
+            (indexes / f"{job_id}.json").write_text(json.dumps({"jobId": job_id, "project_key": project}), encoding="utf-8")
+            value = {"jobId": job_id, "phase": "implementation", "state": launch["state"], "finishedAt": launch["finishedAt"]}
+            if launch.get("type"):
+                value["launchFailureEvidence"] = {"type": launch["type"]}
+            (jobs / f"{job_id}.json").write_text(json.dumps(value), encoding="utf-8")
+
+        observed = []
+        monkeypatch.setattr(codex.telemetry, "emit", lambda event_type, *args, **kwargs: observed.append(event_type))
+        if case["outcome"] == "internal_failure":
+            assert active_path.read_text(encoding="utf-8") == "{"
+            failed = codex.pre_tool_use(event(), config=config, state_root=state_root, repo_root=repo)
+            assert "additionalContext" in failed["hookSpecificOutput"]
+            assert observed == case["observations"]
+            continue
+        result = codex.pre_tool_use(event(), config=config, state_root=state_root, repo_root=repo)
+        output = result["hookSpecificOutput"]
+        if case["outcome"] in {"fallback_question", "deny_asked"}:
+            assert output["permissionDecision"] == "deny"
+            assert "FALLBACK_CONSENT_REQUIRED" in output["permissionDecisionReason"]
+            active = active_coder_state.read(repo, state_root)
+            if case["outcome"] == "fallback_question":
+                assert active["triggering_evidence"] == case["record"]
+                pending = compaction_advisor._read_state(
+                    compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1"
+                )["fallback_pending"]
+                assert pending == {
+                    "line": case["question"], "project": str(repo), "model": fixture["fallback"]["model"],
+                    "blocked": False, "notice": False, "delivered": False,
+                }
+            else:
+                assert active["triggering_evidence"]["question"] == "already asked"
+        elif case["outcome"] == "return_offer":
+            assert output["permissionDecision"] == "deny"
+            assert "PRIMARY_RETURN_CONSENT_REQUIRED" in output["permissionDecisionReason"]
+            active = active_coder_state.read(repo, state_root)
+            assert active["triggering_evidence"]["question"] == case["question"]
+            pending = compaction_advisor._read_state(
+                compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1"
+            )["fallback_pending"]
+            assert pending == {
+                "line": case["question"], "project": str(repo), "model": "gpt-6-sol",
+                "blocked": False, "notice": False, "delivered": False,
+            }
+        else:
+            assert "updatedInput" in output, (case["name"], output)
+        assert observed == case["observations"], (case["name"], observed)
+
+
 def _show_fallback_question(repo, state_root, session_id):
     path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
     pending = compaction_advisor._read_state(path, session_id)["fallback_pending"]

@@ -117,6 +117,26 @@ func ReadProjectActiveCoder(project, root string) (map[string]any, error) {
 	return readProjectActiveCoder(project, root)
 }
 
+// RecordFallbackQuestion persists the current primary-coder question atomically.
+func RecordFallbackQuestion(project, root string, evidence map[string]any, session string) (bool, error) {
+	recorded := false
+	_, err := updateActiveCoderState(activeCoderPath(project, root), func(state map[string]any) {
+		current, _ := state["triggering_evidence"].(map[string]any)
+		_, asked := current["question_session"]
+		if state["active_coder"] != "primary" || asked || session == "" {
+			return
+		}
+		value := make(map[string]any, len(evidence)+3)
+		for key, item := range evidence {
+			value[key] = item
+		}
+		value["question_session"], value["question_shown"], value["answerable"] = session, false, false
+		state["triggering_evidence"] = value
+		recorded = true
+	})
+	return recorded, err
+}
+
 func writeProjectActiveCoder(project, root string, value map[string]any) error {
 	path := activeCoderPath(project, root)
 	unlock, err := LockFile(path + ".lock")
