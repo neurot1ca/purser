@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.67 — 2026-10-04
+
+- **Added:** The Purser job board is drawn above the prompt by the mod, with elapsed and remaining time, overdue, queue wait and last agent activity; it costs no Claude tokens. Chat receipts stay for now.
+- **Fixed:** A reply moves its thread worktree to the current HEAD instead of copying the checkout over an old commit, so replies no longer fail with replay conflicts on other jobs' files.
+- **Fixed:** `codex_apply resolved=true` closes a job that failed on a worker replay conflict and records it as accepted.
+
 ## 0.1.66 — 2026-10-03
 
 - **Fixed:** Prompts with `Goal:` and `Acceptance:` headers count as a grounded task contract, so the readiness check runs and Reviewer-1 is not forced to FULL review.
