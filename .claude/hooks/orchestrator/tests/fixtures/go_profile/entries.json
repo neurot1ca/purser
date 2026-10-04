@@ -1,0 +1,380 @@
+[
+  {
+    "input": {
+      "operation": "checks",
+      "raw": []
+    },
+    "output": {
+      "checks": [],
+      "error": ""
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "lint",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ]
+        }
+      ]
+    },
+    "output": {
+      "checks": [
+        {
+          "name": "lint",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "when": null,
+          "timeout_seconds": 60
+        }
+      ],
+      "error": ""
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "second",
+          "argv": [
+            "b"
+          ],
+          "when": [
+            "./src/**"
+          ],
+          "timeout_seconds": 12
+        },
+        {
+          "name": "first",
+          "argv": [
+            "a"
+          ],
+          "when": null
+        }
+      ]
+    },
+    "output": {
+      "checks": [
+        {
+          "name": "second",
+          "argv": [
+            "b"
+          ],
+          "when": [
+            "./src/**"
+          ],
+          "timeout_seconds": 12
+        },
+        {
+          "name": "first",
+          "argv": [
+            "a"
+          ],
+          "when": null,
+          "timeout_seconds": 60
+        }
+      ],
+      "error": ""
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": null
+    },
+    "output": {
+      "checks": [],
+      "error": "[[checks]] must be an array of at most 8 tables"
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "ok",
+          "argv": [
+            "x"
+          ],
+          "extra": true
+        }
+      ]
+    },
+    "output": {
+      "checks": [],
+      "error": "[[checks]] entry 0 has invalid keys or type"
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "Bad",
+          "argv": [
+            "x"
+          ]
+        }
+      ]
+    },
+    "output": {
+      "checks": [],
+      "error": "[[checks]] entry 0 name is invalid or duplicate"
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "same",
+          "argv": [
+            "x"
+          ]
+        },
+        {
+          "name": "same",
+          "argv": [
+            "y"
+          ]
+        }
+      ]
+    },
+    "output": {
+      "checks": [],
+      "error": "[[checks]] entry 1 name is invalid or duplicate"
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "ok",
+          "argv": []
+        }
+      ]
+    },
+    "output": {
+      "checks": [],
+      "error": "[[checks]] entry 0 argv must be a non-empty array of non-empty strings"
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "ok",
+          "argv": [
+            "x"
+          ],
+          "when": [
+            "../private"
+          ]
+        }
+      ]
+    },
+    "output": {
+      "checks": [],
+      "error": "[[checks]] entry 0 when must contain repository-relative globs"
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "ok",
+          "argv": [
+            "x"
+          ],
+          "timeout_seconds": true
+        }
+      ]
+    },
+    "output": {
+      "checks": [],
+      "error": "[[checks]] entry 0 timeout_seconds must be an integer from 1 to 300"
+    }
+  },
+  {
+    "input": {
+      "operation": "checks",
+      "raw": [
+        {
+          "name": "ok",
+          "argv": [
+            "x"
+          ],
+          "timeout_seconds": 301
+        }
+      ]
+    },
+    "output": {
+      "checks": [],
+      "error": "[[checks]] entry 0 timeout_seconds must be an integer from 1 to 300"
+    }
+  },
+  {
+    "input": {
+      "operation": "authority",
+      "tier": "project",
+      "raw": null
+    },
+    "output": {
+      "sources": [],
+      "warnings": [
+        "project: [authority] sources must be a list; ignored"
+      ]
+    }
+  },
+  {
+    "input": {
+      "operation": "authority",
+      "tier": "project",
+      "raw": [
+        "bad",
+        {
+          "path": "x.md",
+          "headings": [
+            "One"
+          ]
+        },
+        {
+          "path": "./docs/../bad.md",
+          "headings": [
+            "Bad"
+          ]
+        },
+        {
+          "path": "C:\\repo\\RULES.md",
+          "headings": [
+            "Drive"
+          ]
+        },
+        {
+          "path": "rules.md",
+          "headings": []
+        },
+        {
+          "path": "rules.md",
+          "headings": [
+            "One"
+          ],
+          "when_changed": 4
+        },
+        {
+          "path": "./docs\\RULES.md",
+          "headings": [
+            "Authority",
+            "Scope"
+          ],
+          "when_changed": "src/**"
+        },
+        {
+          "path": "ok.md",
+          "headings": [
+            "One"
+          ],
+          "extra": 1
+        }
+      ]
+    },
+    "output": {
+      "sources": [
+        {
+          "path": "x.md",
+          "headings": [
+            "One"
+          ],
+          "when_changed": null
+        },
+        {
+          "path": "docs/RULES.md",
+          "headings": [
+            "Authority",
+            "Scope"
+          ],
+          "when_changed": "src/**"
+        }
+      ],
+      "warnings": [
+        "project: [authority] sources[0] must be a table; entry ignored",
+        "project: [authority] sources[2].path must be a relative repository path without '..'; entry ignored",
+        "project: [authority] sources[3].path must be a relative repository path without '..'; entry ignored",
+        "project: [authority] sources[4].headings must be a non-empty list of strings; entry ignored",
+        "project: [authority] sources[5].when_changed must be a string; entry ignored",
+        "project: [authority] sources[7] has unknown key(s) ['extra']; entry ignored"
+      ]
+    }
+  },
+  {
+    "input": {
+      "operation": "path",
+      "value": "./docs\\RULES.md"
+    },
+    "output": {
+      "path": "docs/RULES.md",
+      "valid": true
+    }
+  },
+  {
+    "input": {
+      "operation": "path",
+      "value": "../outside"
+    },
+    "output": {
+      "path": null,
+      "valid": false
+    }
+  },
+  {
+    "input": {
+      "operation": "path",
+      "value": "C:relative\\file"
+    },
+    "output": {
+      "path": null,
+      "valid": false
+    }
+  },
+  {
+    "input": {
+      "operation": "path",
+      "value": "\\\\server\\share\\file"
+    },
+    "output": {
+      "path": null,
+      "valid": false
+    }
+  },
+  {
+    "input": {
+      "operation": "authority_defaults"
+    },
+    "output": {
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "headings": [
+            "Authority",
+            "Working scope",
+            "Proportional validation",
+            "Test and comment quality"
+          ],
+          "when_changed": null
+        }
+      ]
+    }
+  }
+]
