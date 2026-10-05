@@ -71,7 +71,7 @@ async function handlePostToolUse(event: PostEvent, $, e, next) {
     const result = await $.process.run([binary, 'enforce'], {
       cwd: e.cwd,
       stdin: JSON.stringify(e),
-      timeoutMs: 60000,
+      timeoutMs: 300000,
     })
     if (result.exitCode !== 0) throw new Error(`Go ${event} helper exited ${result.exitCode}`)
     const mapped = mapPostToolUse(event, result.stdout)
@@ -104,7 +104,12 @@ export function register(on) {
     additionalContext?: string[]
     systemMessage?: string
   } {
+    if (!stdout.trim()) return {}
     const output = JSON.parse(stdout)
+    if (output === null || typeof output !== 'object' || Array.isArray(output)) {
+      throw new Error('invalid Go PreToolUse output')
+    }
+    if (Object.keys(output).length === 0) return {}
     const specific = output?.hookSpecificOutput
     if (specific?.hookEventName !== 'PreToolUse') throw new Error('invalid Go PreToolUse output')
     if (specific.permissionDecision === 'deny' && typeof specific.permissionDecisionReason === 'string') {

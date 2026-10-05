@@ -43,6 +43,11 @@ function stubGo(
     const request = JSON.parse(e.init.stdin)
     if (request.hook_event_name === 'PostToolUse' || request.hook_event_name === 'PostToolUseFailure') {
       expect(e.argv[1]).toBe('enforce')
+      expect(e.init.timeoutMs).toBe(300000)
+    } else if (request.hook_event_name === 'WriteUndeliveredMarker') {
+      expect(e.init.timeoutMs).toBe(1000)
+    } else {
+      expect(e.init.timeoutMs).toBe(60000)
     }
     if (request.hook_event_name === 'WriteUndeliveredMarker') {
       markerWrites.push(e.init.stdin)
@@ -52,7 +57,6 @@ function stubGo(
       return { value: { exitCode: result?.exitCode ?? 0, stdout: result?.stdout ?? '{"written":true}', stderr: '' } }
     }
     calls.push(e.init.stdin)
-    expect(e.init.timeoutMs).toBe(60000)
     const result = outcome?.()
     if (result?.deny) return { deny: result.deny }
     return { value: { exitCode: result?.exitCode ?? 0, stdout: result?.stdout ?? stdout, stderr: '' } }
@@ -284,6 +288,42 @@ test('maps Go follow-up deny and passes allowed follow-up input unchanged', opti
   expect(observed(toasts)).toEqual({})
   expect(toolCalls).toHaveLength(1)
   expect(toolCalls[0]).toMatchObject({ task_id: 'origin-task', reason: 'stop' })
+})
+
+test('empty Go Pre output passes codex_result through unchanged', options, async ($, on) => {
+  const calls: string[] = []
+  const toolCalls: unknown[] = []
+  const toasts: string[] = []
+  let stdout = ''
+  stubGo(on, '', calls, toasts, undefined, undefined, undefined, () => ({ stdout }))
+  on('classic.PreToolUse', () => ({ additionalContext: ['prior context'] }))
+  stubToolCall(on, toolCalls)
+
+  for (const output of ['{}\n', '']) {
+    stdout = output
+    await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_result', task_id: 'origin-task' })
+    expect(observed(toasts)).toEqual({ additionalContext: ['prior context'] })
+  }
+
+  expect(calls).toHaveLength(2)
+  expect(toolCalls).toHaveLength(2)
+})
+
+test('malformed Go Pre output adds the follow-up bypass context', options, async ($, on) => {
+  const calls: string[] = []
+  const toolCalls: unknown[] = []
+  const toasts: string[] = []
+  stubGo(on, '{', calls, toasts)
+  on('classic.PreToolUse', () => ({ additionalContext: ['prior context'] }))
+  stubToolCall(on, toolCalls)
+
+  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_result', task_id: 'origin-task' })
+
+  const context = observed(toasts).additionalContext.join(' ')
+  expect(context).toContain('prior context')
+  expect(context).toContain('Orchestrator routing was NOT enforced')
+  expect(toolCalls).toHaveLength(1)
+  expect(calls).toHaveLength(1)
 })
 
 test('follow-up adapter failure allows unchanged with Python internal-error context and no marker', options, async ($, on) => {
