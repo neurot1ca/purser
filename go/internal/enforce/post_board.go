@@ -130,7 +130,7 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 	if len(inProgress) == 0 {
 		visible := false
 		for _, item := range finished {
-			if item.job["boardDisplayCount"] == json.Number("0") {
+			if boardDisplayZero(item.job["boardDisplayCount"]) {
 				visible = true
 			}
 		}
@@ -238,6 +238,18 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 		rows = append(rows, fmt.Sprintf("> | %s | %s | %s | %s | %s | %s |", label, modelLabel, state, eta, review, apply))
 	}
 	return "Purser jobs:\n" + strings.Join(rows, "\n"), ids
+}
+
+func boardDisplayZero(value any) bool {
+	if value == false {
+		return true
+	}
+	number, ok := value.(json.Number)
+	if !ok {
+		return false
+	}
+	parsed, err := number.Float64()
+	return err == nil && parsed == 0
 }
 
 func readBoardJSON(path string) map[string]any {

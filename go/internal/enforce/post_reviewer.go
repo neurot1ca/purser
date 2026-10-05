@@ -1,0 +1,223 @@
+package enforce
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"purser-hook/internal/profile"
+	"purser-hook/internal/review"
+)
+
+type postReviewerAttempt struct {
+	Agent   string `json:"agent"`
+	Model   string `json:"model"`
+	Outcome string `json:"outcome"`
+}
+
+// runPostReviewer selects candidates in Python's configured order and invokes
+// the shared reviewer bridge under one deadline. It does not interpret a
+// completed review; that belongs to the following migration pass.
+func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, resolved postProfile, loaded map[string]any, delta, classification map[string]any, started time.Time, hookBudget time.Duration) (review.BridgeOutcome, error) {
+	candidates := resolved.ReviewerCandidates
+	if len(candidates) == 0 {
+		candidates = []profile.ReviewerCandidate{{Agent: "agy", Model: stringValue(loaded["reviewer1_model_requested"])}}
+	}
+	implementer := vendorFamily(stringValue(pending["fallback_family"]))
+	modelsPresent := false
+	if models, ok := pending["attempted_models"].([]any); ok {
+		modelsPresent = len(models) > 0
+	} else if models, ok := pending["attempted_models"].([]string); ok {
+		modelsPresent = len(models) > 0
+	}
+	if implementer == "" && modelsPresent {
+		implementer = vendorFamily(modelFamily(stringValue(pending["model"])))
+	}
+	if implementer == "" {
+		implementer = vendorFamily(stringValue(loaded["coder_family"]))
+		if implementer == "" {
+			implementer = vendorFamily(modelFamily(stringValue(pending["model"])))
+		}
+	}
+	configuredSeconds := 90.0
+	if n, ok := loaded["reviewer1_timeout_seconds"].(float64); ok {
+		configuredSeconds = n
+	} else if n, ok := loaded["reviewer1_timeout_seconds"].(int); ok {
+		configuredSeconds = float64(n)
+	}
+	remaining := time.Until(started.Add(hookBudget))
+	timeout := time.Duration(configuredSeconds * float64(time.Second))
+	if remaining < timeout {
+		timeout = remaining
+	}
+	deadline := time.Now().Add(timeout)
+	repoRoot := stringValue(pending["repo_root"])
+	if worktree := stringValue(pending["worktree_path"]); worktree != "" {
+		repoRoot = worktree
+	}
+	args := map[string]any{
+		"task_id": stringValue(pending["task_id"]), "phase": stringValue(pending["phase"]),
+		"route": stringValue(pending["route"]), "model": stringValue(pending["model"]),
+		"effort": stringValue(pending["effort"]), "repo_root": repoRoot,
+		"delta": delta, "classification": classification,
+	}
+	for key, value := range map[string]any{
+		"thread_id": bundle["thread_id"], "project_key": pending["project_key"], "state_root": stateRoot,
+		"task_objective": pending["task_objective"], "acceptance_criteria": pending["acceptance_criteria"],
+		"validation_summary": reviewerValidationSummary(bundle), "reviewer_executable": resolved.ReviewerExecutable,
+		"authority_sources": resolved.AuthoritySources,
+	} {
+		if value != nil && (key != "task_objective" && key != "acceptance_criteria" || stringValue(value) != "") &&
+			(key != "reviewer_executable" || stringValue(value) != "") {
+			args[key] = value
+		}
+	}
+	attempts := []postReviewerAttempt{}
+	var last review.BridgeOutcome
+	invoked := false
+	for _, candidate := range candidates {
+		vendor := vendorFamily(modelFamily(candidate.Model))
+		if implementer != "" && vendor != "" && implementer == vendor {
+			attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, "SKIPPED_SAME_VENDOR"})
+			continue
+		}
+		if !postReviewerAdapters[candidate.Agent] {
+			attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, "SKIPPED_ADAPTER_UNREGISTERED"})
+			continue
+		}
+		budget := time.Until(deadline)
+		if budget <= 0 {
+			attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, "UNAVAILABLE_BUDGET_EXHAUSTED"})
+			continue
+		}
+		candidateArgs := clonePostMap(args)
+		candidateArgs["reviewer_agent"], candidateArgs["reviewer_model"] = candidate.Agent, candidate.Model
+		candidateArgs["reviewer_timeout_seconds"] = budget.Seconds()
+		bridgeResult, err := review.RunBridge(context.Background(), root, candidateArgs, budget)
+		if err != nil {
+			if review.IsReviewerBridgeException(err) {
+				bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer-1 bridge raised unexpectedly.")
+			}
+			return review.BridgeOutcome{}, err
+		}
+		last = bridgeResult
+		invoked = true
+		outcome := "COMPLETED"
+		if last.Outcome == "unavailable" {
+			outcome = "UNAVAILABLE"
+		}
+		attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, outcome})
+		if outcome != "UNAVAILABLE" {
+			break
+		}
+	}
+	if len(attempts) > 1 {
+		bundle["reviewer1_attempts"] = attempts
+	}
+	if !invoked {
+		lastAttempt := postReviewerAttempt{Agent: "agy", Model: stringValue(loaded["reviewer1_model_requested"])}
+		if len(attempts) > 0 {
+			lastAttempt = attempts[len(attempts)-1]
+		}
+		reason := "REVIEWER1_UNAVAILABLE"
+		if lastAttempt.Outcome == "SKIPPED_ADAPTER_UNREGISTERED" {
+			reason = "REVIEWER_ADAPTER_UNAVAILABLE"
+		} else if lastAttempt.Outcome == "SKIPPED_SAME_VENDOR" {
+			reason = "REVIEWER_VENDOR_CONFLICT"
+		}
+		bundle["reviewer1_skipped_reason"] = reason
+		last = review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{
+			"review_status": "UNAVAILABLE", "provider": lastAttempt.Agent,
+			"reviewer1_model_requested": lastAttempt.Model, "result": "REVIEWER1_UNAVAILABLE",
+			"validation": "UNKNOWN", "findings": []any{map[string]any{"code": reason,
+				"message": "No eligible registered Reviewer-1 adapter was available; FULL review required."}},
+		}}
+	}
+	return last, nil
+}
+
+var postReviewerAdapters = map[string]bool{"agy": true, "opencode": true, "codex": true}
+
+var modelVendorPrefix = regexp.MustCompile(`^(openai|google|deepseek|anthropic|qwen|mistral|llama)/`)
+
+func modelFamily(model string) string {
+	name := strings.ToLower(model)
+	if match := modelVendorPrefix.FindStringSubmatch(name); len(match) == 2 {
+		if match[1] == "anthropic" {
+			return "claude"
+		}
+		return match[1]
+	}
+	if i := strings.Index(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	switch {
+	case strings.HasPrefix(name, "gemini-"):
+		return "gemini"
+	case strings.HasPrefix(name, "gpt-") || regexp.MustCompile(`^o[134](-|$)`).MatchString(name):
+		return "gpt"
+	case strings.HasPrefix(name, "claude-"):
+		return "claude"
+	case strings.HasPrefix(name, "deepseek-"):
+		return "deepseek"
+	case strings.HasPrefix(name, "qwen-") || regexp.MustCompile(`^qwen[0-9]`).MatchString(name):
+		return "qwen"
+	case strings.HasPrefix(name, "mistral-") || regexp.MustCompile(`^mistral[0-9]`).MatchString(name):
+		return "mistral"
+	case strings.HasPrefix(name, "llama-") || regexp.MustCompile(`^llama[0-9]`).MatchString(name):
+		return "llama"
+	default:
+		return ""
+	}
+}
+
+func vendorFamily(family string) string {
+	normalized := strings.ToLower(strings.TrimSpace(family))
+	if normalized == "" {
+		return ""
+	}
+	if i := strings.IndexAny(normalized, "-/"); i >= 0 {
+		normalized = normalized[:i]
+	}
+	switch normalized {
+	case "gpt", "openai":
+		return "openai"
+	case "gemini", "google":
+		return "google"
+	case "claude", "anthropic":
+		return "anthropic"
+	case "qwen3":
+		return "qwen"
+	case "llama3":
+		return "llama"
+	default:
+		for _, known := range []string{"qwen", "mistral", "llama"} {
+			suffix := strings.TrimPrefix(normalized, known)
+			if suffix != normalized && strings.Trim(suffix, "0123456789") == "" {
+				return known
+			}
+		}
+		return normalized
+	}
+}
+
+func reviewerValidationSummary(bundle map[string]any) string {
+	worker := mapValue(bundle["worker_validation"])
+	status, summary := stringValue(worker["status"]), stringValue(worker["summary"])
+	if utf8.RuneCountInString(summary) > 1200 {
+		runes := []rune(summary)
+		summary = string(runes[:1200])
+	}
+	return fmt.Sprintf("Worker-reported validation summary (status=%s): %s", status, summary)
+}
+
+func clonePostMap(source map[string]any) map[string]any {
+	result := make(map[string]any, len(source)+3)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}

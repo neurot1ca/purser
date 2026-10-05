@@ -1,0 +1,204 @@
+{
+  "oracle": "Python codex post_tool_use Reviewer-1 candidate selection with the reviewer callable faked",
+  "cases": [
+    {
+      "name": "first_available",
+      "candidates": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet"
+        }
+      ],
+      "fallback_family": "openai",
+      "responses": [
+        "completed"
+      ],
+      "calls": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        }
+      ],
+      "attempts": [],
+      "skipped_reason": null,
+      "finding_codes": []
+    },
+    {
+      "name": "unavailable_fallback",
+      "candidates": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet"
+        }
+      ],
+      "fallback_family": "openai",
+      "responses": [
+        "unavailable",
+        "completed"
+      ],
+      "calls": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet"
+        }
+      ],
+      "attempts": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high",
+          "outcome": "UNAVAILABLE"
+        },
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet",
+          "outcome": "COMPLETED"
+        }
+      ],
+      "skipped_reason": null,
+      "finding_codes": []
+    },
+    {
+      "name": "same_family_filtered",
+      "candidates": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet"
+        }
+      ],
+      "fallback_family": "google",
+      "responses": [
+        "completed"
+      ],
+      "calls": [
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet"
+        }
+      ],
+      "attempts": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high",
+          "outcome": "SKIPPED_SAME_VENDOR"
+        },
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet",
+          "outcome": "COMPLETED"
+        }
+      ],
+      "skipped_reason": null,
+      "finding_codes": []
+    },
+    {
+      "name": "all_filtered",
+      "candidates": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        {
+          "agent": "opencode",
+          "model": "google/gemini-2.5-pro"
+        }
+      ],
+      "fallback_family": "google",
+      "responses": [],
+      "calls": [],
+      "attempts": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high",
+          "outcome": "SKIPPED_SAME_VENDOR"
+        },
+        {
+          "agent": "opencode",
+          "model": "google/gemini-2.5-pro",
+          "outcome": "SKIPPED_SAME_VENDOR"
+        }
+      ],
+      "skipped_reason": "REVIEWER_VENDOR_CONFLICT",
+      "finding_codes": [
+        "REVIEWER_VENDOR_CONFLICT"
+      ]
+    },
+    {
+      "name": "deadline_across_candidates",
+      "candidates": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet"
+        }
+      ],
+      "fallback_family": "openai",
+      "responses": [
+        "slow_unavailable",
+        "completed"
+      ],
+      "calls": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        }
+      ],
+      "attempts": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high",
+          "outcome": "UNAVAILABLE"
+        },
+        {
+          "agent": "opencode",
+          "model": "anthropic/claude-sonnet",
+          "outcome": "UNAVAILABLE_BUDGET_EXHAUSTED"
+        }
+      ],
+      "skipped_reason": "REVIEWER1_UNAVAILABLE",
+      "finding_codes": []
+    },
+    {
+      "name": "bridge_exception",
+      "candidates": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        }
+      ],
+      "fallback_family": "openai",
+      "responses": [
+        "exception"
+      ],
+      "calls": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        }
+      ],
+      "attempts": [],
+      "skipped_reason": null,
+      "finding_codes": [
+        "INTERNAL_POST_ERROR"
+      ]
+    }
+  ]
+}
