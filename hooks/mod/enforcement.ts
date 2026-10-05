@@ -4,6 +4,11 @@ const postToolUseFailureTools = new Set([
   'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
   'mcp__plugin_purser_codex-main__codex_cancel',
 ])
+const postToolUseTools = new Set([
+  'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
+  'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
+  'mcp__plugin_purser_codex-main__codex_cancel', 'mcp__plugin_purser_codex-main__codex_apply',
+])
 
 function mapPostToolUse(event: PostEvent, stdout: string): {
   updatedToolOutput?: unknown
@@ -57,7 +62,7 @@ async function goBinary($): Promise<string> {
 
 async function handlePostToolUse(event: PostEvent, $, e, next) {
   const prior = await next(e)
-  if (event === 'PostToolUse' && await $.env.get('PURSER_MOD_POST') !== '1') return prior
+  if (event === 'PostToolUse' && !postToolUseTools.has(e.tool_name)) return prior
   if (event === 'PostToolUseFailure' && !postToolUseFailureTools.has(e.tool_name)) return prior
   if (e.hookSpecificOutput?.hookEventName === event ||
       e.tool_response?.hookSpecificOutput?.hookEventName === event) return prior

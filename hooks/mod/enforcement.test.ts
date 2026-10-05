@@ -85,9 +85,7 @@ test('maps Go Post outputs for both hook events', options, async ($, on) => {
     systemMessage: 'Purser failure recorded',
   })
   let invocation = 0
-  stubGo(on, postOutput, calls, toasts, {
-    OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_POST: '1',
-  }, undefined, undefined, () => ({ stdout: invocation++ === 0 ? postOutput : failureOutput }))
+  stubGo(on, postOutput, calls, toasts, undefined, undefined, undefined, () => ({ stdout: invocation++ === 0 ? postOutput : failureOutput }))
   on('classic.PostToolUse', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
 
@@ -108,9 +106,7 @@ test('maps Go Post outputs for both hook events', options, async ($, on) => {
 test('empty Go Post response passes through', options, async ($, on) => {
   const calls: string[] = []
   const toasts: string[] = []
-  stubGo(on, '', calls, toasts, {
-    OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_POST: '1',
-  })
+  stubGo(on, '', calls, toasts)
   on('classic.PostToolUse', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
 
@@ -121,9 +117,7 @@ test('empty Go Post response passes through', options, async ($, on) => {
 test('invalid Go Post JSON passes through without throwing', options, async ($, on) => {
   const calls: string[] = []
   const toasts: string[] = []
-  stubGo(on, '{', calls, toasts, {
-    OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_POST: '1',
-  })
+  stubGo(on, '{', calls, toasts)
   on('classic.PostToolUse', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
 
@@ -131,12 +125,10 @@ test('invalid Go Post JSON passes through without throwing', options, async ($, 
   expect(calls).toHaveLength(1)
 })
 
-test('Post mod skips an event already handled by the Python command hook', options, async ($, on) => {
+test('Post mod skips an event already handled by an earlier hook', options, async ($, on) => {
   const calls: string[] = []
   const toasts: string[] = []
-  stubGo(on, postOutput, calls, toasts, {
-    OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_POST: '1',
-  })
+  stubGo(on, postOutput, calls, toasts)
   on('classic.PostToolUse', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
 
@@ -146,15 +138,31 @@ test('Post mod skips an event already handled by the Python command hook', optio
   expect(calls).toEqual([])
 })
 
-test('Post mod mapping is inactive by default', options, async ($, on) => {
+test('PostToolUse routes six registered Codex tools without an env gate and excludes non-Codex tools', options, async ($, on) => {
   const calls: string[] = []
   const toasts: string[] = []
   stubGo(on, postOutput, calls, toasts)
   on('classic.PostToolUse', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
 
-  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({})
-  expect(calls).toEqual([])
+  for (const tool of [
+    'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
+    'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
+    'mcp__plugin_purser_codex-main__codex_cancel', 'mcp__plugin_purser_codex-main__codex_apply',
+  ]) {
+    const event = { ...postEvent('PostToolUse'), tool_name: tool }
+    await expect($.classic.PostToolUse(event)).resolves.toEqual({
+      updatedToolOutput: [{ type: 'text', text: 'reviewed' }], additionalContext: ['review required'],
+    })
+  }
+  const excluded = { ...postEvent('PostToolUse'), tool_name: 'mcp__plugin_purser_codex-main__other' }
+  await expect($.classic.PostToolUse(excluded)).resolves.toEqual({})
+  expect(calls).toHaveLength(6)
+  expect(calls.map(call => JSON.parse(call).tool_name)).toEqual([
+    'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
+    'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
+    'mcp__plugin_purser_codex-main__codex_cancel', 'mcp__plugin_purser_codex-main__codex_apply',
+  ])
 })
 
 test('PostToolUseFailure routes five Codex tools without the Post gate and excludes codex_apply', options, async ($, on) => {

@@ -1,23 +1,6 @@
 {
   "modules": ["./register.ts"],
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "^mcp__plugin_purser_codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel|codex_apply)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 300,
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-              "hook",
-              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"
-            ]
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "hooks": [
