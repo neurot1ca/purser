@@ -85,6 +85,20 @@ func TestPostMechanicalPythonFixture(t *testing.T) {
 	})
 }
 
+func TestStartMechanicalShadowLaunchFailureRemovesLock(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	root := t.TempDir()
+	writeMechanicalInventory(t, root)
+	err := startMechanicalShadow(root, t.TempDir(), "project", "repo", "prompt", "report", "served")
+	if err == nil {
+		t.Fatal("startMechanicalShadow() error = nil, want missing Python error")
+	}
+	lock := filepath.Join(root, "projects", "project", "opencode_shadows", "running.lock")
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Fatalf("running.lock stat error = %v, want file removed after launch failure", err)
+	}
+}
+
 func writeMechanicalInventory(t *testing.T, root string) {
 	t.Helper()
 	path := filepath.Join(root, "opencode", "candidates.json")

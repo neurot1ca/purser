@@ -246,7 +246,16 @@ func startMechanicalShadow(root, pluginRoot, projectKey, repository, prompt, rep
 	if err != nil {
 		return err
 	}
-	defer lf.Close()
+	_, writeErr := lf.WriteString(fmt.Sprint(os.Getpid()))
+	closeErr := lf.Close()
+	if writeErr != nil {
+		_ = os.Remove(lock)
+		return writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(lock)
+		return closeErr
+	}
 	id, err := mechanicalID()
 	if err != nil {
 		_ = os.Remove(lock)
@@ -268,7 +277,6 @@ func startMechanicalShadow(root, pluginRoot, projectKey, repository, prompt, rep
 		_ = os.Remove(lock)
 		return err
 	}
-	_, _ = lf.WriteString(fmt.Sprint(os.Getpid()))
 	script, err := filepath.Abs(filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "mechanical_learning.py"))
 	if err != nil {
 		_ = os.Remove(job)
