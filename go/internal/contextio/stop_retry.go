@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -17,7 +18,7 @@ type stopRetryCall struct {
 }
 
 // codexRetryReason finds a retryable async result or classifier denial in the
-// transcript segment beginning after latestUser. Retry state remains in Python.
+// transcript segment beginning after latestUser.
 func codexRetryReason(records []map[string]any, latestUser int, repository string) string {
 	if latestUser < -1 || latestUser >= len(records) || repository == "" {
 		return ""
@@ -106,6 +107,90 @@ func codexRetryReason(records []map[string]any, latestUser int, repository strin
 		}
 	}
 	return ""
+}
+
+// persistCodexRetry applies the Python Stop retry bound to advisor state. A
+// non-empty return value means the caller should block with that reason.
+func persistCodexRetry(path, session, reason string) string {
+	if path == "" || session == "" || reason == "" {
+		return ""
+	}
+	unlock, err := LockFile(path + ".lock")
+	if err != nil {
+		return ""
+	}
+	defer unlock()
+	state := readAdvisorState(path, session)
+	count, ok := stopRetryCount(state["codex_retry_count"])
+	if !ok {
+		count = 0
+	}
+	state["codex_retry_count"] = count
+	state["codex_retry_pending"] = stopRetryPending(state["codex_retry_pending"])
+	if count < 2 {
+		state["codex_retry_count"] = count + 1
+		if writeAdvisorState(path, state) != nil {
+			return ""
+		}
+		return reason
+	}
+	state["codex_retry_pending"] = stopRetrySanitize(reason)
+	if writeAdvisorState(path, state) != nil {
+		return ""
+	}
+	return ""
+}
+
+func stopRetryCount(value any) (int, bool) {
+	var count int
+	switch n := value.(type) {
+	case bool:
+		if n {
+			count = 1
+		}
+	case int:
+		count = n
+	case float64:
+		count = int(n)
+	case json.Number:
+		parsed, err := strconv.Atoi(n.String())
+		if err != nil {
+			return 0, false
+		}
+		count = parsed
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return 0, false
+		}
+		count = parsed
+	default:
+		return 0, false
+	}
+	return min(2, max(0, count)), true
+}
+
+func stopRetryPending(value any) any {
+	switch pending := value.(type) {
+	case string:
+		if strings.TrimSpace(pending) == "" {
+			return false
+		}
+		return stopRetrySanitize(strings.TrimSpace(pending))
+	case bool:
+		return pending
+	default:
+		return false
+	}
+}
+
+func stopRetrySanitize(reason string) string {
+	reason = stopRetryJobSanitize.ReplaceAllString(reason, "job")
+	runes := []rune(reason)
+	if len(runes) > 300 {
+		return string(runes[:300])
+	}
+	return reason
 }
 
 func shortStopToolName(name string) string {

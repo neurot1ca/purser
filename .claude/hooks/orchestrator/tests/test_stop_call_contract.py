@@ -238,7 +238,74 @@ def test_python_stop_retry_oracle_fixture(tmp_path, monkeypatch):
         RETRY_FIXTURE.write_text(json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n",
                                  encoding="utf-8")
     assert RETRY_FIXTURE.exists(), f"missing fixture: {RETRY_FIXTURE} (set STOP_RETRY_WRITE_FIXTURE=1 to capture)"
-    assert json.loads(RETRY_FIXTURE.read_text(encoding="utf-8")) == expected
+    saved = json.loads(RETRY_FIXTURE.read_text(encoding="utf-8"))
+    assert {key: value for key, value in saved.items() if key != "state_write"} == expected
+
+
+def test_python_stop_retry_state_write_fixture(tmp_path, monkeypatch):
+    state_cases = []
+    retry_cases = _stop_retry_cases()
+    denial = next(case for case in retry_cases if case["name"] == "classifier_denied_call")
+    finished = next(case for case in retry_cases if case["name"] == "finished_uncollected_job")
+    finished = {**finished, "job_raw": json.dumps({"jobId": "a" * 64, "call": "call-1",
+                                                    "state": "SUCCEEDED", "label": "a" * 64})}
+    scenarios = [
+        ("first_retry", denial, 0, False),
+        ("second_retry", denial, 1, False),
+        ("third_retry_job_id", finished, 2, False),
+        ("malformed_state", denial, "invalid", ["bad"]),
+    ]
+    for name, case, initial_count, initial_pending in scenarios:
+        repository = tmp_path / name
+        repository.mkdir()
+        root = tmp_path / (name + "-state")
+        session = "stop-retry-" + name
+        advisor = root / "projects" / _project_key(repository) / "telemetry" / "compaction_advisor.json"
+        advisor.parent.mkdir(parents=True)
+        advisor.write_text(json.dumps({"session_id": session, "codex_retry_count": initial_count,
+                                       "codex_retry_pending": initial_pending}), encoding="utf-8")
+        monkeypatch.setattr(compaction_advisor, "_state_directory", lambda _repo, path=advisor.parent: path)
+        monkeypatch.setattr(compaction_advisor.state_root, "default_state_root", lambda root=root: root)
+        index = case["index"]
+        if index:
+            index = dict(index)
+            index["project_key"] = _project_key(repository)
+            index_dir = root / "async_jobs"
+            index_dir.mkdir(parents=True)
+            (index_dir / f'{index["jobId"]}.json').write_text(json.dumps(index), encoding="utf-8")
+            job_path = root / "codex_exec_mcp" / "jobs" / f'{index["jobId"]}.json'
+            job_path.parent.mkdir(parents=True)
+            job_path.write_text(case["job_raw"], encoding="utf-8")
+        transcript = tmp_path / (name + ".jsonl")
+        transcript.write_text(_records(*case["records"]), encoding="utf-8")
+        result = compaction_advisor.stop({"session_id": session, "transcript_path": str(transcript)}, repository)
+        saved = json.loads(advisor.read_text(encoding="utf-8"))
+        fixture_index = {**index, "project_key": "__PROJECT_KEY__"} if index else None
+        state_cases.append({"name": name, "records": case["records"], "index": fixture_index,
+                            "job_raw": case["job_raw"], "initial_count": initial_count,
+                            "initial_pending": initial_pending,
+                            "expected_block": result is not None and result.get("decision") == "block",
+                            "expected_count": saved["codex_retry_count"],
+                            "expected_pending": saved["codex_retry_pending"]})
+
+    prompt_state = {"session_id": "prompt-retry", "codex_retry_count": 2,
+                    "codex_retry_pending": "Retry with job."}
+    monkeypatch.setattr(compaction_advisor, "_state_directory", lambda _repo: tmp_path)
+    (tmp_path / "compaction_advisor.json").write_text(json.dumps(prompt_state), encoding="utf-8")
+    prompt_text = compaction_advisor.prompt_retry_context({"session_id": "prompt-retry"}, tmp_path)
+    prompt_saved = json.loads((tmp_path / "compaction_advisor.json").read_text(encoding="utf-8"))
+    expected = {"oracle": "compaction_advisor.stop retry state and prompt_retry_context",
+                "cases": state_cases, "prompt": {"context": prompt_text,
+                                                   "count": prompt_saved["codex_retry_count"],
+                                                   "pending": prompt_saved["codex_retry_pending"],
+                                                   "input_pending": prompt_state["codex_retry_pending"]}}
+    fixture = json.loads(RETRY_FIXTURE.read_text(encoding="utf-8"))
+    fixture["state_write"] = expected
+    if os.environ.get("STOP_RETRY_STATE_WRITE_FIXTURE") == "1":
+        RETRY_FIXTURE.write_text(json.dumps(fixture, sort_keys=True, separators=(",", ":")) + "\n",
+                                 encoding="utf-8")
+    else:
+        assert json.loads(RETRY_FIXTURE.read_text(encoding="utf-8")).get("state_write") == expected
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["GOCACHE"] = str(REPO_ROOT / ".tmp" / "go-build-cache")
