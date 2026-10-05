@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import statistics
 import subprocess
 import time
@@ -27,6 +28,10 @@ RETENTION_SECONDS = 7 * 86400
 HISTORY_SECONDS = 90 * 86400
 MAX_JOB_RECORDS = 256
 MAX_JOB_RECORD_BYTES = 64 * 1024
+MAX_PREPARATION_GENERATIONS = 128
+MAX_PREPARATION_BYTES = 8 * 1024 * 1024 * 1024
+MAX_PREPARATION_REMOVALS_PER_SCAN = 8
+MAX_WORKTREES = 128
 MAX_TELEMETRY_FILES = 32
 MAX_TELEMETRY_BYTES = 2 * 1024 * 1024
 MAX_TELEMETRY_LINES = 4096
@@ -381,6 +386,287 @@ def _cleanup_orphan_worktrees(root: Path, current: float, protected_worktrees: s
             continue
 
 
+def _is_reparse_path(path: Path) -> bool:
+    try:
+        if path.is_symlink() or (hasattr(os.path, "isjunction") and os.path.isjunction(path)):
+            return True
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+        return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
+def _remove_state_tree(path: Path, state_root: Path) -> bool:
+    """Remove one owned state tree without following links; retry partial failures next scan."""
+    try:
+        root = state_root.absolute()
+        target = path.absolute()
+        relative = target.relative_to(root)
+        if not relative.parts or _is_reparse_path(root):
+            return False
+        parent = root
+        for part in relative.parts[:-1]:
+            parent = parent / part
+            if _is_reparse_path(parent):
+                return False
+        if os.name == "nt":
+            target = Path("\\\\?\\" + str(target)) if not str(target).startswith("\\\\") else Path("\\\\?\\UNC\\" + str(target)[2:])
+
+        def remove(node: Path) -> None:
+            is_junction = hasattr(os.path, "isjunction") and os.path.isjunction(node)
+            if _is_reparse_path(node) or not node.is_dir():
+                try:
+                    node.chmod(node.stat(follow_symlinks=False).st_mode | 0o200)
+                except OSError:
+                    pass
+                if is_junction:
+                    node.rmdir()
+                else:
+                    node.unlink(missing_ok=True)
+                return
+            with os.scandir(node) as entries:
+                children = [Path(entry.path) for entry in entries]
+            for child in children:
+                remove(child)
+            try:
+                node.chmod(node.stat(follow_symlinks=False).st_mode | 0o700)
+            except OSError:
+                pass
+            node.rmdir()
+
+        remove(target)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _preparation_generations(root: Path) -> list[tuple[Path, Path]]:
+    """Yield (job directory, generation) without traversing links or worker trees."""
+    base = root / "preparations"
+    if _is_reparse_path(base):
+        return []
+    try:
+        jobs = list(base.iterdir())
+    except OSError:
+        return []
+    result = []
+    for job_dir in jobs:
+        if _is_reparse_path(job_dir) or not job_dir.is_dir():
+            continue
+        try:
+            children = list(job_dir.iterdir())
+        except OSError:
+            continue
+        generations = [child for child in children if child.name.startswith("revision-")
+                       and not _is_reparse_path(child) and child.is_dir()]
+        if generations:
+            result.extend((job_dir, generation) for generation in generations)
+        elif children or (job_dir / "state.json").is_file():
+            # A job directory without revision children is the legacy generation.
+            result.append((job_dir, job_dir))
+    return result
+
+
+def _preparation_state(generation: Path) -> str | None:
+    manifest = _read_json(generation / "state.json")
+    state = manifest.get("state") if manifest else None
+    return state if isinstance(state, str) else None
+
+
+def _tree_bytes(path: Path) -> int:
+    total = 0
+    if _is_reparse_path(path):
+        return 0
+    for current, dirs, files in os.walk(path, followlinks=False):
+        current_path = Path(current)
+        dirs[:] = [name for name in dirs if not _is_reparse_path(current_path / name)]
+        for name in files:
+            item = current_path / name
+            if _is_reparse_path(item):
+                continue
+            try:
+                total += item.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+    return total
+
+
+def _retire_preparations(root: Path, current: float, *, check_bytes: bool) -> None:
+    """Retire only completed or expired orphan replay backups under the job index lock."""
+    base = root / "preparations"
+    generations = _preparation_generations(root)
+    by_job: dict[str, list[Path]] = {}
+    for owner, generation in generations:
+        by_job.setdefault(owner.name, []).append(generation)
+    generation_sizes = ({generation: _tree_bytes(generation) for _, generation in generations}
+                        if check_bytes else {})
+    eligible: list[tuple[float, Path, Path, int]] = []
+    protected_ids: set[str] = set()
+    for job_id, job_generations in by_job.items():
+        states = [_preparation_state(generation) for generation in job_generations]
+        if any(state is None or state in {"PREPARING", "BLOCKED", "RESOLVING", "CONFLICT"}
+               for state in states):
+            protected_ids.add(job_id)
+
+        if not _JOB_ID.fullmatch(job_id):
+            protected_ids.add(job_id)
+            continue
+        index_path = root / "async_jobs" / f"{job_id}.json"
+        job_path = root / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+        job = _read_json(job_path)
+        index = _read_json(index_path)
+        index_exists = index_path.exists()
+        if index and index.get("stage") == "FINALIZING":
+            protected_ids.add(job_id)
+            continue
+        if job_path.exists():
+            discarded = bool(job and (job.get("discarded") is True
+                                      or (job.get("state") in {"FAILED", "CANCELLED", "TIMED_OUT"}
+                                          and "applyState" not in job)))
+            completed = bool(job and (job.get("applyState") == "applied" or discarded))
+            if (not completed or job_id in protected_ids
+                    or (index_exists and (not index or index.get("stage") != "CONSUMED"))):
+                protected_ids.add(job_id)
+                continue
+        else:
+            try:
+                newest = max(max(generation.stat().st_mtime,
+                                 (generation / "state.json").stat().st_mtime)
+                             for generation in job_generations)
+            except OSError:
+                protected_ids.add(job_id)
+                continue
+            if current - newest < RETENTION_SECONDS or job_id in protected_ids:
+                protected_ids.add(job_id)
+                continue
+        for generation in job_generations:
+            try:
+                stamp = min(generation.stat().st_mtime, (generation / "state.json").stat().st_mtime)
+            except OSError:
+                stamp = 0
+            eligible.append((stamp, root / "preparations" / job_id, generation,
+                             generation_sizes.get(generation, 0)))
+
+    eligible.sort(key=lambda item: (item[0], str(item[2])))
+    count = len(generations)
+    total = sum(generation_sizes.values()) if check_bytes else 0
+    protected_count = count - len(eligible)
+    protected_bytes = total - sum(item[3] for item in eligible) if check_bytes else 0
+    removal_failed = False
+    # On ordinary lifecycle calls only count and age are consulted; the costly size
+    # walk is reserved for the existing daily background ceiling check.
+    for _stamp, owner, generation, size in eligible[:MAX_PREPARATION_REMOVALS_PER_SCAN]:
+        try:
+            index_path = root / "async_jobs" / f"{owner.name}.json"
+            with codex._async_claim(index_path):
+                job_path = root / "codex_exec_mcp" / "jobs" / f"{owner.name}.json"
+                job = _read_json(job_path)
+                index = _read_json(index_path)
+                index_exists = index_path.exists()
+                state = _preparation_state(generation)
+                sibling_states = [_preparation_state(item) for item in by_job.get(owner.name, ())]
+                safe = (state not in {None, "PREPARING", "BLOCKED", "RESOLVING", "CONFLICT"}
+                        and not any(value in {None, "PREPARING", "BLOCKED", "RESOLVING", "CONFLICT"}
+                                    for value in sibling_states))
+                safe = safe and not (index and index.get("stage") == "FINALIZING")
+                if job_path.exists():
+                    discarded = bool(job and (job.get("discarded") is True
+                                               or (job.get("state") in {"FAILED", "CANCELLED", "TIMED_OUT"}
+                                                   and "applyState" not in job)))
+                    safe = safe and bool(job and (job.get("applyState") == "applied" or discarded))
+                    safe = safe and (not index_exists or bool(index and index.get("stage") == "CONSUMED"))
+                else:
+                    safe = safe and current - generation.stat().st_mtime >= RETENTION_SECONDS
+                if safe and _remove_state_tree(generation, base):
+                    count -= 1
+                    total -= size
+                    if generation == owner:
+                        try:
+                            owner.rmdir()
+                        except OSError:
+                            pass
+                else:
+                    removal_failed = True
+        except Exception:
+            removal_failed = True
+    if (protected_count > MAX_PREPARATION_GENERATIONS
+            or (check_bytes and protected_bytes > MAX_PREPARATION_BYTES)
+            or (removal_failed and (count > MAX_PREPARATION_GENERATIONS
+                                    or (check_bytes and total > MAX_PREPARATION_BYTES)))):
+        state_retention._warning(root)
+
+
+def _enforce_worktree_count(root: Path, current: float, protected_worktrees: set[str],
+                            listings: dict[str, tuple[Path, list[Path]] | None],
+                            prune_repos: dict[str, Path],
+                            worktree_owners: dict[str, dict[str, Any]] | None = None) -> None:
+    wt_root = root / "wt"
+    if _is_reparse_path(wt_root):
+        return
+    try:
+        worktrees = [path for path in wt_root.iterdir() if not _is_reparse_path(path) and path.is_dir()]
+    except OSError:
+        return
+    candidates = []
+    jobs = root / "codex_exec_mcp" / "jobs"
+    if worktree_owners is None:
+        worktree_owners = {}
+        try:
+            for path in jobs.glob("*.json"):
+                job = _read_json(path)
+                key = _worktree_key(job.get("worktreePath")) if job else None
+                if key is not None:
+                    worktree_owners.setdefault(key, job)
+        except OSError:
+            return
+    for worktree in worktrees:
+        if _worktree_key(worktree) in protected_worktrees:
+            continue
+        owner = worktree_owners.get(_worktree_key(worktree))
+        discarded = bool(owner and (owner.get("discarded") is True
+                                    or (owner.get("state") in {"FAILED", "CANCELLED", "TIMED_OUT"}
+                                        and "applyState" not in owner)))
+        if owner and not (owner.get("applyState") == "applied" or discarded):
+            continue
+        if owner:
+            index = _read_json(root / "async_jobs" / f"{owner.get('jobId')}.json")
+            if index and index.get("stage") == "FINALIZING":
+                continue
+        try:
+            stamp = worktree.stat().st_mtime
+        except OSError:
+            continue
+        if owner is None and current - stamp < RETENTION_SECONDS:
+            continue
+        candidates.append((stamp, worktree, owner))
+    candidates.sort(key=lambda item: (item[0], str(item[1])))
+    count = len(worktrees)
+    for _stamp, worktree, owner in candidates:
+        if count <= MAX_WORKTREES:
+            break
+        if owner:
+            repo = owner.get("repoRoot")
+            removed = (isinstance(repo, str) and _remove_worktree(
+                root, Path(repo), worktree, listings, prune_repos))
+        else:
+            common_dir = subprocess.run(
+                ["git", "-C", os.fspath(worktree), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
+            )
+            removed = False
+            if not common_dir.returncode:
+                repo_root = Path(common_dir.stdout.strip()).resolve().parent
+                removed = _remove_worktree(root, repo_root, worktree, listings, prune_repos)
+        if removed:
+            count -= 1
+    if count > MAX_WORKTREES:
+        state_retention._warning(root)
+
+
 def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
                  check_ceiling: bool = False) -> None:
     """Reconcile dead hosts and remove expired evidence with its ownership records."""
@@ -406,6 +692,11 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
                 key = _worktree_key(job.get("worktreePath"))
                 if key is not None:
                     protected_worktrees.add(key)
+        worktree_owners: dict[str, dict[str, Any]] = {}
+        for _path, job in loaded_records:
+            key = _worktree_key(job.get("worktreePath"))
+            if key is not None:
+                worktree_owners.setdefault(key, job)
         recoveries: list[tuple[Path, dict[str, Any]]] = []
         removals: list[tuple[Path, dict[str, Any]]] = []
         for path, job in loaded_records:
@@ -514,6 +805,15 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
             except OSError:
                 continue
         _cleanup_orphan_worktrees(root, current, protected_worktrees, listings, prune_repos)
+        _enforce_worktree_count(root, current, protected_worktrees, listings, prune_repos,
+                                worktree_owners)
+        byte_check_due = False
+        if check_ceiling:
+            try:
+                byte_check_due = current - (root / state_retention.CEILING_STAMP).stat().st_mtime >= 86400
+            except OSError:
+                byte_check_due = True
+        _retire_preparations(root, current, check_bytes=byte_check_due)
         for repo_key, repo_root in prune_repos.items():
             try:
                 subprocess.run(

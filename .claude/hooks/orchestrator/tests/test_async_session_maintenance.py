@@ -416,6 +416,182 @@ def test_cleanup_keeps_conflicted_job_worktree(tmp_path, monkeypatch):
     assert worktree.is_dir() and record.exists()
 
 
+def _preparation(root, job_id, state="PREPARED", *, index_stage="CONSUMED", apply_state="applied",
+                 stamp=1000, record=True, revision=True):
+    generation = root / "preparations" / job_id / ("revision-1" if revision else "")
+    generation.mkdir(parents=True)
+    (generation / "state.json").write_text(json.dumps({"state": state}), encoding="utf-8")
+    os.utime(generation, (stamp, stamp))
+    os.utime(generation / "state.json", (stamp, stamp))
+    if record:
+        job_path = root / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+        job_path.parent.mkdir(parents=True, exist_ok=True)
+        job = {"jobId": job_id, "call": job_id, "state": "SUCCEEDED", "finishedAt": stamp}
+        if apply_state is not None:
+            job["applyState"] = apply_state
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+    if index_stage is not None:
+        index_path = root / "async_jobs" / f"{job_id}.json"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(json.dumps({"jobId": job_id, "stage": index_stage}), encoding="utf-8")
+    return generation
+
+
+def test_cleanup_retires_applied_consumed_preparation(tmp_path):
+    generation = _preparation(tmp_path, "a" * 64, revision=False)
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    assert not generation.exists()
+
+
+def test_cleanup_preserves_unapplied_conflicted_interrupted_and_finalizing_preparations(tmp_path):
+    generations = [
+        _preparation(tmp_path, "1" * 64, apply_state=None),
+        _preparation(tmp_path, "2" * 64, apply_state="conflict"),
+        _preparation(tmp_path, "3" * 64, state="PREPARING"),
+        _preparation(tmp_path, "4" * 64, state="BLOCKED"),
+        _preparation(tmp_path, "5" * 64, index_stage="FINALIZING"),
+    ]
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    assert all(generation.exists() for generation in generations)
+
+
+def test_cleanup_retires_old_orphan_preparation_but_keeps_young_one(tmp_path):
+    old = _preparation(tmp_path, "6" * 64, record=False, index_stage=None, stamp=1000)
+    young = _preparation(tmp_path, "7" * 64, record=False, index_stage=None,
+                         stamp=1000 + maintenance.RETENTION_SECONDS)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + maintenance.RETENTION_SECONDS + 1)
+    assert not old.exists()
+    assert young.exists()
+
+
+def test_cleanup_retires_completed_preparations_oldest_first_over_count_bound(tmp_path, monkeypatch):
+    generations = [_preparation(tmp_path, f"{index:064x}", stamp=1000 + index)
+                   for index in range(maintenance.MAX_PREPARATION_GENERATIONS + 2)]
+    removed = []
+    remove = maintenance._remove_state_tree
+
+    def recorded_remove(path, root):
+        removed.append(path)
+        return remove(path, root)
+
+    monkeypatch.setattr(maintenance, "_remove_state_tree", recorded_remove)
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    assert removed[:2] == generations[:2]
+    budget = maintenance.MAX_PREPARATION_REMOVALS_PER_SCAN
+    assert removed == generations[:budget]
+    assert all(not generation.exists() for generation in generations[:budget])
+    assert all(generation.exists() for generation in generations[budget:])
+
+
+def test_daily_byte_check_warns_when_protected_preparation_exceeds_bound(tmp_path, monkeypatch):
+    generation = _preparation(tmp_path, "9" * 64, state="PREPARING", stamp=1000)
+    warnings = []
+    monkeypatch.setattr(maintenance, "MAX_PREPARATION_BYTES", 0)
+    monkeypatch.setattr(maintenance.state_retention, "_warning", lambda root: warnings.append(root))
+    maintenance.cleanup_jobs(tmp_path, now=2000, check_ceiling=True)
+    assert generation.exists()
+    assert warnings == [tmp_path]
+
+
+def test_cleanup_warns_when_protected_preparations_exceed_count_bound(tmp_path, monkeypatch):
+    generations = [_preparation(tmp_path, f"{index:064x}", state="PREPARING", stamp=1000 + index)
+                   for index in range(maintenance.MAX_PREPARATION_GENERATIONS + 1)]
+    warnings = []
+    monkeypatch.setattr(maintenance.state_retention, "_warning", lambda root: warnings.append(root))
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+    assert all(generation.exists() for generation in generations)
+    assert warnings == [tmp_path]
+
+
+def test_cleanup_removes_readonly_preparation_without_following_symlink(tmp_path):
+    generation = _preparation(tmp_path, "8" * 64)
+    external = tmp_path.parent / (tmp_path.name + "-outside")
+    external.mkdir()
+    (external / "keep.txt").write_text("outside", encoding="utf-8")
+    try:
+        readonly = generation / "worker-tree" / "readonly.txt"
+        readonly.parent.mkdir()
+        readonly.write_text("copy", encoding="utf-8")
+        readonly.chmod(0o444)
+        link = generation / "worker-tree" / "external"
+        try:
+            link.symlink_to(external, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            link = None
+        maintenance.cleanup_jobs(tmp_path, now=2000)
+        assert not generation.exists()
+        assert (external / "keep.txt").read_text(encoding="utf-8") == "outside"
+    finally:
+        import shutil
+        shutil.rmtree(external, ignore_errors=True)
+
+
+def test_cleanup_worktree_count_evicts_oldest_eligible_first(tmp_path, monkeypatch):
+    wt_root = tmp_path / "wt"
+    protected = set()
+    paths = []
+    for index in range(maintenance.MAX_WORKTREES + 1):
+        path = wt_root / f"{index:03}"
+        path.mkdir(parents=True)
+        os.utime(path, (1000 + index, 1000 + index))
+        paths.append(path)
+    removed = []
+    monkeypatch.setattr(maintenance, "_remove_worktree",
+                        lambda _root, _repo, path, *_args: (removed.append(path), path.rmdir(), True)[-1])
+    maintenance._enforce_worktree_count(tmp_path, 1000 + maintenance.RETENTION_SECONDS + 10,
+                                        protected, {}, {})
+    assert removed == [paths[0]]
+
+
+def test_worktree_owner_map_read_cost_scales_with_records_plus_worktrees(tmp_path, monkeypatch):
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    wt_root = tmp_path / "wt"
+    record_count, worktree_count = 9, 7
+    for index in range(record_count):
+        worktree = wt_root / f"{index:03}"
+        if index < worktree_count:
+            worktree.mkdir(parents=True)
+        record = {"jobId": f"{index + 1:064x}", "worktreePath": str(worktree),
+                  "repoRoot": str(tmp_path / "repo"), "applyState": "applied"}
+        (jobs / f"{record['jobId']}.json").write_text(json.dumps(record), encoding="utf-8")
+    reads = 0
+    read_json = maintenance._read_json
+
+    def counted_read(path):
+        nonlocal reads
+        if Path(path).parent == jobs:
+            reads += 1
+        return read_json(path)
+
+    monkeypatch.setattr(maintenance, "_read_json", counted_read)
+    maintenance._enforce_worktree_count(tmp_path, 10_000_000, set(), {}, {})
+    assert reads <= record_count + worktree_count
+
+
+def test_preparation_generation_listing_runs_once_per_scan(tmp_path, monkeypatch):
+    for index in range(4):
+        _preparation(tmp_path, f"{index + 1:064x}")
+    calls = 0
+    list_generations = maintenance._preparation_generations
+
+    def counted_listing(root):
+        nonlocal calls
+        calls += 1
+        return list_generations(root)
+
+    monkeypatch.setattr(maintenance, "_preparation_generations", counted_listing)
+    maintenance._retire_preparations(tmp_path, 2000, check_bytes=False)
+    assert calls == 1
+
+
+def test_preparation_removal_budget_limits_one_scan(tmp_path):
+    generations = [_preparation(tmp_path, f"{index + 1:064x}") for index in range(12)]
+    maintenance._retire_preparations(tmp_path, 2000, check_bytes=False)
+    removed = sum(not generation.exists() for generation in generations)
+    assert 0 < removed <= getattr(maintenance, "MAX_PREPARATION_REMOVALS_PER_SCAN", 8)
+
+
 def test_cleanup_keeps_ambiguous_job_worktree(tmp_path, monkeypatch):
     _, _, worktree, record = _registered_job_worktree(tmp_path, "UNKNOWN_OR_IN_PROGRESS")
     maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
