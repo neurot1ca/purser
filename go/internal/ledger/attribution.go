@@ -64,6 +64,13 @@ func AttributeKnownConcurrentScopes(delta map[string]any, ownScope []string, for
 			return delta, []map[string]string{}
 		}
 	}
+	for _, owner := range foreignOwners {
+		taskID, validTask := owner["task_id"].(string)
+		_, validScope := stringList(owner["scope"])
+		if !validTask || taskID == "" || !validScope {
+			return delta, []map[string]string{}
+		}
+	}
 	changed, ok := stringList(delta["changed_paths"])
 	if !ok {
 		return delta, []map[string]string{}
@@ -91,14 +98,8 @@ func AttributeKnownConcurrentScopes(delta map[string]any, ownScope []string, for
 	for _, path := range paths {
 		tasks := map[string]bool{}
 		for _, owner := range foreignOwners {
-			taskID, valid := owner["task_id"].(string)
-			if !valid || taskID == "" {
-				continue
-			}
-			scope, valid := stringList(owner["scope"])
-			if !valid {
-				continue
-			}
+			taskID := owner["task_id"].(string)
+			scope, _ := stringList(owner["scope"])
 			if pathInScope(path, scope) {
 				tasks[taskID] = true
 			}

@@ -57,3 +57,64 @@ func TestAttributeKnownConcurrentScopesPythonFixture(t *testing.T) {
 		})
 	}
 }
+
+func TestAttributeKnownConcurrentScopesMalformedOwnerFailsOpen(t *testing.T) {
+	delta := map[string]any{"status": OK, "changed_paths": []string{"shared/file.txt"}, "changed_file_count": 1}
+	cases := map[string][]map[string]any{
+		"missing_task_id": {
+			{"task_id": "task-a", "scope": []string{"shared"}},
+			{"scope": []string{"shared"}},
+		},
+		"malformed_scope": {
+			{"task_id": "task-a", "scope": []string{"shared"}},
+			{"task_id": "task-b", "scope": []any{"shared", 1}},
+		},
+	}
+	for name, owners := range cases {
+		t.Run(name, func(t *testing.T) {
+			gotDelta, known := AttributeKnownConcurrentScopes(delta, nil, owners, nil, nil)
+			if len(known) != 0 || !reflect.DeepEqual(gotDelta, delta) {
+				t.Fatalf("malformed owner must preserve delta without attribution: delta=%#v known=%#v", gotDelta, known)
+			}
+		})
+	}
+}
+
+func TestClassifyConcurrentWritersPythonFixture(t *testing.T) {
+	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "concurrent_writers.json")
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name              string          `json:"name"`
+			Delta             map[string]any  `json:"delta"`
+			Scope             []string        `json:"scope"`
+			MaterialPaths     []string        `json:"material_paths"`
+			VerificationPaths []string        `json:"verification_paths"`
+			Result            json.RawMessage `json:"result"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range fixture.Cases {
+		t.Run(test.Name, func(t *testing.T) {
+			gotBytes, err := json.Marshal(ClassifyConcurrentWriters(test.Delta, test.Scope, test.MaterialPaths, test.VerificationPaths, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want any
+			if err := json.Unmarshal(gotBytes, &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(test.Result, &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("classification mismatch\n got: %s\nwant: %s", gotBytes, test.Result)
+			}
+		})
+	}
+}

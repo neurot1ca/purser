@@ -12,6 +12,7 @@ FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "delta.json"
 COMPUTE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "compute_delta.json"
 OUT_OF_SCOPE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "out_of_scope.json"
 ATTRIBUTION_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "attribution.json"
+CONCURRENT_WRITERS_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "concurrent_writers.json"
 sys.path.insert(0, str(ORCHESTRATOR))
 import ledger
 import project_profile
@@ -204,3 +205,28 @@ def test_python_oracle_attribution_fixture():
         )
         generated["cases"].append({**case, "protected": ledger.detect_protected_paths(case["delta"], protected_paths=patterns), "result": {"delta": filtered, "known": known}})
     assert json.loads(ATTRIBUTION_FIXTURE.read_text(encoding="utf-8")) == generated
+
+
+CONCURRENT_WRITER_CASES = [
+    {"name": "non_ok_delta", "delta": {"status": "UNKNOWN"}, "scope": ["scope"]},
+    {"name": "invalid_scope", "delta": {"status": "OK", "changed_paths": []}, "scope": ["../escape"]},
+    {"name": "all_in_scope", "delta": {"status": "OK", "changed_paths": ["scope/a", "scope/b"], "path_line_counts": {"scope/a": 2, "scope/b": 3}}, "scope": ["scope"]},
+    {"name": "out_of_scope_no_halt", "delta": {"status": "OK", "changed_paths": ["outside/a"], "path_line_counts": {}}, "scope": ["scope"]},
+    {"name": "in_scope_ambiguous_overlap", "delta": {"status": "OK", "changed_paths": ["scope/a"], "ambiguous_paths": ["scope/a"], "path_line_counts": {}}, "scope": ["scope"]},
+    {"name": "material_path_inside", "delta": {"status": "OK", "changed_paths": ["outside/build/a"], "path_line_counts": {}}, "scope": ["scope"], "material_paths": ["outside/build"]},
+    {"name": "material_path_contains", "delta": {"status": "OK", "changed_paths": ["outside/vendor"], "path_line_counts": {}}, "scope": ["scope"], "material_paths": ["outside/vendor/generated/file"]},
+    {"name": "verification_path", "delta": {"status": "OK", "changed_paths": ["outside/check.py"], "path_line_counts": {}}, "scope": ["scope"], "verification_paths": ["outside/check.py"]},
+    {"name": "protected_touch", "delta": {"status": "OK", "changed_paths": [".env"], "path_line_counts": {}}, "scope": ["scope"]},
+    {"name": "preexisting_outside_scope", "delta": {"status": "OK", "changed_paths": ["scope/a"], "preexisting_paths": ["outside/old"], "path_line_counts": {"scope/a": 1}}, "scope": ["scope"]},
+]
+
+
+def test_python_oracle_concurrent_writers_fixture():
+    generated = {"oracle": "Python ledger.classify_concurrent_writers", "cases": []}
+    for case in CONCURRENT_WRITER_CASES:
+        result = ledger.classify_concurrent_writers(
+            case["delta"], case["scope"], material_paths=case.get("material_paths", []),
+            verification_paths=case.get("verification_paths", []),
+        )
+        generated["cases"].append({**case, "result": result})
+    assert json.loads(CONCURRENT_WRITERS_FIXTURE.read_text(encoding="utf-8")) == generated
