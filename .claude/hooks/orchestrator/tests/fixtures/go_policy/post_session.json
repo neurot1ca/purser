@@ -1,0 +1,252 @@
+{
+  "cases": [
+    {
+      "bundle": {
+        "claude_review_mode": "AUDIT",
+        "findings": [],
+        "status": "OK"
+      },
+      "lease": {
+        "conflicts": [],
+        "owners": {
+          "owner-sync_success_releases": {
+            "acquired_at": 1700000000.0,
+            "deadline_at": 1700007200.0,
+            "job_id": null,
+            "queued_at": 1700000000.0,
+            "released_at": 1700000000.0,
+            "scope": [
+              "src"
+            ],
+            "state": "RELEASED",
+            "task_id": "session-sync_success_releases"
+          }
+        },
+        "version": 1
+      },
+      "name": "sync_success_releases",
+      "pending": false,
+      "repository": "__REPO__",
+      "session": {
+        "checksum": "80a488dcefa6f4284258923d1b01009a243f032f41613aca774d80766b86d129",
+        "payload": {
+          "last_outcome": {
+            "claude_review_mode": "AUDIT",
+            "findings": [],
+            "status": "OK"
+          },
+          "live_thread": {
+            "effort": "high",
+            "model": "gpt-6-luna",
+            "route": "operation",
+            "task_contract_grounded": false,
+            "task_id": "session-sync_success_releases",
+            "thread_id": "thread-p109"
+          },
+          "pending_call_baseline": null,
+          "task_id": "session-sync_success_releases"
+        },
+        "schema_version": 1
+      },
+      "thread": {
+        "project_root": "__REPO__",
+        "thread_id": "thread-p109"
+      }
+    },
+    {
+      "bundle": {
+        "claude_review_mode": "AUDIT",
+        "findings": [],
+        "status": "OK"
+      },
+      "lease": {
+        "conflicts": [],
+        "owners": {
+          "owner-worktree_success_retains": {
+            "acquired_at": 1700000000.0,
+            "deadline_at": 1700007200.0,
+            "job_id": null,
+            "queued_at": 1700000000.0,
+            "retention_after": 1700007200.0,
+            "scope": [
+              "src"
+            ],
+            "state": "ACTIVE",
+            "task_id": "session-worktree_success_retains"
+          }
+        },
+        "version": 1
+      },
+      "name": "worktree_success_retains",
+      "pending": false,
+      "repository": "__REPO__",
+      "session": {
+        "checksum": "9e8d706a838ed13041935907fcef4bbc52636ca8e95e64c4297c244ec75cbc2e",
+        "payload": {
+          "last_outcome": {
+            "claude_review_mode": "AUDIT",
+            "findings": [],
+            "status": "OK"
+          },
+          "live_thread": {
+            "effort": "high",
+            "model": "gpt-6-luna",
+            "route": "operation",
+            "task_contract_grounded": false,
+            "task_id": "session-worktree_success_retains",
+            "thread_id": "thread-p109"
+          },
+          "pending_call_baseline": null,
+          "task_id": "session-worktree_success_retains"
+        },
+        "schema_version": 1
+      },
+      "thread": {
+        "project_root": "__REPO__",
+        "thread_id": "thread-p109"
+      }
+    },
+    {
+      "bundle": {
+        "claude_review_mode": "AUDIT",
+        "findings": [],
+        "status": "OK"
+      },
+      "lease": null,
+      "name": "plan_without_lease",
+      "pending": false,
+      "repository": "__REPO__",
+      "session": {
+        "checksum": "9ecd1b72c1d7502fd48d7b008177e2694a437a14740a25b4cf18a0d41ce51b5a",
+        "payload": {
+          "last_outcome": {
+            "claude_review_mode": "AUDIT",
+            "findings": [],
+            "status": "OK"
+          },
+          "live_thread": {
+            "effort": "high",
+            "model": "gpt-6-luna",
+            "phase": "plan",
+            "route": "operation",
+            "scope": [],
+            "task_contract_grounded": false,
+            "task_id": "session-plan_without_lease",
+            "thread_id": "thread-p109"
+          },
+          "pending_call_baseline": null,
+          "task_id": "session-plan_without_lease"
+        },
+        "schema_version": 1
+      },
+      "thread": {
+        "project_root": "__REPO__",
+        "thread_id": "thread-p109"
+      }
+    },
+    {
+      "bundle": {
+        "claude_review_mode": "FULL",
+        "findings": [
+          {
+            "code": "LEDGER_WRITE_FAILED",
+            "message": "The session record could not be written atomically."
+          }
+        ],
+        "status": "OK"
+      },
+      "lease": {
+        "conflicts": [],
+        "owners": {
+          "owner-ledger_save_failure": {
+            "acquired_at": 1700000000.0,
+            "deadline_at": 1700007200.0,
+            "job_id": null,
+            "queued_at": 1700000000.0,
+            "released_at": 1700000000.0,
+            "scope": [
+              "src"
+            ],
+            "state": "RELEASED",
+            "task_id": "session-ledger_save_failure"
+          }
+        },
+        "version": 1
+      },
+      "name": "ledger_save_failure",
+      "pending": false,
+      "repository": "__REPO__",
+      "session": null,
+      "thread": null
+    },
+    {
+      "bundle": {
+        "claude_review_mode": "AUDIT",
+        "findings": [],
+        "status": "OK"
+      },
+      "lease": {
+        "conflicts": [],
+        "owners": {
+          "owner-pending_already_gone": {
+            "acquired_at": 1700000000.0,
+            "deadline_at": 1700007200.0,
+            "job_id": null,
+            "queued_at": 1700000000.0,
+            "released_at": 1700000000.0,
+            "scope": [
+              "src"
+            ],
+            "state": "RELEASED",
+            "task_id": "session-pending_already_gone"
+          }
+        },
+        "version": 1
+      },
+      "name": "pending_already_gone",
+      "pending": false,
+      "repository": "__REPO__",
+      "session": {
+        "checksum": "b7c7144812361e21a9c77e4c8f7691a1f745350c7697d90103b6766504073dfe",
+        "payload": {
+          "last_outcome": {
+            "claude_review_mode": "AUDIT",
+            "findings": [],
+            "status": "OK"
+          },
+          "live_thread": {
+            "effort": "high",
+            "model": "gpt-6-luna",
+            "phase": "operation",
+            "route": "operation",
+            "scope": [],
+            "task_contract_grounded": false,
+            "task_id": "session-pending_already_gone",
+            "thread_id": "thread-p109"
+          },
+          "pending_call_baseline": null,
+          "task_id": "session-pending_already_gone"
+        },
+        "schema_version": 1
+      },
+      "thread": {
+        "project_root": "__REPO__",
+        "thread_id": "thread-p109"
+      }
+    },
+    {
+      "bundle": {
+        "claude_review_mode": "AUDIT",
+        "findings": [],
+        "status": "OK"
+      },
+      "lease": null,
+      "name": "bypass_without_routing",
+      "pending": false,
+      "repository": "__REPO__",
+      "session": null,
+      "thread": null
+    }
+  ],
+  "oracle": "Python codex post_tool_use session and cleanup tail"
+}
