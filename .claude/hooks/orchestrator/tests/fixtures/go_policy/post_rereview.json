@@ -1,0 +1,243 @@
+{
+  "oracle": "Python codex.post_tool_use Reviewer-1 post-repair re-review and final audit receipt",
+  "cases": [
+    {
+      "name": "rereview_clears",
+      "input": {
+        "repair_ran": true,
+        "repair_status": "SUCCEEDED",
+        "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+        "implementer": "codex-main",
+        "model": "gpt-6-sol",
+        "effort": "medium",
+        "validation": "PASS",
+        "worker_validation": {
+          "artifacts": [],
+          "commands": [
+            "fixture"
+          ],
+          "exit_codes": [
+            0
+          ],
+          "source": "WORKER_REPORTED",
+          "status": "PASS",
+          "summary": "Structured worker validation reported PASS."
+        },
+        "hook_checks": null,
+        "thread_id": "fixture-thread",
+        "changed_paths": [
+          "scope/file with spaces.py"
+        ],
+        "delta_lines": 2,
+        "delta_files": 1,
+        "delta": {
+          "status": "OK"
+        },
+        "task_contract_grounded": true,
+        "task_id": "fixture-task",
+        "route": "normal",
+        "phase": "implementation",
+        "reviewer1_scope": null,
+        "rereview": {
+          "result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "review_status": "COMPLETED",
+          "validation": "PASS",
+          "provider": "agy",
+          "reviewer1_model_requested": "gemini-3.8-flash-high",
+          "findings": []
+        }
+      },
+      "expected": {
+        "micro_repair_cleared_review": true,
+        "repair_status": "SUCCEEDED",
+        "claude_review_mode": "AUDIT",
+        "audit_receipt": {
+          "commit_command": "git add \"scope/file with spaces.py\" && git commit -m \"feat(fixture-task): implement changes\"",
+          "effort": "medium",
+          "implementer": "codex-main",
+          "model": "gpt-6-sol",
+          "reviewer1_verdict": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "validation_summary": "validation=PASS, delta=2L/1F",
+          "verdict": "READY_FOR_ONE_TURN_ACCEPT"
+        }
+      }
+    },
+    {
+      "name": "rereview_still_finds",
+      "input": {
+        "repair_ran": true,
+        "repair_status": "CHANGES_STILL_REQUIRED",
+        "reviewer1_result": "CHANGES_REQUIRED",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+        "implementer": "codex-main",
+        "model": "gpt-6-sol",
+        "effort": "medium",
+        "validation": "PASS",
+        "worker_validation": {
+          "artifacts": [],
+          "commands": [
+            "fixture"
+          ],
+          "exit_codes": [
+            0
+          ],
+          "source": "WORKER_REPORTED",
+          "status": "PASS",
+          "summary": "Structured worker validation reported PASS."
+        },
+        "hook_checks": null,
+        "thread_id": "fixture-thread",
+        "changed_paths": [
+          "scope/file with spaces.py"
+        ],
+        "delta_lines": 2,
+        "delta_files": 1,
+        "delta": {
+          "status": "OK"
+        },
+        "task_contract_grounded": true,
+        "task_id": "fixture-task",
+        "route": "normal",
+        "phase": "implementation",
+        "reviewer1_scope": null,
+        "rereview": {
+          "result": "CHANGES_REQUIRED",
+          "review_status": "COMPLETED",
+          "validation": "PASS",
+          "provider": "agy",
+          "reviewer1_model_requested": "gemini-3.8-flash-high",
+          "findings": [
+            {
+              "code": "REVIEW",
+              "message": "still required"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "micro_repair_cleared_review": false,
+        "repair_status": "CHANGES_STILL_REQUIRED",
+        "claude_review_mode": "FULL",
+        "audit_receipt": null
+      }
+    },
+    {
+      "name": "rereview_unavailable",
+      "input": {
+        "repair_ran": true,
+        "repair_status": "CHANGES_STILL_REQUIRED",
+        "reviewer1_result": "REVIEWER1_UNAVAILABLE",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+        "implementer": "codex-main",
+        "model": "gpt-6-sol",
+        "effort": "medium",
+        "validation": "UNKNOWN",
+        "worker_validation": {
+          "artifacts": [],
+          "commands": [
+            "fixture"
+          ],
+          "exit_codes": [
+            0
+          ],
+          "source": "WORKER_REPORTED",
+          "status": "PASS",
+          "summary": "Structured worker validation reported PASS."
+        },
+        "hook_checks": null,
+        "thread_id": "fixture-thread",
+        "changed_paths": [
+          "scope/file with spaces.py"
+        ],
+        "delta_lines": 2,
+        "delta_files": 1,
+        "delta": {
+          "status": "OK"
+        },
+        "task_contract_grounded": true,
+        "task_id": "fixture-task",
+        "route": "normal",
+        "phase": "implementation",
+        "reviewer1_scope": null,
+        "rereview": {
+          "result": "REVIEWER1_UNAVAILABLE",
+          "review_status": "UNAVAILABLE",
+          "validation": "UNKNOWN",
+          "provider": "agy",
+          "reviewer1_model_requested": "gemini-3.8-flash-high",
+          "findings": []
+        }
+      },
+      "expected": {
+        "micro_repair_cleared_review": false,
+        "repair_status": "CHANGES_STILL_REQUIRED",
+        "claude_review_mode": "FULL",
+        "audit_receipt": null
+      }
+    },
+    {
+      "name": "no_repair_initial_review_receipt",
+      "input": {
+        "repair_ran": false,
+        "repair_status": null,
+        "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+        "implementer": "codex-main",
+        "model": "gpt-6-sol",
+        "effort": "medium",
+        "validation": "PASS",
+        "worker_validation": {
+          "artifacts": [],
+          "commands": [
+            "fixture"
+          ],
+          "exit_codes": [
+            0
+          ],
+          "source": "WORKER_REPORTED",
+          "status": "PASS",
+          "summary": "Structured worker validation reported PASS."
+        },
+        "hook_checks": null,
+        "thread_id": "fixture-thread",
+        "changed_paths": [
+          "scope/file with spaces.py"
+        ],
+        "delta_lines": 2,
+        "delta_files": 1,
+        "delta": {
+          "status": "OK"
+        },
+        "task_contract_grounded": true,
+        "task_id": "fixture-task",
+        "route": "normal",
+        "phase": "implementation",
+        "reviewer1_scope": null,
+        "rereview": null
+      },
+      "expected": {
+        "micro_repair_cleared_review": false,
+        "repair_status": null,
+        "claude_review_mode": "AUDIT",
+        "audit_receipt": {
+          "commit_command": "git add \"scope/file with spaces.py\" && git commit -m \"feat(fixture-task): implement changes\"",
+          "effort": "medium",
+          "implementer": "codex-main",
+          "model": "gpt-6-sol",
+          "reviewer1_verdict": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+          "validation_summary": "validation=PASS, delta=2L/1F",
+          "verdict": "READY_FOR_ONE_TURN_ACCEPT"
+        }
+      }
+    }
+  ]
+}
