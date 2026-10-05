@@ -61,6 +61,102 @@ function stubToolCall(on, calls: unknown[]) {
   on('tool.call', (_$, e) => { calls.push(e); return { result: JSON.stringify(e) } })
 }
 
+const postOutput = JSON.stringify({
+  hookSpecificOutput: {
+    hookEventName: 'PostToolUse', updatedToolOutput: [{ type: 'text', text: 'reviewed' }],
+    additionalContext: 'review required',
+  },
+  systemMessage: 'Purser post review complete',
+})
+
+function postEvent(hook_event_name: 'PostToolUse' | 'PostToolUseFailure') {
+  return {
+    hook_event_name, session_id: 'p66-session', cwd: 'C:/p66-repo',
+    tool_name: 'mcp__plugin_purser_codex-main__codex', tool_use_id: 'post-call',
+    tool_response: { content: 'done' },
+  }
+}
+
+test('maps Go Post outputs for both hook events', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  const failureOutput = JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PostToolUseFailure', additionalContext: 'outcome unknown' },
+    systemMessage: 'Purser failure recorded',
+  })
+  let invocation = 0
+  stubGo(on, postOutput, calls, toasts, {
+    OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_POST: '1',
+  }, undefined, undefined, () => ({ stdout: invocation++ === 0 ? postOutput : failureOutput }))
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  const success = await $.classic.PostToolUse(postEvent('PostToolUse'))
+  expect(success).toEqual({
+    updatedToolOutput: [{ type: 'text', text: 'reviewed' }],
+    additionalContext: ['review required'],
+  })
+  expect(toasts).toContain('Purser post review complete')
+  expect(JSON.parse(calls[0])).toMatchObject({ hook_event_name: 'PostToolUse', tool_use_id: 'post-call' })
+
+  const failure = await $.classic.PostToolUseFailure(postEvent('PostToolUseFailure'))
+  expect(failure).toEqual({ additionalContext: ['outcome unknown'] })
+  expect(toasts).toContain('Purser failure recorded')
+  expect(JSON.parse(calls[1])).toMatchObject({ hook_event_name: 'PostToolUseFailure', tool_use_id: 'post-call' })
+})
+
+test('empty Go Post response passes through', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  stubGo(on, '', calls, toasts, {
+    OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_POST: '1',
+  })
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({})
+  expect(calls).toHaveLength(1)
+})
+
+test('invalid Go Post JSON passes through without throwing', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  stubGo(on, '{', calls, toasts, {
+    OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_POST: '1',
+  })
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({})
+  expect(calls).toHaveLength(1)
+})
+
+test('Post mod skips an event already handled by the Python command hook', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  stubGo(on, postOutput, calls, toasts, {
+    OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_POST: '1',
+  })
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  const event = postEvent('PostToolUse')
+  Object.assign(event, { hookSpecificOutput: { hookEventName: 'PostToolUse' } })
+  await expect($.classic.PostToolUse(event)).resolves.toEqual({})
+  expect(calls).toEqual([])
+})
+
+test('Post mod mapping is inactive by default', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  stubGo(on, postOutput, calls, toasts)
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({})
+  expect(calls).toEqual([])
+})
+
 function observed(toasts: string[]) {
   const result = toasts.find(line => line.startsWith('p66-result:'))
   expect(result).toBeDefined()

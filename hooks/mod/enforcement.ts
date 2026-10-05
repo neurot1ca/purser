@@ -1,3 +1,81 @@
+type PostEvent = 'PostToolUse' | 'PostToolUseFailure'
+
+function mapPostToolUse(event: PostEvent, stdout: string): {
+  updatedToolOutput?: unknown
+  additionalContext?: string[]
+  systemMessage?: string
+} {
+  if (!stdout.trim()) return {}
+  const output = JSON.parse(stdout)
+  const specific = output?.hookSpecificOutput
+  if (specific?.hookEventName !== event) throw new Error(`invalid Go ${event} output`)
+  if (specific.updatedToolOutput !== undefined && !Array.isArray(specific.updatedToolOutput)) {
+    throw new Error(`invalid Go ${event} updatedToolOutput`)
+  }
+  if (specific.additionalContext !== undefined && typeof specific.additionalContext !== 'string') {
+    throw new Error(`invalid Go ${event} additionalContext`)
+  }
+  if (output.systemMessage !== undefined && typeof output.systemMessage !== 'string') {
+    throw new Error(`invalid Go ${event} systemMessage`)
+  }
+  return {
+    ...(specific.updatedToolOutput !== undefined ? { updatedToolOutput: specific.updatedToolOutput } : {}),
+    ...(specific.additionalContext ? { additionalContext: [specific.additionalContext] } : {}),
+    ...(output.systemMessage ? { systemMessage: output.systemMessage } : {}),
+  }
+}
+
+async function goBinary($): Promise<string> {
+  const os = await $.env.get('OS')
+  const ostype = await $.env.get('OSTYPE')
+  const architecture = await $.env.get('PROCESSOR_ARCHITECTURE')
+  const hosttype = await $.env.get('HOSTTYPE')
+  let goos = os === 'Windows_NT' ? 'windows' :
+    /darwin/i.test(ostype ?? '') ? 'darwin' : /linux/i.test(ostype ?? '') ? 'linux' : ''
+  let goarch = /^(amd64|x86_64)$/i.test(architecture ?? hosttype ?? '') ? 'amd64' :
+    /^(arm64|aarch64)$/i.test(architecture ?? hosttype ?? '') ? 'arm64' : ''
+  if (!goos || !goarch) {
+    const uname = await $.process.run(['uname', '-s', '-m'], { timeoutMs: 1000 })
+    if (uname.exitCode !== 0) throw new Error('platform detection failed')
+    const [system, machine] = uname.stdout.trim().split(/\s+/)
+    goos ||= /darwin/i.test(system ?? '') ? 'darwin' : /linux/i.test(system ?? '') ? 'linux' : ''
+    goarch ||= /^(amd64|x86_64)$/i.test(machine ?? '') ? 'amd64' :
+      /^(arm64|aarch64)$/i.test(machine ?? '') ? 'arm64' : ''
+  }
+  const osName = goos.toLowerCase()
+  const archName = goarch.toLowerCase()
+  if (!['windows/amd64', 'windows/arm64', 'linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64'].includes(`${osName}/${archName}`)) {
+    throw new Error(`unsupported platform: ${goos}/${goarch}`)
+  }
+  return `${$.plugin.root}/bin/purser-hook-${osName}-${archName}${osName === 'windows' ? '.exe' : ''}`
+}
+
+async function handlePostToolUse(event: PostEvent, $, e, next) {
+  const prior = await next(e)
+  if (await $.env.get('PURSER_MOD_POST') !== '1') return prior
+  if (e.hookSpecificOutput?.hookEventName === event ||
+      e.tool_response?.hookSpecificOutput?.hookEventName === event) return prior
+  try {
+    const binary = await goBinary($)
+    const result = await $.process.run([binary], {
+      cwd: e.cwd,
+      stdin: JSON.stringify(e),
+      timeoutMs: 60000,
+    })
+    if (result.exitCode !== 0) throw new Error(`Go ${event} helper exited ${result.exitCode}`)
+    const mapped = mapPostToolUse(event, result.stdout)
+    if (mapped.systemMessage) await $.ui.toast(mapped.systemMessage)
+    if (!mapped.updatedToolOutput && !mapped.additionalContext && !mapped.systemMessage) return prior
+    return {
+      ...prior,
+      ...(mapped.updatedToolOutput ? { updatedToolOutput: mapped.updatedToolOutput } : {}),
+      ...(mapped.additionalContext ? { additionalContext: [...(prior.additionalContext ?? []), ...mapped.additionalContext] } : {}),
+    }
+  } catch {
+    return prior
+  }
+}
+
 export function register(on) {
   const syncTools = new Set([
     'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
@@ -39,6 +117,9 @@ export function register(on) {
     }
   }
 
+  on("classic.PostToolUse", ($, e, next) => handlePostToolUse('PostToolUse', $, e, next))
+  on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse('PostToolUseFailure', $, e, next))
+
   on('classic.PreToolUse', async ($, e, next) => {
     const prior = await next(e)
     if (prior.deny !== undefined) return prior
@@ -48,29 +129,9 @@ export function register(on) {
     let helperCwd = ''
     let helperSessionId = ''
     try {
-      const os = await $.env.get('OS')
-      const ostype = await $.env.get('OSTYPE')
-      const architecture = await $.env.get('PROCESSOR_ARCHITECTURE')
-      const hosttype = await $.env.get('HOSTTYPE')
-      let goos = os === 'Windows_NT' ? 'windows' :
-        /darwin/i.test(ostype ?? '') ? 'darwin' : /linux/i.test(ostype ?? '') ? 'linux' : ''
-      let goarch = /^(amd64|x86_64)$/i.test(architecture ?? hosttype ?? '') ? 'amd64' :
-        /^(arm64|aarch64)$/i.test(architecture ?? hosttype ?? '') ? 'arm64' : ''
-      if (!goos || !goarch) {
-        const uname = await $.process.run(['uname', '-s', '-m'], { timeoutMs: 1000 })
-        if (uname.exitCode !== 0) throw new Error('platform detection failed')
-        const [system, machine] = uname.stdout.trim().split(/\s+/)
-        goos ||= /darwin/i.test(system ?? '') ? 'darwin' : /linux/i.test(system ?? '') ? 'linux' : ''
-        goarch ||= /^(amd64|x86_64)$/i.test(machine ?? '') ? 'amd64' :
-          /^(arm64|aarch64)$/i.test(machine ?? '') ? 'arm64' : ''
-      }
-      const osName = goos.toLowerCase()
-      const archName = goarch.toLowerCase()
-      if (!['windows/amd64', 'windows/arm64', 'linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64'].includes(`${osName}/${archName}`)) {
-        throw new Error(`unsupported platform: ${goos}/${goarch}`)
-      }
+      const binary = await goBinary($)
       const sessionId = await $.session.id()
-      helperBinary = `${$.plugin.root}/bin/purser-hook-${osName}-${archName}${osName === 'windows' ? '.exe' : ''}`
+      helperBinary = binary
       helperSessionId = sessionId
       const cwd = await $.session.cwd()
       helperCwd = cwd
