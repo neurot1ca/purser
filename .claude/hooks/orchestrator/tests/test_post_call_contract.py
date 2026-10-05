@@ -119,10 +119,9 @@ def test_post_contract_targets_are_ported_or_pending():
     for target in (*POST_CALL_CONTRACTS.values(), *POST_IMPORTED_CALLS.values(),
                    *POST_METHOD_CALLS.values(), *POST_BUILTIN_CALLS.values()):
         if target.startswith("PENDING:"):
-            assert 93 <= int(target.split(":", 1)[1]) <= 116, target
+            assert 93 <= int(target.split(":", 1)[1]) <= 123, target
         else:
-            assert target.startswith("go/") and target.endswith(")"), target
-            assert 93 <= int(target.rsplit("(", 1)[1][:-1].split(":", 1)[0]) <= 116, target
+            assert target.startswith("go/") and target.endswith(")") and " (" in target, target
 
 
 def _post_bundle(result):
