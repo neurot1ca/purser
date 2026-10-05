@@ -1,0 +1,861 @@
+{
+  "oracle": "Python codex.post_tool_use post-repair recomputation",
+  "cases": [
+    {
+      "case": {
+        "name": "repair_in_scope",
+        "repair": [
+          {
+            "path": "scope/file.txt",
+            "content": "repaired\n"
+          }
+        ]
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "scope": [
+        "scope"
+      ],
+      "repair_delta": {
+        "status": "OK",
+        "code": "DELTA_COMPUTED",
+        "baseline_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "changed_file_count": 1,
+        "changed_line_count": 2,
+        "path_line_counts": {
+          "scope/file.txt": 2
+        },
+        "sources": {
+          "committed": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          },
+          "staged": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          },
+          "unstaged": {
+            "paths": [
+              "scope/file.txt"
+            ],
+            "changed_line_count": 2,
+            "path_line_counts": {
+              "scope/file.txt": 2
+            }
+          },
+          "scoped_manifest": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          }
+        },
+        "preexisting_paths": [],
+        "ambiguous_paths": [],
+        "current_scoped_manifest": []
+      },
+      "expected": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 2
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "delta_lines": 2,
+        "delta_files": 1,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "findings": [
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "SUCCEEDED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": true,
+        "delta_status": "OK"
+      },
+      "observed": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 2
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "delta_lines": 2,
+        "delta_files": 1,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "findings": [
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "SUCCEEDED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": true
+      }
+    },
+    {
+      "case": {
+        "name": "repair_out_of_scope",
+        "repair": [
+          {
+            "path": "outside/file.txt",
+            "content": "repaired\n"
+          }
+        ]
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "scope": [
+        "scope"
+      ],
+      "repair_delta": {
+        "status": "OK",
+        "code": "DELTA_COMPUTED",
+        "baseline_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "changed_paths": [
+          "outside/file.txt",
+          "scope/file.txt"
+        ],
+        "changed_file_count": 2,
+        "changed_line_count": 63,
+        "path_line_counts": {
+          "outside/file.txt": 2,
+          "scope/file.txt": 61
+        },
+        "sources": {
+          "committed": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          },
+          "staged": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          },
+          "unstaged": {
+            "paths": [
+              "outside/file.txt",
+              "scope/file.txt"
+            ],
+            "changed_line_count": 63,
+            "path_line_counts": {
+              "outside/file.txt": 2,
+              "scope/file.txt": 61
+            }
+          },
+          "scoped_manifest": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          }
+        },
+        "preexisting_paths": [],
+        "ambiguous_paths": [],
+        "current_scoped_manifest": []
+      },
+      "expected": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "outside/file.txt",
+            "scope/file.txt"
+          ],
+          "changed_file_count": 2,
+          "changed_line_count": 63
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": [
+            "outside/file.txt"
+          ]
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "outside/file.txt",
+          "scope/file.txt"
+        ],
+        "delta_lines": 63,
+        "delta_files": 2,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [],
+        "concurrent_writer": true,
+        "findings": [
+          {
+            "code": "OUT_OF_SCOPE_MODIFICATION",
+            "message": "1 file(s) modified outside declared scope: outside/file.txt"
+          },
+          {
+            "code": "FIX",
+            "message": "repair"
+          },
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "FAILED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": false,
+        "delta_status": "OK"
+      },
+      "observed": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "outside/file.txt",
+            "scope/file.txt"
+          ],
+          "changed_file_count": 2,
+          "changed_line_count": 63
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": [
+            "outside/file.txt"
+          ]
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "outside/file.txt",
+          "scope/file.txt"
+        ],
+        "delta_lines": 63,
+        "delta_files": 2,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [],
+        "concurrent_writer": true,
+        "findings": [
+          {
+            "code": "OUT_OF_SCOPE_MODIFICATION",
+            "message": "1 file(s) modified outside declared scope: outside/file.txt"
+          },
+          {
+            "code": "FIX",
+            "message": "repair"
+          },
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "FAILED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": false
+      }
+    },
+    {
+      "case": {
+        "name": "repair_protected_path",
+        "protected": [
+          "secrets/**"
+        ],
+        "repair": [
+          {
+            "path": "secrets/key.txt",
+            "content": "repaired\n"
+          }
+        ]
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "scope": [
+        "scope"
+      ],
+      "repair_delta": {
+        "status": "OK",
+        "code": "DELTA_COMPUTED",
+        "baseline_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "changed_paths": [
+          "scope/file.txt",
+          "secrets/key.txt"
+        ],
+        "changed_file_count": 2,
+        "changed_line_count": 63,
+        "path_line_counts": {
+          "scope/file.txt": 61,
+          "secrets/key.txt": 2
+        },
+        "sources": {
+          "committed": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          },
+          "staged": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          },
+          "unstaged": {
+            "paths": [
+              "scope/file.txt",
+              "secrets/key.txt"
+            ],
+            "changed_line_count": 63,
+            "path_line_counts": {
+              "secrets/key.txt": 2,
+              "scope/file.txt": 61
+            }
+          },
+          "scoped_manifest": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          }
+        },
+        "preexisting_paths": [],
+        "ambiguous_paths": [],
+        "current_scoped_manifest": []
+      },
+      "expected": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt",
+            "secrets/key.txt"
+          ],
+          "changed_file_count": 2,
+          "changed_line_count": 63
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": [
+            "secrets/key.txt"
+          ]
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "scope/file.txt",
+          "secrets/key.txt"
+        ],
+        "delta_lines": 63,
+        "delta_files": 2,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [
+          "secrets/key.txt"
+        ],
+        "concurrent_writer": true,
+        "findings": [
+          {
+            "code": "OUT_OF_SCOPE_MODIFICATION",
+            "message": "1 file(s) modified outside declared scope: secrets/key.txt"
+          },
+          {
+            "code": "FIX",
+            "message": "repair"
+          },
+          {
+            "code": "UNKNOWN_CONCURRENT_WRITER",
+            "message": "Concurrent-writer classification requires FULL Claude review; halt paths (1): secrets/key.txt"
+          },
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "FAILED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": false,
+        "delta_status": "OK"
+      },
+      "observed": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt",
+            "secrets/key.txt"
+          ],
+          "changed_file_count": 2,
+          "changed_line_count": 63
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": [
+            "secrets/key.txt"
+          ]
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "scope/file.txt",
+          "secrets/key.txt"
+        ],
+        "delta_lines": 63,
+        "delta_files": 2,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [
+          "secrets/key.txt"
+        ],
+        "concurrent_writer": true,
+        "findings": [
+          {
+            "code": "OUT_OF_SCOPE_MODIFICATION",
+            "message": "1 file(s) modified outside declared scope: secrets/key.txt"
+          },
+          {
+            "code": "FIX",
+            "message": "repair"
+          },
+          {
+            "code": "UNKNOWN_CONCURRENT_WRITER",
+            "message": "Concurrent-writer classification requires FULL Claude review; halt paths (1): secrets/key.txt"
+          },
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "FAILED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": false
+      }
+    },
+    {
+      "case": {
+        "name": "repair_no_change",
+        "repair": []
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "scope": [
+        "scope"
+      ],
+      "repair_delta": {
+        "status": "OK",
+        "code": "DELTA_COMPUTED",
+        "baseline_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "changed_file_count": 1,
+        "changed_line_count": 61,
+        "path_line_counts": {
+          "scope/file.txt": 61
+        },
+        "sources": {
+          "committed": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          },
+          "staged": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          },
+          "unstaged": {
+            "paths": [
+              "scope/file.txt"
+            ],
+            "changed_line_count": 61,
+            "path_line_counts": {
+              "scope/file.txt": 61
+            }
+          },
+          "scoped_manifest": {
+            "paths": [],
+            "changed_line_count": 0,
+            "path_line_counts": {}
+          }
+        },
+        "preexisting_paths": [],
+        "ambiguous_paths": [],
+        "current_scoped_manifest": []
+      },
+      "expected": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 61
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "delta_lines": 61,
+        "delta_files": 1,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "findings": [
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "SUCCEEDED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": true,
+        "delta_status": "OK"
+      },
+      "observed": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 61
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "delta_lines": 61,
+        "delta_files": 1,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "findings": [
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "SUCCEEDED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": true
+      }
+    },
+    {
+      "case": {
+        "name": "repair_delta_failure",
+        "delta_failure": true,
+        "repair": [
+          {
+            "path": "scope/file.txt",
+            "content": "repaired\n"
+          }
+        ]
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "scope": [
+        "scope"
+      ],
+      "repair_delta": {
+        "status": "UNKNOWN",
+        "code": "DELTA_INSPECTION_FAILED",
+        "message": "fixture delta failure",
+        "changed_paths": null
+      },
+      "expected": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 61
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "delta_lines": 61,
+        "delta_files": 1,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "findings": [
+          {
+            "code": "DELTA_INSPECTION_FAILED",
+            "message": "Post-repair delta could not be computed; forcing FULL Claude review."
+          },
+          {
+            "code": "FIX",
+            "message": "repair"
+          },
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "FAILED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": false,
+        "delta_status": "UNKNOWN"
+      },
+      "observed": {
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 61
+        },
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "known_concurrent_scopes": [],
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "delta_lines": 61,
+        "delta_files": 1,
+        "current_head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "findings": [
+          {
+            "code": "DELTA_INSPECTION_FAILED",
+            "message": "Post-repair delta could not be computed; forcing FULL Claude review."
+          },
+          {
+            "code": "FIX",
+            "message": "repair"
+          },
+          {
+            "code": "WORKER_VALIDATION_UNVERIFIED",
+            "message": "Implementer validation was unverified: Done"
+          },
+          {
+            "code": "TASK_CONTRACT_NOT_GROUNDED",
+            "message": "Task contract is not grounded (missing objective or criteria); forcing FULL Claude review."
+          }
+        ],
+        "force_full_review": null,
+        "micro_repair": {
+          "attempted": true,
+          "status": "FAILED",
+          "initial_findings": [
+            {
+              "code": "FIX",
+              "message": "repair"
+            }
+          ]
+        },
+        "micro_repair_cleared_review": false
+      }
+    }
+  ]
+}
