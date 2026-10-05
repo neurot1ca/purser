@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestPrepareJobReplayPythonFixture(t *testing.T) {
@@ -19,6 +20,9 @@ func TestPrepareJobReplayPythonFixture(t *testing.T) {
 		Cases []struct {
 			Name          string              `json:"name"`
 			Seed          string              `json:"seed"`
+			BaseTracked   string              `json:"base_tracked"`
+			Resolver      string              `json:"resolver"`
+			Script        string              `json:"script"`
 			TargetChanges []map[string]string `json:"target_changes"`
 			WorkerChanges []map[string]string `json:"worker_changes"`
 			Result        map[string]any      `json:"result"`
@@ -32,7 +36,7 @@ func TestPrepareJobReplayPythonFixture(t *testing.T) {
 		t.Run(c.Name, func(t *testing.T) {
 			base := t.TempDir()
 			repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
-			snapshot := initReplayRepository(t, repo)
+			snapshot := initReplayRepository(t, repo, c.BaseTracked)
 			git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
 			applyReplayChanges(t, repo, c.TargetChanges)
 			applyReplayChanges(t, worker, c.WorkerChanges)
@@ -77,17 +81,31 @@ func TestPrepareJobReplayPythonFixture(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, runErr := PrepareJobReplay(repo, worker, snapshot, recovery)
-			if c.Name == "direct_apply_failure" {
-				e, ok := runErr.(*inspectionError)
-				if !ok || e.Code != "REPLAY_THREE_WAY_NOT_PORTED" {
-					t.Fatalf("got %v", runErr)
+			resolver := func(conflicts []string, current string) (bool, error) {
+				switch c.Resolver {
+				case "clean":
+					if err := os.WriteFile(filepath.Join(worker, "tracked.txt"), []byte("resolved\n"), 0600); err != nil {
+						return false, err
+					}
+				case "markers":
+					if err := os.WriteFile(filepath.Join(worker, "tracked.txt"), []byte("<<<<<<< ours\n=======\n>>>>>>> theirs\n"), 0600); err != nil {
+						return false, err
+					}
+				case "raises":
+					return false, os.ErrInvalid
 				}
-				if readReplayState(t, recovery)["state"] != "PREPARING" {
-					t.Fatal("PREPARING recovery state was not retained")
-				}
-				return
+				return true, nil
 			}
+			runner := replayGitRunner(runGit)
+			if c.Script == "ls_tree_error" {
+				runner = func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+					if operation == "checking replay source path" {
+						return nil, &inspectionError{"GIT_FAILED", "scripted ls-tree inspection failure"}
+					}
+					return runGit(root, args, timeout, operation, input, env)
+				}
+			}
+			got, runErr := prepareJobReplay(repo, worker, snapshot, recovery, resolver, runner)
 			if runErr != nil {
 				t.Fatal(runErr)
 			}
@@ -108,13 +126,16 @@ func applyReplayChanges(t *testing.T, root string, changes []map[string]string) 
 	}
 }
 
-func initReplayRepository(t *testing.T, root string) string {
+func initReplayRepository(t *testing.T, root, tracked string) string {
 	t.Helper()
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
 	git(t, root, "init", "-q")
-	writePatchTestFile(t, filepath.Join(root, "tracked.txt"), []byte("base\n"))
+	if tracked == "" {
+		tracked = "base\n"
+	}
+	writePatchTestFile(t, filepath.Join(root, "tracked.txt"), []byte(tracked))
 	writePatchTestFile(t, filepath.Join(root, "other.txt"), []byte("other\n"))
 	git(t, root, "add", "--all")
 	git(t, root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture")

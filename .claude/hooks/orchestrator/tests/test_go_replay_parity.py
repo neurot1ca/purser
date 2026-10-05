@@ -23,7 +23,13 @@ CASES = [
     {"name": "unreadable_state", "seed": "UNREADABLE"},
     {"name": "resumed_preparing", "seed": "PREPARING", "target_changes": [{"path": "other.txt", "content": "target\n"}], "worker_changes": [{"path": "tracked.txt", "content": "worker\n"}]},
     {"name": "empty_patch", "target_changes": [{"path": "other.txt", "content": "target\n"}]},
-    {"name": "direct_apply_failure", "target_changes": [{"path": "tracked.txt", "content": "target\n"}], "worker_changes": [{"path": "tracked.txt", "content": "worker\n"}]},
+    {"name": "three_way_success", "base_tracked": "alpha\nmiddle\nomega\n", "target_changes": [{"path": "tracked.txt", "content": "TARGET\nmiddle\nomega\n"}], "worker_changes": [{"path": "tracked.txt", "content": "alpha\nmiddle\nWORKER\n"}]},
+    {"name": "three_way_conflict", "target_changes": [{"path": "tracked.txt", "content": "target\n"}], "worker_changes": [{"path": "tracked.txt", "content": "worker\n"}]},
+    {"name": "resolver_clean", "target_changes": [{"path": "tracked.txt", "content": "target\n"}], "worker_changes": [{"path": "tracked.txt", "content": "worker\n"}], "resolver": "clean"},
+    {"name": "resolver_markers_remain", "target_changes": [{"path": "tracked.txt", "content": "target\n"}], "worker_changes": [{"path": "tracked.txt", "content": "worker\n"}], "resolver": "markers"},
+    {"name": "resolver_raises", "target_changes": [{"path": "tracked.txt", "content": "target\n"}], "worker_changes": [{"path": "tracked.txt", "content": "worker\n"}], "resolver": "raises"},
+    {"name": "new_path_excluded", "target_changes": [{"path": "tracked.txt", "content": "target\n"}], "worker_changes": [{"path": "tracked.txt", "content": "worker\n"}, {"path": "new.txt", "content": "new\n"}]},
+    {"name": "ls_tree_inspection_error", "target_changes": [{"path": "tracked.txt", "content": "target\n"}], "worker_changes": [{"path": "tracked.txt", "content": "worker\n"}], "script": "ls_tree_error"},
 ]
 
 
@@ -35,10 +41,10 @@ def _output(root, *args):
     return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def _repo(root):
+def _repo(root, case):
     root.mkdir(parents=True)
     _git(root, "init", "-q")
-    for name, content in {"tracked.txt": b"base\n", "other.txt": b"other\n"}.items():
+    for name, content in {"tracked.txt": case.get("base_tracked", "base\n").encode(), "other.txt": b"other\n"}.items():
         (root / name).write_bytes(content)
     _git(root, "add", "--all")
     env = {**os.environ, "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"}
@@ -71,7 +77,7 @@ def _normalize(value, snapshot, target):
 
 def _case(case, root):
     repo, worker, recovery = root / "repo", root / "worker", root / "recovery"
-    snapshot = _repo(repo)
+    snapshot = _repo(repo, case)
     _git(repo, "config", "core.autocrlf", "false")
     _git(repo, "worktree", "add", "--detach", str(worker.resolve()), "HEAD")
     _changes(repo, case.get("target_changes", []))
@@ -91,8 +97,24 @@ def _case(case, root):
                 _copy_worker_tree(worker, recovery / "worker-tree")
             if seed == "RESOLVING": _copy_worker_tree(worker, recovery / "worker-tree")
             (recovery / "state.json").write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
+    original_run_git = ledger._run_git
+    if case.get("script") == "ls_tree_error":
+        def scripted_run_git(root, arguments, timeout, operation, **kwargs):
+            if operation == "checking replay source path":
+                raise ledger._InspectionError("GIT_FAILED", "scripted ls-tree inspection failure")
+            return original_run_git(root, arguments, timeout, operation, **kwargs)
+        ledger._run_git = scripted_run_git
+    def resolver(conflicts, current):
+        if case["resolver"] == "raises":
+            raise RuntimeError("scripted resolver failure")
+        if case["resolver"] == "clean":
+            (worker / "tracked.txt").write_text("resolved\n", encoding="utf-8")
+        elif case["resolver"] == "markers":
+            (worker / "tracked.txt").write_text("<<<<<<< ours\n=======\n>>>>>>> theirs\n", encoding="utf-8")
+        return True
     try:
-        result = ledger.prepare_job_replay(repo, worker, snapshot, recovery)
+        result = ledger.prepare_job_replay(repo, worker, snapshot, recovery,
+                                           resolver=resolver if case.get("resolver") else None)
         error = None
     except ledger._InspectionError as exc:
         result, error = None, {"code": exc.code, "message": exc.message}
@@ -111,6 +133,7 @@ def _case(case, root):
                 tree.append({"path": path.relative_to(worker_tree).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
             elif path.is_symlink():
                 tree.append({"path": path.relative_to(worker_tree).as_posix(), "symlink": os.readlink(path)})
+    ledger._run_git = original_run_git
     return {**case, "result": _normalize(result, snapshot, target), "error": error,
             "recovery": {"files": sorted(path.name for path in recovery.iterdir()) if recovery.exists() else [],
                          "state": state, "worker_patch": (recovery / "worker.patch").exists(), "worker_tree": tree}}
