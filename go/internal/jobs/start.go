@@ -2,24 +2,35 @@ package jobs
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
+
+	"purser-hook/internal/enforce"
+	"purser-hook/internal/lease"
+	"purser-hook/internal/ledger"
 )
 
 type StartOptions struct {
-	Validation StartValidationOptions
-	CodexBin   any
-	Launch     func(jobID string, generation int64, token string) error
-	Await      func(jobID string, record *Record) map[string]any
+	StateRoot      string
+	Validation     StartValidationOptions
+	CodexBin       any
+	Launch         func(jobID string, generation int64, token string) error
+	Await          func(jobID string, record *Record) map[string]any
+	RecordDecision func(job map[string]any, decision, kind, sourceJobID string)
 }
 
 // Start writes the durable reservation before invoking the injected host launcher.
 func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]any, *Record, error) {
+	if opt.StateRoot == "" {
+		opt.StateRoot = stateRoot
+	}
 	dir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
 	await := func(id string, r *Record) map[string]any {
 		if opt.Await != nil {
@@ -46,6 +57,7 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 		return req.ExistingResult, readJob(dir, req.JobID), nil
 	}
 	var thread map[string]any
+	var sendBackFrom *Record
 	if req.Mode == "reply" {
 		id, ok := args["threadId"].(string)
 		if !ok {
@@ -54,6 +66,59 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 		thread = LoadRecord(filepath.Join(stateRoot, "codex_exec_mcp", "threads"), id)
 		if thread == nil {
 			return startFailure("UNKNOWN_THREAD", "Thread is unknown to this server"), nil, nil
+		}
+		sendBackFrom = unappliedThreadJob(dir, id)
+		if sendBackFrom != nil {
+			prior := recordMap(sendBackFrom)
+			if snapshot, ok := prior["snapshot"].(string); ok {
+				thread["snapshot"], thread["baselineSnapshot"] = snapshot, snapshot
+			}
+			if worktree, ok := thread["worktreePath"].(string); ok && worktree != "" {
+				repo, _ := thread["repoRoot"].(string)
+				base, _ := thread["baselineSnapshot"].(string)
+				if base == "" {
+					base, _ = thread["snapshot"].(string)
+				}
+				if info, e := os.Stat(worktree); e == nil && info.IsDir() && base != "" && repo != "" {
+					if p, e := filepath.EvalSymlinks(repo); e == nil {
+						repo = p
+					}
+					if p, e := filepath.EvalSymlinks(worktree); e == nil {
+						worktree = p
+					}
+					matches, e := ledger.AppliedReplyMatches(repo, worktree, base)
+					if e == nil && matches {
+						sendBackFrom = nil
+					}
+				}
+			}
+		}
+		if sendBackFrom == nil {
+			if worktree, ok := thread["worktreePath"].(string); ok && worktree != "" {
+				repo, _ := thread["repoRoot"].(string)
+				if repo != "" {
+					repo, _ = filepath.Abs(repo)
+					worktree, _ = filepath.Abs(worktree)
+					if p, e := filepath.EvalSymlinks(repo); e == nil {
+						repo = p
+					}
+					if p, e := filepath.EvalSymlinks(worktree); e == nil {
+						worktree = p
+					}
+					sum := sha256.Sum256([]byte(repo))
+					unlock, e := lease.Lock(filepath.Join(filepath.Dir(dir), "apply", hex.EncodeToString(sum[:])+".lock"))
+					if e == nil {
+						head, snapshot, rebaseErr := ledger.RebaseAppliedReply(repo, worktree)
+						_ = unlock()
+						if rebaseErr != nil {
+							return startFailure("WORKTREE_REBASE_FAILED", "Applied thread worktree could not be rebased to the current checkout"), nil, nil
+						}
+						thread["snapshot"], thread["baselineSnapshot"], thread["head"] = snapshot, snapshot, head
+					} else {
+						return startFailure("WORKTREE_REBASE_FAILED", "Applied thread worktree could not be rebased to the current checkout"), nil, nil
+					}
+				}
+			}
 		}
 	}
 	var signal, owner [16]byte
@@ -133,12 +198,105 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	if err = Write(filepath.Join(dir, req.JobID+".json"), r); err != nil {
 		return nil, nil, err
 	}
+	if req.Mode == "new" && nonemptyString(job["taskId"]) != "" {
+		entries, _ := os.ReadDir(dir)
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".json") {
+				continue
+			}
+			id := strings.TrimSuffix(name, ".json")
+			if id == req.JobID {
+				continue
+			}
+			lock, e := AcquireOwnership(dir, id)
+			if e != nil {
+				continue
+			}
+			earlier, e := Read(filepath.Join(dir, name))
+			if e == nil {
+				m := recordMap(earlier)
+				if m["state"] == "SUCCEEDED" && m["taskId"] == job["taskId"] && nonemptyString(m["worktreePath"]) != "" && m["applyState"] != "applied" && !truthy(m["decisionRecorded"]) {
+					recordStartDecision(opt, m, "rejected", "redispatch", req.JobID)
+					if e = earlier.Set("decisionRecorded", true); e == nil {
+						_ = Write(filepath.Join(dir, name), earlier)
+					}
+				}
+			}
+			_ = lock.Release()
+		}
+	}
 	if opt.Launch != nil {
 		if err = opt.Launch(req.JobID, 1, job["ownershipToken"].(string)); err != nil {
 			return jobResult(map[string]any{"jobId": req.JobID, "state": "UNKNOWN_OR_IN_PROGRESS", "errorCode": "PROCESS_UNCONFIRMED", "message": "Host launch unconfirmed"}), r, nil
 		}
 	}
+	if sendBackFrom != nil {
+		var oldID string
+		sendBackFrom.Get("jobId", &oldID)
+		if oldID != "" {
+			lock, e := AcquireOwnership(dir, oldID)
+			if e == nil {
+				current := readJob(dir, oldID)
+				if current != nil {
+					m := recordMap(current)
+					recordStartDecision(opt, m, "send_back", "reply", req.JobID)
+					if nonemptyString(m["taskId"]) != "" {
+						_ = current.Set("decisionRecorded", true)
+						_ = Write(filepath.Join(dir, oldID+".json"), current)
+					}
+				}
+				_ = lock.Release()
+			}
+		}
+	}
 	return await(req.JobID, r), r, nil
+}
+
+func unappliedThreadJob(dir, thread string) *Record {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var latest *Record
+	best := -1.0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		r, e := Read(filepath.Join(dir, entry.Name()))
+		if e != nil {
+			continue
+		}
+		m := recordMap(r)
+		if m["threadId"] != thread || m["state"] != "SUCCEEDED" || m["applyState"] == "applied" || nonemptyString(m["worktreePath"]) == "" {
+			continue
+		}
+		stamp, ok := m["finishedAt"].(float64)
+		if !ok {
+			stamp, _ = m["acceptedAt"].(float64)
+		}
+		if latest == nil || stamp > best {
+			latest, best = r, stamp
+		}
+	}
+	return latest
+}
+func recordStartDecision(opt StartOptions, job map[string]any, decision, kind, source string) {
+	if nonemptyString(job["taskId"]) == "" {
+		return
+	}
+	if opt.RecordDecision != nil {
+		opt.RecordDecision(job, decision, kind, source)
+	} else {
+		enforce.RecordClaudeDecision(opt.StateRoot, job, decision, kind, source)
+	}
+}
+func truthy(v any) bool {
+	if v == nil || v == false || v == "" {
+		return false
+	}
+	return true
 }
 
 func startFailure(code, message string) map[string]any {

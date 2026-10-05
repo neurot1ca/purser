@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,6 +231,75 @@ func CheckoutSnapshot(repoRoot string) (string, error) {
 	}
 	return strings.TrimSpace(decodeGitPath(tree)), nil
 }
+
+// AppliedReplyMatches returns true when every changed worktree path matches repoRoot.
+func AppliedReplyMatches(repoRoot, worktree, snapshot string) (bool, error) {
+	patch, err := JobPatch(worktree, snapshot)
+	if err != nil {
+		return false, err
+	}
+	if patch == "" {
+		return true, nil
+	}
+	raw, err := runGit(repoRoot, []string{"apply", "--numstat", "-z", "-"}, 30*time.Second, "listing thread changes", []byte(patch), nil)
+	if err != nil {
+		return false, err
+	}
+	for _, row := range bytes.Split(raw, []byte{0}) {
+		fields := bytes.SplitN(row, []byte{'\t'}, 3)
+		if len(fields) != 3 {
+			continue
+		}
+		left, right := filepath.Join(worktree, filepath.FromSlash(decodeGitPath(fields[2]))), filepath.Join(repoRoot, filepath.FromSlash(decodeGitPath(fields[2])))
+		li, le := os.Lstat(left)
+		ri, re := os.Lstat(right)
+		if os.IsNotExist(le) && os.IsNotExist(re) {
+			continue
+		}
+		if le != nil || re != nil || li.Mode()&os.ModeSymlink != ri.Mode()&os.ModeSymlink {
+			return false, nil
+		}
+		if li.Mode()&os.ModeSymlink != 0 {
+			a, e1 := os.Readlink(left)
+			b, e2 := os.Readlink(right)
+			if e1 != nil || e2 != nil || a != b {
+				return false, nil
+			}
+			continue
+		}
+		if !li.Mode().IsRegular() || !ri.Mode().IsRegular() {
+			return false, nil
+		}
+		a, e1 := os.ReadFile(left)
+		b, e2 := os.ReadFile(right)
+		if e1 != nil || e2 != nil || !bytes.Equal(a, b) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// RebaseAppliedReply resets a reply worktree to repoRoot's current HEAD; call under its apply lease lock.
+func RebaseAppliedReply(repoRoot, worktree string) (string, string, error) {
+	headRaw, err := runGit(repoRoot, []string{"rev-parse", "--verify", "HEAD"}, 30*time.Second, "reading reply repository HEAD", nil, nil)
+	if err != nil {
+		return "", "", err
+	}
+	head := strings.TrimSpace(decodeGitPath(headRaw))
+	treeRaw, err := runGit(repoRoot, []string{"rev-parse", "--verify", head + "^{tree}"}, 30*time.Second, "reading reply repository tree", nil, nil)
+	if err != nil {
+		return "", "", err
+	}
+	tree := strings.TrimSpace(decodeGitPath(treeRaw))
+	if _, err = runGit(worktree, []string{"clean", "-fd"}, 30*time.Second, "clearing applied reply worktree changes", nil, nil); err != nil {
+		return "", "", err
+	}
+	if _, err = runGit(worktree, []string{"reset", "--hard", head}, 30*time.Second, "resetting applied reply worktree HEAD", nil, nil); err != nil {
+		return "", "", err
+	}
+	return head, tree, nil
+}
+
 func filterPaths(paths []string, keep map[string]bool) []string {
 	result := []string{}
 	for _, path := range paths {

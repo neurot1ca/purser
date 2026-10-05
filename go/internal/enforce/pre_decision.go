@@ -556,7 +556,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		"effort": selection.Effort, "routing_enforced": true, "fresh_thread": !reply, "reply_call": reply,
 		"reason": optionalString(reason), "eta_minutes": eta, "worker_prompt_chars": len([]rune(stringValue(updated["prompt"]))),
 		"scope_path_count": len(parsed.Scope),
-		"reason_source": observedReasonSource, "previous_route": optionalString(previousRoute), "new_route": optionalString(newRoute),
+		"reason_source":    observedReasonSource, "previous_route": optionalString(previousRoute), "new_route": optionalString(newRoute),
 		"task_type": observationTaskType, "suspected_route_mismatch": suspected,
 		"agent": selection.Agent, "provider": provider(selection.Agent, selection.Model)}
 	preEmit(runtimeRoot, event, repository, taskID, project, "TASK_ROUTE_SELECTED", obs)
@@ -657,6 +657,30 @@ func preEmit(root string, event map[string]any, repository *string, taskID, proj
 		}
 	} else {
 		recordObservationHealth(root, "DEGRADED", "TELEMETRY_EMIT_FAILED")
+	}
+}
+
+// RecordClaudeDecision mirrors the best-effort telemetry emitted by the Python bridge.
+func RecordClaudeDecision(root string, job map[string]any, decision, kind, sourceJobID string) {
+	task, ok := job["taskId"].(string)
+	if !ok || task == "" {
+		return
+	}
+	phase, _ := job["jobPhase"].(string)
+	if phase == "" {
+		phase, _ = job["phase"].(string)
+	}
+	if phase != "implementation" && phase != "operation" && phase != "plan" {
+		phase = "unknown"
+	}
+	var project any
+	if repo, ok := job["repoRoot"].(string); ok && repo != "" {
+		project = projectKey(&repo)
+	}
+	envelope := map[string]any{"session_id": nil, "project_key": project, "repo": nil, "branch": nil, "agent_id": nil, "agent_type": nil}
+	payload := map[string]any{"decision": decision, "task_type": phase, "source": map[string]any{"kind": kind, "job_id": sourceJobID}}
+	if event, err := buildObservationAtStateRoot("CLAUDE_DECISION_RECORDED", envelope, payload, task, root); err == nil {
+		_, _ = persistObservation(filepath.Join(root, "telemetry"), event)
 	}
 }
 

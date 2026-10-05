@@ -364,6 +364,9 @@
           "threadId": "missing"
         }
       ],
+      "seed": null,
+      "thread": null,
+      "gitCase": false,
       "result": {
         "content": [
           {
@@ -379,7 +382,8 @@
         "isError": true
       },
       "files": null,
-      "launches": []
+      "launches": [],
+      "decisions": []
     },
     {
       "name": "valid_new",
@@ -392,6 +396,9 @@
           "jobModel": "model-x"
         }
       ],
+      "seed": null,
+      "thread": null,
+      "gitCase": false,
       "result": {
         "content": [
           {
@@ -440,7 +447,8 @@
           "generation": 1,
           "token": "TOKEN"
         }
-      ]
+      ],
+      "decisions": []
     },
     {
       "name": "duplicate_same",
@@ -456,6 +464,9 @@
           "cwd": "C:/repo"
         }
       ],
+      "seed": null,
+      "thread": null,
+      "gitCase": false,
       "result": {
         "content": [
           {
@@ -500,7 +511,8 @@
           "generation": 1,
           "token": "TOKEN"
         }
-      ]
+      ],
+      "decisions": []
     },
     {
       "name": "duplicate_different",
@@ -516,6 +528,9 @@
           "timeoutSeconds": 0
         }
       ],
+      "seed": null,
+      "thread": null,
+      "gitCase": false,
       "result": {
         "content": [
           {
@@ -560,7 +575,333 @@
           "generation": 1,
           "token": "TOKEN"
         }
+      ],
+      "decisions": []
+    },
+    {
+      "name": "reply_unapplied",
+      "calls": [
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "reply",
+          "mode": "reply",
+          "threadId": "thread-1"
+        }
+      ],
+      "seed": [
+        {
+          "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "threadId": "thread-1",
+          "state": "SUCCEEDED",
+          "applyState": "pending",
+          "worktreePath": "C:/old-worktree",
+          "snapshot": "tree-1",
+          "taskId": "task-old",
+          "acceptedAt": "TIME"
+        }
+      ],
+      "thread": {
+        "thread_id": "thread-1",
+        "cwd": "C:/repo",
+        "config_args": [],
+        "snapshot": "tree-0",
+        "baselineSnapshot": "tree-0"
+      },
+      "gitCase": false,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1\", \"state\": \"QUEUED\", \"acceptedAt\": 10, \"deadlineAt\": 20}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE"
+        },
+        "isError": false
+      },
+      "files": {
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.json": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "call": "00000000-0000-4000-8000-000000000001",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "signalToken": "TOKEN",
+          "generation": 1,
+          "ownershipToken": "TOKEN",
+          "snapshot": "tree-1",
+          "baselineSnapshot": "tree-1"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
+          "name": "codex-reply",
+          "args": {
+            "call": "00000000-0000-4000-8000-000000000001",
+            "prompt": "reply",
+            "mode": "reply",
+            "threadId": "thread-1"
+          },
+          "codexBin": null,
+          "agent": "codex"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.lock": true,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "threadId": "thread-1",
+          "state": "SUCCEEDED",
+          "applyState": "pending",
+          "worktreePath": "C:/old-worktree",
+          "snapshot": "tree-1",
+          "taskId": "task-old",
+          "acceptedAt": "TIME",
+          "decisionRecorded": true
+        },
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.owner-lock": true
+      },
+      "launches": [
+        {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "generation": 1,
+          "token": "TOKEN"
+        }
+      ],
+      "decisions": [
+        {
+          "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "send_back",
+          "kind": "reply",
+          "sourceJobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1"
+        }
       ]
+    },
+    {
+      "name": "redispatch_reject_and_skip",
+      "calls": [
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "new",
+          "mode": "new",
+          "taskId": "task-x"
+        }
+      ],
+      "seed": [
+        {
+          "jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "state": "SUCCEEDED",
+          "taskId": "task-x",
+          "worktreePath": "C:/wt-a",
+          "applyState": "pending",
+          "acceptedAt": "TIME"
+        },
+        {
+          "jobId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "state": "SUCCEEDED",
+          "taskId": "task-x",
+          "worktreePath": "C:/wt-b",
+          "applyState": "applied",
+          "acceptedAt": "TIME"
+        },
+        {
+          "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "state": "SUCCEEDED",
+          "taskId": "task-x",
+          "worktreePath": "C:/wt-c",
+          "applyState": "pending",
+          "decisionRecorded": true,
+          "acceptedAt": "TIME"
+        }
+      ],
+      "thread": null,
+      "gitCase": false,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1\", \"state\": \"QUEUED\", \"acceptedAt\": 10, \"deadlineAt\": 20}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE"
+        },
+        "isError": false
+      },
+      "files": {
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.json": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "call": "00000000-0000-4000-8000-000000000001",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "signalToken": "TOKEN",
+          "generation": 1,
+          "ownershipToken": "TOKEN",
+          "taskId": "task-x"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
+          "name": "codex",
+          "args": {
+            "call": "00000000-0000-4000-8000-000000000001",
+            "prompt": "new",
+            "mode": "new",
+            "taskId": "task-x"
+          },
+          "codexBin": null,
+          "agent": "codex"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.lock": true,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "state": "SUCCEEDED",
+          "taskId": "task-x",
+          "worktreePath": "C:/wt-a",
+          "applyState": "pending",
+          "acceptedAt": "TIME",
+          "decisionRecorded": true
+        },
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.owner-lock": true,
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.json": {
+          "jobId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "state": "SUCCEEDED",
+          "taskId": "task-x",
+          "worktreePath": "C:/wt-b",
+          "applyState": "applied",
+          "acceptedAt": "TIME"
+        },
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.owner-lock": true,
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.json": {
+          "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "state": "SUCCEEDED",
+          "taskId": "task-x",
+          "worktreePath": "C:/wt-c",
+          "applyState": "pending",
+          "decisionRecorded": true,
+          "acceptedAt": "TIME"
+        },
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.owner-lock": true
+      },
+      "launches": [
+        {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "generation": 1,
+          "token": "TOKEN"
+        }
+      ],
+      "decisions": [
+        {
+          "jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "decision": "rejected",
+          "kind": "redispatch",
+          "sourceJobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1"
+        }
+      ]
+    },
+    {
+      "name": "reply_applied_rebase",
+      "calls": [
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "reply",
+          "mode": "reply",
+          "threadId": "thread-rebase"
+        }
+      ],
+      "seed": [
+        {
+          "jobId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "threadId": "thread-rebase",
+          "state": "SUCCEEDED",
+          "applyState": "pending",
+          "worktreePath": "<ROOT>\\worktree",
+          "snapshot": "<OLD_TREE>",
+          "baselineSnapshot": "<OLD_TREE>",
+          "head": "<OLD_HEAD>",
+          "repoRoot": "<ROOT>\\repo",
+          "taskId": "task-rebase",
+          "acceptedAt": "TIME"
+        }
+      ],
+      "thread": {
+        "thread_id": "thread-rebase",
+        "cwd": "<ROOT>\\worktree",
+        "config_args": [],
+        "worktreePath": "<ROOT>\\worktree",
+        "snapshot": "<OLD_TREE>",
+        "baselineSnapshot": "<OLD_TREE>",
+        "head": "<OLD_HEAD>",
+        "repoRoot": "<ROOT>\\repo"
+      },
+      "gitCase": true,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1\", \"state\": \"QUEUED\", \"acceptedAt\": 10, \"deadlineAt\": 20}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE"
+        },
+        "isError": false
+      },
+      "files": {
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.json": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "call": "00000000-0000-4000-8000-000000000001",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "signalToken": "TOKEN",
+          "generation": 1,
+          "ownershipToken": "TOKEN",
+          "worktreePath": "<ROOT>\\worktree",
+          "snapshot": "<TREE>",
+          "head": "<HEAD>",
+          "repoRoot": "<ROOT>\\repo",
+          "baselineSnapshot": "<TREE>"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
+          "name": "codex-reply",
+          "args": {
+            "call": "00000000-0000-4000-8000-000000000001",
+            "prompt": "reply",
+            "mode": "reply",
+            "threadId": "thread-rebase"
+          },
+          "codexBin": null,
+          "agent": "codex"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.lock": true,
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.json": {
+          "jobId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "threadId": "thread-rebase",
+          "state": "SUCCEEDED",
+          "applyState": "pending",
+          "worktreePath": "<ROOT>\\worktree",
+          "snapshot": "<OLD_TREE>",
+          "baselineSnapshot": "<OLD_TREE>",
+          "head": "<OLD_HEAD>",
+          "repoRoot": "<ROOT>\\repo",
+          "taskId": "task-rebase",
+          "acceptedAt": "TIME"
+        }
+      },
+      "launches": [
+        {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "generation": 1,
+          "token": "TOKEN"
+        }
+      ],
+      "decisions": []
     }
   ]
 }

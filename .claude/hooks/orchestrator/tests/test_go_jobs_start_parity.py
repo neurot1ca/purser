@@ -1,5 +1,5 @@
 """154a start validation fixtures are captured from the real Python bridge."""
-import hashlib, inspect, json, os, sys
+import hashlib, inspect, json, os, subprocess, sys
 from pathlib import Path
 import pytest
 
@@ -25,22 +25,47 @@ def _invalid(name, args, tmp_path, monkeypatch, config_error=False):
     return {"name": name, "args": args, "result": result}
 
 
-def _clean(value):
-    if isinstance(value, dict): return {k:("TIME" if k=="acceptedAt" else "DEADLINE" if k=="deadlineAt" else "TOKEN" if k in ("signalToken","ownershipToken") else _clean(v)) for k,v in value.items()}
-    if isinstance(value, list): return [_clean(v) for v in value]
+def _clean(value, root=None, git_values=None):
+    if isinstance(value, dict): return {k:("TIME" if k=="acceptedAt" else "DEADLINE" if k=="deadlineAt" else "TOKEN" if k in ("signalToken","ownershipToken") else _clean(v,root,git_values)) for k,v in value.items()}
+    if isinstance(value, list): return [_clean(v,root,git_values) for v in value]
+    if isinstance(value,str):
+        for original, normalized in (git_values or {}).items():
+            if value == original: return normalized
+        if root and value.startswith(str(root)): return "<ROOT>" + value[len(str(root)):]
     return value
 
 
-def _start_case(name, calls, tmp_path, monkeypatch):
-    server = _server(monkeypatch,tmp_path/name); launches=[]
+def _start_case(name, calls, tmp_path, monkeypatch, seed=None, thread=None, git_values=None):
+    root=tmp_path/name; server = _server(monkeypatch,root); launches=[]
+    decisions=[]
+    for record in seed or []: server._write_job(record)
+    if thread: bridge._save_record(server.state_dir, thread)
     monkeypatch.setattr(bridge,"_launch_host",lambda _dir,jid,gen,token:launches.append({"jobId":jid,"generation":gen,"token":"TOKEN"}))
+    monkeypatch.setattr(bridge,"_record_claude_decision",lambda job,decision,kind,source:decisions.append({"jobId":job["jobId"],"decision":decision,"kind":kind,"sourceJobId":source}))
     server._await_host = lambda jid: bridge._job_result({"jobId":jid,"state":"QUEUED","acceptedAt":10,"deadlineAt":20})
     result=None
     for args in calls: result=server._start_job(args)
     files={}
     if server.job_dir.exists():
-        for p in sorted(server.job_dir.iterdir()): files[p.name]=True if p.is_dir() else _clean(json.loads(p.read_text(encoding="utf-8")))
-    return {"name":name,"calls":calls,"result":_clean(result),"files":files or None,"launches":launches}
+        for p in sorted(server.job_dir.iterdir()): files[p.name]=True if p.is_dir() or p.name.endswith(".owner-lock") else _clean(json.loads(p.read_text(encoding="utf-8")),root,git_values)
+    return {"name":name,"calls":_clean(calls,root,git_values),"seed":_clean(seed,root,git_values),"thread":_clean(thread,root,git_values),"gitCase":git_values is not None,"result":_clean(result,root,git_values),"files":files or None,"launches":launches,"decisions":decisions}
+
+
+def _git(root, *args):
+    return subprocess.check_output(["git", *args], cwd=root, stderr=subprocess.PIPE).decode().strip()
+
+
+def _applied_reply_case(tmp_path, monkeypatch):
+    root=tmp_path/"reply_applied_rebase"; repo=root/"repo"; worktree=root/"worktree"; repo.mkdir(parents=True)
+    _git(repo,"init","-b","main"); _git(repo,"config","user.name","Oracle"); _git(repo,"config","user.email","oracle@example.invalid")
+    (repo/"base.txt").write_text("base\n",encoding="utf-8"); _git(repo,"add","base.txt"); _git(repo,"commit","-m","base")
+    old_head=_git(repo,"rev-parse","HEAD"); old_tree=_git(repo,"rev-parse","HEAD^{tree}"); _git(repo,"worktree","add","--detach",str(worktree),"HEAD")
+    (worktree/"applied.txt").write_text("already applied\n",encoding="utf-8"); (repo/"applied.txt").write_text("already applied\n",encoding="utf-8")
+    _git(repo,"add","applied.txt"); _git(repo,"commit","-m","apply"); head=_git(repo,"rev-parse","HEAD"); tree=_git(repo,"rev-parse","HEAD^{tree}"); tid="thread-rebase"
+    thread={"thread_id":tid,"cwd":str(worktree),"config_args":[],"worktreePath":str(worktree),"snapshot":old_tree,"baselineSnapshot":old_tree,"head":old_head,"repoRoot":str(repo)}
+    seed=[{"jobId":"e"*64,"threadId":tid,"state":"SUCCEEDED","applyState":"pending","worktreePath":str(worktree),"snapshot":old_tree,"baselineSnapshot":old_tree,"head":old_head,"repoRoot":str(repo),"taskId":"task-rebase","acceptedAt":1}]
+    paths={str(root):"<ROOT>",old_tree:"<OLD_TREE>",tree:"<TREE>",old_head:"<OLD_HEAD>",head:"<HEAD>"}
+    return _start_case("reply_applied_rebase",[{"call":CALL,"prompt":"reply","mode":"reply","threadId":tid}],tmp_path,monkeypatch,seed,thread,paths)
 
 
 def test_go_start_validation_matches_python_oracle(tmp_path, monkeypatch):
@@ -86,6 +111,14 @@ def test_go_start_validation_matches_python_oracle(tmp_path, monkeypatch):
         _start_case("valid_new",[{"call":CALL,"prompt":"p","cwd":"C:/repo","taskId":"task-1","jobModel":"model-x"}],tmp_path,monkeypatch),
         _start_case("duplicate_same",[{"call":CALL,"prompt":"p","cwd":"C:/repo"}]*2,tmp_path,monkeypatch),
         _start_case("duplicate_different",[{"call":CALL,"prompt":"p","cwd":"C:/repo"},{"call":CALL,"prompt":"changed","timeoutSeconds":0}],tmp_path,monkeypatch),
+        _start_case("reply_unapplied",[{"call":CALL,"prompt":"reply","mode":"reply","threadId":"thread-1"}],tmp_path,monkeypatch,
+            [{"jobId":"a"*64,"threadId":"thread-1","state":"SUCCEEDED","applyState":"pending","worktreePath":"C:/old-worktree","snapshot":"tree-1","taskId":"task-old","acceptedAt":1}],
+            {"thread_id":"thread-1","cwd":"C:/repo","config_args":[],"snapshot":"tree-0","baselineSnapshot":"tree-0"}),
+        _start_case("redispatch_reject_and_skip",[{"call":CALL,"prompt":"new","mode":"new","taskId":"task-x"}],tmp_path,monkeypatch,
+            [{"jobId":"b"*64,"state":"SUCCEEDED","taskId":"task-x","worktreePath":"C:/wt-a","applyState":"pending","acceptedAt":1},
+             {"jobId":"c"*64,"state":"SUCCEEDED","taskId":"task-x","worktreePath":"C:/wt-b","applyState":"applied","acceptedAt":2},
+             {"jobId":"d"*64,"state":"SUCCEEDED","taskId":"task-x","worktreePath":"C:/wt-c","applyState":"pending","decisionRecorded":True,"acceptedAt":3}]),
+        _applied_reply_case(tmp_path,monkeypatch),
     ])
     fixture = {"oracle": "real Server._start_job before jobs_lock", "cases": cases}
     if os.environ.get("PURSER_REGEN_GO_JOBS_START") == "1":
