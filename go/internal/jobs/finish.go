@@ -24,6 +24,11 @@ type ResultOptions struct {
 	RecordDecision func(job map[string]any, decision, kind, sourceJobID string)
 }
 
+// Result returns the durable bridge result for a job.
+func Result(stateRoot, jobID string, now float64, opt ResultOptions) map[string]any {
+	return resultJob(filepath.Join(stateRoot, "codex_exec_mcp", "jobs"), jobID, now, opt)
+}
+
 // finishJob durably stores output before publishing a terminal record.
 func finishJob(dir, id, state, code string, result map[string]any, message string, now float64, opt FinishOptions) error {
 	lock, err := AcquireOwnership(dir, id)
