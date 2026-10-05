@@ -130,6 +130,55 @@ func TestApplyPythonOracle(t *testing.T) {
 	}
 }
 
+func TestApplyCachedRepeatRecordsDecisionAndReleasesLease(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	worktree := filepath.Join(base, "worktree")
+	state := filepath.Join(base, "state")
+	jobID := "cached-job"
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	jobDir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	job := map[string]any{
+		"jobId": jobID, "state": "SUCCEEDED", "taskId": "task-1",
+		"repoRoot": repo, "worktreePath": worktree, "applyState": "applied",
+		"applyResult": map[string]any{"applied": true, "paths": []any{"tracked.txt"}},
+	}
+	encoded, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(jobDir, jobID+".json"), string(encoded))
+
+	var decisions, releases int
+	options := ApplyOptions{
+		RecordDecision: func(got map[string]any, decision, kind, sourceJobID string) {
+			decisions++
+			if got["taskId"] != "task-1" || decision != "accepted" || kind != "apply" || sourceJobID != jobID {
+				t.Errorf("unexpected decision: job=%#v decision=%q kind=%q sourceJobID=%q", got, decision, kind, sourceJobID)
+			}
+		},
+		ReleaseScopeLease: func(gotState, gotJobID string) bool {
+			releases++
+			if gotState != state || gotJobID != jobID {
+				t.Errorf("unexpected lease release: state=%q jobID=%q", gotState, gotJobID)
+			}
+			return true
+		},
+	}
+	result := Apply(state, map[string]any{"jobId": jobID}, options)
+	if result["structuredContent"] == nil {
+		t.Fatalf("missing cached result: %#v", result)
+	}
+	if decisions != 1 || releases != 1 {
+		t.Fatalf("side effects: decision calls=%d lease releases=%d; want 1 each", decisions, releases)
+	}
+}
+
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	c := exec.Command("git", args...)

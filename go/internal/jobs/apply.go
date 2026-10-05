@@ -80,6 +80,8 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	job.Get("snapshot", &snapshot)
 	var saved map[string]any
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
+		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID)
+		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 		return result(saved)
 	}
 	if resolved {
