@@ -1,0 +1,382 @@
+{
+  "oracle": "real Server._finish_job and Server._result_job",
+  "cases": [
+    {
+      "name": "succeeded_output",
+      "finish": [
+        "SUCCEEDED",
+        null,
+        {
+          "content": "done",
+          "threadId": "thread-1"
+        },
+        null
+      ],
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"SUCCEEDED\", \"threadId\": \"thread-1\", \"content\": \"done\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "SUCCEEDED",
+          "threadId": "thread-1",
+          "content": "done"
+        },
+        "isError": false
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "SUCCEEDED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "finishedAt": "TIME",
+          "threadId": "thread-1",
+          "outputFile": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.output",
+          "boardDisplayCount": 0
+        },
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.output": "done"
+      },
+      "decisions": [],
+      "releases": []
+    },
+    {
+      "name": "output_over_limit",
+      "finish": [
+        "SUCCEEDED",
+        null,
+        {
+          "content": {
+            "length": 1000001,
+            "sha256": "85e4daf430380f612580d11ebf1ba489a0341266af0f6f5ed620852545a4655e",
+            "head": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "tail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          "threadId": "thread-1"
+        },
+        null
+      ],
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"FAILED\", \"errorCode\": \"CODEX_FAILED\", \"message\": \"Codex output exceeded limit\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "FAILED",
+          "errorCode": "CODEX_FAILED",
+          "message": "Codex output exceeded limit"
+        },
+        "isError": true
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "FAILED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "finishedAt": "TIME",
+          "errorCode": "CODEX_FAILED",
+          "message": "Codex output exceeded limit",
+          "boardDisplayCount": 0
+        }
+      },
+      "decisions": [],
+      "releases": []
+    },
+    {
+      "name": "failed_error_code",
+      "finish": [
+        "FAILED",
+        "CODEX_FAILED",
+        null,
+        null
+      ],
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"FAILED\", \"errorCode\": \"CODEX_FAILED\", \"message\": \"Codex failed\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "FAILED",
+          "errorCode": "CODEX_FAILED",
+          "message": "Codex failed"
+        },
+        "isError": true
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "FAILED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "finishedAt": "TIME",
+          "errorCode": "CODEX_FAILED",
+          "message": "Codex failed",
+          "boardDisplayCount": 0
+        }
+      },
+      "decisions": [],
+      "releases": []
+    },
+    {
+      "name": "expired_record",
+      "finish": null,
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"FAILED\", \"errorCode\": \"JOB_EXPIRED\", \"message\": \"Job record expired\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "FAILED",
+          "errorCode": "JOB_EXPIRED",
+          "message": "Job record expired"
+        },
+        "isError": true
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "EXPIRED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "finishedAt": "TIME",
+          "errorCode": "JOB_EXPIRED",
+          "message": "Job record expired"
+        }
+      },
+      "decisions": [],
+      "releases": []
+    },
+    {
+      "name": "terminal_missing_output",
+      "finish": null,
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"FAILED\", \"errorCode\": \"OUTPUT_UNAVAILABLE\", \"message\": \"Job output is unavailable\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "FAILED",
+          "errorCode": "OUTPUT_UNAVAILABLE",
+          "message": "Job output is unavailable"
+        },
+        "isError": true
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "SUCCEEDED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "finishedAt": "TIME",
+          "threadId": "thread-1",
+          "outputFile": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.output"
+        }
+      },
+      "decisions": [],
+      "releases": []
+    },
+    {
+      "name": "unknown_job",
+      "finish": null,
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"JOB_NOT_FOUND\", \"message\": \"Job record is unavailable\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "JOB_NOT_FOUND",
+          "message": "Job record is unavailable"
+        },
+        "isError": true
+      },
+      "files": null,
+      "decisions": [],
+      "releases": []
+    },
+    {
+      "name": "still_running",
+      "finish": null,
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"RUNNING\", \"message\": \"Host identity unconfirmed\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "RUNNING",
+          "message": "Host identity unconfirmed"
+        },
+        "isError": false
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "RUNNING",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE"
+        }
+      },
+      "decisions": [],
+      "releases": []
+    },
+    {
+      "name": "worktree_setup_failed",
+      "finish": [
+        "FAILED",
+        "WORKTREE_SETUP_FAILED",
+        null,
+        null
+      ],
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"FAILED\", \"errorCode\": \"WORKTREE_SETUP_FAILED\", \"message\": \"Worktree setup timed out: setup log\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "FAILED",
+          "errorCode": "WORKTREE_SETUP_FAILED",
+          "message": "Worktree setup timed out: setup log"
+        },
+        "isError": true
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "FAILED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "setupError": {
+            "timedOut": true,
+            "output": "setup log"
+          },
+          "finishedAt": "TIME",
+          "errorCode": "WORKTREE_SETUP_FAILED",
+          "message": "Worktree setup timed out: setup log",
+          "boardDisplayCount": 0
+        }
+      },
+      "decisions": [],
+      "releases": []
+    },
+    {
+      "name": "queued_lease_release",
+      "finish": [
+        "CANCELLED",
+        "CANCELLED",
+        null,
+        null
+      ],
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"CANCELLED\", \"errorCode\": \"CANCELLED\", \"message\": \"Codex cancelled\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "CANCELLED",
+          "errorCode": "CANCELLED",
+          "message": "Codex cancelled"
+        },
+        "isError": true
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "CANCELLED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "leaseQueued": true,
+          "finishedAt": "TIME",
+          "errorCode": "CANCELLED",
+          "message": "Codex cancelled",
+          "boardDisplayCount": 0
+        }
+      },
+      "decisions": [],
+      "releases": [
+        {
+          "project": "project-1",
+          "callKey": "call-1"
+        }
+      ]
+    },
+    {
+      "name": "accepted_decision",
+      "finish": null,
+      "now": 2000000000.0,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"state\": \"SUCCEEDED\", \"threadId\": \"thread-1\", \"content\": \"accepted\"}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "SUCCEEDED",
+          "threadId": "thread-1",
+          "content": "accepted"
+        },
+        "isError": false
+      },
+      "files": {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json": {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "state": "SUCCEEDED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "finishedAt": "TIME",
+          "threadId": "thread-1",
+          "outputFile": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.output",
+          "taskId": "task-accepted",
+          "decisionRecorded": true
+        },
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.output": "accepted"
+      },
+      "decisions": [
+        {
+          "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "decision": "accepted",
+          "kind": "result",
+          "sourceJobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      ],
+      "releases": []
+    }
+  ]
+}
