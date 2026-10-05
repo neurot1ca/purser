@@ -13,6 +13,11 @@ var engineProtected = []string{
 	"*.pem", "*.key", "credentials.*", "secrets.*",
 }
 
+// EngineProtectedPaths returns the engine's default protected path patterns.
+func EngineProtectedPaths() []string {
+	return append([]string(nil), engineProtected...)
+}
+
 type Roles struct {
 	Orchestrator string `json:"orchestrator"`
 	Coder        string `json:"coder"`

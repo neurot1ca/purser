@@ -11,8 +11,10 @@ ORCHESTRATOR = ROOT / ".claude" / "hooks" / "orchestrator"
 FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "delta.json"
 COMPUTE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "compute_delta.json"
 OUT_OF_SCOPE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "out_of_scope.json"
+ATTRIBUTION_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "attribution.json"
 sys.path.insert(0, str(ORCHESTRATOR))
 import ledger
+import project_profile
 
 CASES = [
     {"name": "names", "kind": "names", "raw": "dir\\old.txt\0same\0same\0\0"},
@@ -179,3 +181,26 @@ def test_python_oracle_out_of_scope_fixture():
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
     assert json.loads(OUT_OF_SCOPE_FIXTURE.read_text(encoding="utf-8")) == generated
+
+ATTRIBUTION_CASES = [
+    {"name": "single_foreign_owner", "delta": {"status": "OK", "changed_paths": ["foreign/a.txt"], "changed_file_count": 1, "changed_line_count": 4, "path_line_counts": {"foreign/a.txt": 4}, "sources": {"staged": {"paths": ["foreign/a.txt"], "changed_line_count": 4, "path_line_counts": {"foreign/a.txt": 4}}}, "ambiguous_paths": []}, "owners": [{"task_id": "task-a", "scope": ["foreign"]}]},
+    {"name": "two_foreign_owners", "delta": {"status": "OK", "changed_paths": ["shared/a.txt"], "changed_file_count": 1, "changed_line_count": 2, "path_line_counts": {"shared/a.txt": 2}, "sources": {}, "ambiguous_paths": []}, "owners": [{"task_id": "task-a", "scope": ["shared"]}, {"task_id": "task-b", "scope": ["shared"]}]},
+    {"name": "ambiguous_path", "delta": {"status": "OK", "changed_paths": ["foreign/a.txt"], "changed_file_count": 1, "changed_line_count": 2, "path_line_counts": {"foreign/a.txt": 2}, "sources": {}, "ambiguous_paths": ["foreign/a.txt"]}, "owners": [{"task_id": "task-a", "scope": ["foreign"]}]},
+    {"name": "default_protected_path", "delta": {"status": "OK", "changed_paths": [".env"], "changed_file_count": 1, "changed_line_count": 1, "path_line_counts": {".env": 1}, "sources": {}, "ambiguous_paths": []}, "owners": [{"task_id": "task-a", "scope": ["."]}]},
+    {"name": "explicit_protected_path", "delta": {"status": "OK", "changed_paths": ["private/key.txt"], "changed_file_count": 1, "changed_line_count": 1, "path_line_counts": {"private/key.txt": 1}, "sources": {}, "ambiguous_paths": []}, "owners": [{"task_id": "task-a", "scope": ["private"]}], "protected_paths": ["private/**"]},
+    {"name": "inside_own_scope", "delta": {"status": "OK", "changed_paths": ["mine/a.txt"], "changed_file_count": 1, "changed_line_count": 3, "path_line_counts": {"mine/a.txt": 3}, "sources": {}, "ambiguous_paths": []}, "own_scope": ["mine"], "owners": [{"task_id": "task-a", "scope": ["mine"]}]},
+    {"name": "additional_path", "delta": {"status": "OK", "changed_paths": [], "changed_file_count": 0, "changed_line_count": 0, "path_line_counts": {}, "sources": {}, "ambiguous_paths": []}, "owners": [{"task_id": "task-a", "scope": ["foreign"]}], "additional_paths": ["foreign/new.txt"]},
+    {"name": "non_ok_delta", "delta": {"status": "UNKNOWN", "code": "DELTA_FAILED", "changed_paths": ["foreign/a.txt"]}, "owners": [{"task_id": "task-a", "scope": ["foreign"]}]},
+    {"name": "multi_source_line_recount", "delta": {"status": "OK", "changed_paths": ["foreign/a.txt", "mine/b.txt"], "changed_file_count": 2, "changed_line_count": 9, "path_line_counts": {"foreign/a.txt": 5, "mine/b.txt": 4}, "sources": {"staged": {"paths": ["foreign/a.txt", "mine/b.txt"], "changed_line_count": 7, "path_line_counts": {"foreign/a.txt": 3, "mine/b.txt": 4}}, "unstaged": {"paths": ["foreign/a.txt"], "changed_line_count": 2, "path_line_counts": {"foreign/a.txt": 2}}}, "ambiguous_paths": []}, "own_scope": ["mine"], "owners": [{"task_id": "task-a", "scope": ["foreign"]}]},
+]
+
+def test_python_oracle_attribution_fixture():
+    generated = {"oracle": "Python ledger.attribute_known_concurrent_scopes and detect_protected_paths", "engine_protected": list(project_profile._ENGINE_PROTECTED), "cases": []}
+    for case in ATTRIBUTION_CASES:
+        patterns = case.get("protected_paths")
+        filtered, known = ledger.attribute_known_concurrent_scopes(
+            case["delta"], case.get("own_scope", []), case.get("owners", []),
+            protected_paths=patterns, additional_paths=case.get("additional_paths", []),
+        )
+        generated["cases"].append({**case, "protected": ledger.detect_protected_paths(case["delta"], protected_paths=patterns), "result": {"delta": filtered, "known": known}})
+    assert json.loads(ATTRIBUTION_FIXTURE.read_text(encoding="utf-8")) == generated
