@@ -18,6 +18,8 @@ CASES = [
     {"name": "rereview_clears", "initial": "CHANGES_REQUIRED", "repair": True, "rereview": "clear"},
     {"name": "rereview_still_finds", "initial": "CHANGES_REQUIRED", "repair": True, "rereview": "findings"},
     {"name": "rereview_unavailable", "initial": "CHANGES_REQUIRED", "repair": True, "rereview": "unavailable"},
+    {"name": "rereview_replaces_pre_repair_findings", "initial": "CHANGES_REQUIRED", "repair": True, "rereview": "findings"},
+    {"name": "rereview_failure", "initial": "CHANGES_REQUIRED", "repair": True, "rereview": "failure"},
     {"name": "no_repair_initial_review_receipt", "initial": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "repair": False},
 ]
 
@@ -52,12 +54,15 @@ def _oracle(case, root):
         if len(reports) == 1:
             result = case["initial"]
         else:
+            if case["rereview"] == "failure":
+                return None
             result = {"clear": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "findings": "CHANGES_REQUIRED",
                       "unavailable": policy.REVIEWER1_UNAVAILABLE}[case["rereview"]]
         return {"review_status": "UNAVAILABLE" if result == policy.REVIEWER1_UNAVAILABLE else "COMPLETED",
                 "provider": "agy", "reviewer1_model_requested": "gemini-3.8-flash-high", "result": result,
                 "validation": "UNKNOWN" if result == policy.REVIEWER1_UNAVAILABLE else "PASS",
-                "findings": ([{"code": "REVIEW", "message": "still required"}] if result == "CHANGES_REQUIRED" else [])}
+                "findings": ([{"code": "PRE_REPAIR", "message": "first pass"}] if len(reports) == 1 and result == "CHANGES_REQUIRED"
+                             else [{"code": "REVIEW", "message": "still required"}] if result == "CHANGES_REQUIRED" else [])}
 
     def fake_run(argv, **kwargs):
         if argv and argv[0] == "codex" and argv[1:3] == ["exec", "resume"]:
@@ -87,14 +92,17 @@ def _oracle(case, root):
         "task_contract_grounded": pending.get("task_contract_grounded"), "task_id": pending.get("task_id"),
         "route": pending.get("route"), "phase": pending.get("phase"),
         "reviewer1_scope": bundle.get("reviewer1_scope"),
+        "pre_repair_findings": ([{"code": "PRE_REPAIR", "message": "first pass"}]
+                                if case["name"] == "rereview_replaces_pre_repair_findings" else []),
         "rereview": (None if not case["repair"] else {
-            "result": bundle.get("reviewer1_result"), "review_status": "UNAVAILABLE" if bundle.get("reviewer1_result") == policy.REVIEWER1_UNAVAILABLE else "COMPLETED",
+            "result": bundle.get("reviewer1_result") or policy.UNCERTAIN, "review_status": "UNAVAILABLE" if bundle.get("reviewer1_result") == policy.REVIEWER1_UNAVAILABLE else "COMPLETED",
             "validation": bundle.get("validation"), "provider": bundle.get("reviewer1_provider"),
             "reviewer1_model_requested": bundle.get("reviewer1_model_requested"),
             "findings": ([{"code": "REVIEW", "message": "still required"}] if bundle.get("reviewer1_result") == "CHANGES_REQUIRED" else [])}),
     }, "expected": {"micro_repair_cleared_review": bundle.get("micro_repair_cleared_review"),
                     "repair_status": (bundle.get("micro_repair") or {}).get("status"),
-                    "claude_review_mode": bundle.get("claude_review_mode"), "audit_receipt": bundle.get("audit_receipt")}}
+                    "claude_review_mode": bundle.get("claude_review_mode"), "audit_receipt": bundle.get("audit_receipt"),
+                    "findings": bundle.get("findings"), "validation": bundle.get("validation")}}
 
 
 def test_go_post_rereview_matches_python_fixture(tmp_path):

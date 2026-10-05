@@ -37,22 +37,27 @@ func TestPostRereviewPythonFixture(t *testing.T) {
 				"delta": input["delta"], "task_contract_grounded": input["task_contract_grounded"],
 				"implementer": input["implementer"], "model": input["model"], "effort": input["effort"], "findings": []any{},
 			}
+			if findings, ok := input["pre_repair_findings"].([]any); ok {
+				bundle["findings"] = findings
+			}
 			if input["repair_ran"] == true {
 				bundle["micro_repair"] = map[string]any{"attempted": true, "status": "RUNNING"}
 				var rereview map[string]any
 				encoded, _ := json.Marshal(input["rereview"])
 				_ = json.Unmarshal(encoded, &rereview)
-				setPostRereview(bundle, review.BridgeOutcome{Outcome: map[bool]string{true: "unavailable", false: "completed"}[rereview["review_status"] == "UNAVAILABLE"], Attributes: rereview})
-			}
-			if repair, ok := bundle["micro_repair"].(map[string]any); ok {
-				repair["status"] = input["repair_status"]
+				if rereview["result"] == "UNCERTAIN" {
+					setPostRereview(bundle, review.BridgeOutcome{})
+				} else {
+					setPostRereview(bundle, review.BridgeOutcome{Outcome: map[bool]string{true: "unavailable", false: "completed"}[rereview["review_status"] == "UNAVAILABLE"], Attributes: rereview})
+				}
 			}
 			pending := map[string]any{"task_id": input["task_id"], "route": input["route"], "phase": input["phase"],
 				"task_contract_grounded": input["task_contract_grounded"]}
 			loaded := map[string]any{"always_full_routes": []any{}}
 			finalizePostReview(bundle, pending, loaded, review.GateDecision{Run: true}, nil, true, false, false, false)
 			actual := map[string]any{"micro_repair_cleared_review": bundle["micro_repair_cleared_review"],
-				"repair_status": nil, "claude_review_mode": bundle["claude_review_mode"], "audit_receipt": bundle["audit_receipt"]}
+				"repair_status": nil, "claude_review_mode": bundle["claude_review_mode"], "audit_receipt": bundle["audit_receipt"],
+				"findings": bundle["findings"], "validation": bundle["validation"]}
 			if repair, ok := bundle["micro_repair"].(map[string]any); ok {
 				actual["repair_status"] = repair["status"]
 			}

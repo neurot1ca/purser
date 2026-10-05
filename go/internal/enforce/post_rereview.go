@@ -36,9 +36,17 @@ func setPostRereview(bundle map[string]any, outcome review.BridgeOutcome) {
 		}
 	}
 	bundle["reviewer1_result"] = result
-	bundle["reviewer1_provider"] = outcome.Attributes["provider"]
-	bundle["reviewer1_model_requested"] = outcome.Attributes["reviewer1_model_requested"]
-	bundle["validation"] = stringValue(outcome.Attributes["validation"])
+	if provider, ok := outcome.Attributes["provider"]; ok {
+		bundle["reviewer1_provider"] = provider
+	}
+	if model, ok := outcome.Attributes["reviewer1_model_requested"]; ok {
+		bundle["reviewer1_model_requested"] = model
+	}
+	validation := stringValue(outcome.Attributes["validation"])
+	if validation == "" {
+		validation = "UNKNOWN"
+	}
+	bundle["validation"] = validation
 	if status == "UNAVAILABLE" || result == "REVIEWER1_UNAVAILABLE" {
 		bundle["reviewer1_skipped_reason"] = "REVIEWER1_UNAVAILABLE"
 	}
@@ -46,10 +54,10 @@ func setPostRereview(bundle map[string]any, outcome review.BridgeOutcome) {
 		bundle["reviewer1_result"] = "UNCERTAIN"
 	}
 	findings, _ := outcome.Attributes["findings"].([]any)
-	if len(findings) > 0 {
-		existing, _ := bundle["findings"].([]any)
-		bundle["findings"] = append(existing, findings...)
+	if findings == nil {
+		findings = []any{}
 	}
+	bundle["findings"] = findings
 }
 
 // finalizePostReview chooses the final mode and constructs the audit receipt.
