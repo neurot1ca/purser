@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"encoding/json"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -113,6 +114,12 @@ func manifestLineCount(entry map[string]any, exists bool) (int, error) {
 		return number, nil
 	case int64:
 		return int(number), nil
+	case float64:
+		maxInt := int(^uint(0) >> 1)
+		maxExclusive := float64(maxInt)
+		if math.Trunc(number) == number && number >= -maxExclusive-1 && number < maxExclusive {
+			return int(number), nil
+		}
 	case json.Number:
 		integer, err := strconv.Atoi(string(number))
 		if err == nil {
