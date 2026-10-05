@@ -51,6 +51,11 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	}
 	bundle := baseBundle("")
 	bundle["task_id"], bundle["phase"], bundle["route"] = pending["task_id"], pending["phase"], pending["route"]
+	implementer := stringValue(pending["agent"])
+	if implementer == "" {
+		implementer = "codex"
+	}
+	bundle["implementer"] = implementer + "-main"
 	bundle["model"], bundle["effort"], bundle["thread_id"] = pending["model"], pending["effort"], thread
 	bundle["implementer_report"], bundle["raw_output_path"] = content, ""
 	bundle["routing_enforced"], bundle["task_contract_grounded"] = pending["kind"] != "pretool_bypass", pending["task_contract_grounded"] == true
@@ -115,7 +120,11 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			}
 			bundle["reviewer1_result"] = attrs["result"]
 			if findings, ok := attrs["findings"].([]any); ok && len(findings) > 0 {
-				bundle["findings"] = append(bundle["findings"].([]any), findings...)
+				current, ok := bundle["findings"].([]any)
+				if !ok {
+					current = []any{}
+				}
+				bundle["findings"] = append(current, findings...)
 			}
 			mode := review.ReviewMode(true, routeInList(gateConfig["always_full_routes"], stringValue(pending["route"])), "", stringValue(attrs["result"]))
 			if resolved.ForceFullReview || bundle["force_full_review"] == true || pending["task_contract_grounded"] != true {
@@ -134,7 +143,11 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			return nil, err
 		}
 	}
-	if err = finishPostSession(root, original, pending, bundle, thread, repoRoot, worktree != "" && job["applyState"] != "applied", float64(time.Now().UnixNano())/1e9); err != nil {
+	finishedAt := float64(time.Now().UnixNano()) / 1e9
+	if value, ok := job["finishedAt"].(float64); ok && value > 0 {
+		finishedAt = value
+	}
+	if err = finishPostSession(root, original, pending, bundle, thread, repoRoot, worktree != "" && job["applyState"] != "applied", finishedAt); err != nil {
 		return nil, err
 	}
 	bundle["audit_receipt"] = postAsyncAuditReceipt(bundle)

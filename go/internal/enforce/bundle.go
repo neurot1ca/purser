@@ -78,7 +78,14 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 		}
 		compact["known_concurrent_scopes"] = map[string]any{"count": len(scopes), "task_ids": ordered}
 	}
-	if paths, ok := bundle["changed_paths"].([]any); ok {
+	paths, pathsOK := bundle["changed_paths"].([]any)
+	if strings, ok := bundle["changed_paths"].([]string); ok {
+		paths, pathsOK = make([]any, len(strings)), true
+		for i, path := range strings {
+			paths[i] = path
+		}
+	}
+	if pathsOK {
 		encoded, err := canonicalJSON(paths)
 		if err != nil {
 			return nil, false, err

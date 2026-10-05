@@ -156,6 +156,6 @@ def test_post_async_success_python_fixture(tmp_path, monkeypatch):
     cache = ROOT / ".tmp" / "go-build-cache"
     cache.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GOCACHE": str(cache), "TMP": str(ROOT / ".tmp"), "TEMP": str(ROOT / ".tmp"), "TMPDIR": str(ROOT / ".tmp")}
-    result = subprocess.run(["go", "test", "./internal/enforce/", "-run", "^TestFinishAsyncSuccessCachesReviewedNoDelta$", "-count=1"],
+    result = subprocess.run(["go", "test", "./internal/enforce/", "-run", "^TestFinishAsyncSuccess", "-count=1"],
                             cwd=ROOT / "go", env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr

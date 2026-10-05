@@ -95,6 +95,9 @@ func finishPostSession(root string, event, pending, bundle map[string]any, threa
 			}
 		}
 	}
+	if unappliedWorktree && pending["async_call"] != nil && pending["async_call"] != false {
+		return nil
+	}
 	return removePostPending(root, event)
 }
 

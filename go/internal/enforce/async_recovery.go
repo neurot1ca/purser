@@ -80,7 +80,11 @@ func recoverAsyncFinalizing(root string, event, index, pending map[string]any, c
 	if err != nil {
 		return nil, false, err
 	}
-	if err = atomicWrite(filepath.Join(root, "async_jobs", key+".json"), encoded); err != nil {
+	indexPathID := stringValue(index["jobId"])
+	if indexPathID == "" {
+		indexPathID = key
+	}
+	if err = atomicWrite(filepath.Join(root, "async_jobs", indexPathID+".json"), encoded); err != nil {
 		return nil, false, err
 	}
 	if !keepWorktree {
