@@ -52,6 +52,46 @@ func TestStopFinalizeP130Writes(t *testing.T) {
 	})
 }
 
+func TestStopFinalizeKeepsSessionLockAcrossDecisionAndWrites(t *testing.T) {
+	root := t.TempDir()
+	session := "p131-lock-race"
+	path := activeTaskPath(root, session)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	active := map[string]any{"task_id": "task-original", "tool_use_id": "tool-original", "project_key": "0123456789abcdef", "completed": false, "invalidated": false}
+	data, _ := json.Marshal(active)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock, acquired := acquireTaskUsageLock(root, session, time.Second)
+	if !acquired {
+		t.Fatal("failed to acquire test lock")
+	}
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_ = finalizeStopTask(root, session, "", "", time.Second, time.Now())
+	}()
+	time.Sleep(30 * time.Millisecond)
+	latest := map[string]any{"task_id": "task-latest", "tool_use_id": "tool-latest", "project_key": "0123456789abcdef", "completed": false, "invalidated": true, "invalidated_reason": "NEWER_FINALIZATION"}
+	data, _ = json.Marshal(latest)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		releaseTaskUsageLock(lock)
+		t.Fatal(err)
+	}
+	releaseTaskUsageLock(lock)
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("finalizer did not finish")
+	}
+	got, err := readActiveTask(root, session)
+	if err != nil || got["task_id"] != "task-latest" || got["invalidated_reason"] != "NEWER_FINALIZATION" {
+		t.Fatalf("finalizer overwrote the record read before lock: %v, %v", got, err)
+	}
+}
+
 func TestStopFinalizeP130PythonFiles(t *testing.T) {
 	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "stop_finalize_writes.json")
 	data, err := os.ReadFile(fixturePath)

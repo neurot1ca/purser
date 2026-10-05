@@ -8,11 +8,14 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"purser-hook/internal/contextio"
 )
 
 const maxTaskUsageToken = 100_000_000
 
 func init() {
+	contextio.SetStopTaskFinalizer(FinalizeStopTask)
 	// The schema already recognizes this event and its fields; register its
 	// existing usage allowlist with the observation builder.
 	observationFields["CLAUDE_TASK_USAGE_RECORDED"] = fields("claude_task_usage_source claude_task_usage_known claude_task_usage_complete claude_task_input_tokens claude_task_output_tokens claude_task_cache_creation_input_tokens claude_task_cache_read_input_tokens claude_task_total_observed_tokens claude_task_request_count claude_task_usage_boundary claude_task_usage_dedup claude_task_usage_unknown_reason claude_task_subagent_usage_included")
@@ -24,15 +27,43 @@ func init() {
 	setObservationRule("int", "claude_task_input_tokens claude_task_output_tokens claude_task_cache_creation_input_tokens claude_task_cache_read_input_tokens claude_task_total_observed_tokens claude_task_request_count")
 }
 
-// finalizeStopTask composes the decision and aggregation passes with the
-// Python finalization writes. It is intentionally not wired into stop.go yet.
+// FinalizeStopTask is the registered Go Stop entry point for transcript usage.
+func FinalizeStopTask(root, session, transcriptPath string) {
+	if session == "" {
+		return
+	}
+	home := os.Getenv("USERPROFILE")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	_ = finalizeStopTask(root, session, transcriptPath, filepath.Join(home, ".claude", "projects"), taskUsageLockTimeout, time.Now().UTC())
+}
+
+// finalizeStopTask composes the decision, aggregation, and Python finalization
+// writes while holding the per-session lock throughout.
 func finalizeStopTask(root, session, transcriptPath, projectsRoot string, timeout time.Duration, now time.Time) map[string]any {
 	if session == "" {
 		return nil
 	}
-	active, readErr := readActiveTask(root, session)
+	path := activeTaskPath(root, session)
+	markerPath := taskUsageContentionPath(root, session)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, markerErr := os.Stat(markerPath); os.IsNotExist(markerErr) {
+			return nil
+		}
+	}
+	lock, acquired := acquireTaskUsageLock(root, session, timeout)
+	if !acquired {
+		markTaskUsageContention(root, session, "")
+		return map[string]any{"status": "FAILED", "reason": "ACTIVE_TASK_STATE_CONTENTION"}
+	}
+	defer releaseTaskUsageLock(lock)
 	markerBefore, competingID := readTaskUsageContention(root, session)
-	decision := finalizeStopTaskDecision(root, session, timeout, now)
+	decision := finalizeStopTaskDecisionLocked(root, session, path, markerPath, now)
+	active, readErr := readActiveTask(root, session)
+	if os.IsNotExist(readErr) {
+		active, readErr = nil, nil
+	}
 	if decision == nil {
 		taskID, taskOK := active["task_id"].(string)
 		toolUseID, toolOK := active["tool_use_id"].(string)

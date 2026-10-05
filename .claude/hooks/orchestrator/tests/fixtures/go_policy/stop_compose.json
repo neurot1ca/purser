@@ -1,0 +1,77 @@
+{
+  "oracle": "registered Python codex.stop + compaction_advisor.stop",
+  "cases": [
+    {
+      "name": "plain-allow",
+      "expected": {
+        "decision": "allow",
+        "reason": "",
+        "retry_count": 0,
+        "active_completed": null,
+        "active_invalidated": null,
+        "active_reason": null,
+        "contention": false
+      }
+    },
+    {
+      "name": "retry-block",
+      "expected": {
+        "decision": "block",
+        "reason": "Retry the denied codex_start call.\n\nYour previous reply is already visible to the user: write only the lines requested above, without repeating any of its text.",
+        "retry_count": 1,
+        "active_completed": null,
+        "active_invalidated": null,
+        "active_reason": null,
+        "contention": false
+      }
+    },
+    {
+      "name": "flow-question-block",
+      "expected": {
+        "decision": "block",
+        "reason": "Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question.\n\nYour previous reply is already visible to the user: write only the lines requested above, without repeating any of its text.",
+        "retry_count": 0,
+        "active_completed": null,
+        "active_invalidated": null,
+        "active_reason": null,
+        "contention": false
+      }
+    },
+    {
+      "name": "finalization-failure-isolated",
+      "expected": {
+        "decision": "allow",
+        "reason": "",
+        "retry_count": 0,
+        "active_completed": true,
+        "active_invalidated": true,
+        "active_reason": "TRANSCRIPT_IDENTITY_MISMATCH",
+        "contention": false
+      }
+    },
+    {
+      "name": "finalization-success-retry-block",
+      "expected": {
+        "decision": "block",
+        "reason": "Retry the denied codex_start call.\n\nYour previous reply is already visible to the user: write only the lines requested above, without repeating any of its text.",
+        "retry_count": 1,
+        "active_completed": true,
+        "active_invalidated": false,
+        "active_reason": null,
+        "contention": false
+      }
+    },
+    {
+      "name": "concurrent-finalization-contention",
+      "expected": {
+        "decision": "allow",
+        "reason": "",
+        "retry_count": 0,
+        "active_completed": false,
+        "active_invalidated": false,
+        "active_reason": null,
+        "contention": true
+      }
+    }
+  ]
+}

@@ -17,11 +17,24 @@ const stopSuffix = "\n\nYour previous reply is already visible to the user: writ
 
 var anchorLine = regexp.MustCompile(`(?m)^(?:\*\*⚓ .+\*\*|> ⚓ \*\*.+\*\*|\*\*> ⚓ \*\*.+\*\*\*\*)$`)
 
-// Stop handles context lifecycle notices. Codex retry and flow enforcement remain in Python.
+var stopTaskFinalizer func(root, session, transcriptPath string)
+
+// SetStopTaskFinalizer registers the enforcement package's observational Stop finalizer.
+func SetStopTaskFinalizer(finalize func(root, session, transcriptPath string)) {
+	stopTaskFinalizer = finalize
+}
+
+// Stop handles context lifecycle notices and the registered enforcement Stop finalizer.
 func Stop(event map[string]any, started time.Time) []byte {
 	stopTurn(event, started)
 	repository := projectRoot(event)
 	session := str(event["session_id"])
+	if event["stop_hook_active"] != true && session != "" && stopTaskFinalizer != nil {
+		defer func() {
+			defer func() { _ = recover() }() // Finalization is observational and must not affect Stop.
+			stopTaskFinalizer(stateRoot(), session, str(event["transcript_path"]))
+		}()
+	}
 	if repository == "" || session == "" {
 		return nil
 	}
@@ -149,6 +162,14 @@ func Stop(event map[string]any, started time.Time) []byte {
 		}
 		return nil
 	}
+	var retryReason string
+	if latestUser >= 0 {
+		if changed {
+			_ = writeAdvisorState(path, state)
+		}
+		retryReason = persistCodexRetry(path, session, codexRetryReason(records, latestUser, repository))
+		state = readAdvisorState(path, session)
+	}
 	var reasons []string
 	kinds := map[string]bool{}
 	add := func(kind, reason string) { reasons = append(reasons, reason); kinds[kind] = true }
@@ -186,6 +207,19 @@ func Stop(event map[string]any, started time.Time) []byte {
 	if pending, ok := state["fallback_pending"].(map[string]any); ok && (pending["notice"] == true || pending["blocked"] != true) {
 		pending["blocked"] = true
 		add("fallback", fallbackGuidance(pending))
+	}
+	blockedUser := -1
+	if value, ok := exactInteger(state["flow_blocked_user"]); ok {
+		blockedUser = value
+	}
+	flow, blockedUser := stopFlowReason(records, latestUser, blockedUser, len(reasons) > 0 || retryReason != "")
+	if flow != "" {
+		state["flow_blocked_user"] = blockedUser
+		kinds["flow"] = true
+	}
+	reasons = stopReasons(retryReason, reasons, flow)
+	if retryReason != "" {
+		kinds["dispatch"] = true
 	}
 	if changed || len(reasons) > 0 {
 		if writeAdvisorState(path, state) != nil {

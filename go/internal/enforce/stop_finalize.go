@@ -29,7 +29,13 @@ func finalizeStopTaskDecision(root, session string, timeout time.Duration, now t
 		return map[string]any{"status": "FAILED", "reason": "ACTIVE_TASK_STATE_CONTENTION"}
 	}
 	defer releaseTaskUsageLock(lock)
+	return finalizeStopTaskDecisionLocked(root, session, path, markerPath, now)
+}
 
+// finalizeStopTaskDecisionLocked performs the decision while the caller holds
+// the per-session lock. Stop finalization keeps this lock through aggregation
+// and persistence as well.
+func finalizeStopTaskDecisionLocked(root, session, path, markerPath string, now time.Time) map[string]any {
 	markerPresent, _ := readTaskUsageContention(root, session)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
