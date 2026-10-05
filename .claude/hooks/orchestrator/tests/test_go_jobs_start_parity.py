@@ -1,5 +1,5 @@
 """154a start validation fixtures are captured from the real Python bridge."""
-import inspect, json, os, sys
+import hashlib, inspect, json, os, sys
 from pathlib import Path
 import pytest
 
@@ -25,6 +25,24 @@ def _invalid(name, args, tmp_path, monkeypatch, config_error=False):
     return {"name": name, "args": args, "result": result}
 
 
+def _clean(value):
+    if isinstance(value, dict): return {k:("TIME" if k=="acceptedAt" else "DEADLINE" if k=="deadlineAt" else "TOKEN" if k in ("signalToken","ownershipToken") else _clean(v)) for k,v in value.items()}
+    if isinstance(value, list): return [_clean(v) for v in value]
+    return value
+
+
+def _start_case(name, calls, tmp_path, monkeypatch):
+    server = _server(monkeypatch,tmp_path/name); launches=[]
+    monkeypatch.setattr(bridge,"_launch_host",lambda _dir,jid,gen,token:launches.append({"jobId":jid,"generation":gen,"token":"TOKEN"}))
+    server._await_host = lambda jid: bridge._job_result({"jobId":jid,"state":"QUEUED","acceptedAt":10,"deadlineAt":20})
+    result=None
+    for args in calls: result=server._start_job(args)
+    files={}
+    if server.job_dir.exists():
+        for p in sorted(server.job_dir.iterdir()): files[p.name]=True if p.is_dir() else _clean(json.loads(p.read_text(encoding="utf-8")))
+    return {"name":name,"calls":calls,"result":_clean(result),"files":files or None,"launches":launches}
+
+
 def test_go_start_validation_matches_python_oracle(tmp_path, monkeypatch):
     monkeypatch.delenv("PURSER_AGENT", raising=False)
     cases = [
@@ -46,21 +64,29 @@ def test_go_start_validation_matches_python_oracle(tmp_path, monkeypatch):
 
     server = _server(monkeypatch, tmp_path / "valid")
     observed = {}
-
     class StopAtLock:
         def __enter__(self):
             local = inspect.currentframe().f_back.f_locals
             observed.update({dst: local[src] for dst, src in (("jobId","job_id"),("call","call"),("prompt","prompt"),("agent","job_agent"),("mode","mode"),("name","name"),("timeoutSeconds","timeout"),("args","args"))})
             raise RuntimeError("validation boundary")
-
         __exit__ = lambda self, *_: False
-
     server.jobs_lock = StopAtLock()
-    valid_args = {"call": CALL, "prompt": "p", "cwd": "C:/repo"}
-    with pytest.raises(RuntimeError, match="validation boundary"):
-        server._start_job(valid_args)
+    valid_args = {"call":"urn:00000000uuid:0000-4000-8000-000000000001","prompt":"p","cwd":"C:/repo"}
+    with pytest.raises(RuntimeError,match="validation boundary"): server._start_job(valid_args)
     assert not server.job_dir.exists()
-    cases.append({"name": "valid", "args": valid_args, "request": observed})
+    cases.append({"name":"uuid_cleanup","args":valid_args,"request":observed})
+    server = _server(monkeypatch, tmp_path / "duplicate")
+    job_id = hashlib.sha256(CALL.encode()).hexdigest()
+    server._write_job({"jobId":job_id,"state":"QUEUED","acceptedAt":10,"deadlineAt":20})
+    server._await_host = lambda _: bridge._job_result({"jobId":job_id,"state":"QUEUED","acceptedAt":10,"deadlineAt":20})
+    duplicate_args = {"call":CALL,"prompt":"p","timeoutSeconds":False,"mode":"invalid"}
+    cases.append({"name":"duplicate_before_validation","args":duplicate_args,"existing":True,"result":server._start_job(duplicate_args)})
+    cases.extend([
+        _start_case("unknown_thread",[{"call":CALL,"prompt":"p","mode":"reply","threadId":"missing"}],tmp_path,monkeypatch),
+        _start_case("valid_new",[{"call":CALL,"prompt":"p","cwd":"C:/repo","taskId":"task-1","jobModel":"model-x"}],tmp_path,monkeypatch),
+        _start_case("duplicate_same",[{"call":CALL,"prompt":"p","cwd":"C:/repo"}]*2,tmp_path,monkeypatch),
+        _start_case("duplicate_different",[{"call":CALL,"prompt":"p","cwd":"C:/repo"},{"call":CALL,"prompt":"changed","timeoutSeconds":0}],tmp_path,monkeypatch),
+    ])
     fixture = {"oracle": "real Server._start_job before jobs_lock", "cases": cases}
     if os.environ.get("PURSER_REGEN_GO_JOBS_START") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)

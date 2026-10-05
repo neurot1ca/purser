@@ -1,0 +1,178 @@
+package jobs
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"time"
+)
+
+type StartOptions struct {
+	Validation StartValidationOptions
+	CodexBin   any
+	Launch     func(jobID string, generation int64, token string) error
+	Await      func(jobID string, record *Record) map[string]any
+}
+
+// Start writes the durable reservation before invoking the injected host launcher.
+func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]any, *Record, error) {
+	dir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
+	await := func(id string, r *Record) map[string]any {
+		if opt.Await != nil {
+			return opt.Await(id, r)
+		}
+		if r == nil {
+			return jobResult(map[string]any{"jobId": id, "state": "UNKNOWN_OR_IN_PROGRESS", "errorCode": "PROCESS_UNCONFIRMED", "message": "Host ownership was not acknowledged"})
+		}
+		m := recordMap(r)
+		return jobResult(map[string]any{"jobId": id, "state": m["state"], "acceptedAt": m["acceptedAt"], "deadlineAt": m["deadlineAt"]})
+	}
+	validation := opt.Validation
+	validation.LookupExisting = func(id string) map[string]any {
+		if r := readJob(dir, id); r != nil {
+			return await(id, r)
+		}
+		return nil
+	}
+	req, early := ValidateStart(args, validation)
+	if early != nil {
+		return early, nil, nil
+	}
+	if req.ExistingResult != nil {
+		return req.ExistingResult, readJob(dir, req.JobID), nil
+	}
+	var thread map[string]any
+	if req.Mode == "reply" {
+		id, ok := args["threadId"].(string)
+		if !ok {
+			return startFailure("UNKNOWN_THREAD", "Thread is unknown to this server"), nil, nil
+		}
+		thread = LoadRecord(filepath.Join(stateRoot, "codex_exec_mcp", "threads"), id)
+		if thread == nil {
+			return startFailure("UNKNOWN_THREAD", "Thread is unknown to this server"), nil, nil
+		}
+	}
+	var signal, owner [16]byte
+	if _, err := rand.Read(signal[:]); err != nil {
+		return nil, nil, err
+	}
+	if _, err := rand.Read(owner[:]); err != nil {
+		return nil, nil, err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, nil, err
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dir, 0700); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, req.JobID+".lock"), 0700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			if r := readJob(dir, req.JobID); r != nil {
+				return await(req.JobID, r), r, nil
+			}
+			return await(req.JobID, nil), nil, nil
+		}
+		return nil, nil, err
+	}
+	accepted := float64(time.Now().UnixNano()) / 1e9
+	job := map[string]any{"jobId": req.JobID, "call": req.Call, "state": "QUEUED", "acceptedAt": accepted, "deadlineAt": accepted + req.TimeoutSeconds, "signalToken": hex.EncodeToString(signal[:]), "generation": 1, "ownershipToken": hex.EncodeToString(owner[:])}
+	if thread != nil {
+		for _, k := range []string{"worktreePath", "snapshot", "head", "repoRoot", "baselineSnapshot"} {
+			if v, ok := thread[k]; ok {
+				job[k] = v
+			}
+		}
+		if p, ok := job["worktreePath"].(string); ok && p != "" {
+			if job["baselineSnapshot"] == nil {
+				job["baselineSnapshot"] = job["snapshot"]
+			}
+			job["snapshot"] = job["baselineSnapshot"]
+		}
+	}
+	if args["leaseQueued"] == true {
+		job["leaseQueued"] = true
+	}
+	for _, k := range []string{"taskId", "route", "etaMinutes"} {
+		if v, ok := args[k]; ok {
+			job[k] = v
+		}
+	}
+	for _, p := range [][2]string{{"model", "jobModel"}, {"effort", "jobEffort"}, {"label", "jobLabel"}, {"phase", "jobPhase"}} {
+		v, ok := args[p[1]]
+		if !ok {
+			v, ok = args[p[0]]
+		}
+		if ok && v != nil {
+			job[p[0]] = v
+		}
+	}
+	if readyCheck(args) {
+		job["readinessCheck"] = readinessValue(args)
+	}
+	launch, err := marshalPythonJSON(map[string]any{"name": req.Name, "args": args, "codexBin": opt.CodexBin, "agent": req.Agent})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = atomicWrite(filepath.Join(dir, req.JobID+".launch"), launch); err != nil {
+		return nil, nil, err
+	}
+	data, err := marshalPythonJSON(job)
+	if err != nil {
+		return nil, nil, err
+	}
+	r, err := Decode(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = Write(filepath.Join(dir, req.JobID+".json"), r); err != nil {
+		return nil, nil, err
+	}
+	if opt.Launch != nil {
+		if err = opt.Launch(req.JobID, 1, job["ownershipToken"].(string)); err != nil {
+			return jobResult(map[string]any{"jobId": req.JobID, "state": "UNKNOWN_OR_IN_PROGRESS", "errorCode": "PROCESS_UNCONFIRMED", "message": "Host launch unconfirmed"}), r, nil
+		}
+	}
+	return await(req.JobID, r), r, nil
+}
+
+func startFailure(code, message string) map[string]any {
+	return jobResult(map[string]any{"state": "FAILED", "errorCode": code, "message": message})
+}
+func readJob(dir, id string) *Record {
+	r, e := Read(filepath.Join(dir, id+".json"))
+	if e != nil {
+		return nil
+	}
+	var got string
+	if !r.Get("jobId", &got) || got != id {
+		return nil
+	}
+	return r
+}
+func recordMap(r *Record) map[string]any {
+	b, _ := r.Bytes()
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	return m
+}
+func readyCheck(a map[string]any) bool {
+	c, ok := a["readinessCriteria"].(map[string]any)
+	if !ok || len(c) != 2 || a["readinessGrounded"] != true {
+		return false
+	}
+	o, x := c["objective"].(string)
+	v, y := c["acceptance_criteria"].(string)
+	g, z := a["readinessAgent"].(string)
+	_, m := a["readinessModel"].(string)
+	return x && y && len(o)+len(v) <= 20000 && z && (g == "agy" || g == "off") && m
+}
+func readinessValue(a map[string]any) map[string]any {
+	c := a["readinessCriteria"].(map[string]any)
+	return map[string]any{"grounded": true, "objective": c["objective"], "acceptance_criteria": c["acceptance_criteria"], "agent": a["readinessAgent"], "model": a["readinessModel"]}
+}

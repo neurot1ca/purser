@@ -308,26 +308,259 @@
       }
     },
     {
-      "name": "valid",
+      "name": "uuid_cleanup",
       "args": {
-        "call": "00000000-0000-4000-8000-000000000001",
+        "call": "urn:00000000uuid:0000-4000-8000-000000000001",
         "prompt": "p",
         "cwd": "C:/repo"
       },
       "request": {
-        "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
-        "call": "00000000-0000-4000-8000-000000000001",
+        "jobId": "8d6df4c7c07aaaecb20f9ac0f387ea7ddf58dcbc41e91bba966b3bd1d3813d0a",
+        "call": "urn:00000000uuid:0000-4000-8000-000000000001",
         "prompt": "p",
         "agent": "codex",
         "mode": "new",
         "name": "codex",
         "timeoutSeconds": 86400,
         "args": {
-          "call": "00000000-0000-4000-8000-000000000001",
+          "call": "urn:00000000uuid:0000-4000-8000-000000000001",
           "prompt": "p",
           "cwd": "C:/repo"
         }
       }
+    },
+    {
+      "name": "duplicate_before_validation",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "timeoutSeconds": false,
+        "mode": "invalid"
+      },
+      "existing": true,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1\", \"state\": \"QUEUED\", \"acceptedAt\": 10, \"deadlineAt\": 20}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "state": "QUEUED",
+          "acceptedAt": 10,
+          "deadlineAt": 20
+        },
+        "isError": false
+      }
+    },
+    {
+      "name": "unknown_thread",
+      "calls": [
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "p",
+          "mode": "reply",
+          "threadId": "missing"
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"UNKNOWN_THREAD\", \"message\": \"Thread is unknown to this server\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "UNKNOWN_THREAD",
+          "message": "Thread is unknown to this server"
+        },
+        "isError": true
+      },
+      "files": null,
+      "launches": []
+    },
+    {
+      "name": "valid_new",
+      "calls": [
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "p",
+          "cwd": "C:/repo",
+          "taskId": "task-1",
+          "jobModel": "model-x"
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1\", \"state\": \"QUEUED\", \"acceptedAt\": 10, \"deadlineAt\": 20}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE"
+        },
+        "isError": false
+      },
+      "files": {
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.json": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "call": "00000000-0000-4000-8000-000000000001",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "signalToken": "TOKEN",
+          "generation": 1,
+          "ownershipToken": "TOKEN",
+          "taskId": "task-1",
+          "model": "model-x"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
+          "name": "codex",
+          "args": {
+            "call": "00000000-0000-4000-8000-000000000001",
+            "prompt": "p",
+            "cwd": "C:/repo",
+            "taskId": "task-1",
+            "jobModel": "model-x"
+          },
+          "codexBin": null,
+          "agent": "codex"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.lock": true
+      },
+      "launches": [
+        {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "generation": 1,
+          "token": "TOKEN"
+        }
+      ]
+    },
+    {
+      "name": "duplicate_same",
+      "calls": [
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "p",
+          "cwd": "C:/repo"
+        },
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "p",
+          "cwd": "C:/repo"
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1\", \"state\": \"QUEUED\", \"acceptedAt\": 10, \"deadlineAt\": 20}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE"
+        },
+        "isError": false
+      },
+      "files": {
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.json": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "call": "00000000-0000-4000-8000-000000000001",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "signalToken": "TOKEN",
+          "generation": 1,
+          "ownershipToken": "TOKEN"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
+          "name": "codex",
+          "args": {
+            "call": "00000000-0000-4000-8000-000000000001",
+            "prompt": "p",
+            "cwd": "C:/repo"
+          },
+          "codexBin": null,
+          "agent": "codex"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.lock": true
+      },
+      "launches": [
+        {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "generation": 1,
+          "token": "TOKEN"
+        }
+      ]
+    },
+    {
+      "name": "duplicate_different",
+      "calls": [
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "p",
+          "cwd": "C:/repo"
+        },
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "changed",
+          "timeoutSeconds": 0
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1\", \"state\": \"QUEUED\", \"acceptedAt\": 10, \"deadlineAt\": 20}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE"
+        },
+        "isError": false
+      },
+      "files": {
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.json": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "call": "00000000-0000-4000-8000-000000000001",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "signalToken": "TOKEN",
+          "generation": 1,
+          "ownershipToken": "TOKEN"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
+          "name": "codex",
+          "args": {
+            "call": "00000000-0000-4000-8000-000000000001",
+            "prompt": "p",
+            "cwd": "C:/repo"
+          },
+          "codexBin": null,
+          "agent": "codex"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.lock": true
+      },
+      "launches": [
+        {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "generation": 1,
+          "token": "TOKEN"
+        }
+      ]
     }
   ]
 }

@@ -22,6 +22,7 @@ type StartRequest struct {
 	Name           string         `json:"name"`
 	TimeoutSeconds float64        `json:"timeoutSeconds"`
 	Args           map[string]any `json:"args"`
+	ExistingResult map[string]any `json:"existingResult,omitempty"`
 }
 
 type StartValidationOptions struct {
@@ -29,10 +30,10 @@ type StartValidationOptions struct {
 	FixedAgent      bool
 	ConfiguredAgent func() (string, error)
 	ValidateAgent   func(string) error
+	LookupExisting  func(string) map[string]any
 }
 
-// ValidateStart mirrors _start_job through launch argument validation, before
-// the jobs lock, duplicate lookup, thread lookup, or any durable state access.
+// ValidateStart checks duplicates after UUID validation, before timeout and launch validation.
 func ValidateStart(args map[string]any, opt StartValidationOptions) (StartRequest, map[string]any) {
 	fail := func(code, message string) (StartRequest, map[string]any) {
 		return StartRequest{}, jobResult(map[string]any{"state": "FAILED", "errorCode": code, "message": message})
@@ -69,6 +70,13 @@ func ValidateStart(args map[string]any, opt StartValidationOptions) (StartReques
 	if !validStartUUID(call) {
 		return fail("INVALID_ARGUMENT", "call must be a UUID")
 	}
+	id := sha256.Sum256([]byte(call))
+	jobID := hex.EncodeToString(id[:])
+	if opt.LookupExisting != nil {
+		if existing := opt.LookupExisting(jobID); existing != nil {
+			return StartRequest{JobID: jobID, Call: call, Prompt: prompt, Args: args, ExistingResult: existing}, nil
+		}
+	}
 	timeout := any(startDefaultTimeout)
 	if v, ok := args["timeoutSeconds"]; ok {
 		timeout = v
@@ -94,12 +102,23 @@ func ValidateStart(args map[string]any, opt StartValidationOptions) (StartReques
 	if validateStartLaunch(args, agent, mode, name, opt) != nil {
 		return fail("INVALID_ARGUMENT", "Invalid Codex launch arguments")
 	}
-	id := sha256.Sum256([]byte(call))
-	return StartRequest{JobID: hex.EncodeToString(id[:]), Call: call, Prompt: prompt, Agent: agent, Mode: mode, Name: name, TimeoutSeconds: seconds, Args: args}, nil
+	return StartRequest{JobID: jobID, Call: call, Prompt: prompt, Agent: agent, Mode: mode, Name: name, TimeoutSeconds: seconds, Args: args}, nil
 }
 
 func jobResult(value map[string]any) map[string]any {
-	text := `{"state": ` + pythonQuote(value["state"]) + `, "errorCode": ` + pythonQuote(value["errorCode"]) + `, "message": ` + pythonQuote(value["message"]) + `}`
+	keys := []string{"state", "errorCode", "message"}
+	if _, failed := value["errorCode"]; !failed {
+		keys = []string{"jobId", "state", "acceptedAt", "deadlineAt"}
+	} else if _, hasID := value["jobId"]; hasID {
+		keys = []string{"jobId", "state", "errorCode", "message"}
+	}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if v, ok := value[key]; ok {
+			parts = append(parts, pythonQuote(key)+": "+pythonQuote(v))
+		}
+	}
+	text := "{" + strings.Join(parts, ", ") + "}"
 	return map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "structuredContent": value, "isError": value["errorCode"] != nil}
 }
 
@@ -113,7 +132,8 @@ func pythonQuote(v any) string {
 
 func validStartAgent(s string) bool { return s == "codex" || s == "opencode" || s == "agy" }
 func validStartUUID(s string) bool {
-	s = strings.TrimPrefix(strings.ToLower(s), "urn:uuid:")
+	s = strings.ReplaceAll(s, "urn:", "")
+	s = strings.ReplaceAll(s, "uuid:", "")
 	s = strings.Trim(s, "{}")
 	s = strings.ReplaceAll(s, "-", "")
 	b, err := hex.DecodeString(s)
