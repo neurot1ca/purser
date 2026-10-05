@@ -54,26 +54,31 @@ func (s *Store) OwnerState(ownerKey string, now float64) (string, error) {
 }
 func (s *Store) OverlappingOwners(ownerKey string, now float64) ([]map[string]any, error) {
 	var result []map[string]any
+	var resultErr error
 	err := s.mutate(now, func(value map[string]any) bool {
 		changed := s.expire(value, now)
 		changed = s.promote(value, now) || changed
 		owners := value["owners"].(map[string]any)
 		own, ok := owners[ownerKey]
 		if !ok {
+			resultErr = errors.New("current scope lease history is missing")
 			return changed
 		}
 		record, ok := own.(map[string]any)
 		if !ok {
+			resultErr = errors.New("current scope lease history is missing")
 			return changed
 		}
 		start, ok := pythonFloat(record["acquired_at"])
 		if !ok {
+			resultErr = errors.New("current scope lease history is missing")
 			return changed
 		}
 		end := now
 		if raw, exists := record["released_at"]; exists {
 			end, ok = pythonFloat(raw)
 			if !ok {
+				resultErr = errors.New("current scope lease release time is missing")
 				return changed
 			}
 		}
@@ -85,19 +90,31 @@ func (s *Store) OverlappingOwners(ownerKey string, now float64) ([]map[string]an
 			}
 			otherRaw, exists := owners[key]
 			if !exists {
-				continue
+				resultErr = errors.New("current scope lease history is missing")
+				return changed
 			}
 			other, ok := otherRaw.(map[string]any)
 			if !ok {
+				resultErr = errors.New("current scope lease history is missing")
 				return changed
 			}
-			acquired, hasAcquired := pythonFloat(other["acquired_at"])
-			released, hasReleased := pythonFloat(other["released_at"])
-			if !hasReleased {
-				released = now
-				hasReleased = true
+			if _, exists := other["acquired_at"]; !exists {
+				continue
 			}
-			if hasAcquired && hasReleased && acquired < end && released > start {
+			acquired, ok := pythonFloat(other["acquired_at"])
+			if !ok {
+				resultErr = errors.New("scope lease timing history is missing")
+				return changed
+			}
+			released := now
+			if raw, exists := other["released_at"]; exists {
+				released, ok = pythonFloat(raw)
+				if !ok {
+					resultErr = errors.New("scope lease timing history is missing")
+					return changed
+				}
+			}
+			if acquired < end && released > start {
 				result = append(result, map[string]any{"task_id": other["task_id"], "scope": other["scope"]})
 			}
 		}
@@ -105,6 +122,9 @@ func (s *Store) OverlappingOwners(ownerKey string, now float64) ([]map[string]an
 	})
 	if err != nil {
 		return nil, err
+	}
+	if resultErr != nil {
+		return nil, resultErr
 	}
 	if result == nil {
 		return nil, errors.New("current scope lease history is missing")
