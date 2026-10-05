@@ -1292,7 +1292,7 @@ func fields(names string) map[string]bool {
 var (
 	callObservationFields  = fields("phase route model model_source effort routing_enforced fresh_thread reply_call reason reason_source previous_route new_route eta_minutes worker_prompt_chars scope_path_count task_type suspected_route_mismatch agent provider")
 	startObservationFields = fields("implementer claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
-	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source")}
+	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source")}
 	observationID          = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	observationUUID        = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	unsafeObservationID    = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -1992,6 +1992,10 @@ func mergeFields(sets ...map[string]bool) map[string]bool {
 
 var observationRules = map[string]string{}
 
+var reviewerObservationFields = fields("reviewer1_retry_count reviewer1_retry_recovered reviewer1_provider reviewer1_model_requested served_model_attestation duration_ms gemini_usage_known gemini_input_tokens gemini_cached_input_tokens gemini_output_tokens gemini_reasoning_output_tokens gemini_total_tokens gemini_prompt_tokens gemini_completion_tokens gemini_cached_tokens gemini_cache_read_tokens gemini_cache_write_tokens gemini_thinking_tokens")
+var reviewerFinishedObservationFields = mergeFields(reviewerObservationFields, fields("reviewer1_result reviewer1_initial_finding_count"))
+var reviewerFailedObservationFields = mergeFields(reviewerObservationFields, fields("failure_code reviewer1_error_code reviewer1_result"))
+
 var observationEventTypes = fields("TASK_ROUTE_SELECTED IMPLEMENTER_STARTED IMPLEMENTER_FINISHED IMPLEMENTER_FAILED MECHANICAL_MODEL_RANK_CHANGED REVIEWER1_STARTED REVIEWER1_FINISHED COMPACTION_ADVICE_OUTCOME STOP_BLOCKED SHADOW_FINISHED SCOPE_CONFLICT_OUTCOME REVIEWER1_SKIPPED REVIEWER1_FAILED ROUTING_PROTOCOL_VIOLATION THREAD_CONTINUITY_VIOLATION UNKNOWN_CONCURRENT_WRITER WORKFLOW_VERDICT_RECORDED TELEMETRY_WARNING CLAUDE_TASK_USAGE_RECORDED CONTEXT_IO_TURN_RECORDED CODEX_RESULT_UNFETCHED CLAUDE_DECISION_RECORDED WORKER_REPLAY_CONFLICT MECHANICAL_EDIT_OBSERVED MAINTENANCE_REPORT_FINISHED MAINTENANCE_REPORT_ACTED READINESS_CHECK_OUTCOME")
 
 const claudeUsageSnapshotLimit = 16 << 10
@@ -2089,6 +2093,13 @@ func init() {
 	setObservationRule("enum:low medium high xhigh none", "effort")
 	setObservationRule("enum:new_task continue fix route_change reanchor repeated_failure user_override", "reason")
 	setObservationRule("enum:CODEX_CALL_FAILED CODEX_CALL_INTERRUPTED REVIEWER1_UNAVAILABLE REVIEWER1_INCOMPLETE", "failure_code")
+	setObservationRule("enum:NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE CHANGES_REQUIRED UNCERTAIN REVIEWER1_UNAVAILABLE", "reviewer1_result")
+	setObservationRule("enum:PHASE_OPERATION NO_DELTA BELOW_THRESHOLD REVIEWER_UNAVAILABLE", "reviewer1_skipped_reason")
+	setObservationRule("enum:UNAVAILABLE", "served_model_attestation")
+	setObservationRule("bool", "gemini_usage_known reviewer1_retry_recovered")
+	setObservationRule("int", "reviewer1_retry_count reviewer1_initial_finding_count")
+	setObservationRule("number", "gemini_input_tokens gemini_cached_input_tokens gemini_output_tokens gemini_reasoning_output_tokens gemini_total_tokens gemini_prompt_tokens gemini_completion_tokens gemini_cached_tokens gemini_cache_read_tokens gemini_cache_write_tokens gemini_thinking_tokens")
+	setObservationRule("id", "reviewer1_provider reviewer1_model_requested reviewer1_error_code")
 	setObservationRule("enum:explicit inherited", "reason_source")
 	setObservationRule("enum:implementation operation plan unknown counting_status", "task_type")
 	setObservationRule("enum:accepted send_back rejected unknown", "decision")
@@ -2220,6 +2231,8 @@ func validateObservationValue(name string, value any) error {
 	rule := observationRules[name]
 	valid := false
 	switch {
+	case name == "reviewer1_retry_count":
+		valid = validNumber(value, true) && oneOfNumeric(value, 0, 1)
 	case rule == "bool":
 		_, valid = value.(bool)
 	case rule == "int":

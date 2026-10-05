@@ -1,0 +1,424 @@
+{
+  "oracle": "codex._post_observations with reviewer.py result types",
+  "cases": [
+    {
+      "name": "completed_findings",
+      "started": true,
+      "outcome": "completed",
+      "result": "CHANGES_REQUIRED",
+      "findings": [
+        {
+          "code": "MISSING_TEST",
+          "message": "Add a regression test."
+        }
+      ],
+      "duration_ms": 1250,
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": 8
+      },
+      "retry_count": 1,
+      "retry_recovered": true,
+      "provider": "gemini",
+      "requested_model": "gemini-pro",
+      "initial_finding_count": 1,
+      "attributes": {
+        "provider": "gemini",
+        "reviewer1_model_requested": "gemini-pro",
+        "result": "CHANGES_REQUIRED",
+        "review_status": "COMPLETED",
+        "findings": [
+          {
+            "code": "MISSING_TEST",
+            "message": "Add a regression test."
+          }
+        ],
+        "error_code": "MISSING_TEST",
+        "retry_count": 1,
+        "retry_recovered": true,
+        "reviewer1_retry_count": 1,
+        "reviewer1_retry_recovered": true,
+        "usage": {
+          "input_tokens": 21,
+          "output_tokens": 8
+        }
+      },
+      "events": [
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_STARTED",
+          "payload": {
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        },
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_FINISHED",
+          "payload": {
+            "duration_ms": 1250.0,
+            "gemini_input_tokens": 21,
+            "gemini_output_tokens": 8,
+            "gemini_usage_known": true,
+            "reviewer1_initial_finding_count": 1,
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini",
+            "reviewer1_result": "CHANGES_REQUIRED",
+            "reviewer1_retry_count": 1,
+            "reviewer1_retry_recovered": true,
+            "served_model_attestation": "UNAVAILABLE"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        }
+      ]
+    },
+    {
+      "name": "completed_no_finding",
+      "started": true,
+      "outcome": "completed",
+      "result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+      "findings": [],
+      "duration_ms": 400,
+      "usage": {},
+      "retry_count": 0,
+      "retry_recovered": false,
+      "provider": "gemini",
+      "requested_model": "gemini-pro",
+      "initial_finding_count": 0,
+      "attributes": {
+        "provider": "gemini",
+        "reviewer1_model_requested": "gemini-pro",
+        "result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "review_status": "COMPLETED",
+        "findings": [],
+        "error_code": null,
+        "retry_count": 0,
+        "retry_recovered": false,
+        "reviewer1_retry_count": 0,
+        "reviewer1_retry_recovered": false,
+        "usage": {}
+      },
+      "events": [
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_STARTED",
+          "payload": {
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        },
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_FINISHED",
+          "payload": {
+            "duration_ms": 400.0,
+            "gemini_usage_known": false,
+            "reviewer1_initial_finding_count": 0,
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini",
+            "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+            "reviewer1_retry_count": 0,
+            "reviewer1_retry_recovered": false,
+            "served_model_attestation": "UNAVAILABLE"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        }
+      ]
+    },
+    {
+      "name": "unavailable",
+      "started": true,
+      "outcome": "unavailable",
+      "result": "REVIEWER1_UNAVAILABLE",
+      "findings": [
+        {
+          "code": "REVIEWER_TIMEOUT",
+          "message": "Timed out."
+        }
+      ],
+      "duration_ms": 2500,
+      "usage": {},
+      "retry_count": 0,
+      "retry_recovered": false,
+      "provider": "gemini",
+      "requested_model": "gemini-pro",
+      "initial_finding_count": 1,
+      "attributes": {
+        "provider": "gemini",
+        "reviewer1_model_requested": "gemini-pro",
+        "result": "REVIEWER1_UNAVAILABLE",
+        "review_status": "UNAVAILABLE",
+        "findings": [
+          {
+            "code": "REVIEWER_TIMEOUT",
+            "message": "Timed out."
+          }
+        ],
+        "error_code": "REVIEWER_TIMEOUT",
+        "retry_count": 0,
+        "retry_recovered": false,
+        "reviewer1_retry_count": 0,
+        "reviewer1_retry_recovered": false,
+        "usage": {}
+      },
+      "events": [
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_STARTED",
+          "payload": {
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        },
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_FAILED",
+          "payload": {
+            "duration_ms": 2500.0,
+            "failure_code": "REVIEWER1_UNAVAILABLE",
+            "gemini_usage_known": false,
+            "reviewer1_error_code": "REVIEWER_TIMEOUT",
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini",
+            "reviewer1_result": "REVIEWER1_UNAVAILABLE",
+            "reviewer1_retry_count": 0,
+            "reviewer1_retry_recovered": false,
+            "served_model_attestation": "UNAVAILABLE"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        }
+      ]
+    },
+    {
+      "name": "incomplete_packet",
+      "started": true,
+      "outcome": "incomplete",
+      "result": "UNCERTAIN",
+      "findings": [
+        {
+          "code": "INCOMPLETE_PACKET",
+          "message": "Required material was omitted."
+        }
+      ],
+      "duration_ms": 0,
+      "usage": {},
+      "retry_count": 0,
+      "retry_recovered": false,
+      "provider": "gemini",
+      "requested_model": "gemini-pro",
+      "initial_finding_count": 1,
+      "attributes": {
+        "provider": "gemini",
+        "reviewer1_model_requested": "gemini-pro",
+        "result": "UNCERTAIN",
+        "review_status": "NOT_RUN_INCOMPLETE_PACKET",
+        "findings": [
+          {
+            "code": "INCOMPLETE_PACKET",
+            "message": "Required material was omitted."
+          }
+        ],
+        "error_code": "INCOMPLETE_PACKET",
+        "retry_count": 0,
+        "retry_recovered": false,
+        "reviewer1_retry_count": 0,
+        "reviewer1_retry_recovered": false,
+        "usage": {}
+      },
+      "events": [
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_STARTED",
+          "payload": {
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        },
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_FAILED",
+          "payload": {
+            "duration_ms": 0.0,
+            "failure_code": "REVIEWER1_INCOMPLETE",
+            "gemini_usage_known": false,
+            "reviewer1_error_code": "INCOMPLETE_PACKET",
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini",
+            "reviewer1_result": "UNCERTAIN",
+            "reviewer1_retry_count": 0,
+            "reviewer1_retry_recovered": false,
+            "served_model_attestation": "UNAVAILABLE"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        }
+      ]
+    },
+    {
+      "name": "skipped_no_delta",
+      "started": false,
+      "skipped_reason": "NO_DELTA",
+      "provider": "gemini",
+      "requested_model": "gemini-pro",
+      "initial_finding_count": 0,
+      "attributes": {},
+      "events": [
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_SKIPPED",
+          "payload": {
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_skipped_reason": "NO_DELTA",
+            "served_model_attestation": "UNAVAILABLE"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        }
+      ]
+    },
+    {
+      "name": "skipped_phase_plan",
+      "started": false,
+      "skipped_reason": "PHASE_PLAN",
+      "provider": "gemini",
+      "requested_model": "gemini-pro",
+      "initial_finding_count": 0,
+      "attributes": {},
+      "events": []
+    },
+    {
+      "name": "bridge_exception",
+      "started": true,
+      "outcome": "unavailable",
+      "result": "REVIEWER1_UNAVAILABLE",
+      "findings": [
+        {
+          "code": "REVIEWER_BRIDGE_EXCEPTION",
+          "message": "Reviewer-1 failed unexpectedly (RuntimeError)."
+        }
+      ],
+      "error_code": "REVIEWER_BRIDGE_EXCEPTION",
+      "duration_ms": 75,
+      "usage": {},
+      "retry_count": 0,
+      "retry_recovered": false,
+      "provider": "gemini",
+      "requested_model": "gemini-pro",
+      "initial_finding_count": 1,
+      "attributes": {
+        "provider": "gemini",
+        "reviewer1_model_requested": "gemini-pro",
+        "result": "REVIEWER1_UNAVAILABLE",
+        "review_status": "UNAVAILABLE",
+        "findings": [
+          {
+            "code": "REVIEWER_BRIDGE_EXCEPTION",
+            "message": "Reviewer-1 failed unexpectedly (RuntimeError)."
+          }
+        ],
+        "error_code": "REVIEWER_BRIDGE_EXCEPTION",
+        "retry_count": 0,
+        "retry_recovered": false,
+        "reviewer1_retry_count": 0,
+        "reviewer1_retry_recovered": false,
+        "usage": {}
+      },
+      "events": [
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_STARTED",
+          "payload": {
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        },
+        {
+          "agent_id": null,
+          "agent_type": null,
+          "branch": null,
+          "event_type": "REVIEWER1_FAILED",
+          "payload": {
+            "duration_ms": 75.0,
+            "failure_code": "REVIEWER1_UNAVAILABLE",
+            "gemini_usage_known": false,
+            "reviewer1_error_code": "REVIEWER_BRIDGE_EXCEPTION",
+            "reviewer1_model_requested": "gemini-pro",
+            "reviewer1_provider": "gemini",
+            "reviewer1_result": "REVIEWER1_UNAVAILABLE",
+            "reviewer1_retry_count": 0,
+            "reviewer1_retry_recovered": false,
+            "served_model_attestation": "UNAVAILABLE"
+          },
+          "project_key": "0123456789abcdef",
+          "repo": null,
+          "schema_version": 1,
+          "session_id": "reviewer-fixture-session",
+          "task_id": "reviewer-task"
+        }
+      ]
+    }
+  ]
+}
