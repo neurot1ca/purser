@@ -24,6 +24,8 @@ import (
 
 const observationSchemaVersion = 1
 
+var observationNow = time.Now
+
 const (
 	observationMarkerPrefix     = "<!-- orchestrator projection v1 sha256="
 	observationYAMLMarkerPrefix = "# orchestrator projection v1 sha256="
@@ -1996,7 +1998,7 @@ const claudeUsageSnapshotLimit = 16 << 10
 
 var claudeUsagePayloadFields = fields("claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
 
-func readClaudeUsagePayload(stateRoot string, now time.Time) map[string]any {
+func readClaudeUsagePayload(stateRoot string, now time.Time, eventType string) map[string]any {
 	unknown := map[string]any{"claude_usage_known": false, "claude_rate_limit_delta_scope": "account_window_observation"}
 	file, err := os.Open(filepath.Join(stateRoot, "telemetry", "latest", "claude_usage.json"))
 	if err != nil {
@@ -2041,7 +2043,11 @@ func readClaudeUsagePayload(stateRoot string, now time.Time) map[string]any {
 			continue
 		}
 		if number := validClaudeNumber(values["used_percentage"]); number != nil {
-			payload[window.prefix+"_start_pct"], payload["claude_usage_known"] = number, true
+			endpoint := "start"
+			if eventType == "IMPLEMENTER_FINISHED" || eventType == "IMPLEMENTER_FAILED" {
+				endpoint = "end"
+			}
+			payload[window.prefix+"_"+endpoint+"_pct"], payload["claude_usage_known"] = number, true
 		}
 		if reset, ok := values["resets_at"].(string); ok {
 			if _, valid := parseClaudeUsageTimestamp(reset); valid {
@@ -2131,7 +2137,7 @@ func buildObservationAtStateRoot(eventType string, envelope, payload map[string]
 	if !ok {
 		return nil, fmt.Errorf("unknown telemetry event type")
 	}
-	if (eventType == "IMPLEMENTER_STARTED" || eventType == "IMPLEMENTER_FAILED") && stateRoot != "" {
+	if (eventType == "IMPLEMENTER_STARTED" || eventType == "IMPLEMENTER_FINISHED" || eventType == "IMPLEMENTER_FAILED") && stateRoot != "" {
 		callerPayload := payload
 		payload = make(map[string]any, len(callerPayload)+2)
 		for name, value := range callerPayload {
@@ -2140,7 +2146,7 @@ func buildObservationAtStateRoot(eventType string, envelope, payload map[string]
 		for name := range claudeUsagePayloadFields {
 			delete(payload, name)
 		}
-		for name, value := range readClaudeUsagePayload(stateRoot, time.Now().UTC()) {
+		for name, value := range readClaudeUsagePayload(stateRoot, observationNow().UTC(), eventType) {
 			payload[name] = value
 		}
 	}
@@ -2223,6 +2229,27 @@ func validateObservationValue(name string, value any) error {
 	case rule == "id":
 		s, ok := value.(string)
 		valid = ok && observationID.MatchString(s)
+	case rule == "model":
+		s, ok := value.(string)
+		valid = ok && modelValue.MatchString(s)
+	case rule == "string_map_list":
+		items, ok := value.([]any)
+		valid = ok
+		for _, item := range items {
+			m, ok := item.(map[string]any)
+			if !ok || len(m) != 2 || m["path"] == "" || m["task_id"] == "" {
+				valid = false
+				break
+			}
+			if _, ok = m["path"].(string); !ok {
+				valid = false
+				break
+			}
+			if _, ok = m["task_id"].(string); !ok {
+				valid = false
+				break
+			}
+		}
 	case rule == "time":
 		s, ok := value.(string)
 		parsed, err := time.Parse(time.RFC3339Nano, s)
