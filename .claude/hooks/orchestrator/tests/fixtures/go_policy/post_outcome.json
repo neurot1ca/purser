@@ -1,0 +1,315 @@
+{
+  "oracle": "Python codex post_tool_use initial Reviewer-1 outcome and scope mapping with reviewer callable faked",
+  "cases": [
+    {
+      "name": "no_material_finding",
+      "outcome": "completed",
+      "attributes": {
+        "result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "validation": "PASS",
+        "findings": [],
+        "provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high"
+      },
+      "pending": {
+        "phase": "implementation",
+        "task_contract_grounded": true
+      },
+      "bundle": {
+        "findings": [],
+        "worker_validation": {
+          "status": "PASS"
+        },
+        "thread_id": "fixture-thread",
+        "protected_paths_touched": [],
+        "whole_tree_delta": null
+      },
+      "delta": {
+        "status": "OK",
+        "changed_paths": [
+          "scope/file-0.txt",
+          "scope/file-1.txt",
+          "scope/file-2.txt"
+        ]
+      },
+      "classification": null,
+      "expected": {
+        "claude_review_mode": "AUDIT",
+        "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_scope": null,
+        "findings": []
+      }
+    },
+    {
+      "name": "changes_required",
+      "outcome": "completed",
+      "attributes": {
+        "result": "CHANGES_REQUIRED",
+        "validation": "FAIL",
+        "findings": [
+          {
+            "code": "BUG",
+            "message": "evidence from reviewer"
+          }
+        ],
+        "provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high"
+      },
+      "pending": {
+        "phase": "implementation",
+        "task_contract_grounded": true
+      },
+      "bundle": {
+        "findings": [],
+        "worker_validation": {
+          "status": "PASS"
+        },
+        "thread_id": "fixture-thread",
+        "protected_paths_touched": [],
+        "whole_tree_delta": null
+      },
+      "delta": {
+        "status": "OK",
+        "changed_paths": [
+          "scope/file-0.txt",
+          "scope/file-1.txt",
+          "scope/file-2.txt"
+        ]
+      },
+      "classification": null,
+      "expected": {
+        "claude_review_mode": "FULL",
+        "reviewer1_result": "CHANGES_REQUIRED",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_scope": null,
+        "findings": [
+          {
+            "code": "BUG",
+            "message": "evidence from reviewer"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_json",
+      "outcome": "unavailable",
+      "attributes": {
+        "review_status": "UNAVAILABLE",
+        "result": "REVIEWER1_UNAVAILABLE",
+        "validation": "UNKNOWN",
+        "error_code": "REVIEWER_RESPONSE_INVALID",
+        "findings": [
+          {
+            "code": "REVIEWER_RESPONSE_INVALID",
+            "message": "Reviewer-1 response was invalid (JSONDecodeError)."
+          }
+        ],
+        "provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high"
+      },
+      "pending": {
+        "phase": "implementation",
+        "task_contract_grounded": true
+      },
+      "bundle": {
+        "findings": [],
+        "worker_validation": {
+          "status": "PASS"
+        },
+        "thread_id": "fixture-thread",
+        "protected_paths_touched": [],
+        "whole_tree_delta": null
+      },
+      "delta": {
+        "status": "OK",
+        "changed_paths": [
+          "scope/file-0.txt",
+          "scope/file-1.txt",
+          "scope/file-2.txt"
+        ]
+      },
+      "classification": null,
+      "expected": {
+        "claude_review_mode": "FULL",
+        "reviewer1_result": "REVIEWER1_UNAVAILABLE",
+        "reviewer1_skipped_reason": "REVIEWER1_UNAVAILABLE",
+        "reviewer1_scope": null,
+        "findings": [
+          {
+            "code": "REVIEWER_RESPONSE_INVALID",
+            "message": "Reviewer-1 response was invalid (JSONDecodeError)."
+          }
+        ]
+      }
+    },
+    {
+      "name": "incomplete_packet",
+      "outcome": "incomplete",
+      "attributes": {
+        "review_status": "NOT_RUN_INCOMPLETE_PACKET",
+        "result": "UNCERTAIN",
+        "validation": "UNKNOWN",
+        "findings": [
+          {
+            "code": "REVIEW_PACKET_INCOMPLETE",
+            "message": "Packet omitted required material."
+          }
+        ],
+        "provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high"
+      },
+      "pending": {
+        "phase": "implementation",
+        "task_contract_grounded": true
+      },
+      "bundle": {
+        "findings": [],
+        "worker_validation": {
+          "status": "PASS"
+        },
+        "thread_id": "fixture-thread",
+        "protected_paths_touched": [],
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file-0.txt",
+            "scope/file-1.txt",
+            "scope/file-2.txt"
+          ]
+        }
+      },
+      "delta": {
+        "status": "OK",
+        "changed_paths": [
+          "scope/file-0.txt",
+          "scope/file-1.txt",
+          "scope/file-2.txt"
+        ]
+      },
+      "classification": null,
+      "expected": {
+        "claude_review_mode": "FULL",
+        "reviewer1_result": "UNCERTAIN",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_scope": {
+          "omitted": [
+            "scope/file-0.txt",
+            "scope/file-1.txt",
+            "scope/file-2.txt"
+          ],
+          "reason": "Reviewer-1 did not receive a complete packet.",
+          "reviewed": []
+        },
+        "findings": [
+          {
+            "code": "REVIEW_PACKET_INCOMPLETE",
+            "message": "Packet omitted required material."
+          }
+        ]
+      }
+    },
+    {
+      "name": "out_of_scope_omitted",
+      "outcome": "completed",
+      "attributes": {
+        "result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "validation": "PASS",
+        "findings": [],
+        "provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high"
+      },
+      "pending": {
+        "phase": "implementation",
+        "task_contract_grounded": true
+      },
+      "bundle": {
+        "findings": [],
+        "worker_validation": {
+          "status": "PASS"
+        },
+        "thread_id": "fixture-thread",
+        "protected_paths_touched": [],
+        "whole_tree_delta": null
+      },
+      "delta": {
+        "status": "OK",
+        "changed_paths": [
+          "scope/file-0.txt",
+          "scope/file-1.txt",
+          "scope/file-2.txt"
+        ]
+      },
+      "classification": {
+        "in_scope_paths": [
+          "scope/file-0.txt"
+        ]
+      },
+      "expected": {
+        "claude_review_mode": "FULL",
+        "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_scope": {
+          "omitted": [
+            "scope/file-1.txt",
+            "scope/file-2.txt"
+          ],
+          "reason": "Only delegated in-scope paths were sent to Reviewer-1.",
+          "reviewed": [
+            "scope/file-0.txt"
+          ]
+        },
+        "findings": []
+      }
+    },
+    {
+      "name": "finding_evidence_cap",
+      "outcome": "completed",
+      "attributes": {
+        "result": "CHANGES_REQUIRED",
+        "validation": "FAIL",
+        "findings": [
+          {
+            "code": "BUG",
+            "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ],
+        "provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high"
+      },
+      "pending": {
+        "phase": "implementation",
+        "task_contract_grounded": true
+      },
+      "bundle": {
+        "findings": [],
+        "worker_validation": {
+          "status": "PASS"
+        },
+        "thread_id": "fixture-thread",
+        "protected_paths_touched": [],
+        "whole_tree_delta": null
+      },
+      "delta": {
+        "status": "OK",
+        "changed_paths": [
+          "scope/file-0.txt",
+          "scope/file-1.txt",
+          "scope/file-2.txt"
+        ]
+      },
+      "classification": null,
+      "expected": {
+        "claude_review_mode": "FULL",
+        "reviewer1_result": "CHANGES_REQUIRED",
+        "reviewer1_skipped_reason": null,
+        "reviewer1_scope": null,
+        "findings": [
+          {
+            "code": "BUG",
+            "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    }
+  ]
+}
