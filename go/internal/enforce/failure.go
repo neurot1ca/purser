@@ -7,34 +7,36 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"purser-hook/internal/lease"
 )
 
 // PostToolUseFailure handles only the synchronous Codex failure path. Async
 // result/cancel/start follow-ups remain owned by Python.
-func PostToolUseFailure(event map[string]any, root string) map[string]any {
+func PostToolUseFailure(event map[string]any, root string) (response map[string]any) {
 	tool := stringValue(event["tool_name"])
 	if !codexTools[tool] || strings.HasSuffix(tool, "__codex_start") ||
 		strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
 		return nil
 	}
-	ctx := map[string]any{"hookEventName": "PostToolUseFailure"}
-	failed := func(message string) map[string]any {
-		ctx["additionalContext"] = "Codex failed with an ambiguous outcome; work_performed is UNKNOWN and FULL Claude review is required. Evidence cleanup error: " + message
-		return map[string]any{"hookSpecificOutput": ctx}
-	}
+	var pending map[string]any
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			failureObservation(root, event, pending)
+			response = failureErrorOutput("RuntimeError: " + fmt.Sprint(recovered))
+		}
+	}()
+	failed := func(message string) map[string]any { return failureErrorOutput(message) }
 	if root == "" {
 		return failed("state root is missing")
 	}
 	key, err := callKey(event)
 	if err != nil {
-		return failed(safeError(err))
+		return failed(failureErrorText(err))
 	}
-	pending, pendingFile, err := readFailurePending(root, event, key)
+	cleanupStaleFailurePending(root, event, key)
+	var pendingFile string
+	pending, pendingFile, err = readFailurePending(root, event, key)
 	if err != nil {
-		return failed(safeError(err))
+		return failed(failureErrorText(err))
 	}
 	projectKey := stringValue(pending["project_key"])
 	if projectKey == "" {
@@ -44,7 +46,7 @@ func PostToolUseFailure(event map[string]any, root string) map[string]any {
 	evidencePath, err := persistFailureEvidence(root, key, evidence)
 	if err != nil {
 		failureObservation(root, event, pending)
-		return failed(safeError(err))
+		return failed(failureErrorText(err))
 	}
 	routingEnforced := pending["kind"] != "pretool_bypass"
 	outcome := map[string]any{
@@ -59,28 +61,13 @@ func PostToolUseFailure(event map[string]any, root string) map[string]any {
 		err = errors.New("normal pending call identity is incomplete")
 	}
 	if err == nil {
-		if owner := stringValue(pending["lease_owner"]); owner != "" {
-			result := lease.New(filepath.Join(root, "projects", projectKey)).Release(owner, float64(time.Now().UnixNano())/1e9)
-			if result.Status != "OK" {
-				err = fmt.Errorf("scope lease cleanup failed: %s", result.Code)
-			}
-		}
-	}
-	if err == nil {
-		if removeErr := os.Remove(pendingFile); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			err = fmt.Errorf("pending cleanup failed: %w", removeErr)
-		}
+		err = cleanupFailureTail(root, pendingFile, event, pending, false)
 	}
 	failureObservation(root, event, pending)
 	if err != nil {
-		return failed(safeError(err))
+		return failed(failureErrorText(err))
 	}
-	note := ""
-	if !routingEnforced {
-		note = " Routing was NOT enforced by PreToolUse."
-	}
-	ctx["additionalContext"] = fmt.Sprintf("Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at %s.%s", evidencePath, note)
-	return map[string]any{"hookSpecificOutput": ctx}
+	return failureSuccessOutput(evidencePath, routingEnforced)
 }
 
 func readFailurePending(root string, event map[string]any, key string) (map[string]any, string, error) {
@@ -91,11 +78,14 @@ func readFailurePending(root string, event map[string]any, key string) (map[stri
 		data, err = os.ReadFile(path)
 	}
 	if err != nil {
-		return nil, path, errors.New("pending call record is missing or unreadable")
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, path, errors.New("pending call record is missing")
+		}
+		return nil, path, errors.New("pending call record is unreadable")
 	}
 	var pending map[string]any
 	if json.Unmarshal(data, &pending) != nil || pending == nil {
-		return nil, path, errors.New("pending call record is invalid")
+		return nil, path, errors.New("pending call record is unreadable")
 	}
 	return pending, path, nil
 }

@@ -1,6 +1,7 @@
 {
   "cases": [
     {
+      "async_job_exists": null,
       "event": {
         "duration_ms": 1234,
         "error": "worker failed",
@@ -45,6 +46,7 @@
         "reason": "continue",
         "reason_source": "explicit"
       },
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\99e8ea4083adb1e8af04f90960394dc08b6726f44e7cbb755f4d7d06ea69e603-failure.json.",
       "pending": {
         "agent": "codex",
         "effort": "high",
@@ -62,6 +64,7 @@
         "scope": [],
         "task_id": "p94-sync_failure"
       },
+      "pending_exists": false,
       "session": {
         "last_outcome": {
           "ambiguous_outcome": true,
@@ -88,6 +91,7 @@
       }
     },
     {
+      "async_job_exists": null,
       "event": {
         "duration_ms": 1234,
         "error": "worker failed",
@@ -132,6 +136,7 @@
         "reason": "continue",
         "reason_source": "explicit"
       },
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\da66898ac277828ba956059085289a53655647881f2cf7132c491f2b65c3260e-failure.json.",
       "pending": {
         "agent": "codex",
         "effort": "high",
@@ -149,6 +154,7 @@
         "scope": [],
         "task_id": "p94-sync_interrupt"
       },
+      "pending_exists": false,
       "session": {
         "last_outcome": {
           "ambiguous_outcome": true,
@@ -175,6 +181,7 @@
       }
     },
     {
+      "async_job_exists": null,
       "event": {
         "duration_ms": 1234,
         "error": "worker failed",
@@ -221,6 +228,7 @@
         "reason": "continue",
         "reason_source": "explicit"
       },
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\85d3c2b142ddafdfa3e27bde2a50b0cd149529d262e5da3822a9650c05d2aa6e-failure.json.",
       "pending": {
         "agent": "codex",
         "effort": "high",
@@ -238,6 +246,7 @@
         "scope": [],
         "task_id": "p94-reply_replay_failure"
       },
+      "pending_exists": false,
       "session": {
         "last_outcome": {
           "ambiguous_outcome": true,
@@ -264,6 +273,7 @@
       }
     },
     {
+      "async_job_exists": null,
       "event": {
         "duration_ms": 1234,
         "error": "worker failed",
@@ -275,6 +285,7 @@
       "evidence": null,
       "name": "missing_pending",
       "observation_payload": null,
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN and FULL Claude review is required. Evidence cleanup error: WiringError: pending call record is missing",
       "pending": {
         "agent": "codex",
         "effort": "high",
@@ -292,9 +303,11 @@
         "scope": [],
         "task_id": "p94-missing_pending"
       },
+      "pending_exists": false,
       "session": null
     },
     {
+      "async_job_exists": null,
       "event": {
         "duration_ms": 1234,
         "error": "worker failed",
@@ -306,6 +319,7 @@
       "evidence": null,
       "name": "malformed_pending",
       "observation_payload": null,
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN and FULL Claude review is required. Evidence cleanup error: WiringError: pending call record is unreadable",
       "pending": {
         "agent": "codex",
         "effort": "high",
@@ -323,7 +337,382 @@
         "scope": [],
         "task_id": "p94-malformed_pending"
       },
+      "pending_exists": true,
       "session": null
+    },
+    {
+      "async_job_exists": null,
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "session_id": "p94-session",
+        "tool_name": "mcp__codex-main__codex",
+        "tool_use_id": "lease_release_failure"
+      },
+      "evidence": {
+        "ambiguous_outcome": true,
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "pending_call": {
+          "agent": "codex",
+          "effort": "high",
+          "eta_minutes": 5,
+          "label": "P94 failure",
+          "lease_owner": "p95-owner",
+          "model": "gpt-6-luna",
+          "new_route": "operation",
+          "phase": "operation",
+          "previous_route": "normal",
+          "prior_thread_id": "prior-thread",
+          "project_key": "0123456789abcdef",
+          "reason": "continue",
+          "reason_source": "explicit",
+          "route": "operation",
+          "scope": [],
+          "task_id": "p94-lease_release_failure"
+        },
+        "work_performed": "UNKNOWN"
+      },
+      "name": "lease_release_failure",
+      "observation_payload": {
+        "claude_rate_limit_delta_scope": "account_window_observation",
+        "claude_usage_known": false,
+        "duration_ms": 1234,
+        "eta_minutes": 5,
+        "failure_code": "CODEX_CALL_FAILED",
+        "new_route": "operation",
+        "previous_route": "normal",
+        "reason": "continue",
+        "reason_source": "explicit"
+      },
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN and FULL Claude review is required. Evidence cleanup error: WiringError: LEASE_RELEASE_FAILED",
+      "pending": {
+        "agent": "codex",
+        "effort": "high",
+        "eta_minutes": 5,
+        "label": "P94 failure",
+        "lease_owner": "p95-owner",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-lease_release_failure"
+      },
+      "pending_exists": true,
+      "session": {
+        "last_outcome": {
+          "ambiguous_outcome": true,
+          "claude_review_mode": "FULL",
+          "evidence_path": "__ROOT__\\raw_tool_outputs\\b64b0862c98b11a6803f016bec8285412a87b7f9d0a972aa88f31c405529366f-failure.json",
+          "routing_enforced": true,
+          "status": "AMBIGUOUS_TOOL_FAILURE",
+          "work_performed": "UNKNOWN"
+        },
+        "live_thread": {
+          "effort": "high",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "phase": "operation",
+          "reason": "continue",
+          "route": "operation",
+          "scope": [],
+          "task_contract_grounded": false,
+          "task_id": "p94-lease_release_failure",
+          "thread_id": "prior-thread"
+        },
+        "pending_call_baseline": null,
+        "task_id": "p94-lease_release_failure"
+      }
+    },
+    {
+      "async_job_exists": null,
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "session_id": "p94-session",
+        "tool_name": "mcp__codex-main__codex",
+        "tool_use_id": "pending_removal_failure"
+      },
+      "evidence": {
+        "ambiguous_outcome": true,
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "pending_call": {
+          "agent": "codex",
+          "effort": "high",
+          "eta_minutes": 5,
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "new_route": "operation",
+          "phase": "operation",
+          "previous_route": "normal",
+          "prior_thread_id": "prior-thread",
+          "project_key": "0123456789abcdef",
+          "reason": "continue",
+          "reason_source": "explicit",
+          "route": "operation",
+          "scope": [],
+          "task_id": "p94-pending_removal_failure"
+        },
+        "work_performed": "UNKNOWN"
+      },
+      "name": "pending_removal_failure",
+      "observation_payload": {
+        "claude_rate_limit_delta_scope": "account_window_observation",
+        "claude_usage_known": false,
+        "duration_ms": 1234,
+        "eta_minutes": 5,
+        "failure_code": "CODEX_CALL_FAILED",
+        "new_route": "operation",
+        "previous_route": "normal",
+        "reason": "continue",
+        "reason_source": "explicit"
+      },
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN and FULL Claude review is required. Evidence cleanup error: PermissionError: pending removal denied",
+      "pending": {
+        "agent": "codex",
+        "effort": "high",
+        "eta_minutes": 5,
+        "label": "P94 failure",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-pending_removal_failure"
+      },
+      "pending_exists": true,
+      "session": {
+        "last_outcome": {
+          "ambiguous_outcome": true,
+          "claude_review_mode": "FULL",
+          "evidence_path": "__ROOT__\\raw_tool_outputs\\6c4afd1b8e01da5a3f45a59614f59bf9308aaacdd4237a26845a8f9884964fa8-failure.json",
+          "routing_enforced": true,
+          "status": "AMBIGUOUS_TOOL_FAILURE",
+          "work_performed": "UNKNOWN"
+        },
+        "live_thread": {
+          "effort": "high",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "phase": "operation",
+          "reason": "continue",
+          "route": "operation",
+          "scope": [],
+          "task_contract_grounded": false,
+          "task_id": "p94-pending_removal_failure",
+          "thread_id": "prior-thread"
+        },
+        "pending_call_baseline": null,
+        "task_id": "p94-pending_removal_failure"
+      }
+    },
+    {
+      "async_job_exists": false,
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "session_id": "p94-session",
+        "tool_input": {
+          "call": "async-call-p95"
+        },
+        "tool_name": "mcp__codex-main__codex_start",
+        "tool_use_id": "async_job_record_removal"
+      },
+      "evidence": {
+        "ambiguous_outcome": true,
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "pending_call": {
+          "agent": "codex",
+          "async_call": "async-call-p95",
+          "effort": "high",
+          "eta_minutes": 5,
+          "job_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "new_route": "operation",
+          "phase": "operation",
+          "previous_route": "normal",
+          "prior_thread_id": "prior-thread",
+          "project_key": "0123456789abcdef",
+          "reason": "continue",
+          "reason_source": "explicit",
+          "route": "operation",
+          "scope": [],
+          "task_id": "p94-async_job_record_removal"
+        },
+        "work_performed": "UNKNOWN"
+      },
+      "name": "async_job_record_removal",
+      "observation_payload": {
+        "claude_rate_limit_delta_scope": "account_window_observation",
+        "claude_usage_known": false,
+        "duration_ms": 1234,
+        "eta_minutes": 5,
+        "failure_code": "CODEX_CALL_FAILED",
+        "new_route": "operation",
+        "previous_route": "normal",
+        "reason": "continue",
+        "reason_source": "explicit"
+      },
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\661d85fc57ad54a4c362fdad3a04a3cc3905fbdc8fdda77471956217cfcc0b30-failure.json.",
+      "pending": {
+        "agent": "codex",
+        "async_call": "async-call-p95",
+        "effort": "high",
+        "eta_minutes": 5,
+        "job_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "label": "P94 failure",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-async_job_record_removal"
+      },
+      "pending_exists": false,
+      "session": {
+        "last_outcome": {
+          "ambiguous_outcome": true,
+          "claude_review_mode": "FULL",
+          "evidence_path": "__ROOT__\\raw_tool_outputs\\661d85fc57ad54a4c362fdad3a04a3cc3905fbdc8fdda77471956217cfcc0b30-failure.json",
+          "routing_enforced": true,
+          "status": "AMBIGUOUS_TOOL_FAILURE",
+          "work_performed": "UNKNOWN"
+        },
+        "live_thread": {
+          "effort": "high",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "phase": "operation",
+          "reason": "continue",
+          "route": "operation",
+          "scope": [],
+          "task_contract_grounded": false,
+          "task_id": "p94-async_job_record_removal",
+          "thread_id": "prior-thread"
+        },
+        "pending_call_baseline": null,
+        "task_id": "p94-async_job_record_removal"
+      }
+    },
+    {
+      "async_job_exists": null,
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "session_id": "p94-session",
+        "tool_input": {
+          "prompt": "bypass"
+        },
+        "tool_name": "mcp__codex-main__codex",
+        "tool_use_id": "not_enforced_note"
+      },
+      "evidence": {
+        "ambiguous_outcome": true,
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "pending_call": {
+          "agent": "codex",
+          "effort": "high",
+          "eta_minutes": 5,
+          "kind": "pretool_bypass",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "new_route": "operation",
+          "phase": "operation",
+          "previous_route": "normal",
+          "prior_thread_id": "prior-thread",
+          "project_key": "0123456789abcdef",
+          "reason": "continue",
+          "reason_source": "explicit",
+          "route": "operation",
+          "scope": [],
+          "task_id": "p94-not_enforced_note"
+        },
+        "work_performed": "UNKNOWN"
+      },
+      "name": "not_enforced_note",
+      "observation_payload": {
+        "claude_rate_limit_delta_scope": "account_window_observation",
+        "claude_usage_known": false,
+        "duration_ms": 1234,
+        "eta_minutes": 5,
+        "failure_code": "CODEX_CALL_FAILED",
+        "new_route": "operation",
+        "previous_route": "normal",
+        "reason": "continue",
+        "reason_source": "explicit"
+      },
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\14297bb4fea711b5c4abb54d51c297c3fec24a761f6c675f42cb37a22ee28ef9-failure.json. Routing was NOT enforced by PreToolUse.",
+      "pending": {
+        "agent": "codex",
+        "effort": "high",
+        "eta_minutes": 5,
+        "kind": "pretool_bypass",
+        "label": "P94 failure",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-not_enforced_note"
+      },
+      "pending_exists": false,
+      "session": {
+        "last_outcome": {
+          "ambiguous_outcome": true,
+          "claude_review_mode": "FULL",
+          "evidence_path": "__ROOT__\\raw_tool_outputs\\14297bb4fea711b5c4abb54d51c297c3fec24a761f6c675f42cb37a22ee28ef9-failure.json",
+          "routing_enforced": false,
+          "status": "AMBIGUOUS_TOOL_FAILURE",
+          "work_performed": "UNKNOWN"
+        },
+        "live_thread": {
+          "effort": "high",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "phase": "operation",
+          "reason": "continue",
+          "route": "operation",
+          "scope": [],
+          "task_contract_grounded": false,
+          "task_id": "p94-not_enforced_note",
+          "thread_id": "prior-thread"
+        },
+        "pending_call_baseline": null,
+        "task_id": "p94-not_enforced_note"
+      }
     }
   ]
 }
