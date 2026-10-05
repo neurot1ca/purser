@@ -22,15 +22,6 @@ PLUGIN_TOOLS = {
     "mcp__plugin_purser_codex-main__codex_cancel",
 }
 PLUGIN_APPLY_TOOL = "mcp__plugin_purser_codex-main__codex_apply"
-SYNC_PLUGIN_TOOLS = {
-    "mcp__plugin_purser_codex-main__codex",
-    "mcp__plugin_purser_codex-main__codex-reply",
-}
-ASYNC_PLUGIN_TOOLS = {
-    "mcp__plugin_purser_codex-main__codex_start",
-    "mcp__plugin_purser_codex-main__codex_result",
-    "mcp__plugin_purser_codex-main__codex_cancel",
-}
 
 
 def test_session_start_maintenance_keeps_python_cleanup(monkeypatch, tmp_path):
@@ -64,8 +55,8 @@ def test_plugin_hooks_match_manual_installer():
                 matcher = matcher.replace(
                     "mcp__codex-main__", "mcp__plugin_purser_codex-main__"
                 )
-            if event == "PreToolUse" and matcher == r"^mcp__plugin_purser_codex-main__(codex|codex-reply|codex_start|codex_result|codex_cancel)$":
-                matcher = r"^mcp__plugin_purser_codex-main__(codex_start|codex_result|codex_cancel)$"
+            if event == "PreToolUse" and matcher and "mcp__plugin_purser_codex-main__" in matcher:
+                continue
             expected.add((event, matcher, script, entry["hooks"][0]["timeout"]))
 
     hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
@@ -102,9 +93,7 @@ def test_plugin_manifest_paths_and_registration():
     assert (ROOT / manifest["mcpServers"]).is_file()
     # Plugin commands are auto-discovered from the conventional commands/ directory.
     assert (ROOT / "commands/check.md").is_file()
-    assert set(hooks["hooks"]) == {
-        "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionStart"
-    }
+    assert set(hooks["hooks"]) == {"PostToolUse", "PostToolUseFailure", "Stop", "SessionStart"}
     session_start, = hooks["hooks"]["SessionStart"]
     assert "matcher" not in session_start
     assert session_start["hooks"][0] == {
@@ -118,7 +107,6 @@ def test_plugin_manifest_paths_and_registration():
         ],
     }
     for name, timeout in (
-        ("PreToolUse", 60),
         ("PostToolUse", 300),
         ("PostToolUseFailure", 60),
         ("Stop", 60),
@@ -132,8 +120,7 @@ def test_plugin_manifest_paths_and_registration():
             matched = {
                 tool for tool in PLUGIN_TOOLS if re.fullmatch(entry["matcher"], tool)
             }
-            expected_python = ASYNC_PLUGIN_TOOLS if name == "PreToolUse" else PLUGIN_TOOLS
-            assert matched == expected_python
+            assert matched == PLUGIN_TOOLS
             if name == "PostToolUse":
                 assert re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
             else:
@@ -147,12 +134,17 @@ def test_plugin_manifest_paths_and_registration():
     register_source = (ROOT / "hooks/register.ts").read_text(encoding="utf-8")
     assert re.search(r"^  registerEnforcement\(on\)$", register_source, re.M)
     enforcement_source = (ROOT / "hooks/mod/enforcement.ts").read_text(encoding="utf-8")
-    sync_set = re.search(r"const syncTools = new Set\(\[([\s\S]*?)\]\)", enforcement_source)
-    assert sync_set
-    mod_tools = set(re.findall(r"'([^']+)'", sync_set.group(1)))
-    assert {tool for tool in mod_tools if tool in PLUGIN_TOOLS} == SYNC_PLUGIN_TOOLS
-    # codex_start stays on Python unless the adapter's async flag is set.
-    assert "startTools.has(e.tool) && await $.env.get('PURSER_MOD_ASYNC_START') === '1'" in enforcement_source
+    assert not any(
+        re.fullmatch(entry.get("matcher", ""), tool)
+        for entry in hooks["hooks"].get("PreToolUse", [])
+        for tool in PLUGIN_TOOLS
+    )
+    adapter_sets = re.findall(r"const (?:syncTools|startTools|followupTools) = new Set\(\[([\s\S]*?)\]\)", enforcement_source)
+    adapter_tools = {tool for body in adapter_sets for tool in re.findall(r"'([^']+)'", body)}
+    codex_pre_tools = {f"mcp__{identity}__{tool}" for identity in ("codex-main", "plugin_purser_codex-main") for tool in ("codex", "codex-reply", "codex_start", "codex_result", "codex_cancel")}
+    assert adapter_tools == codex_pre_tools
+    assert PLUGIN_APPLY_TOOL not in adapter_tools
+    assert "PURSER_MOD_ASYNC_START" not in enforcement_source
     bridge = mcp["mcpServers"]["codex-main"]
     assert bridge["command"] == "node"
     assert bridge["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "mcp", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]

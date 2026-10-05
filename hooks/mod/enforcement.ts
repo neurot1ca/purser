@@ -3,8 +3,7 @@ export function register(on) {
     'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
     'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
   ])
-  // Async codex_start Pre stays on the Python command hook until its own move;
-  // PURSER_MOD_ASYNC_START=1 enables this adapter's codex_start path.
+  // Async start and follow-up tools use the Go adapter for both identities.
   const startTools = new Set(['mcp__codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_start'])
   const followupTools = new Set([
     'mcp__codex-main__codex_result', 'mcp__codex-main__codex_cancel',
@@ -43,8 +42,7 @@ export function register(on) {
   on('classic.PreToolUse', async ($, e, next) => {
     const prior = await next(e)
     if (prior.deny !== undefined) return prior
-    if (!syncTools.has(e.tool) &&
-        (!(startTools.has(e.tool) || followupTools.has(e.tool)) || await $.env.get('PURSER_MOD_ASYNC_START') !== '1')) return prior
+    if (!syncTools.has(e.tool) && !startTools.has(e.tool) && !followupTools.has(e.tool)) return prior
 
     let helperBinary = ''
     let helperCwd = ''

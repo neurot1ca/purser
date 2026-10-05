@@ -30,8 +30,7 @@ function stubGo(
   markerWrites: string[] = [],
   markerOutcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
 ) {
-  // The plugin's own register.ts installs the adapter; the flag enables its codex_start path.
-  on('env.get', (_$, e) => ({ value: e.name === 'PURSER_MOD_ASYNC_START' ? (env.PURSER_MOD_ASYNC_START ?? '1') : env[e.name] }))
+  on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('session.id', () => ({ value: 'p66-session' }))
   on('session.cwd', () => ({ value: 'C:/p66-repo' }))
   on('process.run', (_$, e) => {
@@ -104,19 +103,28 @@ test('passes non-Codex tool identities through without starting Go', options, as
   expect(toolCalls).toHaveLength(1)
 })
 
-test('follow-up tools stay pass-through while async adapter is gated off', options, async ($, on) => {
+test('all Codex PreToolUse identities reach Go while non-Codex tools do not', options, async ($, on) => {
   const calls: string[] = []
   const toolCalls: unknown[] = []
   const toasts: string[] = []
-  stubGo(on, success, calls, toasts, { OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_ASYNC_START: '0' })
+  stubGo(on, success, calls, toasts)
   stubToolCall(on, toolCalls)
 
-  for (const tool of ['mcp__codex-main__codex_result', 'mcp__plugin_purser_codex-main__codex_cancel']) {
+  const codexTools = [
+    'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
+    'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result', 'mcp__codex-main__codex_cancel',
+    'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
+    'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
+    'mcp__plugin_purser_codex-main__codex_cancel',
+  ]
+  for (const tool of codexTools) {
     await $.tool.call({ tool, task_id: 'origin-task' })
   }
+  await $.tool.call({ tool: 'mcp__other-server__query', query: 'hello' })
 
-  expect(calls).toEqual([])
-  expect(toolCalls).toHaveLength(2)
+  expect(calls).toHaveLength(10)
+  expect(calls.map(stdin => JSON.parse(stdin).tool_name)).toEqual(codexTools)
+  expect(toolCalls).toHaveLength(11)
 })
 
 test('maps Go follow-up deny and passes allowed follow-up input unchanged', options, async ($, on) => {
