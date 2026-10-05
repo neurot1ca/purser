@@ -1,0 +1,56 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "cancelled": true,
+        "request": "8348e9580fa8ecac33ef9b1831163266d97af6804a6ce69259990a34220833ea:bridge-secret:CANCEL"
+      },
+      "name": "authenticated_cancel"
+    },
+    {
+      "expected": {
+        "cancelled": false,
+        "request": "59b77a7d36d11d49563b2a668179dce1e25c82f1da8fcb5a4653036aaade8681:bridge-secret:CANCEL"
+      },
+      "name": "wrong_auth_cancel"
+    },
+    {
+      "expected": {
+        "cancelled": false,
+        "request": null
+      },
+      "name": "absent_auth_cancel"
+    },
+    {
+      "expected": {
+        "cancelled": true,
+        "request": "f6688ee1f4d5be447efeed4d6c64a8354b94ae15d3ef5ef1f7a1ec7cde78d91c:bridge-secret:CANCEL"
+      },
+      "name": "terminal_cancel"
+    },
+    {
+      "expected": true,
+      "name": "terminal_job"
+    },
+    {
+      "expected": false,
+      "name": "running_job"
+    },
+    {
+      "expected": true,
+      "name": "start_job_absent"
+    },
+    {
+      "expected": false,
+      "name": "malformed_job"
+    },
+    {
+      "expected": {
+        "error": "WiringError",
+        "message": "job is not owned by this session/project"
+      },
+      "name": "cancel_response_other_project"
+    }
+  ],
+  "oracle": "codex._cancel_start_job+_start_job_terminal_or_absent+_async_owned"
+}
