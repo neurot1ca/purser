@@ -1,0 +1,141 @@
+{
+  "oracle": "real Server._apply_job(resolved=True) with temporary git repositories",
+  "cases": [
+    {
+      "name": "not_in_conflict",
+      "setup": {
+        "name": "not_in_conflict",
+        "outcome": "not_in_conflict"
+      },
+      "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "siblingJobId": null,
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "result": {
+        "applied": false,
+        "reason": "Job is not in conflict state."
+      },
+      "record": {
+        "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state": "SUCCEEDED",
+        "applyState": null,
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "taskId": "fixture-task"
+      },
+      "checkout": "base\n",
+      "sideEffects": []
+    },
+    {
+      "name": "markers_remain",
+      "setup": {
+        "name": "markers_remain",
+        "outcome": "markers_remain",
+        "repo": "<<<<<<< ours\nresolved\n>>>>>>> theirs\n"
+      },
+      "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "siblingJobId": null,
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "result": {
+        "applied": false,
+        "reason": "Conflict markers remain in tracked.txt."
+      },
+      "record": {
+        "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state": "SUCCEEDED",
+        "applyState": "conflict",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "taskId": "fixture-task"
+      },
+      "checkout": "<<<<<<< ours\nresolved\n>>>>>>> theirs\n",
+      "sideEffects": []
+    },
+    {
+      "name": "unmerged_path",
+      "setup": {
+        "name": "unmerged_path",
+        "outcome": "unmerged_path",
+        "merge": true
+      },
+      "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "siblingJobId": null,
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "result": {
+        "applied": false,
+        "reason": "Repository has unmerged paths."
+      },
+      "record": {
+        "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state": "SUCCEEDED",
+        "applyState": "conflict",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "taskId": "fixture-task"
+      },
+      "checkout": "<<<<<<< HEAD\nmain change\n=======\nside change\n>>>>>>> side\n",
+      "sideEffects": []
+    },
+    {
+      "name": "clean_resolution",
+      "setup": {
+        "name": "clean_resolution",
+        "outcome": "clean_resolution",
+        "repo": "hand resolved\n",
+        "shared": true
+      },
+      "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "siblingJobId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "result": {
+        "applied": true,
+        "resolvedByHand": true,
+        "paths": [
+          "tracked.txt"
+        ]
+      },
+      "record": {
+        "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state": "SUCCEEDED",
+        "applyState": "applied",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "taskId": "fixture-task",
+        "applyResult": {
+          "applied": true,
+          "resolvedByHand": true,
+          "paths": [
+            "tracked.txt"
+          ]
+        },
+        "decisionRecorded": true
+      },
+      "checkout": "hand resolved\n",
+      "sideEffects": [
+        {
+          "call": "scope",
+          "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+          "action": "resolved_by_hand"
+        },
+        {
+          "call": "decision",
+          "jobId": "0000000000000000000000000000000000000000000000000000000000000000",
+          "decision": "accepted",
+          "kind": "apply",
+          "sourceJobId": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "call": "release",
+          "jobId": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "call": "release",
+          "jobId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ]
+    }
+  ]
+}

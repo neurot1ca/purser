@@ -15,7 +15,11 @@ import (
 
 // Apply applies a succeeded worktree job to its repository. stateRoot is the
 // Purser state directory that contains codex_exec_mcp/jobs.
-func Apply(stateRoot string, args map[string]any) map[string]any {
+func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[string]any {
+	var opt ApplyOptions
+	if len(options) != 0 {
+		opt = options[0]
+	}
 	result := applyToolResult
 	resolved := false
 	if value, ok := args["resolved"]; ok {
@@ -70,6 +74,10 @@ func Apply(stateRoot string, args map[string]any) map[string]any {
 	}
 	var applyState string
 	job.Get("applyState", &applyState)
+	job.Get("applyConflictReason", &conflictReason)
+	job.Get("worktreePath", &worktree)
+	job.Get("repoRoot", &repo)
+	job.Get("snapshot", &snapshot)
 	var saved map[string]any
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
 		return result(saved)
@@ -78,7 +86,7 @@ func Apply(stateRoot string, args map[string]any) map[string]any {
 		if applyState != "conflict" && conflictReason != "worker_replay" {
 			return result(map[string]any{"applied": false, "reason": "Job is not in conflict state."})
 		}
-		return result(map[string]any{"applied": false, "reason": "Hand resolution is not implemented in this pass."})
+		return applyResolvedJob(stateRoot, dir, jobID, job, repo, worktree, snapshot, args, opt)
 	}
 	if info, e := os.Stat(worktree); e != nil || !info.IsDir() {
 		return result(map[string]any{"state": "FAILED", "errorCode": "WORKTREE_MISSING", "message": "Job worktree is unavailable"})
