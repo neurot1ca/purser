@@ -15,6 +15,38 @@ import (
 	"purser-hook/internal/contextio"
 )
 
+func TestObservationEventTypesMatchPythonSchema(t *testing.T) {
+	// Copied from .claude/hooks/orchestrator/telemetry_schema.py: EVENT_TYPES.
+	want := []string{
+		"TASK_ROUTE_SELECTED", "IMPLEMENTER_STARTED", "IMPLEMENTER_FINISHED", "IMPLEMENTER_FAILED",
+		"MECHANICAL_MODEL_RANK_CHANGED", "REVIEWER1_STARTED", "REVIEWER1_FINISHED",
+		"COMPACTION_ADVICE_OUTCOME", "STOP_BLOCKED", "SHADOW_FINISHED", "SCOPE_CONFLICT_OUTCOME",
+		"REVIEWER1_SKIPPED", "REVIEWER1_FAILED", "ROUTING_PROTOCOL_VIOLATION",
+		"THREAD_CONTINUITY_VIOLATION", "UNKNOWN_CONCURRENT_WRITER", "WORKFLOW_VERDICT_RECORDED",
+		"TELEMETRY_WARNING", "CLAUDE_TASK_USAGE_RECORDED", "CONTEXT_IO_TURN_RECORDED",
+		"CODEX_RESULT_UNFETCHED", "CLAUDE_DECISION_RECORDED", "WORKER_REPLAY_CONFLICT",
+		"MECHANICAL_EDIT_OBSERVED", "MAINTENANCE_REPORT_FINISHED", "MAINTENANCE_REPORT_ACTED",
+		"READINESS_CHECK_OUTCOME",
+	}
+	if len(observationEventTypes) != len(want) {
+		t.Fatalf("Go event type count = %d, Python EVENT_TYPES count = %d", len(observationEventTypes), len(want))
+	}
+	for _, eventType := range want {
+		if !observationEventTypes[eventType] {
+			t.Errorf("Go event type set is missing Python EVENT_TYPES member %q", eventType)
+		}
+	}
+	event := map[string]any{
+		"schema_version": float64(1), "event_id": "123e4567-e89b-12d3-a456-426614174000",
+		"ts_utc": "2026-10-04T12:00:00Z", "event_type": "WORKER_REPLAY_CONFLICT",
+		"task_id": "task", "project_key": "0123456789abcdef", "session_id": "session",
+		"repo": nil, "branch": nil, "agent_id": nil, "agent_type": nil, "payload": map[string]any{},
+	}
+	if !validObservationTaskEvent(event) {
+		t.Fatal("valid WORKER_REPLAY_CONFLICT observation was rejected")
+	}
+}
+
 func TestObservationP48Golden(t *testing.T) {
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/observations.json")
 	if err != nil {
