@@ -43,6 +43,10 @@ func operationMain(argv []string) int {
 	}
 	var result map[string]any
 	switch argv[0] {
+	case "codex":
+		result, err = runSynchronous(args, "codex")
+	case "codex-reply":
+		result, err = runSynchronous(args, "codex-reply")
 	case "codex_start":
 		result, _, err = jobs.Start(root, args, jobs.StartOptions{Launch: launch})
 	case "codex_result":
@@ -69,6 +73,9 @@ func operationMain(argv []string) int {
 		return 2
 	}
 	if err != nil {
+		if errors.Is(err, errSynchronousCancelled) {
+			return 0
+		}
 		privateError(err)
 		return 1
 	}
