@@ -1,0 +1,171 @@
+{
+  "oracle": "real Server._cancel_job with monkeypatched host signal",
+  "cases": [
+    {
+      "name": "unknown",
+      "jobId": "missing",
+      "record": null,
+      "result": {
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "JOB_NOT_FOUND",
+          "message": "Job record is unavailable"
+        },
+        "isError": true
+      },
+      "files": {},
+      "sideEffects": []
+    },
+    {
+      "name": "queued",
+      "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "record": {
+        "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "QUEUED",
+        "acceptedAt": 10,
+        "leaseQueued": true
+      },
+      "result": {
+        "structuredContent": {
+          "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "CANCELLED",
+          "errorCode": "CANCELLED",
+          "message": "Codex cancelled"
+        },
+        "isError": true
+      },
+      "files": {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "CANCELLED",
+          "acceptedAt": 10,
+          "leaseQueued": true,
+          "finishedAt": "TIME",
+          "errorCode": "CANCELLED",
+          "message": "Codex cancelled",
+          "boardDisplayCount": 0
+        }
+      },
+      "sideEffects": [
+        {
+          "call": "recordScopeConflictOutcome",
+          "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "action": "discarded"
+        }
+      ]
+    },
+    {
+      "name": "running_ack",
+      "jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "record": {
+        "jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "state": "RUNNING",
+        "acceptedAt": 10,
+        "signalPort": 1,
+        "signalToken": "secret"
+      },
+      "result": {
+        "structuredContent": {
+          "jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "state": "CANCELLED",
+          "errorCode": "CANCELLED",
+          "message": "Codex cancelled"
+        },
+        "isError": true
+      },
+      "files": {
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "state": "CANCELLED",
+          "acceptedAt": 10,
+          "signalPort": "PORT",
+          "signalToken": "secret",
+          "finishedAt": "TIME",
+          "errorCode": "CANCELLED",
+          "message": "Codex cancelled",
+          "boardDisplayCount": 0
+        }
+      },
+      "sideEffects": []
+    },
+    {
+      "name": "running_unconfirmed",
+      "jobId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "record": {
+        "jobId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "state": "RUNNING",
+        "acceptedAt": 10
+      },
+      "result": {
+        "structuredContent": {
+          "jobId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "state": "UNKNOWN_OR_IN_PROGRESS",
+          "errorCode": "PROCESS_UNCONFIRMED",
+          "message": "Process termination unconfirmed"
+        },
+        "isError": true
+      },
+      "files": {
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.json": {
+          "jobId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "state": "RUNNING",
+          "acceptedAt": 10
+        }
+      },
+      "sideEffects": []
+    },
+    {
+      "name": "terminal",
+      "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "record": {
+        "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "state": "SUCCEEDED",
+        "acceptedAt": 10,
+        "finishedAt": 11,
+        "worktreePath": "C:/repo/worktree",
+        "applyState": "pending",
+        "taskId": "task-terminal"
+      },
+      "result": {
+        "structuredContent": {
+          "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "state": "SUCCEEDED",
+          "discarded": true
+        },
+        "isError": false
+      },
+      "files": {
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.json": {
+          "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "state": "SUCCEEDED",
+          "acceptedAt": 10,
+          "finishedAt": "TIME",
+          "worktreePath": "C:/repo/worktree",
+          "applyState": "pending",
+          "taskId": "task-terminal",
+          "discarded": true,
+          "discardedAt": "TIME",
+          "decisionRecorded": true
+        }
+      },
+      "sideEffects": [
+        {
+          "call": "recordDecision",
+          "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "decision": "rejected",
+          "kind": "discard",
+          "sourceJobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        {
+          "call": "recordScopeConflictOutcome",
+          "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "action": "discarded"
+        },
+        {
+          "call": "releaseScopeLease",
+          "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ]
+    }
+  ]
+}
