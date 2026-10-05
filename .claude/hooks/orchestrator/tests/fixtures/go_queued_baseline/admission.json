@@ -1,0 +1,251 @@
+[
+  {
+    "name": "missing_job",
+    "ready": false,
+    "pending": null,
+    "session": null,
+    "leases": null
+  },
+  {
+    "name": "already_bound",
+    "ready": true,
+    "pending": {
+      "async_call": "queued-call",
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "8344d67fc6caa8a2fead25cb5efe0c81abbdb965",
+        "manifest_enabled": true,
+        "scope": [
+          "src"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "job_id": "28391999783af3cfac016146a4fb9b4dc0abc0e3cf8e3115692ee36fe25e10b3",
+      "lease_owner": "owner-key",
+      "lease_queued": true,
+      "project_key": "project",
+      "repo_root": "__ROOT__\\repo",
+      "scope": [
+        "src"
+      ],
+      "task_id": "task"
+    },
+    "session": {
+      "checksum": "ab1652d831c5dfb2687fee1181110b40c57e9fe44cedd037838ee4e021437833",
+      "payload": {
+        "last_outcome": null,
+        "live_thread": null,
+        "pending_call_baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "8344d67fc6caa8a2fead25cb5efe0c81abbdb965",
+          "manifest_enabled": true,
+          "scope": [
+            "src"
+          ],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "task_id": "task"
+      },
+      "schema_version": 1
+    },
+    "leases": {
+      "conflicts": [],
+      "owners": {
+        "owner-key": {
+          "acquired_at": "__TIME__",
+          "job_id": "28391999783af3cfac016146a4fb9b4dc0abc0e3cf8e3115692ee36fe25e10b3",
+          "queued_at": "__TIME__",
+          "retention_after": 1800691200,
+          "scope": [
+            "src"
+          ],
+          "state": "ACTIVE",
+          "task_id": "task"
+        }
+      },
+      "version": 1
+    }
+  },
+  {
+    "name": "lease_not_held",
+    "ready": false,
+    "pending": {
+      "async_call": "queued-call",
+      "job_id": "28391999783af3cfac016146a4fb9b4dc0abc0e3cf8e3115692ee36fe25e10b3",
+      "lease_owner": "owner-key",
+      "lease_queued": true,
+      "project_key": "project",
+      "repo_root": "__ROOT__\\repo",
+      "scope": [
+        "src"
+      ],
+      "task_id": "task"
+    },
+    "session": {
+      "checksum": "269cf72ff2278b093391aa48aaba795a68a006546baf2d38212d67533e1cdfc9",
+      "payload": {
+        "last_outcome": null,
+        "live_thread": null,
+        "pending_call_baseline": {
+          "code": "QUEUED",
+          "status": "UNKNOWN"
+        },
+        "task_id": "task"
+      },
+      "schema_version": 1
+    },
+    "leases": {
+      "conflicts": [],
+      "owners": {
+        "blocker": {
+          "acquired_at": "__TIME__",
+          "job_id": "blocker-job",
+          "queued_at": "__TIME__",
+          "retention_after": 1800691200,
+          "scope": [
+            "src"
+          ],
+          "state": "ACTIVE",
+          "task_id": "blocker-task"
+        },
+        "owner-key": {
+          "job_id": "28391999783af3cfac016146a4fb9b4dc0abc0e3cf8e3115692ee36fe25e10b3",
+          "queued_at": "__TIME__",
+          "retention_after": 1800691200,
+          "scope": [
+            "src"
+          ],
+          "state": "QUEUED",
+          "task_id": "task"
+        }
+      },
+      "version": 1
+    }
+  },
+  {
+    "name": "index_not_ready",
+    "ready": false,
+    "pending": {
+      "async_call": "queued-call",
+      "job_id": "28391999783af3cfac016146a4fb9b4dc0abc0e3cf8e3115692ee36fe25e10b3",
+      "lease_owner": "owner-key",
+      "lease_queued": true,
+      "project_key": "project",
+      "repo_root": "__ROOT__\\repo",
+      "scope": [
+        "src"
+      ],
+      "task_id": "task"
+    },
+    "session": {
+      "checksum": "269cf72ff2278b093391aa48aaba795a68a006546baf2d38212d67533e1cdfc9",
+      "payload": {
+        "last_outcome": null,
+        "live_thread": null,
+        "pending_call_baseline": {
+          "code": "QUEUED",
+          "status": "UNKNOWN"
+        },
+        "task_id": "task"
+      },
+      "schema_version": 1
+    },
+    "leases": {
+      "conflicts": [],
+      "owners": {
+        "owner-key": {
+          "acquired_at": "__TIME__",
+          "job_id": "28391999783af3cfac016146a4fb9b4dc0abc0e3cf8e3115692ee36fe25e10b3",
+          "queued_at": "__TIME__",
+          "retention_after": 1800691200,
+          "scope": [
+            "src"
+          ],
+          "state": "ACTIVE",
+          "task_id": "task"
+        }
+      },
+      "version": 1
+    }
+  },
+  {
+    "name": "success",
+    "ready": true,
+    "pending": {
+      "async_call": "queued-call",
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "8344d67fc6caa8a2fead25cb5efe0c81abbdb965",
+        "manifest_enabled": true,
+        "scope": [
+          "src"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "job_id": "28391999783af3cfac016146a4fb9b4dc0abc0e3cf8e3115692ee36fe25e10b3",
+      "lease_owner": "owner-key",
+      "lease_queued": true,
+      "project_key": "project",
+      "repo_root": "__ROOT__\\repo",
+      "scope": [
+        "src"
+      ],
+      "task_id": "task"
+    },
+    "session": {
+      "checksum": "ab1652d831c5dfb2687fee1181110b40c57e9fe44cedd037838ee4e021437833",
+      "payload": {
+        "last_outcome": null,
+        "live_thread": null,
+        "pending_call_baseline": {
+          "code": "BASELINE_CAPTURED",
+          "head": "8344d67fc6caa8a2fead25cb5efe0c81abbdb965",
+          "manifest_enabled": true,
+          "scope": [
+            "src"
+          ],
+          "scoped_manifest": [],
+          "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "status": "OK",
+          "status_entries": [],
+          "tracked_snapshots": {},
+          "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "task_id": "task"
+      },
+      "schema_version": 1
+    },
+    "leases": {
+      "conflicts": [],
+      "owners": {
+        "owner-key": {
+          "acquired_at": "__TIME__",
+          "job_id": "28391999783af3cfac016146a4fb9b4dc0abc0e3cf8e3115692ee36fe25e10b3",
+          "queued_at": "__TIME__",
+          "retention_after": 1800691200,
+          "scope": [
+            "src"
+          ],
+          "state": "ACTIVE",
+          "task_id": "task"
+        }
+      },
+      "version": 1
+    }
+  }
+]
