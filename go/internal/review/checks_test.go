@@ -24,7 +24,14 @@ func TestChecksParityFixture(t *testing.T) {
 		Definitions []profile.Check `json:"definitions"`
 		Changed     []string        `json:"changed_paths"`
 		Selected    []string        `json:"selected"`
-		Results     []CheckResult   `json:"results"`
+		Cases       []struct {
+			Name     string            `json:"name"`
+			Tracked  map[string]string `json:"tracked_files"`
+			PreFiles map[string]string `json:"pre_files"`
+			NoGit    bool              `json:"no_git"`
+			Argv     []string          `json:"argv"`
+			Expected ChecksReport      `json:"expected"`
+		} `json:"cases"`
 	}
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
@@ -37,14 +44,84 @@ func TestChecksParityFixture(t *testing.T) {
 	if !equalJSON(names, fixture.Selected) {
 		t.Fatalf("selected %v want %v", names, fixture.Selected)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	got := RunChecks("../../..", fixture.Definitions, ctx)
-	for i := range got {
-		got[i].DurationMS = 0
+	python := pythonPath(t)
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !equalJSON(got, fixture.Results) {
-		t.Fatalf("results %#v want %#v", got, fixture.Results)
+	for _, item := range fixture.Cases {
+		repo, err := filepath.Abs(filepath.Join(working, "..", "..", "..", ".tmp", "checks-oracle", item.Name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(repo, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if !item.NoGit {
+			if err := exec.Command("git", "-C", repo, "init", "-q").Run(); err != nil {
+				t.Fatal(err)
+			}
+			if exec.Command("git", "-C", repo, "rev-parse", "--verify", "HEAD").Run() == nil {
+				cmd := exec.Command("git", "-C", repo, "reset", "--hard")
+				if err := cmd.Run(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := exec.Command("git", "-C", repo, "clean", "-fdx").Run(); err != nil {
+				t.Fatal(err)
+			}
+			for name, content := range item.Tracked {
+				if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(item.Tracked) > 0 {
+				for _, args := range [][]string{{"config", "user.email", "parity@example.invalid"}, {"config", "user.name", "Parity"}, {"add", "."}, {"commit", "--allow-empty", "-qm", "baseline"}} {
+					cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+					if output, err := cmd.CombinedOutput(); err != nil {
+						t.Fatalf("git %v: %v: %s", args, err, output)
+					}
+				}
+			}
+			for name, content := range item.PreFiles {
+				if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		argv := append([]string(nil), item.Argv...)
+		if len(argv) > 0 && argv[0] == "__PYTHON__" {
+			argv[0] = python
+		}
+		oldCeiling, hadCeiling := os.LookupEnv("GIT_CEILING_DIRECTORIES")
+		if item.NoGit {
+			if err := os.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(repo)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		got := RunChecksReport(repo, []profile.Check{{Name: item.Name, Argv: argv, TimeoutSeconds: 5}}, ctx)
+		cancel()
+		if item.NoGit {
+			if hadCeiling {
+				_ = os.Setenv("GIT_CEILING_DIRECTORIES", oldCeiling)
+			} else {
+				_ = os.Unsetenv("GIT_CEILING_DIRECTORIES")
+			}
+		}
+		for i := range got.Results {
+			got.Results[i].DurationMS = 0
+		}
+		if !equalJSON(got, item.Expected) {
+			t.Fatalf("case %s report %#v want %#v", item.Name, got, item.Expected)
+		}
+	}
+}
+
+func TestRunChecksEmptyArgvIsUnknown(t *testing.T) {
+	got := RunChecks(t.TempDir(), []profile.Check{{Name: "empty-argv", TimeoutSeconds: 1}}, context.Background())
+	if len(got) != 1 || got[0].Status != "UNKNOWN" || got[0].Tail != "launch error: argv is empty" {
+		t.Fatalf("empty argv result %#v", got)
 	}
 }
 
