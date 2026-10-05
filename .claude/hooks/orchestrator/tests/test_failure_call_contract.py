@@ -16,6 +16,14 @@ ROOT = Path(__file__).parents[4]
 FIXTURE = PACKAGE / "tests" / "fixtures" / "go_policy" / "failure_process.json"
 SHARED_FIXTURE = PACKAGE / "tests" / "fixtures" / "go_policy" / "failure.json"
 
+
+def test_failure_registration_is_owned_by_go_mod():
+    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    assert "PostToolUseFailure" not in hooks
+    adapter = (ROOT / "hooks" / "mod" / "enforcement.ts").read_text(encoding="utf-8")
+    assert 'on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse(\'PostToolUseFailure\', $, e, next))' in adapter
+    assert "event === 'PostToolUseFailure' && !postToolUseFailureTools.has(e.tool_name)" in adapter
+
 # Entries name the current Go owner, or the first still-pending assembly pass.
 FAILURE_CALL_CONTRACTS = {
     "post_tool_use_failure": "go/internal/enforce.PostToolUseFailure (122)",

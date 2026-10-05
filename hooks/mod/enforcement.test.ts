@@ -157,6 +157,33 @@ test('Post mod mapping is inactive by default', options, async ($, on) => {
   expect(calls).toEqual([])
 })
 
+test('PostToolUseFailure routes five Codex tools without the Post gate and excludes codex_apply', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  stubGo(on, JSON.stringify({ hookSpecificOutput: {
+    hookEventName: 'PostToolUseFailure', additionalContext: 'failure handled',
+  } }), calls, toasts)
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  for (const tool of [
+    'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
+    'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
+    'mcp__plugin_purser_codex-main__codex_cancel',
+  ]) {
+    const event = { ...postEvent('PostToolUseFailure'), tool_name: tool }
+    await expect($.classic.PostToolUseFailure(event)).resolves.toEqual({ additionalContext: ['failure handled'] })
+  }
+  const excluded = { ...postEvent('PostToolUseFailure'), tool_name: 'mcp__plugin_purser_codex-main__codex_apply' }
+  await expect($.classic.PostToolUseFailure(excluded)).resolves.toEqual({})
+  expect(calls).toHaveLength(5)
+  expect(calls.map(call => JSON.parse(call).tool_name)).toEqual([
+    'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
+    'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
+    'mcp__plugin_purser_codex-main__codex_cancel',
+  ])
+})
+
 function observed(toasts: string[]) {
   const result = toasts.find(line => line.startsWith('p66-result:'))
   expect(result).toBeDefined()

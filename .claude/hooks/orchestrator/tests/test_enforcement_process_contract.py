@@ -417,14 +417,24 @@ def test_go_pretooluse_tools_cover_hooks_json(repo):
     assert hooked_names <= go_names
 
 
-def test_go_post_mod_mappings_are_inactive_until_registration():
+def test_go_post_mod_routes_failure_and_keeps_success_gated():
     adapter = (REPO_ROOT / "hooks" / "mod" / "enforcement.ts").read_text(encoding="utf-8")
     assert 'on("classic.PostToolUse", ($, e, next) => handlePostToolUse(\'PostToolUse\', $, e, next))' in adapter
     assert 'on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse(\'PostToolUseFailure\', $, e, next))' in adapter
-    assert "await $.env.get('PURSER_MOD_POST') !== '1'" in adapter
+    assert "event === 'PostToolUse' && await $.env.get('PURSER_MOD_POST') !== '1'" in adapter
+    assert "event === 'PostToolUseFailure' && !postToolUseFailureTools.has(e.tool_name)" in adapter
+    failure_tools = re.search(r"const postToolUseFailureTools = new Set\(\[([\s\S]*?)\]\)", adapter)
+    assert failure_tools
+    assert set(re.findall(r"'([^']+)'", failure_tools.group(1))) == {
+        "mcp__plugin_purser_codex-main__codex",
+        "mcp__plugin_purser_codex-main__codex-reply",
+        "mcp__plugin_purser_codex-main__codex_start",
+        "mcp__plugin_purser_codex-main__codex_result",
+        "mcp__plugin_purser_codex-main__codex_cancel",
+    }
     hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     assert hooks["PostToolUse"][0]["hooks"][0]["type"] == "command"
-    assert hooks["PostToolUseFailure"][0]["hooks"][0]["type"] == "command"
+    assert "PostToolUseFailure" not in hooks
 
 
 def test_malformed_json_uses_outer_recovery(repo, process):
