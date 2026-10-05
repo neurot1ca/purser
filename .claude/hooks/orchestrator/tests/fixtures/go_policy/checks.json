@@ -1,0 +1,108 @@
+{
+  "oracle": "Python checks.select_checks and run_checks results",
+  "definitions": [
+    {
+      "name": "always",
+      "argv": [
+        "C:\\Users\\ugur\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-c",
+        "print('ok')"
+      ],
+      "timeout_seconds": 2
+    },
+    {
+      "name": "src",
+      "argv": [
+        "C:\\Users\\ugur\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-c",
+        "print('bad'); raise SystemExit(7)"
+      ],
+      "when": [
+        "src/**"
+      ],
+      "timeout_seconds": 2
+    },
+    {
+      "name": "basename",
+      "argv": [
+        "C:\\Users\\ugur\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-c",
+        "print('ok')"
+      ],
+      "when": [
+        "*.go"
+      ],
+      "timeout_seconds": 2
+    },
+    {
+      "name": "docs",
+      "argv": [
+        "C:\\Users\\ugur\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-c",
+        "print('ok')"
+      ],
+      "when": [
+        "docs/*.md"
+      ],
+      "timeout_seconds": 2
+    },
+    {
+      "name": "empty",
+      "argv": [
+        "C:\\Users\\ugur\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-c",
+        "print('ok')"
+      ],
+      "when": [],
+      "timeout_seconds": 2
+    }
+  ],
+  "changed_paths": [
+    "./src/main.go",
+    "docs/guide.md",
+    "elsewhere/readme.txt"
+  ],
+  "selected": [
+    "always",
+    "src",
+    "basename",
+    "docs"
+  ],
+  "results": [
+    {
+      "name": "always",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "tail": ""
+    },
+    {
+      "name": "src",
+      "status": "FAIL",
+      "exit_code": 7,
+      "duration_ms": 0,
+      "tail": "bad\r\n"
+    },
+    {
+      "name": "basename",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "tail": ""
+    },
+    {
+      "name": "docs",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "tail": ""
+    },
+    {
+      "name": "empty",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "tail": ""
+    }
+  ]
+}
