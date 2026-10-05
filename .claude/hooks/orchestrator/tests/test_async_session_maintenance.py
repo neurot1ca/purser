@@ -322,8 +322,8 @@ def test_cleanup_removes_expired_terminal_evidence_pending_and_lease_once(tmp_pa
     monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)
     emitted = []
     monkeypatch.setattr(maintenance.telemetry, "emit", lambda *a, **kw: emitted.append(a))
-    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
-    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=True)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=True)
     jobs = tmp_path / "codex_exec_mcp" / "jobs"
     assert not (jobs / f"{job_id}.json").exists()
     assert not (jobs / f"{job_id}.output").exists()
@@ -744,7 +744,7 @@ def test_cleanup_reaches_recovery_and_expired_jobs_after_inert_prefix(tmp_path, 
     recovered = []
     monkeypatch.setattr(codex_exec_mcp.Server, "recover_job", lambda self, job_id, **kwargs: recovered.append(job_id))
 
-    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=True)
 
     assert recovered == [recovery_id]
     assert not (jobs / f"{expired_id}.json").exists()
@@ -756,6 +756,99 @@ def test_cleanup_preserves_finalizing_evidence_for_retry(tmp_path, monkeypatch):
     maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
     assert (tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json").exists()
     assert pending.exists() and lease._read()["owners"][job_id]["state"] == "ACTIVE"
+
+
+def test_expired_undistilled_job_and_artifacts_survive_until_checkpoint(tmp_path, monkeypatch):
+    job_id, pending, _lease = _job_fixture(tmp_path, "SUCCEEDED", 1000)
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    record = jobs / f"{job_id}.json"
+    (tmp_path / "raw_tool_outputs").mkdir()
+    (tmp_path / "bundle_artifacts").mkdir()
+    index_path = tmp_path / "async_jobs" / f"{job_id}.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    call_key = job_id
+    index["call_key"] = call_key
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+    raw = tmp_path / "raw_tool_outputs" / f"{call_key}.json"
+    bundle = tmp_path / "bundle_artifacts" / f"{call_key}.json"
+    raw.write_text("raw", encoding="utf-8")
+    bundle.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(maintenance.learning_summary, "distill_jobs",
+                        lambda *_a, **_kw: (_ for _ in ()).throw(OSError("checkpoint unavailable")))
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=True)
+    assert record.exists() and (jobs / f"{job_id}.output").exists()
+    assert raw.exists() and bundle.exists()
+    monkeypatch.undo()
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=True)
+    assert not record.exists() and not pending.exists()
+    assert not raw.exists() and not bundle.exists()
+
+
+def test_session_start_cleanup_does_not_read_distillation_sources(tmp_path, monkeypatch):
+    job_id, _pending, _lease = _job_fixture(tmp_path, "SUCCEEDED", 1000)
+    monkeypatch.setattr(maintenance.learning_summary, "_task",
+                        lambda *_a: (_ for _ in ()).throw(AssertionError("distillation read")))
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=False)
+    assert (tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json").exists()
+
+
+def test_background_prunes_stale_terminal_record_without_finished_at(tmp_path):
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    job_id = "b" * 64
+    record = jobs / f"{job_id}.json"
+    record.write_text(json.dumps({"jobId": job_id, "state": "FAILED", "errorCode": "UNKNOWN"}),
+                      encoding="utf-8")
+    launch = jobs / f"{job_id}.launch"
+    launch.write_text("{}", encoding="utf-8")
+    os.utime(record, (1000, 1000))
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=True)
+    assert not record.exists()
+
+
+def test_sync_prunes_checkpointed_record_without_telemetry_reads(tmp_path, monkeypatch):
+    job_id, _pending, _lease = _job_fixture(tmp_path, "SUCCEEDED", 1000)
+    record = tmp_path / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    job = json.loads(record.read_text(encoding="utf-8"))
+    maintenance.learning_summary.distill_jobs(tmp_path, [(record, job)], now=1000)
+    monkeypatch.setattr(maintenance.learning_summary, "_task",
+                        lambda *_a: (_ for _ in ()).throw(AssertionError("sync telemetry read")))
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=False)
+    assert not record.exists()
+
+
+def test_cleanup_parses_summary_at_most_once_per_scan(tmp_path, monkeypatch):
+    records = []
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    for index in range(3):
+        job_id = f"{index + 1:064x}"
+        record = jobs / f"{job_id}.json"
+        job = {"jobId": job_id, "state": "SUCCEEDED", "finishedAt": 1000}
+        record.write_text(json.dumps(job), encoding="utf-8")
+        records.append((record, job))
+    maintenance.learning_summary.distill_jobs(tmp_path, records, now=1000)
+    reads = []
+    original = maintenance.learning_summary.read_summary
+    monkeypatch.setattr(maintenance.learning_summary, "read_summary",
+                        lambda root: (reads.append(root), original(root))[1])
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=False)
+    assert len(reads) == 1
+
+
+def test_600_undistilled_expired_jobs_emit_at_most_one_warning(tmp_path, monkeypatch):
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    for index in range(600):
+        job_id = f"{index + 1:064x}"
+        (jobs / f"{job_id}.json").write_text(json.dumps({
+            "jobId": job_id, "state": "SUCCEEDED", "finishedAt": 1000,
+        }), encoding="utf-8")
+    monkeypatch.setattr(maintenance.learning_summary, "distill_jobs", lambda *_a, **_kw: set())
+    warnings = []
+    monkeypatch.setattr(maintenance.state_retention, "_warning", lambda root: warnings.append(root))
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400, check_ceiling=True)
+    assert len(warnings) <= 1
 
 
 def _recoverable(root, *, thread_id=None, stage="PENDING", attempts=0):

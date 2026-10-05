@@ -20,6 +20,7 @@ import codex_exec_mcp
 import codex
 import ledger
 import telemetry
+import learning_summary
 import stall_followup
 import state_retention
 
@@ -692,6 +693,7 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
                 key = _worktree_key(job.get("worktreePath"))
                 if key is not None:
                     protected_worktrees.add(key)
+        distilled: set[str] = set()
         worktree_owners: dict[str, dict[str, Any]] = {}
         for _path, job in loaded_records:
             key = _worktree_key(job.get("worktreePath"))
@@ -699,12 +701,12 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
                 worktree_owners.setdefault(key, job)
         recoveries: list[tuple[Path, dict[str, Any]]] = []
         removals: list[tuple[Path, dict[str, Any]]] = []
+        expired_by_path: dict[Path, bool] = {}
         for path, job in loaded_records:
-            if not _JOB_ID.fullmatch(path.stem):
-                continue
             state = job.get("state")
             if state not in TERMINAL:
-                recoveries.append((path, job))
+                if _JOB_ID.fullmatch(path.stem):
+                    recoveries.append((path, job))
                 continue
             discard_without_patch = state in {"FAILED", "CANCELLED", "TIMED_OUT"} and "applyState" not in job
             may_remove_worktree = (state != "UNKNOWN_OR_IN_PROGRESS"
@@ -714,10 +716,45 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
                                     and worktree_key not in protected_worktrees)
             launch_exists = state != "UNKNOWN_OR_IN_PROGRESS" and (jobs / f"{path.stem}.launch").exists()
             finished = job.get("finishedAt")
-            expired = (not isinstance(finished, bool) and isinstance(finished, (int, float))
-                       and not current - finished < RETENTION_SECONDS)
+            if not isinstance(finished, bool) and isinstance(finished, (int, float)):
+                expired = current - finished >= RETENTION_SECONDS
+            else:
+                try:
+                    expired = current - path.stat().st_mtime >= RETENTION_SECONDS
+                except OSError:
+                    expired = False
+            expired_by_path[path] = expired
             if removes_worktree or launch_exists or expired:
                 removals.append((path, job))
+
+        candidates = sorted(
+            ((path, job) for path, job in removals
+             if expired_by_path.get(path, False)
+             and (not job.get("worktreePath")
+                  or ((job.get("applyState") == "applied"
+                       or (job.get("state") in {"FAILED", "CANCELLED", "TIMED_OUT"}
+                           and "applyState" not in job))
+                      and _worktree_key(job.get("worktreePath")) not in protected_worktrees))),
+            key=lambda item: (
+                not (isinstance(item[1].get("finishedAt"), (int, float))
+                     and not isinstance(item[1].get("finishedAt"), bool)),
+                (float(item[1]["finishedAt"]) if isinstance(item[1].get("finishedAt"), (int, float))
+                 and not isinstance(item[1].get("finishedAt"), bool) else current), item[0].name),
+        )
+        if removals:
+            if check_ceiling:
+                try:
+                    distilled = learning_summary.distill_jobs(
+                        root, candidates, now=current, max_sources=learning_summary.MAX_DISTILL_PER_RUN,
+                        existing_sources={learning_summary.source_key(path.stem)
+                                          for path, _job in loaded_records})
+                except Exception:
+                    distilled = set()
+            else:
+                distilled = set(learning_summary.read_summary(root).get("sources", ()))
+            if sum(learning_summary.source_key(path.stem) not in distilled
+                   for path, _job in candidates) > MAX_JOB_RECORDS:
+                state_retention._warning(root)
 
         listings: dict[str, tuple[Path, list[Path]] | None] = {}
         prune_repos: dict[str, Path] = {}
@@ -748,8 +785,11 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
                 if launch_path.exists():
                     launch_path.unlink(missing_ok=True)
                     acted = True
-            finished = job.get("finishedAt")
-            if isinstance(finished, bool) or not isinstance(finished, (int, float)) or current - finished < RETENTION_SECONDS:
+            if not expired_by_path.get(path, False):
+                if acted:
+                    actions += 1
+                continue
+            if learning_summary.source_key(path.stem) not in distilled:
                 if acted:
                     actions += 1
                 continue
@@ -796,6 +836,11 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
                         output_path = jobs / output_name
                         if output_path.parent == jobs:
                             output_path.unlink(missing_ok=True)
+                    call_key = index.get("call_key") if index else None
+                    if isinstance(call_key, str) and _JOB_ID.fullmatch(call_key):
+                        (root / "raw_tool_outputs" / f"{call_key}.json").unlink(missing_ok=True)
+                        (root / "raw_tool_outputs" / f"{call_key}-failure.json").unlink(missing_ok=True)
+                        (root / "bundle_artifacts" / f"{call_key}.json").unlink(missing_ok=True)
                     path.unlink(missing_ok=True)
                     (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
                     if pending_path is not None:
@@ -826,9 +871,9 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
                 continue
         try:
             state_retention.prune_state(root, now=current, check_ceiling=check_ceiling)
-        except BaseException:
+        except Exception:
             pass
-    except BaseException:
+    except Exception:
         return None
 
 
