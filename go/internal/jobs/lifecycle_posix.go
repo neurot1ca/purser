@@ -37,3 +37,9 @@ func ClassifyProcessIdentity(pid int, expectedStartTime uint64) string {
 	}
 	return state
 }
+
+func recoveryProcessState(pid int, createdAt uint64) string {
+	return ClassifyProcessIdentity(pid, createdAt)
+}
+
+func recoveryGroupStopped(pid int) bool { return ProcessGroupStopped(pid) }

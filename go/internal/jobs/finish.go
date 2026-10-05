@@ -161,15 +161,20 @@ func resultJob(dir, id string, now float64, opt ResultOptions) map[string]any {
 		return expiredJobResult(recordMap(r))
 	}
 	if !terminalJobs[state] {
-		// Pass 157 supplies the actual host recovery callback; nil preserves the current unconfirmed behavior.
+		root := opt.StateRoot
+		if root == "" {
+			root = filepath.Dir(filepath.Dir(dir))
+		}
 		hostState := "UNCONFIRMED"
 		if opt.RecoverJob != nil {
 			hostState = opt.RecoverJob(id)
-			if current := readJob(dir, id); current != nil {
-				r = current
-				m = recordMap(r)
-				state, _ = m["state"].(string)
-			}
+		} else {
+			hostState = RecoverJob(root, id, now, RecoverOptions{})
+		}
+		if current := readJob(dir, id); current != nil {
+			r = current
+			m = recordMap(r)
+			state, _ = m["state"].(string)
 		}
 		if hostState == "UNCONFIRMED" {
 			m["message"] = "Host identity unconfirmed"

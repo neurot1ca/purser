@@ -1,0 +1,495 @@
+{
+  "oracle": "real Server.recover_job classification before pass 158 replacement",
+  "cases": [
+    {
+      "name": "terminal",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "FAILED",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "finishedAt": 2000000000.0
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "UNCHANGED",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "FAILED",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "finishedAt": 2000000000.0
+      }
+    },
+    {
+      "name": "consumed",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      },
+      "index": {
+        "stage": "CONSUMED"
+      },
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "UNCHANGED",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      }
+    },
+    {
+      "name": "unclaimed_expired",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "QUEUED",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 1999999999.0,
+        "generation": 1,
+        "hostPid": null,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "leaseQueued": true
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "TIMED_OUT",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "TIMED_OUT",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 1999999999.0,
+        "generation": 1,
+        "hostPid": null,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "leaseQueued": true,
+        "finishedAt": 2000000000.0,
+        "errorCode": "DEADLINE_EXCEEDED",
+        "message": "Codex deadline exceeded",
+        "boardDisplayCount": 0
+      }
+    },
+    {
+      "name": "unclaimed_queued",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "QUEUED",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": null,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "leaseQueued": true
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "RECOVERED",
+      "record": null
+    },
+    {
+      "name": "missing_host",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": null,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "UNCONFIRMED",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": null,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      }
+    },
+    {
+      "name": "live_host",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "ALIVE",
+        "groupStopped": true
+      },
+      "result": "ALIVE",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      }
+    },
+    {
+      "name": "dead_child_live",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": false
+      },
+      "result": "UNCONFIRMED",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      }
+    },
+    {
+      "name": "missing_generation",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": null,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "AMBIGUOUS",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "UNKNOWN_OR_IN_PROGRESS",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": null,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "finishedAt": 2000000000.0,
+        "errorCode": "RECOVERY_PROOF_MISSING",
+        "message": "Host or child-tree termination proof is missing"
+      }
+    },
+    {
+      "name": "invalid_attempts",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "resumedAfterInterruption": -1
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "AMBIGUOUS",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "UNKNOWN_OR_IN_PROGRESS",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "resumedAfterInterruption": -1,
+        "finishedAt": 2000000000.0,
+        "errorCode": "RECOVERY_PROOF_MISSING",
+        "message": "Recovery attempt history is invalid"
+      }
+    },
+    {
+      "name": "exhausted_attempts",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "resumedAfterInterruption": 2
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "AMBIGUOUS",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "UNKNOWN_OR_IN_PROGRESS",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "resumedAfterInterruption": 2,
+        "finishedAt": 2000000000.0,
+        "errorCode": "RECOVERY_ATTEMPTS_EXHAUSTED",
+        "message": "Automatic recovery attempt limit reached"
+      }
+    },
+    {
+      "name": "missing_reply_thread",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789
+      },
+      "index": null,
+      "launch": {
+        "name": "codex-reply",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "AMBIGUOUS",
+      "record": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "UNKNOWN_OR_IN_PROGRESS",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "finishedAt": 2000000000.0,
+        "errorCode": "RECOVERY_THREAD_MISSING",
+        "message": "Original reply thread identity is missing"
+      }
+    },
+    {
+      "name": "dead_resumable",
+      "job": {
+        "jobId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "call": "call-1",
+        "state": "RUNNING",
+        "acceptedAt": 1999999990.0,
+        "deadlineAt": 2000000100.0,
+        "generation": 1,
+        "hostPid": 123,
+        "hostCreatedAt": 456,
+        "hostContained": true,
+        "pid": 789,
+        "threadId": "thread-1",
+        "threadConfig": {
+          "cwd": ".",
+          "config_args": []
+        }
+      },
+      "index": null,
+      "launch": {
+        "name": "codex",
+        "args": {
+          "prompt": "resume",
+          "timeoutSeconds": 30
+        }
+      },
+      "probes": {
+        "host": "DEAD",
+        "groupStopped": true
+      },
+      "result": "RECOVERED",
+      "record": null
+    }
+  ]
+}

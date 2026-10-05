@@ -141,6 +141,52 @@ func TestFinishResultPythonParity(t *testing.T) {
 	}
 }
 
+func TestResultUsesInjectedRecoveryWithoutDefaultRecovery(t *testing.T) {
+	root := scratch(t)
+	id := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	initial := map[string]any{"jobId": id, "state": "QUEUED", "generation": 1,
+		"hostPid": os.Getpid(), "hostCreatedAt": 1, "hostContained": true}
+	raw, _ := json.Marshal(initial)
+	record, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Write(filepath.Join(dir, id+".json"), record); err != nil {
+		t.Fatal(err)
+	}
+	launch := []byte(`{"name":"codex-reply","args":{"prompt":"resume"}}`)
+	if err = os.WriteFile(filepath.Join(dir, id+".launch"), launch, 0600); err != nil {
+		t.Fatal(err)
+	}
+	resultJob(dir, id, 2_000_000_000, ResultOptions{RecoverJob: func(string) string { return "UNCONFIRMED" }})
+	got := recordMap(readJob(dir, id))
+	if got["state"] != "QUEUED" || got["errorCode"] != nil {
+		t.Fatalf("injected recovery was preceded by default recovery: %#v", got)
+	}
+}
+
+func TestResultReportsDefaultRecoveryTimeout(t *testing.T) {
+	root := scratch(t)
+	id := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	initial := map[string]any{"jobId": id, "state": "QUEUED", "leaseQueued": true,
+		"deadlineAt": float64(1_999_999_999), "acceptedAt": float64(1_999_999_990)}
+	raw, _ := json.Marshal(initial)
+	record, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Write(filepath.Join(dir, id+".json"), record); err != nil {
+		t.Fatal(err)
+	}
+	got := resultJob(dir, id, 2_000_000_000, ResultOptions{})
+	value := got["structuredContent"].(map[string]any)
+	if value["state"] != "TIMED_OUT" || value["errorCode"] != "DEADLINE_EXCEEDED" {
+		t.Fatalf("result = %#v, want TIMED_OUT/DEADLINE_EXCEEDED", value)
+	}
+}
+
 func normalizeFinish(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
