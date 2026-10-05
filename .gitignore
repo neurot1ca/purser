@@ -7,6 +7,7 @@ pytest-cache-files-*/
 .claude/settings.local.json.bak-*
 docs/research/
 NEXT.md
+NEXT-archive.md
 docs/ROADMAP.md
 docs/PROVENANCE.md
 docs/ORCHESTRATION_REFORM_SPEC.md
