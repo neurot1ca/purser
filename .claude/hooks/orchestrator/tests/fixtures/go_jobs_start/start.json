@@ -1,0 +1,333 @@
+{
+  "oracle": "real Server._start_job before jobs_lock",
+  "cases": [
+    {
+      "name": "invalid_agent",
+      "args": {
+        "agent": "other",
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid agent\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid agent"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "invalid_config",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_CONFIG\", \"message\": \"bad configuration\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_CONFIG",
+          "message": "bad configuration"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "required",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"call and prompt are required\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "call and prompt are required"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "uuid",
+      "args": {
+        "call": "bad",
+        "prompt": "p"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"call must be a UUID\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "call must be a UUID"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "timeout",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "timeoutSeconds": true
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"timeoutSeconds must be positive\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "timeoutSeconds must be positive"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "mode",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "mode": "resume"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"invalid mode\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "invalid mode"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "cwd",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "cwd": ""
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid Codex launch arguments\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid Codex launch arguments"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "model",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "model": 1
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid Codex launch arguments\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid Codex launch arguments"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "config_type",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "config": []
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid Codex launch arguments\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid Codex launch arguments"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "config_value",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "config": {
+          "x": null
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid Codex launch arguments\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid Codex launch arguments"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "sandbox",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "sandbox": "bad"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid Codex launch arguments\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid Codex launch arguments"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "worktree",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "worktree": 1
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid Codex launch arguments\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid Codex launch arguments"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "approval",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "approval-policy": "always"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid Codex launch arguments\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid Codex launch arguments"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "instructions",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "compact-prompt": null
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"state\": \"FAILED\", \"errorCode\": \"INVALID_ARGUMENT\", \"message\": \"Invalid Codex launch arguments\"}"
+          }
+        ],
+        "structuredContent": {
+          "state": "FAILED",
+          "errorCode": "INVALID_ARGUMENT",
+          "message": "Invalid Codex launch arguments"
+        },
+        "isError": true
+      }
+    },
+    {
+      "name": "valid",
+      "args": {
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "cwd": "C:/repo"
+      },
+      "request": {
+        "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+        "call": "00000000-0000-4000-8000-000000000001",
+        "prompt": "p",
+        "agent": "codex",
+        "mode": "new",
+        "name": "codex",
+        "timeoutSeconds": 86400,
+        "args": {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "p",
+          "cwd": "C:/repo"
+        }
+      }
+    }
+  ]
+}
