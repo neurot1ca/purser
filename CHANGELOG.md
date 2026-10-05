@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.74 — 2026-10-05
+
+- **Fixed:** `codex_result` and `codex_cancel` no longer report "routing was NOT enforced" when Go PreToolUse allows the call without changes.
+- **Fixed:** Go PostToolUse/PostToolUseFailure get 300 seconds again; the 60-second limit killed Reviewer-1 finalization and returned unreviewed results.
+- **Internal:** Go hook binary gains private `op`/`host` entry points and recovery replacement; still not wired.
+
 ## 0.1.73 — 2026-10-05
 
 - **Fixed:** The mod adapter runs the Go PostToolUse and PostToolUseFailure helper in enforce mode; in 0.1.72 Go skipped Post enforcement (review, receipts, apply refresh) for the Codex tools.
