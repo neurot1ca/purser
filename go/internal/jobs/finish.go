@@ -59,15 +59,10 @@ func finishJob(dir, id, state, code string, result map[string]any, message strin
 	_ = r.Set("state", state)
 	_ = r.Set("finishedAt", now)
 	if terminalJobs[state] {
-		if v, ok := r.values["stallDetectedAt"]; ok {
-			_ = v
-			delete(r.values, "stallDetectedAt")
-			r.dirty = true
-		}
+		r.Delete("stallDetectedAt")
 		var old string
 		if r.Get("errorCode", &old) && old == "STALLED" {
-			delete(r.values, "errorCode")
-			r.dirty = true
+			r.Delete("errorCode")
 		}
 	}
 	if code != "" {

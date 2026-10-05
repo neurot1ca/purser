@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,8 +35,8 @@ type HostOptions struct {
 	HostContained bool
 }
 
-// RunHostGeneration owns and executes one queued Codex generation. Worktree,
-// queued-lease, and alternate-agent execution remain explicitly unavailable.
+// RunHostGeneration owns and executes one queued Codex generation. Worktree
+// and alternate-agent execution remain explicitly unavailable.
 func RunHostGeneration(dir, jobID string, generation int64, token string, options ...HostOptions) (map[string]any, error) {
 	if len(jobID) != 64 || !validJobID(jobID) || generation < 1 || token == "" {
 		return nil, errors.New("invalid host generation identity")
@@ -79,7 +81,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if err = json.Unmarshal(launch.Args, &argsMap); err != nil || argsMap == nil {
 		return nil, errors.New("launch args must be an object")
 	}
-	if worktreePath != "" || argsMap["worktree"] == true || leaseQueued ||
+	if worktreePath != "" || argsMap["worktree"] == true ||
 		(launch.Agent != "" && launch.Agent != "codex") ||
 		(launch.Name != "codex" && launch.Name != "codex-reply") {
 		return failHostUnavailable(path, jobID, generation, token, "Go host branch is not ported")
@@ -123,8 +125,14 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if cancelled.Swap(true) {
 			return false
 		}
-		if cancel != nil {
-			cancel()
+		cancel()
+		current, readErr := Read(path)
+		if readErr == nil {
+			var currentState string
+			current.Get("state", &currentState)
+			if currentState == "QUEUED" {
+				_ = finishJob(dir, jobID, "CANCELLED", "CANCELLED", nil, "Codex cancelled", float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
+			}
 		}
 		return true
 	})
@@ -159,8 +167,8 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		key   string
 		value any
 	}{
-		{"state", "RUNNING"}, {"hostPid", os.Getpid()}, {"hostCreatedAt", createdValue},
-		{"hostContained", opt.HostContained}, {"signalPort", address.Port}, {"startedAt", now},
+		{"hostPid", os.Getpid()}, {"hostCreatedAt", createdValue},
+		{"hostContained", opt.HostContained}, {"signalPort", address.Port},
 	} {
 		if err = job.Set(field.key, field.value); err != nil {
 			break
@@ -175,19 +183,124 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if err != nil {
 		return nil, err
 	}
+	if leaseQueued {
+		root := filepath.Dir(filepath.Dir(dir))
+		if err = WaitForQueuedBaseline(ctx, root, jobID, time.Second); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				_ = finishJob(dir, jobID, "TIMED_OUT", "DEADLINE_EXCEEDED", nil, "Codex deadline exceeded", float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
+				return map[string]any{"status": "ok"}, nil
+			}
+			if errors.Is(err, context.Canceled) {
+				_ = finishJob(dir, jobID, "CANCELLED", "CANCELLED", nil, "Codex cancelled", float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
+				return map[string]any{"status": "ok"}, nil
+			}
+			_ = finishJob(dir, jobID, "UNKNOWN_OR_IN_PROGRESS", "ADMISSION_BASELINE_UNAVAILABLE", nil, "Fresh admission baseline could not be bound; FULL review required", float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
+			return map[string]any{"status": "error", "errorCode": "ADMISSION_BASELINE_UNAVAILABLE", "message": "Fresh admission baseline could not be bound; FULL review required"}, nil
+		}
+	}
+	if cancelled.Load() {
+		return map[string]any{"status": "ok"}, nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || float64(time.Now().UnixNano())/1e9 >= deadline {
+		_ = finishJob(dir, jobID, "TIMED_OUT", "DEADLINE_EXCEEDED", nil, "Codex deadline exceeded", float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
+		return map[string]any{"status": "ok"}, nil
+	}
+	if ctx.Err() != nil {
+		return map[string]any{"status": "ok"}, nil
+	}
+	lock, err = AcquireOwnership(dir, jobID)
+	if err != nil {
+		return nil, err
+	}
+	job, err = Read(path)
+	if err == nil {
+		job.Get("jobId", &recordedID)
+		job.Get("generation", &recordedGeneration)
+		job.Get("ownershipToken", &recordedToken)
+		job.Get("state", &state)
+		if recordedID != jobID || recordedGeneration != generation || recordedToken != token || state != "QUEUED" {
+			_ = lock.Release()
+			return map[string]any{"status": "stale"}, nil
+		}
+		now = float64(time.Now().UnixNano()) / 1e9
+		_ = job.Set("state", "RUNNING")
+		_ = job.Set("startedAt", now)
+		err = Write(path, job)
+	}
+	if releaseErr := lock.Release(); err == nil {
+		err = releaseErr
+	}
+	if err != nil {
+		return nil, err
+	}
 	command := exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...)
 	command.Dir = args.Cwd
 	command.Stdin = strings.NewReader(prompt)
 	stream := NewEventStream("codex")
-	command.Stdout = eventWriter{stream}
+	activity := NewLivenessActivity(job, "codex", StallThreshold(dir, job), now)
+	activityMu := &sync.Mutex{}
+	command.Stdout = eventWriter{stream: stream, activity: activity, activityMu: activityMu}
 	stderr := &tailBuffer{limit: 4000}
 	command.Stderr = stderr
 	proc.ConfigureProcessTreeKill(command)
-	runErr := command.Run()
-	if runErr != nil && command.Process == nil {
+	if err = command.Start(); err != nil {
 		close(terminal)
-		_ = finishJob(dir, jobID, "FAILED", "CODEX_FAILED", nil, runErr.Error(), float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
-		return map[string]any{"status": "error", "errorCode": "CODEX_FAILED", "message": runErr.Error()}, nil
+		contextErr := ctx.Err()
+		if contextErr == nil && float64(time.Now().UnixNano())/1e9 >= deadline {
+			contextErr = context.DeadlineExceeded
+		}
+		return finishHostStartError(dir, jobID, generation, token, cancelled.Load(), contextErr, err)
+	}
+	lock, err = AcquireOwnership(dir, jobID)
+	if err == nil {
+		job, err = Read(path)
+		if err == nil {
+			_ = job.Set("pid", command.Process.Pid)
+			err = Write(path, job)
+		}
+		if releaseErr := lock.Release(); err == nil {
+			err = releaseErr
+		}
+	}
+	if err != nil {
+		_ = command.Process.Kill()
+		return nil, err
+	}
+	activityMu.Lock()
+	_, checkpointErr := CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, true, true)
+	activityMu.Unlock()
+	if checkpointErr != nil {
+		_ = command.Process.Kill()
+		return nil, checkpointErr
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	checkTicker := time.NewTicker(100 * time.Millisecond)
+	defer checkTicker.Stop()
+	var runErr error
+	for running := true; running; {
+		select {
+		case runErr = <-done:
+			running = false
+		case <-checkTicker.C:
+			activityMu.Lock()
+			_, checkpointErr := CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, true, false)
+			activityMu.Unlock()
+			if checkpointErr != nil {
+				_ = command.Process.Kill()
+				return nil, checkpointErr
+			}
+		}
+	}
+	if !cancelled.Load() {
+		activityMu.Lock()
+		lastActivity := numberOr(activity["lastActivityAt"], float64(time.Now().UnixNano())/1e9)
+		activity["longestSilentGapSeconds"] = math.Max(numberOr(activity["longestSilentGapSeconds"], 0), math.Max(0, float64(time.Now().UnixNano())/1e9-lastActivity))
+		_, checkpointErr = CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, false, true)
+		activityMu.Unlock()
+		if checkpointErr != nil {
+			return nil, checkpointErr
+		}
 	}
 	exitCode := 0
 	if runErr != nil {
@@ -198,6 +311,23 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			exitCode = 1
 		}
 	}
+	if cancelled.Load() || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		exitCode = 1
+	}
+	lock, err = AcquireOwnership(dir, jobID)
+	if err == nil {
+		job, err = Read(path)
+		if err == nil {
+			_ = job.Set("exitCode", exitCode)
+			err = Write(path, job)
+		}
+		if releaseErr := lock.Release(); err == nil {
+			err = releaseErr
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
 	result := stream.Result(cancelled.Load() || ctx.Err() != nil, exitCode, stderr.String())
 	if result.ThreadID != "" {
 		configArgs, configErr := FlattenConfig(args.Config)
@@ -207,9 +337,21 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if configArgs == nil {
 			configArgs = []string{}
 		}
-		threadConfig := map[string]any{"cwd": args.Cwd, "model": args.Model, "config_args": configArgs,
-			"sandbox": args.Sandbox, "agent": "codex"}
+		var model, sandbox any
+		if args.Model != "" {
+			model = args.Model
+		}
+		if args.Sandbox != "" {
+			sandbox = args.Sandbox
+		}
+		threadConfig := map[string]any{"cwd": args.Cwd, "model": model, "config_args": configArgs,
+			"sandbox": sandbox, "agent": "codex"}
 		if err = saveHostThread(dir, jobID, generation, token, result.ThreadID, threadConfig, launch.Name == "codex"); err != nil {
+			return nil, err
+		}
+	}
+	if !cancelled.Load() && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if err = saveHostAttemptFields(path, jobID, generation, token, exitCode, result.Status != "success"); err != nil {
 			return nil, err
 		}
 	}
@@ -224,6 +366,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if message == "" {
 			message = "Codex completion event missing"
 		}
+		message = "Codex failed: " + message
 		err = finishJob(dir, jobID, "FAILED", "CODEX_FAILED", nil, message, finished, hostFinishOptions(generation, token))
 	default:
 		content := result.Final
@@ -242,10 +385,69 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	return map[string]any{"status": "ok"}, nil
 }
 
-type eventWriter struct{ stream *EventStream }
+func finishHostStartError(dir, id string, generation int64, token string, cancelled bool, contextErr, startErr error) (map[string]any, error) {
+	now := float64(time.Now().UnixNano()) / 1e9
+	switch {
+	case cancelled:
+		if err := finishJob(dir, id, "CANCELLED", "CANCELLED", nil, "Codex cancelled", now, hostFinishOptions(generation, token)); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "ok"}, nil
+	case errors.Is(contextErr, context.DeadlineExceeded):
+		if err := finishJob(dir, id, "TIMED_OUT", "DEADLINE_EXCEEDED", nil, "Codex deadline exceeded", now, hostFinishOptions(generation, token)); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "ok"}, nil
+	default:
+		if err := finishJob(dir, id, "FAILED", "CODEX_FAILED", nil, startErr.Error(), now, hostFinishOptions(generation, token)); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "error", "errorCode": "CODEX_FAILED", "message": startErr.Error()}, nil
+	}
+}
+
+func saveHostAttemptFields(path, id string, generation int64, token string, exitCode int, failed bool) error {
+	lock, err := AcquireOwnership(filepath.Dir(path), id)
+	if err != nil {
+		return err
+	}
+	job, err := Read(path)
+	if err == nil {
+		var actual int64
+		var owner, state string
+		job.Get("generation", &actual)
+		job.Get("ownershipToken", &owner)
+		job.Get("state", &state)
+		if actual == generation && owner == token && state == "RUNNING" {
+			_ = job.Set("responsivenessAttempts", 1)
+			if failed && exitCode != 0 {
+				_ = job.Set("launchFailureEvidence", map[string]any{
+					"type": "AMBIGUOUS", "retryAfterSeconds": nil, "noWorkProof": false,
+				})
+			}
+			err = Write(path, job)
+		}
+	}
+	if releaseErr := lock.Release(); err == nil {
+		err = releaseErr
+	}
+	return err
+}
+
+type eventWriter struct {
+	stream     *EventStream
+	activity   LivenessActivity
+	activityMu *sync.Mutex
+}
 
 func (w eventWriter) Write(value []byte) (int, error) {
 	w.stream.Write(value)
+	if w.activityMu != nil {
+		w.activityMu.Lock()
+		w.activity["stdoutBytes"] = int(numberOr(w.activity["stdoutBytes"], 0)) + len(value)
+		RecordLivenessActivity(w.activity, float64(time.Now().UnixNano())/1e9)
+		w.activityMu.Unlock()
+	}
 	return len(value), nil
 }
 

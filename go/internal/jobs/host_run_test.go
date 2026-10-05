@@ -1,7 +1,9 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,9 +23,9 @@ func TestHostFakeWorker(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		os.Exit(0)
 	}
-	_, _ = os.Stdout.WriteString("{\"type\":\"thread.started\",\"thread_id\":\"fake-thread\"}\n")
-	_, _ = os.Stdout.WriteString("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"fake answer\"}}\n")
-	_, _ = os.Stdout.WriteString("{\"type\":\"turn.completed\"}\n")
+	_, _ = os.Stdout.WriteString("{\"type\": \"thread.started\", \"thread_id\": \"fake-thread\"}\r\n")
+	_, _ = os.Stdout.WriteString("{\"type\": \"item.completed\", \"item\": {\"type\": \"agent_message\", \"text\": \"fake answer\"}}\r\n")
+	_, _ = os.Stdout.WriteString("{\"type\": \"turn.completed\"}\r\n")
 	_ = os.WriteFile(output, []byte("fake answer"), 0600)
 	if mode == "nonzero" {
 		os.Exit(7)
@@ -41,6 +43,7 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 		{name: "success", state: "SUCCEEDED"},
 		{name: "worker_nonzero", mode: "nonzero", state: "FAILED", errorCode: "CODEX_FAILED"},
 		{name: "deadline", mode: "sleep", state: "TIMED_OUT", errorCode: "DEADLINE_EXCEEDED", deadline: 120 * time.Millisecond},
+		{name: "deadline_before_worker_start", state: "TIMED_OUT", errorCode: "DEADLINE_EXCEEDED", deadline: -time.Second},
 		{name: "signal_cancel", mode: "sleep", state: "CANCELLED", errorCode: "CANCELLED", deadline: 5 * time.Second, cancel: true},
 		{name: "stale_generation", state: "QUEUED", stale: true},
 		{name: "worktree_setup_unavailable", state: "FAILED", errorCode: hostUnavailableCode},
@@ -53,7 +56,7 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 				t.Fatal(err)
 			}
 			deadline := time.Now().Add(10 * time.Second)
-			if tc.deadline > 0 {
+			if tc.deadline != 0 {
 				deadline = time.Now().Add(tc.deadline)
 			}
 			job := map[string]any{"jobId": hostTestID, "state": "QUEUED", "generation": 1,
@@ -132,11 +135,48 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 	}
 }
 
+func TestHostStartFailurePreservesCancellationAndDeadline(t *testing.T) {
+	tests := []struct {
+		name, state, code string
+		cancelled         bool
+		contextErr        error
+	}{
+		{name: "cancel", state: "CANCELLED", code: "CANCELLED", cancelled: true, contextErr: context.Canceled},
+		{name: "deadline", state: "TIMED_OUT", code: "DEADLINE_EXCEEDED", contextErr: context.DeadlineExceeded},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+				"jobId": hostTestID, "state": "RUNNING", "generation": 1, "ownershipToken": "owner",
+			})
+			if _, err := finishHostStartError(dir, hostTestID, 1, "owner", tc.cancelled, tc.contextErr, errors.New("worker start failed")); err != nil {
+				t.Fatal(err)
+			}
+			got := readJob(dir, hostTestID)
+			var state, code string
+			got.Get("state", &state)
+			got.Get("errorCode", &code)
+			if state != tc.state || code != tc.code {
+				t.Fatalf("start failure terminal state/code=%s/%s, want %s/%s", state, code, tc.state, tc.code)
+			}
+		})
+	}
+}
+
 func waitForHostState(t *testing.T, dir, expected string) {
 	t.Helper()
 	limit := time.Now().Add(3 * time.Second)
 	for time.Now().Before(limit) {
 		job := readJob(dir, hostTestID)
+		if job == nil {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
 		var state string
 		job.Get("state", &state)
 		if state == expected {
