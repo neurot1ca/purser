@@ -1,14 +1,130 @@
 package enforce
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const maxTaskUsageToken = 100_000_000
+
+func init() {
+	// The schema already recognizes this event and its fields; register its
+	// existing usage allowlist with the observation builder.
+	observationFields["CLAUDE_TASK_USAGE_RECORDED"] = fields("claude_task_usage_source claude_task_usage_known claude_task_usage_complete claude_task_input_tokens claude_task_output_tokens claude_task_cache_creation_input_tokens claude_task_cache_read_input_tokens claude_task_total_observed_tokens claude_task_request_count claude_task_usage_boundary claude_task_usage_dedup claude_task_usage_unknown_reason claude_task_subagent_usage_included")
+	setObservationRule("enum:desktop_jsonl_observed", "claude_task_usage_source")
+	setObservationRule("enum:anchored_pre_tool_to_stop", "claude_task_usage_boundary")
+	setObservationRule("enum:message_id_request_id", "claude_task_usage_dedup")
+	setObservationRule("bool", "claude_task_usage_known claude_task_usage_complete claude_task_subagent_usage_included")
+	setObservationRule("id", "claude_task_usage_unknown_reason")
+	setObservationRule("int", "claude_task_input_tokens claude_task_output_tokens claude_task_cache_creation_input_tokens claude_task_cache_read_input_tokens claude_task_total_observed_tokens claude_task_request_count")
+}
+
+// finalizeStopTask composes the decision and aggregation passes with the
+// Python finalization writes. It is intentionally not wired into stop.go yet.
+func finalizeStopTask(root, session, transcriptPath, projectsRoot string, timeout time.Duration, now time.Time) map[string]any {
+	if session == "" {
+		return nil
+	}
+	active, readErr := readActiveTask(root, session)
+	markerBefore, competingID := readTaskUsageContention(root, session)
+	decision := finalizeStopTaskDecision(root, session, timeout, now)
+	if decision == nil {
+		taskID, taskOK := active["task_id"].(string)
+		toolUseID, toolOK := active["tool_use_id"].(string)
+		if active != nil && (!taskOK || taskID == "" || !toolOK || toolUseID == "") {
+			_ = os.Remove(activeTaskPath(root, session))
+		}
+		return nil
+	}
+	if decision["status"] == "READY" {
+		decision = finalizeStopTaskUsage(decision, active, session, transcriptPath, projectsRoot)
+	}
+	if readErr != nil || active == nil {
+		return decision
+	}
+	if active["completed"] == true || active["invalidated"] == true {
+		return decision
+	}
+	if decision["reason"] == "ACTIVE_TASK_STATE_CONTENTION" {
+		if !markerBefore { // Lock timeout just created the marker; Python returns without finalizing.
+			return decision
+		}
+		active = invalidateStopTask(active, "ACTIVE_TASK_STATE_CONTENTION")
+		ids, _ := active["affected_task_ids"].([]any)
+		if taskID := active["task_id"]; taskID != nil && taskID != "" && !containsTaskID(ids, taskID) {
+			ids = append(ids, taskID)
+		}
+		if competingID != "" && !containsTaskID(ids, competingID) {
+			ids = append(ids, competingID)
+		}
+		active["affected_task_ids"] = lastTaskIDs(ids, 16)
+		_ = writeActiveTaskJSON(activeTaskPath(root, session), active)
+		stopTaskObservation(root, session, active, stopTaskUnknown("ACTIVE_TASK_STATE_CONTENTION"))
+		_ = removeTaskUsageContention(root, session)
+		return decision
+	}
+	if decision["status"] == "FAILED" {
+		reason, _ := decision["reason"].(string)
+		active = invalidateStopTask(active, reason)
+		_ = writeActiveTaskJSON(activeTaskPath(root, session), active)
+		stopTaskObservation(root, session, active, stopTaskUnknown(reason))
+		return decision
+	}
+	if decision["status"] == "COMPLETED" {
+		usage, _ := decision["usage"].(map[string]any)
+		stopTaskObservation(root, session, active, usage)
+		active = cloneTaskRecord(active)
+		active["completed"] = true
+		_ = writeActiveTaskJSON(activeTaskPath(root, session), active)
+	}
+	return decision
+}
+
+func readActiveTask(root, session string) (map[string]any, error) {
+	data, err := os.ReadFile(activeTaskPath(root, session))
+	if err != nil {
+		return nil, err
+	}
+	var active map[string]any
+	if err = json.Unmarshal(data, &active); err != nil {
+		return nil, err
+	}
+	return active, nil
+}
+
+func invalidateStopTask(active map[string]any, reason string) map[string]any {
+	active = cloneTaskRecord(active)
+	active["invalidated"], active["invalidated_reason"], active["completed"] = true, reason, true
+	return active
+}
+
+func stopTaskUnknown(reason string) map[string]any {
+	return map[string]any{"claude_task_usage_source": "desktop_jsonl_observed", "claude_task_usage_known": false,
+		"claude_task_usage_complete": false, "claude_task_usage_unknown_reason": reason, "claude_task_subagent_usage_included": false}
+}
+
+func stopTaskObservation(root, session string, active, payload map[string]any) {
+	taskID, _ := active["task_id"].(string)
+	if taskID == "" {
+		return
+	}
+	projectKey, _ := active["project_key"].(string)
+	if !observationProjectKey.MatchString(projectKey) {
+		projectKey = "unresolved"
+	}
+	envelope := map[string]any{"session_id": session, "project_key": projectKey}
+	event, err := buildObservationAtStateRoot("CLAUDE_TASK_USAGE_RECORDED", envelope, payload, taskID, root)
+	telemetryRoot := filepath.Join(root, "telemetry")
+	if err == nil {
+		_, _ = persistObservation(telemetryRoot, event) // Telemetry is best effort in Python too.
+	}
+	updateObservationTaskBestEffort(telemetryRoot, normalizeObservationID(taskID, "unknown"), projectKey)
+}
 
 func finalizeStopTaskUsage(decision, active map[string]any, session, transcriptPath, projectsRoot string) map[string]any {
 	if decision["status"] != "READY" {
