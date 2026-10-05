@@ -309,6 +309,15 @@ func diagnostic(event map[string]any, cause error) map[string]any {
 
 func safeError(err error) string {
 	message := strings.TrimSpace(err.Error())
+	var typed interface{ PostErrorKind() string }
+	if errors.As(err, &typed) {
+		if kind := typed.PostErrorKind(); kind != "" {
+			if message == "" {
+				return kind
+			}
+			return kind + ": " + message
+		}
+	}
 	if message == "" {
 		return "RuntimeError"
 	}

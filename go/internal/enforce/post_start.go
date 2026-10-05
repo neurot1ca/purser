@@ -76,7 +76,7 @@ func postStart(event map[string]any, root, pythonExe, waiterPath string) (map[st
 	if waiterPath == "" {
 		waiterPath = filepath.Join(".claude", "hooks", "orchestrator", "purser_wait.py")
 	}
-	next := fmt.Sprintf("Run in the background (use the PowerShell tool on Windows): %q %q %s ; when it finishes, call codex_result with this jobId.", pythonExe, waiterPath, jobID)
+	next := fmt.Sprintf("Run in the background (use the PowerShell tool on Windows): \"%s\" \"%s\" %s ; when it finishes, call codex_result with this jobId.", pythonExe, waiterPath, jobID)
 	textValue, _ := canonicalJSON(map[string]any{"jobId": jobID, "state": state, "next": next})
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse",
 		field: []any{map[string]any{"type": "text", "text": string(textValue)}}}}, nil

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"purser-hook/internal/lease"
@@ -20,10 +21,16 @@ func finalizeAsyncFailure(root string, event, index, pending map[string]any) (ma
 		return nil, false, nil
 	}
 	prepFailure := event["error_code"] == "JOB_REPLAY_PREPARATION_FAILED"
+	cancelRunning := event["hook_event_name"] == "PostToolUse" &&
+		strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") && job["state"] == "RUNNING"
 	switch job["state"] {
 	case "FAILED", "TIMED_OUT", "CANCELLED", "EXPIRED":
 	case "SUCCEEDED":
 		if !prepFailure {
+			return nil, false, nil
+		}
+	case "RUNNING":
+		if !cancelRunning {
 			return nil, false, nil
 		}
 	default:

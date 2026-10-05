@@ -1,15 +1,18 @@
 package enforce
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"purser-hook/internal/lease"
 	"purser-hook/internal/obsidian"
+	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
@@ -58,8 +61,15 @@ func postInternalOutput(event map[string]any, root string, cause error) map[stri
 	}
 	field := "updatedToolOutput"
 	if config, err := loadPreConfig(); err == nil {
+		bundle["reviewer1_model_requested"] = config["reviewer1_model_requested"]
 		if value := stringValue(config["post_tool_output_field"]); value != "" {
 			field = value
+		}
+		if root != "" {
+			if compact, _, finalizeErr := finalizePostArtifacts(root, event, bundle, 8000,
+				postReportLimit(config, nil)); finalizeErr == nil {
+				bundle = compact
+			}
 		}
 	}
 	response, err := replacement(bundle, field)
@@ -141,7 +151,7 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 	classification := mapValue(bundle["concurrent_writer"])
 	if stringValue(bundle["reviewer1_skipped_reason"]) == "" && stringValue(bundle["claude_review_mode"]) == review.Full {
 		budget := time.Duration(numberOr(loaded["max_total_hook_budget_seconds"], 240)) * time.Second
-		bridge, bridgeErr := postReviewerDispatch(root, root, pending, bundle, resolved, loaded, delta, classification, started, budget)
+		bridge, bridgeErr := postReviewerDispatch(pluginRoot(), root, pending, bundle, resolved, loaded, delta, classification, started, budget)
 		repository := repoRoot
 		recordPostReviewerObservations(root, event, optionalRepository(&repository), stringValue(pending["task_id"]), project,
 			postReviewerStarted(bundle), stringValue(bridge.Attributes["provider"]), stringValue(loaded["reviewer1_model_requested"]),
@@ -228,7 +238,9 @@ func postStartDispatch(event map[string]any, root string) (map[string]any, error
 		adapted[key] = value
 	}
 	adapted["post_tool_output_field"] = loaded["post_tool_output_field"]
-	response, err := postStart(adapted, root, "", "")
+	pythonExe := proc.ResolvePython(context.Background(), pluginRoot())
+	waiterPath := filepath.Join(pluginRoot(), ".claude", "hooks", "orchestrator", "purser_wait.py")
+	response, err := postStart(adapted, root, pythonExe, waiterPath)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +334,20 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	defer func() { releaseTaskUsageLock(lock); _ = lock.Close() }()
 	if cached != nil {
 		response, _ := cached.(map[string]any)
-		if response != nil {
+		job := asyncJob(root, index)
+		if !(job != nil && stringValue(job["worktreePath"]) != "" && job["applyState"] != "applied") {
+			key, project := stringValue(index["call_key"]), stringValue(index["project_key"])
+			if asyncHash.MatchString(key) {
+				result := lease.New(filepath.Join(root, "projects", project)).Release(key, float64(time.Now().UnixNano())/1e9)
+				if result.Status != "OK" && result.Code != "LEASE_OWNER_MISSING" {
+					return nil, fmt.Errorf("scope lease cleanup failed: %s", result.Code)
+				}
+				if err := os.Remove(filepath.Join(root, "pending", key+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return nil, fmt.Errorf("pending cleanup failed: %w", err)
+				}
+			}
+		}
+		if response != nil && len(response) > 0 {
 			return response, nil
 		}
 		loaded, loadErr := loadPreConfig()
@@ -334,7 +359,19 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") {
 		if result, handled, failure := finalizeAsyncFailure(root, event, index, pending); handled || failure != nil {
 			if failure == nil && result != nil {
-				result = appendAsyncProjectStatus(root, event, index, pending, result)
+				context := stringValue(mapValue(result["hookSpecificOutput"])["additionalContext"])
+				field := "updatedToolOutput"
+				if config, configErr := loadPreConfig(); configErr == nil && stringValue(config["post_tool_output_field"]) != "" {
+					field = stringValue(config["post_tool_output_field"])
+				}
+				result, failure = replacement(map[string]any{"state": "FAILED", "ambiguous_outcome": true,
+					"claude_review_mode": review.Full}, field)
+				if failure == nil {
+					output := mapValue(result["hookSpecificOutput"])
+					output["additionalContext"], output["hookEventName"] = context, "PostToolUse"
+				}
+				index["response"] = result
+				_ = atomicAdmissionJSON(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index)
 			}
 			return result, failure
 		}

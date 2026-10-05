@@ -57,13 +57,17 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	}
 	bundle["implementer"] = implementer + "-main"
 	bundle["model"], bundle["effort"], bundle["thread_id"] = pending["model"], pending["effort"], thread
+	bundle["reviewer1_model_requested"] = loaded["reviewer1_model_requested"]
 	bundle["implementer_report"], bundle["raw_output_path"] = content, ""
 	bundle["routing_enforced"], bundle["task_contract_grounded"] = pending["kind"] != "pretool_bypass", pending["task_contract_grounded"] == true
-	bundle["worker_validation"] = pending["worker_validation"]
+	bundle["worker_validation"] = parseWorkerValidation(content)
 	if worker := mapValue(pending["worker_validation"]); worker["status"] != nil {
+		bundle["worker_validation"] = worker
 		bundle["validation"] = worker["status"]
 	}
-	rawPath, err := persistRawOutput(root, original, event["tool_response"])
+	normalized, _ := canonicalJSON(value)
+	toolResponse := map[string]any{"content": []any{map[string]any{"type": "text", "text": string(normalized)}}}
+	rawPath, err := persistRawOutput(root, original, toolResponse)
 	if err != nil {
 		return nil, err
 	}

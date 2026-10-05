@@ -93,10 +93,13 @@ func postReportLimit(config map[string]any, phase any) int {
 // finalizePostArtifacts adds the quota snapshot within the compact-response byte cap.
 // The complete bundle is persisted by finalizeBundle before its response is compacted.
 func finalizePostArtifacts(root string, event, bundle map[string]any, cap, reportLimit int) (map[string]any, string, error) {
+	stripWorkerValidation(bundle)
 	compact, path, err := finalizeBundle(root, event, bundle, cap, reportLimit)
 	if err != nil {
 		return nil, "", err
 	}
+	delete(compact, "delta")
+	delete(compact, "force_full_review")
 	if quota, exists := bundle["codex_quota"]; exists {
 		compact["codex_quota"] = quota
 		size, sizeErr := nonReportBytes(compact)

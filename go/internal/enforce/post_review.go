@@ -75,6 +75,9 @@ func schedulePostReview(repoRoot string, pending map[string]any, bundle map[stri
 	}
 
 	gate := review.Gate(phase, stringValue(pending["route"]), routeKnown, files, lines, maxFiles, maxLines, reviewerAvailable)
+	if files == 0 && lines == 0 {
+		gate = review.GateDecision{Reason: review.NoDelta}
+	}
 	if phase == "plan" {
 		gate = review.GateDecision{Reason: review.PhasePlan}
 	}

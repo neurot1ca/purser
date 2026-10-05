@@ -18,6 +18,11 @@ type postIntakeResult struct {
 	Bundle                          map[string]any
 }
 
+type postWiringError string
+
+func (err postWiringError) Error() string         { return string(err) }
+func (err postWiringError) PostErrorKind() string { return "WiringError" }
+
 func postIntake(event map[string]any, root string) (intake postIntakeResult, early map[string]any, err error) {
 	tool := stringValue(event["tool_name"])
 	if event["hook_event_name"] != "PostToolUse" || !codexTools[tool] ||
@@ -139,7 +144,7 @@ func readPostPending(paths []string) (map[string]any, error) {
 		}
 		return pending, nil
 	}
-	return nil, errors.New("pending call record is missing")
+	return nil, postWiringError("pending call record is missing")
 }
 
 func readPostUndelivered(root string, event map[string]any) (string, map[string]any, bool) {

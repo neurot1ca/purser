@@ -3,9 +3,11 @@ package enforce
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -173,6 +175,61 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 	}
 	size, err := nonReportBytes(mandatory)
 	return mandatory, size > cap, err
+}
+
+func stripWorkerValidation(bundle map[string]any) {
+	report, ok := bundle["implementer_report"].(string)
+	worker, workerOK := bundle["worker_validation"].(map[string]any)
+	if !ok || !workerOK {
+		return
+	}
+	lines := splitPythonLines(report)
+	if len(lines) == 0 {
+		return
+	}
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if len(last) >= 2 && strings.HasPrefix(last, "`") && strings.HasSuffix(last, "`") {
+		last = strings.TrimSpace(last[1 : len(last)-1])
+	}
+	if !strings.HasPrefix(last, "VALIDATION:") || strings.Contains(stringValue(worker["summary"]), last) {
+		return
+	}
+	reported := parseWorkerValidation(last)
+	if reported["source"] == worker["source"] && reported["status"] == worker["status"] &&
+		reported["summary"] == worker["summary"] &&
+		postSameStrings(reported["commands"], worker["commands"]) &&
+		postSameStrings(reported["artifacts"], worker["artifacts"]) &&
+		postSameInts(reported["exit_codes"], worker["exit_codes"]) {
+		bundle["implementer_report"] = strings.TrimSpace(strings.Join(lines[:len(lines)-1], "\n"))
+	}
+}
+
+func postSameStrings(left, right any) bool {
+	a, aOK := postStringList(left)
+	b, bOK := postStringList(right)
+	if !aOK || !bOK || len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func postSameInts(left, right any) bool {
+	a, aOK := left.([]any)
+	b, bOK := right.([]any)
+	if !aOK || !bOK || len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if fmt.Sprint(a[i]) != fmt.Sprint(b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func intPointer(value int) *int { return &value }
