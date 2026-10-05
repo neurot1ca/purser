@@ -69,14 +69,16 @@ func asyncOwned(root string, event map[string]any, repoRoot string) (string, map
 	}
 	eventSession, _ := event["session_id"].(string)
 	if session != eventSession {
-		if repoRoot == "" {
-			repoRoot, _ = event["cwd"].(string)
+		var explicitRoot *string
+		if repoRoot != "" {
+			explicitRoot = &repoRoot
 		}
-		if repoRoot == "" || project != projectKey(&repoRoot) || event["tool_name"] != "mcp__codex-main__codex_result" && event["tool_name"] != "mcp__plugin_purser_codex-main__codex_result" {
+		resolvedRoot, _ := resolveProjectRoot(event, explicitRoot)
+		if resolvedRoot == nil || project != projectKey(resolvedRoot) || event["tool_name"] != "mcp__codex-main__codex_result" && event["tool_name"] != "mcp__plugin_purser_codex-main__codex_result" {
 			return "", nil, nil, nil, notOwned()
 		}
 		if index["stage"] != "CONSUMED" && asyncJob(root, index) == nil {
-			return "", nil, nil, nil, notOwned()
+			return "", nil, nil, nil, asyncOwnershipError{"WiringError", "job and durable result do not match"}
 		}
 		if input["adopt"] != true {
 			return "", nil, nil, nil, asyncOwnershipError{"AsyncAdoptionRequired", "user consent is required for adoption"}

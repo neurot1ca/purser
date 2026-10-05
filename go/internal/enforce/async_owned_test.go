@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -32,6 +33,9 @@ func TestAsyncOwnedFixture(t *testing.T) {
 			repo := filepath.Join(state, "repo")
 			if err := os.Mkdir(repo, 0700); err != nil {
 				t.Fatal(err)
+			}
+			if output, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v: %s", err, output)
 			}
 			project := projectKey(&repo)
 			input := replaceAsyncFixture(item["input"], repo, project).(map[string]any)
@@ -69,7 +73,30 @@ func TestAsyncOwnedFixture(t *testing.T) {
 			if wantJob == nil && gotJob != nil || wantJob != nil && !reflect.DeepEqual(gotJob, wantJob) {
 				t.Fatalf("asyncJob = %#v, want %#v", gotJob, mapValue(item["python"])["async_job"])
 			}
-			t.Run("pre_followup (pass 72)", func(t *testing.T) { t.Skip("pass 72") })
+			gotPre, preErr := Pre(input, state)
+			if preErr != nil {
+				t.Fatalf("Pre: %v", preErr)
+			}
+			wantPre := mapValue(item["python"])["pre_followup"]
+			if !reflect.DeepEqual(gotPre, wantPre) {
+				t.Fatalf("Pre = %#v, want %#v", gotPre, wantPre)
+			}
+			if item["name"] == "adoptable" {
+				jobPath := filepath.Join(state, "codex_exec_mcp", "jobs", inputJobID(input)+".json")
+				if err := os.Remove(jobPath); err != nil {
+					t.Fatal(err)
+				}
+				_, _, _, _, err := asyncOwned(state, input, repo)
+				ownershipErr, ok := err.(asyncOwnershipError)
+				if !ok || ownershipErr.kind != "WiringError" || ownershipErr.message != "job and durable result do not match" {
+					t.Fatalf("adopt missing durable job error = %#v", err)
+				}
+				got, preErr := Pre(input, state)
+				want := denyPre("UNKNOWN_ASYNC_JOB", "No pending job belongs to this session/project.")
+				if preErr != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("Pre with missing durable job = %#v, %v; want %#v", got, preErr, want)
+				}
+			}
 		})
 	}
 }

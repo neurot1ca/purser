@@ -45,10 +45,10 @@ func Pre(event map[string]any, root string) (response map[string]any, failure er
 	internal := contractFault()
 	tool := stringValue(event["tool_name"])
 	if strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
-		if internal == nil {
-			internal = errors.New("Go PreToolUse enforcement is not yet ported")
+		if internal != nil {
+			return syncBypass(event, root, internal, metadata), internal
 		}
-		return syncBypass(event, root, internal, metadata), internal
+		return asyncPreFollowup(event, root), nil
 	}
 	if internal == nil {
 		decision, err := runPreDecision(event, root, metadata)
@@ -58,6 +58,49 @@ func Pre(event map[string]any, root string) (response map[string]any, failure er
 		internal = err
 	}
 	return preFailure(event, root, internal, metadata), internal
+}
+
+func asyncPreFollowup(event map[string]any, root string) map[string]any {
+	stateRoot := defaultPreStateRoot(root)
+	_, index, _, _, err := asyncOwned(stateRoot, event, "")
+	if err != nil {
+		var ownership asyncOwnershipError
+		if errors.As(err, &ownership) && ownership.kind == "AsyncAdoptionRequired" {
+			return denyPre("ASYNC_ADOPTION_REQUIRES_USER_CONSENT", "Ask the user before adopting this earlier session's job; after agreement call codex_result with adopt: true.")
+		}
+		return denyPre("UNKNOWN_ASYNC_JOB", "No pending job belongs to this session/project.")
+	}
+	if index["stage"] == "CONSUMED" {
+		if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") {
+			job := asyncJob(stateRoot, index)
+			state := stringValue(job["state"])
+			terminal := state == "SUCCEEDED" || state == "FAILED" || state == "CANCELLED" || state == "TIMED_OUT"
+			_, hasWorktree := job["worktreePath"]
+			worktree, _ := job["worktreePath"].(string)
+			if job != nil && job["applyState"] != "applied" && (job["discarded"] == true || terminal && hasWorktree && worktree != "") {
+				return map[string]any{}
+			}
+			return denyPre("ASYNC_ALREADY_CONSUMED", "This job has already been finalized.")
+		}
+		return map[string]any{}
+	}
+	if index["stage"] == "FINALIZING" {
+		if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_result") {
+			return map[string]any{}
+		}
+		return denyPre("ASYNC_FINALIZING", "This job is already being finalized.")
+	}
+	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_result") {
+		job := asyncJob(stateRoot, index)
+		if job != nil && (job["state"] == "QUEUED" || job["state"] == "RUNNING") {
+			status := "queued"
+			if job["state"] == "RUNNING" {
+				status = "still running"
+			}
+			return denyPre("ASYNC_STILL_RUNNING", status+"; wait for the completion signal")
+		}
+	}
+	return map[string]any{}
 }
 
 func preFailure(event map[string]any, root string, internal error, metadata map[string]any) map[string]any {
