@@ -1,0 +1,431 @@
+{
+  "oracle": "Python codex post_tool_use delta selection using ledger.py",
+  "cases": [
+    {
+      "case": {
+        "name": "sync_in_scope",
+        "phase": "implementation",
+        "scope": [
+          "scope"
+        ],
+        "changes": [
+          {
+            "path": "scope/file.txt",
+            "content": "changed\n"
+          }
+        ],
+        "lease_owner": "fixture-owner"
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "snapshot": "c381cebc0e3a9af1339525f3d368684d17788130",
+      "expected": {
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 2
+        },
+        "known_concurrent_scopes": [],
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "changed_path_count": 1,
+        "delta_lines": 2,
+        "delta_files": 1,
+        "findings": []
+      }
+    },
+    {
+      "case": {
+        "name": "sync_out_of_scope",
+        "phase": "implementation",
+        "scope": [
+          "scope"
+        ],
+        "changes": [
+          {
+            "path": "outside/file.txt",
+            "content": "changed\n"
+          }
+        ],
+        "lease_owner": "fixture-owner"
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "snapshot": "c381cebc0e3a9af1339525f3d368684d17788130",
+      "expected": {
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": [
+            "outside/file.txt"
+          ]
+        },
+        "whole_tree_delta": {
+          "changed_paths": [
+            "outside/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 2
+        },
+        "known_concurrent_scopes": [],
+        "protected_paths_touched": [],
+        "concurrent_writer": true,
+        "changed_paths": [
+          "outside/file.txt"
+        ],
+        "changed_path_count": 1,
+        "delta_lines": 2,
+        "delta_files": 1,
+        "findings": [
+          {
+            "code": "OUT_OF_SCOPE_MODIFICATION",
+            "message": "1 file(s) modified outside declared scope: outside/file.txt"
+          }
+        ]
+      }
+    },
+    {
+      "case": {
+        "name": "protected_path",
+        "phase": "implementation",
+        "scope": [
+          "secrets"
+        ],
+        "protected_paths": [
+          "secrets/**"
+        ],
+        "changes": [
+          {
+            "path": "secrets/key.txt",
+            "content": "changed\n"
+          }
+        ],
+        "lease_owner": "fixture-owner"
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "secrets"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "snapshot": "c381cebc0e3a9af1339525f3d368684d17788130",
+      "expected": {
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "whole_tree_delta": {
+          "changed_paths": [
+            "secrets/key.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 2
+        },
+        "known_concurrent_scopes": [],
+        "protected_paths_touched": [
+          "secrets/key.txt"
+        ],
+        "concurrent_writer": false,
+        "changed_paths": [
+          "secrets/key.txt"
+        ],
+        "changed_path_count": 1,
+        "delta_lines": 2,
+        "delta_files": 1,
+        "findings": []
+      }
+    },
+    {
+      "case": {
+        "name": "known_concurrent_scope",
+        "phase": "implementation",
+        "scope": [
+          "scope"
+        ],
+        "owners": [
+          {
+            "task_id": "foreign-task",
+            "scope": [
+              "outside"
+            ]
+          }
+        ],
+        "changes": [
+          {
+            "path": "outside/file.txt",
+            "content": "changed\n"
+          }
+        ],
+        "lease_owner": "fixture-owner"
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "snapshot": "c381cebc0e3a9af1339525f3d368684d17788130",
+      "expected": {
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": [
+            "outside/file.txt"
+          ]
+        },
+        "whole_tree_delta": {
+          "changed_paths": [
+            "outside/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 2
+        },
+        "known_concurrent_scopes": [
+          {
+            "path": "outside/file.txt",
+            "task_id": "foreign-task"
+          }
+        ],
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "changed_paths": [],
+        "changed_path_count": 0,
+        "delta_lines": 0,
+        "delta_files": 0,
+        "findings": []
+      }
+    },
+    {
+      "case": {
+        "name": "plan_phase_repo_mutation",
+        "phase": "plan",
+        "scope": [
+          "scope"
+        ],
+        "changes": [
+          {
+            "path": "scope/file.txt",
+            "content": "changed\n"
+          }
+        ],
+        "lease_owner": "fixture-owner"
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": false,
+        "scope": [],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "snapshot": "c381cebc0e3a9af1339525f3d368684d17788130",
+      "expected": {
+        "whole_tree_anomaly": null,
+        "whole_tree_delta": null,
+        "known_concurrent_scopes": [],
+        "protected_paths_touched": [],
+        "concurrent_writer": null,
+        "changed_paths": null,
+        "changed_path_count": null,
+        "delta_lines": null,
+        "delta_files": null,
+        "findings": [
+          {
+            "code": "PLAN_MUTATED_REPO",
+            "message": "Repository source changed during a read-only plan call; a concurrent writer may be the cause: scope/file.txt"
+          },
+          {
+            "code": "EXTERNAL_REPOSITORY_CHANGE",
+            "message": "Repository changes could not be attributed to this plan job."
+          }
+        ]
+      }
+    },
+    {
+      "case": {
+        "name": "worktree_job_delta",
+        "phase": "implementation",
+        "scope": [
+          "scope"
+        ],
+        "worktree": true,
+        "changes": [
+          {
+            "path": "scope/file.txt",
+            "content": "changed\n"
+          }
+        ],
+        "lease_owner": "fixture-owner"
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "snapshot": "c381cebc0e3a9af1339525f3d368684d17788130",
+      "expected": {
+        "whole_tree_anomaly": {
+          "status": "OK",
+          "code": "OUT_OF_SCOPE_CHECK_COMPLETED",
+          "paths": []
+        },
+        "whole_tree_delta": {
+          "changed_paths": [
+            "scope/file.txt"
+          ],
+          "changed_file_count": 1,
+          "changed_line_count": 2
+        },
+        "known_concurrent_scopes": [],
+        "protected_paths_touched": [],
+        "concurrent_writer": false,
+        "changed_paths": [
+          "scope/file.txt"
+        ],
+        "changed_path_count": 1,
+        "delta_lines": 2,
+        "delta_files": 1,
+        "findings": []
+      }
+    },
+    {
+      "case": {
+        "name": "worktree_filter_git_failure",
+        "phase": "implementation",
+        "scope": [
+          "scope"
+        ],
+        "worktree": true,
+        "filter_failure": true,
+        "changes": [
+          {
+            "path": "scope/file.txt",
+            "content": "changed\n"
+          }
+        ],
+        "lease_owner": "fixture-owner"
+      },
+      "baseline": {
+        "code": "BASELINE_CAPTURED",
+        "head": "c1bc1d18ccc16ba10426f31c601720bfa5967fd3",
+        "manifest_enabled": true,
+        "scope": [
+          "scope"
+        ],
+        "scoped_manifest": [],
+        "staged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": "OK",
+        "status_entries": [],
+        "tracked_snapshots": {},
+        "unstaged_diff_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "snapshot": "c381cebc0e3a9af1339525f3d368684d17788130",
+      "post_tool_use_result": {
+        "audit_receipt": null,
+        "baseline_head": null,
+        "changed_path_count": null,
+        "changed_paths": null,
+        "changed_paths_sha256": null,
+        "claude_review_mode": "FULL",
+        "concurrent_writer": null,
+        "current_head": null,
+        "delta_files": null,
+        "delta_lines": null,
+        "effort": "medium",
+        "findings": [
+          {
+            "code": "INTERNAL_POST_ERROR",
+            "message": "_InspectionError: GIT_FAILED: Git could not filter ignored job patch paths."
+          }
+        ],
+        "full_bundle_path": "<FULL_BUNDLE>",
+        "hook_checks": null,
+        "implementer": "codex-main",
+        "implementer_report": "",
+        "micro_repair": null,
+        "micro_repair_cleared_review": false,
+        "model": "gpt-6-sol",
+        "phase": "implementation",
+        "project_root_reason": null,
+        "protected_paths_touched": [],
+        "raw_output_path": "<RAW_OUTPUT>",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+        "reviewer1_provider": null,
+        "reviewer1_result": null,
+        "reviewer1_skipped_reason": null,
+        "route": "normal",
+        "routing_enforced": true,
+        "served_model_attestation": "UNAVAILABLE",
+        "task_contract_grounded": false,
+        "task_id": "fixture-task",
+        "thread_id": null,
+        "validation": "UNKNOWN",
+        "worker_validation": null
+      }
+    }
+  ]
+}

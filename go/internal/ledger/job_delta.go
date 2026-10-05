@@ -63,18 +63,27 @@ func ComputeJobDelta(worktreePath, snapshot string) map[string]any {
 		"sources": sources, "preexisting_paths": []string{}, "ambiguous_paths": []string{}, "current_scoped_manifest": []any{}}
 }
 func FilterJobDelta(repoRoot string, delta map[string]any) map[string]any {
+	filtered, err := FilterJobDeltaChecked(repoRoot, delta)
+	if err != nil {
+		return cloneMap(delta)
+	}
+	return filtered
+}
+
+// FilterJobDeltaChecked preserves Python's exception behavior when Git cannot
+// inspect ignored paths. Callers that own a fail-open boundary can handle it.
+func FilterJobDeltaChecked(repoRoot string, delta map[string]any) (map[string]any, error) {
 	paths, ok := delta["changed_paths"].([]string)
 	if delta["status"] != "OK" || !ok || len(paths) == 0 {
-		return cloneMap(delta)
+		return cloneMap(delta), nil
 	}
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
-		return cloneMap(delta)
+		return cloneMap(delta), err
 	}
 	filtered, err := filterJobPaths(root, paths)
 	if err != nil {
-		// Python raises when Git cannot filter these paths; Go conservatively keeps the delta.
-		return cloneMap(delta)
+		return nil, err
 	}
 	keep := make(map[string]bool, len(filtered))
 	for _, path := range filtered {
@@ -106,7 +115,7 @@ func FilterJobDelta(repoRoot string, delta map[string]any) map[string]any {
 		}
 		result["sources"] = filteredSources
 	}
-	return result
+	return result, nil
 }
 
 func filterJobPaths(root string, paths []string) ([]string, error) {
