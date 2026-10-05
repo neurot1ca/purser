@@ -144,7 +144,7 @@ func persistRawOutputAs(root, name string, value any) (string, error) {
 }
 
 // PostInternalError replaces an unreviewed raw result only when the Go Post
-// handler has failed. Normal PostToolUse review remains owned by Python.
+// handler has failed.
 func PostInternalError(event map[string]any, root string) (map[string]any, error) {
 	if event["hook_event_name"] != "PostToolUse" || !codexTools[stringValue(event["tool_name"])] {
 		return nil, nil
