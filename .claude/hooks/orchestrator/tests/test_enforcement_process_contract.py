@@ -29,9 +29,38 @@ PRE_CALL_CONTRACTS = {
 PRE_CALL_CONTRACTS.update({"_deny": "C2", "_internal_pre_allow": "C3", "_record_diagnostic": "C3",
                            "_release_scope_lease": "C3", "_remove_pending": "C3", "_write_pre_bypass": "C3"})
 PRE_CALL_EXCLUSIONS = {
-    "_async_pre_followup": "EXCLUDED: async codex_result/codex_cancel branch in pre_tool_use",
     "codex_quota.read_latest_quota": "C1: quota snapshot is optional and failures are explicitly ignored",
     "codex_exec_mcp.probe_api_primary": "EXCLUDED: fallback-only 25-second branch",
+}
+ASYNC_PRE_CALL_CONTRACTS = {
+    "_async_pre_followup": "A1: codex_result/codex_cancel PreToolUse decisions",
+    "_async_job": "A1: durable async job identity and result state",
+    "_async_owned": "A1: async index, pending call, and session/project ownership",
+    "_call_key": "A1: pending call identity binding",
+    "_deny": "A1: async PreToolUse denial response",
+    "_repo_root": "A1: project ownership resolution for adoption",
+    "_state_root": "A1: async state directory resolution",
+}
+ASYNC_PRE_IMPORTED_CALLS = {
+    "hashlib.sha256": "A1: job and pending identity validation",
+    "json.loads": "A1: durable index, pending, and job decoding",
+    "project_root.project_key": "A1: same-project adoption check",
+    "project_root.resolve_project_root": "A1: adoption repository resolution",
+    "re.fullmatch": "A1: job id and call hash validation",
+    "state_root.default_state_root": "A1: default async state directory",
+}
+ASYNC_PRE_METHOD_CALLS = {
+    "encode": "A1: hash input encoding",
+    "get": "A1: event and durable record fields",
+    "hexdigest": "A1: stable async identity hash",
+    "read_text": "A1: durable index, pending, and job reads",
+}
+ASYNC_PRE_BUILTIN_CALLS = {
+    "AsyncAdoptionRequired": "A1: explicit consent boundary for cross-session adoption",
+    "WiringError": "A1: malformed or mismatched ownership state",
+    "dict": "A1: reconstructed originating call",
+    "isinstance": "A1: input and durable state validation",
+    "str": "A1: defensive call hash validation",
 }
 PRE_IMPORTED_CALLS = {
     name: "C1" for name in "active_coder_state.approve_fallback active_coder_state.read active_coder_state.record_fallback_question active_coder_state.update coder_config.load coder_config.opencode_candidates codex_exec_mcp._load_record codex_exec_mcp._state_dir compaction_advisor.queue_fallback_question datetime.datetime.fromisoformat datetime.datetime.now hashlib.sha256 json.loads json_transport.dumps ledger.ScopeLeases ledger.SessionLedger ledger.build_session_record ledger.capture_baseline math.ceil math.isfinite os.fsync os.replace policy.OrchParseResult policy.fresh_codex_decision policy.parse_orch_prompt policy.resolve_route policy.thread_compatibility policy.validate_config project_profile.load_profile project_root.project_key project_root.resolve_candidate project_root.resolve_project_root re.escape re.fullmatch re.match re.search re.sub state_root.default_state_root telemetry.record_health tempfile.NamedTemporaryFile time.time uuid.uuid5".split()
@@ -58,12 +87,11 @@ def test_sync_pre_call_diff_is_mapped():
         reached.add(name)
         for node in ast.walk(functions[name]):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                    and node.func.id in functions and node.func.id != "_async_pre_followup"):
+                    and node.func.id in functions):
                 todo.append(node.func.id)
     calls = {node.func.id for name in reached for node in ast.walk(functions[name])
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in functions}
-    calls.add("_async_pre_followup")
-    assert calls <= set(PRE_CALL_CONTRACTS) | set(PRE_CALL_EXCLUSIONS), f"unmapped Python callees: {sorted(calls - set(PRE_CALL_CONTRACTS) - set(PRE_CALL_EXCLUSIONS))}"
+    assert calls <= set(PRE_CALL_CONTRACTS) | set(PRE_CALL_EXCLUSIONS) | set(ASYNC_PRE_CALL_CONTRACTS), f"unmapped Python callees: {sorted(calls - set(PRE_CALL_CONTRACTS) - set(PRE_CALL_EXCLUSIONS) - set(ASYNC_PRE_CALL_CONTRACTS))}"
     aliases = {}
     for node in tree.body:
         if isinstance(node, ast.Import):
@@ -74,15 +102,49 @@ def test_sync_pre_call_diff_is_mapped():
                 for name in reached for node in ast.walk(functions[name])
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name) and node.func.value.id in aliases}
-    assert imported <= set(PRE_IMPORTED_CALLS), f"unmapped imported calls: {sorted(imported - set(PRE_IMPORTED_CALLS))}"
+    assert imported <= set(PRE_IMPORTED_CALLS) | set(ASYNC_PRE_IMPORTED_CALLS), f"unmapped imported calls: {sorted(imported - set(PRE_IMPORTED_CALLS) - set(ASYNC_PRE_IMPORTED_CALLS))}"
     methods = {node.func.attr for name in reached for node in ast.walk(functions[name])
                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                and not (isinstance(node.func.value, ast.Name) and node.func.value.id in aliases)}
-    assert methods <= set(PRE_METHOD_CALLS), f"unmapped method calls: {sorted(methods - set(PRE_METHOD_CALLS))}"
+    assert methods <= set(PRE_METHOD_CALLS) | set(ASYNC_PRE_METHOD_CALLS), f"unmapped method calls: {sorted(methods - set(PRE_METHOD_CALLS) - set(ASYNC_PRE_METHOD_CALLS))}"
     bare = {node.func.id for name in reached for node in ast.walk(functions[name])
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id not in functions and node.func.id not in aliases}
-    assert bare <= set(PRE_BUILTIN_CALLS), f"unmapped builtin/nested calls: {sorted(bare - set(PRE_BUILTIN_CALLS))}"
+    assert bare <= set(PRE_BUILTIN_CALLS) | set(ASYNC_PRE_BUILTIN_CALLS), f"unmapped builtin/nested calls: {sorted(bare - set(PRE_BUILTIN_CALLS) - set(ASYNC_PRE_BUILTIN_CALLS))}"
+
+
+def test_async_pre_call_diff_is_mapped():
+    source = (PACKAGE / "codex.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    reached, todo = set(), ["_async_owned", "_async_job", "_async_pre_followup"]
+    while todo:
+        name = todo.pop()
+        if name in reached or name not in functions:
+            continue
+        reached.add(name)
+        todo.extend(node.func.id for node in ast.walk(functions[name])
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in functions)
+    calls = [node for name in reached for node in ast.walk(functions[name]) if isinstance(node, ast.Call)]
+    internal = {node.func.id for node in calls if isinstance(node.func, ast.Name) and node.func.id in functions}
+    assert internal <= set(ASYNC_PRE_CALL_CONTRACTS), f"unmapped async Python callees: {sorted(internal - set(ASYNC_PRE_CALL_CONTRACTS))}"
+    aliases = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            aliases.update({item.asname or item.name.split(".")[0]: item.name for item in node.names})
+        elif isinstance(node, ast.ImportFrom):
+            aliases.update({item.asname or item.name: f"{node.module}.{item.name}" for item in node.names})
+    imported = {f"{aliases[node.func.value.id]}.{node.func.attr}" for node in calls
+                if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in aliases}
+    assert imported <= set(ASYNC_PRE_IMPORTED_CALLS), f"unmapped async imported calls: {sorted(imported - set(ASYNC_PRE_IMPORTED_CALLS))}"
+    methods = {node.func.attr for node in calls if isinstance(node.func, ast.Attribute)
+               and not (isinstance(node.func.value, ast.Name) and node.func.value.id in aliases)}
+    assert methods <= set(ASYNC_PRE_METHOD_CALLS), f"unmapped async method calls: {sorted(methods - set(ASYNC_PRE_METHOD_CALLS))}"
+    bare = {node.func.id for node in calls if isinstance(node.func, ast.Name)
+            and node.func.id not in functions and node.func.id not in aliases}
+    assert bare <= set(ASYNC_PRE_BUILTIN_CALLS), f"unmapped async builtin/nested calls: {sorted(bare - set(ASYNC_PRE_BUILTIN_CALLS))}"
 
 
 @pytest.fixture
