@@ -14,6 +14,7 @@ OUT_OF_SCOPE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "ou
 ATTRIBUTION_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "attribution.json"
 CONCURRENT_WRITERS_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "concurrent_writers.json"
 JOB_DELTA_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "job_delta.json"
+JOB_PATCH_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "job_patch.json"
 sys.path.insert(0, str(ORCHESTRATOR))
 import ledger
 import project_profile
@@ -256,10 +257,8 @@ def _job_delta_oracle(case, root):
     (root / "delete.txt").write_bytes(b"delete\n")
     (root / "binary.dat").write_bytes(bytes.fromhex("000102ff"))
     _git(root, "add", "--all")
-    env = {**os.environ, "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
-           "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"}
-    _git(root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
-         "commit", "-m", "fixture", env=env)
+    env = {**os.environ, "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"}
+    _git(root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture", env=env)
     snapshot = _git_output(root, "rev-parse", "HEAD" if case["snapshot"] == "commit" else "HEAD^{tree}")
     if case["snapshot"] == "invalid":
         snapshot = "invalid"
@@ -288,3 +287,55 @@ def test_python_oracle_job_delta_fixture(tmp_path):
         _job_delta_oracle(case, tmp_path / str(index)) for index, case in enumerate(JOB_DELTA_CASES)
     ]}
     assert json.loads(JOB_DELTA_FIXTURE.read_text(encoding="utf-8")) == generated
+
+
+JOB_PATCH_CASES = [
+    {"name": "empty"}, {"name": "text_modification", "changes": [{"path": "tracked.txt", "content": "changed\n"}]},
+    {"name": "new_untracked", "changes": [{"path": "new.txt", "content": "new\n"}]}, {"name": "deleted", "changes": [{"path": "delete.txt", "op": "delete"}]},
+    {"name": "binary", "changes": [{"path": "binary.dat", "content_hex": "000102fe"}]}, {"name": "spaces_unicode", "changes": [{"path": "dir with ünicode/file name.txt", "content": "changed\n"}]},
+]
+
+
+def _job_patch_repo(root):
+    root.mkdir(parents=True)
+    _git(root, "init", "-q")
+    for name, content in {"tracked.txt": b"base\n", "delete.txt": b"delete\n", "binary.dat": bytes.fromhex("000102ff")}.items():
+        (root / name).write_bytes(content)
+    _git(root, "add", "--all")
+    env = {**os.environ, "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
+           "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"}
+    _git(root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+         "commit", "-m", "fixture", env=env)
+    return _git_output(root, "rev-parse", "HEAD^{tree}")
+
+
+def _job_patch_oracle(case, root):
+    snapshot = _job_patch_repo(root)
+    for change in case.get("changes", []):
+        path = root / change["path"]
+        if change.get("op") == "delete": path.unlink(); continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = bytes.fromhex(change["content_hex"]) if "content_hex" in change else change["content"].encode()
+        path.write_bytes(content)
+    return {**case, "patch": ledger.job_patch(root, snapshot)}
+
+
+def _checkout_snapshot_oracle(root):
+    _job_patch_repo(root)
+    clean = ledger.checkout_snapshot(root)
+    (root / "tracked.txt").write_bytes(b"dirty\n")
+    (root / "untracked.txt").write_bytes(b"new\n")
+    dirty = ledger.checkout_snapshot(root)
+    return {"clean": "<CLEAN_TREE>", "dirty": "<DIRTY_TREE>", "different": clean != dirty, "stable": dirty == ledger.checkout_snapshot(root)}
+
+
+def test_python_oracle_job_patch_fixture():
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(exist_ok=True)
+    temporary = scratch / ("job-patch-" + uuid.uuid4().hex)
+    temporary.mkdir()
+    try:
+        generated = {"oracle": "Python ledger.job_patch and checkout_snapshot", "patch_cases": [_job_patch_oracle(case, temporary / str(index)) for index, case in enumerate(JOB_PATCH_CASES)], "checkout_snapshot": _checkout_snapshot_oracle(temporary / "snapshot")}
+        assert json.loads(JOB_PATCH_FIXTURE.read_text(encoding="utf-8")) == generated
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)

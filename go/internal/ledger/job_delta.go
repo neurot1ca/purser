@@ -1,9 +1,12 @@
 package ledger
+
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
 func ComputeJobDelta(worktreePath, snapshot string) map[string]any {
 	if len(snapshot) < 40 || len(snapshot) > 64 {
 		return deltaUnknown("JOB_SNAPSHOT_INVALID", "The job snapshot tree is unavailable.", nil, nil)
@@ -68,33 +71,14 @@ func FilterJobDelta(repoRoot string, delta map[string]any) map[string]any {
 	if err != nil {
 		return cloneMap(delta)
 	}
-	input := []byte(strings.Join(paths, "\x00") + "\x00")
-	ignoredRaw, err := runGit(root, []string{"check-ignore", "--no-index", "-z", "--stdin"}, 30*time.Second,
-		"filtering ignored job patch paths", input, nil)
-	ignored := make(map[string]bool)
-	if err == nil {
-		for _, path := range strings.Split(string(ignoredRaw), "\x00") {
-			if path != "" {
-				ignored[decodeGitPath([]byte(path))] = true
-			}
-		}
-	} else if failure, ok := err.(*inspectionError); !ok || !strings.Contains(failure.Message, "exit code 1") {
+	filtered, err := filterJobPaths(root, paths)
+	if err != nil {
+		// Python raises when Git cannot filter these paths; Go conservatively keeps the delta.
 		return cloneMap(delta)
 	}
-	keep := make(map[string]bool)
-	filtered := make([]string, 0, len(paths))
-	for _, path := range paths {
-		norm := strings.ReplaceAll(path, `\`, "/")
-		cache := strings.HasSuffix(norm, ".pyc")
-		for _, part := range strings.Split(norm, "/") {
-			if part == ".pytest_cache" || part == "__pycache__" || part == "node_modules" {
-				cache = true
-			}
-		}
-		if !ignored[path] && !cache {
-			filtered = append(filtered, path)
-			keep[path] = true
-		}
+	keep := make(map[string]bool, len(filtered))
+	for _, path := range filtered {
+		keep[path] = true
 	}
 	result := cloneMap(delta)
 	result["changed_paths"], result["changed_file_count"] = filtered, len(filtered)
@@ -123,6 +107,119 @@ func FilterJobDelta(repoRoot string, delta map[string]any) map[string]any {
 		result["sources"] = filteredSources
 	}
 	return result
+}
+
+func filterJobPaths(root string, paths []string) ([]string, error) {
+	input := []byte(strings.Join(paths, "\x00") + "\x00")
+	ignoredRaw, err := runGit(root, []string{"check-ignore", "--no-index", "-z", "--stdin"}, 30*time.Second,
+		"filtering ignored job patch paths", input, nil)
+	ignored := make(map[string]bool)
+	if err != nil {
+		failure, ok := err.(*inspectionError)
+		if !ok || failure.Code != "GIT_FAILED" || failure.Message != "Git failed with exit code 1 while filtering ignored job patch paths." {
+			return nil, err
+		}
+	} else {
+		for _, path := range strings.Split(string(ignoredRaw), "\x00") {
+			if path != "" {
+				ignored[decodeGitPath([]byte(path))] = true
+			}
+		}
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		norm := strings.ReplaceAll(path, `\`, "/")
+		cache := strings.HasSuffix(norm, ".pyc")
+		for _, part := range strings.Split(norm, "/") {
+			if part == ".pytest_cache" || part == "__pycache__" || part == "node_modules" {
+				cache = true
+			}
+		}
+		if !ignored[path] && !cache {
+			filtered = append(filtered, path)
+		}
+	}
+	return filtered, nil
+}
+
+// JobPatch returns a binary patch from the immutable snapshot tree to current job state.
+func JobPatch(worktreePath, snapshot string) (string, error) {
+	root, err := filepath.Abs(worktreePath)
+	if err != nil {
+		return "", err
+	}
+	if _, err = runGit(root, []string{"add", "-A"}, 30*time.Second, "staging job changes for patch generation", nil, nil); err != nil {
+		return "", err
+	}
+	names, err := runGit(root, []string{"diff", "--name-only", "-z", "--no-renames", snapshot, "--"}, 30*time.Second,
+		"listing job patch paths", nil, nil)
+	if err != nil {
+		return "", err
+	}
+	paths := make([]string, 0)
+	for _, path := range strings.Split(string(names), "\x00") {
+		if path != "" {
+			paths = append(paths, decodeGitPath([]byte(path)))
+		}
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	paths, err = filterJobPaths(root, paths)
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	args := []string{"diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", snapshot, "--"}
+	for _, path := range paths {
+		args = append(args, ":(literal)"+path)
+	}
+	patch, err := runGit(root, args, 30*time.Second, "generating job patch", nil, nil)
+	return string(patch), err
+}
+
+// CheckoutSnapshot captures tracked and untracked checkout state without touching its index.
+func CheckoutSnapshot(repoRoot string) (string, error) {
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	gitDirRaw, err := runGit(root, []string{"rev-parse", "--absolute-git-dir"}, 30*time.Second,
+		"locating checkout snapshot index", nil, nil)
+	if err != nil {
+		return "", err
+	}
+	gitDir := strings.TrimSpace(decodeGitPath(gitDirRaw))
+	index, err := os.CreateTemp(gitDir, "purser-replay-*.index")
+	if err != nil {
+		return "", err
+	}
+	indexPath := index.Name()
+	if err = index.Close(); err != nil {
+		_ = os.Remove(indexPath)
+		return "", err
+	}
+	if err = os.Remove(indexPath); err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = os.Remove(indexPath)
+		_ = os.Remove(indexPath + ".lock")
+	}()
+	env := map[string]string{"GIT_INDEX_FILE": indexPath}
+	if _, err = runGit(root, []string{"read-tree", "HEAD"}, 30*time.Second, "initializing checkout snapshot index", nil, env); err != nil {
+		return "", err
+	}
+	if _, err = runGit(root, []string{"add", "-A"}, 30*time.Second, "capturing current checkout state", nil, env); err != nil {
+		return "", err
+	}
+	tree, err := runGit(root, []string{"write-tree"}, 30*time.Second, "writing current checkout snapshot", nil, env)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(decodeGitPath(tree)), nil
 }
 func filterPaths(paths []string, keep map[string]bool) []string {
 	result := []string{}
