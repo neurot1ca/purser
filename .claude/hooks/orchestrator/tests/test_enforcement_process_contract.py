@@ -319,15 +319,16 @@ def test_mixed_go_pre_python_consumers(repo, process, go_pre_binary, contract, c
     assert stopped.returncode == 0
 
 
-def test_mixed_go_pre_policy_deny_then_python_stop(repo, process, go_pre_binary):
+def test_mixed_go_pre_policy_deny_keeps_go_lifecycle_stop(repo, process, go_pre_binary):
     state, run = process
     result = run_go_pre(go_pre_binary, state, repo, pre(repo, prompt="missing routing contract"))
     denied = decision(result)["hookSpecificOutput"]
     assert denied["permissionDecision"] == "deny"
     assert not list(state.glob("pending/*.json"))
-    stopped = run("Stop", {"hook_event_name": "Stop", "session_id": "process-contract",
-                            "cwd": str(repo), "stop_hook_active": False})
-    assert stopped.returncode == 0
+    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    assert "Stop" not in hooks
+    register = (REPO_ROOT / "hooks" / "register.ts").read_text(encoding="utf-8")
+    assert "on('classic.Stop', ($, e, next) => lifecycle($, e, next, 'Stop'))" in register
 
 
 def test_pretool_allow_process_contract(repo, process):

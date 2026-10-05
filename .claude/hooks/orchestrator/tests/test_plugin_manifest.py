@@ -51,6 +51,8 @@ def test_plugin_hooks_match_manual_installer():
                 continue
             if script == "context_io_hook.py" and event in {"Stop", "UserPromptSubmit", "SessionStart", "PreCompact"}:
                 continue
+            if event == "Stop":
+                continue
             if matcher and "mcp__codex-main__" in matcher:
                 matcher = matcher.replace(
                     "mcp__codex-main__", "mcp__plugin_purser_codex-main__"
@@ -93,7 +95,8 @@ def test_plugin_manifest_paths_and_registration():
     assert (ROOT / manifest["mcpServers"]).is_file()
     # Plugin commands are auto-discovered from the conventional commands/ directory.
     assert (ROOT / "commands/check.md").is_file()
-    assert set(hooks["hooks"]) == {"PostToolUse", "PostToolUseFailure", "Stop", "SessionStart"}
+    assert set(hooks["hooks"]) == {"PostToolUse", "PostToolUseFailure", "SessionStart"}
+    assert "Stop" not in hooks["hooks"]
     session_start, = hooks["hooks"]["SessionStart"]
     assert "matcher" not in session_start
     assert session_start["hooks"][0] == {
@@ -109,23 +112,21 @@ def test_plugin_manifest_paths_and_registration():
     for name, timeout in (
         ("PostToolUse", 300),
         ("PostToolUseFailure", 60),
-        ("Stop", 60),
     ):
         entry, = [
             item
             for item in hooks["hooks"][name]
             if item["hooks"][0]["args"][-1].endswith("/hook.py")
         ]
-        if name != "Stop":
-            matched = {
-                tool for tool in PLUGIN_TOOLS if re.fullmatch(entry["matcher"], tool)
-            }
-            assert matched == PLUGIN_TOOLS
-            if name == "PostToolUse":
-                assert re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
-            else:
-                assert not re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
-            assert not re.fullmatch(entry["matcher"], "mcp__codex-main__codex")
+        matched = {
+            tool for tool in PLUGIN_TOOLS if re.fullmatch(entry["matcher"], tool)
+        }
+        assert matched == PLUGIN_TOOLS
+        if name == "PostToolUse":
+            assert re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
+        else:
+            assert not re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
+        assert not re.fullmatch(entry["matcher"], "mcp__codex-main__codex")
         command, = entry["hooks"]
         assert command["timeout"] == timeout
         assert command["type"] == "command"
@@ -133,6 +134,7 @@ def test_plugin_manifest_paths_and_registration():
         assert command["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "pre-codex" if name == "PreToolUse" else "hook", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"]
     register_source = (ROOT / "hooks/register.ts").read_text(encoding="utf-8")
     assert re.search(r"^  registerEnforcement\(on\)$", register_source, re.M)
+    assert "on('classic.Stop', ($, e, next) => lifecycle($, e, next, 'Stop'))" in register_source
     enforcement_source = (ROOT / "hooks/mod/enforcement.ts").read_text(encoding="utf-8")
     assert not any(
         re.fullmatch(entry.get("matcher", ""), tool)

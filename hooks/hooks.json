@@ -35,22 +35,6 @@
         ]
       }
     ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 60,
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-              "hook",
-              "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"
-            ]
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "hooks": [
