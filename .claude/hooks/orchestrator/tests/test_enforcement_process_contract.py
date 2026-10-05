@@ -419,8 +419,8 @@ def test_go_pretooluse_tools_cover_hooks_json(repo):
 
 def test_go_post_mod_mappings_are_inactive_until_registration():
     adapter = (REPO_ROOT / "hooks" / "mod" / "enforcement.ts").read_text(encoding="utf-8")
-    assert "const postEvents = ['PostToolUse', 'PostToolUseFailure']" in adapter
-    assert "on(`classic.${event}`" in adapter
+    assert 'on("classic.PostToolUse", ($, e, next) => handlePostToolUse(\'PostToolUse\', $, e, next))' in adapter
+    assert 'on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse(\'PostToolUseFailure\', $, e, next))' in adapter
     assert "await $.env.get('PURSER_MOD_POST') !== '1'" in adapter
     hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     assert hooks["PostToolUse"][0]["hooks"][0]["type"] == "command"
