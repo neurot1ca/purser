@@ -7,14 +7,21 @@ import (
 )
 
 // PostToolUseFailureAsyncFollowup mirrors Python's failed codex_result and
-// codex_cancel follow-up path. It is deliberately not wired into failure.go.
+// codex_cancel follow-up path.
 func PostToolUseFailureAsyncFollowup(event map[string]any, root string) map[string]any {
 	tool := stringValue(event["tool_name"])
-	if root == "" || !codexTools[tool] || !(strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel")) {
+	if !codexTools[tool] || !(strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel")) {
 		return nil
+	}
+	if root == "" {
+		return failureErrorOutput("state root is missing")
 	}
 	lock, index, pending, _, cached, err := claimAsyncResult(root, event, stringValue(event["cwd"]))
 	if err != nil {
+		diagnostic := postDiagnostic(event, err)
+		diagnostic["phase"] = "PostToolUse"
+		diagnostic["error"] = failureErrorText(err)
+		_ = writeFailureDiagnostic(root, diagnostic)
 		return asyncFailureInterrupted()
 	}
 	defer releaseTaskUsageLock(lock)

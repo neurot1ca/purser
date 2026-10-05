@@ -4,40 +4,73 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// PostToolUseFailure handles only the synchronous Codex failure path. Async
-// result/cancel/start follow-ups remain owned by Python.
+// PostToolUseFailure dispatches each Codex failure event to its Go finalizer.
 func PostToolUseFailure(event map[string]any, root string) (response map[string]any) {
 	tool := stringValue(event["tool_name"])
-	if !codexTools[tool] || strings.HasSuffix(tool, "__codex_start") ||
-		strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
+	if !codexTools[tool] {
 		return nil
 	}
-	var pending map[string]any
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			failureObservation(root, event, pending)
+			diagnostic := postFailureDiagnostic(event, fmt.Errorf("panic: %v", recovered))
+			diagnostic["error"] = "RuntimeError: " + fmt.Sprint(recovered)
+			_ = writeFailureDiagnostic(root, diagnostic)
+			response = failureErrorOutput("RuntimeError: " + fmt.Sprint(recovered))
+		}
+	}()
+	if strings.HasSuffix(tool, "__codex_start") {
+		return postFailureStart(event, root)
+	}
+	if strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
+		return PostToolUseFailureAsyncFollowup(event, root)
+	}
+	return postSynchronousFailure(event, root)
+}
+
+func postSynchronousFailure(event map[string]any, root string) (response map[string]any) {
+	var pending map[string]any
+	var undeliveredPath string
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if pending != nil {
+				failureObservation(root, event, pending)
+				failureObservationTail(root, pending)
+			}
+			diagnostic := postFailureDiagnostic(event, fmt.Errorf("panic: %v", recovered))
+			diagnostic["error"] = "RuntimeError: " + fmt.Sprint(recovered)
+			_ = writeFailureDiagnostic(root, diagnostic)
 			response = failureErrorOutput("RuntimeError: " + fmt.Sprint(recovered))
 		}
 	}()
 	failed := func(message string) map[string]any { return failureErrorOutput(message) }
+	failedWithDiagnostic := func(err error) map[string]any {
+		if root != "" {
+			diagnostic := postFailureDiagnostic(event, err)
+			diagnostic["error"] = failureErrorText(err)
+			_ = writeFailureDiagnostic(root, diagnostic)
+		}
+		return failed(failureErrorText(err))
+	}
 	if root == "" {
 		return failed("state root is missing")
 	}
 	key, err := callKey(event)
 	if err != nil {
-		return failed(failureErrorText(err))
+		return failedWithDiagnostic(err)
 	}
 	cleanupStaleFailurePending(root, event, key)
 	var pendingFile string
 	pending, pendingFile, err = readFailurePending(root, event, key)
 	if err != nil {
-		return failed(failureErrorText(err))
+		return failedWithDiagnostic(err)
 	}
+	undeliveredPath, _ = failureUndelivered(root, event, pending)
 	projectKey := stringValue(pending["project_key"])
 	if projectKey == "" {
 		projectKey = "unresolved"
@@ -46,7 +79,7 @@ func PostToolUseFailure(event map[string]any, root string) (response map[string]
 	evidencePath, err := persistFailureEvidence(root, key, evidence)
 	if err != nil {
 		failureObservation(root, event, pending)
-		return failed(failureErrorText(err))
+		return failedWithDiagnostic(err)
 	}
 	routingEnforced := pending["kind"] != "pretool_bypass"
 	outcome := map[string]any{
@@ -61,13 +94,28 @@ func PostToolUseFailure(event map[string]any, root string) (response map[string]
 		err = errors.New("normal pending call identity is incomplete")
 	}
 	if err == nil {
-		err = cleanupFailureTail(root, pendingFile, event, pending, false)
+		if undeliveredPath != "" {
+			failureUndeliveredTail(root, undeliveredPath, pendingFile, event, pending)
+		} else {
+			err = cleanupFailureTail(root, pendingFile, event, pending, false)
+		}
 	}
+	recordFailedMechanicalAttempt(root, pending)
 	failureObservation(root, event, pending)
+	failureObservationTail(root, pending)
 	if err != nil {
-		return failed(failureErrorText(err))
+		return failedWithDiagnostic(err)
+	}
+	if undeliveredPath != "" {
+		_ = os.Remove(undeliveredPath)
 	}
 	return failureSuccessOutput(evidencePath, routingEnforced)
+}
+
+func postFailureDiagnostic(event map[string]any, err error) map[string]any {
+	diagnostic := postDiagnostic(event, err)
+	diagnostic["phase"] = "PostToolUseFailure"
+	return diagnostic
 }
 
 func readFailurePending(root string, event map[string]any, key string) (map[string]any, string, error) {
@@ -91,12 +139,26 @@ func readFailurePending(root string, event map[string]any, key string) (map[stri
 }
 
 func telemetryDuration(value any) any {
-	number, ok := value.(json.Number)
-	if !ok {
+	var parsed float64
+	switch number := value.(type) {
+	case json.Number:
+		var err error
+		parsed, err = number.Float64()
+		if err != nil {
+			return nil
+		}
+	case float64:
+		parsed = number
+	case float32:
+		parsed = float64(number)
+	case int:
+		parsed = float64(number)
+	case int64:
+		parsed = float64(number)
+	default:
 		return nil
 	}
-	parsed, err := number.Float64()
-	if err != nil || parsed < 0 {
+	if parsed < 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
 		return nil
 	}
 	return parsed

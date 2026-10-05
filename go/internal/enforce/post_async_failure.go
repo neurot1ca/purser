@@ -59,10 +59,8 @@ func finalizeAsyncFailure(root string, event, index, pending map[string]any) (ma
 	}
 	failureEvent["tool_name"], failureEvent["session_id"], failureEvent["tool_use_id"] =
 		"mcp__codex-main__codex", index["session_id"], pending["tool_use_id"]
-	if failureEvent["duration_ms"] == nil {
-		if duration := asyncFailureDuration(job); duration != nil {
-			failureEvent["duration_ms"] = json.Number(strconv.FormatFloat(*duration, 'f', -1, 64))
-		}
+	if duration := asyncFailureDuration(job); duration != nil {
+		failureEvent["duration_ms"] = json.Number(strconv.FormatFloat(*duration, 'f', -1, 64))
 	} else if duration, ok := failureEvent["duration_ms"].(float64); ok {
 		failureEvent["duration_ms"] = json.Number(strconv.FormatFloat(duration, 'f', -1, 64))
 	} else if duration, ok := failureEvent["duration_ms"].(int); ok {

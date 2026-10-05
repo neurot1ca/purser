@@ -4,31 +4,54 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// postFailureStart mirrors the codex_start failure branch without connecting
-// it to the failure dispatcher while the Post lane is being ported.
-func postFailureStart(event map[string]any, root string) map[string]any {
+// postFailureStart mirrors Python's codex_start failure branch.
+func postFailureStart(event map[string]any, root string) (response map[string]any) {
 	tool := stringValue(event["tool_name"])
 	if event["hook_event_name"] != "PostToolUseFailure" || !strings.HasSuffix(tool, "__codex_start") {
 		return nil
+	}
+	var pending map[string]any
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if pending != nil {
+				failureObservation(root, event, pending)
+				failureObservationTail(root, pending)
+			}
+			cause := fmt.Errorf("panic: %v", recovered)
+			diagnostic := postFailureDiagnostic(event, cause)
+			diagnostic["error"] = "RuntimeError: " + fmt.Sprint(recovered)
+			_ = writeFailureDiagnostic(root, diagnostic)
+			response = failureErrorOutput("RuntimeError: " + fmt.Sprint(recovered))
+		}
+	}()
+	failed := func(err error) map[string]any {
+		if root != "" {
+			diagnostic := postFailureDiagnostic(event, err)
+			diagnostic["error"] = failureErrorText(err)
+			_ = writeFailureDiagnostic(root, diagnostic)
+		}
+		return failureErrorOutput(failureErrorText(err))
 	}
 	if root == "" {
 		return failureErrorOutput("state root is missing")
 	}
 	key, err := callKey(event)
 	if err != nil {
-		return failureErrorOutput(failureErrorText(err))
+		return failed(err)
 	}
 	cleanupStaleFailurePending(root, event, key)
 	pendingPath := filepath.Join(root, "pending", key+".json")
-	pending, _, err := readFailurePending(root, event, key)
+	pending, _, err = readFailurePending(root, event, key)
 	if err != nil {
-		return failureErrorOutput(failureErrorText(err))
+		return failed(err)
 	}
+	markerPath, _ := failureUndelivered(root, event, pending)
 	call := stringValue(pending["async_call"])
 	if call == "" {
 		if input, ok := event["tool_input"].(map[string]any); ok {
@@ -43,7 +66,8 @@ func postFailureStart(event map[string]any, root string) map[string]any {
 	path, err := persistFailureEvidence(root, key, failureEvidence(event, pending))
 	if err != nil {
 		failureObservation(root, event, pending)
-		return failureErrorOutput(failureErrorText(err))
+		failureObservationTail(root, pending)
+		return failed(err)
 	}
 	routingEnforced := pending["kind"] != "pretool_bypass"
 	outcome := map[string]any{"status": "AMBIGUOUS_TOOL_FAILURE", "ambiguous_outcome": true,
@@ -58,7 +82,8 @@ func postFailureStart(event map[string]any, root string) map[string]any {
 	}
 	if err != nil {
 		failureObservation(root, event, pending)
-		return failureErrorOutput(failureErrorText(err))
+		failureObservationTail(root, pending)
+		return failed(err)
 	}
 
 	terminal := asyncStartTerminalOrAbsent(root, pending)
@@ -71,7 +96,9 @@ func postFailureStart(event map[string]any, root string) map[string]any {
 			err = atomicObservationJSON(pendingPath, encoded)
 		}
 	}
-	if err == nil && terminal {
+	if err == nil && markerPath != "" {
+		failureUndeliveredTail(root, markerPath, pendingPath, event, pending)
+	} else if err == nil && terminal {
 		err = cleanupFailureTail(root, pendingPath, event, pending, false)
 	}
 	if err == nil {
@@ -92,9 +119,11 @@ func postFailureStart(event map[string]any, root string) map[string]any {
 			}
 		}
 	}
+	recordFailedMechanicalAttempt(root, pending)
 	failureObservation(root, event, pending)
+	failureObservationTail(root, pending)
 	if err != nil {
-		return failureErrorOutput(failureErrorText(err))
+		return failed(err)
 	}
 	return failureSuccessOutput(path, routingEnforced)
 }
