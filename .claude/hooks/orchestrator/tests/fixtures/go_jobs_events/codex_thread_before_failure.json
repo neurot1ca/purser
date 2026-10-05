@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"resume-me\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"later failure\"}}\n",
+  "stderr": "",
+  "exitCode": 1,
+  "interrupted": false,
+  "expected": {
+    "status": "error",
+    "threadId": "resume-me",
+    "failure": "later failure"
+  }
+}

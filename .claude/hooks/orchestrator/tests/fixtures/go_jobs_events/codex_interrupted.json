@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"t-stop\"}\n",
+  "stderr": "",
+  "exitCode": -1,
+  "interrupted": true,
+  "expected": {
+    "status": "interrupted",
+    "threadId": "t-stop",
+    "failure": "cancelled"
+  }
+}

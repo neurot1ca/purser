@@ -1,0 +1,12 @@
+{
+  "agent": "agy",
+  "stdout": "{\"conversation_id\":\"agy-err\",\"status\":\"FAILED\",\"error\":\"Antigravity failed\"}\n",
+  "stderr": "",
+  "exitCode": 1,
+  "interrupted": false,
+  "expected": {
+    "status": "error",
+    "threadId": "agy-err",
+    "failure": "Antigravity failed"
+  }
+}

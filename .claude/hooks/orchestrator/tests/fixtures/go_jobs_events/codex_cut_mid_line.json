@@ -1,0 +1,10 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"turn.completed\"}",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "success"
+  }
+}

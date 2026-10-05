@@ -1,0 +1,12 @@
+{
+  "agent": "opencode",
+  "stdout": "{\"type\":\"tool_use\",\"sessionID\":\"oc-order\",\"part\":{\"state\":{\"status\":\"error\",\"error\":\"first tool failed\"}}}\n{\"type\":\"step_finish\",\"sessionID\":\"oc-order\",\"part\":{\"reason\":\"stop\"}}\n",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "error",
+    "threadId": "oc-order",
+    "failure": "first tool failed"
+  }
+}

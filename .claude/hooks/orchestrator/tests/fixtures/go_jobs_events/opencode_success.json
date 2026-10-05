@@ -1,0 +1,12 @@
+{
+  "agent": "opencode",
+  "stdout": "{\"type\":\"text\",\"sessionID\":\"oc-1\",\"part\":{\"text\":\"hi \"}}\n{\"type\":\"text\",\"sessionID\":\"oc-1\",\"part\":{\"text\":\"there\"}}\n{\"type\":\"step_finish\",\"sessionID\":\"oc-1\",\"part\":{\"reason\":\"stop\"}}\n",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "success",
+    "threadId": "oc-1",
+    "final": "hi there"
+  }
+}

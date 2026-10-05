@@ -1,0 +1,16 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":4,\"cached_input_tokens\":2,\"output_tokens\":1,\"reasoning_output_tokens\":0,\"ignored\":9,\"bad\":-1,\"bool\":true}}\n",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "success",
+    "usage": {
+      "input_tokens": 4,
+      "cached_input_tokens": 2,
+      "output_tokens": 1,
+      "reasoning_output_tokens": 0
+    }
+  }
+}

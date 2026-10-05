@@ -1,0 +1,12 @@
+{
+  "agent": "opencode",
+  "stdout": "{\"type\":\"error\",\"sessionID\":\"oc-err\",\"error\":{\"message\":\"工具失败\"}}\n",
+  "stderr": "",
+  "exitCode": 1,
+  "interrupted": false,
+  "expected": {
+    "status": "error",
+    "threadId": "oc-err",
+    "failure": "工具失败"
+  }
+}

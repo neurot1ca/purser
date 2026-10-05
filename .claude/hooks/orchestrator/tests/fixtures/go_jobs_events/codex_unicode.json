@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"t-界🙂\"}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"héllo 世界 🌱\"}}\n{\"type\":\"turn.completed\"}\n",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "success",
+    "threadId": "t-界🙂",
+    "final": "héllo 世界 🌱"
+  }
+}

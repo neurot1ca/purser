@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"t-error\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"quota denied\"}}\n",
+  "stderr": "",
+  "exitCode": 1,
+  "interrupted": false,
+  "expected": {
+    "status": "error",
+    "threadId": "t-error",
+    "failure": "quota denied"
+  }
+}

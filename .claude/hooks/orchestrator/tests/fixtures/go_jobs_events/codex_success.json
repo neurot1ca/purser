@@ -1,0 +1,15 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"t-ok\"}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"done\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":3}}\n",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "success",
+    "threadId": "t-ok",
+    "final": "done",
+    "usage": {
+      "input_tokens": 3
+    }
+  }
+}

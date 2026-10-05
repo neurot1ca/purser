@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"t-interrupt-failure\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"provider failed\"}}\n",
+  "stderr": "",
+  "exitCode": 1,
+  "interrupted": true,
+  "expected": {
+    "status": "interrupted",
+    "threadId": "t-interrupt-failure",
+    "failure": "cancelled"
+  }
+}

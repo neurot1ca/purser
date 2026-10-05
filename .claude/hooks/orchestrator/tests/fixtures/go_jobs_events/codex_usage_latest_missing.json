@@ -1,0 +1,13 @@
+{
+  "agent": "codex",
+  "stdout": "{\"type\":\"turn.completed\",\"usage\":{\"output_tokens\":7}}\n{\"type\":\"turn.completed\"}\n",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "success",
+    "usage": {
+      "output_tokens": 7
+    }
+  }
+}

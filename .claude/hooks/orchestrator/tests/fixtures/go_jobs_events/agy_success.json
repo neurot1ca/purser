@@ -1,0 +1,12 @@
+{
+  "agent": "agy",
+  "stdout": "{\"conversation_id\":\"agy-1\",\"status\":\"SUCCESS\",\"response\":\"完成 🙂\"}\n",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "success",
+    "threadId": "agy-1",
+    "final": "完成 🙂"
+  }
+}

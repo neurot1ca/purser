@@ -1,0 +1,12 @@
+{
+  "agent": "agy",
+  "stdout": "{\"type\":\"progress\",\"conversation_id\":\"agy-progress\",\"message\":\"still working\"}\n",
+  "stderr": "",
+  "exitCode": 0,
+  "interrupted": false,
+  "expected": {
+    "status": "error",
+    "threadId": "agy-progress",
+    "failure": "Antigravity completion missing"
+  }
+}
