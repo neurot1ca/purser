@@ -1,0 +1,1 @@
+{"cases":{"complete_artifact":{"ledger_rejected":true,"recovered":true},"corrupt_artifact":{"artifact_error":"corrupt"},"ledger_recorded":{"ledger_rejected":false},"missing_artifact":{"recovered":false},"rejected_response":{"artifact_has_rejection":true,"ledger_rejected":true,"response_mode":"FULL"}},"oracle":"codex._async_post_followup FINALIZING recovery helpers"}
