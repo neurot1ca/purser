@@ -371,7 +371,7 @@ class ScopeLeases:
             now = time.time()
             recent = {item["path"]: item for item in value.get("conflicts", [])
                       if item["recorded_at"] >= now - CONFLICT_PATH_RETENTION_SECONDS}
-            for path in clean:
+            for path in sorted(clean):
                 recent[path] = {"path": path, "recorded_at": now}
             value["conflicts"] = list(recent.values())
             self._write(value)

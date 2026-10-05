@@ -327,6 +327,7 @@ func TestRetentionParityReplay(t *testing.T) {
 			Operations []struct {
 				Method string   `json:"method"`
 				Owner  string   `json:"owner"`
+				TaskID string   `json:"task_id"`
 				Value  float64  `json:"value"`
 				Paths  []string `json:"paths"`
 			} `json:"operations"`
@@ -352,6 +353,12 @@ func TestRetentionParityReplay(t *testing.T) {
 			}
 		case "record_conflicts":
 			err = store.RecordConflicts(op.Paths, fixture.Case.Now)
+		case "extend_retention":
+			result = store.ExtendRetention(op.Owner, op.Value, fixture.Case.Now)
+		case "active":
+			result, err = store.Active(fixture.Case.Now)
+		case "release_task":
+			result, err = store.ReleaseTask(op.TaskID, fixture.Case.Now)
 		default:
 			t.Fatalf("unknown method %q", op.Method)
 		}
@@ -375,6 +382,39 @@ func TestRetentionParityReplay(t *testing.T) {
 	}
 	t.Log("LEASE_RETENTION_RESULT:" + string(encoded))
 }
+
+func TestRetentionMethodsRejectMalformedRecordsWithoutPanicking(t *testing.T) {
+	for _, tc := range []struct {
+		name, record string
+		check        func(*Store) bool
+	}{
+		{"owner-state", `{"version":1,"owners":{"x":{"state":"BROKEN","scope":["a"],"task_id":"t"}}}`, func(s *Store) bool {
+			_, err := s.OwnerState("x", 1)
+			return err != nil
+		}},
+		{"retention-owner", `{"version":1,"owners":{"x":{"state":"BROKEN","scope":["a"],"task_id":"t"}}}`, func(s *Store) bool {
+			got := s.SetRetentionAfter("x", 2, 1)
+			return got == (Result{"UNKNOWN", "LEASE_RETENTION_UNCERTAIN"})
+		}},
+		{"conflict-path", `{"version":1,"owners":{},"conflicts":[{"path":1,"recorded_at":1}]}`, func(s *Store) bool {
+			return s.RecordConflicts([]string{"a"}, 1) != nil
+		}},
+		{"conflict-item", `{"version":1,"owners":{},"conflicts":[1]}`, func(s *Store) bool {
+			return s.RecordConflicts([]string{"a"}, 1) != nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "scope_leases.json"), []byte(tc.record), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.check(New(root)) {
+				t.Fatal("malformed record did not return its error/UNKNOWN outcome")
+			}
+		})
+	}
+}
+
 func TestWritePrunesExpiredPythonLeaseEntries(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "scope_leases.json")
