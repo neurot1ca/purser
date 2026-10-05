@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/proc"
 )
 
 const (
@@ -25,37 +26,6 @@ const (
 	codeMapMaxSeconds   = 10 * time.Second
 	codeMapProcessLimit = 2 * time.Second
 )
-
-type codeMapPython struct {
-	Path string `json:"path"`
-}
-
-// ResolvePython uses the plugin's locator, with the same PATH fallback used by code map.
-func ResolvePython(ctx context.Context, pluginRoot string) string {
-	node, err := exec.LookPath("node")
-	locator := filepath.Join(pluginRoot, "bin", "python-locator.js")
-	pythonPath := ""
-	if err == nil {
-		cmd := exec.CommandContext(ctx, node, locator, "--resolve-json")
-		cmd.Env = os.Environ()
-		if data, callErr := cmd.Output(); callErr == nil {
-			var python codeMapPython
-			if json.Unmarshal(data, &python) == nil {
-				pythonPath = python.Path
-			}
-		}
-	}
-	if pythonPath == "" {
-		pythonPath, _ = exec.LookPath("python")
-	}
-	if ctx.Err() != nil {
-		return ""
-	}
-	return pythonPath
-}
-
-// ConfigureProcessTreeKill applies the shared subprocess tree-kill behavior.
-func ConfigureProcessTreeKill(command *exec.Cmd) { configureProbeLaunch(command) }
 
 // refreshCodeMapForPre delegates all symbol parsing to the Python oracle.
 func refreshCodeMapForPre(repo string) (string, string) {
@@ -70,7 +40,7 @@ func refreshCodeMapForPre(repo string) (string, string) {
 	deadline := time.Now().Add(codeMapProcessLimit)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	pythonPath := ResolvePython(ctx, pluginRoot)
+	pythonPath := proc.ResolvePython(ctx, pluginRoot)
 	if pythonPath == "" || ctx.Err() != nil {
 		return "", "UNAVAILABLE"
 	}

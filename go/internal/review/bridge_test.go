@@ -6,6 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,4 +74,121 @@ func TestRunBridgeReviewerException(t *testing.T) {
 	if !errors.As(err, &bridgeErr) || !IsReviewerBridgeException(err) {
 		t.Fatalf("reviewer exception = %v", err)
 	}
+}
+
+func TestReviewDoesNotImportEnforce(t *testing.T) {
+	output, err := exec.Command("go", "list", "-f", "{{.Imports}}", ".").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list: %v: %s", err, output)
+	}
+	if strings.Contains(string(output), "purser-hook/internal/enforce") {
+		t.Fatalf("review imports enforce: %s", output)
+	}
+}
+
+func TestRunBridgeTimeoutKillsProcessTreeWithinBudget(t *testing.T) {
+	assertBridgeTreeStopped(t, 300*time.Millisecond, false)
+}
+
+func TestRunBridgeCancellationKillsProcessTree(t *testing.T) {
+	assertBridgeTreeStopped(t, 5*time.Second, true)
+}
+
+func assertBridgeTreeStopped(t *testing.T, budget time.Duration, cancelRun bool) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("PURSER_BRIDGE_PARENT_PID", filepath.Join(dir, "parent.pid"))
+	t.Setenv("PURSER_BRIDGE_CHILD_PID", filepath.Join(dir, "child.pid"))
+	python, script := fakeBridge(t, "import os, subprocess, sys, time\n"+
+		"open(os.environ['PURSER_BRIDGE_PARENT_PID'], 'w').write(str(os.getpid()))\n"+
+		"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"+
+		"open(os.environ['PURSER_BRIDGE_CHILD_PID'], 'w').write(str(child.pid))\n"+
+		"time.sleep(60)\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		err     error
+		elapsed time.Duration
+	}
+	done := make(chan result, 1)
+	go func() {
+		started := time.Now()
+		_, err := runBridge(ctx, python, script, map[string]any{}, budget)
+		done <- result{err: err, elapsed: time.Since(started)}
+	}()
+	parentPID := waitPIDFile(t, filepath.Join(dir, "parent.pid"))
+	childPID := waitPIDFile(t, filepath.Join(dir, "child.pid"))
+	defer func() {
+		for _, pid := range []string{parentPID, childPID} {
+			if process, err := os.FindProcess(mustPID(t, pid)); err == nil {
+				_ = process.Kill()
+			}
+		}
+	}()
+	if cancelRun {
+		cancel()
+	}
+	got := <-done
+	wantCode := "BRIDGE_TIMEOUT"
+	if cancelRun {
+		wantCode = "BRIDGE_CANCELED"
+	} else if got.elapsed < budget-100*time.Millisecond || got.elapsed > budget+500*time.Millisecond {
+		t.Fatalf("bridge timeout budget %s, elapsed %s", budget, got.elapsed)
+	}
+	var bridgeErr *BridgeError
+	if !errors.As(got.err, &bridgeErr) || bridgeErr.Code != wantCode {
+		t.Fatalf("bridge error = %v, want %s", got.err, wantCode)
+	}
+	for _, process := range []struct{ role, pid string }{{"bridge", parentPID}, {"child", childPID}} {
+		deadline := time.Now().Add(2 * time.Second)
+		for processExists(process.pid) && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if processExists(process.pid) {
+			t.Fatalf("%s process %s remains after %s", process.role, process.pid, wantCode)
+		}
+	}
+}
+
+func waitPIDFile(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+			return strings.TrimSpace(string(data))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pid file not written: %s", path)
+	return ""
+}
+
+func processExists(pid string) bool {
+	if runtime.GOOS == "windows" {
+		command := "$p=Get-Process -Id " + pid + " -ErrorAction SilentlyContinue; if ($p) { exit 0 }; exit 1"
+		err := exec.Command("powershell.exe", "-NoProfile", "-Command", command).Run()
+		if err == nil {
+			return true
+		}
+		exit, ok := err.(*exec.ExitError)
+		return !ok || exit.ExitCode() != 1
+	}
+	output, err := exec.Command("ps", "-o", "stat=", "-p", pid).Output()
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+			return false
+		}
+		return true
+	}
+	state := strings.TrimSpace(string(output))
+	return state != "" && state[0] != 'Z'
+}
+
+func mustPID(t *testing.T, pid string) int {
+	t.Helper()
+	parsed, err := strconv.Atoi(pid)
+	if err != nil || parsed <= 0 {
+		t.Fatalf("invalid process id %q", pid)
+	}
+	return parsed
 }

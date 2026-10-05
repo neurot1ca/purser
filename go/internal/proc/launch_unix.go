@@ -1,13 +1,13 @@
 //go:build !windows
 
-package enforce
+package proc
 
 import (
 	"os/exec"
 	"syscall"
 )
 
-func configureProbeLaunch(command *exec.Cmd) {
+func ConfigureProcessTreeKill(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Cancel = func() error {
 		if command.Process == nil {

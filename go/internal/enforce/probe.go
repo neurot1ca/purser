@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/proc"
 )
 
 const probeTimeout = 25 * time.Second
@@ -36,7 +37,7 @@ func RunProbe(prefix []string, model string, timeout time.Duration) map[string]a
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.Dir = cwd
 	cmd.Stdin = strings.NewReader("Reply with OK.")
-	configureProbeLaunch(cmd)
+	proc.ConfigureProcessTreeKill(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Start()

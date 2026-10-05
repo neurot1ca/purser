@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"purser-hook/internal/enforce"
+	"purser-hook/internal/proc"
 )
 
 type BridgeOutcome struct {
@@ -47,7 +47,7 @@ func RunBridge(ctx context.Context, pluginRoot string, args map[string]any, time
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	python := enforce.ResolvePython(ctx, pluginRoot)
+	python := proc.ResolvePython(ctx, pluginRoot)
 	if ctx.Err() != nil {
 		return BridgeOutcome{}, bridgeContextError(ctx.Err())
 	}
@@ -67,7 +67,7 @@ func runBridge(parent context.Context, python, script string, args map[string]an
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, python, script)
-	enforce.ConfigureProcessTreeKill(cmd)
+	proc.ConfigureProcessTreeKill(cmd)
 	cmd.Stdin = bytes.NewReader(input)
 	output, runErr := cmd.Output()
 	if ctx.Err() != nil {

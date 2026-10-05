@@ -1,6 +1,6 @@
 //go:build windows
 
-package enforce
+package proc
 
 import (
 	"os/exec"
@@ -8,7 +8,7 @@ import (
 	"syscall"
 )
 
-func configureProbeLaunch(command *exec.Cmd) {
+func ConfigureProcessTreeKill(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000200, HideWindow: true}
 	command.Cancel = func() error {
 		if command.Process == nil {
