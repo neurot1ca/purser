@@ -1,0 +1,168 @@
+{
+  "oracle": "codex._attempt_in_hook_micro_repair subprocess contract",
+  "cases": [
+    {
+      "name": "not-eligible",
+      "eligible": false,
+      "outcome": "success",
+      "findings": [
+        {
+          "code": "F1",
+          "message": "mechanical fix"
+        }
+      ],
+      "expected_result": null,
+      "capture": {}
+    },
+    {
+      "name": "success",
+      "eligible": true,
+      "outcome": "success",
+      "findings": [
+        {
+          "code": "F1",
+          "message": "mechanical fix"
+        }
+      ],
+      "expected_result": {
+        "repaired": true,
+        "output": "repaired"
+      },
+      "capture": {
+        "argv": [
+          "codex",
+          "exec",
+          "resume",
+          "thread-5",
+          "-",
+          "--sandbox",
+          "workspace-write"
+        ],
+        "cwd": "fixture-repo",
+        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "timeout": 45,
+        "env_sentinel": "present"
+      }
+    },
+    {
+      "name": "timeout",
+      "eligible": true,
+      "outcome": "timeout",
+      "findings": [
+        {
+          "code": "F1",
+          "message": "mechanical fix"
+        }
+      ],
+      "expected_result": {
+        "repaired": false,
+        "error": "TimeoutExpired: 45s"
+      },
+      "capture": {
+        "argv": [
+          "codex",
+          "exec",
+          "resume",
+          "thread-5",
+          "-",
+          "--sandbox",
+          "workspace-write"
+        ],
+        "cwd": "fixture-repo",
+        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "timeout": 45,
+        "env_sentinel": "present"
+      }
+    },
+    {
+      "name": "nonzero",
+      "eligible": true,
+      "outcome": "nonzero",
+      "findings": [
+        {
+          "code": "F1",
+          "message": "mechanical fix"
+        }
+      ],
+      "expected_result": {
+        "repaired": false,
+        "error": "repair rejected"
+      },
+      "capture": {
+        "argv": [
+          "codex",
+          "exec",
+          "resume",
+          "thread-5",
+          "-",
+          "--sandbox",
+          "workspace-write"
+        ],
+        "cwd": "fixture-repo",
+        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "timeout": 45,
+        "env_sentinel": "present"
+      }
+    },
+    {
+      "name": "malformed",
+      "eligible": true,
+      "outcome": "malformed",
+      "findings": [
+        {
+          "code": "F1",
+          "message": "mechanical fix"
+        }
+      ],
+      "expected_result": {
+        "repaired": false,
+        "error": "AttributeError: 'object' object has no attribute 'returncode'"
+      },
+      "capture": {
+        "argv": [
+          "codex",
+          "exec",
+          "resume",
+          "thread-5",
+          "-",
+          "--sandbox",
+          "workspace-write"
+        ],
+        "cwd": "fixture-repo",
+        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "timeout": 45,
+        "env_sentinel": "present"
+      }
+    },
+    {
+      "name": "prompt-bound",
+      "eligible": true,
+      "outcome": "success",
+      "findings": [
+        {
+          "code": "F",
+          "message": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+        }
+      ],
+      "expected_result": {
+        "repaired": true,
+        "output": "repaired"
+      },
+      "capture": {
+        "argv": [
+          "codex",
+          "exec",
+          "resume",
+          "thread-5",
+          "-",
+          "--sandbox",
+          "workspace-write"
+        ],
+        "cwd": "fixture-repo",
+        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F: ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "timeout": 45,
+        "env_sentinel": "present"
+      }
+    }
+  ]
+}
