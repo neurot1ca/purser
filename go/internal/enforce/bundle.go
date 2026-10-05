@@ -160,7 +160,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 		mandatory["micro_repair"] = map[string]any{"status": repair["status"]}
 	}
 	mandatory["audit_receipt"] = nil
-	if audit, ok := bundle["audit_receipt"].(map[string]any); ok {
+	if audit, ok := bundle["audit_receipt"].(map[string]any); ok && audit["verdict"] != nil {
 		mandatory["audit_receipt"] = map[string]any{"verdict": audit["verdict"]}
 	}
 	mandatory["changed_paths"] = []any{}

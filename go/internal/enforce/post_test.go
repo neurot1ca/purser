@@ -136,6 +136,14 @@ func TestBundleFinalizationMatchesPythonFixtures(t *testing.T) {
 	checkArtifact("mandatory", fixture.Mandatory)
 }
 
+func TestCompactBundleKeepsMissingAuditVerdictNull(t *testing.T) {
+	bundle := map[string]any{"audit_receipt": map[string]any{}, "findings": []any{}, "optional": strings.Repeat("x", 256)}
+	compact, overflow, err := compactBundle(bundle, 1)
+	if err != nil || !overflow || compact["audit_receipt"] != nil {
+		t.Fatalf("missing audit verdict compacted to %#v, overflow=%v, err=%v", compact["audit_receipt"], overflow, err)
+	}
+}
+
 type bundleFixture struct {
 	Bundle           map[string]any `json:"bundle"`
 	Cap              int            `json:"cap"`
