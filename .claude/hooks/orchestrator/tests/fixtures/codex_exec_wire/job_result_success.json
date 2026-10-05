@@ -1,0 +1,12 @@
+{
+  "name": "job_result_success",
+  "input": {
+    "function": "_job_result",
+    "value": {
+      "jobId": "job-123",
+      "state": "SUCCEEDED",
+      "content": "done"
+    }
+  },
+  "expected_text": "{\"jobId\": \"job-123\", \"state\": \"SUCCEEDED\", \"content\": \"done\"}"
+}

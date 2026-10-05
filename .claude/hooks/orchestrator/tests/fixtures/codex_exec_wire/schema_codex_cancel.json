@@ -1,0 +1,8 @@
+{
+  "name": "schema_codex_cancel",
+  "input": {
+    "function": "schema",
+    "tool": "codex_cancel"
+  },
+  "expected_text": "{\"name\": \"codex_cancel\", \"description\": \"Cancel a durable Codex job.\", \"inputSchema\": {\"type\": \"object\", \"properties\": {\"jobId\": {\"type\": \"string\"}, \"reason\": {\"type\": \"string\"}}, \"required\": [\"jobId\"]}}"
+}

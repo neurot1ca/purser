@@ -1,0 +1,12 @@
+{
+  "name": "job_result_alias_unicode",
+  "input": {
+    "function": "_job_result",
+    "value": {
+      "conversationId": "oturum-ıd 🪁",
+      "threadId": "işlem-çubuğu",
+      "message": "Başarılı ✅"
+    }
+  },
+  "expected_text": "{\"conversationId\": \"oturum-ıd 🪁\", \"threadId\": \"işlem-çubuğu\", \"message\": \"Başarılı ✅\"}"
+}

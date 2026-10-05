@@ -1,0 +1,9 @@
+{
+  "name": "tool_result_error",
+  "input": {
+    "function": "_tool_result",
+    "thread_id": null,
+    "error": "request failed"
+  },
+  "expected_text": "{\"threadId\": null, \"error\": \"request failed\"}"
+}

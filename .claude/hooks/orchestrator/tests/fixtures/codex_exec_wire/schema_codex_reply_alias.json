@@ -1,0 +1,8 @@
+{
+  "name": "schema_codex_reply_alias",
+  "input": {
+    "function": "schema",
+    "tool": "codex-reply"
+  },
+  "expected_text": "{\"name\": \"codex-reply\", \"description\": \"Continue a thread created by this server.\", \"inputSchema\": {\"type\": \"object\", \"properties\": {\"threadId\": {\"type\": \"string\"}, \"conversationId\": {\"type\": \"string\", \"description\": \"Deprecated alias for threadId.\"}, \"prompt\": {\"type\": \"string\"}, \"label\": {\"type\": \"string\", \"description\": \"Short human task description in the user's language (up to 80 characters); may be omitted to reuse the thread label.\"}}, \"required\": [\"prompt\"]}}"
+}

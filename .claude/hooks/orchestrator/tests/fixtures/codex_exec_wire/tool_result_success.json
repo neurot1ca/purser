@@ -1,0 +1,9 @@
+{
+  "name": "tool_result_success",
+  "input": {
+    "function": "_tool_result",
+    "thread_id": "thread-123",
+    "content": "completed"
+  },
+  "expected_text": "{\"threadId\": \"thread-123\", \"content\": \"completed\"}"
+}

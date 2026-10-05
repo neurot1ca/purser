@@ -1,0 +1,8 @@
+{
+  "name": "schema_codex",
+  "input": {
+    "function": "schema",
+    "tool": "codex"
+  },
+  "expected_text": "{\"name\": \"codex\", \"description\": \"Run a new Codex thread.\", \"inputSchema\": {\"type\": \"object\", \"properties\": {\"prompt\": {\"type\": \"string\"}, \"label\": {\"type\": \"string\", \"description\": \"Short human task description in the user's language (up to 80 characters).\"}, \"model\": {\"type\": \"string\"}, \"cwd\": {\"type\": \"string\"}, \"config\": {\"type\": \"object\"}, \"developer-instructions\": {\"type\": \"string\"}, \"base-instructions\": {\"type\": \"string\"}, \"compact-prompt\": {\"type\": \"string\"}, \"sandbox\": {\"type\": \"string\", \"enum\": [\"read-only\", \"workspace-write\", \"danger-full-access\"]}, \"approval-policy\": {\"type\": \"string\", \"enum\": [\"on-request\", \"never\"]}}, \"required\": [\"prompt\"]}}"
+}
