@@ -312,6 +312,69 @@ func TestReconcileParityOutcome(t *testing.T) {
 	t.Log("LEASE_RECONCILE_RESULT:" + string(result))
 }
 
+func TestRetentionParityReplay(t *testing.T) {
+	root, fixturePath := os.Getenv("PURSER_LEASE_RETENTION_ROOT"), os.Getenv("PURSER_LEASE_RETENTION_FIXTURE")
+	if root == "" || fixturePath == "" {
+		t.Skip("parity helper")
+	}
+	raw, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Case struct {
+			Now        float64 `json:"now"`
+			Operations []struct {
+				Method string   `json:"method"`
+				Owner  string   `json:"owner"`
+				Value  float64  `json:"value"`
+				Paths  []string `json:"paths"`
+			} `json:"operations"`
+		} `json:"case"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	store := New(root)
+	snapshots := make([]map[string]any, 0, len(fixture.Case.Operations))
+	for _, op := range fixture.Case.Operations {
+		var result any
+		switch op.Method {
+		case "set_retention_after":
+			result = store.SetRetentionAfter(op.Owner, op.Value, fixture.Case.Now)
+		case "owner_state":
+			result, err = store.OwnerState(op.Owner, fixture.Case.Now)
+		case "overlapping_owners":
+			result, err = store.OverlappingOwners(op.Owner, fixture.Case.Now)
+			if err != nil {
+				result = map[string]any{"error": err.Error()}
+				err = nil
+			}
+		case "record_conflicts":
+			err = store.RecordConflicts(op.Paths, fixture.Case.Now)
+		default:
+			t.Fatalf("unknown method %q", op.Method)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch value := result.(type) {
+		case Result:
+			result = map[string]any{"status": value.Status, "code": value.Code}
+		}
+		state, err := store.read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		delete(state, ownerOrderKey)
+		snapshots = append(snapshots, map[string]any{"result": result, "state": state})
+	}
+	encoded, err := json.Marshal(snapshots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("LEASE_RETENTION_RESULT:" + string(encoded))
+}
 func TestWritePrunesExpiredPythonLeaseEntries(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "scope_leases.json")
