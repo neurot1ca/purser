@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[4]
 ORCHESTRATOR = ROOT / ".claude" / "hooks" / "orchestrator"
 FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "delta.json"
 COMPUTE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "compute_delta.json"
+OUT_OF_SCOPE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "out_of_scope.json"
 sys.path.insert(0, str(ORCHESTRATOR))
 import ledger
 
@@ -119,3 +120,62 @@ def test_python_oracle_compute_delta_fixture():
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
     assert json.loads(COMPUTE_FIXTURE.read_text(encoding="utf-8")) == generated
+
+
+OUT_OF_SCOPE_CASES = [
+    {"name": "clean", "changes": []},
+    {"name": "in_scope_modification", "changes": [{"path": "scope/tracked.txt", "content": "changed\n"}]},
+    {"name": "out_of_scope_tracked", "changes": [{"path": "outside/tracked.txt", "content": "changed\n"}]},
+    {"name": "out_of_scope_untracked", "changes": [{"path": "outside/new.txt", "content": "new\n"}]},
+    {"name": "preexisting_dirty_unchanged", "pre_changes": [{"path": "outside/tracked.txt", "content": "dirty\n"}]},
+    {"name": "preexisting_dirty_mutated", "pre_changes": [{"path": "outside/tracked.txt", "content": "staged\n"}], "stage_before_baseline": ["outside/tracked.txt"], "changes": [{"path": "outside/tracked.txt", "content": "mutated\n"}]},
+    {"name": "invalid_baseline", "baseline_override": None},
+    {"name": "no_scope", "scope": []},
+    {"name": "invalid_scope", "scope": ["../escape"]},
+    {"name": "committed_out_of_scope", "changes": [{"path": "outside/tracked.txt", "content": "committed\n"}], "commit_changes": True},
+]
+
+
+def _out_of_scope_oracle(case, root):
+    _git(root, "init", "-q")
+    for name, content in {"scope/tracked.txt": "base\n", "outside/tracked.txt": "outside\n"}.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content.encode("utf-8"))
+    _git(root, "add", "--all")
+    env = os.environ.copy()
+    env.update({"GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"})
+    _git(root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture", env=env)
+    for change in case.get("pre_changes", []):
+        path = root / change["path"]
+        path.write_bytes(change["content"].encode("utf-8"))
+    if case.get("stage_before_baseline"):
+        _git(root, "add", *case["stage_before_baseline"])
+    baseline = ledger.capture_baseline(root, ["scope"])
+    if "baseline_override" in case:
+        baseline = case["baseline_override"]
+    for change in case.get("changes", []):
+        path = root / change["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(change["content"].encode("utf-8"))
+    if case.get("commit_changes"):
+        _git(root, "add", "--all")
+        _git(root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "after baseline", env=env)
+    result = ledger.detect_out_of_scope_modifications(root, baseline, case.get("scope", ["scope"]))
+    return {"name": case["name"], "scope": case.get("scope", ["scope"]), "pre_changes": case.get("pre_changes", []), "stage_before_baseline": case.get("stage_before_baseline", []), "changes": case.get("changes", []), "commit_changes": case.get("commit_changes", False), "baseline": baseline, "result": result}
+
+
+def test_python_oracle_out_of_scope_fixture():
+    generated = {"oracle": "Python ledger.detect_out_of_scope_modifications", "cases": []}
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(exist_ok=True)
+    temporary = scratch / ("out-of-scope-" + uuid.uuid4().hex)
+    temporary.mkdir()
+    try:
+        for index, case in enumerate(OUT_OF_SCOPE_CASES):
+            root = temporary / str(index)
+            root.mkdir()
+            generated["cases"].append(_out_of_scope_oracle(case, root))
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+    assert json.loads(OUT_OF_SCOPE_FIXTURE.read_text(encoding="utf-8")) == generated
