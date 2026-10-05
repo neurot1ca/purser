@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.73 — 2026-10-05
+
+- **Fixed:** The mod adapter runs the Go PostToolUse and PostToolUseFailure helper in enforce mode; in 0.1.72 Go skipped Post enforcement (review, receipts, apply refresh) for the Codex tools.
+- **Internal:** Go `jobs` package adds job start for replies, finish/result, cancellation, apply with hand resolution, queued admission, worktree creation and setup, readiness, and recovery classification and replacement, each against a Python oracle; still not wired.
+
 ## 0.1.72 — 2026-10-05
 
 - **Changed:** Every Purser hook for the Codex tools now runs in Go through the mod adapter: async `codex_start`/`codex_result`/`codex_cancel` PreToolUse, PostToolUse, PostToolUseFailure and Stop. The Python command hooks are no longer registered by the plugin; the Python bridge and Reviewer-1 bridge still run as subprocesses.
