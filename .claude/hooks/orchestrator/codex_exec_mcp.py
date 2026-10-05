@@ -2636,7 +2636,7 @@ def main() -> None:
     def _recovery_scan() -> None:
         try:
             import async_session_maintenance
-            async_session_maintenance.cleanup_jobs(server.job_dir.parent.parent)
+            async_session_maintenance.cleanup_jobs(server.job_dir.parent.parent, check_ceiling=True)
         except Exception as exc:
             print(f"Codex recovery scan unavailable: {exc}", file=sys.stderr, flush=True)
     threading.Thread(target=_recovery_scan, name="purser-recovery-scan", daemon=True).start()

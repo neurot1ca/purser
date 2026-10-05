@@ -20,6 +20,7 @@ import codex
 import ledger
 import telemetry
 import stall_followup
+import state_retention
 
 
 RETENTION_SECONDS = 7 * 86400
@@ -380,7 +381,8 @@ def _cleanup_orphan_worktrees(root: Path, current: float, protected_worktrees: s
             continue
 
 
-def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
+def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
+                 check_ceiling: bool = False) -> None:
     """Reconcile dead hosts and remove expired evidence with its ownership records."""
     try:
         root = Path(state_root)
@@ -522,6 +524,10 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
                 )
             except (OSError, subprocess.SubprocessError):
                 continue
+        try:
+            state_retention.prune_state(root, now=current, check_ceiling=check_ceiling)
+        except BaseException:
+            pass
     except BaseException:
         return None
 
