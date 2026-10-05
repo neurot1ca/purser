@@ -31,7 +31,7 @@ function stubGo(
   markerOutcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
 ) {
   // The plugin's own register.ts installs the adapter; the flag enables its codex_start path.
-  on('env.get', (_$, e) => ({ value: e.name === 'PURSER_MOD_ASYNC_START' ? '1' : env[e.name] }))
+  on('env.get', (_$, e) => ({ value: e.name === 'PURSER_MOD_ASYNC_START' ? (env.PURSER_MOD_ASYNC_START ?? '1') : env[e.name] }))
   on('session.id', () => ({ value: 'p66-session' }))
   on('session.cwd', () => ({ value: 'C:/p66-repo' }))
   on('process.run', (_$, e) => {
@@ -102,6 +102,65 @@ test('passes non-Codex tool identities through without starting Go', options, as
   expect(calls).toEqual([])
   expect(continuations).toBe(1)
   expect(toolCalls).toHaveLength(1)
+})
+
+test('follow-up tools stay pass-through while async adapter is gated off', options, async ($, on) => {
+  const calls: string[] = []
+  const toolCalls: unknown[] = []
+  const toasts: string[] = []
+  stubGo(on, success, calls, toasts, { OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_MOD_ASYNC_START: '0' })
+  stubToolCall(on, toolCalls)
+
+  for (const tool of ['mcp__codex-main__codex_result', 'mcp__plugin_purser_codex-main__codex_cancel']) {
+    await $.tool.call({ tool, task_id: 'origin-task' })
+  }
+
+  expect(calls).toEqual([])
+  expect(toolCalls).toHaveLength(2)
+})
+
+test('maps Go follow-up deny and passes allowed follow-up input unchanged', options, async ($, on) => {
+  const calls: string[] = []
+  const toolCalls: unknown[] = []
+  const toasts: string[] = []
+  let response = JSON.stringify({ hookSpecificOutput: {
+    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'ASYNC_STILL_RUNNING: still running; wait for the completion signal',
+  } })
+  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => ({ stdout: response }))
+  stubToolCall(on, toolCalls)
+
+  const denied = await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_result', task_id: 'origin-task' })
+  expect(observed(toasts)).toEqual({ deny: 'ASYNC_STILL_RUNNING: still running; wait for the completion signal' })
+  expect(denied.isError).toBe(true)
+  expect(toolCalls).toEqual([])
+
+  response = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse' } })
+  toasts.length = 0
+  const input = { tool: 'mcp__plugin_purser_codex-main__codex_cancel', task_id: 'origin-task', reason: 'stop' }
+  await $.tool.call(input)
+  expect(JSON.parse(calls[1])).toMatchObject({ tool_name: input.tool, tool_input: { task_id: 'origin-task', reason: 'stop' } })
+  expect(observed(toasts)).toEqual({})
+  expect(toolCalls).toHaveLength(1)
+  expect(toolCalls[0]).toMatchObject({ task_id: 'origin-task', reason: 'stop' })
+})
+
+test('follow-up adapter failure allows unchanged with Python internal-error context and no marker', options, async ($, on) => {
+  const calls: string[] = []
+  const markerWrites: string[] = []
+  const toolCalls: unknown[] = []
+  const toasts: string[] = []
+  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => ({ deny: 'Go helper unavailable' }), markerWrites)
+  stubToolCall(on, toolCalls)
+
+  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_result', task_id: 'origin-task' })
+
+  expect(observed(toasts).additionalContext[0]).toContain('because of an internal error: ')
+  expect(observed(toasts).additionalContext[0]).toContain('Go helper unavailable')
+  expect(observed(toasts).additionalContext[0]).toContain('The call is allowed unmodified.')
+  expect(observed(toasts).additionalContext[0]).toContain('The bypass record could not be persisted')
+  expect(markerWrites).toEqual([])
+  expect(toolCalls).toHaveLength(1)
+  expect(toolCalls[0]).toMatchObject({ task_id: 'origin-task' })
 })
 
 test('maps the Python deny reason', options, async ($, on) => {

@@ -124,6 +124,48 @@ func TestWriteUndeliveredMarkerLeavesSyncStateAndWritesMarker(t *testing.T) {
 	}
 }
 
+func TestWriteUndeliveredMarkerFollowupLeavesOriginPendingAndLeaseUntouched(t *testing.T) {
+	root := t.TempDir()
+	origin := undeliveredEvent("mcp__plugin_purser_codex-main__codex_start", "p74-origin")
+	originKey := undeliveredCallKey(origin)
+	pendingPath := filepath.Join(root, "pending", originKey+".json")
+	if err := os.MkdirAll(filepath.Dir(pendingPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pendingPath, []byte(`{"kind":"async_pending","lease_owner":"p74-origin"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	projectRoot := filepath.Join(root, "projects", "p74-origin-project")
+	if got := lease.New(projectRoot).Acquire("p74-origin", "p74-task", []string{"src/a.go"}, lease.AcquireOptions{}, float64(time.Now().Unix())); got.Status != "OK" {
+		t.Fatalf("origin lease acquire = %#v", got)
+	}
+	leasePath := filepath.Join(projectRoot, "scope_leases.json")
+	leaseBefore, err := os.ReadFile(leasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originBefore, err := os.ReadFile(pendingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	followup := undeliveredEvent("mcp__plugin_purser_codex-main__codex_result", "p74-followup")
+	if err := WriteUndeliveredMarker(root, followup); err != nil {
+		t.Fatal(err)
+	}
+	originAfter, err := os.ReadFile(pendingPath)
+	if err != nil || string(originAfter) != string(originBefore) {
+		t.Fatalf("origin pending changed: %v", err)
+	}
+	leaseAfter, err := os.ReadFile(leasePath)
+	if err != nil || string(leaseAfter) != string(leaseBefore) {
+		t.Fatalf("origin lease changed: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "pending"))
+	if err != nil || len(entries) != 1 || entries[0].Name() != originKey+".json" {
+		t.Fatalf("followup wrote or removed pending state: %v %v", entries, err)
+	}
+}
+
 func undeliveredEvent(tool, id string) map[string]any {
 	return map[string]any{"hook_event_name": "WriteUndeliveredMarker", "session_id": "p67-session",
 		"tool_use_id": id, "tool_name": tool, "reason": "adapter failed"}

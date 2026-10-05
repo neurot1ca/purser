@@ -191,7 +191,10 @@ func WriteUndeliveredMarker(root string, event map[string]any) error {
 		return errors.New("invalid undelivered marker event")
 	}
 	tool := stringValue(event["tool_name"])
-	if !codexTools[tool] || strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
+	if strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
+		return nil
+	}
+	if !codexTools[tool] {
 		return errors.New("tool is not eligible for an undelivered marker")
 	}
 	pending, err := pendingPath(root, event)
