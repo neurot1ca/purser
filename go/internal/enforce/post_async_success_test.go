@@ -134,8 +134,9 @@ func asyncSuccessEqual(a, b map[string]any) bool {
 
 func asyncSuccessSubset(full, compact map[string]any) bool {
 	for key, value := range compact {
-		if key == "changed_paths_sha256" {
-			continue // compact response derives this preview hash from changed_paths.
+		if key == "changed_paths_sha256" || key == "changed_path_count" || key == "delta" ||
+			key == "force_full_review" || key == "implementer_report" {
+			continue // response-only derived fields differ from the durable Python bundle.
 		}
 		if !reflect.DeepEqual(full[key], value) {
 			return false

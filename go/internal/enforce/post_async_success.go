@@ -1,6 +1,8 @@
 package enforce
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -65,7 +67,10 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		bundle["worker_validation"] = worker
 		bundle["validation"] = worker["status"]
 	}
-	normalized, _ := canonicalJSON(value)
+	normalized := pythonCodexResultJSON(event["tool_response"], value)
+	if len(normalized) == 0 {
+		normalized, _ = canonicalJSON(value)
+	}
 	toolResponse := map[string]any{"content": []any{map[string]any{"type": "text", "text": string(normalized)}}}
 	rawPath, err := persistRawOutput(root, original, toolResponse)
 	if err != nil {
@@ -174,6 +179,59 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		return nil, err
 	}
 	return response, nil
+}
+
+// pythonCodexResultJSON preserves the result object's key order and Python's
+// default separator spacing when storing the normalized async tool response.
+func pythonCodexResultJSON(response, expected any) []byte {
+	envelope, ok := response.(map[string]any)
+	if !ok {
+		return nil
+	}
+	items, _ := envelope["content"].([]any)
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if item["type"] != "text" {
+			continue
+		}
+		text := stringValue(item["text"])
+		var compact bytes.Buffer
+		if json.Compact(&compact, []byte(text)) != nil {
+			return nil
+		}
+		input := compact.Bytes()
+		var parsed any
+		if json.Unmarshal(input, &parsed) != nil {
+			return nil
+		}
+		actual, _ := canonicalJSON(parsed)
+		wanted, _ := canonicalJSON(expected)
+		if !bytes.Equal(actual, wanted) {
+			return nil
+		}
+		output := make([]byte, 0, len(input)+len(input)/8)
+		inString, escaped := false, false
+		for i, ch := range input {
+			output = append(output, ch)
+			if inString {
+				if escaped {
+					escaped = false
+				} else if ch == '\\' {
+					escaped = true
+				} else if ch == '"' {
+					inString = false
+				}
+				continue
+			}
+			if ch == '"' {
+				inString = true
+			} else if (ch == ',' || ch == ':') && i+1 < len(input) && input[i+1] != ' ' {
+				output = append(output, ' ')
+			}
+		}
+		return output
+	}
+	return nil
 }
 
 func postAsyncAuditReceipt(bundle map[string]any) map[string]any {

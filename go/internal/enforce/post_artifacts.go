@@ -93,13 +93,34 @@ func postReportLimit(config map[string]any, phase any) int {
 // finalizePostArtifacts adds the quota snapshot within the compact-response byte cap.
 // The complete bundle is persisted by finalizeBundle before its response is compacted.
 func finalizePostArtifacts(root string, event, bundle map[string]any, cap, reportLimit int) (map[string]any, string, error) {
-	stripWorkerValidation(bundle)
-	compact, path, err := finalizeBundle(root, event, bundle, cap, reportLimit)
+	// Python persists the original bundle, before response-only derived fields
+	// and validation-line compaction are applied.
+	artifactBundle := make(map[string]any, len(bundle))
+	for key, value := range bundle {
+		artifactBundle[key] = value
+	}
+	delete(artifactBundle, "delta")
+	delete(artifactBundle, "force_full_review")
+	artifactBundle["changed_path_count"] = nil
+	_, path, err := finalizeBundle(root, event, artifactBundle, cap, reportLimit)
+	if err != nil {
+		return nil, "", err
+	}
+	bundle["full_bundle_path"] = artifactBundle["full_bundle_path"]
+	// finalizeBundle may have promoted the bundle when its mandatory fields
+	// exceeded the response cap. Keep that decision in the caller's bundle.
+	bundle["claude_review_mode"] = artifactBundle["claude_review_mode"]
+	bundle["audit_receipt"] = artifactBundle["audit_receipt"]
+	compact, _, err := compactBundle(bundle, cap)
 	if err != nil {
 		return nil, "", err
 	}
 	delete(compact, "delta")
 	delete(compact, "force_full_review")
+	stripWorkerValidation(compact)
+	if report, ok := compact["implementer_report"].(string); ok {
+		compact["implementer_report"] = prefixRunes(report, reportLimit)
+	}
 	if quota, exists := bundle["codex_quota"]; exists {
 		compact["codex_quota"] = quota
 		size, sizeErr := nonReportBytes(compact)
@@ -116,6 +137,7 @@ func finalizePostArtifacts(root string, event, bundle map[string]any, cap, repor
 				return nil, "", compactErr
 			} else if !overflow && size <= cap {
 				compact = smaller
+				stripWorkerValidation(compact)
 				if report, ok := compact["implementer_report"].(string); ok {
 					compact["implementer_report"] = prefixRunes(report, reportLimit)
 				}
