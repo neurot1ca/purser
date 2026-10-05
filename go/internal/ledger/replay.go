@@ -375,13 +375,15 @@ func tryThreeWayJobPatch(root, destination string, paths []string, patch []byte,
 			*conflicts = append(*conflicts, name)
 		}
 		sort.Strings(*conflicts)
-		for _, name := range paths {
-			source, target := filepath.Join(tree, filepath.FromSlash(name)), filepath.Join(destination, filepath.FromSlash(name))
-			if !withinPath(destination, filepath.Dir(target)) {
-				return nil, &inspectionError{"GIT_FAILED", "Replay path traverses a worktree symlink."}
-			}
-			if err = copyReplayPath(source, target); err != nil {
-				return nil, err
+		if destination != "" {
+			for _, name := range paths {
+				source, target := filepath.Join(tree, filepath.FromSlash(name)), filepath.Join(destination, filepath.FromSlash(name))
+				if !withinPath(destination, filepath.Dir(target)) {
+					return nil, &inspectionError{"GIT_FAILED", "Replay path traverses a worktree symlink."}
+				}
+				if err = copyReplayPath(source, target); err != nil {
+					return nil, err
+				}
 			}
 		}
 		return nil, nil
