@@ -1,0 +1,269 @@
+{
+  "oracle": "registered Python codex.stop + compaction_advisor.stop",
+  "cases": [
+    {
+      "name": "event-mapping",
+      "session": "p132-event-mapping",
+      "transcript": null,
+      "events": [
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "session_id": "p132-event-mapping",
+          "stop_hook_active": false
+        },
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "session_id": "p132-event-mapping",
+          "stop_hook_active": true
+        },
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "stop_hook_active": false
+        }
+      ],
+      "outputs": [
+        {},
+        {},
+        {}
+      ],
+      "snapshot": {
+        "retry_count": 0,
+        "retry_pending": false,
+        "active_completed": null,
+        "active_invalidated": null,
+        "active_reason": null,
+        "advisor_state": {},
+        "active_state": null,
+        "task_event_count": 0
+      },
+      "prompt_output": null,
+      "after_prompt": null,
+      "active_seed": null
+    },
+    {
+      "name": "missing-transcript",
+      "session": "p132-missing-transcript",
+      "transcript": null,
+      "events": [
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "session_id": "p132-missing-transcript",
+          "stop_hook_active": false
+        }
+      ],
+      "outputs": [
+        {}
+      ],
+      "snapshot": {
+        "retry_count": 0,
+        "retry_pending": false,
+        "active_completed": null,
+        "active_invalidated": null,
+        "active_reason": null,
+        "advisor_state": {},
+        "active_state": null,
+        "task_event_count": 0
+      },
+      "prompt_output": null,
+      "after_prompt": null,
+      "active_seed": null
+    },
+    {
+      "name": "active-stop",
+      "session": "p132-active-stop",
+      "transcript": "{\"type\":\"user\",\"message\":{\"content\":\"Continue.\"}}\r\n{\"type\":\"assistant\",\"requestId\":\"p132-task-request\",\"message\":{\"id\":\"p132-task-message\",\"content\":[{\"type\":\"tool_use\",\"id\":\"p132-task-tool\"}],\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":2}}}\r\n",
+      "events": [
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "session_id": "p132-active-stop",
+          "stop_hook_active": false,
+          "transcript_path": "<TRANSCRIPT>"
+        },
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "session_id": "p132-active-stop",
+          "stop_hook_active": true,
+          "transcript_path": "<TRANSCRIPT>"
+        }
+      ],
+      "outputs": [
+        {},
+        {}
+      ],
+      "snapshot": {
+        "retry_count": 0,
+        "retry_pending": false,
+        "active_completed": true,
+        "active_invalidated": false,
+        "active_reason": null,
+        "advisor_state": {},
+        "active_state": {
+          "affected_task_ids": [
+            "p132-task"
+          ],
+          "anchor_byte_offset": null,
+          "anchor_deferred": true,
+          "anchor_search_start_offset": 51,
+          "canonical_transcript_path": "<TRANSCRIPT>",
+          "completed": true,
+          "created_at": "<CREATED_AT>",
+          "initial_size": 51,
+          "invalidated": false,
+          "invalidated_reason": null,
+          "project_key": "<PROJECT_KEY>",
+          "session_id": "p132-active-stop",
+          "task_id": "p132-task",
+          "terminal_task_ids": [],
+          "tool_use_id": "p132-task-tool"
+        },
+        "task_event_count": 1
+      },
+      "prompt_output": null,
+      "after_prompt": null,
+      "active_seed": {
+        "affected_task_ids": [
+          "p132-task"
+        ],
+        "anchor_byte_offset": null,
+        "anchor_deferred": true,
+        "anchor_search_start_offset": 51,
+        "canonical_transcript_path": "<TRANSCRIPT>",
+        "completed": false,
+        "created_at": "<CREATED_AT>",
+        "initial_size": 51,
+        "invalidated": false,
+        "invalidated_reason": null,
+        "project_key": "<PROJECT_KEY>",
+        "session_id": "p132-active-stop",
+        "task_id": "p132-task",
+        "terminal_task_ids": [],
+        "tool_use_id": "p132-task-tool"
+      }
+    },
+    {
+      "name": "retry-three-stops",
+      "session": "p132-retry-three-stops",
+      "transcript": "{\"type\":\"user\",\"message\":{\"content\":\"Try Codex.\"}}\r\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"call-1\",\"name\":\"mcp__plugin_purser_codex-main__codex_start\",\"input\":{}}]}}\r\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call-1\",\"is_error\":true,\"content\":\"classifier denied permission\"}]}}\r\n",
+      "events": [
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "session_id": "p132-retry-three-stops",
+          "stop_hook_active": false,
+          "transcript_path": "<TRANSCRIPT>"
+        },
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "session_id": "p132-retry-three-stops",
+          "stop_hook_active": false,
+          "transcript_path": "<TRANSCRIPT>"
+        },
+        {
+          "hook_event_name": "Stop",
+          "cwd": "<REPO>",
+          "last_assistant_message": "Done.",
+          "session_id": "p132-retry-three-stops",
+          "stop_hook_active": false,
+          "transcript_path": "<TRANSCRIPT>"
+        }
+      ],
+      "outputs": [
+        {
+          "decision": "block",
+          "reason": "Retry the denied codex_start call.\n\nYour previous reply is already visible to the user: write only the lines requested above, without repeating any of its text."
+        },
+        {
+          "decision": "block",
+          "reason": "Retry the denied codex_start call.\n\nYour previous reply is already visible to the user: write only the lines requested above, without repeating any of its text."
+        },
+        {}
+      ],
+      "snapshot": {
+        "retry_count": 2,
+        "retry_pending": "Retry the denied codex_start call.",
+        "active_completed": null,
+        "active_invalidated": null,
+        "active_reason": null,
+        "advisor_state": {
+          "codex_retry_count": 2,
+          "codex_retry_pending": "Retry the denied codex_start call.",
+          "compaction_outcome_pending": null,
+          "context_prompt_count": 0,
+          "dispatch_pending": null,
+          "fallback_pending": null,
+          "flow_blocked_user": null,
+          "language_after_reset": false,
+          "language_injections": 0,
+          "last_context_language": null,
+          "last_suggested_context": 0,
+          "last_task_id": null,
+          "leader_pending": null,
+          "maintenance_pending": null,
+          "notice_pending": null,
+          "planning_injections": 0,
+          "receipt_pending": null,
+          "reminder_messages": 0,
+          "reminder_wasted_tokens": 0,
+          "session_id": "p132-retry-three-stops",
+          "version_pending": null
+        },
+        "active_state": null,
+        "task_event_count": 0
+      },
+      "prompt_output": {
+        "hookSpecificOutput": {
+          "hookEventName": "UserPromptSubmit",
+          "additionalContext": "Previous turn ended with an unfinished Purser step: Retry the denied codex_start call."
+        }
+      },
+      "after_prompt": {
+        "retry_count": 0,
+        "retry_pending": false,
+        "active_completed": null,
+        "active_invalidated": null,
+        "active_reason": null,
+        "advisor_state": {
+          "codex_retry_count": 0,
+          "codex_retry_pending": false,
+          "compaction_outcome_pending": null,
+          "context_prompt_count": 1,
+          "dispatch_pending": null,
+          "fallback_pending": null,
+          "flow_blocked_user": null,
+          "language_after_reset": false,
+          "language_injections": 0,
+          "last_context_language": null,
+          "last_suggested_context": 0,
+          "last_task_id": null,
+          "leader_pending": null,
+          "maintenance_pending": null,
+          "notice_pending": null,
+          "planning_injections": 0,
+          "receipt_pending": null,
+          "reminder_messages": 0,
+          "reminder_wasted_tokens": 0,
+          "session_id": "p132-retry-three-stops",
+          "version_pending": null
+        },
+        "active_state": null,
+        "task_event_count": 0
+      },
+      "active_seed": null
+    }
+  ]
+}
