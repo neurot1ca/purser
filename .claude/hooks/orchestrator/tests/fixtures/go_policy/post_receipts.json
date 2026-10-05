@@ -1,0 +1,199 @@
+{
+  "oracle": "compaction_advisor receipt queue, delivery and pending guidance",
+  "cases": [
+    {
+      "name": "queue",
+      "repository": "C:\\post-receipts\\queue",
+      "initial": {
+        "last_suggested_context": 0,
+        "reminder_messages": 0,
+        "reminder_wasted_tokens": 0,
+        "last_task_id": null,
+        "session_id": "post-receipts-session",
+        "notice_pending": null,
+        "compaction_outcome_pending": null,
+        "receipt_pending": {
+          "blocked": false,
+          "effort": "high",
+          "model": "gpt-6-sol"
+        },
+        "dispatch_pending": {
+          "lines": [
+            "> ⚓ **Codex: first**",
+            "> ⚓ **Codex: second**"
+          ],
+          "board": null,
+          "board_job_ids": [],
+          "blocked": false
+        },
+        "version_pending": null,
+        "leader_pending": null,
+        "fallback_pending": null,
+        "maintenance_pending": null,
+        "flow_blocked_user": null,
+        "codex_retry_count": 0,
+        "codex_retry_pending": false,
+        "context_prompt_count": 0,
+        "language_injections": 0,
+        "planning_injections": 0,
+        "last_context_language": null,
+        "language_after_reset": false
+      },
+      "bundle": {
+        "model": "gpt-6-sol",
+        "effort": "high"
+      },
+      "expected": {
+        "lines": [
+          "> ⚓ **Codex: first**",
+          "> ⚓ **Codex: second**"
+        ],
+        "receipt": {
+          "blocked": false,
+          "effort": "high",
+          "model": "gpt-6-sol"
+        },
+        "guidance": "Write one line in the user's language as `> ⚓ **Codex done: ...**`, showing model gpt-6-sol, effort high.\nWrite one line in the user's language as `> ⚓ **Codex: ...**`, including every exact dispatch receipt line below verbatim:\n> ⚓ **Codex: first**\n> ⚓ **Codex: second**"
+      }
+    },
+    {
+      "name": "delivered",
+      "repository": "C:\\post-receipts\\delivered",
+      "initial": {
+        "last_suggested_context": 0,
+        "reminder_messages": 0,
+        "reminder_wasted_tokens": 0,
+        "last_task_id": null,
+        "session_id": "post-receipts-session",
+        "notice_pending": null,
+        "compaction_outcome_pending": null,
+        "receipt_pending": null,
+        "dispatch_pending": null,
+        "version_pending": {
+          "version": "v1",
+          "delivered": false
+        },
+        "leader_pending": null,
+        "fallback_pending": null,
+        "maintenance_pending": null,
+        "flow_blocked_user": null,
+        "codex_retry_count": 0,
+        "codex_retry_pending": false,
+        "context_prompt_count": 0,
+        "language_injections": 0,
+        "planning_injections": 0,
+        "last_context_language": null,
+        "language_after_reset": false
+      },
+      "bundle": null,
+      "expected": {
+        "delivered_once": true,
+        "delivered_repeat": true
+      }
+    },
+    {
+      "name": "guidance",
+      "repository": "C:\\post-receipts\\guidance",
+      "initial": {
+        "last_suggested_context": 0,
+        "reminder_messages": 0,
+        "reminder_wasted_tokens": 0,
+        "last_task_id": null,
+        "session_id": "post-receipts-session",
+        "notice_pending": null,
+        "compaction_outcome_pending": null,
+        "receipt_pending": {
+          "blocked": false,
+          "effort": "high",
+          "model": "gpt-6-sol"
+        },
+        "dispatch_pending": {
+          "lines": [
+            "> ⚓ **Codex: finished job**"
+          ],
+          "board": null,
+          "board_job_ids": [],
+          "blocked": false
+        },
+        "version_pending": null,
+        "leader_pending": null,
+        "fallback_pending": null,
+        "maintenance_pending": null,
+        "flow_blocked_user": null,
+        "codex_retry_count": 0,
+        "codex_retry_pending": false,
+        "context_prompt_count": 0,
+        "language_injections": 0,
+        "planning_injections": 0,
+        "last_context_language": null,
+        "language_after_reset": false
+      },
+      "bundle": null,
+      "expected": {
+        "guidance": "Write one line in the user's language as `> ⚓ **Codex done: ...**`, showing model gpt-6-sol, effort high.\nWrite one line in the user's language as `> ⚓ **Codex: ...**`, including every exact dispatch receipt line below verbatim:\n> ⚓ **Codex: finished job**"
+      }
+    },
+    {
+      "name": "absent",
+      "repository": "C:\\post-receipts\\absent",
+      "initial": {
+        "last_suggested_context": 0,
+        "reminder_messages": 0,
+        "reminder_wasted_tokens": 0,
+        "last_task_id": null,
+        "session_id": "post-receipts-session",
+        "notice_pending": null,
+        "compaction_outcome_pending": null,
+        "receipt_pending": null,
+        "dispatch_pending": null,
+        "version_pending": null,
+        "leader_pending": null,
+        "fallback_pending": null,
+        "maintenance_pending": null,
+        "flow_blocked_user": null,
+        "codex_retry_count": 0,
+        "codex_retry_pending": false,
+        "context_prompt_count": 0,
+        "language_injections": 0,
+        "planning_injections": 0,
+        "last_context_language": null,
+        "language_after_reset": false
+      },
+      "bundle": null,
+      "expected": {
+        "guidance": ""
+      }
+    },
+    {
+      "name": "corrupt",
+      "repository": "C:\\post-receipts\\corrupt",
+      "initial": {
+        "last_suggested_context": 0,
+        "reminder_messages": 0,
+        "reminder_wasted_tokens": 0,
+        "last_task_id": null,
+        "session_id": "post-receipts-session",
+        "notice_pending": null,
+        "compaction_outcome_pending": null,
+        "receipt_pending": null,
+        "dispatch_pending": null,
+        "version_pending": null,
+        "leader_pending": null,
+        "fallback_pending": null,
+        "maintenance_pending": null,
+        "flow_blocked_user": null,
+        "codex_retry_count": 0,
+        "codex_retry_pending": false,
+        "context_prompt_count": 0,
+        "language_injections": 0,
+        "planning_injections": 0,
+        "last_context_language": null,
+        "language_after_reset": false
+      },
+      "bundle": null,
+      "expected": {
+        "guidance": ""
+      }
+    }
+  ]
+}
