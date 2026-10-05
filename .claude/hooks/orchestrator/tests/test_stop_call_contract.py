@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 from contract_hook_runner import run_contract_hook
 from install_claude_task_telemetry import CONTEXT_IO_HOOK_SPECS, HOOK_SPECS
@@ -13,6 +14,9 @@ from install_claude_task_telemetry import CONTEXT_IO_HOOK_SPECS, HOOK_SPECS
 PACKAGE = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).parents[4]
 FIXTURE = PACKAGE / "tests" / "fixtures" / "go_policy" / "stop_process.json"
+RETRY_FIXTURE = PACKAGE / "tests" / "fixtures" / "go_policy" / "stop_retry.json"
+sys.path.insert(0, str(PACKAGE))
+import compaction_advisor
 
 STOP_CALL_CONTRACTS = {
     "_observe": "PENDING:130",
@@ -172,3 +176,74 @@ def test_python_registered_stop_process_oracles(tmp_path):
         FIXTURE.write_text(json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     assert FIXTURE.exists(), f"missing fixture: {FIXTURE} (set STOP_PROCESS_WRITE_FIXTURE=1 to capture)"
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == expected
+
+
+def _stop_retry_cases():
+    job_id = "a" * 64
+
+    def transcript(result=None, *, tool="codex_start", error=False):
+        records = [{"type": "user", "message": {"content": "Continue."}}]
+        blocks = [{"type": "tool_use", "id": "call-1",
+                   "name": f"mcp__plugin_purser_codex-main__{tool}", "input": {}}]
+        records.append({"type": "assistant", "message": {"content": blocks}})
+        if result is not None:
+            block = {"type": "tool_result", "tool_use_id": "call-1", "content": result}
+            if error:
+                block["is_error"] = True
+            records.append({"type": "user", "message": {"content": [block]}})
+        return records
+
+    job = {"jobId": job_id, "call": "call-1", "state": "SUCCEEDED",
+           "label": "Build result"}
+    index = {"jobId": job_id, "call": "call-1", "project_key": "__PROJECT_KEY__",
+             "stage": "FINISHED"}
+    finished = transcript(json.dumps({"jobId": job_id}))
+    denied = transcript("classifier denied permission", error=True)
+    return [
+        {"name": "none_pending", "records": transcript(), "index": None, "job_raw": None},
+        {"name": "finished_uncollected_job", "records": finished, "index": index,
+         "job_raw": json.dumps(job)},
+        {"name": "another_project_ignored", "records": finished,
+         "index": {**index, "project_key": "another-project"}, "job_raw": json.dumps(job)},
+        {"name": "collected_job_ignored", "records": finished,
+         "index": {**index, "stage": "CONSUMED"}, "job_raw": json.dumps(job)},
+        {"name": "classifier_denied_call", "records": denied, "index": None, "job_raw": None},
+        {"name": "malformed_job_record", "records": finished, "index": index, "job_raw": "{"},
+    ]
+
+
+def test_python_stop_retry_oracle_fixture(tmp_path, monkeypatch):
+    cases = []
+    for case in _stop_retry_cases():
+        repo = tmp_path / case["name"]
+        repo.mkdir()
+        root = tmp_path / (case["name"] + "-state")
+        monkeypatch.setattr(compaction_advisor.state_root, "default_state_root", lambda root=root: root)
+        index = dict(case["index"]) if case["index"] else None
+        if index is not None and index.get("project_key") == "__PROJECT_KEY__":
+            index["project_key"] = compaction_advisor.project_root.project_key(repo)
+        job_raw = case["job_raw"]
+        if index is not None:
+            index_dir = root / "async_jobs"
+            index_dir.mkdir(parents=True)
+            (index_dir / f'{index["jobId"]}.json').write_text(json.dumps(index), encoding="utf-8")
+            job_dir = root / "codex_exec_mcp" / "jobs"
+            job_dir.mkdir(parents=True)
+            (job_dir / f'{index["jobId"]}.json').write_text(job_raw, encoding="utf-8")
+        item = {**case, "expected": compaction_advisor._codex_retry_reason(case["records"], 0, repo) or ""}
+        cases.append(item)
+    expected = {"oracle": "compaction_advisor._codex_retry_reason", "cases": cases}
+    if os.environ.get("STOP_RETRY_WRITE_FIXTURE") == "1":
+        RETRY_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        RETRY_FIXTURE.write_text(json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n",
+                                 encoding="utf-8")
+    assert RETRY_FIXTURE.exists(), f"missing fixture: {RETRY_FIXTURE} (set STOP_RETRY_WRITE_FIXTURE=1 to capture)"
+    assert json.loads(RETRY_FIXTURE.read_text(encoding="utf-8")) == expected
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["GOCACHE"] = str(REPO_ROOT / ".tmp" / "go-build-cache")
+    result = subprocess.run(
+        ["go", "test", "./internal/contextio/", "-run", "^TestPythonStopRetryGoldenParity$", "-count=1"],
+        cwd=REPO_ROOT / "go", text=True, capture_output=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
