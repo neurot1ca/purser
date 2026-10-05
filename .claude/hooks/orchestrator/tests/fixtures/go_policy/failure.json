@@ -1,0 +1,329 @@
+{
+  "cases": [
+    {
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "session_id": "p94-session",
+        "tool_name": "mcp__codex-main__codex",
+        "tool_use_id": "sync_failure"
+      },
+      "evidence": {
+        "ambiguous_outcome": true,
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "pending_call": {
+          "agent": "codex",
+          "effort": "high",
+          "eta_minutes": 5,
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "new_route": "operation",
+          "phase": "operation",
+          "previous_route": "normal",
+          "prior_thread_id": "prior-thread",
+          "project_key": "0123456789abcdef",
+          "reason": "continue",
+          "reason_source": "explicit",
+          "route": "operation",
+          "scope": [],
+          "task_id": "p94-sync_failure"
+        },
+        "work_performed": "UNKNOWN"
+      },
+      "name": "sync_failure",
+      "observation_payload": {
+        "claude_rate_limit_delta_scope": "account_window_observation",
+        "claude_usage_known": false,
+        "duration_ms": 1234,
+        "eta_minutes": 5,
+        "failure_code": "CODEX_CALL_FAILED",
+        "new_route": "operation",
+        "previous_route": "normal",
+        "reason": "continue",
+        "reason_source": "explicit"
+      },
+      "pending": {
+        "agent": "codex",
+        "effort": "high",
+        "eta_minutes": 5,
+        "label": "P94 failure",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-sync_failure"
+      },
+      "session": {
+        "last_outcome": {
+          "ambiguous_outcome": true,
+          "claude_review_mode": "FULL",
+          "evidence_path": "__ROOT__\\raw_tool_outputs\\99e8ea4083adb1e8af04f90960394dc08b6726f44e7cbb755f4d7d06ea69e603-failure.json",
+          "routing_enforced": true,
+          "status": "AMBIGUOUS_TOOL_FAILURE",
+          "work_performed": "UNKNOWN"
+        },
+        "live_thread": {
+          "effort": "high",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "phase": "operation",
+          "reason": "continue",
+          "route": "operation",
+          "scope": [],
+          "task_contract_grounded": false,
+          "task_id": "p94-sync_failure",
+          "thread_id": "prior-thread"
+        },
+        "pending_call_baseline": null,
+        "task_id": "p94-sync_failure"
+      }
+    },
+    {
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": true,
+        "session_id": "p94-session",
+        "tool_name": "mcp__codex-main__codex",
+        "tool_use_id": "sync_interrupt"
+      },
+      "evidence": {
+        "ambiguous_outcome": true,
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": true,
+        "pending_call": {
+          "agent": "codex",
+          "effort": "high",
+          "eta_minutes": 5,
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "new_route": "operation",
+          "phase": "operation",
+          "previous_route": "normal",
+          "prior_thread_id": "prior-thread",
+          "project_key": "0123456789abcdef",
+          "reason": "continue",
+          "reason_source": "explicit",
+          "route": "operation",
+          "scope": [],
+          "task_id": "p94-sync_interrupt"
+        },
+        "work_performed": "UNKNOWN"
+      },
+      "name": "sync_interrupt",
+      "observation_payload": {
+        "claude_rate_limit_delta_scope": "account_window_observation",
+        "claude_usage_known": false,
+        "duration_ms": 1234,
+        "eta_minutes": 5,
+        "failure_code": "CODEX_CALL_INTERRUPTED",
+        "new_route": "operation",
+        "previous_route": "normal",
+        "reason": "continue",
+        "reason_source": "explicit"
+      },
+      "pending": {
+        "agent": "codex",
+        "effort": "high",
+        "eta_minutes": 5,
+        "label": "P94 failure",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-sync_interrupt"
+      },
+      "session": {
+        "last_outcome": {
+          "ambiguous_outcome": true,
+          "claude_review_mode": "FULL",
+          "evidence_path": "__ROOT__\\raw_tool_outputs\\da66898ac277828ba956059085289a53655647881f2cf7132c491f2b65c3260e-failure.json",
+          "routing_enforced": true,
+          "status": "AMBIGUOUS_TOOL_FAILURE",
+          "work_performed": "UNKNOWN"
+        },
+        "live_thread": {
+          "effort": "high",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "phase": "operation",
+          "reason": "continue",
+          "route": "operation",
+          "scope": [],
+          "task_contract_grounded": false,
+          "task_id": "p94-sync_interrupt",
+          "thread_id": "prior-thread"
+        },
+        "pending_call_baseline": null,
+        "task_id": "p94-sync_interrupt"
+      }
+    },
+    {
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "error_code": "JOB_REPLAY_PREPARATION_FAILED",
+        "is_interrupt": false,
+        "replay_thread_id": "replayed-thread",
+        "session_id": "p94-session",
+        "tool_name": "mcp__codex-main__codex-reply",
+        "tool_use_id": "reply_replay_failure"
+      },
+      "evidence": {
+        "ambiguous_outcome": true,
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "pending_call": {
+          "agent": "codex",
+          "effort": "high",
+          "eta_minutes": 5,
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "new_route": "operation",
+          "phase": "operation",
+          "previous_route": "normal",
+          "prior_thread_id": "prior-thread",
+          "project_key": "0123456789abcdef",
+          "reason": "continue",
+          "reason_source": "explicit",
+          "route": "operation",
+          "scope": [],
+          "task_id": "p94-reply_replay_failure"
+        },
+        "work_performed": "UNKNOWN"
+      },
+      "name": "reply_replay_failure",
+      "observation_payload": {
+        "claude_rate_limit_delta_scope": "account_window_observation",
+        "claude_usage_known": false,
+        "duration_ms": 1234,
+        "eta_minutes": 5,
+        "failure_code": "CODEX_CALL_FAILED",
+        "new_route": "operation",
+        "previous_route": "normal",
+        "reason": "continue",
+        "reason_source": "explicit"
+      },
+      "pending": {
+        "agent": "codex",
+        "effort": "high",
+        "eta_minutes": 5,
+        "label": "P94 failure",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-reply_replay_failure"
+      },
+      "session": {
+        "last_outcome": {
+          "ambiguous_outcome": true,
+          "claude_review_mode": "FULL",
+          "evidence_path": "__ROOT__\\raw_tool_outputs\\85d3c2b142ddafdfa3e27bde2a50b0cd149529d262e5da3822a9650c05d2aa6e-failure.json",
+          "routing_enforced": true,
+          "status": "AMBIGUOUS_TOOL_FAILURE",
+          "work_performed": "UNKNOWN"
+        },
+        "live_thread": {
+          "effort": "high",
+          "label": "P94 failure",
+          "model": "gpt-6-luna",
+          "phase": "operation",
+          "reason": "continue",
+          "route": "operation",
+          "scope": [],
+          "task_contract_grounded": false,
+          "task_id": "p94-reply_replay_failure",
+          "thread_id": "replayed-thread"
+        },
+        "pending_call_baseline": null,
+        "task_id": "p94-reply_replay_failure"
+      }
+    },
+    {
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "session_id": "p94-session",
+        "tool_name": "mcp__codex-main__codex",
+        "tool_use_id": "missing_pending"
+      },
+      "evidence": null,
+      "name": "missing_pending",
+      "observation_payload": null,
+      "pending": {
+        "agent": "codex",
+        "effort": "high",
+        "eta_minutes": 5,
+        "label": "P94 failure",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-missing_pending"
+      },
+      "session": null
+    },
+    {
+      "event": {
+        "duration_ms": 1234,
+        "error": "worker failed",
+        "is_interrupt": false,
+        "session_id": "p94-session",
+        "tool_name": "mcp__codex-main__codex",
+        "tool_use_id": "malformed_pending"
+      },
+      "evidence": null,
+      "name": "malformed_pending",
+      "observation_payload": null,
+      "pending": {
+        "agent": "codex",
+        "effort": "high",
+        "eta_minutes": 5,
+        "label": "P94 failure",
+        "model": "gpt-6-luna",
+        "new_route": "operation",
+        "phase": "operation",
+        "previous_route": "normal",
+        "prior_thread_id": "prior-thread",
+        "project_key": "0123456789abcdef",
+        "reason": "continue",
+        "reason_source": "explicit",
+        "route": "operation",
+        "scope": [],
+        "task_id": "p94-malformed_pending"
+      },
+      "session": null
+    }
+  ]
+}

@@ -1290,7 +1290,7 @@ func fields(names string) map[string]bool {
 var (
 	callObservationFields  = fields("phase route model model_source effort routing_enforced fresh_thread reply_call reason reason_source previous_route new_route eta_minutes worker_prompt_chars scope_path_count task_type suspected_route_mismatch agent provider")
 	startObservationFields = fields("implementer claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
-	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source")}
+	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source")}
 	observationID          = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	observationUUID        = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	unsafeObservationID    = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -2074,6 +2074,7 @@ func validClaudeNumber(value any) any {
 
 func init() {
 	setObservationRule("bool", "routing_enforced fresh_thread reply_call claude_usage_known")
+	setObservationRule("number", "duration_ms longest_silent_gap_seconds")
 	setObservationRule("int", "worker_prompt_chars scope_path_count")
 	setObservationRule("number", "queue_wait_ms claude_5h_start_pct claude_5h_end_pct claude_7d_start_pct claude_7d_end_pct claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms")
 	setObservationRule("enum:implementation operation plan", "phase")
@@ -2081,6 +2082,7 @@ func init() {
 	setObservationRule("enum:override route", "model_source")
 	setObservationRule("enum:low medium high xhigh none", "effort")
 	setObservationRule("enum:new_task continue fix route_change reanchor repeated_failure user_override", "reason")
+	setObservationRule("enum:CODEX_CALL_FAILED CODEX_CALL_INTERRUPTED REVIEWER1_UNAVAILABLE REVIEWER1_INCOMPLETE", "failure_code")
 	setObservationRule("enum:explicit inherited", "reason_source")
 	setObservationRule("enum:implementation operation plan unknown counting_status", "task_type")
 	setObservationRule("enum:accepted send_back rejected unknown", "decision")
@@ -2129,7 +2131,7 @@ func buildObservationAtStateRoot(eventType string, envelope, payload map[string]
 	if !ok {
 		return nil, fmt.Errorf("unknown telemetry event type")
 	}
-	if eventType == "IMPLEMENTER_STARTED" && stateRoot != "" {
+	if (eventType == "IMPLEMENTER_STARTED" || eventType == "IMPLEMENTER_FAILED") && stateRoot != "" {
 		callerPayload := payload
 		payload = make(map[string]any, len(callerPayload)+2)
 		for name, value := range callerPayload {
