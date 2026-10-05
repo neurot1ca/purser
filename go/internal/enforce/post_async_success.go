@@ -147,7 +147,10 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	if value, ok := job["finishedAt"].(float64); ok && value > 0 {
 		finishedAt = value
 	}
-	if err = finishPostSession(root, original, pending, bundle, thread, repoRoot, worktree != "" && job["applyState"] != "applied", finishedAt); err != nil {
+	if pendingAgent(pending) == "codex" {
+		bundle["codex_quota"] = postReadQuota(thread)
+	}
+	if err = finishPostSession(root, original, pending, bundle, thread, repoRoot, worktree != "" && job["applyState"] != "applied", finishedAt, numberOr(loaded["manifest_budget_seconds"], 3)); err != nil {
 		return nil, err
 	}
 	bundle["audit_receipt"] = postAsyncAuditReceipt(bundle)
@@ -159,8 +162,9 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	if err != nil {
 		return nil, err
 	}
+	appendPostQuotaSystemMessage(response, bundle["codex_quota"])
 	if bundle["apply"] == "codex_apply" {
-		response["systemMessage"] = PostApplyGuidance("", stringValue(index["jobId"]))
+		response["systemMessage"] = PostApplyGuidance(stringValue(response["systemMessage"]), stringValue(index["jobId"]))
 	}
 	if err = consumeAsyncResult(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index, artifact, response); err != nil {
 		return nil, err

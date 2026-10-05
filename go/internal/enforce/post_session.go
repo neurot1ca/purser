@@ -15,7 +15,11 @@ const unappliedWorktreeRetentionSeconds = 2 * 60 * 60
 // finishPostSession mirrors the durable tail of Python post_tool_use. It is
 // intentionally not wired into post.go until the surrounding post lane moves.
 func finishPostSession(root string, event, pending, bundle map[string]any, threadID string,
-	repository string, unappliedWorktree bool, now float64) error {
+	repository string, unappliedWorktree bool, now float64, manifestBudget ...float64) error {
+	manifestBudgetSeconds := 3.0
+	if len(manifestBudget) > 0 && manifestBudget[0] > 0 {
+		manifestBudgetSeconds = manifestBudget[0]
+	}
 	project := pendingProjectKey(pending)
 	if project == "" {
 		project = "unresolved"
@@ -58,6 +62,22 @@ func finishPostSession(root string, event, pending, bundle map[string]any, threa
 		if scope, ok := options["scope"].([]any); !ok || len(scope) == 0 {
 			delete(options, "phase")
 			delete(options, "scope")
+		}
+	}
+	if threadID != "" && repository != "" && options["phase"] == "implementation" {
+		if scope, ok := options["scope"].([]any); ok && len(scope) > 0 {
+			paths := anyStringList(scope)
+			baseline := mapValue(pending["baseline"])
+			if len(paths) == len(scope) && baseline["status"] == ledger.OK {
+				postState := ledger.CaptureBaseline(repository, paths, manifestBudgetSeconds)
+				if postState["status"] == ledger.OK {
+					encoded, marshalErr := json.Marshal(postState)
+					var normalized map[string]any
+					if marshalErr == nil && json.Unmarshal(encoded, &normalized) == nil {
+						options["origin_baseline"], options["origin_scope"], options["post_state"] = baseline, scope, normalized
+					}
+				}
+			}
 		}
 	}
 	record := ledger.BuildSessionRecord(taskID, optionalThread(threadID), stringValue(pending["route"]),

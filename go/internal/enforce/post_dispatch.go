@@ -109,7 +109,7 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 		}
 	}
 	if pendingAgent(pending) == "codex" {
-		bundle["codex_quota"] = nil
+		bundle["codex_quota"] = postReadQuota(intake.ThreadID)
 	}
 	if stringValue(pending["phase"]) != "plan" {
 		worker := parseWorkerValidation(intake.Report)
@@ -166,7 +166,7 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 		bundle["force_full_review"] == true, mapValue(bundle["hook_checks"])["status"] == "FAIL", profileForcesFull)
 	PostImplementerObservations(event, pending, bundle, root)
 	PostMechanicalLearning(loaded, root, pluginRoot(), project, pending, bundle)
-	if err = finishPostSession(root, event, pending, bundle, intake.ThreadID, repoRoot, false, float64(time.Now().UnixNano())/1e9); err != nil {
+	if err = finishPostSession(root, event, pending, bundle, intake.ThreadID, repoRoot, false, float64(time.Now().UnixNano())/1e9, numberOr(loaded["manifest_budget_seconds"], 3)); err != nil {
 		return nil, err
 	}
 	recordPostCompletion(root, event, repoRoot, bundle)
@@ -178,6 +178,9 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 		return nil, err
 	}
 	response, err := replacement(compact, stringValue(loaded["post_tool_output_field"]))
+	if err == nil {
+		appendPostQuotaSystemMessage(response, bundle["codex_quota"])
+	}
 	if err == nil && stringValue(pending["async_call"]) == "" {
 		response = appendPostDispatchReceipt(response, root, event, pending, repoRoot)
 	}
@@ -322,7 +325,11 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 		if response != nil {
 			return response, nil
 		}
-		return map[string]any{"status": "ALREADY_CONSUMED_OR_INTERRUPTED", "claude_review_mode": "FULL", "ambiguous_outcome": true}, nil
+		loaded, loadErr := loadPreConfig()
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		return replacement(map[string]any{"status": "ALREADY_CONSUMED_OR_INTERRUPTED", "claude_review_mode": "FULL", "ambiguous_outcome": true}, stringValue(loaded["post_tool_output_field"]))
 	}
 	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") {
 		if result, handled, failure := finalizeAsyncFailure(root, event, index, pending); handled || failure != nil {
@@ -410,9 +417,6 @@ func recordPostCompletion(root string, event map[string]any, repo string, bundle
 		return
 	}
 	queuePostCompletionReceipt(root, event, repo, bundle)
-	if line := postPendingGuidance(root, event, repo); line != "" {
-		markPostGuidanceDelivered(root, event, repo)
-	}
 }
 
 func appendPostDispatchReceipt(response map[string]any, root string, event, pending map[string]any, repo string) map[string]any {
@@ -449,9 +453,6 @@ func appendPostDispatchReceipt(response map[string]any, root string, event, pend
 		output["additionalContext"] = prior + "\n" + context
 	} else {
 		output["additionalContext"] = context
-	}
-	if line != "" {
-		markPostGuidanceDelivered(root, event, repo)
 	}
 	return response
 }

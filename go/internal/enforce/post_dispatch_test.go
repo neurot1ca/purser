@@ -47,6 +47,7 @@ func TestPostToolUseReviewerBridgeDispatch(t *testing.T) {
 	}
 	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
 	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
 	root, repo := t.TempDir(), t.TempDir()
 	if err = os.MkdirAll(filepath.Join(repo, "src"), 0700); err != nil {
 		t.Fatal(err)
@@ -78,6 +79,7 @@ func TestPostToolUseReviewerBridgeDispatch(t *testing.T) {
 	pending := map[string]any{"kind": "call", "task_id": "dispatch-review-task", "phase": "implementation", "scope": []any{"src"}, "baseline": baseline,
 		"project_key": "dispatch-review-project", "repo_root": repo, "session_id": event["session_id"], "tool_use_id": event["tool_use_id"],
 		"route": "normal", "model": "openai/gpt-5", "effort": "medium", "task_contract_grounded": true, "agent": "codex",
+		"task_objective": "verify post-call handoff", "acceptance_criteria": "session ledger records both baselines",
 		"protected_paths": []any{}, "force_full_review": false, "skip_max_lines": 50, "skip_max_files": 2, "configured": true,
 		"user_status": "accepted", "project_status": "accepted", "reviewer_candidates": []any{map[string]any{"agent": "agy", "model": "google/gemini-3.8-flash-high"}}}
 	if err = writeFixtureJSON(mustPendingPath(t, root, event), pending); err != nil {
@@ -97,6 +99,18 @@ func TestPostToolUseReviewerBridgeDispatch(t *testing.T) {
 	bundle := responseBundle(t, response)
 	if bundle["reviewer1_result"] != "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE" || bundle["thread_id"] != "thread-review" {
 		t.Fatalf("review dispatch bundle: %#v", bundle)
+	}
+	sessionPath, err := ledger.PathForTask(filepath.Join(root, "projects", "dispatch-review-project"), "dispatch-review-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := ledger.Load(sessionPath, "dispatch-review-task")
+	if loaded.Status != ledger.OK {
+		t.Fatalf("session load: %+v findings=%#v", loaded, bundle["findings"])
+	}
+	thread := mapValue(loaded.Record["live_thread"])
+	if mapValue(thread["origin_baseline"])["status"] != ledger.OK || mapValue(thread["post_state"])["status"] != ledger.OK || thread["origin_scope"] == nil {
+		t.Fatalf("post-call baseline handoff missing: %#v", thread)
 	}
 	if _, err = os.Stat(stringValue(bundle["full_bundle_path"])); err != nil {
 		t.Fatalf("bundle artifact missing: %v", err)
@@ -199,6 +213,31 @@ func TestPostToolUseAsyncResultDispatch(t *testing.T) {
 	}
 	if got := responseBundle(t, response); got["thread_id"] != "thread-dispatch" {
 		t.Fatalf("async result bundle: %#v", got)
+	}
+}
+
+func TestPostAsyncDispatchWrapsEmptyCachedResponse(t *testing.T) {
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("USERPROFILE", t.TempDir())
+	root := t.TempDir()
+	call, jobID := "cached response fixture", jobHash("cached response fixture")
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_result",
+		"session_id": "cached-session", "tool_input": map[string]any{"jobId": jobID}}
+	index := map[string]any{"jobId": jobID, "call": call, "call_key": jobID, "project_key": "cached-project",
+		"session_id": "cached-session", "stage": "CONSUMED", "response": ""}
+	if err = writeFixtureJSON(filepath.Join(root, "async_jobs", jobID+".json"), index); err != nil {
+		t.Fatal(err)
+	}
+	response, err := postAsyncDispatch(event, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapValue(response["hookSpecificOutput"]) == nil {
+		t.Fatalf("cached fallback is not replacement-wrapped: %#v", response)
 	}
 }
 

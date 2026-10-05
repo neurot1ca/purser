@@ -69,3 +69,17 @@ func TestPostReceiptsPythonFixture(t *testing.T) {
 		})
 	}
 }
+
+func TestPostDispatchReceiptDoesNotMarkLifecycleDelivered(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	event := map[string]any{"session_id": "receipt-session", "tool_use_id": "receipt-call"}
+	statePath := postReceiptStatePath(root, repo)
+	state := readPostReceiptState(statePath, "receipt-session")
+	state["version_pending"] = map[string]any{"version": "1", "delivered": false}
+	writePostReceiptState(statePath, state)
+	pending := map[string]any{"label": "task", "model": "gpt-6-sol", "effort": "medium", "route": "normal"}
+	response := appendPostDispatchReceipt(map[string]any{}, root, event, pending, repo)
+	if response["hookSpecificOutput"] == nil || mapValue(readPostReceiptState(statePath, "receipt-session")["version_pending"])["delivered"] != false {
+		t.Fatalf("receipt incorrectly marked lifecycle guidance delivered: %#v", response)
+	}
+}
