@@ -16,6 +16,87 @@ import (
 	"purser-hook/internal/profile"
 )
 
+func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "durable_review_finalization.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Oracle string                    `json:"oracle"`
+		Cases  map[string]map[string]any `json:"cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil || fixture.Oracle != "codex._async_post_followup durable async review finalization" {
+		t.Fatalf("oracle fixture invalid: %v %#v", err, fixture)
+	}
+	for _, name := range []string{"normal", "finalizing_recovery", "reviewer_bridge_unavailable"} {
+		t.Run(name, func(t *testing.T) {
+			state, repo, event, index, pending, original, _, resolved, _ := newAsyncSuccessCase(t, "success_delta_audit")
+			if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// review delta\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			loaded := map[string]any{"post_tool_output_field": "updatedToolOutput", "reviewer1_model_requested": "gemini-3.8-flash-high"}
+			gate := map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}
+			plugin := filepath.Join(state, "plugin")
+			bridge := filepath.Join(plugin, ".claude", "hooks", "orchestrator", "reviewer_bridge.py")
+			if err := os.MkdirAll(filepath.Dir(bridge), 0700); err != nil {
+				t.Fatal(err)
+			}
+			callsPath := filepath.Join(state, "reviewer.calls")
+			bridgeCode := "import sys\nsys.exit(2)\n"
+			if name != "reviewer_bridge_unavailable" {
+				attrs := `{"outcome":"completed","review_status":"COMPLETED","provider":"agy","reviewer1_model_requested":"gemini-3.8-flash-high","result":"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","validation":"PASS","findings":[]}`
+				bridgeCode = fmt.Sprintf("import json,os\nopen(os.environ['POST_REVIEW_CALLS'],'a').write('called\\n')\nprint(json.dumps(json.loads(%q)))\n", attrs)
+			}
+			if err := os.WriteFile(bridge, []byte(bridgeCode), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
+			t.Setenv("POST_REVIEW_CALLS", callsPath)
+			indexPath := filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json")
+			if err := writeAsyncObject(indexPath, index); err != nil {
+				t.Fatal(err)
+			}
+			response, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil, gate, 8000, 1200, 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bundle := responseBundle(t, response)
+			want := fixture.Cases[name]
+			if bundle["claude_review_mode"] != want["mode"] || bundle["reviewer1_result"] != want["reviewer_result"] || index["stage"] != want["stage"] {
+				t.Fatalf("oracle mismatch bundle=%#v stage=%v want=%#v", bundle, index["stage"], want)
+			}
+			if expected, ok := want["reviewer_calls"].(float64); ok {
+				data, readErr := os.ReadFile(callsPath)
+				if readErr != nil || float64(strings.Count(string(data), "called")) != expected {
+					t.Fatalf("review calls=%q want %v err=%v", data, expected, readErr)
+				}
+			}
+			if name == "finalizing_recovery" {
+				index["stage"] = "FINALIZING"
+				if err := writeAsyncObject(indexPath, index); err != nil {
+					t.Fatal(err)
+				}
+				recovered, handled, recoverErr := recoverAsyncFinalizing(state, original, index, pending, 8000, 1200)
+				data, readErr := os.ReadFile(callsPath)
+				if recoverErr != nil || !handled || !asyncSuccessEqual(recovered, response) || readErr != nil || strings.Count(string(data), "called") != 1 {
+					t.Fatalf("retry response mismatch handled=%v calls=%q err=%v read=%v", handled, data, recoverErr, readErr)
+				}
+				lock, _, _, _, cached, claimErr := claimAsyncResult(state, event, repo)
+				if claimErr != nil || !asyncSuccessEqual(mapValue(cached), recovered) {
+					t.Fatalf("second result did not reuse consumed response: cached=%#v err=%v", cached, claimErr)
+				}
+				releaseTaskUsageLock(lock)
+			}
+			if name == "reviewer_bridge_unavailable" && (bundle["claude_review_mode"] != "FULL" || bundle["reviewer1_result"] != nil) {
+				t.Fatalf("unavailable reviewer was represented as passing: %#v", bundle)
+			}
+			if want["bundle_persisted"] == true && !isFile(filepath.Join(state, "bundle_artifacts", stringValue(index["call_key"])+".json")) {
+				t.Fatal("bundle artifact was not persisted")
+			}
+		})
+	}
+}
+
 func TestFinishAsyncSuccessRemainingFixtureCases(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "post_async_success.json"))
 	if err != nil {
