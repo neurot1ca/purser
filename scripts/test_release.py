@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / "scripts" / "release.py"
+RELATIVE_IMPORT = re.compile(
+    r"(?m)^[ \t]*(?:import|export)(?![ \t]+type\b)"
+    r"(?:(?!^[ \t]*(?:import|export)\b)[\s\S])*?\bfrom\s*"
+    r"(['\"])((?:\./|\.\./)[^'\"]+)\1"
+)
+SIDE_EFFECT_IMPORT = re.compile(
+    r"(?m)^[ \t]*import(?![ \t]+type\b)[ \t]+"
+    r"(['\"])((?:\./|\.\./)[^'\"]+)\1"
+)
 
 
 @pytest.fixture
@@ -120,6 +130,39 @@ def release(path, env, claude, *args):
         env=env,
         check=False,
     )
+
+
+def runtime_import_sources(entrypoint, root):
+    root = root.resolve()
+    pending = [entrypoint.resolve()]
+    sources = set()
+    while pending:
+        source = pending.pop()
+        try:
+            relative_source = source.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if relative_source in sources:
+            continue
+        sources.add(relative_source)
+        source_text = source.read_text(encoding="utf-8")
+        specifiers = [match[1] for match in RELATIVE_IMPORT.findall(source_text)]
+        specifiers.extend(match[1] for match in SIDE_EFFECT_IMPORT.findall(source_text))
+        for specifier in specifiers:
+            imported = (source.parent / specifier).resolve()
+            try:
+                imported.relative_to(root)
+            except ValueError:
+                continue
+            if imported.suffix == ".js":
+                imported = imported.with_suffix(".ts").resolve()
+                try:
+                    imported.relative_to(root)
+                except ValueError:
+                    continue
+            if imported.is_file():
+                pending.append(imported)
+    return sources
 
 
 def test_unrelated_staged_file_is_refused_without_repo_changes(tmp_path):
@@ -335,6 +378,54 @@ def test_staged_export_requires_mod_sources_and_all_six_binaries(tmp_path):
     (staged / "bin" / "purser-hook-darwin-arm64").unlink()
     with pytest.raises(module.ReleaseError, match="purser-hook-darwin-arm64"):
         module._verify_staged_mod_assets(staged, include_binaries=True)
+
+
+def test_export_includes_runtime_mod_imports():
+    module_spec = importlib.util.spec_from_file_location("release_under_test", RELEASE)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    runtime_imports = runtime_import_sources(ROOT / "hooks" / "register.ts", ROOT)
+    missing = runtime_imports - set(module.MOD_SOURCE_FILES)
+    assert not missing, f"runtime mod imports missing from MOD_SOURCE_FILES: {sorted(missing)}"
+
+
+@pytest.mark.parametrize(
+    ("name", "importer", "statement", "target"),
+    (
+        ("multiline import", "hooks/register.ts", "import {\n  a,\n  b,\n} from './mod/multiline.js'", "hooks/mod/multiline.ts"),
+        ("parent-relative import", "hooks/mod/nested/entry.ts", "import { a } from '../parent.js'", "hooks/mod/parent.ts"),
+        ("named re-export", "hooks/register.ts", "export { a } from './mod/named.js'", "hooks/mod/named.ts"),
+        ("star re-export", "hooks/register.ts", "export * from './mod/star.js'", "hooks/mod/star.ts"),
+        ("side-effect import", "hooks/register.ts", "import './mod/side-effect.js'", "hooks/mod/side-effect.ts"),
+    ),
+)
+def test_runtime_import_scanner_handles_import_forms(tmp_path, name, importer, statement, target):
+    root = tmp_path / "repo"
+    source = root / importer
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(statement, encoding="utf-8")
+    destination = root / target
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("// target\n", encoding="utf-8")
+    imported = runtime_import_sources(source, root)
+    assert target in imported, f"scanner missed {name}"
+
+
+def test_runtime_import_scanner_skips_type_only_and_outside_root(tmp_path):
+    root = tmp_path / "repo"
+    source = root / "hooks" / "register.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "import type { A } from './type-only.js'\n"
+        "export type { B } from './export-type.js'\n"
+        "import '../../outside.js'\n",
+        encoding="utf-8",
+    )
+    (root / "hooks" / "type-only.ts").write_text("// type only\n", encoding="utf-8")
+    (root / "hooks" / "export-type.ts").write_text("// type only\n", encoding="utf-8")
+    (tmp_path / "outside.ts").write_text("// outside root\n", encoding="utf-8")
+    assert runtime_import_sources(source, root) == {"hooks/register.ts"}
 
 
 def test_go_hook_build_chmods_four_unix_targets(tmp_path, monkeypatch):
