@@ -13,6 +13,7 @@ COMPUTE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "compute
 OUT_OF_SCOPE_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "out_of_scope.json"
 ATTRIBUTION_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "attribution.json"
 CONCURRENT_WRITERS_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "concurrent_writers.json"
+JOB_DELTA_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_baseline" / "job_delta.json"
 sys.path.insert(0, str(ORCHESTRATOR))
 import ledger
 import project_profile
@@ -230,3 +231,60 @@ def test_python_oracle_concurrent_writers_fixture():
         )
         generated["cases"].append({**case, "result": result})
     assert json.loads(CONCURRENT_WRITERS_FIXTURE.read_text(encoding="utf-8")) == generated
+
+
+JOB_DELTA_CASES = [
+    {"name": "invalid_snapshot", "snapshot": "invalid"},
+    {"name": "snapshot_is_commit", "snapshot": "commit"},
+    {"name": "no_changes", "snapshot": "tree"},
+    {"name": "modified_file", "snapshot": "tree", "changes": [{"path": "tracked.txt", "content": "changed\n"}]},
+    {"name": "added_untracked_file", "snapshot": "tree", "changes": [{"path": "new.txt", "content": "new\n"}]},
+    {"name": "deleted_file", "snapshot": "tree", "changes": [{"op": "delete", "path": "delete.txt"}]},
+    {"name": "binary_file", "snapshot": "tree", "changes": [{"path": "binary.dat", "content_hex": "000102fe"}]},
+    {"name": "missing_worktree", "snapshot": "missing"},
+]
+
+def _job_delta_oracle(case, root):
+    if case["snapshot"] == "missing":
+        result = ledger.compute_job_delta(root / "absent", "a" * 40)
+        if result.get("baseline_head") is not None:
+            result["baseline_head"] = "<SNAPSHOT>"
+        return {**case, "result": result}
+    root.mkdir(parents=True)
+    _git(root, "init", "-q")
+    (root / "tracked.txt").write_bytes(b"base\n")
+    (root / "delete.txt").write_bytes(b"delete\n")
+    (root / "binary.dat").write_bytes(bytes.fromhex("000102ff"))
+    _git(root, "add", "--all")
+    env = {**os.environ, "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
+           "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"}
+    _git(root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+         "commit", "-m", "fixture", env=env)
+    snapshot = _git_output(root, "rev-parse", "HEAD" if case["snapshot"] == "commit" else "HEAD^{tree}")
+    if case["snapshot"] == "invalid":
+        snapshot = "invalid"
+    for change in case.get("changes", []):
+        path = root / change["path"]
+        if change.get("op") == "delete":
+            path.unlink()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = bytes.fromhex(change["content_hex"]) if "content_hex" in change else change["content"].encode()
+            path.write_bytes(payload)
+    result = ledger.compute_job_delta(root, snapshot)
+    if result.get("baseline_head") is not None:
+        result["baseline_head"] = "<SNAPSHOT>"
+    if result.get("current_head") is not None:
+        result["current_head"] = "<HEAD>"
+    return {**case, "result": result}
+
+
+def _git_output(root, *args):
+    return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_python_oracle_job_delta_fixture(tmp_path):
+    generated = {"oracle": "Python ledger.compute_job_delta", "cases": [
+        _job_delta_oracle(case, tmp_path / str(index)) for index, case in enumerate(JOB_DELTA_CASES)
+    ]}
+    assert json.loads(JOB_DELTA_FIXTURE.read_text(encoding="utf-8")) == generated
