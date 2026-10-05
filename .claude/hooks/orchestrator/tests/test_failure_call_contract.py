@@ -218,7 +218,7 @@ def _write(path, value):
     path.write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
 
 
-def _async_failure_state(state, repo, name, tool):
+def _async_failure_state(state, repo, name, tool, *, stage="FINISHED", job_state="FAILED", response=None):
     import ledger
     import project_root
     session, origin = "failure-session", "origin-tool-use"
@@ -231,9 +231,13 @@ def _async_failure_state(state, repo, name, tool):
                "baseline": {}, "route": "normal", "model": "gpt-6.1-sol", "effort": "medium",
                "lease_owner": call_key, "prior_thread_id": "prior-thread", "repo_root": str(repo)}
     index = {"jobId": job_id, "call": call, "call_key": call_key, "session_id": session,
-             "project_key": project, "stage": "FINISHED"}
-    job = {"jobId": job_id, "call": call, "state": "FAILED", "errorCode": "ASYNC_TERMINAL_FAILURE",
-           "threadId": "thread-fixture", "acceptedAt": 10.0, "startedAt": 11.0, "finishedAt": 12.0}
+             "project_key": project, "stage": stage}
+    if response is not None:
+        index["response"] = response
+    job = {"jobId": job_id, "call": call, "state": job_state, "errorCode": "ASYNC_TERMINAL_FAILURE",
+           "threadId": "thread-fixture", "acceptedAt": 10.0, "startedAt": 11.0}
+    if job_state != "RUNNING":
+        job["finishedAt"] = 12.0
     _write(state / "async_jobs" / f"{job_id}.json", index)
     _write(state / "pending" / f"{call_key}.json", pending)
     _write(state / "codex_exec_mcp" / "jobs" / f"{job_id}.json", job)
@@ -347,11 +351,53 @@ def test_python_failure_process_oracles(repo, tmp_path):
         result = run("PostToolUseFailure", failed, state)
         cases.append(_case_view(name, result, state, repo, job_id))
 
+    followup_cases = []
+    scenarios = (
+            ("result_finished", sorted(codex.CODEX_RESULT_TOOL_NAMES)[0], "FINISHED", "FAILED", None, True),
+            ("result_consumed", sorted(codex.CODEX_RESULT_TOOL_NAMES)[0], "CONSUMED", "FAILED",
+             {"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": [
+                 {"type": "text", "text": "{\"status\":\"cached\"}"}]}}, True),
+            ("result_finalizing_recovery", sorted(codex.CODEX_RESULT_TOOL_NAMES)[0], "FINALIZING", "FAILED", None, True),
+            ("cancel_running", sorted(codex.CODEX_CANCEL_TOOL_NAMES)[0], "FINISHED", "RUNNING", None, True),
+            ("cancel_absent_job", sorted(codex.CODEX_CANCEL_TOOL_NAMES)[0], "FINISHED", "RUNNING", None, False),
+            ("claim_lock_contention", sorted(codex.CODEX_RESULT_TOOL_NAMES)[0], "FINISHED", "FAILED", None, True),
+    )
+    for name, tool, stage, job_state, cached, job_exists in scenarios:
+        state = tmp_path / ("followup-" + name)
+        state.mkdir()
+        failed, job_id = _async_failure_state(state, repo, name, tool, stage=stage,
+                                               job_state=job_state, response=cached)
+        if not job_exists:
+            (state / "codex_exec_mcp" / "jobs" / f"{job_id}.json").unlink()
+        index_path = state / "async_jobs" / f"{job_id}.json"
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        pending_path = state / "pending" / f"{index['call_key']}.json"
+        pending = json.loads(pending_path.read_text(encoding="utf-8"))
+        initial = {"event": failed, "index": index, "pending": pending,
+                   "job": (json.loads((state / "codex_exec_mcp" / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+                           if job_exists else None)}
+        if stage == "FINALIZING":
+            evidence = {"ambiguous_outcome": True, "work_performed": "UNKNOWN",
+                        "error": failed["error"], "is_interrupt": failed["is_interrupt"],
+                        "duration_ms": failed["duration_ms"], "pending_call": pending}
+            codex._persist_raw_output(state, dict(failed, tool_name="mcp__codex-main__codex",
+                                                   tool_use_id=pending["tool_use_id"]), evidence, "-failure")
+        if name == "claim_lock_contention":
+            with codex._async_claim(index_path):
+                result = run("PostToolUseFailure", failed, state)
+        else:
+            result = run("PostToolUseFailure", failed, state)
+        captured = _case_view(name, result, state, repo, job_id)
+        captured["async_initial"] = _normalize(initial, state, repo)
+        followup_cases.append(captured)
+    cases.extend(followup_cases)
+
     expected = {"oracle": "Python PostToolUseFailure real hook process behavior", "cases": cases,
                 "shared_finalizer_reuse": sorted(shared_names & {
                     "sync_failure", "sync_interrupt", "lease_release_failure",
                     "pending_removal_failure", "async_job_record_removal", "not_enforced_note"})}
-    if os.environ.get("FAILURE_PROCESS_WRITE_FIXTURE") == "1":
+    if (os.environ.get("FAILURE_PROCESS_WRITE_FIXTURE") == "1"
+            or os.environ.get("FAILURE_FOLLOWUP_WRITE_FIXTURE") == "1"):
         FIXTURE.write_text(json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     assert FIXTURE.exists(), f"missing fixture: {FIXTURE} (set FAILURE_PROCESS_WRITE_FIXTURE=1 to capture)"
     saved = json.loads(FIXTURE.read_text(encoding="utf-8"))
