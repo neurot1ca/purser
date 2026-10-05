@@ -41,6 +41,9 @@ function stubGo(
     }
     expect(e.argv[0].replace(/\\/g, '/').endsWith(binary)).toBe(true)
     const request = JSON.parse(e.init.stdin)
+    if (request.hook_event_name === 'PostToolUse' || request.hook_event_name === 'PostToolUseFailure') {
+      expect(e.argv[1]).toBe('enforce')
+    }
     if (request.hook_event_name === 'WriteUndeliveredMarker') {
       markerWrites.push(e.init.stdin)
       expect(e.init.timeoutMs).toBe(1000)

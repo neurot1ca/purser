@@ -68,7 +68,7 @@ async function handlePostToolUse(event: PostEvent, $, e, next) {
       e.tool_response?.hookSpecificOutput?.hookEventName === event) return prior
   try {
     const binary = await goBinary($)
-    const result = await $.process.run([binary], {
+    const result = await $.process.run([binary, 'enforce'], {
       cwd: e.cwd,
       stdin: JSON.stringify(e),
       timeoutMs: 60000,
