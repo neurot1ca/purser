@@ -1,0 +1,186 @@
+{
+  "oracle": "mechanical_learning.record_sample+start_shadow",
+  "cases": [
+    {
+      "name": "sample_recorded_ranking_updated_launch_spec",
+      "result": {
+        "inventory": {
+          "candidates": [
+            {
+              "id": "served",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                false,
+                true,
+                true,
+                true
+              ]
+            },
+            {
+              "id": "runner-up",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                false,
+                false
+              ]
+            },
+            {
+              "id": "shadow",
+              "status": "available",
+              "mechanical_samples": []
+            }
+          ]
+        },
+        "leader": {
+          "model": "served",
+          "successes": 4,
+          "sample_count": 5,
+          "announced": false
+        },
+        "launch": {
+          "argv": [
+            "__PYTHON__",
+            "__SCRIPT__",
+            "--shadow",
+            "__JOB__"
+          ],
+          "env": null,
+          "cwd": "__ORCH__"
+        },
+        "job": {
+          "model": "shadow",
+          "repository": "__REPO__",
+          "prompt": "fixture prompt",
+          "accepted_report": "accepted",
+          "scratch": "__SCRATCH__",
+          "project_key": "fixture-project",
+          "state_root": "__STATE__"
+        }
+      }
+    },
+    {
+      "name": "sample_write_failure",
+      "result": {
+        "inventory": {
+          "candidates": [
+            {
+              "id": "served",
+              "status": "available",
+              "mechanical_samples": [
+                true,
+                false,
+                true,
+                true
+              ]
+            },
+            {
+              "id": "runner-up",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                false,
+                false
+              ]
+            },
+            {
+              "id": "shadow",
+              "status": "available",
+              "mechanical_samples": []
+            }
+          ]
+        },
+        "leader": null,
+        "launch": null,
+        "job": null
+      }
+    },
+    {
+      "name": "launch_failure",
+      "result": {
+        "inventory": {
+          "candidates": [
+            {
+              "id": "served",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                false,
+                true,
+                true,
+                true
+              ]
+            },
+            {
+              "id": "runner-up",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                false,
+                false
+              ]
+            },
+            {
+              "id": "shadow",
+              "status": "available",
+              "mechanical_samples": []
+            }
+          ]
+        },
+        "leader": {
+          "model": "served",
+          "successes": 4,
+          "sample_count": 5,
+          "announced": false
+        },
+        "launch": null,
+        "job": null
+      }
+    },
+    {
+      "name": "feature_disabled_by_config",
+      "result": {
+        "inventory": {
+          "candidates": [
+            {
+              "id": "served",
+              "status": "available",
+              "mechanical_samples": [
+                true,
+                false,
+                true,
+                true
+              ]
+            },
+            {
+              "id": "runner-up",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                false,
+                false
+              ]
+            },
+            {
+              "id": "shadow",
+              "status": "available",
+              "mechanical_samples": []
+            }
+          ]
+        },
+        "leader": null,
+        "launch": null,
+        "job": null
+      }
+    }
+  ]
+}
