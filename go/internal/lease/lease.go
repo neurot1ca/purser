@@ -594,6 +594,8 @@ func scopesOverlap(left, right []any) bool {
 	return false
 }
 
+func ScopesOverlap(left, right []any) bool { return scopesOverlap(left, right) }
+
 func hotPathOverlap(value map[string]any, scope []any, now float64) bool {
 	owners := value["owners"].(map[string]any)
 	conflicts, _ := value["conflicts"].([]any)

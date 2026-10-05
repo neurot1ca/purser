@@ -15,8 +15,8 @@ TOOL = "mcp__codex-main__codex"
 # Go symbols carry their implementation pass. PENDING entries identify the
 # first assembly pass that still owns the Python behavior.
 POST_CALL_CONTRACTS = {
-    "_append_dispatch_receipt": "PENDING:116", "_append_pending_guidance": "PENDING:116",
-    "_append_project_job_status": "PENDING:116", "_append_worktree_apply_context": "PENDING:116",
+    "_append_dispatch_receipt": "go/internal/enforce.PostDispatchReceipt (105d)", "_append_pending_guidance": "PENDING:116",
+    "_append_project_job_status": "PENDING:116", "_append_worktree_apply_context": "go/internal/enforce.PostApplyGuidance (105d)",
     "_post_start": "PENDING:110", "_async_post_followup": "PENDING:111",
     "_apply_out_of_scope_result": "go/internal/enforce.applyOutOfScopeResult (81)", "_async_claim": "PENDING:111",
     "_async_continuation_turn_count": "PENDING:111", "_async_duration": "PENDING:111",
@@ -40,7 +40,7 @@ POST_CALL_CONTRACTS = {
     "_pending_candidates": "go/internal/enforce.postIntake (93)", "_pending_path": "PENDING:113",
     "_pending_project_key": "PENDING:113", "_persist_raw_output": "go/internal/enforce.persistRawOutput (pre-tranche-5)",
     "_plan_summary": "PENDING:116", "_post_observations": "PENDING:116",
-    "_project_job_board_details": "PENDING:116", "_project_state_root": "PENDING:113",
+    "_project_job_board_details": "go/internal/enforce.PostProjectJobBoard (105d)", "_project_state_root": "PENDING:113",
     "_read_pending": "go/internal/enforce.postIntake (93)", "_record_diagnostic": "PENDING:116",
     "_record_thread_root": "PENDING:116", "_release_async_lease": "PENDING:110",
     "_release_scope_lease": "PENDING:110", "_remove_pending": "PENDING:113",
