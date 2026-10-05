@@ -102,3 +102,30 @@ func ApplyJobPatch(repoRoot, patch string) map[string]any {
 	conflicts, applicable := checkPaths()
 	return map[string]any{"applied": false, "conflicts": conflicts, "applicable": applicable}
 }
+
+// JobPatchPaths returns the paths encoded in a generated job patch.
+func JobPatchPaths(repoRoot, patch string) ([]string, error) {
+	if patch == "" {
+		return []string{}, nil
+	}
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	out, err := runGit(root, []string{"apply", "--numstat", "-z", "-"}, 30*time.Second,
+		"listing job patch paths", []byte(patch), nil)
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{}
+	for _, row := range strings.Split(string(out), "\x00") {
+		if row == "" {
+			continue
+		}
+		cols := strings.SplitN(row, "\t", 3)
+		if len(cols) == 3 {
+			paths = append(paths, decodeGitPath([]byte(cols[2])))
+		}
+	}
+	return paths, nil
+}

@@ -1,0 +1,200 @@
+{
+  "oracle": "real Server._apply_job with temporary git repositories and job worktrees",
+  "cases": [
+    {
+      "name": "clean_apply",
+      "setup": {
+        "name": "clean_apply",
+        "repo": "base\n",
+        "worktree": "worker\n",
+        "state": "SUCCEEDED"
+      },
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "reviewedSnapshot": null,
+      "result": {
+        "applied": true,
+        "paths": [
+          "tracked.txt"
+        ]
+      },
+      "record": {
+        "jobId": "c82a30fb161f81ff9ee9aa0b29e50faa8f5b60b021f165f89ff4cbe820d9ccd5",
+        "state": "SUCCEEDED",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "applyState": "applied",
+        "applyResult": {
+          "applied": true,
+          "paths": [
+            "tracked.txt"
+          ]
+        }
+      },
+      "checkout": "worker\n",
+      "index": null
+    },
+    {
+      "name": "cached_repeat",
+      "setup": {
+        "name": "cached_repeat",
+        "repo": "base\n",
+        "worktree": "worker\n",
+        "state": "SUCCEEDED",
+        "repeat": true
+      },
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "reviewedSnapshot": null,
+      "result": {
+        "applied": true,
+        "paths": [
+          "tracked.txt"
+        ]
+      },
+      "record": {
+        "jobId": "04ced161f6041698fa271ab36cdb5297924f52d4e7e13d1f3840b14811d7abed",
+        "state": "SUCCEEDED",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "applyState": "applied",
+        "applyResult": {
+          "applied": true,
+          "paths": [
+            "tracked.txt"
+          ]
+        }
+      },
+      "checkout": "worker\n",
+      "index": null
+    },
+    {
+      "name": "already_present",
+      "setup": {
+        "name": "already_present",
+        "repo": "worker\n",
+        "worktree": "worker\n",
+        "state": "SUCCEEDED"
+      },
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "reviewedSnapshot": null,
+      "result": {
+        "applied": true,
+        "paths": [
+          "tracked.txt"
+        ]
+      },
+      "record": {
+        "jobId": "9c9f2e8471bae69283efd59ad11a1f8a94befe3ccb484212bb3f786a73260cc0",
+        "state": "SUCCEEDED",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "applyState": "applied",
+        "applyResult": {
+          "applied": true,
+          "paths": [
+            "tracked.txt"
+          ]
+        }
+      },
+      "checkout": "worker\n",
+      "index": null
+    },
+    {
+      "name": "stale_review",
+      "setup": {
+        "name": "stale_review",
+        "repo": "intervening\n",
+        "worktree": "worker\n",
+        "state": "SUCCEEDED",
+        "review": true
+      },
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "reviewedSnapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "result": {
+        "applied": false,
+        "errorCode": "REVIEW_STALE_REPREPARE_REQUIRED",
+        "message": "Checkout changed in the reviewed job paths. Call codex_result to re-prepare and review the diff before applying.",
+        "paths": [
+          "tracked.txt"
+        ]
+      },
+      "record": {
+        "jobId": "5218622e2ee4d583bf093ca5cc9a85ff90bcbe063ee41250e10453b4aeed33e5",
+        "state": "SUCCEEDED",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "snapshotRevision": 3,
+        "reviewRefreshPending": true
+      },
+      "checkout": "intervening\n",
+      "index": {
+        "stage": "REVIEW_REFRESH"
+      }
+    },
+    {
+      "name": "conflict",
+      "setup": {
+        "name": "conflict",
+        "repo": "other\n",
+        "worktree": "worker\n",
+        "state": "SUCCEEDED"
+      },
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "reviewedSnapshot": null,
+      "result": {
+        "applied": false,
+        "conflicts": [
+          "tracked.txt"
+        ],
+        "applicable": [],
+        "worktreePath": "WORKTREE"
+      },
+      "record": {
+        "jobId": "fa9e1d22205ad852b0dc9509ec4e31644e88742c4dfce93c08f011fee1cd8a1a",
+        "state": "SUCCEEDED",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+        "applyState": "conflict",
+        "applyResult": {
+          "applied": false,
+          "conflicts": [
+            "tracked.txt"
+          ],
+          "applicable": [],
+          "worktreePath": "WORKTREE"
+        }
+      },
+      "checkout": "other\n",
+      "index": null
+    },
+    {
+      "name": "not_succeeded",
+      "setup": {
+        "name": "not_succeeded",
+        "repo": "base\n",
+        "worktree": "worker\n",
+        "state": "RUNNING"
+      },
+      "snapshot": "3e21a205dd9b55021aeae87965092623807e455f",
+      "reviewedSnapshot": null,
+      "result": {
+        "state": "FAILED",
+        "errorCode": "JOB_NOT_READY",
+        "message": "Job has not succeeded"
+      },
+      "record": {
+        "jobId": "2f66e6e4d95d69d19bdfd4477821f817e98c51a794a572f48a2a11fd1e20da29",
+        "state": "RUNNING",
+        "repoRoot": "REPO",
+        "worktreePath": "WORKTREE",
+        "snapshot": "3e21a205dd9b55021aeae87965092623807e455f"
+      },
+      "checkout": "base\n",
+      "index": null
+    }
+  ]
+}
