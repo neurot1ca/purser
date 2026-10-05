@@ -454,6 +454,126 @@ def test_cleanup_never_removes_worktree_outside_state_wt(tmp_path, monkeypatch):
     assert worktree.is_dir()
 
 
+def test_cleanup_lists_each_repository_once_for_multiple_removals(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    worktrees = []
+    for index in range(2):
+        job_id = f"{index + 1:064x}"
+        worktree = tmp_path / "wt" / str(index)
+        worktree.parent.mkdir(exist_ok=True)
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(worktree), "HEAD"], check=True)
+        worktrees.append(worktree)
+        (jobs / f"{job_id}.json").write_text(json.dumps({
+            "jobId": job_id, "state": "SUCCEEDED", "finishedAt": 1000,
+            "applyState": "applied", "worktreePath": str(worktree), "repoRoot": str(repo),
+        }), encoding="utf-8")
+
+    calls = []
+    run = maintenance.subprocess.run
+
+    def counted_run(command, *args, **kwargs):
+        if "worktree" in command and "list" in command:
+            calls.append(command)
+        return run(command, *args, **kwargs)
+
+    monkeypatch.setattr(maintenance.subprocess, "run", counted_run)
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+
+    assert len(calls) == 1
+    assert all(not worktree.exists() for worktree in worktrees)
+
+
+def test_cleanup_does_not_retry_failed_repository_listing(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    for index in range(2):
+        job_id = f"{index + 1:064x}"
+        worktree = tmp_path / "wt" / str(index)
+        worktree.mkdir(parents=True)
+        (jobs / f"{job_id}.json").write_text(json.dumps({
+            "jobId": job_id, "state": "SUCCEEDED", "finishedAt": 1000,
+            "applyState": "applied", "worktreePath": str(worktree), "repoRoot": str(repo),
+        }), encoding="utf-8")
+
+    calls = []
+    run = maintenance.subprocess.run
+
+    def failed_listing(command, *args, **kwargs):
+        if "worktree" in command and "list" in command:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="failed")
+        return run(command, *args, **kwargs)
+
+    monkeypatch.setattr(maintenance.subprocess, "run", failed_listing)
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+
+    assert len(calls) == 1
+
+
+def test_cleanup_skips_listing_for_absent_worktrees_and_prunes_once(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    for index in range(2):
+        job_id = f"{index + 1:064x}"
+        (jobs / f"{job_id}.json").write_text(json.dumps({
+            "jobId": job_id, "state": "SUCCEEDED", "finishedAt": 1000,
+            "applyState": "applied", "worktreePath": str(tmp_path / "wt" / str(index)),
+            "repoRoot": str(repo),
+        }), encoding="utf-8")
+
+    calls = []
+
+    def run(command, *args, **kwargs):
+        if "worktree" in command:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(maintenance.subprocess, "run", run)
+    maintenance.cleanup_jobs(tmp_path, now=2000)
+
+    assert not any("list" in call for call in calls)
+    assert sum("prune" in call for call in calls) == 1
+
+
+def test_cleanup_reaches_recovery_and_expired_jobs_after_inert_prefix(tmp_path, monkeypatch):
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    for index in range(maintenance.MAX_JOB_RECORDS + 2):
+        job_id = f"{index + 1:064x}"
+        (jobs / f"{job_id}.json").write_text(json.dumps({
+            "jobId": job_id, "state": "SUCCEEDED", "finishedAt": 1000 + 8 * 86400 - 1,
+        }), encoding="utf-8")
+    recovery_id = f"{maintenance.MAX_JOB_RECORDS + 3:064x}"
+    expired_id = f"{maintenance.MAX_JOB_RECORDS + 4:064x}"
+    (jobs / f"{recovery_id}.json").write_text(json.dumps({
+        "jobId": recovery_id, "state": "RUNNING", "finishedAt": 1000,
+    }), encoding="utf-8")
+    (jobs / f"{expired_id}.json").write_text(json.dumps({
+        "jobId": expired_id, "state": "SUCCEEDED", "finishedAt": 1000,
+    }), encoding="utf-8")
+    recovered = []
+    monkeypatch.setattr(codex_exec_mcp.Server, "recover_job", lambda self, job_id, **kwargs: recovered.append(job_id))
+
+    maintenance.cleanup_jobs(tmp_path, now=1000 + 8 * 86400)
+
+    assert recovered == [recovery_id]
+    assert not (jobs / f"{expired_id}.json").exists()
+
+
 def test_cleanup_preserves_finalizing_evidence_for_retry(tmp_path, monkeypatch):
     job_id, pending, lease = _job_fixture(tmp_path, "SUCCEEDED", 1000, stage="FINALIZING")
     monkeypatch.setattr(codex_exec_mcp.Server, "_host_alive", lambda self, job: False)

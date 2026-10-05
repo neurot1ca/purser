@@ -296,7 +296,9 @@ def _listed_worktrees(repo_root: Path) -> tuple[Path, list[Path]] | None:
         return None
 
 
-def _remove_worktree(state_root: Path, repo_root: Path, worktree_path: str | Path) -> bool:
+def _remove_worktree(state_root: Path, repo_root: Path, worktree_path: str | Path,
+                     listings: dict[str, tuple[Path, list[Path]] | None],
+                     prune_repos: dict[str, Path]) -> bool:
     """Remove only a registered worktree contained by this state's wt directory."""
     try:
         wt_root = (state_root / "wt").resolve()
@@ -306,7 +308,14 @@ def _remove_worktree(state_root: Path, repo_root: Path, worktree_path: str | Pat
         return False
     if target == wt_root:
         return False
-    listing = _listed_worktrees(repo_root.resolve())
+    repo = repo_root.resolve()
+    repo_key = os.path.normcase(os.fspath(repo))
+    if not target.exists():
+        prune_repos.setdefault(repo_key, repo)
+        return False
+    if repo_key not in listings:
+        listings[repo_key] = _listed_worktrees(repo)
+    listing = listings[repo_key]
     if listing is None:
         return False
     command_root, paths = listing
@@ -321,12 +330,8 @@ def _remove_worktree(state_root: Path, repo_root: Path, worktree_path: str | Pat
         )
         if removed.returncode:
             return False
-        subprocess.run(
-            ["git", "-C", os.fspath(command_root), "worktree", "prune"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=30, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
-        )
+        paths[:] = [path for path in paths
+                    if os.path.normcase(os.fspath(path)) != os.path.normcase(os.fspath(target))]
         return True
     except (OSError, subprocess.SubprocessError):
         return False
@@ -339,7 +344,9 @@ def _worktree_key(worktree_path: Any) -> str | None:
         return None
 
 
-def _cleanup_orphan_worktrees(root: Path, current: float, protected_worktrees: set[str]) -> None:
+def _cleanup_orphan_worktrees(root: Path, current: float, protected_worktrees: set[str],
+                              listings: dict[str, tuple[Path, list[Path]] | None],
+                              prune_repos: dict[str, Path]) -> None:
     """Prune old registered worktrees only when their job record is absent."""
     wt_root = root / "wt"
     try:
@@ -368,7 +375,7 @@ def _cleanup_orphan_worktrees(root: Path, current: float, protected_worktrees: s
                 continue
             # Linked worktrees share <main-repo>/.git as their common directory.
             repo_root = Path(common_dir.stdout.strip()).resolve().parent
-            _remove_worktree(root, repo_root, worktree)
+            _remove_worktree(root, repo_root, worktree, listings, prune_repos)
         except (OSError, subprocess.SubprocessError, ValueError):
             continue
 
@@ -382,10 +389,13 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
         current = time.time() if now is None else now
         all_records = list(jobs.glob("*.json"))
         protected_worktrees = set()
+        loaded_records: list[tuple[Path, dict[str, Any]]] = []
         for record in all_records:
             job = _read_json(record)
             if not job:
                 continue
+            if job.get("jobId") == record.stem:
+                loaded_records.append((record, job))
             state = job.get("state")
             discard_without_patch = state in {"FAILED", "CANCELLED", "TIMED_OUT"} and "applyState" not in job
             may_remove_worktree = (state != "UNKNOWN_OR_IN_PROGRESS"
@@ -394,32 +404,64 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
                 key = _worktree_key(job.get("worktreePath"))
                 if key is not None:
                     protected_worktrees.add(key)
-        records = all_records[:MAX_JOB_RECORDS]
-        for path in records:
+        recoveries: list[tuple[Path, dict[str, Any]]] = []
+        removals: list[tuple[Path, dict[str, Any]]] = []
+        for path, job in loaded_records:
             if not _JOB_ID.fullmatch(path.stem):
                 continue
-            job = _read_json(path)
-            if not job or job.get("jobId") != path.stem:
+            state = job.get("state")
+            if state not in TERMINAL:
+                recoveries.append((path, job))
                 continue
-            if job.get("state") not in TERMINAL:
-                bridge.recover_job(path.stem, now=current)
-                continue
+            discard_without_patch = state in {"FAILED", "CANCELLED", "TIMED_OUT"} and "applyState" not in job
+            may_remove_worktree = (state != "UNKNOWN_OR_IN_PROGRESS"
+                                   and (job.get("applyState") == "applied" or discard_without_patch))
+            worktree_key = _worktree_key(job.get("worktreePath"))
+            removes_worktree = bool(job.get("worktreePath") and may_remove_worktree
+                                    and worktree_key not in protected_worktrees)
+            launch_exists = state != "UNKNOWN_OR_IN_PROGRESS" and (jobs / f"{path.stem}.launch").exists()
+            finished = job.get("finishedAt")
+            expired = (not isinstance(finished, bool) and isinstance(finished, (int, float))
+                       and not current - finished < RETENTION_SECONDS)
+            if removes_worktree or launch_exists or expired:
+                removals.append((path, job))
+
+        listings: dict[str, tuple[Path, list[Path]] | None] = {}
+        prune_repos: dict[str, Path] = {}
+        actions = 0
+        for path, job in recoveries:
+            if actions >= MAX_JOB_RECORDS:
+                break
+            bridge.recover_job(path.stem, now=current)
+            actions += 1
+        for path, job in removals:
+            if actions >= MAX_JOB_RECORDS:
+                break
             state = job.get("state")
             discard_without_patch = state in {"FAILED", "CANCELLED", "TIMED_OUT"} and "applyState" not in job
             may_remove_worktree = (state != "UNKNOWN_OR_IN_PROGRESS"
                                    and (job.get("applyState") == "applied" or discard_without_patch))
             if job.get("worktreePath") and not may_remove_worktree:
                 continue
+            acted = False
             if (job.get("worktreePath") and may_remove_worktree
                     and _worktree_key(job["worktreePath"]) not in protected_worktrees):
                 repo_root = job.get("repoRoot")
                 if isinstance(repo_root, str) and repo_root:
-                    _remove_worktree(root, Path(repo_root), job["worktreePath"])
-            if job.get("state") != "UNKNOWN_OR_IN_PROGRESS":
-                (jobs / f"{path.stem}.launch").unlink(missing_ok=True)
+                    acted = _remove_worktree(root, Path(repo_root), job["worktreePath"],
+                                             listings, prune_repos) or acted
+            if state != "UNKNOWN_OR_IN_PROGRESS":
+                launch_path = jobs / f"{path.stem}.launch"
+                if launch_path.exists():
+                    launch_path.unlink(missing_ok=True)
+                    acted = True
             finished = job.get("finishedAt")
             if isinstance(finished, bool) or not isinstance(finished, (int, float)) or current - finished < RETENTION_SECONDS:
+                if acted:
+                    actions += 1
                 continue
+            if acted:
+                actions += 1
             try:
                 with codex._async_claim(root / "async_jobs" / f"{path.stem}.json"):
                     index_path = root / "async_jobs" / f"{path.stem}.json"
@@ -448,6 +490,8 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
                             released = lease.release(owner)
                             if released["status"] != ledger.OK and released["code"] != "LEASE_OWNER_MISSING":
                                 continue
+                    if not acted:
+                        actions += 1
                     if pending_exists and index is not None and index.get("stage") != "CONSUMED" and not index.get("unfetched_event_emitted"):
                         index["unfetched_event_emitted"] = True
                         _write_json(index_path, index)
@@ -467,7 +511,17 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None) -> None:
                         index_path.unlink(missing_ok=True)
             except OSError:
                 continue
-        _cleanup_orphan_worktrees(root, current, protected_worktrees)
+        _cleanup_orphan_worktrees(root, current, protected_worktrees, listings, prune_repos)
+        for repo_key, repo_root in prune_repos.items():
+            try:
+                subprocess.run(
+                    ["git", "-C", os.fspath(repo_root), "worktree", "prune"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=30, check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
     except BaseException:
         return None
 
