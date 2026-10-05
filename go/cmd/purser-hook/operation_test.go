@@ -129,6 +129,10 @@ func TestHostReportsUnportedWorker(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, jobID+".json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
+	launch, _ := json.Marshal(map[string]any{"name": "codex", "agent": "opencode", "args": map[string]any{}})
+	if err := os.WriteFile(filepath.Join(dir, jobID+".launch"), launch, 0600); err != nil {
+		t.Fatal(err)
+	}
 	command := exec.Command(binary, "host", dir, jobID, "1", token)
 	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state)
 	output, err := command.CombinedOutput()

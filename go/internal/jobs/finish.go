@@ -17,6 +17,8 @@ var terminalJobs = map[string]bool{"SUCCEEDED": true, "FAILED": true, "CANCELLED
 
 type FinishOptions struct {
 	ReleaseLease func(projectKey, callKey string)
+	Generation   *int64
+	Token        string
 }
 type ResultOptions struct {
 	StateRoot      string
@@ -40,6 +42,15 @@ func finishJob(dir, id, state, code string, result map[string]any, message strin
 	r, err := Read(path)
 	if err != nil {
 		return nil
+	}
+	if opt.Generation != nil {
+		var generation int64
+		var token string
+		r.Get("generation", &generation)
+		r.Get("ownershipToken", &token)
+		if generation != *opt.Generation || token != opt.Token {
+			return nil
+		}
 	}
 	var got, current string
 	if !r.Get("jobId", &got) || got != id || !r.Get("state", &current) || terminalJobs[current] {
