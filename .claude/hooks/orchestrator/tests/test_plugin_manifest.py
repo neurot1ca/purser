@@ -39,6 +39,7 @@ def test_plugin_hooks_match_manual_installer():
     installed, _ = installer.merge_settings(
         {}, repo_root=ROOT, python_executable=Path(sys.executable)
     )
+    assert {"PostToolUse", "PostToolUseFailure", "Stop"} <= set(installed["hooks"])
     expected = set()
     for event, entries in installed["hooks"].items():
         for entry in entries:
@@ -62,6 +63,9 @@ def test_plugin_hooks_match_manual_installer():
             expected.add((event, matcher, script, entry["hooks"][0]["timeout"]))
 
     hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+    # HOOK_SPECS describes the manual installer. Compare only its events that
+    # remain registered directly by the plugin manifest.
+    plugin_events = set(hooks) & {event for event, _matcher, _timeout in installer.HOOK_SPECS}
     actual = set()
     for event, entries in hooks.items():
         for entry in entries:
@@ -69,7 +73,9 @@ def test_plugin_hooks_match_manual_installer():
             script = Path(command["args"][-1]).name
             actual.add((event, entry.get("matcher"), script, command["timeout"]))
 
-    assert {entry for entry in actual if entry[0] != "SessionStart"} == expected
+    assert {entry for entry in actual if entry[0] in plugin_events} == {
+        entry for entry in expected if entry[0] in plugin_events
+    }
 
 
 def test_plugin_manifest_paths_and_registration():
@@ -95,7 +101,7 @@ def test_plugin_manifest_paths_and_registration():
     assert (ROOT / manifest["mcpServers"]).is_file()
     # Plugin commands are auto-discovered from the conventional commands/ directory.
     assert (ROOT / "commands/check.md").is_file()
-    assert set(hooks["hooks"]) == {"PostToolUse", "PostToolUseFailure", "SessionStart"}
+    assert set(hooks["hooks"]) == {"SessionStart"}
     assert "Stop" not in hooks["hooks"]
     session_start, = hooks["hooks"]["SessionStart"]
     assert "matcher" not in session_start
@@ -109,33 +115,17 @@ def test_plugin_manifest_paths_and_registration():
             "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/session_start_maintenance.py",
         ],
     }
-    for name, timeout in (
-        ("PostToolUse", 300),
-        ("PostToolUseFailure", 60),
-    ):
-        entry, = [
-            item
-            for item in hooks["hooks"][name]
-            if item["hooks"][0]["args"][-1].endswith("/hook.py")
-        ]
-        matched = {
-            tool for tool in PLUGIN_TOOLS if re.fullmatch(entry["matcher"], tool)
-        }
-        assert matched == PLUGIN_TOOLS
-        if name == "PostToolUse":
-            assert re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
-        else:
-            assert not re.fullmatch(entry["matcher"], PLUGIN_APPLY_TOOL)
-        assert not re.fullmatch(entry["matcher"], "mcp__codex-main__codex")
-        command, = entry["hooks"]
-        assert command["timeout"] == timeout
-        assert command["type"] == "command"
-        assert command["command"] == "node"
-        assert command["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "pre-codex" if name == "PreToolUse" else "hook", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/hook.py"]
     register_source = (ROOT / "hooks/register.ts").read_text(encoding="utf-8")
     assert re.search(r"^  registerEnforcement\(on\)$", register_source, re.M)
     assert "on('classic.Stop', ($, e, next) => lifecycle($, e, next, 'Stop'))" in register_source
     enforcement_source = (ROOT / "hooks/mod/enforcement.ts").read_text(encoding="utf-8")
+    assert 'on("classic.PostToolUse", ($, e, next) => handlePostToolUse(\'PostToolUse\', $, e, next))' in enforcement_source
+    assert 'on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse(\'PostToolUseFailure\', $, e, next))' in enforcement_source
+    post_tools = re.search(r"const postToolUseTools = new Set\(\[([\s\S]*?)\]\)", enforcement_source)
+    failure_tools = re.search(r"const postToolUseFailureTools = new Set\(\[([\s\S]*?)\]\)", enforcement_source)
+    assert post_tools and failure_tools
+    assert set(re.findall(r"'([^']+)'", post_tools.group(1))) == PLUGIN_TOOLS | {PLUGIN_APPLY_TOOL}
+    assert set(re.findall(r"'([^']+)'", failure_tools.group(1))) == PLUGIN_TOOLS
     assert not any(
         re.fullmatch(entry.get("matcher", ""), tool)
         for entry in hooks["hooks"].get("PreToolUse", [])

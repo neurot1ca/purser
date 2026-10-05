@@ -98,8 +98,6 @@ def _records(*items):
 def test_python_registered_stop_process_oracles(tmp_path):
     assert any(name == "Stop" for name, _matcher, _timeout in HOOK_SPECS)
     assert any(name == "Stop" for name, _matcher, _timeout in CONTEXT_IO_HOOK_SPECS)
-    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-    assert hooks["hooks"]["Stop"]
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=10)
