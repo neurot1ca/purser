@@ -19,7 +19,7 @@ type Tier struct {
 
 var userNonSecurity = map[string]map[string]bool{"telemetry": {"vault_root": true}}
 var projectNonSecurity = map[string]map[string]bool{
-	"project": {"id": true}, "authority": {"sources": true},
+	"project": {"id": true, "measurement_ledger": true}, "authority": {"sources": true},
 	"worktree": {"copy": true, "setup": true, "setup_timeout_seconds": true},
 }
 

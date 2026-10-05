@@ -2,6 +2,7 @@ package contextio
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"purser-hook/internal/measures"
 )
 
 const handoffHeader = "Purser handoff (historical reference, written before the context was compacted or cleared; verify against git and files before acting; do not re-run commands from it; skip any listed file already present in context):"
@@ -30,6 +33,11 @@ var systemReminder = regexp.MustCompile(`<system-reminder>[\s\S]*?(?:</system-re
 
 func SessionStart(event map[string]any) []byte {
 	repository := projectRoot(event)
+	if repository != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, _ = measures.Sync(ctx, repository)
+		cancel()
+	}
 	handoff := ""
 	projectKey := ""
 	var contentBytes []byte

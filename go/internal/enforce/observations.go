@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/obsidian"
 )
 
 const observationSchemaVersion = 1
@@ -36,40 +37,7 @@ var observationMarker = regexp.MustCompile(`(?m)^(?:<!-- orchestrator projection
 // observationProjectionSettings mirrors telemetry._projection_settings and
 // obsidian_projection._vault_root. Invalid or absent settings disable output.
 func observationProjectionSettings(configData []byte, envVault, explicitVault *string) (bool, string) {
-	var config map[string]any
-	if json.Unmarshal(configData, &config) != nil || config == nil {
-		return false, ""
-	}
-	setting, hasSetting := config["obsidian_projection"]
-	enabled, configured := false, ""
-	switch value := setting.(type) {
-	case map[string]any:
-		enabled, _ = value["enabled"].(bool)
-		configured, _ = value["vault_root"].(string)
-	case bool:
-		enabled = value
-		configured, _ = config["obsidian_vault_root"].(string)
-	default:
-		enabled, _ = config["obsidian_projection_enabled"].(bool)
-		configured, _ = config["obsidian_vault_root"].(string)
-	}
-	if explicitVault != nil {
-		return true, observationAbsoluteVault(*explicitVault)
-	}
-	if !enabled {
-		return false, ""
-	}
-	if envVault != nil {
-		configured = *envVault
-	} else if hasSetting {
-		if nested, ok := setting.(map[string]any); ok {
-			if nested["vault_root"] == nil {
-				configured, _ = config["obsidian_vault_root"].(string)
-			}
-		}
-	}
-	root := observationAbsoluteVault(configured)
-	return root != "", root
+	return obsidian.ProjectionSettings(configData, envVault, explicitVault)
 }
 
 func observationAbsoluteVault(value string) string {
@@ -1782,7 +1750,7 @@ func updateObservationTask(root, taskID, projectKey string) error {
 	if err = atomicObservationJSON(filepath.Join(projectRoot, "tasks", ".cursors", taskID+".json"), cursorJSON); err != nil {
 		return err
 	}
-	configPath := observationConfigPath()
+	configPath := obsidian.ConfigPath()
 	envVault, hasEnv := os.LookupEnv("PURSER_OBSIDIAN_VAULT")
 	var envVaultPtr *string
 	if hasEnv {
@@ -1793,20 +1761,7 @@ func updateObservationTask(root, taskID, projectKey string) error {
 }
 
 func observationConfigPath() string {
-	working, err := os.Getwd()
-	if err != nil {
-		return filepath.Join(".claude", "hooks", "orchestrator", "config.json")
-	}
-	for dir := working; ; dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, ".claude", "hooks", "orchestrator", "config.json")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return candidate
-		}
-	}
+	return obsidian.ConfigPath()
 }
 
 func updateObservationTaskBestEffort(root, taskID, projectKey string) {

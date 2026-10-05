@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -10,10 +12,20 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/measures"
 )
 
 func main() {
 	defer func() { _ = recover() }()
+	if len(os.Args) > 1 && os.Args[1] == "measures-sync" {
+		root := measures.CurrentRepo()
+		if root == "" {
+			return
+		}
+		count, _ := measures.Sync(context.Background(), root)
+		_, _ = fmt.Fprintln(os.Stdout, count)
+		return
+	}
 	started := time.Now()
 	enforcementMode := len(os.Args) > 1 && os.Args[1] == "enforce"
 	data, err := io.ReadAll(os.Stdin)

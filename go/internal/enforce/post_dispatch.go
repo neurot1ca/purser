@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"purser-hook/internal/lease"
+	"purser-hook/internal/obsidian"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
@@ -458,9 +458,5 @@ func appendPostDispatchReceipt(response map[string]any, root string, event, pend
 }
 
 func pluginRoot() string {
-	if root := os.Getenv("CLAUDE_PLUGIN_ROOT"); root != "" {
-		return root
-	}
-	cwd, _ := os.Getwd()
-	return cwd
+	return obsidian.PluginRoot()
 }
