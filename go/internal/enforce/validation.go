@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const implementerReportLimit = 1200
@@ -67,15 +68,36 @@ func pythonJSONSize(record map[string]any) int {
 	}
 	return len(b) + separators
 }
+func splitPythonLines(report string) []string {
+	lines := make([]string, 0, 1)
+	start := 0
+	for i := 0; i < len(report); {
+		r, size := utf8.DecodeRuneInString(report[i:])
+		if strings.ContainsRune("\n\v\f\x1c\x1d\x1e\u0085\u2028\u2029", r) || r == '\r' {
+			lines = append(lines, report[start:i])
+			i += size
+			if r == '\r' && i < len(report) && report[i] == '\n' {
+				i++
+			}
+			start = i
+			continue
+		}
+		i += size
+	}
+	if start < len(report) {
+		lines = append(lines, report[start:])
+	}
+	return lines
+}
 func parseWorkerValidation(report string) map[string]any {
 	if strings.TrimSpace(report) == "" {
 		s := "No implementer report was provided."
 		return canonicalUnknownValidation(&s)
 	}
 	lines := make([]string, 0, 1)
-	for _, line := range strings.Split(report, "\n") {
-		line = strings.TrimSpace(line) // TrimSpace also removes CR in CRLF reports.
-		if strings.HasPrefix(line, "`") && strings.HasSuffix(line, "`") {
+	for _, line := range splitPythonLines(report) {
+		line = strings.TrimSpace(line)
+		if len(line) >= 2 && strings.HasPrefix(line, "`") && strings.HasSuffix(line, "`") {
 			line = strings.TrimSpace(line[1 : len(line)-1])
 		}
 		payload := strings.TrimPrefix(line, "VALIDATION:")

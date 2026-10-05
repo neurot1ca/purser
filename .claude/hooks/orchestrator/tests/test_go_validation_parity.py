@@ -22,6 +22,9 @@ def _cases():
         ("record-too-large", record(summary="x" * 1300, commands=["x"], exit_codes=[0])),
         ("validation-not-at-end", record(commands=["x"], exit_codes=[0]) + "\ntrailing narrative"),
         ("crlf", record(commands=["x"], exit_codes=[0]) + "\r\ncontinued"),
+        ("single-backtick", "`"),
+        ("lone-cr", "before\r" + record(commands=["x"], exit_codes=[0]) + "\rafter"),
+        ("line-separator", "before\u2028" + record(commands=["x"], exit_codes=[0]) + "\u2028after"),
         ("markdown-wrapper", "`" + record(commands=["x"], exit_codes=[0]) + "`"), ("unknown-summary", "narrative Validation: tests uncertain"),
     ]
     return [{"name": name, "report": report, "expected": codex._parse_worker_validation(report)} for name, report in reports]
