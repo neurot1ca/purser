@@ -1,0 +1,170 @@
+{
+  "cases": [
+    {
+      "name": "new_all_options",
+      "input": {
+        "binary_override": "codex",
+        "name": "codex",
+        "cwd": "C:/work",
+        "model": "gpt-test",
+        "config": {
+          "model_reasoning_effort": "high",
+          "nested": {
+            "quoted": "a \"quote\" and \\ path\n雪",
+            "enabled": true,
+            "count": 7,
+            "ratio": 1.25,
+            "values": [
+              "x",
+              false,
+              2
+            ]
+          }
+        },
+        "sandbox": "workspace-write",
+        "output_path": "C:/tmp/last-message.txt",
+        "developer_instructions": "follow these instructions",
+        "base_instructions": "base rules",
+        "compact_prompt": "compact this",
+        "approval_policy": "never"
+      },
+      "expected": [
+        "codex",
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "-m",
+        "gpt-test",
+        "-c",
+        "model_reasoning_effort=\"high\"",
+        "-c",
+        "nested.quoted=\"a \\\"quote\\\" and \\\\ path\\n雪\"",
+        "-c",
+        "nested.enabled=true",
+        "-c",
+        "nested.count=7",
+        "-c",
+        "nested.ratio=1.25",
+        "-c",
+        "nested.values=[\"x\", false, 2]",
+        "-c",
+        "developer_instructions=\"follow these instructions\"",
+        "-c",
+        "base_instructions=\"base rules\"",
+        "-c",
+        "compact_prompt=\"compact this\"",
+        "-c",
+        "approval_policy=\"never\"",
+        "-s",
+        "workspace-write",
+        "-C",
+        "C:/work",
+        "-o",
+        "C:\\tmp\\last-message.txt",
+        "-"
+      ]
+    },
+    {
+      "name": "resume_all_options",
+      "input": {
+        "binary_override": "codex",
+        "name": "codex-reply",
+        "cwd": "C:/ignored",
+        "model": "gpt-test",
+        "config": {
+          "model_reasoning_effort": "high",
+          "nested": {
+            "quoted": "a \"quote\" and \\ path\n雪",
+            "enabled": true,
+            "count": 7,
+            "ratio": 1.25,
+            "values": [
+              "x",
+              false,
+              2
+            ]
+          }
+        },
+        "thread_id": "thread-123",
+        "output_path": "C:/tmp/resume.txt",
+        "developer_instructions": "follow these instructions",
+        "base_instructions": "base rules",
+        "compact_prompt": "compact this",
+        "approval_policy": "never"
+      },
+      "expected": [
+        "codex",
+        "exec",
+        "resume",
+        "--json",
+        "--skip-git-repo-check",
+        "-m",
+        "gpt-test",
+        "-c",
+        "model_reasoning_effort=\"high\"",
+        "-c",
+        "nested.quoted=\"a \\\"quote\\\" and \\\\ path\\n雪\"",
+        "-c",
+        "nested.enabled=true",
+        "-c",
+        "nested.count=7",
+        "-c",
+        "nested.ratio=1.25",
+        "-c",
+        "nested.values=[\"x\", false, 2]",
+        "-c",
+        "developer_instructions=\"follow these instructions\"",
+        "-c",
+        "base_instructions=\"base rules\"",
+        "-c",
+        "compact_prompt=\"compact this\"",
+        "-c",
+        "approval_policy=\"never\"",
+        "-o",
+        "C:\\tmp\\resume.txt",
+        "thread-123",
+        "-"
+      ]
+    },
+    {
+      "name": "new_optional_fields_absent",
+      "input": {
+        "binary_override": "codex",
+        "name": "codex",
+        "cwd": "C:/work",
+        "output_path": "C:/tmp/empty.txt"
+      },
+      "expected": [
+        "codex",
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "-C",
+        "C:/work",
+        "-o",
+        "C:\\tmp\\empty.txt",
+        "-"
+      ]
+    },
+    {
+      "name": "resume_optional_fields_absent",
+      "input": {
+        "binary_override": "codex",
+        "name": "codex-reply",
+        "thread_id": "thread-empty",
+        "output_path": "C:/tmp/empty-resume.txt"
+      },
+      "expected": [
+        "codex",
+        "exec",
+        "resume",
+        "--json",
+        "--skip-git-repo-check",
+        "-o",
+        "C:\\tmp\\empty-resume.txt",
+        "thread-empty",
+        "-"
+      ]
+    }
+  ]
+}
