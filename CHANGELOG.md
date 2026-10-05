@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.75 — 2026-10-05
+
+- **Fixed:** codex-main connects again; its startup recovery scan runs in the background instead of delaying the MCP handshake past the connect timeout.
+
 ## 0.1.74 — 2026-10-05
 
 - **Fixed:** `codex_result` and `codex_cancel` no longer report "routing was NOT enforced" when Go PreToolUse allows the call without changes.
