@@ -13,7 +13,10 @@ import (
 type RecoverOptions struct {
 	ProcessAlive func(pid int, createdAt int64) string
 	GroupStopped func(pid int) bool
-	// Replace handles replacement claim and launch; pass 158 supplies it.
+	LaunchHost   func(dir, jobID string, generation int64, token string) error
+	NewToken     func() string
+	Clock        func() float64
+	// Replace overrides the default replacement step.
 	Replace func(stateRoot, jobID string, job *Record, now float64) string
 }
 
@@ -112,23 +115,25 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 	} else if attempts >= 2 {
 		return ambiguous("RECOVERY_ATTEMPTS_EXHAUSTED", "Automatic recovery attempt limit reached")
 	}
-	launchData, err := os.ReadFile(filepath.Join(dir, jobID+".launch"))
-	var launch map[string]any
-	if err != nil || json.Unmarshal(launchData, &launch) != nil {
-		return ambiguous("RECOVERY_LAUNCH_MISSING", "Recovery launch data unavailable")
-	}
-	name, _ := launch["originalName"].(string)
-	if name == "" {
-		name, _ = launch["name"].(string)
-	}
-	thread, exists := values["threadId"]
-	if exists && thread != nil {
-		if value, ok := thread.(string); !ok || value == "" {
-			return ambiguous("RECOVERY_LAUNCH_MISSING", "Recovery launch data unavailable: invalid thread identity")
+	if opt.Replace != nil {
+		launchData, err := os.ReadFile(filepath.Join(dir, jobID+".launch"))
+		var launch map[string]any
+		if err != nil || json.Unmarshal(launchData, &launch) != nil {
+			return ambiguous("RECOVERY_LAUNCH_MISSING", "Recovery launch data unavailable")
 		}
-	}
-	if name == "codex-reply" && (!exists || thread == nil || thread == "") {
-		return ambiguous("RECOVERY_THREAD_MISSING", "Original reply thread identity is missing")
+		name, _ := launch["originalName"].(string)
+		if name == "" {
+			name, _ = launch["name"].(string)
+		}
+		thread, exists := values["threadId"]
+		if exists && thread != nil {
+			if value, ok := thread.(string); !ok || value == "" {
+				return ambiguous("RECOVERY_LAUNCH_MISSING", "Recovery launch data unavailable: invalid thread identity")
+			}
+		}
+		if name == "codex-reply" && (!exists || thread == nil || thread == "") {
+			return ambiguous("RECOVERY_THREAD_MISSING", "Original reply thread identity is missing")
+		}
 	}
 	return runReplacement(opt, stateRoot, jobID, job, now)
 }
@@ -137,7 +142,7 @@ func runReplacement(opt RecoverOptions, stateRoot, jobID string, job *Record, no
 	if opt.Replace != nil {
 		return opt.Replace(stateRoot, jobID, job, now)
 	}
-	return "UNCONFIRMED"
+	return replaceRecoverJob(opt, stateRoot, jobID, job, now)
 }
 
 func recoverTimedOut(dir, jobID string, now float64) string {

@@ -88,6 +88,20 @@ func (r *Record) Set(key string, value any) error {
 	return nil
 }
 
+func (r *Record) Delete(key string) {
+	if _, ok := r.values[key]; !ok {
+		return
+	}
+	delete(r.values, key)
+	for i, existing := range r.keys {
+		if existing == key {
+			r.keys = append(r.keys[:i], r.keys[i+1:]...)
+			break
+		}
+	}
+	r.dirty = true
+}
+
 func (r *Record) Bytes() ([]byte, error) {
 	if !r.dirty {
 		return append([]byte(nil), r.original...), nil
