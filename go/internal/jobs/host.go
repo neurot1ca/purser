@@ -14,7 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"purser-hook/internal/ledger"
 	"purser-hook/internal/proc"
+	"purser-hook/internal/profile"
 )
 
 const hostUnavailableCode = "GO_HOST_EXECUTION_UNAVAILABLE"
@@ -35,8 +37,7 @@ type HostOptions struct {
 	HostContained bool
 }
 
-// RunHostGeneration owns and executes one queued Codex generation. Worktree
-// and alternate-agent execution remain explicitly unavailable.
+// RunHostGeneration owns and executes one queued agent generation.
 func RunHostGeneration(dir, jobID string, generation int64, token string, options ...HostOptions) (map[string]any, error) {
 	if len(jobID) != 64 || !validJobID(jobID) || generation < 1 || token == "" {
 		return nil, errors.New("invalid host generation identity")
@@ -81,11 +82,6 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if err = json.Unmarshal(launch.Args, &argsMap); err != nil || argsMap == nil {
 		return nil, errors.New("launch args must be an object")
 	}
-	if worktreePath != "" || argsMap["worktree"] == true ||
-		(launch.Agent != "" && launch.Agent != "codex") ||
-		(launch.Name != "codex" && launch.Name != "codex-reply") {
-		return failHostUnavailable(path, jobID, generation, token, "Go host branch is not ported")
-	}
 	var args LaunchArgs
 	if err = json.Unmarshal(launch.Args, &args); err != nil {
 		return nil, err
@@ -97,16 +93,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	args.Name = launch.Name
 	args.OutputPath = filepath.Join(dir, jobID+".host-output")
 	defer os.Remove(args.OutputPath)
-	if launch.CodexBin != nil {
-		encoded, _ := json.Marshal(launch.CodexBin)
-		args.BinaryOverride = string(encoded)
+	agent := launch.Agent
+	if agent == "" {
+		agent = "codex"
 	}
-	commandArgs, err := BuildCodexCommand(args)
-	if opt.WorkerCommand != nil {
-		commandArgs, err = opt.WorkerCommand(args)
-	}
-	if err != nil || len(commandArgs) == 0 {
-		return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Codex launch arguments are invalid")
+	if launch.Name != "codex" && launch.Name != "codex-reply" {
+		return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Invalid host launch tool")
 	}
 	deadline, ok := numericDeadline(job)
 	if !ok {
@@ -144,44 +136,178 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if !createdOK {
 		return finishHostError(path, jobID, generation, token, "PROCESS_UNCONFIRMED", "Host process identity unavailable")
 	}
-	lock, err := AcquireOwnership(dir, jobID)
-	if err != nil {
-		return nil, err
-	}
-	job, err = Read(path)
-	if err != nil {
-		_ = lock.Release()
-		return nil, err
-	}
-	job.Get("jobId", &recordedID)
-	job.Get("generation", &recordedGeneration)
-	job.Get("ownershipToken", &recordedToken)
-	job.Get("state", &state)
-	if recordedID != jobID || recordedGeneration != generation || recordedToken != token || state != "QUEUED" {
-		_ = lock.Release()
-		return map[string]any{"status": "stale"}, nil
-	}
-	now := float64(time.Now().UnixNano()) / 1e9
-	address, _ := signal.Addr().(*net.TCPAddr)
-	for _, field := range []struct {
-		key   string
-		value any
-	}{
-		{"hostPid", os.Getpid()}, {"hostCreatedAt", createdValue},
-		{"hostContained", opt.HostContained}, {"signalPort", address.Port},
-	} {
-		if err = job.Set(field.key, field.value); err != nil {
-			break
+	{
+		lock, lockErr := AcquireOwnership(dir, jobID)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		job, lockErr = Read(path)
+		if lockErr == nil {
+			job.Get("jobId", &recordedID)
+			job.Get("generation", &recordedGeneration)
+			job.Get("ownershipToken", &recordedToken)
+			job.Get("state", &state)
+			if recordedID != jobID || recordedGeneration != generation || recordedToken != token || state != "QUEUED" {
+				_ = lock.Release()
+				return map[string]any{"status": "stale"}, nil
+			}
+			address, _ := signal.Addr().(*net.TCPAddr)
+			for _, field := range []struct {
+				key   string
+				value any
+			}{
+				{"hostPid", os.Getpid()}, {"hostCreatedAt", createdValue},
+				{"hostContained", opt.HostContained}, {"signalPort", address.Port},
+			} {
+				if lockErr = job.Set(field.key, field.value); lockErr != nil {
+					break
+				}
+			}
+			if lockErr == nil {
+				lockErr = Write(path, job)
+			}
+		}
+		if releaseErr := lock.Release(); lockErr == nil {
+			lockErr = releaseErr
+		}
+		if lockErr != nil {
+			return nil, lockErr
 		}
 	}
-	if err == nil {
-		err = Write(path, job)
+	if worktreePath != "" || argsMap["worktree"] == true {
+		stateRoot := filepath.Dir(filepath.Dir(dir))
+		var repoRoot, relativeCWD string
+		if worktreePath != "" {
+			var recordedRoot string
+			job.Get("repoRoot", &recordedRoot)
+			repoRoot = recordedRoot
+			if repoRoot == "" {
+				repoRoot = worktreePath
+			}
+			if info, statErr := os.Stat(worktreePath); statErr != nil || !info.IsDir() {
+				return finishHostError(path, jobID, generation, token, "WORKTREE_MISSING", "Job worktree is unavailable")
+			}
+			requested, _ := filepath.Abs(args.Cwd)
+			root, _ := filepath.Abs(repoRoot)
+			relativeCWD, _ = filepath.Rel(root, requested)
+			if relativeCWD == ".." || strings.HasPrefix(relativeCWD, ".."+string(filepath.Separator)) {
+				relativeCWD = ""
+			}
+			var pending bool
+			job.Get("replySnapshotPending", &pending)
+			if pending {
+				var resumed bool
+				job.Get("resumedAfterInterruption", &resumed)
+				if resumed {
+					return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_INTERRUPTED", "Worktree snapshot was interrupted")
+				}
+				var baseline any
+				if job.Get("baselineSnapshot", &baseline) {
+					_ = job.Set("snapshot", baseline)
+				}
+				job.Delete("replySnapshotPending")
+				if err = Write(path, job); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			requested, absErr := filepath.Abs(args.Cwd)
+			if absErr != nil {
+				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
+			}
+			rootOut, gitErr := exec.Command("git", "-C", requested, "rev-parse", "--show-toplevel").Output()
+			if gitErr != nil {
+				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
+			}
+			repoRoot = strings.TrimSpace(string(rootOut))
+			relativeCWD, _ = filepath.Rel(repoRoot, requested)
+			snapshot, createErr := ledger.CreateJobWorktree(repoRoot, jobID, filepath.Join(stateRoot, "wt"))
+			if createErr != nil {
+				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
+			}
+			worktreePath = snapshot["path"]
+			job, err = Read(path)
+			if err != nil {
+				return nil, err
+			}
+			setup := profile.LoadProfile(repoRoot).Worktree
+			setupResult := ledger.RunWorktreeSetup(worktreePath, setup)
+			if setupResult.Failed() {
+				if err = job.Set("worktreePath", worktreePath); err != nil {
+					return nil, err
+				}
+				if err = job.Set("repoRoot", repoRoot); err != nil {
+					return nil, err
+				}
+				_ = job.Set("setupError", setupResult.Failure)
+				if err = Write(path, job); err != nil {
+					return nil, err
+				}
+				return finishHostError(path, jobID, generation, token, "WORKTREE_SETUP_FAILED", "Worktree setup failed")
+			}
+			for key, value := range map[string]any{"worktreePath": snapshot["path"], "snapshot": snapshot["snapshot"], "baselineSnapshot": snapshot["snapshot"], "head": snapshot["head"], "repoRoot": repoRoot} {
+				if err = job.Set(key, value); err != nil {
+					return nil, err
+				}
+			}
+			if err = Write(path, job); err != nil {
+				return nil, err
+			}
+		}
+		mapped := filepath.Join(worktreePath, relativeCWD)
+		if info, statErr := os.Stat(mapped); statErr != nil || !info.IsDir() {
+			_ = job.Set("cwdFallback", relativeCWD)
+			mapped = worktreePath
+			if err = Write(path, job); err != nil {
+				return nil, err
+			}
+		}
+		args.Cwd = mapped
+		if agent == "codex" {
+			config := map[string]any{}
+			if ordered, ok := args.Config.(OrderedObject); ok {
+				for _, entry := range ordered {
+					config[entry.Key] = entry.Value
+				}
+			} else if existing, ok := args.Config.(map[string]any); ok {
+				config = existing
+			}
+			config["sandbox_workspace_write"] = map[string]any{"writable_roots": []any{worktreePath}}
+			args.Config = config
+		}
 	}
-	if releaseErr := lock.Release(); err == nil {
-		err = releaseErr
+	if launch.CodexBin != nil {
+		encoded, _ := json.Marshal(launch.CodexBin)
+		args.BinaryOverride = string(encoded)
 	}
-	if err != nil {
-		return nil, err
+	var commandArgs []string
+	if agent == "codex" {
+		commandArgs, err = BuildCodexCommand(args)
+	} else {
+		configArgs, configErr := FlattenConfig(args.Config)
+		if configErr != nil {
+			err = configErr
+		} else {
+			var prefix []string
+			if launch.CodexBin != nil {
+				prefix, err = ResolveAgentPrefix(agent, launch.CodexBin)
+			} else {
+				prefix, err = ResolveAgentPrefix(agent, nil)
+			}
+			if err == nil {
+				var sandbox *string
+				if args.Sandbox != "" {
+					sandbox = &args.Sandbox
+				}
+				commandArgs, err = BuildAgentCommand(AgentCommandInput{Agent: agent, Prefix: prefix, Tool: launch.Name, CWD: args.Cwd, Model: args.Model, ConfigArgs: configArgs, Sandbox: sandbox, ThreadID: args.ThreadID, Prompt: prompt})
+			}
+		}
+	}
+	if opt.WorkerCommand != nil {
+		commandArgs, err = opt.WorkerCommand(args)
+	}
+	if err != nil || len(commandArgs) == 0 {
+		return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Codex launch arguments are invalid")
 	}
 	if leaseQueued {
 		root := filepath.Dir(filepath.Dir(dir))
@@ -208,7 +334,8 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if ctx.Err() != nil {
 		return map[string]any{"status": "ok"}, nil
 	}
-	lock, err = AcquireOwnership(dir, jobID)
+	now := float64(time.Now().UnixNano()) / 1e9
+	lock, err := AcquireOwnership(dir, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -236,8 +363,8 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	command := exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...)
 	command.Dir = args.Cwd
 	command.Stdin = strings.NewReader(prompt)
-	stream := NewEventStream("codex")
-	activity := NewLivenessActivity(job, "codex", StallThreshold(dir, job), now)
+	stream := NewEventStream(agent)
+	activity := NewLivenessActivity(job, agent, StallThreshold(dir, job), now)
 	activityMu := &sync.Mutex{}
 	command.Stdout = eventWriter{stream: stream, activity: activity, activityMu: activityMu}
 	stderr := &tailBuffer{limit: 4000}
@@ -345,13 +472,20 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			sandbox = args.Sandbox
 		}
 		threadConfig := map[string]any{"cwd": args.Cwd, "model": model, "config_args": configArgs,
-			"sandbox": sandbox, "agent": "codex"}
+			"sandbox": sandbox, "agent": agent}
+		for _, key := range []string{"worktreePath", "snapshot", "baselineSnapshot", "head", "repoRoot"} {
+			var value any
+			if job.Get(key, &value) {
+				threadConfig[key] = value
+			}
+		}
 		if err = saveHostThread(dir, jobID, generation, token, result.ThreadID, threadConfig, launch.Name == "codex"); err != nil {
 			return nil, err
 		}
 	}
 	if !cancelled.Load() && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		if err = saveHostAttemptFields(path, jobID, generation, token, exitCode, result.Status != "success"); err != nil {
+		if err = saveHostAttemptFields(path, jobID, generation, token, result.Status != "success" || result.ThreadID == "",
+			LaunchFailureEvidence(agent, stream.Events(), stderr.String(), true, numberOr(activity["stdoutBytes"], 0) > 0, hostOutputHasData(args.OutputPath), &exitCode)); err != nil {
 			return nil, err
 		}
 	}
@@ -406,7 +540,7 @@ func finishHostStartError(dir, id string, generation int64, token string, cancel
 	}
 }
 
-func saveHostAttemptFields(path, id string, generation int64, token string, exitCode int, failed bool) error {
+func saveHostAttemptFields(path, id string, generation int64, token string, failed bool, evidence map[string]any) error {
 	lock, err := AcquireOwnership(filepath.Dir(path), id)
 	if err != nil {
 		return err
@@ -420,10 +554,8 @@ func saveHostAttemptFields(path, id string, generation int64, token string, exit
 		job.Get("state", &state)
 		if actual == generation && owner == token && state == "RUNNING" {
 			_ = job.Set("responsivenessAttempts", 1)
-			if failed && exitCode != 0 {
-				_ = job.Set("launchFailureEvidence", map[string]any{
-					"type": "AMBIGUOUS", "retryAfterSeconds": nil, "noWorkProof": false,
-				})
+			if failed {
+				_ = job.Set("launchFailureEvidence", evidence)
 			}
 			err = Write(path, job)
 		}
@@ -432,6 +564,11 @@ func saveHostAttemptFields(path, id string, generation int64, token string, exit
 		err = releaseErr
 	}
 	return err
+}
+
+func hostOutputHasData(path string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && len(data) > 0
 }
 
 type eventWriter struct {

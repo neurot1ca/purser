@@ -24,6 +24,7 @@ type EventStream struct {
 	pending []byte
 	result  EventResult
 	text    []string
+	events  []map[string]any
 }
 
 func NewEventStream(agent string) *EventStream {
@@ -53,6 +54,7 @@ func (s *EventStream) consume(line []byte) {
 		return
 	}
 	kind, _ := event["type"].(string)
+	s.events = append(s.events, event)
 	session := ""
 	var failure string
 	terminal, success := false, false
@@ -123,6 +125,8 @@ func (s *EventStream) consume(line []byte) {
 		s.result.Status = "success"
 	}
 }
+
+func (s *EventStream) Events() []map[string]any { return s.events }
 
 // Result flushes an unterminated final line and returns a snapshot.
 func (s *EventStream) Result(interrupted bool, exitCode int, stderr string) EventResult {

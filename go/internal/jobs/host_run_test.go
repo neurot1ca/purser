@@ -19,6 +19,16 @@ func TestHostFakeWorker(t *testing.T) {
 	}
 	output := os.Args[len(os.Args)-1]
 	mode := os.Getenv("PURSER_HOST_FAKE_MODE")
+	if os.Getenv("PURSER_HOST_FAKE_AGENT") == "opencode" {
+		_, _ = os.Stdout.WriteString("{\"type\": \"step_start\", \"sessionID\": \"fake-session\"}\r\n")
+		if mode == "agent_failure" {
+			_, _ = os.Stdout.WriteString("{\"type\": \"error\", \"message\": \"fake agent failure\"}\r\n")
+			os.Exit(1)
+		}
+		_, _ = os.Stdout.WriteString("{\"type\": \"text\", \"sessionID\": \"fake-session\", \"part\": {\"text\": \"fake answer\"}}\r\n")
+		_, _ = os.Stdout.WriteString("{\"type\": \"step_finish\", \"sessionID\": \"fake-session\", \"part\": {\"reason\": \"stop\"}}\r\n")
+		os.Exit(0)
+	}
 	if mode == "sleep" {
 		time.Sleep(3 * time.Second)
 		os.Exit(0)
@@ -46,7 +56,7 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 		{name: "deadline_before_worker_start", state: "TIMED_OUT", errorCode: "DEADLINE_EXCEEDED", deadline: -time.Second},
 		{name: "signal_cancel", mode: "sleep", state: "CANCELLED", errorCode: "CANCELLED", deadline: 5 * time.Second, cancel: true},
 		{name: "stale_generation", state: "QUEUED", stale: true},
-		{name: "worktree_setup_unavailable", state: "FAILED", errorCode: hostUnavailableCode},
+		{name: "worktree_setup_unavailable", state: "FAILED", errorCode: "WORKTREE_MISSING"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

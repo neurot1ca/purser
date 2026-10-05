@@ -319,5 +319,211 @@
       "message": "Codex cancelled",
       "boardDisplayCount": 0
     }
+  },
+  {
+    "name": "worktree_success",
+    "snapshot": null,
+    "record": {
+      "jobId": "20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3",
+      "call": "host-parity-call",
+      "acceptedAt": "__TIME__",
+      "state": "SUCCEEDED",
+      "generation": 1,
+      "ownershipToken": "__TOKEN__",
+      "signalToken": "__TOKEN__",
+      "deadlineAt": "__TIME__",
+      "leaseQueued": false,
+      "hostPid": "__PID__",
+      "hostCreatedAt": "__HOST_IDENTITY__",
+      "hostContained": true,
+      "signalPort": "__HOST_IDENTITY__",
+      "worktreePath": "__ROOT__\\wt\\20a269724f0b",
+      "snapshot": "ea42c9862edb8fabb6bcce8ef2917ee385a677a9",
+      "baselineSnapshot": "ea42c9862edb8fabb6bcce8ef2917ee385a677a9",
+      "head": "8344d67fc6caa8a2fead25cb5efe0c81abbdb965",
+      "repoRoot": "__ROOT__\\repo",
+      "startedAt": "__TIME__",
+      "activeAgent": "codex",
+      "liveness": {
+        "route": null,
+        "agent": "codex",
+        "lastActivityAt": "__TIME__",
+        "stdoutBytes": 170,
+        "processAlive": false,
+        "processAliveAt": "__TIME__",
+        "longestSilentGapSeconds": "__DURATION__",
+        "stallThresholdSeconds": 1800
+      },
+      "pid": "__PID__",
+      "threadId": "fake-thread",
+      "threadConfig": {
+        "cwd": "__ROOT__\\wt\\20a269724f0b",
+        "model": null,
+        "config_args": [
+          "sandbox_workspace_write.writable_roots=[\"__ROOT__\\\\wt\\\\20a269724f0b\"]"
+        ],
+        "sandbox": null,
+        "agent": "codex",
+        "worktreePath": "__ROOT__\\wt\\20a269724f0b",
+        "snapshot": "ea42c9862edb8fabb6bcce8ef2917ee385a677a9",
+        "baselineSnapshot": "ea42c9862edb8fabb6bcce8ef2917ee385a677a9",
+        "head": "8344d67fc6caa8a2fead25cb5efe0c81abbdb965",
+        "repoRoot": "__ROOT__\\repo"
+      },
+      "exitCode": 0,
+      "responsivenessAttempts": 1,
+      "finishedAt": "__TIME__",
+      "outputFile": "20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3.output",
+      "boardDisplayCount": 0
+    }
+  },
+  {
+    "name": "worktree_create_failure",
+    "snapshot": null,
+    "record": {
+      "jobId": "20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3",
+      "call": "host-parity-call",
+      "acceptedAt": "__TIME__",
+      "state": "FAILED",
+      "generation": 1,
+      "ownershipToken": "__TOKEN__",
+      "signalToken": "__TOKEN__",
+      "deadlineAt": "__TIME__",
+      "leaseQueued": false,
+      "hostPid": "__PID__",
+      "hostCreatedAt": "__HOST_IDENTITY__",
+      "hostContained": true,
+      "signalPort": "__HOST_IDENTITY__",
+      "finishedAt": "__TIME__",
+      "errorCode": "WORKTREE_SNAPSHOT_FAILED",
+      "message": "Worktree snapshot could not be created",
+      "boardDisplayCount": 0
+    }
+  },
+  {
+    "name": "worktree_setup_failure",
+    "snapshot": null,
+    "record": {
+      "jobId": "20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3",
+      "call": "host-parity-call",
+      "acceptedAt": "__TIME__",
+      "state": "FAILED",
+      "generation": 1,
+      "ownershipToken": "__TOKEN__",
+      "signalToken": "__TOKEN__",
+      "deadlineAt": "__TIME__",
+      "leaseQueued": false,
+      "hostPid": "__PID__",
+      "hostCreatedAt": "__HOST_IDENTITY__",
+      "hostContained": true,
+      "signalPort": "__HOST_IDENTITY__",
+      "worktreePath": "__ROOT__\\wt\\20a269724f0b",
+      "repoRoot": "__ROOT__\\repo",
+      "setupError": {
+        "exitCode": 9,
+        "timedOut": false,
+        "output": ""
+      },
+      "finishedAt": "__TIME__",
+      "errorCode": "WORKTREE_SETUP_FAILED",
+      "message": "Worktree setup exited with code 9",
+      "boardDisplayCount": 0
+    }
+  },
+  {
+    "name": "agent_success",
+    "snapshot": null,
+    "record": {
+      "jobId": "20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3",
+      "call": "host-parity-call",
+      "acceptedAt": "__TIME__",
+      "state": "SUCCEEDED",
+      "generation": 1,
+      "ownershipToken": "__TOKEN__",
+      "signalToken": "__TOKEN__",
+      "deadlineAt": "__TIME__",
+      "leaseQueued": false,
+      "hostPid": "__PID__",
+      "hostCreatedAt": "__HOST_IDENTITY__",
+      "hostContained": true,
+      "signalPort": "__HOST_IDENTITY__",
+      "startedAt": "__TIME__",
+      "activeAgent": "opencode",
+      "liveness": {
+        "route": null,
+        "agent": "opencode",
+        "lastActivityAt": "__TIME__",
+        "stdoutBytes": 215,
+        "processAlive": false,
+        "processAliveAt": "__TIME__",
+        "longestSilentGapSeconds": "__DURATION__",
+        "stallThresholdSeconds": 1800
+      },
+      "pid": "__PID__",
+      "threadId": "fake-session",
+      "threadConfig": {
+        "cwd": "__ROOT__",
+        "model": "provider/model",
+        "config_args": [],
+        "sandbox": null,
+        "agent": "opencode"
+      },
+      "exitCode": 0,
+      "responsivenessAttempts": 1,
+      "finishedAt": "__TIME__",
+      "outputFile": "20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3.output",
+      "boardDisplayCount": 0
+    }
+  },
+  {
+    "name": "agent_failure",
+    "snapshot": null,
+    "record": {
+      "jobId": "20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3",
+      "call": "host-parity-call",
+      "acceptedAt": "__TIME__",
+      "state": "FAILED",
+      "generation": 1,
+      "ownershipToken": "__TOKEN__",
+      "signalToken": "__TOKEN__",
+      "deadlineAt": "__TIME__",
+      "leaseQueued": false,
+      "hostPid": "__PID__",
+      "hostCreatedAt": "__HOST_IDENTITY__",
+      "hostContained": true,
+      "signalPort": "__HOST_IDENTITY__",
+      "startedAt": "__TIME__",
+      "activeAgent": "opencode",
+      "liveness": {
+        "route": null,
+        "agent": "opencode",
+        "lastActivityAt": "__TIME__",
+        "stdoutBytes": 105,
+        "processAlive": false,
+        "processAliveAt": "__TIME__",
+        "longestSilentGapSeconds": "__DURATION__",
+        "stallThresholdSeconds": 1800
+      },
+      "pid": "__PID__",
+      "threadId": "fake-session",
+      "threadConfig": {
+        "cwd": "__ROOT__",
+        "model": "provider/model",
+        "config_args": [],
+        "sandbox": null,
+        "agent": "opencode"
+      },
+      "exitCode": 1,
+      "launchFailureEvidence": {
+        "type": "NONZERO_EXIT",
+        "retryAfterSeconds": null,
+        "noWorkProof": true
+      },
+      "responsivenessAttempts": 1,
+      "finishedAt": "__TIME__",
+      "errorCode": "CODEX_FAILED",
+      "message": "Codex failed: fake agent failure",
+      "boardDisplayCount": 0
+    }
   }
 ]

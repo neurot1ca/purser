@@ -4,11 +4,85 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
 var agyModel = regexp.MustCompile(`^gemini-[A-Za-z0-9._-]+$`)
+
+// ResolveAgentPrefix mirrors Python's alternate-agent binary override rules.
+func ResolveAgentPrefix(agent string, override any) ([]string, error) {
+	if override != nil {
+		if value, ok := override.(string); ok {
+			if strings.HasPrefix(value, "[") {
+				var parsed []string
+				if err := json.Unmarshal([]byte(value), &parsed); err != nil || len(parsed) == 0 {
+					return nil, errors.New("invalid agent binary override")
+				}
+				for _, item := range parsed {
+					if item == "" {
+						return nil, errors.New("invalid agent binary override")
+					}
+				}
+				return parsed, nil
+			}
+			if value != "" {
+				return []string{value}, nil
+			}
+		}
+		if values, ok := override.([]any); ok {
+			prefix := make([]string, 0, len(values))
+			for _, value := range values {
+				item, valid := value.(string)
+				if !valid || item == "" {
+					return nil, errors.New("invalid agent binary override")
+				}
+				prefix = append(prefix, item)
+			}
+			if len(prefix) > 0 {
+				return prefix, nil
+			}
+		}
+		return nil, errors.New("invalid agent binary override")
+	}
+	launcher, err := exec.LookPath(agent)
+	if err != nil {
+		return nil, err
+	}
+	if agent != "opencode" {
+		return []string{launcher}, nil
+	}
+	packages := map[string][]string{
+		"windows": {"opencode-windows-x64", "opencode-windows-x64-baseline"},
+		"linux":   {"opencode-linux-x64", "opencode-linux-arm64"},
+		"darwin":  {"opencode-darwin-x64", "opencode-darwin-arm64"},
+	}[runtime.GOOS]
+	roots := []string{
+		filepath.Join(filepath.Dir(launcher), "node_modules", "opencode-ai", "node_modules"),
+		filepath.Join(filepath.Dir(filepath.Dir(launcher)), "node_modules", "opencode-ai", "node_modules"),
+		filepath.Join(filepath.Dir(filepath.Dir(launcher)), "node_modules"),
+		filepath.Join(filepath.Dir(filepath.Dir(launcher)), "opencode-ai", "node_modules"),
+	}
+	binary := "opencode"
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	for _, root := range roots {
+		for _, name := range packages {
+			candidate := filepath.Join(root, name, "bin", binary)
+			if _, err := exec.LookPath(candidate); err == nil {
+				return []string{candidate}, nil
+			}
+		}
+	}
+	if runtime.GOOS == "windows" && strings.ToLower(filepath.Ext(launcher)) != ".exe" {
+		return nil, errors.New("opencode executable was not found")
+	}
+	return []string{launcher}, nil
+}
 
 // AgentCommandInput contains the values used to construct an alternate-agent
 // CLI invocation. Prefix and Args remain argv elements; no shell is involved.

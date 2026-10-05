@@ -33,8 +33,8 @@ func TestHostPythonOracleReplay(t *testing.T) {
 	if err = json.Unmarshal(data, &want); err != nil {
 		t.Fatal(err)
 	}
-	if len(want) != 8 {
-		t.Fatalf("fixture has %d cases, want 8", len(want))
+	if len(want) != 13 {
+		t.Fatalf("fixture has %d cases, want 13", len(want))
 	}
 	for _, fixture := range want {
 		t.Run(fixture.Name, func(t *testing.T) {
@@ -46,6 +46,23 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			}
 			if fixture.Name == "queued" || fixture.Name == "cancel_queued" {
 				setupHostParityAdmission(t, root)
+			}
+			worktreeCase := fixture.Name == "worktree_success" || fixture.Name == "worktree_create_failure" || fixture.Name == "worktree_setup_failure"
+			if fixture.Name == "worktree_success" || fixture.Name == "worktree_setup_failure" {
+				setupHostParityRepo(t, filepath.Join(root, "repo"), fixture.Name == "worktree_setup_failure")
+			}
+			if fixture.Name == "worktree_setup_failure" {
+				home := filepath.Join(root, "home")
+				config := filepath.Join(home, ".orchestrator", "config.toml")
+				if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
+					t.Fatal(err)
+				}
+				trust := "schema_version = 1\n[trust]\npaths = [\"" + filepath.ToSlash(filepath.Join(root, "repo")) + "\"]\n"
+				if err := os.WriteFile(config, []byte(trust), 0600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("HOME", home)
+				t.Setenv("USERPROFILE", home)
 			}
 			deadline := time.Now().Add(30 * time.Second)
 			if fixture.Name == "deadline" {
@@ -62,8 +79,23 @@ func TestHostPythonOracleReplay(t *testing.T) {
 					"stdoutBytes": 0, "longestSilentGapSeconds": 0.0}
 			}
 			writeHostTestJSON(t, filepath.Join(dir, jobID+".json"), job)
+			agent := "codex"
+			if fixture.Name == "agent_success" || fixture.Name == "agent_failure" {
+				agent = "opencode"
+			}
+			cwd := root
+			if fixture.Name == "worktree_success" || fixture.Name == "worktree_setup_failure" {
+				cwd = filepath.Join(root, "repo")
+			}
+			args := map[string]any{"cwd": cwd, "prompt": "hello"}
+			if worktreeCase {
+				args["worktree"] = true
+			}
+			if agent == "opencode" {
+				args["model"] = "provider/model"
+			}
 			writeHostTestJSON(t, filepath.Join(dir, jobID+".launch"), map[string]any{
-				"name": "codex", "agent": "codex", "args": map[string]any{"cwd": root, "prompt": "hello"},
+				"name": "codex", "agent": agent, "codexBin": []string{"fake-worker"}, "args": args,
 			})
 			_ = os.Setenv("PURSER_HOST_FAKE_WORKER", "1")
 			mode := fixture.Name
@@ -71,8 +103,10 @@ func TestHostPythonOracleReplay(t *testing.T) {
 				mode = "sleep"
 			}
 			_ = os.Setenv("PURSER_HOST_FAKE_MODE", mode)
+			_ = os.Setenv("PURSER_HOST_FAKE_AGENT", agent)
 			defer os.Unsetenv("PURSER_HOST_FAKE_WORKER")
 			defer os.Unsetenv("PURSER_HOST_FAKE_MODE")
+			defer os.Unsetenv("PURSER_HOST_FAKE_AGENT")
 			executable, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -168,6 +202,34 @@ func setupHostParityAdmission(t *testing.T, root string) {
 	baseline := map[string]any{"status": "UNKNOWN", "code": "QUEUED"}
 	if saved := ledger.Save(project, ledger.BuildSessionRecord("task", nil, "", "", "", map[string]any{"pending_call_baseline": baseline})); saved.Status != "OK" {
 		t.Fatal("could not create queued session")
+	}
+}
+
+func setupHostParityRepo(t *testing.T, repo string, setupFailure bool) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(repo, "src"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "src", "file"), []byte("baseline\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if setupFailure {
+		config := filepath.Join(repo, ".orchestrator")
+		if err := os.MkdirAll(config, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(config, "profile.toml"), []byte("schema_version = 1\n[worktree]\nsetup = \"exit 9\"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"commit", "-qm", "baseline"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z",
+			"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
 	}
 }
 
@@ -279,7 +341,13 @@ func normalizeHostParityValue(value any, root string) any {
 			item[index] = normalizeHostParityValue(item[index], root)
 		}
 	case string:
-		return strings.ReplaceAll(item, root, "__ROOT__")
+		escapedRoot := strings.ReplaceAll(root, `\`, `\\`)
+		forwardRoot := filepath.ToSlash(root)
+		item = strings.ReplaceAll(item, forwardRoot, "__ROOT__")
+		if strings.HasPrefix(item, "__ROOT__/") {
+			item = "__ROOT__" + string(filepath.Separator) + filepath.FromSlash(strings.TrimPrefix(item, "__ROOT__/"))
+		}
+		return strings.ReplaceAll(strings.ReplaceAll(item, escapedRoot, "__ROOT__"), root, "__ROOT__")
 	}
 	return value
 }

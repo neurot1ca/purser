@@ -24,12 +24,23 @@ CALL = "host-parity-call"
 JOB_ID = hashlib.sha256(CALL.encode()).hexdigest()
 TOKEN = "host-owner-token"
 SIGNAL = "host-signal-token"
-CASES = ("success", "nonzero", "deadline", "cancel", "stale", "queued", "cancel_queued", "stall")
+CASES = ("success", "nonzero", "deadline", "cancel", "stale", "queued", "cancel_queued", "stall",
+         "worktree_success", "worktree_create_failure", "worktree_setup_failure",
+         "agent_success", "agent_failure")
 
 FAKE_WORKER = r'''import json, os, sys, time
 mode = os.environ.get("PURSER_HOST_ORACLE_MODE", "success")
+agent = os.environ.get("PURSER_HOST_ORACLE_AGENT", "codex")
 if mode in ("sleep", "deadline", "cancel", "cancel_queued", "stall"):
     time.sleep(5)
+if agent == "opencode":
+    print(json.dumps({"type":"step_start","sessionID":"fake-session"}), flush=True)
+    if mode == "agent_failure":
+        print(json.dumps({"type":"error","message":"fake agent failure"}), flush=True)
+        sys.exit(1)
+    print(json.dumps({"type":"text","sessionID":"fake-session","part":{"text":"fake answer"}}), flush=True)
+    print(json.dumps({"type":"step_finish","sessionID":"fake-session","part":{"reason":"stop"}}), flush=True)
+    sys.exit(0)
 print(json.dumps({"type":"thread.started","thread_id":"fake-thread"}), flush=True)
 print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"fake answer"}}), flush=True)
 print(json.dumps({"type":"turn.completed"}), flush=True)
@@ -90,7 +101,8 @@ def _normalize(value, root):
     if isinstance(value, list):
         return [_normalize(item, root) for item in value]
     if isinstance(value, str):
-        return value.replace(str(root), "__ROOT__")
+        escaped_root = str(root).replace("\\", "\\\\")
+        return value.replace(escaped_root, "__ROOT__").replace(str(root), "__ROOT__")
     return value
 
 
@@ -133,11 +145,44 @@ def _case(tmp_path, name):
     _write(job_path, job)
     fake_path = root / "fake_worker.py"
     fake_path.write_text(FAKE_WORKER, encoding="utf-8")
+    agent = "opencode" if name.startswith("agent_") else "codex"
+    worktree = name.startswith("worktree_")
+    if name in ("worktree_success", "worktree_setup_failure"):
+        repo = root / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / "src" / "file").write_text("baseline\n", encoding="utf-8")
+        if name == "worktree_setup_failure":
+            (repo / ".orchestrator").mkdir()
+            (repo / ".orchestrator" / "profile.toml").write_text(
+                'schema_version = 1\n[worktree]\nsetup = "exit 9"\n', encoding="utf-8")
+            user_config = root / "home" / ".orchestrator" / "config.toml"
+            user_config.parent.mkdir(parents=True)
+            user_config.write_text(
+                f'schema_version = 1\n[trust]\npaths = [{json.dumps(str(repo))}]\n', encoding="utf-8")
+        env = os.environ.copy()
+        env.update({"GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
+                    "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                    "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"})
+        for args in (("init", "-q"), ("add", "."), ("commit", "-qm", "baseline")):
+            subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
+    cwd = str(root / "repo") if worktree and name != "worktree_create_failure" else str(root)
+    launch_args = {"cwd": cwd, "prompt": "hello"}
+    if worktree:
+        launch_args["worktree"] = True
+    if agent == "opencode":
+        launch_args["model"] = "provider/model"
     _write(jobs / f"{JOB_ID}.launch", {
-        "name": "codex", "agent": "codex", "codexBin": json.dumps([sys.executable, str(fake_path)]),
-        "args": {"cwd": str(root), "prompt": "hello"},
+        "name": "codex", "agent": agent, "codexBin": json.dumps([sys.executable, str(fake_path)]),
+        "args": launch_args,
     })
+    prior_env = {key: os.environ.get(key) for key in ("PURSER_HOST_ORACLE_MODE", "PURSER_HOST_ORACLE_AGENT",
+                                                        "PURSER_STATE_DIR", "HOME", "USERPROFILE")}
     os.environ["PURSER_HOST_ORACLE_MODE"] = name
+    os.environ["PURSER_HOST_ORACLE_AGENT"] = agent
+    os.environ["PURSER_STATE_DIR"] = str(root)
+    if name == "worktree_setup_failure":
+        os.environ["HOME"] = str(root / "home")
+        os.environ["USERPROFILE"] = str(root / "home")
     outcome = {}
     worker = threading.Thread(target=lambda: codex_exec_mcp._host_main(JOB_ID, jobs, 1, TOKEN), daemon=True)
     worker.start()
@@ -162,7 +207,11 @@ def _case(tmp_path, name):
             worker.join(6)
         assert not worker.is_alive(), f"Python host did not finish {name}"
     finally:
-        os.environ.pop("PURSER_HOST_ORACLE_MODE", None)
+        for key, value in prior_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     final = json.loads(job_path.read_text(encoding="utf-8"))
     return {"name": name, "snapshot": outcome.get("snapshot"), "record": _normalize(final, root)}
 
@@ -175,3 +224,11 @@ def test_go_host_fixture_matches_real_python_host(tmp_path):
     assert FIXTURE.is_file(), f"missing {FIXTURE}; run with PURSER_REGEN_FIXTURES=1"
     assert FIXTURE.stat().st_size < 30_000
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == actual
+
+
+@pytest.mark.parametrize("name", ("worktree_create_failure", "worktree_setup_failure"))
+def test_worktree_failures_do_not_launch_worker(tmp_path, name):
+    record = _case(tmp_path, name)["record"]
+    assert record["state"] == "FAILED"
+    assert record["errorCode"] in ("WORKTREE_SNAPSHOT_FAILED", "WORKTREE_SETUP_FAILED")
+    assert "startedAt" not in record and "pid" not in record
