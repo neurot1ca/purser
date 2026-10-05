@@ -1,0 +1,25 @@
+{
+  "internal_diagnostic": {
+    "finding": "INTERNAL_POST_ERROR",
+    "phase": "PostToolUseFailure",
+    "review_mode": "FULL"
+  },
+  "mechanical_negative": {
+    "samples": [
+      true,
+      false
+    ]
+  },
+  "observation_failure_tolerated": {
+    "returned": true
+  },
+  "task_projection": {
+    "projected": true
+  },
+  "undelivered_marker": {
+    "kind": "pretool_bypass",
+    "marker_exists": false,
+    "protocol_violation": true,
+    "reason": "adapter did not deliver"
+  }
+}
