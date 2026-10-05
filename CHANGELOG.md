@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.72 — 2026-10-05
+
+- **Changed:** Every Purser hook for the Codex tools now runs in Go through the mod adapter: async `codex_start`/`codex_result`/`codex_cancel` PreToolUse, PostToolUse, PostToolUseFailure and Stop. The Python command hooks are no longer registered by the plugin; the Python bridge and Reviewer-1 bridge still run as subprocesses.
+- **Added:** The measurement ledger and its reports are projected into the Obsidian vault (`purser-hook measures-sync`, also at SessionStart).
+- **Fixed:** Obsidian projection settings resolve from the plugin root before the working directory.
+- **Internal:** Go `jobs` package ports the Codex bridge's job store and locking, thread records, launch arguments, alternate agents, event parsing, Windows/POSIX detached launch and containment, the host signal protocol and liveness, each against a Python oracle; nothing is wired to it yet.
+
 ## 0.1.71 — 2026-10-04
 
 - **Changed:** PreToolUse for `codex` and `codex-reply` runs in Go through the mod adapter instead of the Python hook; `codex_start`, `codex_result`, `codex_cancel` and every Post/Stop hook stay Python.
