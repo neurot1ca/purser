@@ -403,18 +403,16 @@ def test_go_pretooluse_tools_cover_hooks_json(repo):
     sys.path.insert(0, str(PACKAGE))
     import codex
 
-    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    adapter = (REPO_ROOT / "hooks" / "mod" / "enforcement.ts").read_text(encoding="utf-8")
     go_source = (REPO_ROOT / "go" / "internal" / "enforce" / "pre.go").read_text(encoding="utf-8")
     go_map = go_source.split("var codexTools = map[string]bool{", 1)[1].split("}", 1)[0]
     go_names = set(re.findall(r'"(mcp__[^" ]+)"\s*:', go_map))
     hooked_names = set()
-    for entry in hooks["hooks"]["PreToolUse"]:
-        matcher = re.fullmatch(r"\^([^()]+)\(([^()]+)\)\$", entry["matcher"])
-        assert matcher, entry["matcher"]
-        prefix, alternatives = matcher.groups()
-        names = {prefix + suffix for suffix in alternatives.split("|")}
-        assert names <= codex.CODEX_TOOLS
-        hooked_names.update(names)
+    for name in ("syncTools", "startTools", "followupTools"):
+        tool_set = re.search(rf"const {name} = new Set\(\[([\s\S]*?)\]\)", adapter)
+        assert tool_set, name
+        hooked_names.update(re.findall(r"'([^']+)'", tool_set.group(1)))
+    assert hooked_names <= codex.CODEX_TOOLS
     assert hooked_names <= go_names
 
 
