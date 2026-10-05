@@ -87,6 +87,9 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			if fixture.Name == "worktree_success" || fixture.Name == "worktree_setup_failure" {
 				cwd = filepath.Join(root, "repo")
 			}
+			if fixture.Name == "worktree_create_failure" {
+				cwd = os.TempDir()
+			}
 			args := map[string]any{"cwd": cwd, "prompt": "hello"}
 			if worktreeCase {
 				args["worktree"] = true

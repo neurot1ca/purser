@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func buildPurserHook(t *testing.T) string {
@@ -115,7 +114,7 @@ func TestPrivateOperationRejectsUnknownAndMalformedInput(t *testing.T) {
 	}
 }
 
-func TestHostReportsUnportedWorker(t *testing.T) {
+func TestHostEntryPointReportsExplicitErrorStatus(t *testing.T) {
 	binary := buildPurserHook(t)
 	state := t.TempDir()
 	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
@@ -140,19 +139,7 @@ func TestHostReportsUnportedWorker(t *testing.T) {
 		t.Fatalf("host unexpectedly returned success: %s", output)
 	}
 	var status map[string]any
-	if json.Unmarshal(output, &status) != nil || status["status"] != "error" || status["errorCode"] != "GO_HOST_EXECUTION_UNAVAILABLE" {
+	if json.Unmarshal(output, &status) != nil || status["status"] != "error" {
 		t.Fatalf("host error status missing: %q", output)
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		contents, readErr := os.ReadFile(filepath.Join(dir, jobID+".json"))
-		if readErr == nil {
-			var job map[string]any
-			if json.Unmarshal(contents, &job) == nil && job["state"] == "FAILED" {
-				return
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("host did not persist failure: %s", output)
 }

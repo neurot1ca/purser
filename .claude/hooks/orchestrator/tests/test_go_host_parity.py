@@ -7,6 +7,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -165,7 +166,8 @@ def _case(tmp_path, name):
                     "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"})
         for args in (("init", "-q"), ("add", "."), ("commit", "-qm", "baseline")):
             subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
-    cwd = str(root / "repo") if worktree and name != "worktree_create_failure" else str(root)
+    cwd = (tempfile.gettempdir() if name == "worktree_create_failure" else
+           str(root / "repo") if worktree else str(root))
     launch_args = {"cwd": cwd, "prompt": "hello"}
     if worktree:
         launch_args["worktree"] = True
