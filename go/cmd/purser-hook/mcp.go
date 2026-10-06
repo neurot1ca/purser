@@ -9,13 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"purser-hook/internal/jobs"
-	"purser-hook/internal/proc"
 )
 
 const mcpSchemas = `[{"name":"codex","description":"Run a new Codex thread.","inputSchema":{"type":"object","properties":{"prompt":{"type":"string"},"label":{"type":"string","description":"Short human task description in the user's language (up to 80 characters)."},"model":{"type":"string"},"cwd":{"type":"string"},"config":{"type":"object"},"developer-instructions":{"type":"string"},"base-instructions":{"type":"string"},"compact-prompt":{"type":"string"},"sandbox":{"type":"string","enum":["read-only","workspace-write","danger-full-access"]},"approval-policy":{"type":"string","enum":["on-request","never"]}},"required":["prompt"]}},{"name":"codex-reply","description":"Continue a thread created by this server.","inputSchema":{"type":"object","properties":{"threadId":{"type":"string"},"conversationId":{"type":"string","description":"Deprecated alias for threadId."},"prompt":{"type":"string"},"label":{"type":"string","description":"Short human task description in the user's language (up to 80 characters); may be omitted to reuse the thread label."}},"required":["prompt"]}},{"name":"codex_start","description":"Start a durable Codex job.","inputSchema":{"type":"object","properties":{"prompt":{"type":"string"},"label":{"type":"string","description":"Short human task description in the user's language (up to 80 characters)."},"model":{"type":"string"},"cwd":{"type":"string"},"config":{"type":"object"},"developer-instructions":{"type":"string"},"base-instructions":{"type":"string"},"compact-prompt":{"type":"string"},"sandbox":{"type":"string","enum":["read-only","workspace-write","danger-full-access"]},"approval-policy":{"type":"string","enum":["on-request","never"]},"call":{"type":"string"},"mode":{"type":"string","enum":["new","reply"]},"worktree":{"type":"boolean"},"threadId":{"type":"string"},"timeoutSeconds":{"type":"number"},"taskId":{"type":"string"},"route":{"type":"string"},"etaMinutes":{"type":"integer"},"jobModel":{"type":"string"},"jobEffort":{"type":"string"},"jobLabel":{"type":"string"},"jobPhase":{"type":"string"},"readinessCriteria":{"type":"object"},"readinessGrounded":{"type":"boolean"},"readinessAgent":{"type":"string"},"readinessModel":{"type":"string"}},"required":["prompt"]}},{"name":"codex_result","description":"Read a durable Codex job.","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"adopt":{"type":"boolean","description":"After user consent, finalize a job from an earlier session in this project."}},"required":["jobId"]}},{"name":"codex_cancel","description":"Cancel a durable Codex job.","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"reason":{"type":"string"}},"required":["jobId"]}},{"name":"codex_apply","description":"Apply a job worktree patch.","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"resolved":{"type":"boolean","description":"Record a hand-resolved conflict after verifying the repository."},"reviewer1Valid":{"type":"integer","minimum":0},"reviewer1False":{"type":"integer","minimum":0}},"required":["jobId"]}}]`
@@ -290,40 +287,5 @@ func startMCPMaintenance(ctx context.Context, stdout, stderr io.Writer) {
 	if ctx.Err() != nil {
 		return
 	}
-	if _, err := jobs.RecoverPending(stateRoot(), time.Now()); err != nil && ctx.Err() == nil {
-		fmt.Fprintf(stderr, "Codex job recovery unavailable: %v\n", err)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
-	if pluginRoot == "" {
-		executable, err := os.Executable()
-		if err != nil {
-			fmt.Fprintf(stderr, "Codex recovery scan unavailable: %v\n", err)
-			return
-		}
-		pluginRoot = filepath.Dir(filepath.Dir(executable))
-	}
-	python := proc.ResolvePython(ctx, pluginRoot)
-	if python == "" {
-		if ctx.Err() == nil {
-			fmt.Fprintln(stderr, "Codex job cleanup unavailable: Python was not found; recovery ran")
-		}
-		return
-	}
-	script := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "async_session_maintenance.py")
-	cmd := mcpMaintenanceCommand(ctx, python, script, stateRoot(), stdout, stderr)
-	if err := cmd.Run(); err != nil && ctx.Err() == nil {
-		fmt.Fprintf(stderr, "Codex recovery scan unavailable: %v\n", err)
-	}
-}
-
-func mcpMaintenanceCommand(ctx context.Context, python, script, root string, stdout, stderr io.Writer) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, python, script, "--startup", root)
-	cmd.Env = append(os.Environ(), "PYTHONUTF8=1")
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	proc.ConfigureProcessTreeKill(cmd)
-	return cmd
+	jobs.CleanupJobs(stateRoot(), time.Now(), true)
 }

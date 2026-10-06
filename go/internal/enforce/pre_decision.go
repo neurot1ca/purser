@@ -669,6 +669,24 @@ func preEmit(root string, event map[string]any, repository *string, taskID, proj
 	}
 }
 
+// RecordUnfetchedResult mirrors telemetry.emit for cleanup's result-not-fetched marker.
+func RecordUnfetchedResult(root string, projectKey, route any) {
+	defer func() {
+		if recover() != nil {
+			recordObservationHealth(root, "DEGRADED", "TELEMETRY_ENTRYPOINT_FAILURE")
+		}
+	}()
+	payload := map[string]any{"route": route, "code": "RESULT_NOT_FETCHED"}
+	envelope := map[string]any{"project_key": projectKey}
+	if event, err := buildObservationAtStateRoot("CODEX_RESULT_UNFETCHED", envelope, payload, nil, root); err == nil {
+		if code, err := persistObservation(filepath.Join(root, "telemetry"), event); err != nil {
+			recordObservationHealth(root, "DEGRADED", code)
+		}
+	} else {
+		recordObservationHealth(root, "DEGRADED", "TELEMETRY_EMIT_FAILED")
+	}
+}
+
 // RecordClaudeDecision mirrors the best-effort telemetry emitted by the Python bridge.
 func RecordClaudeDecision(root string, job map[string]any, decision, kind, sourceJobID string, reviewerCounts ...any) {
 	task, ok := job["taskId"].(string)

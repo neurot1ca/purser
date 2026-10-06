@@ -32,14 +32,7 @@ func envInt(key string) int {
 	return value
 }
 
-func TestMCPMaintenanceCommandUsesProcessTreeCancellation(t *testing.T) {
-	cmd := mcpMaintenanceCommand(context.Background(), "python", "maintenance.py", "state", io.Discard, io.Discard)
-	if cmd.SysProcAttr == nil || cmd.Cancel == nil {
-		t.Fatal("maintenance command is missing process-tree launch or cancellation settings")
-	}
-}
-
-func TestMCPStartupRecoversJobsWhenPythonIsUnavailable(t *testing.T) {
+func TestMCPStartupRunsNativeCleanupWithoutPython(t *testing.T) {
 	base := t.TempDir()
 	pluginRoot := filepath.Join(base, "plugin")
 	stateRoot := filepath.Join(base, "state")
@@ -65,8 +58,8 @@ func TestMCPStartupRecoversJobsWhenPythonIsUnavailable(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(jobsDir, id+".owner-lock")); err != nil {
 		t.Fatalf("startup did not run native recovery: %v", err)
 	}
-	if got, want := stderr.String(), "Codex job cleanup unavailable: Python was not found; recovery ran\n"; got != want {
-		t.Fatalf("stderr = %q, want %q", got, want)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("native maintenance wrote unexpected stderr: %q", got)
 	}
 }
 
