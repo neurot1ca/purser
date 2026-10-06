@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -35,6 +36,20 @@ func TestAwaitHostPythonAcknowledgementOutcomes(t *testing.T) {
 		text := got["content"].([]any)[0].(map[string]any)["text"]
 		if value["state"] != "RUNNING" || text != `{"jobId": "`+id+`", "acceptedAt": 10, "deadlineAt": 20, "state": "RUNNING"}` {
 			t.Fatalf("immediate completion differs from Python: %#v", got)
+		}
+	})
+	t.Run("running host process is acknowledged without signal ping", func(t *testing.T) {
+		stateRoot := t.TempDir()
+		created, ok := hostProcessIdentity()
+		if !ok {
+			t.Skip("current process identity is unavailable")
+		}
+		writeAwaitRecord(t, stateRoot, map[string]any{"jobId": id, "state": "RUNNING",
+			"hostPid": os.Getpid(), "hostCreatedAt": created, "hostContained": runtime.GOOS == "windows",
+			"acceptedAt": 10, "deadlineAt": 20})
+		got := awaitHost(stateRoot, id, time.Second)
+		if got["isError"] == true || got["structuredContent"].(map[string]any)["state"] != "RUNNING" {
+			t.Fatalf("live host process was not acknowledged: %#v", got)
 		}
 	})
 	t.Run("explicit unconfirmed state returns immediately", func(t *testing.T) {

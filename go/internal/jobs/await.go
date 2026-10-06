@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -30,7 +31,15 @@ func awaitHost(stateRoot, jobID string, timeout time.Duration) map[string]any {
 			if portOK && port > 0 && token != "" {
 				acknowledged, _ = SignalPing("127.0.0.1:"+pythonString(port), jobID, token, 500*time.Millisecond)
 			}
-			if state == "QUEUED" && job["leaseQueued"] == true && acknowledged || state == "RUNNING" && acknowledged {
+			hostAlive := false
+			if state == "RUNNING" {
+				pid, pidOK := recoveryInteger(record, "hostPid")
+				created, createdOK := recoveryInteger(record, "hostCreatedAt")
+				contained := runtime.GOOS != "windows" || job["hostContained"] == true
+				hostAlive = pidOK && pid > 0 && createdOK && contained &&
+					recoveryProcessState(int(pid), uint64(created)) == "ALIVE"
+			}
+			if state == "QUEUED" && job["leaseQueued"] == true && acknowledged || state == "RUNNING" && (hostAlive || acknowledged) {
 				return finishResult(map[string]any{"jobId": job["jobId"], "state": state,
 					"acceptedAt": job["acceptedAt"], "deadlineAt": job["deadlineAt"]},
 					"jobId", "state", "acceptedAt", "deadlineAt")
