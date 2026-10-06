@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.82 — 2026-10-06
+
+- **Changed:** Python is no longer needed for core use: the codex-main MCP server, the job waiter, scope leases, SessionStart and MCP-start maintenance, Reviewer-1 and the readiness check all run natively in Go; the Python MCP fallback and the Python SessionStart hook are removed.
+- **Added:** The Go MCP host refreshes the models.dev catalog cache at every start when it is older than 24 hours.
+- **Changed:** Opt-in maintenance reports still use Python and are skipped with a notice when Python is missing.
+
 ## 0.1.81 — 2026-10-06
 
 - **Fixed:** The plugin upgrade note and the free-model ranking notice appear again at session start under the Go hooks, and the daily pinned model-version discovery runs again.
