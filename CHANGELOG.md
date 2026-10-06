@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.84 — 2026-10-06
+
+- **Added:** `/purser:gear-up` and `/purser:gear-down` (or just ask in chat) switch a project's luna-high Codex work to the configured sol model at medium until geared down; Pre enforces it for new jobs.
+- **Added:** After a Codex job, Purser suggests gearing up when quota would otherwise go unused, or back down when it runs low, at most once per quota window; receipts show `gear up`.
+- **Added:** The usage band shows Claude's context fill and the latest Codex job's model and effort.
+- **Fixed:** Lock files are no longer written before locking, removing a Windows lock race.
+
 ## 0.1.83 — 2026-10-06
 
 - **Fixed:** Reviewer-1 gets its configured 180 s timeout again instead of a silent 90 s default; the Go Post hook now honors numeric config values (hook budgets, report limits).
