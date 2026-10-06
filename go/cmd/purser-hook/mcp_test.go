@@ -39,6 +39,37 @@ func TestMCPMaintenanceCommandUsesProcessTreeCancellation(t *testing.T) {
 	}
 }
 
+func TestMCPStartupRecoversJobsWhenPythonIsUnavailable(t *testing.T) {
+	base := t.TempDir()
+	pluginRoot := filepath.Join(base, "plugin")
+	stateRoot := filepath.Join(base, "state")
+	pathDir := filepath.Join(base, "empty-path")
+	if err := os.MkdirAll(pathDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("PURSER_STATE_DIR", stateRoot)
+	t.Setenv("PATH", pathDir)
+	id := strings.Repeat("a", 64)
+	jobsDir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	job := []byte(`{"jobId":"` + id + `","state":"QUEUED"}`)
+	if err := os.WriteFile(filepath.Join(jobsDir, id+".json"), job, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	startMCPMaintenance(context.Background(), io.Discard, &stderr)
+	if _, err := os.Stat(filepath.Join(jobsDir, id+".owner-lock")); err != nil {
+		t.Fatalf("startup did not run native recovery: %v", err)
+	}
+	if got, want := stderr.String(), "Codex job cleanup unavailable: Python was not found; recovery ran\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
 func mcpTestStartup(delay time.Duration, exitCode int, done chan<- struct{}) func(context.Context, io.Writer, io.Writer) {
 	return func(ctx context.Context, stdout, stderr io.Writer) {
 		defer close(done)

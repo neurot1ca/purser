@@ -287,6 +287,15 @@ func mcpMainWithStartup(args []string, input io.Reader, output, stderr io.Writer
 }
 
 func startMCPMaintenance(ctx context.Context, stdout, stderr io.Writer) {
+	if ctx.Err() != nil {
+		return
+	}
+	if _, err := jobs.RecoverPending(stateRoot(), time.Now()); err != nil && ctx.Err() == nil {
+		fmt.Fprintf(stderr, "Codex job recovery unavailable: %v\n", err)
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
 	if pluginRoot == "" {
 		executable, err := os.Executable()
@@ -299,7 +308,7 @@ func startMCPMaintenance(ctx context.Context, stdout, stderr io.Writer) {
 	python := proc.ResolvePython(ctx, pluginRoot)
 	if python == "" {
 		if ctx.Err() == nil {
-			fmt.Fprintln(stderr, "Codex recovery scan unavailable: Python was not found")
+			fmt.Fprintln(stderr, "Codex job cleanup unavailable: Python was not found; recovery ran")
 		}
 		return
 	}
