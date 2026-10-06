@@ -4,8 +4,7 @@
       "command": "node",
       "args": [
         "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-        "go-mcp",
-        "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"
+        "go-mcp"
       ]
     }
   }

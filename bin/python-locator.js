@@ -55,7 +55,7 @@ function main(args, resolve = resolvePython, run = spawnSync) {
     return selected ? 0 : 1;
   }
   let mode = args.shift();
-  if (!['pre-codex', 'hook', 'go-hook', 'mcp', 'go-mcp'].includes(mode) || !args.length) {
+  if (!['pre-codex', 'hook', 'go-hook', 'mcp', 'go-mcp'].includes(mode) || (!args.length && mode !== 'go-mcp')) {
     process.stderr.write('Purser: invalid Python locator invocation\n');
     return mode === 'pre-codex' ? 2 : 1;
   }
@@ -75,14 +75,23 @@ function main(args, resolve = resolvePython, run = spawnSync) {
   }
   if (mode === 'go-mcp') {
     const binary = goBinaryPath();
+    const expected = binary || path.join(__dirname, '..', 'bin', `purser-hook-${process.platform}-${process.arch}`);
     let reason = !binary ? 'unsupported platform' : !fs.existsSync(binary) ? 'Go binary missing' : null;
     if (!reason) {
-      const child = run(binary, ['mcp', ...args.slice(1)], { stdio: 'inherit', windowsHide: true });
+      let child = run(binary, ['mcp', ...args], { stdio: 'inherit', windowsHide: true });
+      if (process.platform !== 'win32' && child.error && child.error.code === 'EACCES') {
+        try {
+          fs.chmodSync(binary, 0o755);
+          child = run(binary, ['mcp', ...args], { stdio: 'inherit', windowsHide: true });
+        } catch (error) {
+          child = { error };
+        }
+      }
       if (!child.error || child.pid) return child.status === null ? 1 : child.status;
       reason = `Go process creation failed: ${child.error.message}`;
     }
-    process.stderr.write(`Purser: Go MCP unavailable (${reason}); falling back to Python\n`);
-    mode = 'mcp';
+    process.stderr.write(`Purser: Go MCP unavailable on ${process.platform}/${process.arch}; expected binary ${expected} (${reason})\n`);
+    return 1;
   }
   const selected = resolve();
   if (!selected) {
