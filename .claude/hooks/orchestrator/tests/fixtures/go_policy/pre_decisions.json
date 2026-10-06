@@ -82,7 +82,7 @@
         "hookSpecificOutput": {
           "hookEventName": "PreToolUse",
           "permissionDecision": "deny",
-          "permissionDecisionReason": "FULL_SUITE_REQUEST: Ask the worker for focused tests only."
+          "permissionDecisionReason": "FULL_SUITE_REQUEST: Ask the worker for focused tests only. Matched phrase: \"Run the full suite\"."
         }
       }
     },

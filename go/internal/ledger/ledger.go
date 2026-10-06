@@ -204,25 +204,39 @@ func Load(path, taskID string) Result {
 }
 
 func decodeRecord(raw []byte, expectedTaskID string) (map[string]any, bool) {
-	var envelope map[string]any
-	if json.Unmarshal(raw, &envelope) != nil || !keys(envelope, "schema_version", "checksum", "payload") || number(envelope["schema_version"]) != 1 {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil || len(envelope) != 3 ||
+		envelope["schema_version"] == nil || envelope["checksum"] == nil || envelope["payload"] == nil {
 		return nil, false
 	}
-	payload, ok := envelope["payload"].(map[string]any)
-	if !ok {
+	var schemaVersion json.Number
+	if json.Unmarshal(envelope["schema_version"], &schemaVersion) != nil || number(schemaVersion) != 1 {
+		return nil, false
+	}
+	var payload map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(envelope["payload"]))
+	decoder.UseNumber()
+	if decoder.Decode(&payload) != nil || payload == nil {
 		return nil, false
 	}
 	canonical, err := canonicalJSON(payload)
 	if err != nil {
 		return nil, false
 	}
-	checksum, ok := envelope["checksum"].(string)
-	digest := sha256.Sum256(canonical)
-	expected := hex.EncodeToString(digest[:])
-	if !ok || len(checksum) != len(expected) || subtle.ConstantTimeCompare([]byte(checksum), []byte(expected)) != 1 || !validRecord(payload, expectedTaskID) {
+	var checksum string
+	if json.Unmarshal(envelope["checksum"], &checksum) != nil {
 		return nil, false
 	}
-	return payload, true
+	digest := sha256.Sum256(canonical)
+	expected := hex.EncodeToString(digest[:])
+	if len(checksum) != len(expected) || subtle.ConstantTimeCompare([]byte(checksum), []byte(expected)) != 1 || !validRecord(payload, expectedTaskID) {
+		return nil, false
+	}
+	var record map[string]any
+	if json.Unmarshal(envelope["payload"], &record) != nil {
+		return nil, false
+	}
+	return record, true
 }
 
 func canonicalJSON(value any) ([]byte, error) {
@@ -249,7 +263,17 @@ func keys(value map[string]any, want ...string) bool {
 	return true
 }
 
-func number(value any) float64 { n, _ := value.(float64); return n }
+func number(value any) float64 {
+	switch n := value.(type) {
+	case float64:
+		return n
+	case json.Number:
+		parsed, _ := n.Float64()
+		return parsed
+	default:
+		return 0
+	}
+}
 
 func validRecord(record map[string]any, expectedTaskID string) bool {
 	if !keys(record, "task_id", "live_thread", "pending_call_baseline", "last_outcome") {

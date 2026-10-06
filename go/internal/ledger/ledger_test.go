@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -170,6 +172,54 @@ func TestPythonLedgerFixtures(t *testing.T) {
 	}
 	if got := Load(path, "go-pass3-fixture"); got.Status != "CORRUPT" || got.Code != "LEDGER_CORRUPT" {
 		t.Fatalf("checksummed invalid record: %#v", got)
+	}
+}
+
+func TestPythonFloatLedgerChecksumParity(t *testing.T) {
+	const payload = `{"task_id":"task-float","live_thread":null,"pending_call_baseline":null,"last_outcome":{"codex_quota":{"remaining":27.0,"limit":60.0}}}`
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.UseNumber()
+	var record map[string]any
+	if err := decoder.Decode(&record); err != nil {
+		t.Fatal(err)
+	}
+	goCanonical, err := canonicalJSON(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, source, _, _ := runtime.Caller(0)
+	repo := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
+	moduleDir := filepath.Join(repo, ".claude", "hooks", "orchestrator")
+	python, err := exec.LookPath("python")
+	if err != nil {
+		python, err = exec.LookPath("python3")
+	}
+	if err != nil {
+		t.Fatal("Python interpreter unavailable")
+	}
+	script := "import json,sys; sys.path.insert(0,sys.argv[1]); from ledger import _canonical_json; sys.stdout.buffer.write(_canonical_json(json.loads(sys.argv[2])))"
+	output, err := exec.Command(python, "-B", "-c", script, moduleDir, payload).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(goCanonical, output) {
+		t.Fatalf("canonical checksum bytes differ\nGo: %s\nPython: %s", goCanonical, output)
+	}
+	digest := sha256.Sum256(goCanonical)
+	envelope := `{"schema_version":1,"checksum":"` + hex.EncodeToString(digest[:]) + `","payload":` + payload + `}`
+	root := t.TempDir()
+	path, err := PathForTask(root, "task-float")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(envelope), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load(path, "task-float"); got.Status != OK {
+		t.Fatalf("Python float checksum record did not load: %#v", got)
 	}
 }
 

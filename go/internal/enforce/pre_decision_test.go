@@ -152,6 +152,53 @@ func TestPreTelemetryScopePathCount(t *testing.T) {
 	t.Fatal("TASK_ROUTE_SELECTED observation missing")
 }
 
+func TestPreCodexStartRejectsFinishedTaskID(t *testing.T) {
+	scratch := preTempDir(t)
+	repo, runtimeRoot := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	home := filepath.Join(scratch, "home")
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
+	t.Setenv("PURSER_STATE_DIR", runtimeRoot)
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("CODEX_HOME", filepath.Join(scratch, "codex"))
+	thread := "finished-thread"
+	record := ledger.BuildSessionRecord("task-finished", &thread, "normal", "gpt-6-sol", "medium", map[string]any{
+		"phase": "implementation", "scope": []any{"src/a.go"}, "label": "finished task",
+	})
+	record["last_outcome"] = map[string]any{"codex_quota": map[string]any{"remaining": 27.0, "limit": 60.0}}
+	if saved := ledger.Save(filepath.Join(runtimeRoot, "projects", projectKey(&repo)), record); saved.Status != ledger.OK {
+		t.Fatalf("seed finished task: %#v", saved)
+	}
+	prompt := "ORCH|task=task-finished|phase=implementation|route=normal|reason=new_task|basis=specific boundary|scope=src/a.go\nContinue."
+	event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_use_id": "finished-start", "session_id": "finished-session", "cwd": repo,
+		"tool_input": map[string]any{"mode": "new", "prompt": prompt, "label": "finished task"}}
+	got, gotErr := Pre(event, runtimeRoot)
+	if gotErr != nil {
+		t.Fatal(gotErr)
+	}
+	output := mapValue(got["hookSpecificOutput"])
+	if output["permissionDecision"] != "deny" || stringValue(output["permissionDecisionReason"]) !=
+		"TASK_ALREADY_FINISHED: This task already finished; use a fresh task id." {
+		t.Fatalf("finished task denial: %#v", output)
+	}
+}
+
 func replaceFixtureProjectKey(value any, project string) any {
 	switch value := value.(type) {
 	case string:

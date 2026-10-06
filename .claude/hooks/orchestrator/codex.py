@@ -365,7 +365,7 @@ def _append_worker_validation_instruction(
 
 
 _FULL_SUITE_REQUEST = re.compile(
-    r"\b(?:full\s+(?:test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b",
+    r"\b(?:run|execute)\s+(?:the\s+)?(?:full\s+(?:test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b",
     re.IGNORECASE,
 )
 _NEGATED_FULL_SUITE_REQUEST = re.compile(
@@ -391,13 +391,14 @@ def _claude_runs_full_suite_at_acceptance(repository: Path | None) -> bool:
 
 
 def _asks_worker_to_run_full_suite(prompt: str) -> bool:
-    requested = _FULL_SUITE_REQUEST.sub(
-        lambda match: "" if _NEGATED_FULL_SUITE_REQUEST.search(
-            prompt[max(0, match.start() - 32):match.end()]
-        ) else match.group(),
-        prompt,
-    )
-    return bool(_FULL_SUITE_REQUEST.search(requested))
+    return _full_suite_request_phrase(prompt) is not None
+
+
+def _full_suite_request_phrase(prompt: str) -> str | None:
+    for match in _FULL_SUITE_REQUEST.finditer(prompt):
+        if not _NEGATED_FULL_SUITE_REQUEST.search(prompt[max(0, match.start() - 32):match.end()]):
+            return match.group()
+    return None
 
 
 def _canonical_unknown_validation(summary: str | None = None) -> dict[str, Any]:
@@ -1900,6 +1901,12 @@ def pre_tool_use(
                 raise WiringError("session ledger is unreadable")
             record = loaded.get("record") if loaded["status"] == ledger.OK else None
             live_thread = record.get("live_thread") if isinstance(record, Mapping) else None
+            if is_start and not reply_call and isinstance(record, Mapping) and record.get("last_outcome") is not None:
+                return _observed_denial(
+                    event, "TASK_ALREADY_FINISHED",
+                    "This task already finished; use a fresh task id.",
+                    state_root=state_root, task_id=parsed.task_id,
+                )
 
         if task_label is None:
             inherited_label = live_thread.get("label") if isinstance(live_thread, Mapping) else None
@@ -1925,15 +1932,16 @@ def pre_tool_use(
             parsed.phase != "operation"
             and isinstance(prompt_text, str)
             and _claude_runs_full_suite_at_acceptance(repository)
-            and _asks_worker_to_run_full_suite(prompt_text)
         ):
-            return _observed_denial(
-                event,
-                "FULL_SUITE_REQUEST",
-                "Ask the worker for focused tests only.",
-                state_root=state_root,
-                task_id=parsed.task_id,
-            )
+            phrase = _full_suite_request_phrase(prompt_text)
+            if phrase is not None:
+                return _observed_denial(
+                    event,
+                    "FULL_SUITE_REQUEST",
+                    f'Ask the worker for focused tests only. Matched phrase: "{phrase}".',
+                    state_root=state_root,
+                    task_id=parsed.task_id,
+                )
         requested = _requested_thread(parsed, route)
         agent = loaded_config.get("coder_agent", "codex")
         model = route.model

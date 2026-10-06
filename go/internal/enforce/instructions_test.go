@@ -66,3 +66,15 @@ func TestInstructionsParityFixture(t *testing.T) {
 		})
 	}
 }
+
+func TestFullSuiteGuardRequiresImperativeRequest(t *testing.T) {
+	if got := WorkerFullSuiteRequestPhrase("ürun all tests"); got != "" {
+		t.Fatalf("non-ASCII letter glued to imperative matched %q", got)
+	}
+	if got := WorkerFullSuiteRequestPhrase("All tests write only to temporary directories."); got != "" {
+		t.Fatalf("descriptive test sentence matched %q", got)
+	}
+	if got := WorkerFullSuiteRequestPhrase("Run all tests, then report."); got != "Run all tests" {
+		t.Fatalf("imperative request phrase = %q", got)
+	}
+}

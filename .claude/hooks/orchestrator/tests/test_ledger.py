@@ -577,6 +577,22 @@ def test_session_record_is_checksummed_and_feeds_thread_policy(sandbox_dir):
     assert policy.thread_compatibility(requested, loaded["record"]["live_thread"]).compatible
 
 
+def test_session_record_checksum_preserves_whole_number_float_spelling(sandbox_dir):
+    store = ledger.SessionLedger(sandbox_dir / "ledger")
+    record = ledger.build_session_record(
+        "task-float", None, "normal", "gpt-6-sol", "medium",
+        last_outcome={"codex_quota": {"remaining": 27.0, "limit": 60.0}},
+    )
+    assert store.save(record)["status"] == ledger.OK
+    path = store.path_for_task("task-float")
+    assert b'"remaining":27.0' in path.read_bytes()
+    loaded = store.load("task-float")
+    assert loaded["status"] == ledger.OK
+    assert loaded["record"]["last_outcome"]["codex_quota"] == {
+        "remaining": 27.0, "limit": 60.0,
+    }
+
+
 def test_pending_baseline_can_be_saved_before_a_fresh_thread_exists(sandbox_dir):
     store = ledger.SessionLedger(sandbox_dir / "ledger")
     record = ledger.build_session_record(

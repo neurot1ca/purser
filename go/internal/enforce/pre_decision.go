@@ -72,8 +72,10 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		return denyPre(parsed.Code, parsed.Message), nil
 	}
 	if root != nil && parsed.Phase != nil && *parsed.Phase != "operation" &&
-		ClaudeRunsFullSuiteAtAcceptance(*root) && AsksWorkerToRunFullSuite(stringValue(input["prompt"])) {
-		return denyPre("FULL_SUITE_REQUEST", "Ask the worker for focused tests only."), nil
+		ClaudeRunsFullSuiteAtAcceptance(*root) {
+		if phrase := WorkerFullSuiteRequestPhrase(stringValue(input["prompt"])); phrase != "" {
+			return denyPre("FULL_SUITE_REQUEST", "Ask the worker for focused tests only. Matched phrase: \""+phrase+"\"."), nil
+		}
 	}
 	route := policy.ResolveRoute(*parsed.Route, config)
 	if !route.Valid {
@@ -113,6 +115,9 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 		if loaded.Status == ledger.OK {
 			live, _ = loaded.Record["live_thread"].(map[string]any)
+			if isStart && !reply && loaded.Record["last_outcome"] != nil {
+				return denyPre("TASK_ALREADY_FINISHED", "This task already finished; use a fresh task id."), nil
+			}
 		}
 		fresh := policy.DecideFreshCodex(requested, live, parsed.Reason)
 		if !fresh.Allowed {

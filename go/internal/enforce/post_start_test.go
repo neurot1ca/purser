@@ -131,6 +131,47 @@ func TestPostStartPythonWriteFixture(t *testing.T) {
 	}
 }
 
+func TestPostStartFallbackWaiterPathIsAbsolute(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".claude", "hooks", "orchestrator"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", repo)
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_use_id": "absolute-waiter", "session_id": "waiter-session"}
+	call, _ := callKey(event)
+	jobID := jobHash("waiter-call")
+	pending := map[string]any{"async_call": "waiter-call", "async_ready": true, "session_id": "waiter-session",
+		"tool_use_id": "absolute-waiter", "project_key": "project"}
+	path := filepath.Join(root, "pending", call+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFixtureJSON(path, pending); err != nil {
+		t.Fatal(err)
+	}
+	event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "RUNNING"}}
+	got, err := postStart(event, root, "python", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := mapValue(got["hookSpecificOutput"])
+	entries, _ := output["updatedToolOutput"].([]any)
+	if len(entries) == 0 {
+		t.Fatalf("post-start response has no output: %#v", got)
+	}
+	text := stringValue(mapValue(entries[0])["text"])
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		t.Fatal(err)
+	}
+	waiter := filepath.Join(repo, ".claude", "hooks", "orchestrator", "purser_wait.py")
+	if !filepath.IsAbs(waiter) || !strings.Contains(stringValue(payload["next"]), `"`+waiter+`"`) {
+		t.Fatalf("waiter path is not absolute in response: %s", text)
+	}
+}
+
 func jobHash(call string) string {
 	sum := sha256.Sum256([]byte(call))
 	return hex.EncodeToString(sum[:])

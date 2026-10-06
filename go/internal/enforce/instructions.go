@@ -18,7 +18,7 @@ const smallestChangeInstruction = "Make the smallest change that meets the crite
 const unrelatedHangInstruction = "If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue."
 
 var (
-	fullSuitePattern    = regexp.MustCompile(`(?i)\b(full\s+(?:test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b`)
+	fullSuitePattern    = regexp.MustCompile(`(?i)\b(?:run|execute)\s+(?:the\s+)?(full\s+(?:test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b`)
 	negatedSuitePattern = regexp.MustCompile(`(?i)\b(?:(?:do\s+not|don't|never|avoid)\s+(?:run|execute)\s+|(?:no|without)\s+)(the\s+)?(full\s+(test\s+)?suite|whole\s+test\s+suite|all\s+tests)\b`)
 	claudeSuitePattern  = regexp.MustCompile(`(?i)Claude\s+runs\s+(the\s+full\s+suite|it)\s+once\s+(at|before)\s+acceptance`)
 )
@@ -35,6 +35,10 @@ func ClaudeRunsFullSuiteAtAcceptance(repository string) bool {
 // AsksWorkerToRunFullSuite keeps each positive match unless its own preceding
 // 32 characters negate running the matching suite.
 func AsksWorkerToRunFullSuite(prompt string) bool {
+	return WorkerFullSuiteRequestPhrase(prompt) != ""
+}
+
+func WorkerFullSuiteRequestPhrase(prompt string) string {
 	runes := []rune(prompt)
 	for _, match := range fullSuitePattern.FindAllStringIndex(prompt, -1) {
 		start, end := byteIndexToRune(runes, match[0]), byteIndexToRune(runes, match[1])
@@ -48,10 +52,10 @@ func AsksWorkerToRunFullSuite(prompt string) bool {
 		window := string(runes[windowStart:end])
 		negated := negatedSuitePattern.MatchString(window)
 		if !negated {
-			return true
+			return string(runes[start:end])
 		}
 	}
-	return false
+	return ""
 }
 
 func byteIndexToRune(value []rune, byteIndex int) int {

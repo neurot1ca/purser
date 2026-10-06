@@ -4474,10 +4474,46 @@ def test_full_suite_request_denied_when_claude_owns_acceptance_suite(workspace, 
 
     assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "FULL_SUITE_REQUEST" in response["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "Ask the worker for focused tests only." in response["hookSpecificOutput"]["permissionDecisionReason"]
+    assert response["hookSpecificOutput"]["permissionDecisionReason"] == (
+        'FULL_SUITE_REQUEST: Ask the worker for focused tests only. '
+        'Matched phrase: "Run the full test suite".'
+    )
     denial, = [item for item in _all_telemetry_events(state)
                if item["event_type"] == "ROUTING_PROTOCOL_VIOLATION"]
     assert denial["payload"]["violation_code"] == "FULL_SUITE_REQUEST"
+
+
+def test_descriptive_all_tests_sentence_is_not_a_suite_request(workspace, config):
+    repo, state = workspace
+    (repo / "AGENTS.md").write_text(
+        "Claude runs the full suite once before acceptance.\n", encoding="utf-8"
+    )
+    response = codex.pre_tool_use(
+        event(prompt=orch() + "\nAll tests write only to temporary directories."),
+        config=config,
+        state_root=state,
+        repo_root=repo,
+    )
+    assert "updatedInput" in response["hookSpecificOutput"]
+
+
+def test_codex_start_rejects_finished_task_id(workspace, config):
+    repo, state = workspace
+    record = ledger.build_session_record(
+        "task-1", "finished-thread", "normal", "gpt-6-sol", "medium",
+        phase="implementation", scope=["file0.py"], label="test task",
+        last_outcome={"codex_quota": {"remaining": 27.0, "limit": 60.0}},
+    )
+    project_state = state / "projects" / project_root.project_key(repo.resolve())
+    assert ledger.SessionLedger(project_state).save(record)["status"] == ledger.OK
+    response = codex.pre_tool_use(
+        event(START_TOOL, prompt=orch() + "\nRun focused tests.", tool_use_id="finished-start"),
+        config=config, state_root=state, repo_root=repo,
+    )
+    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert response["hookSpecificOutput"]["permissionDecisionReason"] == (
+        "TASK_ALREADY_FINISHED: This task already finished; use a fresh task id."
+    )
 
 
 def test_no_full_suite_request_allowed_with_acceptance_suite_policy(workspace, config):
