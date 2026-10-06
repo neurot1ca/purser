@@ -333,7 +333,7 @@ class Client:
                     "PURSER_CODEX_TEST_PARENT_PID": str(os.getpid()), "FAKE_RECORD": str(self.record)})
         env.update(extra_env or {})
         override = bin_override if bin_override is not None else json.dumps([sys.executable, str(fake)])
-        command = (list(server_command) if server_command is not None else
+        command = ([*server_command, "--codex-bin", override] if server_command is not None else
                    [sys.executable, "-u", str(SCRIPT), "--codex-bin", override])
         self.process = subprocess.Popen(
             command,

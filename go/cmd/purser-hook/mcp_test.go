@@ -9,12 +9,36 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func exchange(line string) string {
-	var out bytes.Buffer
-	(&mcpServer{out: &out}).handle([]byte(line))
+	out := &testBuffer{}
+	(&mcpServer{out: out}).handle([]byte(line))
+	if strings.Contains(line, `"method":"tools/call"`) {
+		deadline := time.Now().Add(3 * time.Second)
+		for out.String() == "" && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+	}
 	return out.String()
+}
+
+type testBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *testBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *testBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
 }
 
 func TestMCPDiscoveryProtocol(t *testing.T) {
@@ -95,6 +119,27 @@ func TestMCPPreservesLargeJSONRPCIDAndUnknownToolResult(t *testing.T) {
 	}
 	if !response.Result.IsError || response.Result.Content[0].Text != `{"threadId": null, "error": "unknown tool: not-a-tool"}` {
 		t.Fatalf("unknown tool result: %s", got)
+	}
+}
+
+func TestMCPCallValidatesArgumentsBeforeToolNameAndPreservesResultShape(t *testing.T) {
+	got := exchange(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"not-a-tool","arguments":[]}}`)
+	if !strings.Contains(got, `"text":"{\"threadId\": null, \"error\": \"arguments must be an object\"}"`) ||
+		!strings.Contains(got, `"isError":true`) {
+		t.Fatalf("invalid arguments should be a tool error before unknown-name handling: %s", got)
+	}
+	got = exchange(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"codex","arguments":{"prompt":3}}}`)
+	if !strings.Contains(got, `"text":"{\"threadId\": null, \"error\": \"prompt must be a string\"}"`) ||
+		!strings.Contains(got, `"isError":true`) {
+		t.Fatalf("dispatcher error shape: %s", got)
+	}
+}
+
+func TestMCPSendUsesPythonCompatibleUnicodeAndHTMLSerialization(t *testing.T) {
+	got := exchange(`{"jsonrpc":"2.0","id":7,"method":"initialize","params":{"protocolVersion":"<>&   "}}`)
+	want := "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"protocolVersion\":\"<>&   \",\"serverInfo\":{\"name\":\"codex-exec-mcp\",\"version\":\"1.0.0\"},\"capabilities\":{\"tools\":{}}}}\n"
+	if got != want {
+		t.Fatalf("serialization differs from Python ensure_ascii=False: %q", got)
 	}
 }
 
