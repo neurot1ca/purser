@@ -1,0 +1,22 @@
+{
+  "adapter": "agy",
+  "expected": {
+    "conversation_id": "agy-1",
+    "duration_seconds": 1.25,
+    "response": {
+      "findings": [],
+      "result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+      "validation": "PASS"
+    },
+    "served_model_attestation": "UNAVAILABLE",
+    "usage": {
+      "cache_read_tokens": 2,
+      "input_tokens": 10,
+      "output_tokens": 3,
+      "thinking_tokens": 1.5,
+      "total_tokens": 13
+    }
+  },
+  "include_metadata": true,
+  "stdout": "{\"conversation_id\": \"agy-1\", \"status\": \"SUCCESS\", \"response\": \"ignored prose\", \"duration_seconds\": 1.25, \"num_turns\": 2, \"usage\": {\"input_tokens\": 10, \"output_tokens\": 3, \"total_tokens\": 13, \"cache_read_tokens\": 2, \"other\": 99, \"thinking_tokens\": 1.5, \"negative_tokens\": -1, \"bool_tokens\": true}, \"structured_output\": {\"result\": \"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\", \"validation\": \"PASS\", \"findings\": []}}"
+}

@@ -1,0 +1,9 @@
+{
+  "adapter": "codex",
+  "expected": {
+    "error": "review response fields do not match the schema",
+    "error_type": "ValueError"
+  },
+  "include_metadata": true,
+  "stdout": "{\"thread_id\":\"cx-fence\",\"model\":\"openai/reviewer\",\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\\\"```json\\\\n{\\\\\\\"result\\\\\\\":\\\\\\\"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\\\\\\\",\\\\\\\"validation\\\\\\\":\\\\\\\"PASS\\\\\\\",\\\\\\\"findings\\\\\\\":[]}\\\\n```\\\"\"}}\n{\"type\":\"turn.completed\"}"
+}

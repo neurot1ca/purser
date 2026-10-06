@@ -1,0 +1,16 @@
+{
+  "adapter": "opencode",
+  "expected": {
+    "conversation_id": "oc-events",
+    "duration_seconds": null,
+    "response": {
+      "findings": [],
+      "result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+      "validation": "PASS"
+    },
+    "served_model_attestation": "acme/reviewer",
+    "usage": {}
+  },
+  "include_metadata": true,
+  "stdout": "{\"sessionID\":\"oc-events\",\"model\":\"acme/reviewer\",\"type\":\"text\",\"part\":{\"text\":\"{\\\"result\\\":\\\"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\\\",\\\"validation\\\":\\\"PASS\\\",\\\"findings\\\":[]}\"}}\n{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\"}}"
+}

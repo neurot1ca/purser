@@ -1,0 +1,21 @@
+{
+  "adapter": "opencode",
+  "expected": {
+    "conversation_id": "oc-2",
+    "duration_seconds": null,
+    "response": {
+      "findings": [
+        {
+          "code": "BUG-1",
+          "message": "bad behavior"
+        }
+      ],
+      "result": "CHANGES_REQUIRED",
+      "validation": "FAIL"
+    },
+    "served_model_attestation": "acme/reviewer-v2",
+    "usage": {}
+  },
+  "include_metadata": true,
+  "stdout": "{\"sessionID\":\"oc-2\",\"model\":\"acme/reviewer-v2\",\"type\":\"text\",\"part\":{\"text\":\"{\\\"result\\\":\\\"CHANGES_REQUIRED\\\",\\\"validation\\\":\\\"FAIL\\\",\\\"findings\\\":[{\\\"code\\\":\\\"BUG-1\\\",\\\"message\\\":\\\"bad behavior\\\"}]}\"}}\n{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\"}}"
+}

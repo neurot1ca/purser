@@ -1,0 +1,52 @@
+{
+  "completed": {
+    "available": true,
+    "conversation_id": "cx-3",
+    "findings": [
+      {
+        "code": "BUG-1",
+        "message": "bad behavior"
+      }
+    ],
+    "provider": "codex",
+    "result": "CHANGES_REQUIRED",
+    "review_status": "COMPLETED",
+    "reviewer1_model_requested": "wanted/model",
+    "served_model_attestation": "other/model-actual",
+    "validation": "FAIL"
+  },
+  "incomplete": {
+    "available": true,
+    "findings": [
+      {
+        "code": "PACKET_INCOMPLETE",
+        "message": "missing context"
+      }
+    ],
+    "omitted": [
+      "delegated_diff"
+    ],
+    "provider": "opencode",
+    "result": "UNCERTAIN",
+    "review_status": "NOT_RUN_INCOMPLETE_PACKET",
+    "reviewer1_model_requested": "wanted/model",
+    "served_model_attestation": "UNAVAILABLE",
+    "validation": "UNKNOWN"
+  },
+  "unavailable": {
+    "available": false,
+    "error_code": "REVIEWER_RESPONSE_INVALID",
+    "findings": [
+      {
+        "code": "REVIEWER_RESPONSE_INVALID",
+        "message": "invalid response"
+      }
+    ],
+    "provider": "codex",
+    "result": "REVIEWER1_UNAVAILABLE",
+    "review_status": "UNAVAILABLE",
+    "reviewer1_model_requested": "wanted/model",
+    "served_model_attestation": "UNAVAILABLE",
+    "validation": "UNKNOWN"
+  }
+}

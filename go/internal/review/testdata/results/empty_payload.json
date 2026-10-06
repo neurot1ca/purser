@@ -1,0 +1,9 @@
+{
+  "adapter": "agy",
+  "expected": {
+    "error": "Expecting value: line 1 column 1 (char 0)",
+    "error_type": "JSONDecodeError"
+  },
+  "include_metadata": true,
+  "stdout": "{\"conversation_id\": \"agy-1\", \"status\": \"SUCCESS\", \"response\": \"ignored prose\", \"duration_seconds\": 1.25, \"num_turns\": 2, \"usage\": {}, \"structured_output\": \"\"}"
+}

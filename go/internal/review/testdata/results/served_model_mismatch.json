@@ -1,0 +1,21 @@
+{
+  "adapter": "codex",
+  "expected": {
+    "conversation_id": "cx-mismatch",
+    "duration_seconds": null,
+    "response": {
+      "findings": [
+        {
+          "code": "BUG-1",
+          "message": "bad behavior"
+        }
+      ],
+      "result": "CHANGES_REQUIRED",
+      "validation": "FAIL"
+    },
+    "served_model_attestation": "other/model-actual",
+    "usage": {}
+  },
+  "include_metadata": true,
+  "stdout": "{\"thread_id\":\"cx-mismatch\",\"model\":\"other/model-actual\",\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"result\\\":\\\"CHANGES_REQUIRED\\\",\\\"validation\\\":\\\"FAIL\\\",\\\"findings\\\":[{\\\"code\\\":\\\"BUG-1\\\",\\\"message\\\":\\\"bad behavior\\\"}]}\"}}\n{\"type\":\"turn.completed\"}"
+}

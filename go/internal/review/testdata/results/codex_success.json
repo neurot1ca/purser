@@ -1,0 +1,16 @@
+{
+  "adapter": "codex",
+  "expected": {
+    "conversation_id": "cx-3",
+    "duration_seconds": null,
+    "response": {
+      "findings": [],
+      "result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+      "validation": "PASS"
+    },
+    "served_model_attestation": "openai/different-model",
+    "usage": {}
+  },
+  "include_metadata": true,
+  "stdout": "{\"thread_id\":\"cx-3\",\"model\":\"openai/different-model\",\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"result\\\":\\\"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\\\",\\\"validation\\\":\\\"PASS\\\",\\\"findings\\\":[]}\"}}\n{\"type\":\"turn.completed\"}"
+}
