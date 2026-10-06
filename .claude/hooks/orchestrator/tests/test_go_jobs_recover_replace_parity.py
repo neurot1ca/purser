@@ -2,15 +2,21 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
+import pytest
 
 ORCH = Path(__file__).resolve().parents[1]
 FIXTURE = ORCH / "tests" / "fixtures" / "go_jobs_recover_replace" / "oracle.json"
 sys.path.insert(0, str(ORCH))
 sys.dont_write_bytecode = True
 import codex_exec_mcp as bridge
+from mixed_owner_support import go_test_tools
 
 JOB = "0123456789abcdef" * 4
 NOW = 2_000_000_000.0
@@ -115,3 +121,59 @@ def test_go_jobs_recover_replace_matches_python(tmp_path, monkeypatch):
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
         FIXTURE.write_text(json.dumps(fixture, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture
+
+
+def test_python_and_go_recovery_contend_for_python_record_once(go_test_tools, tmp_path, monkeypatch):
+    """Python and Go contend on a Python-created record; one replacement owns generation two."""
+    jobs = tmp_path / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    go_hook_binary, fake = go_test_tools["hook"], go_test_tools["fake"]
+    marker = tmp_path / "worker-launches.txt"
+    now = time.time()
+    server = bridge.Server(agent="codex", job_dir=jobs)
+    server._write_job({"jobId": JOB, "call": "python-created", "state": "RUNNING",
+                       "acceptedAt": now - 1, "deadlineAt": now + 30, "generation": 1,
+                       "ownershipToken": "python-owner-token", "signalToken": "python-signal-token",
+                       "hostPid": 2**30, "hostCreatedAt": 0, "hostContained": True,
+                       "resumedAfterInterruption": 0})
+    launch = {"name": "codex", "args": {"cwd": str(tmp_path), "prompt": "recover",
+                                           "timeoutSeconds": 30},
+              "codexBin": str(fake), "agent": "codex"}
+    (jobs / f"{JOB}.launch").write_text(json.dumps(launch), encoding="utf-8")
+    env = os.environ.copy()
+    env.update(PURSER_STATE_DIR=str(tmp_path), PURSER_CODEX_BIN=str(fake),
+               MIXED_LAUNCH_MARKER=str(marker), PURSER_CODEX_TEST_PARENT_PID=str(os.getpid()))
+    monkeypatch.setenv("PURSER_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PURSER_CODEX_TEST_PARENT_PID", str(os.getpid()))
+    monkeypatch.setenv("MIXED_LAUNCH_MARKER", str(marker))
+    barrier = threading.Barrier(2)
+
+    def go_result():
+        barrier.wait()
+        return subprocess.run([str(go_hook_binary), "op", "codex_result"],
+                              input=json.dumps({"args": {"jobId": JOB}}), text=True,
+                              capture_output=True, env=env, timeout=15, check=True)
+
+    def python_cleanup():
+        import async_session_maintenance as maintenance
+        barrier.wait()
+        maintenance.cleanup_jobs(tmp_path, now=time.time())
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        go_future = pool.submit(go_result)
+        python_future = pool.submit(python_cleanup)
+        result = go_future.result(timeout=20)
+        python_future.result(timeout=20)
+    assert json.loads(result.stdout)["status"] == "ok"
+
+    record = jobs / f"{JOB}.json"
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        job = json.loads(record.read_text(encoding="utf-8"))
+        if job.get("state") == "SUCCEEDED":
+            break
+        time.sleep(0.02)
+    assert job["state"] == "SUCCEEDED", job
+    assert job["generation"] == 2
+    assert job["ownershipToken"] != "python-owner-token"
+    assert marker.read_text(encoding="utf-8").splitlines() == ["launch"]

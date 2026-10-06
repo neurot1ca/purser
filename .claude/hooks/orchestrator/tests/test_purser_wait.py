@@ -1,11 +1,18 @@
 import json
 import socket
+import subprocess
 import sys
 import threading
 import time
+import os
+import uuid
 from pathlib import Path
 
+import pytest
+
 import purser_wait
+from mixed_owner_support import go_test_tools, launch_go_host
+from mixed_owner_support import go_test_tools
 
 
 def write_job(root, job_id, **values):
@@ -224,3 +231,52 @@ def test_unknown_job_returns_two_and_one_line(tmp_path, monkeypatch, capsys):
 
     assert purser_wait.main(["unknown"]) == 2
     assert capsys.readouterr().out == "purser-wait unknown UNKNOWN_JOB\n"
+
+
+def test_python_waiter_matches_go_host_terminal_and_stall(go_test_tools, tmp_path, monkeypatch, capsys):
+    """Python waiter observes a Go-hosted job with the same terminal and stall contract."""
+    go_host_binary, fake = go_test_tools["hook"], go_test_tools["fake"]
+    go_root = tmp_path / "go-state"
+    call = str(uuid.uuid4())
+    env = {**os.environ, "PURSER_STATE_DIR": str(go_root), "PURSER_AGENT": "codex",
+           "PURSER_CODEX_TEST_PARENT_PID": str(os.getpid()), "PURSER_CODEX_BIN": str(fake)}
+    created = subprocess.run(
+        [str(go_host_binary), "op", "codex_start"],
+        input=json.dumps({"args": {"call": call, "prompt": "wait parity", "timeoutSeconds": 20}}),
+        text=True, capture_output=True, timeout=15, check=True,
+        env=env,
+    )
+    reply = json.loads(created.stdout)["result"]["structuredContent"]
+    job_id = reply["jobId"]
+    monkeypatch.setenv("PURSER_STATE_DIR", str(go_root))
+    deadline = time.monotonic() + 15
+    path = go_root / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    launch_go_host(go_host_binary, path, env)
+    while time.monotonic() < deadline and json.loads(path.read_text(encoding="utf-8"))["state"] != "SUCCEEDED":
+        time.sleep(0.02)
+    assert purser_wait.main([job_id]) == 0
+    go_terminal = capsys.readouterr().out
+    assert read_job(go_root, job_id)["waiterObservedTerminalState"] == "SUCCEEDED"
+
+    python_root = tmp_path / "python-state"
+    python_job = read_job(go_root, job_id)
+    write_job(python_root, job_id, **{k: v for k, v in python_job.items() if k not in {"jobId", "state"}},
+              state="SUCCEEDED")
+    monkeypatch.setenv("PURSER_STATE_DIR", str(python_root))
+    assert purser_wait.main([job_id]) == 0
+    assert capsys.readouterr().out == go_terminal
+
+    stalled = read_job(go_root, job_id)
+    stalled.update(state="RUNNING", errorCode="STALLED", stallDetectedAt=1234.0,
+                   waiterObservedStallAt=None, signalPort=None, deadlineAt=time.time() + 60)
+    path.write_text(json.dumps(stalled), encoding="utf-8")
+    write_job(python_root, job_id, **{k: v for k, v in stalled.items() if k not in {"jobId", "state"}},
+              state="RUNNING")
+    monkeypatch.setenv("PURSER_STATE_DIR", str(go_root))
+    assert purser_wait.main([job_id]) == 4
+    go_stall = capsys.readouterr().out
+    assert read_job(go_root, job_id)["waiterObservedStallAt"] == 1234.0
+    monkeypatch.setenv("PURSER_STATE_DIR", str(python_root))
+    assert purser_wait.main([job_id]) == 4
+    assert capsys.readouterr().out == go_stall
+    assert read_job(python_root, job_id)["waiterObservedStallAt"] == 1234.0

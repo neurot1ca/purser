@@ -3,6 +3,7 @@ import os
 import hashlib
 import subprocess
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -13,9 +14,33 @@ import async_session_maintenance as maintenance
 import codex_exec_mcp
 import ledger
 import telemetry_schema
+import pytest
+from mixed_owner_support import go_test_tools, launch_go_host
 
 
 PROJECT_KEY = "0123456789abcdef"
+
+
+def _go_success_job(go_tools, state, call):
+    binary, fake = go_tools["hook"], go_tools["fake"]
+    env = {**os.environ, "PURSER_STATE_DIR": str(state), "PURSER_AGENT": "codex",
+           "PURSER_CODEX_TEST_PARENT_PID": str(os.getpid()),
+           "PURSER_CODEX_BIN": str(fake)}
+    run = subprocess.run([str(binary), "op", "codex_start"],
+                         input=json.dumps({"args": {"call": call, "prompt": "cleanup proof",
+                                                     "timeoutSeconds": 20}}),
+                         text=True, capture_output=True, env=env, timeout=15, check=True)
+    job_id = json.loads(run.stdout)["result"]["structuredContent"]["jobId"]
+    path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    launch_go_host(binary, path, env)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        job = json.loads(codex_exec_mcp.purser_state_root.retry_permission_error(
+            lambda: path.read_text(encoding="utf-8")))
+        if job.get("state") == "SUCCEEDED":
+            return job_id, path
+        time.sleep(0.02)
+    raise AssertionError(f"Go host did not finish cleanup fixture: {job}")
 
 
 def _single_followup_job(tmp_path, state, observed=False):
@@ -748,6 +773,43 @@ def test_cleanup_reaches_recovery_and_expired_jobs_after_inert_prefix(tmp_path, 
 
     assert recovered == [recovery_id]
     assert not (jobs / f"{expired_id}.json").exists()
+
+
+def test_python_cleanup_distills_go_jobs_before_ceiling_limited_deletion(
+        go_test_tools, tmp_path, monkeypatch):
+    """Python cleanup distills Go-created jobs before its per-scan deletion ceiling."""
+    state = tmp_path / "state"
+    first_id, first_path = _go_success_job(go_test_tools, state, str(uuid.uuid4()))
+    second_id, second_path = _go_success_job(go_test_tools, state, str(uuid.uuid4()))
+    now = time.time() + maintenance.RETENTION_SECONDS + 1
+    for path in (first_path, second_path):
+        job = json.loads(codex_exec_mcp.purser_state_root.retry_permission_error(
+            lambda path=path: path.read_text(encoding="utf-8")))
+        job["finishedAt"] = now - maintenance.RETENTION_SECONDS
+        path.write_text(json.dumps(job), encoding="utf-8")
+    monkeypatch.setattr(maintenance, "MAX_JOB_RECORDS", 1)
+
+    maintenance.cleanup_jobs(state, now=now, check_ceiling=True)
+
+    remaining = list((state / "codex_exec_mcp" / "jobs").glob("*.json"))
+    assert len(remaining) == 1
+    removed_id = ({first_id, second_id} - {remaining[0].stem}).pop()
+    summary = maintenance.learning_summary.read_summary(state)
+    sources = summary.get("sources", ())
+    assert maintenance.learning_summary.source_key(first_id) in sources
+    assert maintenance.learning_summary.source_key(second_id) in sources
+    assert not (state / "codex_exec_mcp" / "jobs" / f"{removed_id}.json").exists()
+
+    monkeypatch.setattr(maintenance, "MAX_JOB_RECORDS", 256)
+    evidence_id, evidence_path = _go_success_job(go_test_tools, state, str(uuid.uuid4()))
+    evidence = json.loads(codex_exec_mcp.purser_state_root.retry_permission_error(
+        lambda: evidence_path.read_text(encoding="utf-8")))
+    worktree = tmp_path / "unapplied-worktree"
+    worktree.mkdir()
+    evidence.update(worktreePath=str(worktree), finishedAt=now - maintenance.RETENTION_SECONDS - 1)
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    maintenance.cleanup_jobs(state, now=now, check_ceiling=True)
+    assert evidence_path.exists() and worktree.is_dir()
 
 
 def test_cleanup_preserves_finalizing_evidence_for_retry(tmp_path, monkeypatch):

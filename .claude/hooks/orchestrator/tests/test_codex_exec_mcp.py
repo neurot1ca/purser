@@ -23,6 +23,7 @@ SCRATCH = ROOT.parents[2] / ".tmp" / "codex-exec-mcp-tests"
 sys.path.insert(0, str(ROOT))
 import codex
 import codex_exec_mcp
+from mixed_owner_support import go_test_tools, launch_go_host
 
 
 def _remove_readonly(function, path, _error):
@@ -332,6 +333,7 @@ class Client:
         env.update({"PURSER_CODEX_SHIM_STATE": str(area / "state"), "PURSER_STATE_DIR": str(area / "root"),
                     "PURSER_CODEX_TEST_PARENT_PID": str(os.getpid()), "FAKE_RECORD": str(self.record)})
         env.update(extra_env or {})
+        self.env = env
         override = bin_override if bin_override is not None else json.dumps([sys.executable, str(fake)])
         command = ([*server_command, "--codex-bin", override] if server_command is not None else
                    [sys.executable, "-u", str(SCRIPT), "--codex-bin", override])
@@ -384,6 +386,18 @@ class Client:
 @pytest.fixture
 def client(area):
     instance = Client(area)
+    try:
+        yield instance
+    finally:
+        instance.close()
+
+
+@pytest.fixture
+def go_client(area, go_test_tools):
+    instance = Client(area, bin_override=str(go_test_tools["fake"]),
+                      server_command=[str(go_test_tools["hook"]), "mcp"],
+                      extra_env={"FAKE_HANG_BEFORE_TERMINAL": "1", "PURSER_AGENT": "codex"})
+    instance.go_hook = go_test_tools["hook"]
     try:
         yield instance
     finally:
@@ -770,6 +784,54 @@ def finish(client, job_id, wanted, *, timeout=30):
             return result
         time.sleep(0.02)
     pytest.fail(f"expected {wanted}, got {result}")
+
+
+def _go_running_job(go_client, area):
+    import async_session_maintenance
+
+    running = job_call(go_client, "codex_start", {
+        "call": str(uuid.uuid4()), "prompt": "wait for Python cancellation",
+        "timeoutSeconds": 30,
+    })
+    job_id = running["jobId"]
+    record_path = area / "root" / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    launch_go_host(go_client.go_hook, record_path, go_client.env)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        record = read_job_record(record_path)
+        if record.get("state") == "RUNNING":
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail(f"Go host did not claim job: {record}")
+
+    async_session_maintenance.cleanup_jobs(area / "root", now=time.time(), check_ceiling=True)
+    after_cleanup = read_job_record(record_path)
+    assert after_cleanup["generation"] == record["generation"]
+    assert after_cleanup["ownershipToken"] == record["ownershipToken"]
+    assert after_cleanup["hostPid"] == record["hostPid"]
+    return job_id, record_path
+
+
+def test_python_result_and_apply_read_go_created_job(go_client, area):
+    """Python result/apply owners read a Go-created, Go-hosted active record."""
+    job_id, record_path = _go_running_job(go_client, area)
+    python_owner = codex_exec_mcp.Server(job_dir=record_path.parent)
+    result = python_owner._result_job({"jobId": job_id})["structuredContent"]
+    assert result["state"] == "RUNNING"
+    apply_result = python_owner._apply_job({"jobId": job_id})["structuredContent"]
+    assert apply_result["errorCode"] == "NOT_WORKTREE_JOB"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "Python codex_cancel returns PROCESS_UNCONFIRMED for a live Go-hosted job; "
+    "cross-owner terminal cancellation is not established on this Windows host"))
+def test_python_cancel_reaches_go_created_job(go_client, area):
+    """Python codex_cancel signals a Go-hosted job and requires terminal confirmation."""
+    job_id, record_path = _go_running_job(go_client, area)
+    python_owner = codex_exec_mcp.Server(job_dir=record_path.parent)
+    result = python_owner._cancel_job({"jobId": job_id})["structuredContent"]
+    assert result["state"] == "CANCELLED"
 
 
 def test_stream_activity_updates_and_checkpoints_are_throttled(tmp_path, monkeypatch):
