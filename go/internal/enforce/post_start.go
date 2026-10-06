@@ -74,12 +74,26 @@ func postStart(event map[string]any, root, pythonExe, waiterPath string) (map[st
 		pythonExe = "python"
 	}
 	if waiterPath == "" {
-		waiterPath = filepath.Join(pluginRoot(), ".claude", "hooks", "orchestrator", "purser_wait.py")
+		waiterPath = postStartWaiterPath()
 	}
 	next := fmt.Sprintf("Run in the background (use the PowerShell tool on Windows): \"%s\" \"%s\" %s ; when it finishes, call codex_result with this jobId.", pythonExe, waiterPath, jobID)
 	textValue, _ := canonicalJSON(map[string]any{"jobId": jobID, "state": state, "next": next})
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse",
 		field: []any{map[string]any{"type": "text", "text": string(textValue)}}}}, nil
+}
+
+func postStartWaiterPath() string {
+	if os.Getenv("CLAUDE_PLUGIN_ROOT") == "" {
+		if executable, err := os.Executable(); err == nil {
+			if executable, err = filepath.EvalSymlinks(executable); err == nil {
+				candidate := filepath.Join(filepath.Dir(filepath.Dir(executable)), ".claude", "hooks", "orchestrator", "purser_wait.py")
+				if _, err := os.Stat(candidate); err == nil {
+					return candidate
+				}
+			}
+		}
+	}
+	return filepath.Join(pluginRoot(), ".claude", "hooks", "orchestrator", "purser_wait.py")
 }
 
 func codexResponseIsError(response any) bool {

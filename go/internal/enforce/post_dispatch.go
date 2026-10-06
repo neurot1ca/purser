@@ -239,8 +239,7 @@ func postStartDispatch(event map[string]any, root string) (map[string]any, error
 	}
 	adapted["post_tool_output_field"] = loaded["post_tool_output_field"]
 	pythonExe := proc.ResolvePython(context.Background(), pluginRoot())
-	waiterPath := filepath.Join(pluginRoot(), ".claude", "hooks", "orchestrator", "purser_wait.py")
-	response, err := postStart(adapted, root, pythonExe, waiterPath)
+	response, err := postStart(adapted, root, pythonExe, "")
 	if err != nil {
 		return nil, err
 	}

@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -169,6 +171,100 @@ func TestPostStartFallbackWaiterPathIsAbsolute(t *testing.T) {
 	waiter := filepath.Join(repo, ".claude", "hooks", "orchestrator", "purser_wait.py")
 	if !filepath.IsAbs(waiter) || !strings.Contains(stringValue(payload["next"]), `"`+waiter+`"`) {
 		t.Fatalf("waiter path is not absolute in response: %s", text)
+	}
+}
+
+func TestPostStartWaiterUsesExecutableRoot(t *testing.T) {
+	const childEnv = "PURSER_WAITER_PATH_CHILD"
+	if plugin := os.Getenv(childEnv); plugin != "" {
+		if os.Getenv("CLAUDE_PLUGIN_ROOT") != "" {
+			t.Fatal("CLAUDE_PLUGIN_ROOT must be unset")
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(plugin, ".claude", "hooks", "orchestrator", "purser_wait.py")
+		if strings.HasPrefix(filepath.Clean(want)+string(os.PathSeparator), filepath.Clean(cwd)+string(os.PathSeparator)) {
+			t.Fatalf("fixture waiter unexpectedly under cwd: %s", want)
+		}
+		root := t.TempDir()
+		event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+			"tool_use_id": "executable-root-waiter", "session_id": "waiter-session"}
+		key, err := callKey(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeFixtureJSON(filepath.Join(root, "pending", key+".json"), map[string]any{
+			"async_call": "executable-root-call", "async_ready": true, "project_key": "project",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		event["tool_response"] = map[string]any{"structuredContent": map[string]any{
+			"jobId": jobHash("executable-root-call"), "state": "RUNNING",
+		}}
+		got, err := postStart(event, root, "python", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		output := mapValue(got["hookSpecificOutput"])
+		entries, _ := output["updatedToolOutput"].([]any)
+		if len(entries) == 0 {
+			t.Fatalf("waiter command output is missing: %#v", got)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stringValue(mapValue(entries[0])["text"])), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(stringValue(payload["next"]), want) {
+			t.Fatalf("waiter command did not use executable-root path %s: %#v", want, got)
+		}
+		return
+	}
+
+	temp := t.TempDir()
+	plugin := filepath.Join(temp, "plugin")
+	bin := filepath.Join(plugin, "bin")
+	waiter := filepath.Join(plugin, ".claude", "hooks", "orchestrator", "purser_wait.py")
+	if err := os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(waiter), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(waiter, []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(bin, "purser-hook-test")
+	if runtime.GOOS == "windows" {
+		child += ".exe"
+	}
+	data, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cwd := filepath.Join(temp, "unrelated")
+	if err := os.Mkdir(cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(child, "-test.run=^TestPostStartWaiterUsesExecutableRoot$")
+	command.Dir = cwd
+	command.Env = []string{}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "CLAUDE_PLUGIN_ROOT=") && !strings.HasPrefix(entry, childEnv+"=") {
+			command.Env = append(command.Env, entry)
+		}
+	}
+	command.Env = append(command.Env, childEnv+"="+plugin)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("child waiter path check: %v\n%s", err, output)
 	}
 }
 
