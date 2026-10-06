@@ -11,15 +11,28 @@ import (
 )
 
 func setupDiscovery(t *testing.T, config map[string]any, listing func(string, map[string]map[string]json.RawMessage) listingResult) string {
+	return setupDiscoveryWithRouteOrder(t, config, routeNames(config), listing)
+}
+
+func setupDiscoveryWithRouteOrder(t *testing.T, config map[string]any, routeOrder []string, listing func(string, map[string]map[string]json.RawMessage) listingResult) string {
 	t.Helper()
 	state := t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", state)
 	oldConfig, oldCatalog, oldListing := loadConfig, loadCatalog, listModels
-	loadConfig = func() (map[string]any, error) { return config, nil }
+	loadConfig = func() (loadedConfig, error) { return loadedConfig{Values: config, RouteOrder: routeOrder}, nil }
 	loadCatalog = func() (catalog, error) { return catalog{Providers: map[string]map[string]json.RawMessage{}}, nil }
 	listModels = listing
 	t.Cleanup(func() { loadConfig, loadCatalog, listModels = oldConfig, oldCatalog, oldListing })
 	return state
+}
+
+func routeNames(config map[string]any) []string {
+	routes, _ := config["routes"].(map[string]any)
+	order := make([]string, 0, len(routes))
+	for name := range routes {
+		order = append(order, name)
+	}
+	return order
 }
 
 func writeCheckedState(t *testing.T, root, date string, asked, declined []string) {
@@ -74,6 +87,50 @@ func TestDiscoverNewerWritesPendingAndDailyCheck(t *testing.T) {
 		"pending": map[string]any{"current": "gpt-6-luna", "new": "gpt-6.1-luna", "blocked": false, "delivered": false}}
 	if !reflect.DeepEqual(state, want) {
 		t.Fatalf("state mismatch\n got: %#v\nwant: %#v", state, want)
+	}
+}
+
+func TestDiscoverChecksRoutesInConfigOrder(t *testing.T) {
+	config := map[string]any{"coder_agent": "codex", "routes": map[string]any{
+		"zeta": "gpt-6-luna", "middle": "gpt-6-sol", "alpha": "gpt-6-astra",
+	}}
+	routeOrder, err := routeKeyOrder([]byte(`{"routes":{"zeta":"gpt-6-luna","alpha":"gpt-6-astra","middle":"gpt-6-sol"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := setupDiscoveryWithRouteOrder(t, config, routeOrder, func(agent string, _ map[string]map[string]json.RawMessage) listingResult {
+		if agent != "codex" {
+			t.Fatalf("agent = %q", agent)
+		}
+		return listingResult{available: true, ids: []string{"gpt-6.1-luna", "gpt-6.1-sol", "gpt-6.1-astra"}}
+	})
+
+	current, newer, ok := DiscoverModelVersion(t.TempDir())
+	if !ok || current != "gpt-6-luna" || newer != "gpt-6.1-luna" {
+		t.Fatalf("first route checked = %q -> %q, available = %v; want zeta route gpt-6-luna", current, newer, ok)
+	}
+	if got := readStateJSON(t, root)["pending"].(map[string]any)["current"]; got != current {
+		t.Fatalf("pending current = %v, want %q", got, current)
+	}
+}
+
+func TestDiscoverChecksOverlayOnlyRoute(t *testing.T) {
+	config := map[string]any{"coder_agent": "codex", "routes": map[string]any{
+		"normal": "gpt-6-luna", "overlay": "gpt-6-sol",
+	}}
+	root := setupDiscoveryWithRouteOrder(t, config, []string{"normal"}, func(agent string, _ map[string]map[string]json.RawMessage) listingResult {
+		if agent != "codex" {
+			t.Fatalf("agent = %q", agent)
+		}
+		return listingResult{available: true, ids: []string{"gpt-6-luna", "gpt-6.1-sol"}}
+	})
+
+	current, newer, ok := DiscoverModelVersion(t.TempDir())
+	if !ok || current != "gpt-6-sol" || newer != "gpt-6.1-sol" {
+		t.Fatalf("got %q -> %q, available = %v; want overlay route", current, newer, ok)
+	}
+	if got := readStateJSON(t, root)["pending"].(map[string]any)["current"]; got != current {
+		t.Fatalf("pending current = %v, want %q", got, current)
 	}
 }
 

@@ -1,10 +1,10 @@
 package models
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math/big"
 	"os"
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +45,11 @@ type catalog struct {
 	Providers map[string]map[string]json.RawMessage `json:"providers"`
 }
 
+type loadedConfig struct {
+	Values     map[string]any
+	RouteOrder []string
+}
+
 // DiscoverModelVersion checks pinned models at most once per UTC day and queues a newer version.
 func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	if strings.TrimSpace(repository) == "" {
@@ -54,10 +60,11 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	if state.CheckedOn != nil && *state.CheckedOn == time.Now().UTC().Format("2006-01-02") {
 		return "", "", false
 	}
-	config, err := loadConfig()
+	loaded, err := loadConfig()
 	if err != nil {
 		return "", "", false
 	}
+	config := loaded.Values
 	cached, err := loadCatalog()
 	if err != nil {
 		return "", "", false
@@ -69,18 +76,21 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	}
 	if routes, valid := config["routes"].(map[string]any); valid {
 		seen := map[string]bool{}
-		ordered := []any{}
-		if required, ok := config["required_routes"].([]any); ok {
-			for _, name := range required {
-				if route, exists := routes[fmt.Sprint(name)]; exists {
-					ordered = append(ordered, route)
-				}
+		ordered := append([]string(nil), loaded.RouteOrder...)
+		visited := map[string]bool{}
+		for _, name := range ordered {
+			visited[name] = true
+		}
+		for _, name := range sortedRouteNames(routes) {
+			if !visited[name] {
+				ordered = append(ordered, name)
 			}
 		}
-		for _, route := range routes {
-			ordered = append(ordered, route)
-		}
-		for _, route := range ordered {
+		for _, name := range ordered {
+			route, exists := routes[name]
+			if !exists {
+				continue
+			}
 			model := routeModel(route)
 			if model != "" && !seen[model] {
 				checks = append(checks, modelCheck{agent: agent, model: model})
@@ -125,12 +135,91 @@ type listingResult struct {
 }
 
 // Variables keep the process and filesystem boundaries replaceable in package tests.
-var loadConfig = func() (map[string]any, error) {
+var loadConfig = func() (loadedConfig, error) {
 	home, err := os.UserHomeDir()
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	configPath := obsidian.ConfigPath()
+	config, err := policy.LoadCoderConfig(configPath, filepath.Join(home, ".orchestrator", "config.toml"))
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	routeOrder, err := routeKeyOrder(raw)
+	if err != nil {
+		routes, _ := config["routes"].(map[string]any)
+		routeOrder = sortedRouteNames(routes)
+	}
+	return loadedConfig{Values: config, RouteOrder: routeOrder}, nil
+}
+
+func sortedRouteNames(routes map[string]any) []string {
+	order := make([]string, 0, len(routes))
+	for name := range routes {
+		order = append(order, name)
+	}
+	sort.Strings(order)
+	return order
+}
+
+func routeKeyOrder(raw []byte) ([]string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	start, err := decoder.Token()
 	if err != nil {
 		return nil, err
 	}
-	return policy.LoadCoderConfig(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"))
+	if delimiter, ok := start.(json.Delim); !ok || delimiter != '{' {
+		return nil, errors.New("config is not a JSON object")
+	}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		name, ok := key.(string)
+		if !ok {
+			return nil, errors.New("config key is not a string")
+		}
+		if name != "routes" {
+			var value json.RawMessage
+			if err := decoder.Decode(&value); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		routesStart, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		if delimiter, ok := routesStart.(json.Delim); !ok || delimiter != '{' {
+			return nil, errors.New("routes is not a JSON object")
+		}
+		order := []string{}
+		for decoder.More() {
+			routeKey, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			routeName, ok := routeKey.(string)
+			if !ok {
+				return nil, errors.New("route key is not a string")
+			}
+			var route json.RawMessage
+			if err := decoder.Decode(&route); err != nil {
+				return nil, err
+			}
+			order = append(order, routeName)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return order, nil
+	}
+	return nil, errors.New("config has no routes")
 }
 
 var loadCatalog = func() (catalog, error) {
