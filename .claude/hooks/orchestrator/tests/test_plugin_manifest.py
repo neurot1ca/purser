@@ -139,7 +139,7 @@ def test_plugin_manifest_paths_and_registration():
     assert "PURSER_MOD_ASYNC_START" not in enforcement_source
     bridge = mcp["mcpServers"]["codex-main"]
     assert bridge["command"] == "node"
-    assert bridge["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "mcp", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]
+    assert bridge["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "go-mcp", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]
     for value in [*bridge["args"], *(arg for entries in hooks["hooks"].values() for entry in entries for arg in entry["hooks"][0]["args"])]:
         for relative in re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\s\"']+)", value):
             assert (ROOT / relative).is_file()
