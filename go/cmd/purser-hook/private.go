@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"purser-hook/internal/jobs"
@@ -37,46 +40,18 @@ func operationMain(argv []string) int {
 		privateError(err)
 		return 2
 	}
-	root := stateRoot()
-	launch := func(id string, generation int64, token string) error {
-		return launchHost(root, id, generation, token)
-	}
-	var result map[string]any
-	switch argv[0] {
-	case "codex":
-		result, err = runSynchronous(args, "codex")
-	case "codex-reply":
-		result, err = runSynchronous(args, "codex-reply")
-	case "codex_start":
-		result, _, err = jobs.Start(root, args, jobs.StartOptions{Launch: launch})
-	case "codex_result":
-		id, ok := args["jobId"].(string)
-		if !ok || id == "" {
-			privateError(errors.New("jobId must be a nonempty string"))
-			return 2
-		}
-		result = jobs.Result(root, id, float64(time.Now().UnixNano())/1e9, jobs.ResultOptions{
-			StateRoot: root,
-			RecoverJob: func(jobID string) string {
-				return jobs.RecoverJob(root, jobID, float64(time.Now().UnixNano())/1e9,
-					jobs.RecoverOptions{LaunchHost: func(dir, id string, generation int64, token string) error {
-						return launchHostDir(root, dir, id, generation, token)
-					}})
-			},
-		})
-	case "codex_cancel":
-		result = jobs.Cancel(root, args)
-	case "codex_apply":
-		result = jobs.Apply(root, args)
-	default:
-		privateError(fmt.Errorf("unknown operation %q", argv[0]))
-		return 2
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	result, err := dispatchOperation(ctx, argv[0], args, stateRoot())
 	if err != nil {
 		if errors.Is(err, errSynchronousCancelled) {
 			return 0
 		}
 		privateError(err)
+		var inputErr operationInputError
+		if errors.As(err, &inputErr) {
+			return 2
+		}
 		return 1
 	}
 	status := "ok"
@@ -90,6 +65,43 @@ func operationMain(argv []string) int {
 	}
 	writePrivateJSON(map[string]any{"status": status, "result": result})
 	return 0
+}
+
+type operationInputError struct{ message string }
+
+func (e operationInputError) Error() string { return e.message }
+
+func dispatchOperation(ctx context.Context, tool string, args map[string]any, root string) (map[string]any, error) {
+	launch := func(id string, generation int64, token string) error {
+		return launchHost(root, id, generation, token)
+	}
+	switch tool {
+	case "codex", "codex-reply":
+		return runSynchronousContext(ctx, args, tool)
+	case "codex_start":
+		result, _, err := jobs.Start(root, args, jobs.StartOptions{Launch: launch})
+		return result, err
+	case "codex_result":
+		id, ok := args["jobId"].(string)
+		if !ok || id == "" {
+			return nil, operationInputError{"jobId must be a nonempty string"}
+		}
+		return jobs.Result(root, id, float64(time.Now().UnixNano())/1e9, jobs.ResultOptions{
+			StateRoot: root,
+			RecoverJob: func(jobID string) string {
+				return jobs.RecoverJob(root, jobID, float64(time.Now().UnixNano())/1e9,
+					jobs.RecoverOptions{LaunchHost: func(dir, id string, generation int64, token string) error {
+						return launchHostDir(root, dir, id, generation, token)
+					}})
+			},
+		}), nil
+	case "codex_cancel":
+		return jobs.Cancel(root, args), nil
+	case "codex_apply":
+		return jobs.Apply(root, args), nil
+	default:
+		return nil, operationInputError{fmt.Sprintf("unknown operation %q", tool)}
+	}
 }
 
 func hostMain(argv []string) int {

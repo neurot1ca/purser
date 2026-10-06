@@ -126,6 +126,118 @@ func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
 	}
 }
 
+func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
+	_, source, _, _ := runtime.Caller(0)
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Python    string `json:"python"`
+		FakeCodex string `json:"fakeCodex"`
+		Cases     []struct {
+			Name      string         `json:"name"`
+			Tool      string         `json:"tool"`
+			Arguments map[string]any `json:"arguments"`
+			Result    map[string]any `json:"result"`
+		} `json:"cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	var selected *struct {
+		Name      string         `json:"name"`
+		Tool      string         `json:"tool"`
+		Arguments map[string]any `json:"arguments"`
+		Result    map[string]any `json:"result"`
+	}
+	for i := range fixture.Cases {
+		if fixture.Cases[i].Name == "new_success" {
+			selected = &fixture.Cases[i]
+			break
+		}
+	}
+	if selected == nil {
+		t.Fatal("Python fixture has no new_success case")
+	}
+	root := t.TempDir()
+	args := replaceFixtureRoot(selected.Arguments, root)
+	cwd := args["cwd"].(string)
+	if err := os.MkdirAll(cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	bin, err := json.Marshal([]string{fixture.Python, "-c", fixture.FakeCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", root)
+	t.Setenv("PURSER_CODEX_BIN", string(bin))
+	t.Setenv("PURSER_SYNC_ORACLE_MODE", "success")
+	t.Setenv("PURSER_SYNC_ORACLE_THREAD", "thread-new")
+	got, err := dispatchOperation(context.Background(), selected.Tool, args, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotText := got["content"].([]any)[0].(map[string]any)["text"]
+	wantText := selected.Result["content"].([]any)[0].(map[string]any)["text"]
+	if gotText != wantText {
+		t.Fatalf("result text bytes differ\ngot:  %q\nwant: %q", gotText, wantText)
+	}
+}
+
+func TestDispatchOperationContextCancellationStopsChild(t *testing.T) {
+	_, source, _, _ := runtime.Caller(0)
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Python    string `json:"python"`
+		FakeCodex string `json:"fakeCodex"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	args := map[string]any{"prompt": "cancel", "cwd": root}
+	started := filepath.Join(root, "child-started")
+	bin, err := json.Marshal([]string{fixture.Python, "-c", fixture.FakeCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", root)
+	t.Setenv("PURSER_CODEX_BIN", string(bin))
+	t.Setenv("PURSER_SYNC_ORACLE_MODE", "cancel")
+	t.Setenv("PURSER_SYNC_ORACLE_THREAD", "thread-cancelled")
+	t.Setenv("PURSER_SYNC_ORACLE_STARTED", started)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, callErr := dispatchOperation(ctx, "codex", args, root)
+		result <- callErr
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(started); err != nil {
+		t.Fatal("fake child did not start")
+	}
+	cancel()
+	select {
+	case callErr := <-result:
+		if !errors.Is(callErr, errSynchronousCancelled) {
+			t.Fatalf("dispatch error=%v, want synchronous cancellation", callErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatcher did not stop after context cancellation")
+	}
+}
+
 func TestPythonToolJSONUnicodeEscapeParity(t *testing.T) {
 	_, source, _, _ := runtime.Caller(0)
 	fixturePath := filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json")
