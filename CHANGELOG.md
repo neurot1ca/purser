@@ -6,7 +6,6 @@ before it is published.
 ## 0.1.83 — 2026-10-06
 
 - **Fixed:** Reviewer-1 gets its configured 180 s timeout again instead of a silent 90 s default; the Go Post hook now honors numeric config values (hook budgets, report limits).
-- **Fixed:** The Go binary builds for Linux and macOS again.
 - **Fixed:** The band job board no longer triggers an engine refusal when another plugin draws above the prompt.
 - **Fixed:** Model-version discovery checks routes in config order, matching Python.
 
