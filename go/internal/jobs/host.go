@@ -512,9 +512,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if data, readErr := os.ReadFile(args.OutputPath); readErr == nil {
 			content = string(data)
 		}
-		err = finishJob(dir, jobID, "SUCCEEDED", "", map[string]any{
+		jobResult := map[string]any{
 			"content": content, "threadId": result.ThreadID, "usage": result.Usage,
-		}, "", finished, hostFinishOptions(generation, token))
+		}
+		checkReadinessBeforeSuccess(dir, jobID, jobResult)
+		finished = float64(time.Now().UnixNano()) / 1e9
+		err = finishJob(dir, jobID, "SUCCEEDED", "", jobResult, "", finished, hostFinishOptions(generation, token))
 	}
 	close(terminal)
 	time.Sleep(200 * time.Millisecond)

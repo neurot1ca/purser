@@ -624,6 +624,12 @@ func delegatedDiff(repo string, delta, classification map[string]any) ([]string,
 	return paths, diff, nil
 }
 
+// DelegatedDiff returns only the complete attributed addition selected from a
+// filtered job delta. Readiness consumes the same attribution boundary as review.
+func DelegatedDiff(repo string, delta map[string]any) ([]string, string, error) {
+	return delegatedDiff(repo, delta, nil)
+}
+
 func linesSet(text string) map[string]bool {
 	result := map[string]bool{}
 	for _, line := range strings.Split(text, "\n") {

@@ -227,6 +227,30 @@ func ParseAgyEnvelope(stdout []byte, includeMetadata bool) (ParsedEnvelope, erro
 	return parsed, nil
 }
 
+// ParseAgyStructuredPayload validates the common agy envelope while leaving
+// the structured payload to the caller's schema. Readiness has a different
+// response schema from Reviewer-1 but shares this transport envelope.
+func ParseAgyStructuredPayload(stdout []byte) (any, error) {
+	var envelope map[string]any
+	if err := decodeJSON(stdout, &envelope); err != nil {
+		return nil, err
+	}
+	for _, key := range envelopeFields {
+		if _, ok := envelope[key]; !ok {
+			return nil, errors.New("agy envelope has an unexpected shape")
+		}
+	}
+	conversation, conversationOK := envelope["conversation_id"].(string)
+	status, statusOK := envelope["status"].(string)
+	duration, durationOK := number(envelope["duration_seconds"])
+	turns, turnsOK := integer(envelope["num_turns"])
+	_, usageOK := envelope["usage"].(map[string]any)
+	if !conversationOK || conversation == "" || !statusOK || !strings.EqualFold(status, "success") || !durationOK || duration < 0 || math.IsInf(duration, 0) || math.IsNaN(duration) || !turnsOK || turns < 1 || !usageOK || envelope["structured_output"] == nil {
+		return nil, errors.New("agy envelope metadata has an unexpected shape")
+	}
+	return structuredPayload(envelope)
+}
+
 func ParseOpenCodeEnvelope(stdout []byte, includeMetadata bool) (ParsedEnvelope, error) {
 	return parseEventStream(stdout, "opencode", includeMetadata)
 }

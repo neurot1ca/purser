@@ -1,0 +1,98 @@
+{
+  "criteria": {
+    "grounded": true,
+    "acceptance_criteria": "must handle errors",
+    "objective": "test"
+  },
+  "diff": "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -0,0 +1,2 @@\n+first added line\n+second added line\n",
+  "cases": [
+    {
+      "name": "unmet_valid",
+      "payload": {
+        "verdict": "UNMET",
+        "criterion": "must handle errors",
+        "evidence": [
+          {
+            "path": "a.txt",
+            "line": 2,
+            "quote": "second added"
+          }
+        ]
+      },
+      "grounded": true,
+      "expected": {
+        "verdict": "UNMET",
+        "criterion": "must handle errors",
+        "evidence": [
+          {
+            "path": "a.txt",
+            "line": 2,
+            "quote": "second added"
+          }
+        ]
+      }
+    },
+    {
+      "name": "no_unmet",
+      "payload": {
+        "verdict": "NO_UNMET_FOUND",
+        "criterion": null,
+        "evidence": []
+      },
+      "grounded": true,
+      "expected": {
+        "verdict": "NO_UNMET_FOUND",
+        "criterion": null,
+        "evidence": []
+      }
+    },
+    {
+      "name": "unknown",
+      "payload": {
+        "verdict": "UNKNOWN",
+        "criterion": null,
+        "evidence": []
+      },
+      "grounded": true,
+      "expected": {
+        "verdict": "UNKNOWN",
+        "criterion": null,
+        "evidence": []
+      }
+    },
+    {
+      "name": "unmet_wrong_line",
+      "payload": {
+        "verdict": "UNMET",
+        "criterion": "must handle errors",
+        "evidence": [
+          {
+            "path": "a.txt",
+            "line": 1,
+            "quote": "second added"
+          }
+        ]
+      },
+      "grounded": true,
+      "expected": {
+        "verdict": "UNKNOWN",
+        "criterion": null,
+        "evidence": []
+      }
+    },
+    {
+      "name": "ungrounded",
+      "payload": {
+        "verdict": "NO_UNMET_FOUND",
+        "criterion": null,
+        "evidence": []
+      },
+      "grounded": false,
+      "expected": {
+        "verdict": "UNKNOWN",
+        "criterion": null,
+        "evidence": []
+      }
+    }
+  ]
+}
