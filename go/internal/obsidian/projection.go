@@ -12,6 +12,14 @@ func PluginRoot() string {
 	if root := os.Getenv("CLAUDE_PLUGIN_ROOT"); root != "" {
 		return root
 	}
+	if executable, err := os.Executable(); err == nil {
+		if executable, err = filepath.EvalSymlinks(executable); err == nil {
+			root := filepath.Dir(filepath.Dir(executable))
+			if _, err := os.Stat(filepath.Join(root, ".claude", "hooks", "orchestrator", "purser_wait.py")); err == nil {
+				return root
+			}
+		}
+	}
 	cwd, _ := os.Getwd()
 	return cwd
 }

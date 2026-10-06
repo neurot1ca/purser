@@ -83,16 +83,6 @@ func postStart(event map[string]any, root, pythonExe, waiterPath string) (map[st
 }
 
 func postStartWaiterPath() string {
-	if os.Getenv("CLAUDE_PLUGIN_ROOT") == "" {
-		if executable, err := os.Executable(); err == nil {
-			if executable, err = filepath.EvalSymlinks(executable); err == nil {
-				candidate := filepath.Join(filepath.Dir(filepath.Dir(executable)), ".claude", "hooks", "orchestrator", "purser_wait.py")
-				if _, err := os.Stat(candidate); err == nil {
-					return candidate
-				}
-			}
-		}
-	}
 	return filepath.Join(pluginRoot(), ".claude", "hooks", "orchestrator", "purser_wait.py")
 }
 

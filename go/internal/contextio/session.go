@@ -52,6 +52,7 @@ func SessionStart(event map[string]any) []byte {
 	source, _ := event["source"].(string)
 	validSession := session != ""
 	var state map[string]any
+	updateContext := sessionUpdateContext(session, repository, nil)
 	statePath := ""
 	if handoff != "" {
 		statePath = filepath.Join(filepath.Dir(handoff), "compaction_advisor.json")
@@ -98,6 +99,7 @@ func SessionStart(event map[string]any) []byte {
 			}
 			state["notice_pending"] = nil
 		}
+		updateContext = sessionUpdateContext(session, repository, state)
 		state["session_id"] = session
 		state["last_context_language"] = nullableLanguage(language)
 		reset := source == "compact" || source == "clear"
@@ -124,6 +126,7 @@ func SessionStart(event map[string]any) []byte {
 		line = ""
 	}
 	additional = joinContext(line, additional)
+	additional = joinContext(additional, updateContext)
 
 	var modelState map[string]any
 	modelContext := ""
