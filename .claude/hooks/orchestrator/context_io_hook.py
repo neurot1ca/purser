@@ -103,8 +103,8 @@ def _plugin_update_context(payload: Mapping[str, Any], repository: Path | None) 
         return None
 
 
-def _model_version_context(repository: Path | None) -> str | None:
-    """Check pinned models against bounded live CLI listings at most daily."""
+def discover_model_version(repository: Path | None) -> tuple[str, str] | None:
+    """Queue a newer pinned model version after bounded listings, at most daily."""
     try:
         if repository is None or not model_version_notice.due_today():
             return None
@@ -137,21 +137,29 @@ def _model_version_context(repository: Path | None) -> str | None:
                 state["pending"] = {"current": current, "new": newer, "blocked": False}
                 model_version_notice.write_state(state)
                 model_version_notice.record_check()
-                return (
-                    "On your next reply, render exactly these three lines in the user's language; "
-                    "translate from English, keeping ⚓, both model names, and `/purser:init` unchanged. "
-                    f"If the user answers 1/yes, apply only these routes with "
-                    f"`python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --adopt-model-version {newer}`. "
-                    f"If they answer 2/no, record that choice with `python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --decline-model-version {newer}`. "
-                    "Do not change routes unless the user says yes.\n"
-                    f"> ⚓ **New model version available: `{newer}` (you are on `{current}`).**\n"
-                    "> *Should Purser switch to it? (1-yes 2-no)*\n"
-                    "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
-                )
+                return current, newer
         model_version_notice.record_check()
         return None
     except BaseException:
         return None
+
+
+def _model_version_context(repository: Path | None) -> str | None:
+    version = discover_model_version(repository)
+    if version is None:
+        return None
+    current, newer = version
+    return (
+        "On your next reply, render exactly these three lines in the user's language; "
+        "translate from English, keeping ⚓, both model names, and `/purser:init` unchanged. "
+        f"If the user answers 1/yes, apply only these routes with "
+        f"`python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --adopt-model-version {newer}`. "
+        f"If they answer 2/no, record that choice with `python \"${{CLAUDE_PLUGIN_ROOT}}/.claude/hooks/orchestrator/purser_init.py\" --decline-model-version {newer}`. "
+        "Do not change routes unless the user says yes.\n"
+        f"> ⚓ **New model version available: `{newer}` (you are on `{current}`).**\n"
+        "> *Should Purser switch to it? (1-yes 2-no)*\n"
+        "> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
+    )
 
 
 def _queue_maintenance_notice(payload: Mapping[str, Any], repository: Path | None,

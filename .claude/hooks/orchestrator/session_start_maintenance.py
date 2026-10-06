@@ -4,6 +4,7 @@ import json
 import sys
 
 import async_session_maintenance
+import context_io_hook
 import maintenance_reports
 import project_root
 import state_root
@@ -17,6 +18,7 @@ def main() -> int:
         repository, _reason = project_root.resolve_project_root(event)
         if repository is not None:
             maintenance_reports.wake_background_check(repository)
+            context_io_hook.discover_model_version(repository)
         async_session_maintenance.cleanup_jobs(state_root.default_state_root())
     except BaseException:
         pass

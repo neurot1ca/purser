@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import sys
 
+import pytest
 
 ROOT = Path(__file__).parents[4]
 ORCHESTRATOR_ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,8 @@ if str(ORCHESTRATOR_ROOT) not in sys.path:
 
 import install_claude_task_telemetry as installer
 import session_start_maintenance
+import context_io_hook
+import model_version_notice
 
 
 PLUGIN_TOOLS = {
@@ -31,8 +34,54 @@ def test_session_start_maintenance_keeps_python_cleanup(monkeypatch, tmp_path):
     monkeypatch.setattr(session_start_maintenance.state_root, "default_state_root", lambda: tmp_path / "state")
     monkeypatch.setattr(session_start_maintenance.maintenance_reports, "wake_background_check", lambda repo: calls.append(("wake", repo)))
     monkeypatch.setattr(session_start_maintenance.async_session_maintenance, "cleanup_jobs", lambda root: calls.append(("cleanup", root)))
+    monkeypatch.setattr(context_io_hook, "discover_model_version", lambda _repo: None)
     assert session_start_maintenance.main() == 0
     assert calls == [("wake", tmp_path), ("cleanup", tmp_path / "state")]
+
+
+def test_session_start_queues_newer_model_version_without_printing(monkeypatch, tmp_path):
+    state_root = tmp_path / "state"
+    monkeypatch.setattr(model_version_notice, "state_root", session_start_maintenance.state_root)
+    monkeypatch.setattr(session_start_maintenance.state_root, "default_state_root", lambda: state_root)
+    monkeypatch.setattr(session_start_maintenance.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(session_start_maintenance.maintenance_reports, "wake_background_check", lambda _repo: None)
+    monkeypatch.setattr(session_start_maintenance.async_session_maintenance, "cleanup_jobs", lambda _root: None)
+    monkeypatch.setattr(session_start_maintenance.sys, "stdin", io.StringIO(json.dumps({"hook_event_name": "SessionStart"})))
+    output = io.StringIO()
+    monkeypatch.setattr(session_start_maintenance.sys, "stdout", output)
+    monkeypatch.setattr(context_io_hook.coder_config, "load", lambda _path: {
+        "coder_agent": "codex", "routes": {"normal": "gpt-6-luna", "mechanical": {"model": "gpt-6-luna"}},
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+    })
+    monkeypatch.setattr(context_io_hook.model_catalog, "load_cached_catalog", lambda: {"providers": {}})
+    listing_calls = []
+    def list_models(agent, _providers, *, timeout_seconds):
+        listing_calls.append((agent, timeout_seconds))
+        models = ["gpt-6.1-luna"] if agent == "codex" else ["gemini-3.9-flash-high"]
+        return {"status": "available", "models": [{"id": model} for model in models]}
+    monkeypatch.setattr(context_io_hook.model_listing, "list_models", list_models)
+
+    assert session_start_maintenance.main() == 0
+    state = model_version_notice.read_state()
+    assert state["pending"] == {"current": "gpt-6-luna", "new": "gpt-6.1-luna",
+                                "blocked": False, "delivered": False}
+    assert state["checked_on"] is not None
+    assert listing_calls == [("codex", 2)]
+    assert output.getvalue() == ""
+
+
+def test_session_start_model_version_discovery_does_nothing_when_not_due(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_version_notice, "state_root", session_start_maintenance.state_root)
+    monkeypatch.setattr(session_start_maintenance.state_root, "default_state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(session_start_maintenance.project_root, "resolve_project_root", lambda _event: (tmp_path, "test"))
+    monkeypatch.setattr(session_start_maintenance.maintenance_reports, "wake_background_check", lambda _repo: None)
+    monkeypatch.setattr(session_start_maintenance.async_session_maintenance, "cleanup_jobs", lambda _root: None)
+    monkeypatch.setattr(session_start_maintenance.sys, "stdin", io.StringIO(json.dumps({"hook_event_name": "SessionStart"})))
+    monkeypatch.setattr(context_io_hook.model_version_notice, "due_today", lambda: False)
+    monkeypatch.setattr(context_io_hook.coder_config, "load", lambda _path: pytest.fail("configuration loaded when not due"))
+
+    assert session_start_maintenance.main() == 0
+    assert model_version_notice.read_state() == {"checked_on": None, "asked": [], "declined": [], "pending": None}
 
 
 def test_plugin_hooks_match_manual_installer():
