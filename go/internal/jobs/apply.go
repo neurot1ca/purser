@@ -80,7 +80,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	job.Get("snapshot", &snapshot)
 	var saved map[string]any
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
-		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID)
+		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 		return result(saved)
 	}
@@ -110,7 +110,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 			}
 		}
 		if allPresent {
-			return persistApplied(dir, jobID, job, map[string]any{"applied": true, "paths": paths})
+			return persistApplied(stateRoot, dir, jobID, job, map[string]any{"applied": true, "paths": paths}, args, opt)
 		}
 	}
 	if _, ok := job.values["applyResult"]; ok {
@@ -174,20 +174,30 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	_ = job.Set("applyResult", value)
 	if applied {
 		_ = job.Set("appliedAt", float64(time.Now().UnixNano())/1e9)
+		if task, _ := recordMap(job)["taskId"].(string); task != "" {
+			_ = job.Set("decisionRecorded", true)
+		}
 	}
 	if err := Write(filepath.Join(dir, jobID+".json"), job); err != nil {
 		return result(map[string]any{"state": "FAILED", "errorCode": "JOB_WRITE_FAILED", "message": err.Error()})
 	}
+	if applied {
+		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
+	}
 	return result(value)
 }
 
-func persistApplied(dir, jobID string, job *Record, value map[string]any) map[string]any {
+func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]any, args map[string]any, opt ApplyOptions) map[string]any {
 	_ = job.Set("applyState", "applied")
 	_ = job.Set("applyResult", value)
 	_ = job.Set("appliedAt", float64(time.Now().UnixNano())/1e9)
+	if task, _ := recordMap(job)["taskId"].(string); task != "" {
+		_ = job.Set("decisionRecorded", true)
+	}
 	if err := Write(filepath.Join(dir, jobID+".json"), job); err != nil {
 		return applyToolResult(map[string]any{"state": "FAILED", "errorCode": "JOB_WRITE_FAILED", "message": err.Error()})
 	}
+	recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	return applyToolResult(value)
 }
 

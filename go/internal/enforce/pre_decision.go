@@ -661,7 +661,7 @@ func preEmit(root string, event map[string]any, repository *string, taskID, proj
 }
 
 // RecordClaudeDecision mirrors the best-effort telemetry emitted by the Python bridge.
-func RecordClaudeDecision(root string, job map[string]any, decision, kind, sourceJobID string) {
+func RecordClaudeDecision(root string, job map[string]any, decision, kind, sourceJobID string, reviewerCounts ...any) {
 	task, ok := job["taskId"].(string)
 	if !ok || task == "" {
 		return
@@ -679,9 +679,36 @@ func RecordClaudeDecision(root string, job map[string]any, decision, kind, sourc
 	}
 	envelope := map[string]any{"session_id": nil, "project_key": project, "repo": nil, "branch": nil, "agent_id": nil, "agent_type": nil}
 	payload := map[string]any{"decision": decision, "task_type": phase, "source": map[string]any{"kind": kind, "job_id": sourceJobID}}
+	for i, field := range []string{"reviewer1_valid_count", "reviewer1_false_count"} {
+		if i >= len(reviewerCounts) {
+			break
+		}
+		if count, ok := nonnegativeInteger(reviewerCounts[i]); ok {
+			payload[field] = count
+		}
+	}
 	if event, err := buildObservationAtStateRoot("CLAUDE_DECISION_RECORDED", envelope, payload, task, root); err == nil {
 		_, _ = persistObservation(filepath.Join(root, "telemetry"), event)
 	}
+}
+
+func nonnegativeInteger(value any) (int64, bool) {
+	switch number := value.(type) {
+	case int:
+		if number >= 0 {
+			return int64(number), true
+		}
+	case int64:
+		if number >= 0 {
+			return number, true
+		}
+	case json.Number:
+		parsed, err := number.Int64()
+		if err == nil && parsed >= 0 {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 func provider(agent, model string) any {

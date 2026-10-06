@@ -179,6 +179,68 @@ func TestApplyCachedRepeatRecordsDecisionAndReleasesLease(t *testing.T) {
 	}
 }
 
+func TestApplyFreshSuccessPersistsReviewerDecisionCountsOnce(t *testing.T) {
+	base := t.TempDir()
+	state, repo, worktree := filepath.Join(base, "state"), filepath.Join(base, "repo"), filepath.Join(base, "worktree")
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "-q")
+	write(t, filepath.Join(repo, "tracked.txt"), "base\n")
+	git(t, repo, "add", "--all")
+	git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "base")
+	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	snapshot, err := ledger.CheckoutSnapshot(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(worktree, "tracked.txt"), "worker change\n")
+	jobID := strings.Repeat("a", 64)
+	job := map[string]any{
+		"jobId": jobID, "state": "SUCCEEDED", "taskId": "decision-task", "jobPhase": "implementation",
+		"repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot,
+	}
+	encoded, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(state, "codex_exec_mcp", "jobs", jobID+".json"), string(encoded))
+	args := map[string]any{"jobId": jobID, "reviewer1Valid": json.Number("3"), "reviewer1False": json.Number("1")}
+	result := Apply(state, args)
+	structured, _ := result["structuredContent"].(map[string]any)
+	if structured["applied"] != true {
+		t.Fatalf("fresh apply failed: %#v", result)
+	}
+	eventPath := filepath.Join(state, "telemetry", "events", "by_task", "decision-task.jsonl")
+	data, err := os.ReadFile(eventPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("fresh apply emitted %d decision events, want 1: %s", len(lines), data)
+	}
+	var event map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &event); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := event["payload"].(map[string]any)
+	if payload["reviewer1_valid_count"] != float64(3) || payload["reviewer1_false_count"] != float64(1) {
+		t.Fatalf("reviewer counts were not persisted from fresh codex_apply: %#v", payload)
+	}
+	result = Apply(state, args)
+	if structured, _ := result["structuredContent"].(map[string]any); structured["applied"] != true {
+		t.Fatalf("replayed apply failed: %#v", result)
+	}
+	data, err = os.ReadFile(eventPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(strings.Split(strings.TrimSpace(string(data)), "\n")); got != 2 {
+		t.Fatalf("Python-compatible replay decision count = %d, want 2", got)
+	}
+}
+
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	c := exec.Command("git", args...)

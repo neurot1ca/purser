@@ -272,6 +272,11 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			} else if existing, ok := args.Config.(map[string]any); ok {
 				config = existing
 			}
+			for key := range config {
+				if strings.HasPrefix(key, "sandbox_workspace_write.") {
+					delete(config, key)
+				}
+			}
 			config["sandbox_workspace_write"] = map[string]any{"writable_roots": []any{worktreePath}}
 			args.Config = config
 		}

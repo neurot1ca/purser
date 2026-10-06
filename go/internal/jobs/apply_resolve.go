@@ -76,7 +76,7 @@ func applyResolvedJob(stateRoot, dir, jobID string, job *Record, repo, worktree,
 	}
 	values = recordMap(job)
 	recordScopeOutcome(opt, stateRoot, values, "resolved_by_hand")
-	recordApplyDecision(opt, stateRoot, values, "accepted", "apply", jobID)
+	recordApplyDecision(opt, stateRoot, values, "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	return applyToolResult(value)
 }
@@ -127,7 +127,7 @@ func recordScopeOutcome(opt ApplyOptions, root string, job map[string]any, actio
 	}
 }
 
-func recordApplyDecision(opt ApplyOptions, root string, job map[string]any, decision, kind, source string) {
+func recordApplyDecision(opt ApplyOptions, root string, job map[string]any, decision, kind, source string, reviewerCounts ...any) {
 	if task, _ := job["taskId"].(string); task == "" {
 		return
 	}
@@ -135,7 +135,7 @@ func recordApplyDecision(opt ApplyOptions, root string, job map[string]any, deci
 	if opt.RecordDecision != nil {
 		opt.RecordDecision(job, decision, kind, source)
 	} else {
-		enforce.RecordClaudeDecision(root, job, decision, kind, source)
+		enforce.RecordClaudeDecision(root, job, decision, kind, source, reviewerCounts...)
 	}
 }
 

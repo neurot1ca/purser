@@ -145,6 +145,62 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 	}
 }
 
+func TestHostReplacesDottedSandboxWorkspaceWriteKeys(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	worktree := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	deadline := float64(time.Now().Add(time.Minute).UnixNano()) / 1e9
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": deadline, "worktreePath": worktree, "repoRoot": worktree,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "codex", "args": map[string]any{
+			"cwd": worktree, "prompt": "hello", "config": map[string]any{
+				"sandbox_workspace_write":                map[string]any{"writable_roots": []any{"outside"}},
+				"sandbox_workspace_write.network_access": true,
+				"sandbox_workspace_write.extra":          "unsafe",
+				"unrelated":                              "preserved",
+			},
+		},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		config, ok := args.Config.(map[string]any)
+		if !ok {
+			t.Fatalf("config has type %T", args.Config)
+		}
+		if _, exists := config["sandbox_workspace_write.network_access"]; exists {
+			t.Error("dotted sandbox_workspace_write key survived host rewrite")
+		}
+		if _, exists := config["sandbox_workspace_write.extra"]; exists {
+			t.Error("dotted sandbox_workspace_write key survived host rewrite")
+		}
+		if config["unrelated"] != "preserved" {
+			t.Errorf("unrelated config was lost: %#v", config)
+		}
+		workspace, _ := config["sandbox_workspace_write"].(map[string]any)
+		if roots, _ := workspace["writable_roots"].([]any); len(roots) != 1 || roots[0] != worktree {
+			t.Errorf("writable root = %#v, want %q", roots, worktree)
+		}
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}}
+	if _, err := RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHostStartFailurePreservesCancellationAndDeadline(t *testing.T) {
 	tests := []struct {
 		name, state, code string
