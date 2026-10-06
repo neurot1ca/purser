@@ -1,6 +1,7 @@
 package enforce
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -85,9 +86,14 @@ func postReportLimit(config map[string]any, phase any) int {
 		return int(value)
 	case int:
 		return value
+	case json.Number:
+		if parsed, err := value.Float64(); err == nil {
+			return int(parsed)
+		}
 	default:
 		return fallback
 	}
+	return fallback
 }
 
 // finalizePostArtifacts adds the quota snapshot within the compact-response byte cap.

@@ -259,9 +259,13 @@ func numberOr(value any, fallback float64) float64 {
 		return n
 	case int:
 		return float64(n)
+	case json.Number:
+		if parsed, err := n.Float64(); err == nil {
+			return parsed
+		}
 	default:
-		return fallback
 	}
+	return fallback
 }
 
 func finishPostReviewDelta(repoRoot, root string, event, pending, bundle map[string]any, resolved postProfile,

@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -47,6 +48,10 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		configuredSeconds = n
 	} else if n, ok := loaded["reviewer1_timeout_seconds"].(int); ok {
 		configuredSeconds = float64(n)
+	} else if n, ok := loaded["reviewer1_timeout_seconds"].(json.Number); ok {
+		if parsed, err := n.Float64(); err == nil {
+			configuredSeconds = parsed
+		}
 	}
 	remaining := time.Until(started.Add(hookBudget))
 	timeout := time.Duration(configuredSeconds * float64(time.Second))
@@ -96,7 +101,7 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		candidateArgs := clonePostMap(args)
 		candidateArgs["reviewer_agent"], candidateArgs["reviewer_model"] = candidate.Agent, candidate.Model
 		candidateArgs["reviewer_timeout_seconds"] = budget.Seconds()
-		bridgeResult, err := review.RunBridge(context.Background(), root, candidateArgs, budget)
+		bridgeResult, err := postReviewerBridge(context.Background(), root, candidateArgs, budget)
 		if err != nil {
 			if review.IsReviewerBridgeException(err) {
 				bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer-1 bridge raised unexpectedly.")
@@ -140,6 +145,8 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 }
 
 var postReviewerAdapters = map[string]bool{"agy": true, "opencode": true, "codex": true}
+
+var postReviewerBridge = review.RunBridge
 
 var modelVendorPrefix = regexp.MustCompile(`^(openai|google|deepseek|anthropic|qwen|mistral|llama)/`)
 

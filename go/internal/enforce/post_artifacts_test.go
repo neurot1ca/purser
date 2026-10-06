@@ -29,7 +29,9 @@ func TestPostArtifactsPythonFixture(t *testing.T) {
 	limits := mapValue(fixture["report_limits"])
 	if postReportLimit(nil, "implementation") != int(limits["implementation"].(float64)) ||
 		postReportLimit(nil, "operation") != int(limits["operation"].(float64)) ||
-		postReportLimit(map[string]any{"operation_report_max_chars": float64(7)}, "operation") != int(limits["custom"].(float64)) {
+		postReportLimit(map[string]any{"operation_report_max_chars": float64(7)}, "operation") != int(limits["custom"].(float64)) ||
+		postReportLimit(map[string]any{"implementation_report_max_chars": json.Number("1300")}, "implementation") != 1300 ||
+		postReportLimit(map[string]any{"operation_report_max_chars": json.Number("25000")}, "operation") != 25000 {
 		t.Fatal("report limits differ from Python")
 	}
 

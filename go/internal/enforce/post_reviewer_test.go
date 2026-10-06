@@ -1,11 +1,15 @@
 package enforce
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"purser-hook/internal/profile"
+	"purser-hook/internal/review"
 )
 
 func TestPostReviewerFamilyAndBoardZeroParity(t *testing.T) {
@@ -56,5 +60,77 @@ func TestRunPostReviewerSameFamilyAndDeadline(t *testing.T) {
 	deadlineAttempts, ok := deadlineBundle["reviewer1_attempts"].([]postReviewerAttempt)
 	if !ok || len(deadlineAttempts) != 2 || deadlineAttempts[0].Outcome != "UNAVAILABLE_BUDGET_EXHAUSTED" || deadlineAttempts[1].Outcome != "UNAVAILABLE_BUDGET_EXHAUSTED" {
 		t.Fatalf("expired shared deadline attempts=%#v", deadlineBundle["reviewer1_attempts"])
+	}
+}
+
+func TestRunPostReviewerUsesConfiguredJSONNumberTimeout(t *testing.T) {
+	pluginRoot := t.TempDir()
+	configDir := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configBytes, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := map[string]any{}
+	if err := json.Unmarshal(configBytes, &config); err != nil {
+		t.Fatal(err)
+	}
+	config["reviewer1_timeout_seconds"] = 180
+	configBytes, err = json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), configBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	loaded, err := loadPreConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded["reviewer1_timeout_seconds"].(json.Number); !ok {
+		t.Fatalf("loaded timeout type=%T, want json.Number", loaded["reviewer1_timeout_seconds"])
+	}
+	for key, want := range map[string]float64{
+		"hook_checks_deadline_seconds":  150,
+		"max_total_hook_budget_seconds": 240,
+		"manifest_budget_seconds":       3,
+		"micro_repair_timeout_seconds":  60,
+	} {
+		t.Run(key, func(t *testing.T) {
+			if got := numberOr(loaded[key], -1); got != want {
+				t.Fatalf("numberOr(%s)=%v, want %v", key, got, want)
+			}
+		})
+	}
+
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	var gotBudgets []time.Duration
+	var gotTimeouts []float64
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, timeout time.Duration) (review.BridgeOutcome, error) {
+		gotBudgets = append(gotBudgets, timeout)
+		gotTimeouts = append(gotTimeouts, args["reviewer_timeout_seconds"].(float64))
+		return review.BridgeOutcome{Outcome: "unavailable"}, nil
+	}
+	candidates := []profile.ReviewerCandidate{{Agent: "agy", Model: "gemini-3.8-flash-high"}}
+	for _, tc := range []struct {
+		budget time.Duration
+		want   time.Duration
+	}{{240 * time.Second, 180 * time.Second}, {120 * time.Second, 120 * time.Second}} {
+		_, err := runPostReviewer("", "", map[string]any{"model": "gpt-5"}, map[string]any{"findings": []any{}},
+			postProfile{ReviewerCandidates: candidates}, loaded, nil, nil, time.Now(), tc.budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := gotBudgets[len(gotBudgets)-1]
+		if delta := got - tc.want; delta < -time.Second || delta > 0 {
+			t.Errorf("reviewer bridge budget=%s, want %s capped by hook budget", got, tc.want)
+		}
+		if gotTimeout := gotTimeouts[len(gotTimeouts)-1]; gotTimeout > tc.want.Seconds() || gotTimeout < tc.want.Seconds()-1 {
+			t.Errorf("reviewer_timeout_seconds=%v, want %v capped by hook budget", gotTimeout, tc.want.Seconds())
+		}
 	}
 }
