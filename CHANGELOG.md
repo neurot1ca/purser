@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.80 — 2026-10-06
+
+- **Fixed:** Under the Go MCP host, codex_cancel waits for the job's terminal state instead of reporting it unconfirmed, and codex_apply releases the job's scope lease so later overlapping jobs no longer queue behind applied ones.
+- **Fixed:** The codex_start waiter command points to the plugin's waiter, not a path under Claude's current directory.
+- **Fixed:** A job whose Go host died after Codex finished is recovered as a failed job instead of staying running forever.
+
 ## 0.1.79 — 2026-10-06
 
 - **Fixed:** codex_start works again under the Go MCP host; the detached host launch no longer fails with access denied when attaching to the desktop shell parent.
