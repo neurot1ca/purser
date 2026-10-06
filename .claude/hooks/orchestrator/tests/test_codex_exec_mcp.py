@@ -324,7 +324,7 @@ def test_atomic_job_write_retries_transient_replace_permission_error(area, monke
 
 
 class Client:
-    def __init__(self, area, *, bin_override=None, extra_env=None):
+    def __init__(self, area, *, bin_override=None, extra_env=None, server_command=None):
         fake = area / "fake_codex.py"
         fake.write_text(FAKE, encoding="utf-8")
         self.record = area / "calls.jsonl"
@@ -333,8 +333,10 @@ class Client:
                     "PURSER_CODEX_TEST_PARENT_PID": str(os.getpid()), "FAKE_RECORD": str(self.record)})
         env.update(extra_env or {})
         override = bin_override if bin_override is not None else json.dumps([sys.executable, str(fake)])
+        command = (list(server_command) if server_command is not None else
+                   [sys.executable, "-u", str(SCRIPT), "--codex-bin", override])
         self.process = subprocess.Popen(
-            [sys.executable, "-u", str(SCRIPT), "--codex-bin", override],
+            command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", env=env,
             **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}),
@@ -352,6 +354,16 @@ class Client:
         if params is not None:
             value["params"] = params
         self.process.stdin.write(json.dumps(value, ensure_ascii=False) + "\n")
+        self.process.stdin.flush()
+
+    def send_notification(self, method, params=None):
+        value = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            value["params"] = params
+        self.send_raw(json.dumps(value, ensure_ascii=False) + "\n")
+
+    def send_raw(self, text):
+        self.process.stdin.write(text)
         self.process.stdin.flush()
 
     def receive(self, timeout=120):
@@ -378,6 +390,27 @@ def client(area):
         instance.close()
 
 
+@pytest.fixture(params=["python", "alternate"])
+def server_command(request):
+    if request.param == "alternate":
+        configured = os.environ.get("PURSER_MCP_SERVER_COMMAND")
+        if not configured:
+            pytest.skip("PURSER_MCP_SERVER_COMMAND is not configured")
+        command = json.loads(configured)
+        assert isinstance(command, list) and command and all(isinstance(item, str) for item in command)
+        return command
+    return None
+
+
+@pytest.fixture
+def oracle_client(area, server_command):
+    instance = Client(area, server_command=server_command)
+    try:
+        yield instance
+    finally:
+        instance.close()
+
+
 def call(client, request_id, name, arguments):
     client.send(request_id, "tools/call", {"name": name, "arguments": arguments})
     response = client.receive()
@@ -385,23 +418,103 @@ def call(client, request_id, name, arguments):
     return response["result"]
 
 
-def test_initialize_and_list(client):
-    client.send(1, "initialize", {"protocolVersion": "2025-06-18"})
-    initialized = client.receive()
-    assert initialized["result"] == {
-        "protocolVersion": "2025-06-18",
-        "serverInfo": {"name": "codex-exec-mcp", "version": "1.0.0"},
-        "capabilities": {"tools": {}},
+def test_initialize_and_list(oracle_client):
+    oracle_client.send(1, "initialize", {"protocolVersion": "2025-06-18"})
+    assert oracle_client.receive() == {
+        "jsonrpc": "2.0", "id": 1, "result": {
+            "protocolVersion": "2025-06-18",
+            "serverInfo": {"name": "codex-exec-mcp", "version": "1.0.0"},
+            "capabilities": {"tools": {}},
+        },
     }
-    client.send(2, "tools/list")
-    tools = client.receive()["result"]["tools"]
+    oracle_client.send(2, "tools/list")
+    listed = oracle_client.receive()
+    assert listed == {"jsonrpc": "2.0", "id": 2,
+                      "result": {"tools": codex_exec_mcp.TOOL_SCHEMAS}}
+    tools = listed["result"]["tools"]
     assert [tool["name"] for tool in tools] == ["codex", "codex-reply", "codex_start", "codex_result", "codex_cancel", "codex_apply"]
     start = next(tool for tool in tools if tool["name"] == "codex_start")
     assert "call" not in start["inputSchema"]["required"]
     apply = next(tool for tool in tools if tool["name"] == "codex_apply")
     assert apply["inputSchema"]["properties"]["resolved"]["type"] == "boolean"
-    missing = call(client, 3, "codex_start", {"prompt": "work"})
+    missing = call(oracle_client, 3, "codex_start", {"prompt": "work"})
     assert missing["structuredContent"]["errorCode"] == "INVALID_ARGUMENT"
+
+
+def test_oracle_result_envelope_and_exact_text_bytes(oracle_client, area):
+    arguments = {"prompt": "wire oracle", "cwd": str(area)}
+    oracle_client.send(3, "tools/call", {"name": "codex", "arguments": arguments})
+    response = oracle_client.receive()
+    expected = codex_exec_mcp._tool_result("thread-123", content="Reply from fake Codex")
+    assert response == {"jsonrpc": "2.0", "id": 3, "result": expected}
+    assert response["result"]["content"][0]["text"].encode("utf-8") == (
+        b'{"threadId": "thread-123", "content": "Reply from fake Codex"}')
+
+
+def test_large_prompt_is_framed_and_preserved(oracle_client, area):
+    prompt = ("frame 🧵\n" * 40000) + "end"
+    oracle_client.send(10, "tools/call", {
+        "name": "codex", "arguments": {"prompt": prompt, "cwd": str(area)},
+    })
+    response = oracle_client.receive()
+    assert response["jsonrpc"] == "2.0" and response["id"] == 10
+    assert response["result"]["content"][0]["text"].encode("utf-8") == (
+        b'{"threadId": "thread-123", "content": "Reply from fake Codex"}')
+    deadline = time.monotonic() + 2
+    while not oracle_client.calls() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert bytes.fromhex(oracle_client.calls()[0]["stdin_hex"]).decode("utf-8") == prompt
+
+
+def test_protocol_error_and_malformed_input_envelopes(oracle_client):
+    oracle_client.send(21, "missing/method")
+    assert oracle_client.receive() == {"jsonrpc": "2.0", "id": 21,
+                                       "error": {"code": -32601, "message": "Method not found"}}
+    oracle_client.send(22, "tools/call", [])
+    assert oracle_client.receive() == {"jsonrpc": "2.0", "id": 22,
+                                       "error": {"code": -32602, "message": "Invalid params"}}
+    oracle_client.send_raw("{not json}\n")
+    with pytest.raises(queue.Empty):
+        oracle_client.receive(timeout=0.15)
+    oracle_client.send(23, "ping")
+    assert oracle_client.receive() == {"jsonrpc": "2.0", "id": 23, "result": {}}
+
+
+def test_slow_call_does_not_block_ping_or_another_call(area, server_command):
+    client = Client(area, extra_env={"FAKE_SLOW": "1", "FAKE_SLEEP_SECONDS": "1.5"},
+                    server_command=server_command)
+    try:
+        client.send(31, "tools/call", {"name": "codex", "arguments": {"prompt": "slow", "cwd": str(area)}})
+        client.send(32, "ping")
+        client.send(33, "tools/call", {"name": "codex_start", "arguments": {}})
+        responses = [client.receive(timeout=1) for _ in range(2)]
+        by_id = {item["id"]: item for item in responses}
+        assert [item["id"] for item in responses] in ([32, 33], [33, 32])
+        assert by_id[32] == {"jsonrpc": "2.0", "id": 32, "result": {}}
+        failed_start = {"state": "FAILED", "errorCode": "INVALID_ARGUMENT",
+                        "message": "call and prompt are required"}
+        assert by_id[33] == {"jsonrpc": "2.0", "id": 33,
+                             "result": codex_exec_mcp._job_result(failed_start)}
+        slow_result = codex_exec_mcp._tool_result("thread-123", content="Reply from fake Codex")
+        assert client.receive(timeout=4) == {"jsonrpc": "2.0", "id": 31, "result": slow_result}
+    finally:
+        client.close()
+
+
+def test_cancel_notification_suppresses_late_response_through_server_handle(area, server_command):
+    client = Client(area, extra_env={"FAKE_SLOW": "1", "FAKE_SLEEP_SECONDS": "1"},
+                    server_command=server_command)
+    try:
+        client.send(41, "tools/call", {"name": "codex", "arguments": {"prompt": "cancel", "cwd": str(area)}})
+        deadline = time.monotonic() + 3
+        while not client.calls() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert client.calls()
+        client.send_notification("notifications/cancelled", {"requestId": 41})
+        with pytest.raises(queue.Empty):
+            client.receive(timeout=1.5)
+    finally:
+        client.close()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows process creation flags")
