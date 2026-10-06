@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
 
@@ -179,6 +180,72 @@ func TestApplyCachedRepeatRecordsDecisionAndReleasesLease(t *testing.T) {
 	}
 }
 
+func TestApplyFreshSuccessReleasesActiveScopeLease(t *testing.T) {
+	base := t.TempDir()
+	state, repo, worktree := filepath.Join(base, "state"), filepath.Join(base, "repo"), filepath.Join(base, "worktree")
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "-q")
+	write(t, filepath.Join(repo, "tracked.txt"), "base\n")
+	git(t, repo, "add", "--all")
+	git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "base")
+	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	snapshot, err := ledger.CheckoutSnapshot(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(worktree, "tracked.txt"), "worker change\n")
+	jobID := strings.Repeat("b", 64)
+	project, owner := "0123456789abcdef", strings.Repeat("f", 64)
+	store := lease.New(filepath.Join(state, "projects", project))
+	if got := store.Acquire(owner, "apply-task", []string{"src"}, lease.AcquireOptions{JobID: &jobID}, 100); got.Status != "OK" {
+		t.Fatalf("seed active scope lease: %#v", got)
+	}
+	index, err := json.Marshal(map[string]any{"jobId": jobID, "project_key": project, "call_key": owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(state, "async_jobs", jobID+".json"), string(index))
+	job := map[string]any{
+		"jobId": jobID, "state": "SUCCEEDED", "repoRoot": repo,
+		"worktreePath": worktree, "snapshot": snapshot,
+	}
+	encoded, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(state, "codex_exec_mcp", "jobs", jobID+".json"), string(encoded))
+	data, err := os.ReadFile(filepath.Join(state, "projects", project, "scope_leases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	owners := value["owners"].(map[string]any)
+	if got := owners[owner].(map[string]any)["state"]; got != "ACTIVE" {
+		t.Fatalf("seed scope lease state = %v, want ACTIVE", got)
+	}
+
+	result := Apply(state, map[string]any{"jobId": jobID})
+	if structured, _ := result["structuredContent"].(map[string]any); structured["applied"] != true {
+		t.Fatalf("fresh apply failed: %#v", result)
+	}
+	data, err = os.ReadFile(filepath.Join(state, "projects", project, "scope_leases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	owners = value["owners"].(map[string]any)
+	if got := owners[owner].(map[string]any)["state"]; got != "RELEASED" {
+		t.Fatalf("scope lease state = %v, want RELEASED", got)
+	}
+}
+
 func TestApplyFreshSuccessPersistsReviewerDecisionCountsOnce(t *testing.T) {
 	base := t.TempDir()
 	state, repo, worktree := filepath.Join(base, "state"), filepath.Join(base, "repo"), filepath.Join(base, "worktree")
@@ -212,17 +279,37 @@ func TestApplyFreshSuccessPersistsReviewerDecisionCountsOnce(t *testing.T) {
 		t.Fatalf("fresh apply failed: %#v", result)
 	}
 	eventPath := filepath.Join(state, "telemetry", "events", "by_task", "decision-task.jsonl")
+	countDecisionEvents := func(data []byte) int {
+		count := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			var event map[string]any
+			if err := json.Unmarshal([]byte(line), &event); err != nil {
+				t.Fatal(err)
+			}
+			if event["event_type"] == "CLAUDE_DECISION_RECORDED" {
+				count++
+			}
+		}
+		return count
+	}
 	data, err := os.ReadFile(eventPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 1 {
-		t.Fatalf("fresh apply emitted %d decision events, want 1: %s", len(lines), data)
+	if got := countDecisionEvents(data); got != 1 {
+		t.Fatalf("fresh apply emitted %d decision events, want 1: %s", got, data)
 	}
 	var event map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &event); err != nil {
-		t.Fatal(err)
+	for _, line := range lines {
+		var candidate map[string]any
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			t.Fatal(err)
+		}
+		if candidate["event_type"] == "CLAUDE_DECISION_RECORDED" {
+			event = candidate
+			break
+		}
 	}
 	payload, _ := event["payload"].(map[string]any)
 	if payload["reviewer1_valid_count"] != float64(3) || payload["reviewer1_false_count"] != float64(1) {
@@ -236,7 +323,7 @@ func TestApplyFreshSuccessPersistsReviewerDecisionCountsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(strings.Split(strings.TrimSpace(string(data)), "\n")); got != 2 {
+	if got := countDecisionEvents(data); got != 2 {
 		t.Fatalf("Python-compatible replay decision count = %d, want 2", got)
 	}
 }

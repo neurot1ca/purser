@@ -182,7 +182,9 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		return result(map[string]any{"state": "FAILED", "errorCode": "JOB_WRITE_FAILED", "message": err.Error()})
 	}
 	if applied {
+		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
+		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	}
 	return result(value)
 }
@@ -197,7 +199,11 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 	if err := Write(filepath.Join(dir, jobID+".json"), job); err != nil {
 		return applyToolResult(map[string]any{"state": "FAILED", "errorCode": "JOB_WRITE_FAILED", "message": err.Error()})
 	}
+	var worktree string
+	job.Get("worktreePath", &worktree)
+	recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 	recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
+	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	return applyToolResult(value)
 }
 
