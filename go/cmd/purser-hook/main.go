@@ -16,6 +16,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		os.Exit(mcpMain(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "op" || os.Args[1] == "host") {
 		os.Exit(privateMain())
 	}
