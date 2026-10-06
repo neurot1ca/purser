@@ -66,6 +66,7 @@ async function handlePostToolUse(event: PostEvent, $, e, next) {
   if (event === 'PostToolUseFailure' && !postToolUseFailureTools.has(e.tool_name)) return prior
   if (e.hookSpecificOutput?.hookEventName === event ||
       e.tool_response?.hookSpecificOutput?.hookEventName === event) return prior
+  let failureReason = 'helper could not run'
   try {
     const binary = await goBinary($)
     const result = await $.process.run([binary, 'enforce'], {
@@ -73,9 +74,21 @@ async function handlePostToolUse(event: PostEvent, $, e, next) {
       stdin: JSON.stringify(e),
       timeoutMs: 300000,
     })
-    if (result.exitCode !== 0) throw new Error(`Go ${event} helper exited ${result.exitCode}`)
-    const mapped = mapPostToolUse(event, result.stdout)
-    if (mapped.systemMessage) await $.ui.toast(mapped.systemMessage)
+    if (result.exitCode !== 0) {
+      failureReason = `helper exited with code ${result.exitCode}`
+      throw new Error(failureReason)
+    }
+    let mapped: ReturnType<typeof mapPostToolUse>
+    try {
+      mapped = mapPostToolUse(event, result.stdout)
+    } catch {
+      failureReason = 'invalid helper output'
+      throw new Error(failureReason)
+    }
+    if (mapped.systemMessage) {
+      try { await $.ui.toast(mapped.systemMessage) }
+      catch { /* Toast delivery must not discard a valid enforcement result. */ }
+    }
     if (!mapped.updatedToolOutput && !mapped.additionalContext && !mapped.systemMessage) return prior
     return {
       ...prior,
@@ -83,7 +96,11 @@ async function handlePostToolUse(event: PostEvent, $, e, next) {
       ...(mapped.additionalContext ? { additionalContext: [...(prior.additionalContext ?? []), ...mapped.additionalContext] } : {}),
     }
   } catch {
-    return prior
+    return {
+      ...prior,
+      additionalContext: [...(prior.additionalContext ?? []),
+        `Purser ${event} enforcement failed for this tool call (${e.tool_name ?? 'unknown tool'}): ${failureReason}. FULL Claude review is required.`],
+    }
   }
 }
 

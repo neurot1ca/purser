@@ -29,6 +29,7 @@ function stubGo(
   outcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
   markerWrites: string[] = [],
   markerOutcome?: () => { deny?: string; exitCode?: number; stdout?: string } | undefined,
+  toastFailure = false,
 ) {
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('session.id', () => ({ value: 'p66-session' }))
@@ -61,7 +62,11 @@ function stubGo(
     if (result?.deny) return { deny: result.deny }
     return { value: { exitCode: result?.exitCode ?? 0, stdout: result?.stdout ?? stdout, stderr: '' } }
   })
-  on('ui.toast', (_$, e) => { toasts.push(e.text); return { value: undefined } })
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+    if (toastFailure) throw new Error('toast failed')
+    return { value: undefined }
+  })
 }
 
 function stubToolCall(on, calls: unknown[]) {
@@ -121,14 +126,65 @@ test('empty Go Post response passes through', options, async ($, on) => {
   expect(calls).toHaveLength(1)
 })
 
-test('invalid Go Post JSON passes through without throwing', options, async ($, on) => {
+test('invalid Go Post JSON preserves the host result and requires FULL review', options, async ($, on) => {
   const calls: string[] = []
   const toasts: string[] = []
   stubGo(on, '{', calls, toasts)
+  on('classic.PostToolUse', () => ({ additionalContext: ['host context'] }))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({
+    additionalContext: [
+      'host context',
+      'Purser PostToolUse enforcement failed for this tool call (mcp__plugin_purser_codex-main__codex): invalid helper output. FULL Claude review is required.',
+    ],
+  })
+  expect(calls).toHaveLength(1)
+})
+
+test('nonzero Go Post exit preserves the host result and requires FULL review', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  stubGo(on, postOutput, calls, toasts, undefined, undefined, undefined, () => ({ exitCode: 7 }))
   on('classic.PostToolUse', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
 
-  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({})
+  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({
+    additionalContext: [
+      'Purser PostToolUse enforcement failed for this tool call (mcp__plugin_purser_codex-main__codex): helper exited with code 7. FULL Claude review is required.',
+    ],
+  })
+  expect(calls).toHaveLength(1)
+})
+
+test('invalid Go Post mapping preserves the host result and names the event', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  stubGo(on, postOutput, calls, toasts, undefined, undefined, undefined, () => ({
+    stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUseFailure' } }),
+  }))
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({
+    additionalContext: [
+      'Purser PostToolUse enforcement failed for this tool call (mcp__plugin_purser_codex-main__codex): invalid helper output. FULL Claude review is required.',
+    ],
+  })
+  expect(calls).toHaveLength(1)
+})
+
+test('Post toast rejection preserves mapped enforcement output', options, async ($, on) => {
+  const calls: string[] = []
+  const toasts: string[] = []
+  stubGo(on, postOutput, calls, toasts, undefined, undefined, undefined, undefined, undefined, undefined, true)
+  on('classic.PostToolUse', () => ({ additionalContext: ['host context'] }))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  await expect($.classic.PostToolUse(postEvent('PostToolUse'))).resolves.toEqual({
+    updatedToolOutput: [{ type: 'text', text: 'reviewed' }],
+    additionalContext: ['host context', 'review required'],
+  })
   expect(calls).toHaveLength(1)
 })
 
