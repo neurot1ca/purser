@@ -17,7 +17,8 @@ import (
 )
 
 func TestDetachedHelper(t *testing.T) {
-	if os.Getenv("PURSER_DETACH_LAUNCHER") == "1" {
+	// The child inherits the launcher's environment, so test for it first.
+	if os.Getenv("PURSER_DETACH_LAUNCHER") == "1" && os.Getenv("PURSER_DETACH_CHILD") != "1" {
 		exe, err := os.Executable()
 		if err != nil {
 			t.Fatal(err)
@@ -82,7 +83,13 @@ func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0600) })
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, nil, 0600)
+		// The child runs this test binary; go test cannot delete it until the child exits.
+		for deadline := time.Now().Add(10 * time.Second); IdentityMatches(pid, identity) && time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
 	if !IdentityMatches(pid, identity) {
 		t.Fatal("creation identity did not match the live detached process")
 	}
