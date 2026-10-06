@@ -100,6 +100,15 @@ def test_same_session_unobserved_unknown_job_is_reminded(tmp_path):
     assert maintenance.followup_hints(tmp_path, PROJECT_KEY, "session-2") is None
 
 
+def test_startup_entrypoint_runs_cleanup_with_ceiling_check(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(maintenance, "cleanup_jobs",
+                        lambda root, **kwargs: calls.append((root, kwargs)))
+
+    assert maintenance.main(["--startup", str(tmp_path)]) == 0
+    assert calls == [(str(tmp_path), {"check_ceiling": True})]
+
+
 def event(kind, route=None, duration=None, project=PROJECT_KEY, stamp="2026-09-01T00:00:00Z"):
     payload = {}
     if route is not None:

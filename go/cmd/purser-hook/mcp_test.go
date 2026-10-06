@@ -2,15 +2,118 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestMCPMaintenanceChild(t *testing.T) {
+	if os.Getenv("PURSER_MCP_CHILD") != "1" {
+		return
+	}
+	time.Sleep(time.Duration(envInt("PURSER_MCP_CHILD_DELAY_MS")) * time.Millisecond)
+	_, _ = fmt.Fprint(os.Stdout, "maintenance stdout sentinel")
+	_, _ = fmt.Fprint(os.Stderr, "maintenance stderr sentinel")
+	os.Exit(envInt("PURSER_MCP_CHILD_EXIT"))
+}
+
+func envInt(key string) int {
+	value, _ := strconv.Atoi(os.Getenv(key))
+	return value
+}
+
+func TestMCPMaintenanceCommandUsesProcessTreeCancellation(t *testing.T) {
+	cmd := mcpMaintenanceCommand(context.Background(), "python", "maintenance.py", "state", io.Discard, io.Discard)
+	if cmd.SysProcAttr == nil || cmd.Cancel == nil {
+		t.Fatal("maintenance command is missing process-tree launch or cancellation settings")
+	}
+}
+
+func mcpTestStartup(delay time.Duration, exitCode int, done chan<- struct{}) func(context.Context, io.Writer, io.Writer) {
+	return func(ctx context.Context, stdout, stderr io.Writer) {
+		defer close(done)
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPMaintenanceChild$")
+		cmd.Env = append(os.Environ(), "PURSER_MCP_CHILD=1",
+			"PURSER_MCP_CHILD_DELAY_MS="+strconv.Itoa(int(delay/time.Millisecond)),
+			"PURSER_MCP_CHILD_EXIT="+strconv.Itoa(exitCode))
+		cmd.Stdout, cmd.Stderr = stdout, stderr
+		if err := cmd.Run(); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(stderr, "Codex recovery scan unavailable: %v\n", err)
+		}
+	}
+}
+
+func runMCPWithStartup(startup func(context.Context, io.Writer, io.Writer)) (*testBuffer, *testBuffer, *io.PipeWriter, <-chan int) {
+	input, inputWriter := io.Pipe()
+	output, stderr := &testBuffer{}, &testBuffer{}
+	serverDone := make(chan int, 1)
+	go func() { serverDone <- mcpMainWithStartup(nil, input, output, stderr, startup) }()
+	return output, stderr, inputWriter, serverDone
+}
+
+func TestMCPStartupMaintenanceDoesNotDelayInitialize(t *testing.T) {
+	startupDone := make(chan struct{})
+	output, _, input, serverDone := runMCPWithStartup(
+		mcpTestStartup(700*time.Millisecond, 0, startupDone))
+	defer input.Close()
+	started := time.Now()
+	_, _ = io.WriteString(input, `{"jsonrpc":"2.0","id":1,"method":"initialize"}`+"\n")
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for output.String() == "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if output.String() == "" || time.Since(started) >= 300*time.Millisecond {
+		t.Fatalf("initialize waited for startup maintenance: %q", output.String())
+	}
+	if !strings.Contains(output.String(), `"id":1`) {
+		t.Fatalf("initialize response missing: %s", output.String())
+	}
+	_ = input.Close()
+	<-serverDone
+}
+
+func TestMCPStartupMaintenanceOutputNeverReachesProtocolStdout(t *testing.T) {
+	startupDone := make(chan struct{})
+	output, stderr, input, serverDone := runMCPWithStartup(
+		mcpTestStartup(0, 0, startupDone))
+	_, _ = io.WriteString(input, `{"jsonrpc":"2.0","id":2,"method":"initialize"}`+"\n")
+	<-startupDone
+	_ = input.Close()
+	<-serverDone
+	if strings.Contains(output.String(), "maintenance ") {
+		t.Fatalf("maintenance output contaminated MCP stdout: %q", output.String())
+	}
+	if !strings.Contains(stderr.String(), "maintenance stderr sentinel") {
+		t.Fatalf("maintenance stderr was not surfaced: %q", stderr.String())
+	}
+}
+
+func TestMCPStartupMaintenanceFailureOnlyUsesStderr(t *testing.T) {
+	startupDone := make(chan struct{})
+	output, stderr, input, serverDone := runMCPWithStartup(
+		mcpTestStartup(0, 7, startupDone))
+	_, _ = io.WriteString(input, `{"jsonrpc":"2.0","id":3,"method":"initialize"}`+"\n")
+	<-startupDone
+	_ = input.Close()
+	<-serverDone
+	if strings.Contains(output.String(), "maintenance") {
+		t.Fatalf("failed maintenance wrote to MCP stdout: %q", output.String())
+	}
+	if !strings.Contains(stderr.String(), "maintenance stderr sentinel") ||
+		!strings.Contains(stderr.String(), "Codex recovery scan unavailable") {
+		t.Fatalf("failure was not surfaced on stderr: %q", stderr.String())
+	}
+}
 
 func exchange(line string) string {
 	out := &testBuffer{}

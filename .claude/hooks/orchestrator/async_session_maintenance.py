@@ -13,6 +13,7 @@ import re
 import stat
 import statistics
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -878,3 +879,22 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
 
 
 __all__ = ["cleanup_jobs", "duration_hint", "followup_hints"]
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run MCP startup maintenance as a short-lived subprocess entry point."""
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--startup", metavar="STATE_ROOT", required=True)
+    args = parser.parse_args(argv)
+    try:
+        cleanup_jobs(args.startup, check_ceiling=True)
+    except Exception as exc:
+        print(f"Codex recovery scan unavailable: {exc}", file=sys.stderr, flush=True)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
