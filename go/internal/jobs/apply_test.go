@@ -180,6 +180,58 @@ func TestApplyCachedRepeatRecordsDecisionAndReleasesLease(t *testing.T) {
 	}
 }
 
+func TestApplyCachedRepeatReleasesLeaseAfterWorktreeRemoval(t *testing.T) {
+	base := t.TempDir()
+	state, repo, worktree := filepath.Join(base, "state"), filepath.Join(base, "repo"), filepath.Join(base, "worktree")
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	jobID := strings.Repeat("c", 64)
+	project, owner := "0123456789abcdef", strings.Repeat("e", 64)
+	store := lease.New(filepath.Join(state, "projects", project))
+	if got := store.Acquire(owner, "apply-task", []string{"src"}, lease.AcquireOptions{JobID: &jobID}, 100); got.Status != "OK" {
+		t.Fatalf("seed active scope lease: %#v", got)
+	}
+	job := map[string]any{
+		"jobId": jobID, "state": "SUCCEEDED", "repoRoot": repo,
+		"worktreePath": worktree, "applyState": "applied",
+		"applyResult": map[string]any{"applied": true, "paths": []any{"tracked.txt"}},
+	}
+	encoded, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(state, "codex_exec_mcp", "jobs", jobID+".json"), string(encoded))
+	index, err := json.Marshal(map[string]any{"jobId": jobID, "project_key": project, "call_key": owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(state, "async_jobs", jobID+".json"), string(index))
+	if err := os.RemoveAll(worktree); err != nil {
+		t.Fatal(err)
+	}
+
+	result := Apply(state, map[string]any{"jobId": jobID})
+	if result["structuredContent"] == nil {
+		t.Fatalf("missing cached result: %#v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(state, "projects", project, "scope_leases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	owners := value["owners"].(map[string]any)
+	if got := owners[owner].(map[string]any)["state"]; got != "RELEASED" {
+		t.Fatalf("scope lease state = %v, want RELEASED", got)
+	}
+}
+
 func TestApplyFreshSuccessReleasesActiveScopeLease(t *testing.T) {
 	base := t.TempDir()
 	state, repo, worktree := filepath.Join(base, "state"), filepath.Join(base, "repo"), filepath.Join(base, "worktree")

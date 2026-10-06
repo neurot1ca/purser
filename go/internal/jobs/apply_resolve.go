@@ -145,10 +145,14 @@ func releaseAppliedJobLeases(opt ApplyOptions, stateRoot, dir, worktree string) 
 	if release == nil {
 		release = lease.ReleaseJobScopeLease
 	}
-	target, err := filepath.EvalSymlinks(worktree)
+	target, err := filepath.Abs(worktree)
 	if err != nil {
 		return
 	}
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		target = resolved
+	}
+	target = filepath.Clean(target)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -163,9 +167,19 @@ func releaseAppliedJobLeases(opt ApplyOptions, stateRoot, dir, worktree string) 
 		}
 		values := recordMap(bound)
 		boundPath, _ := values["worktreePath"].(string)
-		boundTarget, err := filepath.EvalSymlinks(boundPath)
+		if boundPath == "" {
+			continue
+		}
+		boundTarget, err := filepath.Abs(boundPath)
+		if err != nil {
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(boundTarget); err == nil {
+			boundTarget = resolved
+		}
+		boundTarget = filepath.Clean(boundTarget)
 		id, _ := values["jobId"].(string)
-		if err != nil || id == "" || boundTarget != target {
+		if id == "" || boundTarget != target {
 			continue
 		}
 		if release(stateRoot, id) {
