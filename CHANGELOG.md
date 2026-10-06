@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.76 — 2026-10-06
+
+- **Fixed:** Purser's state no longer grows without bound: job cleanup lists git worktrees once per repository, retires finished jobs' worktrees and replay backups, and prunes expired job records with their raw outputs and bundles after distilling them into a learning summary capped at 4 MiB; every state directory has a registered retention policy and a total-size check.
+
 ## 0.1.75 — 2026-10-05
 
 - **Fixed:** codex-main connects again; its startup recovery scan runs in the background instead of delaying the MCP handshake past the connect timeout.
