@@ -374,8 +374,12 @@ func validateProviders(data []byte) (map[string]map[string]json.RawMessage, erro
 				valid := true
 				for _, key := range []string{"context", "output"} {
 					if rawLimit, exists := values[key]; exists {
-						var count int64
-						if json.Unmarshal(rawLimit, &count) != nil || count <= 0 {
+						var count json.Number
+						if json.Unmarshal(rawLimit, &count) != nil {
+							valid = false
+							continue
+						}
+						if _, ok := positiveInteger(count); !ok {
 							valid = false
 						}
 					}
