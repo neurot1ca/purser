@@ -152,6 +152,9 @@ func projectRoot(event map[string]any) string {
 	return resolve(strings.TrimSpace(string(out)))
 }
 
+// ProjectRoot resolves the repository associated with a hook event.
+func ProjectRoot(event map[string]any) string { return projectRoot(event) }
+
 func Read(event map[string]any, processStart time.Time) error {
 	started := time.Now()
 	key := sessionKey(event["session_id"])

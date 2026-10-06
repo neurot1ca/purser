@@ -39,12 +39,9 @@ def cannot_spawn_from_node():
 
 
 def test_manifests_use_locator():
-    hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
-    for entries in hooks.values():
-        for entry in entries:
-            command = entry["hooks"][0]
-            assert command["command"] == "node"
-            assert command["args"][0] == "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js"
+    hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+    assert hooks["modules"] == ["./register.ts"]
+    assert "hooks" not in hooks
     mcp = json.loads((ROOT / "plugin/mcp.json").read_text(encoding="utf-8"))["mcpServers"]["codex-main"]
     assert mcp["command"] == "node"
     assert mcp["args"][0] == "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js"

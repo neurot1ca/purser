@@ -103,9 +103,7 @@ func main() {
 		}
 		writeJSON(map[string]any{"written": true})
 	case "SessionStart":
-		if output := contextio.SessionStart(event); len(output) > 0 {
-			_, _ = os.Stdout.Write(output)
-		}
+		handleSessionStart(event)
 	case "UserPromptSubmit":
 		if output := contextio.UserPromptSubmit(event, started); len(output) > 0 {
 			if written, err := os.Stdout.Write(output); err == nil && written == len(output) {

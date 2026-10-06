@@ -111,7 +111,7 @@ def test_plugin_hooks_match_manual_installer():
                 continue
             expected.add((event, matcher, script, entry["hooks"][0]["timeout"]))
 
-    hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+    hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8")).get("hooks", {})
     # HOOK_SPECS describes the manual installer. Compare only its events that
     # remain registered directly by the plugin manifest.
     plugin_events = set(hooks) & {event for event, _matcher, _timeout in installer.HOOK_SPECS}
@@ -132,9 +132,10 @@ def test_plugin_manifest_paths_and_registration():
     marketplace = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
     hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
     assert hooks["modules"] == ["./register.ts"]
+    assert "hooks" not in hooks
     assert not any(
         entry.get("matcher") == r"^Read$"
-        for entries in hooks["hooks"].values()
+        for entries in hooks.get("hooks", {}).values()
         for entry in entries
     )
     assert (ROOT / "hooks/register.ts").is_file()
@@ -150,20 +151,6 @@ def test_plugin_manifest_paths_and_registration():
     assert (ROOT / manifest["mcpServers"]).is_file()
     # Plugin commands are auto-discovered from the conventional commands/ directory.
     assert (ROOT / "commands/check.md").is_file()
-    assert set(hooks["hooks"]) == {"SessionStart"}
-    assert "Stop" not in hooks["hooks"]
-    session_start, = hooks["hooks"]["SessionStart"]
-    assert "matcher" not in session_start
-    assert session_start["hooks"][0] == {
-        "type": "command",
-        "command": "node",
-        "timeout": 60,
-        "args": [
-            "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
-            "hook",
-            "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/session_start_maintenance.py",
-        ],
-    }
     register_source = (ROOT / "hooks/register.ts").read_text(encoding="utf-8")
     assert re.search(r"^  registerEnforcement\(on\)$", register_source, re.M)
     assert "on('classic.Stop', ($, e, next) => lifecycle($, e, next, 'Stop'))" in register_source
@@ -177,7 +164,7 @@ def test_plugin_manifest_paths_and_registration():
     assert set(re.findall(r"'([^']+)'", failure_tools.group(1))) == PLUGIN_TOOLS
     assert not any(
         re.fullmatch(entry.get("matcher", ""), tool)
-        for entry in hooks["hooks"].get("PreToolUse", [])
+        for entry in hooks.get("hooks", {}).get("PreToolUse", [])
         for tool in PLUGIN_TOOLS
     )
     adapter_sets = re.findall(r"const (?:syncTools|startTools|followupTools) = new Set\(\[([\s\S]*?)\]\)", enforcement_source)
@@ -188,7 +175,7 @@ def test_plugin_manifest_paths_and_registration():
     assert "PURSER_MOD_ASYNC_START" not in enforcement_source
     bridge = mcp["mcpServers"]["codex-main"]
     assert bridge["command"] == "node"
-    assert bridge["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "go-mcp", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]
-    for value in [*bridge["args"], *(arg for entries in hooks["hooks"].values() for entry in entries for arg in entry["hooks"][0]["args"])]:
+    assert bridge["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js", "go-mcp"]
+    for value in [*bridge["args"], *(arg for entries in hooks.get("hooks", {}).values() for entry in entries for arg in entry["hooks"][0]["args"] )]:
         for relative in re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\s\"']+)", value):
             assert (ROOT / relative).is_file()
