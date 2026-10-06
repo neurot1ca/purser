@@ -1,5 +1,5 @@
 type Window = { percent: number; resetAt: number; windowMs: number }
-type Quota = { fiveHour?: Window; sevenDay?: Window }
+type Quota = { fiveHour?: Window; sevenDay?: Window; model?: string; effort?: string }
 type SessionData = { quota: Quota; contextFill?: number; cost?: number }
 type Pill = { id: string; label: string; value: string; detail: string; icon: string; color: string; percent?: number; tick?: number; countdown?: string }
 
@@ -48,6 +48,18 @@ export function mapSessionUsage(value: any, now = Date.now()): SessionData {
   }
 }
 
+// The newest artifact naming a model gives the model pill, even when it carries no quota.
+export function readCodexModel(records: unknown[]): Pick<Quota, 'model' | 'effort'> {
+  for (const value of records.slice(0, 20)) {
+    let item: any = value
+    try { if (typeof value === 'string') item = JSON.parse(value) } catch { continue }
+    if (typeof item?.model === 'string' && item.model) {
+      return { model: item.model, effort: typeof item.effort === 'string' && item.effort ? item.effort : undefined }
+    }
+  }
+  return {}
+}
+
 export function readQuotaSnapshot(records: unknown[], now = Date.now()): Quota {
   for (const value of records.slice(0, 20)) {
     let item = value
@@ -94,6 +106,13 @@ export function usageGroups(codex: Quota, session: SessionData, now = Date.now()
     })
   }
   const codexPills = quotaPills(codex, 'codex', now, session.contextFill)
+  if (codex.model) {
+    const value = codex.effort ? `${codex.model} · ${codex.effort}` : codex.model
+    codexPills.unshift({
+      id: 'codex-model', label: '⚓ codex', value,
+      detail: `Codex model of the latest job: ${value}`, icon: '⚓', color: '#5b7083',
+    })
+  }
   const groups: Pill[][] = [claude, codexPills]
   if (session.cost !== undefined) {
     const context = session.contextFill === undefined ? '' : `; context ${session.contextFill.toFixed(1)}%`
@@ -147,7 +166,7 @@ async function readCodexQuota($, home: string, now: number): Promise<Quota> {
       records.push(content)
       try { if (JSON.parse(content)?.codex_quota) break } catch { /* Try the next artifact. */ }
     }
-    return readQuotaSnapshot(records, now)
+    return { ...readQuotaSnapshot(records, now), ...readCodexModel(records) }
   } catch { return {} }
 }
 

@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { barColor, formatUsageNumber, mapSessionUsage, pillSvg, readQuotaSnapshot, registerUsage, terminalBar, timeElapsedTick, usageGroups } from './usage.js'
+import { barColor, formatUsageNumber, mapSessionUsage, pillSvg, readCodexModel, readQuotaSnapshot, registerUsage, terminalBar, timeElapsedTick, usageGroups } from './usage.js'
 
 const now = Date.parse('2026-10-04T12:00:00Z')
 const quotaRecord = (five = 69, seven = 90) => ({ codex_quota: {
@@ -158,4 +158,13 @@ test('reads Codex quota from the newest artifact that contains it', async ($, on
   expect(reads.map(path => path.split(/[\\/]/).at(-1))).toEqual([newest, prior])
   expect(await ui.find({ type: 'Text', text: /codex 5h/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('shows the latest Codex model and effort as the first Codex pill', () => {
+  const records = [JSON.stringify({ model: 'gpt-6-luna', effort: 'high' }), quotaRecord()]
+  expect(readCodexModel(records)).toEqual({ model: 'gpt-6-luna', effort: 'high' })
+  expect(readCodexModel(['not json', { model: '' }])).toEqual({})
+  const groups = usageGroups({ ...readQuotaSnapshot([quotaRecord()], now), ...readCodexModel(records) }, mapSessionUsage(usage, now), now)
+  expect(groups[1][0]).toMatchObject({ id: 'codex-model', value: 'gpt-6-luna · high' })
+  expect(terminalBar(groups[1][0])).toBeUndefined()
 })
