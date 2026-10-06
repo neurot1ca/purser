@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.78 — 2026-10-06
+
+- **Changed:** codex-main now runs on the Go MCP host (`purser-hook mcp`), sharing the private CLI's operations, with per-request cancellation and a background startup recovery scan; the launcher falls back to the Python server only when the Go process cannot be created.
+- **Fixed:** codex_cancel from the Python server confirms the terminal state of a Go-hosted job instead of reporting it still running.
+
 ## 0.1.77 — 2026-10-06
 
 - **Fixed:** Codex task records written with whole-number floats are no longer reported as a corrupt ledger by the Go hook, and reusing a finished task id is denied plainly as TASK_ALREADY_FINISHED.
