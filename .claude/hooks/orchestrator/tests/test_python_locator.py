@@ -25,6 +25,14 @@ def node(code, *, env=None):
     return subprocess.run(["node", "-e", code], capture_output=True, text=True, env=env, check=False)
 
 
+def isolated_locator(scratch):
+    bindir = scratch / "bin"
+    bindir.mkdir()
+    locator = bindir / "python-locator.js"
+    shutil.copy2(LOCATOR, locator)
+    return locator
+
+
 def cannot_spawn_from_node():
     result = node("const r=require('node:child_process').spawnSync(process.execPath,['--version']); process.stdout.write(r.error?.code || 'OK')")
     return result.stdout == "EPERM"
@@ -40,6 +48,116 @@ def test_manifests_use_locator():
     mcp = json.loads((ROOT / "plugin/mcp.json").read_text(encoding="utf-8"))["mcpServers"]["codex-main"]
     assert mcp["command"] == "node"
     assert mcp["args"][0] == "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js"
+    assert mcp["args"][1:] == ["go-mcp", "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/orchestrator/codex_exec_mcp.py"]
+
+
+def test_go_mcp_prefers_supported_binary_and_forwards_arguments(scratch):
+    locator = isolated_locator(scratch)
+    script = str(scratch / "codex_exec_mcp.py")
+    code = f'''const fs=require('node:fs'), locator=require({json.dumps(str(locator))});
+const binary=locator.goBinaryPath(); if(!binary)process.exit(77); fs.writeFileSync(binary,'stub');
+const calls=[]; let resolves=0;
+const status=locator.main(['go-mcp',{json.dumps(script)},'--codex-bin','custom'],()=>{{resolves++;return {{path:'python'}}}},(command,args,options)=>{{calls.push({{command,args,stdio:options.stdio}});return {{pid:123,status:0}}}});
+    fs.unlinkSync(binary); process.stdout.write(JSON.stringify({{status,calls,resolves}}));'''
+    result = node(code)
+    if result.returncode == 77:
+        pytest.skip("host platform has no packaged Go target")
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["status"] == 0
+    assert len(observed["calls"]) == 1
+    assert observed["calls"][0]["command"].startswith(str(locator.parent / "purser-hook-"))
+    assert observed["calls"][0]["args"] == ["mcp", "--codex-bin", "custom"]
+    assert observed["calls"][0]["stdio"] == "inherit"
+    assert observed["resolves"] == 0
+    assert result.stderr == ""
+
+
+def test_go_mcp_missing_binary_falls_back_with_marker(scratch):
+    locator = isolated_locator(scratch)
+    script = str(scratch / "codex_exec_mcp.py")
+    code = f'''const locator=require({json.dumps(str(locator))}); let resolves=0; const calls=[];
+const status=locator.main(['go-mcp',{json.dumps(script)}],()=>{{resolves++;return {{path:'python'}}}},(command,args,options)=>{{calls.push([command,args,options.stdio,options.env.PYTHONUTF8]);return {{status:0}}}});
+process.stdout.write(JSON.stringify({{status,calls,resolves}}));'''
+    result = node(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["status"] == 0
+    assert observed["calls"] == [["python", [script], "inherit", "1"]]
+    assert observed["resolves"] == 1
+    assert result.stderr == "Purser: Go MCP unavailable (Go binary missing); falling back to Python\n"
+
+
+def test_go_mcp_unsupported_platform_falls_back_with_marker(scratch):
+    locator = isolated_locator(scratch)
+    script = str(scratch / "codex_exec_mcp.py")
+    code = f'''Object.defineProperty(process,'platform',{{value:'plan9'}});
+const locator=require({json.dumps(str(locator))}); let resolves=0; const calls=[];
+const status=locator.main(['go-mcp',{json.dumps(script)}],()=>{{resolves++;return {{path:'python'}}}},(command,args)=>{{calls.push([command,args]);return {{status:0}}}});
+process.stdout.write(JSON.stringify({{status,calls,resolves}}));'''
+    result = node(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout) == {"status": 0, "calls": [["python", [script]]], "resolves": 1}
+    assert result.stderr == "Purser: Go MCP unavailable (unsupported platform); falling back to Python\n"
+
+
+def test_go_mcp_spawn_failure_falls_back_with_marker(scratch):
+    locator = isolated_locator(scratch)
+    script = str(scratch / "codex_exec_mcp.py")
+    code = f'''const fs=require('node:fs'), locator=require({json.dumps(str(locator))}); const binary=locator.goBinaryPath();
+fs.writeFileSync(binary,'stub'); let attempt=0; const calls=[];
+const status=locator.main(['go-mcp',{json.dumps(script)}],()=>({{path:'python'}}),(command,args)=>{{calls.push([command,args]);return ++attempt===1?{{pid:0,status:null,error:{{code:'ENOENT',message:'spawn failed'}}}}:{{status:0}}}});
+fs.unlinkSync(binary); process.stdout.write(JSON.stringify({{status,calls}}));'''
+    result = node(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["status"] == 0
+    assert len(observed["calls"]) == 2
+    assert observed["calls"][0][1] == ["mcp"]
+    assert observed["calls"][1] == ["python", [script]]
+    assert observed["calls"][0][0].startswith(str(locator.parent / "purser-hook-"))
+    assert result.stderr == "Purser: Go MCP unavailable (Go process creation failed: spawn failed); falling back to Python\n"
+
+
+def test_go_mcp_real_spawn_failure_falls_back_with_marker(scratch):
+    locator = isolated_locator(scratch)
+    script = str(scratch / "codex_exec_mcp.py")
+    code = f'''const fs=require('node:fs'), cp=require('node:child_process'), locator=require({json.dumps(str(locator))});
+const binary=locator.goBinaryPath(); fs.writeFileSync(binary,'stub'); let failedSpawn; const calls=[];
+const status=locator.main(['go-mcp',{json.dumps(script)}],()=>({{path:'python'}}),(command,args,options)=>{{
+  calls.push([command,args]); if(command==='python')return {{status:0}};
+  fs.unlinkSync(binary); failedSpawn=cp.spawnSync(command,args,options); return failedSpawn;
+}});
+process.stdout.write(JSON.stringify({{status,calls,pid:failedSpawn.pid,childStatus:failedSpawn.status,error:failedSpawn.error?.code}}));'''
+    result = node(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["status"] == 0
+    assert observed["pid"] == 0
+    assert observed["childStatus"] is None
+    assert observed["error"] == "ENOENT"
+    assert len(observed["calls"]) == 2
+    assert observed["calls"][0][1] == ["mcp"]
+    assert observed["calls"][1] == ["python", [script]]
+    assert result.stderr.startswith("Purser: Go MCP unavailable (Go process creation failed: spawnSync ")
+    assert result.stderr.endswith(" ENOENT); falling back to Python\n")
+
+
+def test_go_mcp_does_not_fallback_after_child_starts(scratch):
+    locator = isolated_locator(scratch)
+    script = str(scratch / "codex_exec_mcp.py")
+    code = f'''const fs=require('node:fs'), locator=require({json.dumps(str(locator))}); const binary=locator.goBinaryPath();
+fs.writeFileSync(binary,'stub'); let resolves=0; const calls=[];
+const status=locator.main(['go-mcp',{json.dumps(script)}],()=>{{resolves++;return {{path:'python'}}}},(command,args)=>{{calls.push([command,args]);return {{pid:123,status:17}}}});
+fs.unlinkSync(binary); process.stdout.write(JSON.stringify({{status,calls,resolves}}));'''
+    result = node(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["status"] == 17
+    assert len(observed["calls"]) == 1
+    assert observed["calls"][0][1] == ["mcp"]
+    assert observed["resolves"] == 0
+    assert result.stderr == ""
 
 
 def test_env_override_wins_for_real(scratch):

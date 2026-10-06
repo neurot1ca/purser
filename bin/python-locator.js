@@ -55,7 +55,7 @@ function main(args, resolve = resolvePython, run = spawnSync) {
     return selected ? 0 : 1;
   }
   let mode = args.shift();
-  if (!['pre-codex', 'hook', 'go-hook', 'mcp'].includes(mode) || !args.length) {
+  if (!['pre-codex', 'hook', 'go-hook', 'mcp', 'go-mcp'].includes(mode) || !args.length) {
     process.stderr.write('Purser: invalid Python locator invocation\n');
     return mode === 'pre-codex' ? 2 : 1;
   }
@@ -72,6 +72,17 @@ function main(args, resolve = resolvePython, run = spawnSync) {
       if (!child.error) return child.status === null ? 1 : child.status;
     }
     mode = 'hook';
+  }
+  if (mode === 'go-mcp') {
+    const binary = goBinaryPath();
+    let reason = !binary ? 'unsupported platform' : !fs.existsSync(binary) ? 'Go binary missing' : null;
+    if (!reason) {
+      const child = run(binary, ['mcp', ...args.slice(1)], { stdio: 'inherit', windowsHide: true });
+      if (!child.error || child.pid) return child.status === null ? 1 : child.status;
+      reason = `Go process creation failed: ${child.error.message}`;
+    }
+    process.stderr.write(`Purser: Go MCP unavailable (${reason}); falling back to Python\n`);
+    mode = 'mcp';
   }
   const selected = resolve();
   if (!selected) {
