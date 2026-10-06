@@ -77,7 +77,14 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			return denyPre("FULL_SUITE_REQUEST", "Ask the worker for focused tests only. Matched phrase: \""+phrase+"\"."), nil
 		}
 	}
-	route := policy.ResolveRoute(*parsed.Route, config)
+	gearUp := false
+	if root != nil && !reply && config["coder_agent"] == "codex" {
+		gearUp, err = contextio.Gear(defaultPreStateRoot(runtimeRoot), projectKey(root))
+		if err != nil {
+			return nil, fmt.Errorf("gear state unreadable: %w", err)
+		}
+	}
+	route := policy.ResolveRoute(*parsed.Route, config, gearUp)
 	if !route.Valid {
 		if route.Code == "CONFIG_INVALID" {
 			return nil, errors.New(route.Message)
@@ -138,7 +145,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		quotaHome = filepath.Join(home, ".codex")
 	}
 	quota, _ := contextio.LatestQuota(quotaHome, time.Now().UTC())
-	selection := SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, preOpenCodeCandidates(runtimeRoot))
+	selection := SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, preOpenCodeCandidates(runtimeRoot), gearUp)
 	if selection.Code == "THREAD_AGENT_MISMATCH" {
 		return denyPre(selection.Code, "thread belongs to a different coding agent; start a fresh thread."), nil
 	}
@@ -168,7 +175,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			if err != nil {
 				return nil, err
 			}
-			selection = SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, nil)
+			selection = SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, nil, gearUp)
 		case "question":
 			evidence := make(map[string]any, len(decision.Trigger)+2)
 			for key, value := range decision.Trigger {
@@ -192,7 +199,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			case "deny":
 				return denyPre("PRIMARY_RETURN_CONSENT_REQUIRED", "Wait for the return question to be shown and answered before dispatch."), nil
 			case "offer":
-				primaryRoute := policy.ResolveRoute(*parsed.Route, config)
+				primaryRoute := policy.ResolveRoute(*parsed.Route, config, false)
 				if !primaryRoute.Valid {
 					return denyPre("PRIMARY_RETURN_ROUTE_INVALID", primaryRoute.Message), nil
 				}
@@ -218,7 +225,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 				if err != nil {
 					return nil, err
 				}
-				selection = SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, nil)
+				selection = SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, nil, gearUp)
 			case "claim_probe":
 				_, probeErr := ProbeFallback(*root, runtimeRoot, kind, triggerID, event, []string{"codex"}, *route.Model)
 				if probeErr != nil {

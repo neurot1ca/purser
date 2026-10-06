@@ -133,7 +133,7 @@ func TestCoderSelectionParityP41(t *testing.T) {
 			candidates, _ := input["candidates"].([]any)
 			got := SelectCoder(stringValue(input["route"]), stringValue(input["model"]), stringValue(input["effort"]),
 				stringValue(input["reason"]), input["new_call"] == true, input["reply_call"] == true,
-				config, toolInput, live, active, candidates)
+				config, toolInput, live, active, candidates, false)
 			var actual map[string]any
 			data, _ := json.Marshal(got)
 			if err := json.Unmarshal(data, &actual); err != nil {
@@ -143,6 +143,38 @@ func TestCoderSelectionParityP41(t *testing.T) {
 				t.Fatalf("selection = %#v, want %#v", actual, item.Selected)
 			}
 		})
+	}
+}
+
+func TestGearSelectionPreservesAuthorityBoundaries(t *testing.T) {
+	config := map[string]any{
+		"coder_agent": "codex",
+		"routes": map[string]any{
+			"mechanical": map[string]any{"model": "gpt-6.1-luna", "effort": "high"},
+			"normal":     map[string]any{"model": "gpt-6.1-sol", "effort": "medium"},
+		},
+		"fallback": map[string]any{"agent": "agy", "model": "claude-test"},
+	}
+	input := map[string]any{"model": "gpt-6.1-luna", "config": map[string]any{"model_reasoning_effort": "high"}}
+	selected := SelectCoder("mechanical", "gpt-6-sol", "medium", "", true, false, config, input, nil, nil, nil, true)
+	if selected.Model != "gpt-6.1-sol" || selected.Effort != "medium" || selected.ModelSource != "route" {
+		t.Fatalf("explicit override bypassed gear: %#v", selected)
+	}
+	reply := SelectCoder("mechanical", "gpt-6.1-luna", "high", "", false, true, config, nil,
+		map[string]any{"agent": "codex", "model": "recorded-thread-model", "effort": "xhigh"}, nil, nil, true)
+	if reply.Model != "recorded-thread-model" || reply.Effort != "xhigh" {
+		t.Fatalf("reply model identity changed: %#v", reply)
+	}
+	nonCodex := map[string]any{"coder_agent": "opencode", "routes": config["routes"], "fallback": config["fallback"]}
+	alt := SelectCoder("mechanical", "gpt-6.1-luna", "high", "", true, false, nonCodex, nil, nil, nil,
+		[]any{map[string]any{"id": "vendor/model", "status": "measured"}}, true)
+	if alt.Agent != "opencode" || alt.Model != "vendor/model" {
+		t.Fatalf("gear changed non-Codex candidate: %#v", alt)
+	}
+	fallback := SelectCoder("mechanical", "gpt-6-sol", "medium", "", true, false, config, input, nil,
+		map[string]any{"active_coder": "fallback"}, nil, true)
+	if fallback.Agent != "agy" || fallback.Model != "claude-test" {
+		t.Fatalf("gear changed fallback selection: %#v", fallback)
 	}
 }
 

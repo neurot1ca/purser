@@ -15,15 +15,6 @@ func LockFile(path string) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	if info, statErr := f.Stat(); statErr != nil {
-		_ = f.Close()
-		return nil, statErr
-	} else if info.Size() == 0 {
-		if _, err = f.WriteAt([]byte("0"), 0); err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if err = TryLock(f); err == nil {

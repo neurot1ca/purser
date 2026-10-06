@@ -26,7 +26,7 @@ type CoderSelection struct {
 // SelectCoder keeps reply identity ahead of new-call choices, then applies
 // mechanical candidates, active fallback, and explicit Codex overrides in Pre order.
 func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, replyCall bool,
-	config, toolInput, liveThread, active map[string]any, candidates []any) CoderSelection {
+	config, toolInput, liveThread, active map[string]any, candidates []any, gearUp bool) CoderSelection {
 	agent, _ := config["coder_agent"].(string)
 	if agent == "" {
 		agent = "codex"
@@ -85,6 +85,16 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 					selection.Effort = effort
 				}
 			}
+		}
+	}
+	if gearUp && newCall && !replyCall && !fallbackActive && selection.Agent == agent && agent == "codex" {
+		routes, _ := config["routes"].(map[string]any)
+		entry, _ := routes[route].(map[string]any)
+		model, _ := entry["model"].(string)
+		effort, _ := entry["effort"].(string)
+		if targetModel, targetEffort, changed := policy.GearTarget(config, model, effort); changed {
+			selection.Model, selection.Effort = targetModel, targetEffort
+			selection.ModelSource = "route"
 		}
 	}
 	if replyCall && liveThread != nil && parsedReason == "" {
@@ -249,7 +259,7 @@ func RecoverReply(event map[string]any, runtimeRoot string, explicitRoot *string
 		return replyFailure("MISSING_TASK_LABEL", "Fix: add `label` with a short human description in the user's language (1–80 characters); this thread has no saved label to reuse.")
 	}
 	label := labelValue
-	route := policy.ResolveRoute(*parsed.Route, config)
+	route := policy.ResolveRoute(*parsed.Route, config, false)
 	if !route.Valid {
 		return ReplyRecovery{Code: route.Code, Message: route.Message, Root: root, Parsed: parsed, Record: record, LiveThread: live, Label: &label, Route: route}
 	}

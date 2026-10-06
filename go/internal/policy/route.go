@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -28,7 +29,7 @@ type FreshCodexDecision struct {
 	Message string `json:"message"`
 }
 
-func ResolveRoute(route any, config map[string]any) RouteResolution {
+func ResolveRoute(route any, config map[string]any, gearUp bool) RouteResolution {
 	if err := ValidateConfig(config); err != nil {
 		message := err.Error()
 		if _, detail, found := strings.Cut(message, ": "); found {
@@ -53,10 +54,99 @@ func ResolveRoute(route any, config map[string]any) RouteResolution {
 	values := entry.(map[string]any)
 	model, _ := values["model"].(string)
 	effort, _ := values["effort"].(string)
+	if gearUp {
+		model, effort, _ = GearTarget(config, model, effort)
+	}
 	return RouteResolution{
 		Valid: true, Code: "VALID", Message: "Route is valid.", Route: routeName,
 		Model: stringPointer(model), Effort: stringPointer(effort),
 	}
+}
+
+// GearTarget returns the configured Codex gear-up target for an eligible pair.
+func GearTarget(config map[string]any, model, effort string) (string, string, bool) {
+	if config["coder_agent"] != nil && config["coder_agent"] != "codex" {
+		return model, effort, false
+	}
+	if !strings.HasSuffix(model, "-luna") || effort != "high" {
+		return model, effort, false
+	}
+	target := configuredSolModel(config)
+	if target == "" {
+		return model, effort, false
+	}
+	return target, "medium", true
+}
+
+func configuredSolModel(config map[string]any) string {
+	routes, _ := config["routes"].(map[string]any)
+	counts := make(map[string]int)
+	first := make(map[string]int)
+	order := gearRouteOrder(config, routes)
+	for index, name := range order {
+		entry, _ := routes[name].(map[string]any)
+		model, _ := entry["model"].(string)
+		if strings.HasSuffix(model, "-sol") {
+			counts[model]++
+			if _, exists := first[model]; !exists {
+				first[model] = index
+			}
+		}
+	}
+	selected := ""
+	selectedCount := 0
+	selectedFirst := len(order) + 1
+	for model, count := range counts {
+		if count > selectedCount ||
+			(count == selectedCount && first[model] < selectedFirst) ||
+			(count == selectedCount && first[model] == selectedFirst && model < selected) {
+			selected, selectedCount, selectedFirst = model, count, first[model]
+		}
+	}
+	return selected
+}
+
+func gearRouteOrder(config map[string]any, routes map[string]any) []string {
+	order := make([]string, 0, len(routes))
+	seen := make(map[string]bool, len(routes))
+	if required, ok := config["required_routes"].([]any); ok {
+		for _, raw := range required {
+			name, ok := raw.(string)
+			if ok && !seen[name] {
+				if _, exists := routes[name]; exists {
+					order = append(order, name)
+					seen[name] = true
+				}
+			}
+		}
+	}
+	remaining := make([]string, 0, len(routes)-len(order))
+	for name := range routes {
+		if !seen[name] {
+			remaining = append(remaining, name)
+		}
+	}
+	sort.Strings(remaining)
+	return append(order, remaining...)
+}
+
+// GearEligibleRoutes returns configured Codex routes whose base pair is eligible.
+func GearEligibleRoutes(config map[string]any) []string {
+	if config["coder_agent"] != nil && config["coder_agent"] != "codex" {
+		return nil
+	}
+	routes, _ := config["routes"].(map[string]any)
+	eligible := make([]string, 0)
+	for name, raw := range routes {
+		entry, _ := raw.(map[string]any)
+		model, _ := entry["model"].(string)
+		effort, _ := entry["effort"].(string)
+		if strings.HasSuffix(model, "-luna") && effort == "high" {
+			eligible = append(eligible, name)
+		}
+	}
+	sort.Strings(eligible)
+	return eligible
 }
 
 func ThreadCompatibility(requested any, recorded any) ThreadCompatibilityDecision {

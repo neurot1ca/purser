@@ -1290,13 +1290,6 @@ func persistObservation(root string, event map[string]any) (string, error) {
 		return "TELEMETRY_EMIT_FAILED", err
 	}
 	defer lock.Close()
-	if info, statErr := lock.Stat(); statErr != nil {
-		return "TELEMETRY_EMIT_FAILED", statErr
-	} else if info.Size() == 0 {
-		if _, err = lock.WriteAt([]byte("0"), 0); err != nil {
-			return "TELEMETRY_EMIT_FAILED", err
-		}
-	}
 	if err = contextio.TryLock(lock); err != nil {
 		spool := filepath.Join(events, "spool", eventID+".json")
 		if err = atomicObservationJSON(spool, encoded); err != nil {
