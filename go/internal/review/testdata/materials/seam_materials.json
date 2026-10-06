@@ -1,0 +1,7 @@
+{
+  "objective": "Review the complete delegated change for task 'golden-task', bounded to these actual changed paths: deleted.txt, modified.txt, new.txt. Task Objective: objective detail",
+  "acceptance_criteria": "Accept only if the complete delegated diff is correct within the named bounded task, preserves current contracts, and introduces no material regression or scope expansion. Consider supplied validation evidence, but do not treat its normal absence as evidence that the diff is incomplete. Specific Task Criteria: criterion detail",
+  "authority_contract": "# Authority\nRoot authority body.\n## Working scope\nScope body.\n### Proportional validation\nValidation body.\n## Test and comment quality\nQuality body.\n## Unselected heading\nDo not include.",
+  "delegated_diff": "diff --git a/deleted.txt b/deleted.txt\ndeleted file mode 100644\nindex 10b961a..0000000\n--- a/deleted.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-remove me\ndiff --git a/modified.txt b/modified.txt\nindex bdab01f..14f36dd 100644\n--- a/modified.txt\n+++ b/modified.txt\n@@ -1,2 +1,2 @@\n-before\n+after\n shared\ndiff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..00e323c\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new complete content\n",
+  "validation_summary": "Orchestrator-supplied validation evidence: tests passed Ledger delta: 3 files, 4 changed lines; concurrent-writer decision: ISOLATED. Raw agent output and full success logs were not forwarded."
+}
