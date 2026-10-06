@@ -5,10 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -84,7 +82,7 @@ func TestPostStartPythonWriteFixture(t *testing.T) {
 				}
 			}
 			event["tool_response"] = map[string]any{"structuredContent": response}
-			got, err := postStart(event, root, "__PYTHON__", "__WAITER__")
+			got, err := postStart(event, root)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -133,7 +131,7 @@ func TestPostStartPythonWriteFixture(t *testing.T) {
 	}
 }
 
-func TestPostStartFallbackWaiterPathIsAbsolute(t *testing.T) {
+func TestPostStartWaiterUsesExecutablePath(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
 	if err := os.MkdirAll(filepath.Join(repo, ".claude", "hooks", "orchestrator"), 0700); err != nil {
@@ -154,7 +152,7 @@ func TestPostStartFallbackWaiterPathIsAbsolute(t *testing.T) {
 		t.Fatal(err)
 	}
 	event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "RUNNING"}}
-	got, err := postStart(event, root, "python", "")
+	got, err := postStart(event, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,103 +166,21 @@ func TestPostStartFallbackWaiterPathIsAbsolute(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &payload); err != nil {
 		t.Fatal(err)
 	}
-	waiter := filepath.Join(repo, ".claude", "hooks", "orchestrator", "purser_wait.py")
-	if !filepath.IsAbs(waiter) || !strings.Contains(stringValue(payload["next"]), `"`+waiter+`"`) {
-		t.Fatalf("waiter path is not absolute in response: %s", text)
-	}
-}
-
-func TestPostStartWaiterUsesExecutableRoot(t *testing.T) {
-	const childEnv = "PURSER_WAITER_PATH_CHILD"
-	if plugin := os.Getenv(childEnv); plugin != "" {
-		if os.Getenv("CLAUDE_PLUGIN_ROOT") != "" {
-			t.Fatal("CLAUDE_PLUGIN_ROOT must be unset")
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := filepath.Join(plugin, ".claude", "hooks", "orchestrator", "purser_wait.py")
-		if strings.HasPrefix(filepath.Clean(want)+string(os.PathSeparator), filepath.Clean(cwd)+string(os.PathSeparator)) {
-			t.Fatalf("fixture waiter unexpectedly under cwd: %s", want)
-		}
-		root := t.TempDir()
-		event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
-			"tool_use_id": "executable-root-waiter", "session_id": "waiter-session"}
-		key, err := callKey(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := writeFixtureJSON(filepath.Join(root, "pending", key+".json"), map[string]any{
-			"async_call": "executable-root-call", "async_ready": true, "project_key": "project",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		event["tool_response"] = map[string]any{"structuredContent": map[string]any{
-			"jobId": jobHash("executable-root-call"), "state": "RUNNING",
-		}}
-		got, err := postStart(event, root, "python", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		output := mapValue(got["hookSpecificOutput"])
-		entries, _ := output["updatedToolOutput"].([]any)
-		if len(entries) == 0 {
-			t.Fatalf("waiter command output is missing: %#v", got)
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(stringValue(mapValue(entries[0])["text"])), &payload); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(stringValue(payload["next"]), want) {
-			t.Fatalf("waiter command did not use executable-root path %s: %#v", want, got)
-		}
-		return
-	}
-
-	temp := t.TempDir()
-	plugin := filepath.Join(temp, "plugin")
-	bin := filepath.Join(plugin, "bin")
-	waiter := filepath.Join(plugin, ".claude", "hooks", "orchestrator", "purser_wait.py")
-	if err := os.MkdirAll(bin, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(waiter), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(waiter, []byte(""), 0600); err != nil {
-		t.Fatal(err)
-	}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	child := filepath.Join(bin, "purser-hook-test")
-	if runtime.GOOS == "windows" {
-		child += ".exe"
+	resolved, err := filepath.EvalSymlinks(executable)
+	if err == nil {
+		executable = resolved
 	}
-	data, err := os.ReadFile(executable)
+	executable, err = filepath.Abs(executable)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(child, data, 0700); err != nil {
-		t.Fatal(err)
-	}
-	cwd := filepath.Join(temp, "unrelated")
-	if err := os.Mkdir(cwd, 0700); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(child, "-test.run=^TestPostStartWaiterUsesExecutableRoot$")
-	command.Dir = cwd
-	command.Env = []string{}
-	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "CLAUDE_PLUGIN_ROOT=") && !strings.HasPrefix(entry, childEnv+"=") {
-			command.Env = append(command.Env, entry)
-		}
-	}
-	command.Env = append(command.Env, childEnv+"="+plugin)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("child waiter path check: %v\n%s", err, output)
+	next := stringValue(payload["next"])
+	if !strings.Contains(next, `"`+executable+`" wait `+jobID) || strings.Contains(strings.ToLower(next), "python") {
+		t.Fatalf("next command does not invoke Go waiter by executable path: %s", next)
 	}
 }
 
@@ -287,6 +203,22 @@ func writeFixtureJSON(path string, value any) error {
 func normalizePostStart(value any, root, repo, project string) any {
 	switch item := value.(type) {
 	case string:
+		var payload map[string]any
+		if json.Unmarshal([]byte(item), &payload) == nil {
+			if next, ok := payload["next"].(string); ok {
+				const commandPrefix = `Run in the background (use the PowerShell tool on Windows): "`
+				const waiterSeparator = `" wait `
+				if strings.HasPrefix(next, commandPrefix) {
+					if separator := strings.Index(next[len(commandPrefix):], waiterSeparator); separator >= 0 {
+						jobCommand := next[len(commandPrefix)+separator+len(waiterSeparator):]
+						payload["next"] = commandPrefix + `__PYTHON__" "__WAITER__" ` + jobCommand
+						if normalized, err := canonicalJSON(payload); err == nil {
+							item = string(normalized)
+						}
+					}
+				}
+			}
+		}
 		item = strings.ReplaceAll(item, root, "__ROOT__")
 		item = strings.ReplaceAll(item, repo, "__ROOT__/repo")
 		item = strings.ReplaceAll(item, project, "__PROJECT_KEY__")

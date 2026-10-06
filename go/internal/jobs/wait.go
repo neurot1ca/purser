@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"purser-hook/internal/waiter"
 )
 
 var waitTerminal = map[string]bool{
@@ -183,7 +185,7 @@ func stallWaitLines(id string, job map[string]any) []string {
 		minutes = max(0, int((float64(time.Now().UnixNano())/1e9-lastActivity)/60))
 	}
 	receipt := "> ⚓ **Purser has seen no worker activity for " + strconv.Itoa(minutes) + " minutes.** The job is still running; I'm checking its status."
-	lines = append(lines, "Do not call codex_result yet. Restart purser_wait.py for this same jobId in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, translated from: \""+receipt+"\" Do not show the jobId to the user.")
+	lines = append(lines, "Do not call codex_result yet. Restart "+waiter.Command(id)+" in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, translated from: \""+receipt+"\" Do not show the jobId to the user.")
 	return lines
 }
 

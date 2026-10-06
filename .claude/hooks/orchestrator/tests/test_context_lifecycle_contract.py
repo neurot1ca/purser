@@ -62,6 +62,18 @@ def _assert_json_stdout(result, expected):
     )
 
 
+def _assert_go_waiter_line(line, prefix, job_id, start):
+    before = prefix + ("Start " if start else "Do not call codex_result yet. Restart ")
+    after = (" in the background (use the PowerShell tool on Windows); call codex_result when it finishes, "
+             "without adopt or asking the user. Do not show the jobId to the user.") if start else (
+             " in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, "
+             "translated from: ")
+    match = re.fullmatch(re.escape(before) + r'"([^"]+)" wait ' + re.escape(job_id) + re.escape(after) + (r'.*' if not start else ''), line)
+    assert match, line
+    assert os.path.isabs(match.group(1)), line
+    assert "python" not in line.lower(), line
+
+
 def test_user_prompt_nudge_throttle_and_lifecycle_delivery(isolated):
     _root, repo, state = isolated
     handoff = state / "projects" / _project_key(repo) / "telemetry" / "purser-handoff.md"
@@ -441,21 +453,24 @@ def test_session_start_async_followup_branches_match_contract(isolated, case):
         job_values["resumedAfterInterruption"] = 2
     job_id = _seed_async_followup(state, key, prior, task, **job_values)
     prefix = f"Purser (jobId={job_id}, for Claude only): "
+    go_runtime = bool(os.environ.get("PURSER_HOOK_CMD_SESSIONSTART") or os.environ.get("PURSER_HOOK_CMD"))
     translate = ('Render the line in the user\'s language, translating from the English text and keeping ⚓, markdown, '
                  'model names, numbers, and commands unchanged: "')
     if case == "same-session-terminal":
         expected_line = prefix + "Call codex_result with this jobId now, without adopt or asking the user. Do not show the jobId to the user."
     elif case == "same-session-running":
-        expected_line = (prefix + translate + '> ⚓ **The Codex task (branch task) was interrupted when the computer shut down; I resumed it from where it left off.**" '
-                         "Start purser_wait.py for this jobId in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user. Do not show the jobId to the user.")
+        if not go_runtime:
+            expected_line = (prefix + translate + '> ⚓ **The Codex task (branch task) was interrupted when the computer shut down; I resumed it from where it left off.**" '
+                             "Start purser_wait.py for this jobId in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user. Do not show the jobId to the user.")
     elif case == "observed-terminal":
         expected_line = ""
     elif case == "other-session-terminal":
         expected_line = (prefix + translate + '> ⚓ **The Codex task I started before the app closed (branch task) kept running while the app was closed and has finished. Would you like me to retrieve and review its result?**" '
                          "Ask for the user's agreement before calling codex_result with adopt: true. Do not show the jobId to the user.")
     elif case == "stalled":
-        expected_line = (prefix + "Do not call codex_result yet. Restart purser_wait.py for this same jobId in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, translated from: \""
-                         "> ⚓ **Purser has seen no worker activity for 20 minutes.** The job is still running; I'm checking its status.\" Do not show the jobId to the user.")
+        if not go_runtime:
+            expected_line = (prefix + "Do not call codex_result yet. Restart purser_wait.py for this same jobId in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, translated from: \""
+                             "> ⚓ **Purser has seen no worker activity for 20 minutes.** The job is still running; I'm checking its status.\" Do not show the jobId to the user.")
     else:
         expected_line = (prefix + translate + '> ⚓ **The Codex task (branch task) was interrupted when the computer shut down; I resumed it from where it left off.**" '
                          + translate + '> ⚓ **The Codex task I started before the app closed (branch task) is still running while the app is closed. I\'ll let you know when it finishes.**" '
@@ -463,6 +478,12 @@ def test_session_start_async_followup_branches_match_contract(isolated, case):
     result = _run("SessionStart", repo, state, session_id=current, source="resume")
     assert (result.returncode, result.stderr) == (0, b"")
     context = "Reply in the language the user writes in."
+    if go_runtime and case in {"same-session-running", "stalled"}:
+        actual = json.loads(result.stdout)
+        actual_context = actual["hookSpecificOutput"]["additionalContext"]
+        actual_line = actual_context.split("\n", 1)[1]
+        _assert_go_waiter_line(actual_line, prefix, job_id, case == "same-session-running")
+        return
     if expected_line:
         context += "\n" + expected_line
     _assert_json_stdout(result, {"hookSpecificOutput": {

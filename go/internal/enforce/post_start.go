@@ -11,11 +11,12 @@ import (
 	"time"
 
 	"purser-hook/internal/lease"
+	"purser-hook/internal/waiter"
 )
 
 // postStart mirrors codex._post_start. It is intentionally not connected to
 // post.go while the Post lane is being ported in tranches.
-func postStart(event map[string]any, root, pythonExe, waiterPath string) (map[string]any, error) {
+func postStart(event map[string]any, root string) (map[string]any, error) {
 	field := "updatedToolOutput"
 	if event["hook_event_name"] != "PostToolUse" || !strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") {
 		return map[string]any{}, nil
@@ -70,20 +71,10 @@ func postStart(event map[string]any, root, pythonExe, waiterPath string) (map[st
 	if configField, ok := event["post_tool_output_field"].(string); ok && (configField == "updatedToolOutput" || configField == "updatedMCPToolOutput") {
 		field = configField
 	}
-	if pythonExe == "" {
-		pythonExe = "python"
-	}
-	if waiterPath == "" {
-		waiterPath = postStartWaiterPath()
-	}
-	next := fmt.Sprintf("Run in the background (use the PowerShell tool on Windows): \"%s\" \"%s\" %s ; when it finishes, call codex_result with this jobId.", pythonExe, waiterPath, jobID)
+	next := fmt.Sprintf("Run in the background (use the PowerShell tool on Windows): %s ; when it finishes, call codex_result with this jobId.", waiter.Command(jobID))
 	textValue, _ := canonicalJSON(map[string]any{"jobId": jobID, "state": state, "next": next})
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse",
 		field: []any{map[string]any{"type": "text", "text": string(textValue)}}}}, nil
-}
-
-func postStartWaiterPath() string {
-	return filepath.Join(pluginRoot(), ".claude", "hooks", "orchestrator", "purser_wait.py")
 }
 
 func codexResponseIsError(response any) bool {

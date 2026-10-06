@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"purser-hook/internal/waiter"
 )
 
 func writeWaitJob(t *testing.T, root, id string, fields map[string]any) string {
@@ -185,6 +187,7 @@ func TestWaitReportsStallOnce(t *testing.T) {
 	first := Wait(root, "stalled")
 	fields := readWaitFields(t, path)
 	if first.ExitCode != 4 || len(first.Lines) != 2 || fields["waiterObservedStallAt"] != 1234.0 ||
+		!strings.Contains(first.Lines[1], "Restart "+waiter.Command("stalled")+" in the background") ||
 		!strings.Contains(first.Lines[1], "Do not show the jobId to the user.") {
 		t.Fatalf("first result=%#v record=%#v", first, fields)
 	}

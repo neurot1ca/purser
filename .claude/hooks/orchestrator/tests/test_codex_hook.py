@@ -164,6 +164,20 @@ def response_bundle(response, config):
     return json.loads(output[0]["text"])
 
 
+def _assert_waiter_next_command(next_text, job_id):
+    legacy = (f'Run in the background (use the PowerShell tool on Windows): "{sys.executable}" '
+              f'"{Path(codex.__file__).resolve().parent / "purser_wait.py"}" '
+              f'{job_id} ; when it finishes, call codex_result with this jobId.')
+    if next_text == legacy:
+        return
+    match = re.fullmatch(
+        rf'Run in the background \(use the PowerShell tool on Windows\): "([^"]+)" wait {re.escape(job_id)} ; '
+        r'when it finishes, call codex_result with this jobId\.', next_text)
+    assert match, next_text
+    assert Path(match.group(1)).is_absolute(), next_text
+    assert "python" not in next_text.lower(), next_text
+
+
 def test_opencode_start_and_cross_agent_reply_denied(workspace, config):
     repo, state = workspace
     config["coder_agent"] = "opencode"
@@ -3131,9 +3145,7 @@ def test_async_start_post_stores_only_job_id_without_finalizing(workspace, confi
     result = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
                                  reviewer=lambda **kwargs: pytest.fail("reviewer ran at start"))
     next_text = response_bundle(result, config)["next"]
-    assert next_text == (f'Run in the background (use the PowerShell tool on Windows): "{sys.executable}" '
-                         f'"{Path(codex.__file__).resolve().parent / "purser_wait.py"}" '
-                         f'{job_id} ; when it finishes, call codex_result with this jobId.')
+    _assert_waiter_next_command(next_text, job_id)
     assert response_bundle(result, config)["jobId"] == job_id
     assert response_bundle(result, config)["state"] == "RUNNING"
     assert codex._read_pending(state, call)["job_id"] == job_id

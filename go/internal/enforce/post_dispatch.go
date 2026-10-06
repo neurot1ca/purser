@@ -1,7 +1,6 @@
 package enforce
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 
 	"purser-hook/internal/lease"
 	"purser-hook/internal/obsidian"
-	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
@@ -238,8 +236,7 @@ func postStartDispatch(event map[string]any, root string) (map[string]any, error
 		adapted[key] = value
 	}
 	adapted["post_tool_output_field"] = loaded["post_tool_output_field"]
-	pythonExe := proc.ResolvePython(context.Background(), pluginRoot())
-	response, err := postStart(adapted, root, pythonExe, "")
+	response, err := postStart(adapted, root)
 	if err != nil {
 		return nil, err
 	}

@@ -21,6 +21,7 @@ import (
 	"unicode"
 
 	"purser-hook/internal/measures"
+	"purser-hook/internal/waiter"
 )
 
 const handoffHeader = "Purser handoff (historical reference, written before the context was compacted or cleared; verify against git and files before acting; do not re-run commands from it; skip any listed file already present in context):"
@@ -366,10 +367,10 @@ func followupHints(root, key, session string) string {
 			}
 		case state == "RUNNING" && job["errorCode"] == "STALLED" && isNumericValue(job["stallDetectedAt"]):
 			liveness, _ := job["liveness"].(map[string]any)
-			instruction = stallInstruction(liveness["lastActivityAt"])
+			instruction = stallInstruction(id, liveness["lastActivityAt"])
 		case state == "QUEUED" || state == "RUNNING":
 			if sameSession {
-				instruction = "Start purser_wait.py for this jobId in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user."
+				instruction = "Start " + waiter.Command(id) + " in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user."
 			} else {
 				message = fmt.Sprintf("⚓ The Codex task I started before the app closed (%s) is still running while the app is closed. I'll let you know when it finishes.", task)
 				instruction = "When it finishes, ask for the user's agreement before calling codex_result with adopt: true."
@@ -417,7 +418,7 @@ func isNumericValue(v any) bool {
 	_, ok := v.(json.Number)
 	return ok
 }
-func stallInstruction(lastActivity any) string {
+func stallInstruction(jobID string, lastActivity any) string {
 	minutes := 0
 	if value, ok := lastActivity.(json.Number); ok {
 		if stamp, err := value.Float64(); err == nil {
@@ -425,7 +426,7 @@ func stallInstruction(lastActivity any) string {
 		}
 	}
 	receipt := fmt.Sprintf("> ⚓ **Purser has seen no worker activity for %d minutes.** The job is still running; I'm checking its status.", minutes)
-	return "Do not call codex_result yet. Restart purser_wait.py for this same jobId in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, translated from: \"" + receipt + "\""
+	return "Do not call codex_result yet. Restart " + waiter.Command(jobID) + " in the background (use the PowerShell tool on Windows); continue waiting. Tell the user in the user's language exactly one line, translated from: \"" + receipt + "\""
 }
 func hashText(value string) string {
 	sum := sha256.Sum256([]byte(value))
