@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"syscall"
 	"time"
 
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/jobs"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
@@ -142,33 +144,60 @@ func dispatchOperation(ctx context.Context, tool string, args map[string]any, ro
 	}
 }
 
-func hostMain(argv []string) int {
-	if len(argv) != 4 {
-		privateError(errors.New("usage: purser-hook host <jobDir> <jobId> <generation> <token>"))
-		return 2
+func hostMain(argv []string) (code int) {
+	jobID := ""
+	var generation int64
+	if len(argv) > 1 {
+		jobID = argv[1]
 	}
-	generation, err := strconv.ParseInt(argv[2], 10, 64)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stack := debug.Stack()
+			if len(stack) > 4096 {
+				stack = stack[:4096]
+			}
+			err := fmt.Errorf("host panic: %v\n%s", recovered, stack)
+			recordHostFailure(jobID, generation, err)
+			privateError(err)
+			code = 1
+		}
+	}()
+	if len(argv) != 4 {
+		return hostFailure(jobID, generation, errors.New("usage: purser-hook host <jobDir> <jobId> <generation> <token>"), 2)
+	}
+	var err error
+	generation, err = strconv.ParseInt(argv[2], 10, 64)
 	if err != nil || generation < 1 {
-		privateError(errors.New("generation must be a positive integer"))
-		return 2
+		return hostFailure(jobID, generation, errors.New("generation must be a positive integer"), 2)
 	}
 	closeContainment, err := containHost()
 	if err != nil {
-		privateError(err)
-		return 1
+		return hostFailure(jobID, generation, err, 1)
 	}
 	// The Windows kill-on-close Job Object must stay open until this host exits.
 	_ = closeContainment
 	status, err := jobs.RunHostGeneration(argv[0], argv[1], generation, argv[3], jobs.HostOptions{HostContained: closeContainment != nil})
 	if err != nil {
-		privateError(err)
-		return 1
+		return hostFailure(jobID, generation, err, 1)
 	}
 	writePrivateJSON(status)
 	if status["status"] == "error" {
 		return 1
 	}
 	return 0
+}
+
+func hostFailure(jobID string, generation int64, err error, code int) int {
+	recordHostFailure(jobID, generation, err)
+	privateError(err)
+	return code
+}
+
+func recordHostFailure(jobID string, generation int64, err error) {
+	_ = enforce.WriteFailureDiagnostic(stateRoot(), map[string]any{
+		"at": time.Now().UTC().Format(time.RFC3339), "error": err.Error(), "phase": "host",
+		"job_id": jobID, "generation": generation,
+	})
 }
 
 func readOperationArgs() (map[string]any, error) {

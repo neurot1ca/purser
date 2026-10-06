@@ -88,6 +88,11 @@ func writeFailureDiagnostic(root string, diagnostic map[string]any) error {
 	return closeErr
 }
 
+// WriteFailureDiagnostic appends a diagnostic using the shared JSONL format.
+func WriteFailureDiagnostic(root string, diagnostic map[string]any) error {
+	return writeFailureDiagnostic(root, diagnostic)
+}
+
 // failureObservationTail adds Python's failed task projection refresh after
 // the append-only failure observation. Projection errors are observational.
 func failureObservationTail(root string, pending map[string]any) {
