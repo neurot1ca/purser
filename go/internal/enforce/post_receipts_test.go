@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"purser-hook/internal/contextio"
 )
 
 func TestPostReceiptsPythonFixture(t *testing.T) {
@@ -81,5 +84,22 @@ func TestPostDispatchReceiptDoesNotMarkLifecycleDelivered(t *testing.T) {
 	response := appendPostDispatchReceipt(map[string]any{}, root, event, pending, repo)
 	if response["hookSpecificOutput"] == nil || mapValue(readPostReceiptState(statePath, "receipt-session")["version_pending"])["delivered"] != false {
 		t.Fatalf("receipt incorrectly marked lifecycle guidance delivered: %#v", response)
+	}
+}
+
+func TestCompletionReceiptShowsEnforcedPairAndGearIndicator(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	key := projectKey(&repo)
+	if err := contextio.SetGear(root, key, "up"); err != nil {
+		t.Fatal(err)
+	}
+	event := map[string]any{"session_id": "receipt-gear-session"}
+	bundle := map[string]any{"model": "configured-sol", "effort": "medium", "codex_quota": nil}
+	queuePostCompletionReceipt(root, event, repo, bundle)
+	guidance := postPendingGuidance(root, event, repo)
+	for _, value := range []string{"model configured-sol", "effort medium", "gear up"} {
+		if !strings.Contains(guidance, value) {
+			t.Fatalf("receipt guidance %q omitted %q", guidance, value)
+		}
 	}
 }

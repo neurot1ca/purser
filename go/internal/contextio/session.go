@@ -152,6 +152,7 @@ func SessionStart(event map[string]any) []byte {
 		root := stateRoot()
 		additional = joinContext(additional, durationHint(root, projectKey, "codex-main"))
 		additional = joinContext(additional, followupHints(root, projectKey, session))
+		additional = joinContext(additional, recoverGearAdvice(root, projectKey, time.Now().UTC()))
 		if source == "compact" {
 			additional = joinContext(additional, compactAccuracyHint(root, projectKey))
 		}
@@ -185,6 +186,14 @@ type DurationSample struct {
 	JobID       string
 }
 
+// RouteDurationSamples returns the recent completion samples used by the
+// SessionStart route duration hint, limited to one route.
+func RouteDurationSamples(root, key, route string) []DurationSample {
+	groups := map[string][]DurationSample{}
+	readRouteDurationSamples(root, key, groups)
+	return groups[route]
+}
+
 // RouteP90 uses the SessionStart duration hint's sample sufficiency and p90 rule.
 // The current job is excluded by ID before choosing implementer-specific samples.
 func RouteP90(samples []DurationSample, implementer, excludeJobID string) (float64, int, bool) {
@@ -212,6 +221,40 @@ func RouteP90(samples []DurationSample, implementer, excludeJobID string) (float
 
 func durationHint(root, key, implementer string) string {
 	groups := map[string][]DurationSample{}
+	readRouteDurationSamples(root, key, groups)
+	var parts []string
+	for _, route := range finishedRoutes {
+		p90, count, ok := RouteP90(groups[route], implementer, "")
+		if !ok {
+			continue
+		}
+		var values []float64
+		for _, sample := range groups[route] {
+			if sample.Implementer == implementer {
+				values = append(values, sample.DurationMS)
+			}
+		}
+		if len(values) < 5 {
+			values = values[:0]
+			for _, sample := range groups[route] {
+				values = append(values, sample.DurationMS)
+			}
+		}
+		sort.Float64s(values)
+		median := values[len(values)/2]
+		if len(values)%2 == 0 {
+			median = (values[len(values)/2-1] + median) / 2
+		}
+		parts = append(parts, fmt.Sprintf("%s %d/%d min (n=%d)", route, roundedMinutes(median), roundedMinutes(p90), count))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	name := "Codex"
+	return "Purser: typical " + name + " durations here (median/p90, n): " + strings.Join(parts, ", ") + "."
+}
+
+func readRouteDurationSamples(root, key string, groups map[string][]DurationSample) {
 	files := telemetryFiles(filepath.Join(root, "telemetry", "events"))
 	cutoff := time.Now().UTC().Add(-90 * 24 * time.Hour)
 	bytesRead, lines := 0, 0
@@ -247,42 +290,14 @@ func durationHint(root, key, implementer string) string {
 			if agent == "codex" {
 				agent = "codex-main"
 			}
-			groups[route] = append(groups[route], DurationSample{DurationMS: duration, Implementer: agent})
+			jobID, _ := item["job_id"].(string)
+			groups[route] = append(groups[route], DurationSample{DurationMS: duration, Implementer: agent,
+				JobID: jobID})
 		}
 		if bytesRead >= 2<<20 || lines >= 4096 {
 			break
 		}
 	}
-	var parts []string
-	for _, route := range finishedRoutes {
-		p90, count, ok := RouteP90(groups[route], implementer, "")
-		if !ok {
-			continue
-		}
-		var values []float64
-		for _, sample := range groups[route] {
-			if sample.Implementer == implementer {
-				values = append(values, sample.DurationMS)
-			}
-		}
-		if len(values) < 5 {
-			values = values[:0]
-			for _, sample := range groups[route] {
-				values = append(values, sample.DurationMS)
-			}
-		}
-		sort.Float64s(values)
-		median := values[len(values)/2]
-		if len(values)%2 == 0 {
-			median = (values[len(values)/2-1] + median) / 2
-		}
-		parts = append(parts, fmt.Sprintf("%s %d/%d min (n=%d)", route, roundedMinutes(median), roundedMinutes(p90), count))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	name := "Codex"
-	return "Purser: typical " + name + " durations here (median/p90, n): " + strings.Join(parts, ", ") + "."
 }
 
 func telemetryFiles(root string) []string {

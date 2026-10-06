@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"purser-hook/internal/contextio"
 )
 
 func postReceiptStatePath(root, repository string) string {
@@ -48,6 +50,9 @@ func queuePostCompletionReceipt(root string, event map[string]any, repository st
 		effort = "unknown"
 	}
 	receipt := map[string]any{"model": model, "effort": effort, "blocked": false}
+	if up, err := contextio.Gear(defaultPreStateRoot(root), projectKey(&repository)); err == nil && up {
+		receipt["gear"] = "up"
+	}
 	if quota, ok := bundle["codex_quota"].(map[string]any); ok {
 		for _, key := range []string{"5h_used_pct", "5h_resets_at", "7d_used_pct", "7d_resets_at", "snapshot_at"} {
 			value := quota[key]
@@ -126,6 +131,9 @@ func postPendingGuidance(root string, event map[string]any, repository string) s
 		effort, effortOK := receipt["effort"].(string)
 		if modelOK && model != "" && effortOK {
 			values := []string{"model " + model, "effort " + effort}
+			if receipt["gear"] == "up" {
+				values = append(values, "gear up")
+			}
 			if percentage, ok := receipt["5h_used_pct"].(float64); ok {
 				values = append(values, fmt.Sprintf("5h used %g%%", percentage))
 			}

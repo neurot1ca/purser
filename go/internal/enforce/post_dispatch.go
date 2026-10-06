@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/profile"
@@ -188,6 +189,7 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 	response, err := replacement(compact, stringValue(loaded["post_tool_output_field"]))
 	if err == nil {
 		appendPostQuotaSystemMessage(response, bundle["codex_quota"])
+		postGearAdvice(root, event, pending, loaded, response, numberOr(event["duration_ms"], 0), "")
 	}
 	if err == nil && stringValue(pending["async_call"]) == "" {
 		response = appendPostDispatchReceipt(response, root, event, pending, repoRoot)
@@ -348,6 +350,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			}
 		}
 		if response != nil && len(response) > 0 {
+			contextio.ClearCompletedGearAdviceRecovery(root, stringValue(index["project_key"]), stringValue(index["jobId"]))
 			return response, nil
 		}
 		loaded, loadErr := loadPreConfig()
@@ -411,6 +414,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	if err = atomicAdmissionJSON(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index); err != nil {
 		return nil, err
 	}
+	contextio.ClearCompletedGearAdviceRecovery(root, stringValue(index["project_key"]), stringValue(index["jobId"]))
 	return response, err
 }
 

@@ -172,6 +172,8 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		return nil, err
 	}
 	appendPostQuotaSystemMessage(response, bundle["codex_quota"])
+	postGearAdvice(root, original, pending, loaded, response,
+		workerDuration(job["startedAt"], job["finishedAt"]), stringValue(index["jobId"]))
 	if bundle["apply"] == "codex_apply" {
 		response["systemMessage"] = PostApplyGuidance(stringValue(response["systemMessage"]), stringValue(index["jobId"]))
 	}
