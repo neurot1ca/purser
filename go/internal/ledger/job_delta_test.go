@@ -1,4 +1,5 @@
 package ledger
+
 import (
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 )
+
 func TestComputeJobDeltaPythonFixture(t *testing.T) {
 	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "job_delta.json")
 	data, err := os.ReadFile(fixturePath)
@@ -79,16 +81,26 @@ func TestComputeJobDeltaPythonFixture(t *testing.T) {
 }
 func stringsOutput(t *testing.T, root string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", args...); command.Dir = root
-	output, err := command.Output(); if err != nil { t.Fatal(err) }
+	command := exec.Command("git", args...)
+	command.Dir = root
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
 	return strings.TrimSpace(string(output))
 }
 func assertJobDeltaExpected(t *testing.T, got, want map[string]any) {
 	t.Helper()
 	got = cloneMap(got)
-	if got["baseline_head"] != nil { got["baseline_head"] = "<SNAPSHOT>" }
-	if got["current_head"] != nil { got["current_head"] = "<HEAD>" }
+	if got["baseline_head"] != nil {
+		got["baseline_head"] = "<SNAPSHOT>"
+	}
+	if got["current_head"] != nil {
+		got["current_head"] = "<HEAD>"
+	}
 	left, _ := json.Marshal(got)
 	right, _ := json.Marshal(want)
-	if string(left) != string(right) { t.Fatalf("job delta mismatch\n got: %s\nwant: %s", left, right) }
+	if string(left) != string(right) {
+		t.Fatalf("job delta mismatch\n got: %s\nwant: %s", left, right)
+	}
 }

@@ -68,7 +68,7 @@ func TestStopFinalizeP128Fixture(t *testing.T) {
 					}
 					record = []byte(raw)
 				}
-			if err := os.WriteFile(path, record, 0600); err != nil {
+				if err := os.WriteFile(path, record, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
