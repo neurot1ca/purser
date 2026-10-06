@@ -86,6 +86,13 @@ function quotaPills(quota: Quota, prefix: string, now: number, contextFill?: num
 
 export function usageGroups(codex: Quota, session: SessionData, now = Date.now()): Pill[][] {
   const claude = quotaPills(session.quota, 'claude', now, session.contextFill)
+  if (session.contextFill !== undefined) {
+    claude.push({
+      id: 'claude-context', label: '◧ ctx', value: `${Math.round(session.contextFill)}%`,
+      detail: `claude context ${session.contextFill.toFixed(1)}% of the window used`,
+      icon: '◧', color: '#4a7fc1', percent: session.contextFill,
+    })
+  }
   const codexPills = quotaPills(codex, 'codex', now, session.contextFill)
   const groups: Pill[][] = [claude, codexPills]
   if (session.cost !== undefined) {
@@ -113,7 +120,7 @@ export function pillSvg(pill: Pill): string {
   x += textWidth(pill.label, 12) + 8
   if (pill.percent !== undefined) {
     const barWidth = 46
-    inner += `<rect x="${x}" y="10" width="${barWidth}" height="4" rx="2" fill="#8c96a0" opacity=".35"/><rect x="${x}" y="10" width="${barWidth * pill.percent / 100}" height="4" rx="2" fill="${barColor(pill.percent)}"/><path d="M${x + barWidth * (pill.tick ?? 0)} 7v10" stroke="#252b32" stroke-width="1.4"/>`
+    inner += `<rect x="${x}" y="10" width="${barWidth}" height="4" rx="2" fill="#8c96a0" opacity=".35"/><rect x="${x}" y="10" width="${barWidth * pill.percent / 100}" height="4" rx="2" fill="${barColor(pill.percent)}"/>${pill.tick === undefined ? '' : `<path d="M${x + barWidth * pill.tick} 7v10" stroke="#252b32" stroke-width="1.4"/>`}`
     x += barWidth + 8
   }
   inner += `<text x="${x}" y="${baseline}" font-size="12" font-weight="700">${escapeXml(pill.value)}</text>`
@@ -148,7 +155,7 @@ export function terminalBar(pill: Pill): string | undefined {
   if (pill.percent === undefined) return undefined
   const width = 10
   const full = Math.round(width * pill.percent / 100)
-  const tick = Math.round(width * (pill.tick ?? 0))
+  const tick = pill.tick === undefined ? -1 : Math.round(width * pill.tick)
   return Array.from({ length: width }, (_, i) => i === tick ? '│' : i < full ? '█' : '░').join('')
 }
 

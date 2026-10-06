@@ -35,9 +35,11 @@ test('maps session usage fields and keeps Claude, Codex, then cost groups', () =
   expect(session.contextFill).toBe(42.5)
   expect(session.cost).toBe(4.32)
   expect(groups.map(group => group.map(pill => pill.id))).toEqual([
-    ['claude-5h', 'claude-7d'], ['codex-5h', 'codex-7d'], ['cost'],
+    ['claude-5h', 'claude-7d', 'claude-context'], ['codex-5h', 'codex-7d'], ['cost'],
   ])
   expect(groups[0][0].detail).toContain('context 42.5%')
+  expect(groups[0][2]).toMatchObject({ value: '43%', percent: 42.5 })
+  expect(terminalBar(groups[0][2])).toBe('████░░░░░░')
   expect(groups[2][0].detail).toContain('summed over priced API responses')
   expect(groups.flat().some(pill => ['input', 'output', 'cache'].includes(pill.id))).toBe(false)
 })
