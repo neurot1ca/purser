@@ -179,12 +179,39 @@ func SessionStart(event map[string]any) []byte {
 var finishedRoutes = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation"}
 var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-func durationHint(root, key, implementer string) string {
-	type sample struct {
-		duration    float64
-		implementer string
+type DurationSample struct {
+	DurationMS  float64
+	Implementer string
+	JobID       string
+}
+
+// RouteP90 uses the SessionStart duration hint's sample sufficiency and p90 rule.
+// The current job is excluded by ID before choosing implementer-specific samples.
+func RouteP90(samples []DurationSample, implementer, excludeJobID string) (float64, int, bool) {
+	var own, all []float64
+	for _, sample := range samples {
+		if sample.JobID != "" && sample.JobID == excludeJobID || sample.DurationMS <= 0 || math.IsNaN(sample.DurationMS) || math.IsInf(sample.DurationMS, 0) {
+			continue
+		}
+		all = append(all, sample.DurationMS)
+		if sample.Implementer == implementer {
+			own = append(own, sample.DurationMS)
+		}
 	}
-	groups := map[string][]sample{}
+	values := own
+	ready := len(own) >= 5
+	if !ready {
+		values = all
+	}
+	if len(values) < map[bool]int{true: 5, false: 10}[ready] {
+		return 0, 0, false
+	}
+	sort.Float64s(values)
+	return values[int(math.Ceil(.9*float64(len(values))))-1], len(values), true
+}
+
+func durationHint(root, key, implementer string) string {
+	groups := map[string][]DurationSample{}
 	files := telemetryFiles(filepath.Join(root, "telemetry", "events"))
 	cutoff := time.Now().UTC().Add(-90 * 24 * time.Hour)
 	bytesRead, lines := 0, 0
@@ -220,7 +247,7 @@ func durationHint(root, key, implementer string) string {
 			if agent == "codex" {
 				agent = "codex-main"
 			}
-			groups[route] = append(groups[route], sample{duration, agent})
+			groups[route] = append(groups[route], DurationSample{DurationMS: duration, Implementer: agent})
 		}
 		if bytesRead >= 2<<20 || lines >= 4096 {
 			break
@@ -228,28 +255,28 @@ func durationHint(root, key, implementer string) string {
 	}
 	var parts []string
 	for _, route := range finishedRoutes {
-		var own, all []float64
-		for _, s := range groups[route] {
-			all = append(all, s.duration)
-			if s.implementer == implementer {
-				own = append(own, s.duration)
+		p90, count, ok := RouteP90(groups[route], implementer, "")
+		if !ok {
+			continue
+		}
+		var values []float64
+		for _, sample := range groups[route] {
+			if sample.Implementer == implementer {
+				values = append(values, sample.DurationMS)
 			}
 		}
-		values := own
-		ready := len(own) >= 5
-		if !ready {
-			values = all
-		}
-		if len(values) < map[bool]int{true: 5, false: 10}[ready] {
-			continue
+		if len(values) < 5 {
+			values = values[:0]
+			for _, sample := range groups[route] {
+				values = append(values, sample.DurationMS)
+			}
 		}
 		sort.Float64s(values)
 		median := values[len(values)/2]
 		if len(values)%2 == 0 {
 			median = (values[len(values)/2-1] + median) / 2
 		}
-		p90 := values[int(math.Ceil(.9*float64(len(values))))-1]
-		parts = append(parts, fmt.Sprintf("%s %d/%d min (n=%d)", route, roundedMinutes(median), roundedMinutes(p90), len(values)))
+		parts = append(parts, fmt.Sprintf("%s %d/%d min (n=%d)", route, roundedMinutes(median), roundedMinutes(p90), count))
 	}
 	if len(parts) == 0 {
 		return ""

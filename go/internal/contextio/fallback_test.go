@@ -88,6 +88,12 @@ func TestQuotaAndLaunchFailureP35Fixture(t *testing.T) {
 			if !ok {
 				got = nil
 			}
+			if got != nil {
+				if source, valid := got["source_identity"].(string); !valid || source == "" {
+					t.Fatalf("quota source identity missing: %#v", got)
+				}
+				delete(got, "source_identity")
+			}
 			if !reflect.DeepEqual(got, test.Expected) {
 				t.Fatalf("quota = %#v, want %#v", got, test.Expected)
 			}

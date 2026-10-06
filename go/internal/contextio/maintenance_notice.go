@@ -1,6 +1,8 @@
 package contextio
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -144,9 +146,21 @@ func latestQuotaAt(home string, now time.Time) (map[string]any, *[3]any, bool) {
 	stamp, hasStamp := event["timestamp"].(string)
 	payload, _ := event["payload"].(map[string]any)
 	limits, _ := payload["rate_limits"].(map[string]any)
-	snapshot := map[string]any{"windows_seen": false}
+	sourcePath, _ := filepath.Abs(home)
+	if real, e := filepath.EvalSymlinks(sourcePath); e == nil {
+		sourcePath = real
+	}
+	sourceHash := sha256.Sum256([]byte(filepath.Clean(sourcePath)))
+	snapshot := map[string]any{"windows_seen": false, "source_identity": hex.EncodeToString(sourceHash[:])}
 	if hasStamp {
 		snapshot["snapshot_at"] = stamp
+	}
+	planType, _ := payload["plan_type"].(string)
+	if planType == "" {
+		planType, _ = limits["plan_type"].(string)
+	}
+	if planType != "" {
+		snapshot["plan_type"] = strings.ToLower(strings.TrimSpace(planType))
 	}
 	for _, entry := range []struct {
 		source, label string
