@@ -1969,6 +1969,15 @@ class Server:
                     connection.settimeout(7)
                     connection.sendall(f'{job_id}:{job["signalToken"]}:CANCEL'.encode("ascii"))
                     confirmed = connection.recv(1) == b"1"
+                if confirmed:
+                    result = self._result_job({"jobId": job_id})
+                    if result.get("structuredContent", {}).get("state") in TERMINAL:
+                        return result
+                    # Go acknowledges CANCEL before its durable terminal write.
+                    with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=7) as connection:
+                        connection.settimeout(7)
+                        connection.sendall(f'{job_id}:{job["signalToken"]}'.encode("ascii"))
+                        confirmed = connection.recv(1) == b"1"
             except (OSError, KeyError, TypeError, ValueError):
                 confirmed = False
             if not confirmed:

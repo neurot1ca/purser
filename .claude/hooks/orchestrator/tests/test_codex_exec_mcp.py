@@ -823,15 +823,38 @@ def test_python_result_and_apply_read_go_created_job(go_client, area):
     assert apply_result["errorCode"] == "NOT_WORKTREE_JOB"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Python codex_cancel returns PROCESS_UNCONFIRMED for a live Go-hosted job; "
-    "cross-owner terminal cancellation is not established on this Windows host"))
 def test_python_cancel_reaches_go_created_job(go_client, area):
     """Python codex_cancel signals a Go-hosted job and requires terminal confirmation."""
     job_id, record_path = _go_running_job(go_client, area)
     python_owner = codex_exec_mcp.Server(job_dir=record_path.parent)
     result = python_owner._cancel_job({"jobId": job_id})["structuredContent"]
     assert result["state"] == "CANCELLED"
+
+
+def test_python_cancel_skips_terminal_wait_after_local_host_finishes(area, monkeypatch):
+    job_id = "c" * 64
+    job_dir = area / "root" / "codex_exec_mcp" / "jobs"
+    host = codex_exec_mcp.Server(host=True, job_dir=job_dir)
+    assert host.listener is not None
+    host.job_events[job_id] = threading.Event()
+    now = time.time()
+    host._write_job({"jobId": job_id, "state": "RUNNING", "signalToken": "local-token",
+                     "signalPort": host.listener.getsockname()[1], "acceptedAt": now,
+                     "deadlineAt": now + 60})
+    finish_job = host._finish_job
+
+    def finish_and_remove_event(*args, **kwargs):
+        finish_job(*args, **kwargs)
+        host.job_events.pop(job_id, None)
+
+    monkeypatch.setattr(host, "_finish_job", finish_and_remove_event)
+    python_owner = codex_exec_mcp.Server(job_dir=job_dir)
+    try:
+        result = python_owner._cancel_job({"jobId": job_id})["structuredContent"]
+        assert result["state"] == "CANCELLED"
+        assert host._read_job(job_id)["state"] == "CANCELLED"
+    finally:
+        host.listener.close()
 
 
 def test_stream_activity_updates_and_checkpoints_are_throttled(tmp_path, monkeypatch):
