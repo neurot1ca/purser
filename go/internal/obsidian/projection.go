@@ -14,14 +14,21 @@ func PluginRoot() string {
 	}
 	if executable, err := os.Executable(); err == nil {
 		if executable, err = filepath.EvalSymlinks(executable); err == nil {
-			root := filepath.Dir(filepath.Dir(executable))
-			if _, err := os.Stat(filepath.Join(root, ".claude", "hooks", "orchestrator", "purser_wait.py")); err == nil {
+			if root := pluginRootFromExecutable(executable); root != "" {
 				return root
 			}
 		}
 	}
 	cwd, _ := os.Getwd()
 	return cwd
+}
+
+func pluginRootFromExecutable(executable string) string {
+	root := filepath.Dir(filepath.Dir(executable))
+	if _, err := os.Stat(filepath.Join(root, ".claude-plugin", "plugin.json")); err == nil {
+		return root
+	}
+	return ""
 }
 
 // ConfigPath prefers the plugin's bundled config and falls back to the cwd ancestry.

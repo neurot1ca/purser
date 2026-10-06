@@ -504,7 +504,11 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		if admitted.Status != "OK" {
 			if admitted.Code == "SCOPE_LEASE_CONFLICT" {
 				preEmit(runtimeRoot, event, repository, taskID, project, "ROUTING_PROTOCOL_VIOLATION", map[string]any{"violation_code": admitted.Code})
-				return denyPre(admitted.Code, fmt.Sprintf("Scope is leased by task %s. To release a stuck lease, run: python .claude/hooks/orchestrator/purser_leases.py --release <task-id>", admitted.TaskID)), nil
+				command := "purser-hook"
+				if executable, err := os.Executable(); err == nil && executable != "" {
+					command = `"` + executable + `"`
+				}
+				return denyPre(admitted.Code, fmt.Sprintf("Scope is leased by task %s. To release a stuck lease, run: %s leases --release <task-id>", admitted.TaskID, command)), nil
 			}
 			switch admitted.Code {
 			case "LEASE_ADMISSION_UNCERTAIN", "LEASE_OWNER_CONFLICT", "LEASE_INVALID":

@@ -32,3 +32,20 @@ func TestConfigPathPrefersPluginRootFromUnrelatedProject(t *testing.T) {
 		t.Fatalf("config path = %q, want %q", got, pluginConfig)
 	}
 }
+
+func TestPluginRootUsesPluginManifestSentinel(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "bin", "purser-hook")
+	if err := os.MkdirAll(filepath.Dir(executable), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".claude-plugin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".claude-plugin", "plugin.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := pluginRootFromExecutable(executable); got != root {
+		t.Fatalf("plugin root = %q, want %q", got, root)
+	}
+}

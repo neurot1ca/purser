@@ -431,7 +431,7 @@
       "pending": null,
       "response": {
         "permissionDecision": "deny",
-        "permissionDecisionReason": "SCOPE_LEASE_CONFLICT: Scope is leased by task p64-existing. To release a stuck lease, run: python .claude/hooks/orchestrator/purser_leases.py --release <task-id>"
+        "permissionDecisionReason": "SCOPE_LEASE_CONFLICT: Scope is leased by task p64-existing. To release a stuck lease, run: \"__EXECUTABLE__\" leases --release <task-id>"
       },
       "session": null,
       "task_id": "p64-conflict",

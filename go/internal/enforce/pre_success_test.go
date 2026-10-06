@@ -208,6 +208,9 @@ func normalizeP64(value any, repo, state, project string) any {
 		item = strings.ReplaceAll(item, repo, "__REPO__")
 		item = strings.ReplaceAll(item, state, "__STATE__")
 		item = strings.ReplaceAll(item, project, "__PROJECT_KEY__")
+		if executable, err := os.Executable(); err == nil {
+			item = strings.ReplaceAll(item, `"`+executable+`" leases --release`, `"__EXECUTABLE__" leases --release`)
+		}
 		return item
 	case []any:
 		for i := range item {
