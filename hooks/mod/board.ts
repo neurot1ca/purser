@@ -255,9 +255,12 @@ export function registerBoard(on) {
         key: 'purser-board-details', label: 'details', plain: true, dimColor: true,
         onPress: async () => { await $.ui.open({ id: detailsPaneId, title: 'Jobs' }) },
       }))
+      if (!prior) return Box({ width: e.props.bodyColumns, flexDirection: 'row', flexWrap: 'nowrap', children: content })
+      // The engine refuses its own node under a Box with a width, so the outer row stays unsized.
       return Box({
-        width: e.props.bodyColumns, flexDirection: 'row', flexWrap: 'nowrap',
-        children: prior ? [prior, Text({ children: ' · ', dimColor: true }), ...content] : content,
+        flexDirection: 'row', flexWrap: 'nowrap',
+        children: [prior, Text({ children: ' · ', dimColor: true }),
+          Box({ flexDirection: 'row', flexWrap: 'nowrap', flexShrink: 1, children: content })],
       })
     } catch {
       await reportOnce($, 'Purser job board refresh failed; turn continued unchanged.')
