@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func buildPurserHook(t *testing.T) string {
@@ -111,6 +112,113 @@ func TestPrivateOperationRejectsUnknownAndMalformedInput(t *testing.T) {
 	code, output = runPrivate(t, binary, state, "op codex_start", `{`)
 	if code == 0 || decodeOutput(t, output)["status"] != "error" {
 		t.Fatalf("malformed args were not explicit: exit=%d output=%s", code, output)
+	}
+}
+
+func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
+	binary := buildPurserHook(t)
+	plugin := t.TempDir()
+	configDir := filepath.Join(plugin, ".claude", "hooks", "orchestrator")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	config, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(configDir, "config.json"), config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	userConfig := filepath.Join(home, ".orchestrator")
+	if err = os.MkdirAll(userConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	configured := "[coding]\ncoder_agent = \"agy\"\nfamily = \"team\"\n[coding.routes]\nmechanical = { model = \"gemini-test\", effort = \"high\" }\nsubtle = { model = \"gemini-test\", effort = \"high\" }\nnormal = { model = \"gemini-test\", effort = \"high\" }\nconsequential = { model = \"gemini-test\", effort = \"high\" }\nescalated = { model = \"gemini-test\", effort = \"high\" }\noperation = { model = \"gemini-test\", effort = \"high\" }\nplan_standard = { model = \"gemini-test\", effort = \"high\" }\n[roles]\ncoder = \"agy\"\n"
+	if err = os.WriteFile(filepath.Join(userConfig, "config.toml"), []byte(configured), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	t.Setenv("PURSER_AGENT", "")
+	state := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeSource := filepath.Join(fakeDir, "main.go")
+	if err = os.WriteFile(fakeSource, []byte("package main\nimport \"time\"\nfunc main() { time.Sleep(time.Second) }\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	override := filepath.Join(fakeDir, "fake-codex")
+	if runtime.GOOS == "windows" {
+		override += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", override, fakeSource)
+	if output, buildErr := build.CombinedOutput(); buildErr != nil {
+		t.Fatalf("build fake worker: %v\n%s", buildErr, output)
+	}
+	t.Setenv("PURSER_CODEX_BIN", override)
+	args := map[string]any{"call": "123e4567-e89b-12d3-a456-426614174001", "prompt": "test", "cwd": t.TempDir(),
+		"model": "gemini-test", "config": map[string]any{"model_reasoning_effort": "high"}}
+	input, _ := json.Marshal(map[string]any{"args": args})
+	code, output := runPrivate(t, binary, state, "op codex_start", string(input))
+	if code != 0 {
+		t.Fatalf("start exit=%d output=%s", code, output)
+	}
+	id := sha256.Sum256([]byte(args["call"].(string)))
+	launch, err := os.ReadFile(filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(id[:])+".launch"))
+	if err != nil {
+		t.Fatalf("launch record unavailable: %v; operation output=%s", err, output)
+	}
+	var recorded map[string]any
+	if err = json.Unmarshal(launch, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded["agent"] != "agy" || recorded["codexBin"] != override {
+		t.Fatalf("launch did not preserve configured agent and executable override: %s", launch)
+	}
+	t.Setenv("PURSER_AGENT", "codex")
+	args["call"] = "123e4567-e89b-12d3-a456-426614174003"
+	input, _ = json.Marshal(map[string]any{"args": args})
+	code, output = runPrivate(t, binary, state, "op codex_start", string(input))
+	if code != 0 {
+		t.Fatalf("environment-selected start exit=%d output=%s", code, output)
+	}
+	id = sha256.Sum256([]byte(args["call"].(string)))
+	launch, err = os.ReadFile(filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(id[:])+".launch"))
+	if err != nil {
+		t.Fatalf("environment-selected launch record unavailable: %v; operation output=%s", err, output)
+	}
+	if err = json.Unmarshal(launch, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded["agent"] != "codex" {
+		t.Fatalf("PURSER_AGENT did not override coder_agent: %s", launch)
+	}
+	t.Setenv("PURSER_AGENT", "")
+	t.Setenv("PURSER_CODEX_BIN", "[")
+	args["call"] = "123e4567-e89b-12d3-a456-426614174002"
+	input, _ = json.Marshal(map[string]any{"args": args})
+	code, output = runPrivate(t, binary, state, "op codex_start", string(input))
+	if code != 0 {
+		t.Fatalf("invalid launch exit=%d output=%s", code, output)
+	}
+	failed := decodeOutput(t, output)["result"].(map[string]any)["structuredContent"].(map[string]any)
+	if failed["state"] != "FAILED" || failed["errorCode"] != "INVALID_ARGUMENT" {
+		t.Fatalf("invalid executable override was not rejected before launch: %#v", failed)
+	}
+	for _, call := range []string{"123e4567-e89b-12d3-a456-426614174001", "123e4567-e89b-12d3-a456-426614174003"} {
+		id := sha256.Sum256([]byte(call))
+		path := filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(id[:])+".json")
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			data, readErr := os.ReadFile(path)
+			var job map[string]any
+			if readErr == nil && json.Unmarshal(data, &job) == nil &&
+				(job["state"] == "SUCCEEDED" || job["state"] == "FAILED") {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }
 

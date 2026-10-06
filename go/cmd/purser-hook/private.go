@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"purser-hook/internal/jobs"
+	"purser-hook/internal/obsidian"
+	"purser-hook/internal/policy"
 )
 
 func privateMain() (code int) {
@@ -79,7 +81,43 @@ func dispatchOperation(ctx context.Context, tool string, args map[string]any, ro
 	case "codex", "codex-reply":
 		return runSynchronousContext(ctx, args, tool)
 	case "codex_start":
-		result, _, err := jobs.Start(root, args, jobs.StartOptions{Launch: launch})
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return nil, homeErr
+		}
+		override := os.Getenv("PURSER_CODEX_BIN")
+		var codexBin any
+		if override != "" {
+			codexBin = override
+		}
+		configuredAgent := func() (string, error) {
+			config, err := policy.LoadCoderConfig(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"))
+			if err != nil {
+				return "", err
+			}
+			agent, _ := config["coder_agent"].(string)
+			return agent, nil
+		}
+		validateAgent := func(agent string) error {
+			if agent == "codex" {
+				_, err := jobs.ResolveCodexPrefix(override)
+				return err
+			}
+			_, err := jobs.ResolveAgentPrefix(agent, override)
+			return err
+		}
+		selectedByEnv := os.Getenv("PURSER_AGENT") != ""
+		result, _, err := jobs.Start(root, args, jobs.StartOptions{
+			CodexBin: codexBin,
+			Launch:   launch,
+			Validation: jobs.StartValidationOptions{
+				Agent: os.Getenv("PURSER_AGENT"), FixedAgent: selectedByEnv,
+				ConfiguredAgent: configuredAgent, ValidateAgent: validateAgent,
+			},
+			Await: func(id string, record *jobs.Record) map[string]any {
+				return jobs.AwaitHost(root, id, record)
+			},
+		})
 		return result, err
 	case "codex_result":
 		id, ok := args["jobId"].(string)
