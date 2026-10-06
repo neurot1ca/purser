@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"purser-hook/internal/contextio"
@@ -378,12 +377,7 @@ func isCleanupLink(p string) bool {
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return true
 	}
-	if runtime.GOOS == "windows" {
-		if x, ok := fi.Sys().(*syscall.Win32FileAttributeData); ok && x.FileAttributes&0x400 != 0 {
-			return true
-		}
-	}
-	return false
+	return isReparsePoint(fi)
 }
 func removeSafe(root, p string) bool {
 	if !cleanupPath(root, p) {
