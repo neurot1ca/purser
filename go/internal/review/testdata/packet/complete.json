@@ -1,0 +1,24 @@
+{
+  "materials": {
+    "objective": "Fix parser behavior",
+    "acceptance_criteria": "Handles empty input safely",
+    "authority_contract": "Read-only review; no deploy authority",
+    "delegated_diff": "diff --git a/parser.go b/parser.go\n--- a/parser.go\n+++ b/parser.go\n@@ -1 +1 @@\n-oldName := 1\n+newName := 1\n",
+    "validation_summary": "Focused validation passed"
+  },
+  "max_bytes": 10000,
+  "expected": {
+    "kind": "ready",
+    "packet": {
+      "objective": "Fix parser behavior",
+      "acceptance_criteria": "Handles empty input safely",
+      "authority_contract": "Read-only review; no deploy authority",
+      "delegated_diff": "diff --git a/parser.go b/parser.go\n--- a/parser.go\n+++ b/parser.go\n@@ -1 +1 @@\n-oldName := 1\n+newName := 1\n",
+      "validation_summary": "Focused validation passed"
+    },
+    "canonical": "{\"acceptance_criteria\":\"Handles empty input safely\",\"authority_contract\":\"Read-only review; no deploy authority\",\"delegated_diff\":\"diff --git a/parser.go b/parser.go\\n--- a/parser.go\\n+++ b/parser.go\\n@@ -1 +1 @@\\n-oldName := 1\\n+newName := 1\\n\",\"objective\":\"Fix parser behavior\",\"validation_summary\":\"Focused validation passed\"}",
+    "sha256": "c712b2aef47dc57efbc4470891bd10c781873d513d6cee5993867caa4c36f50e",
+    "added_redaction_count": 0,
+    "added_affected_files": []
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "materials": {
+    "objective": "Fix parser behavior",
+    "acceptance_criteria": "Handles empty input safely",
+    "authority_contract": "Read-only review; no deploy authority",
+    "delegated_diff": "diff --git a/parser.go b/parser.go\n--- a/parser.go\n+++ b/parser.go\n@@ -1 +1 @@\n-oldName := 1\n+newName := 1\n",
+    "validation_summary": "Focused validation passed"
+  },
+  "max_bytes": 10,
+  "expected": {
+    "kind": "omitted",
+    "code": "REVIEW_PACKET_TOO_LARGE",
+    "message": "The complete 329-byte packet exceeds the 10-byte budget. Omitted: delegated_diff (complete diff exceeds packet budget; not truncated). No partial diff was sent and no model call was made.",
+    "omitted": [
+      "delegated_diff (complete diff exceeds packet budget; not truncated)"
+    ]
+  }
+}

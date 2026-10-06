@@ -1,0 +1,17 @@
+{
+  "materials": {
+    "objective": "Fix parser behavior",
+    "authority_contract": "Read-only review; no deploy authority",
+    "delegated_diff": "diff --git a/parser.go b/parser.go\n--- a/parser.go\n+++ b/parser.go\n@@ -1 +1 @@\n-oldName := 1\n+newName := 1\n",
+    "validation_summary": "Focused validation passed"
+  },
+  "max_bytes": 10000,
+  "expected": {
+    "kind": "omitted",
+    "code": "REVIEW_PACKET_FIELDS_REJECTED",
+    "message": "The packet allowlist rejected missing required fields: acceptance_criteria; no context was sent.",
+    "omitted": [
+      "acceptance_criteria"
+    ]
+  }
+}

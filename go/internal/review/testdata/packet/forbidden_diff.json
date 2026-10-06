@@ -1,0 +1,24 @@
+{
+  "materials": {
+    "objective": "Fix parser behavior",
+    "acceptance_criteria": "Handles empty input safely",
+    "authority_contract": "Read-only review; no deploy authority",
+    "delegated_diff": "diff --git a/auth.go b/auth.go\n--- a/auth.go\n+++ b/auth.go\n@@ -1 +1 @@\n-token = \"ghp_1234567890abcdef1234567890\"\n+token = \"safe\"\n",
+    "validation_summary": "Focused validation passed"
+  },
+  "max_bytes": 10000,
+  "expected": {
+    "kind": "ready",
+    "packet": {
+      "objective": "Fix parser behavior",
+      "acceptance_criteria": "Handles empty input safely",
+      "authority_contract": "Read-only review; no deploy authority",
+      "delegated_diff": "diff --git a/auth.go b/auth.go\n--- a/auth.go\n+++ b/auth.go\n@@ -1 +1 @@\n-token = \"[[REDACTED: PRE-EXISTING OR REMOVED SENSITIVE SPAN]]\"\n+token = \"safe\"\n",
+      "validation_summary": "Focused validation passed\n\nREDACTION NOTICE: 1 forbidden-text span(s) were redacted from pre-existing context or removed credential-shaped/excluded material in: auth.go. Each unmistakable [[REDACTED: PRE-EXISTING OR REMOVED SENSITIVE SPAN]] marker replaces the complete matched span. A redaction is not permission to ignore a possible defect; question any unexplained redaction."
+    },
+    "canonical": "{\"acceptance_criteria\":\"Handles empty input safely\",\"authority_contract\":\"Read-only review; no deploy authority\",\"delegated_diff\":\"diff --git a/auth.go b/auth.go\\n--- a/auth.go\\n+++ b/auth.go\\n@@ -1 +1 @@\\n-token = \\\"[[REDACTED: PRE-EXISTING OR REMOVED SENSITIVE SPAN]]\\\"\\n+token = \\\"safe\\\"\\n\",\"objective\":\"Fix parser behavior\",\"validation_summary\":\"Focused validation passed\\n\\nREDACTION NOTICE: 1 forbidden-text span(s) were redacted from pre-existing context or removed credential-shaped/excluded material in: auth.go. Each unmistakable [[REDACTED: PRE-EXISTING OR REMOVED SENSITIVE SPAN]] marker replaces the complete matched span. A redaction is not permission to ignore a possible defect; question any unexplained redaction.\"}",
+    "sha256": "e52b2ec69f66c6bae56e194e766b4b436aa18a8289da285053cdd4afaa4a82e5",
+    "added_redaction_count": 0,
+    "added_affected_files": []
+  }
+}
