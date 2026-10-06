@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"purser-hook/internal/lease"
 )
@@ -110,6 +111,56 @@ func TestCancelMatchesPythonOracle(t *testing.T) {
 				t.Fatalf("records mismatch\n got: %#v\nwant: %#v", files, wantFiles)
 			}
 		})
+	}
+}
+
+func TestCancelWaitsForDelayedTerminalWrite(t *testing.T) {
+	root := scratch(t)
+	jobID, token := "0123456789abcdef0123456789abcdef", "secret"
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	path := filepath.Join(dir, jobID+".json")
+	record, err := Decode([]byte(`{"jobId":"` + jobID + `","state":"RUNNING","signalToken":"` + token + `"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Write(path, record); err != nil {
+		t.Fatal(err)
+	}
+	terminal := make(chan struct{})
+	written := make(chan struct{})
+	host, err := StartSignalHost(jobID, token, terminal, func() bool {
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			current, readErr := Read(path)
+			if readErr == nil {
+				finishCancelled(current)
+				if Write(path, current) == nil {
+					close(terminal)
+					close(written)
+				}
+			}
+		}()
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close()
+	current, _ := Read(path)
+	_ = current.Set("signalPort", host.Addr().(*net.TCPAddr).Port)
+	if err = Write(path, current); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Cancel(root, map[string]any{"jobId": jobID})
+	select {
+	case <-written:
+	case <-time.After(time.Second):
+		t.Fatal("fake host did not write terminal record")
+	}
+	value, _ := got["structuredContent"].(map[string]any)
+	if value["state"] != "CANCELLED" {
+		t.Fatalf("cancel result state = %v, want CANCELLED (result %#v)", value["state"], got)
 	}
 }
 

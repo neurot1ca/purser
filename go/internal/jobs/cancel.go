@@ -130,7 +130,19 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	if current != nil {
 		var currentState string
 		current.Get("state", &currentState)
-		if currentState == "CANCELLED" {
+		if terminalJobState(currentState) {
+			return cancelRecordResult(recordMap(current))
+		}
+	}
+	confirmed, err = SignalWait(address, id, token, 7*time.Second)
+	if err != nil || !confirmed {
+		return processUnconfirmed(id)
+	}
+	current = readJob(dir, id)
+	if current != nil {
+		var currentState string
+		current.Get("state", &currentState)
+		if terminalJobState(currentState) {
 			return cancelRecordResult(recordMap(current))
 		}
 	}
