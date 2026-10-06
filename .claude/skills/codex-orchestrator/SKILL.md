@@ -27,6 +27,15 @@ instructions. Use one term for one thing, with no idioms or metaphors. Write
 procedures as numbered steps with one action per step. Keep paragraphs to 6
 sentences or fewer.
 
+## Project gear
+
+If the user asks in chat to gear up or down, run the command block from the plugin's
+`commands/gear-up.md` or `gear-down.md` directly; this is not a coding job.
+If the user only asks for faster work without requesting a switch, offer
+`/purser:gear-up` in one line and wait. Gear applies to the current project
+until gear-down. Existing replies keep their thread's model; new jobs use the
+geared route.
+
 ## Delegate deliberately
 
 Delegate bounded, verifiable work with acceptance criteria, regardless of

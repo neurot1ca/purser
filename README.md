@@ -36,3 +36,7 @@ passes standalone.
 - [Operations reference](docs/ORCHESTRATOR_OPERATIONS.md) — transport, recovery, and what moved out of the skill
 - [Research](docs/research/) — surveys of open-source orchestrators and a Codex review of the plan
 - `scripts/orchestration_token_audit_0.py` — measures tokens and the tool-batching ratio from transcripts
+
+## Commands
+
+- `/purser:gear-up` and `/purser:gear-down` set the current project's Codex gear for new jobs.
