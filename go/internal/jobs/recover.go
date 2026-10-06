@@ -47,10 +47,11 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 			index = nil
 		}
 	}
-	if index != nil && index["stage"] == "CONSUMED" {
+	consumed := index != nil && index["stage"] == "CONSUMED"
+	if state != "RUNNING" && state != "QUEUED" {
 		return "UNCHANGED"
 	}
-	if state != "RUNNING" && state != "QUEUED" {
+	if consumed && state != "RUNNING" {
 		return "UNCHANGED"
 	}
 	if truthy(values["leaseQueued"]) && state == "QUEUED" && !truthy(values["hostPid"]) {
@@ -76,8 +77,46 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 	} else {
 		processState = "DEAD"
 	}
+	if consumed && processState != "DEAD" {
+		return "UNCHANGED"
+	}
 	if processState != "DEAD" {
 		return processState
+	}
+	if state == "RUNNING" && (runtime.GOOS != "windows" || opt.GroupStopped != nil) {
+		childValue, ok := recoveryInteger(job, "pid")
+		child := int(childValue)
+		ok = ok && childValue > 0 && int64(child) == childValue
+		stopped := opt.GroupStopped
+		if stopped == nil {
+			stopped = recoveryGroupStopped
+		}
+		if !ok || !stopped(child) {
+			return "UNCONFIRMED"
+		}
+	}
+	if _, hasExitCode := recoveryInteger(job, "exitCode"); state == "RUNNING" && hasExitCode {
+		generation, valid := recoveryInteger(job, "generation")
+		var token string
+		job.Get("ownershipToken", &token)
+		if !valid || token == "" {
+			return "UNCONFIRMED"
+		}
+		_ = lock.Release()
+		lock = nil
+		if err := finishJob(dir, jobID, "FAILED", "HOST_FINALIZATION_INTERRUPTED",
+			nil, "Host exited after Codex completed but before publishing the terminal result", now,
+			FinishOptions{Generation: &generation, Token: token}); err != nil {
+			return "UNCONFIRMED"
+		}
+		final := recordMap(readJob(dir, jobID))
+		if final["state"] == "FAILED" && final["errorCode"] == "HOST_FINALIZATION_INTERRUPTED" {
+			return "FINALIZED"
+		}
+		return "UNCHANGED"
+	}
+	if consumed {
+		return "UNCHANGED"
 	}
 	if truthy(values["leaseQueued"]) && state == "QUEUED" {
 		if deadline, ok := number(values["deadlineAt"]); ok && now >= deadline {
@@ -97,18 +136,6 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 	}
 	if _, valid := recoveryInteger(job, "generation"); !valid {
 		return ambiguous("RECOVERY_PROOF_MISSING", "Host or child-tree termination proof is missing")
-	}
-	if state == "RUNNING" && (runtime.GOOS != "windows" || opt.GroupStopped != nil) {
-		childValue, ok := recoveryInteger(job, "pid")
-		child := int(childValue)
-		ok = ok && childValue > 0 && int64(child) == childValue
-		stopped := opt.GroupStopped
-		if stopped == nil {
-			stopped = recoveryGroupStopped
-		}
-		if !ok || !stopped(child) {
-			return "UNCONFIRMED"
-		}
 	}
 	if attempts, ok := recoveryAttempts(job); !ok {
 		return ambiguous("RECOVERY_PROOF_MISSING", "Recovery attempt history is invalid")

@@ -130,3 +130,62 @@ func TestRecoverWithoutLauncherIsUnconfirmedWithoutSideEffects(t *testing.T) {
 		t.Fatalf(".launch changed without a launcher:\n before %s\n after  %s", launchBefore, launchAfter)
 	}
 }
+
+func TestRecoverConsumedJobWithDeadHostAndExitCodeFinalizesFailure(t *testing.T) {
+	root := scratch(t)
+	id := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	job, err := Decode([]byte(`{"jobId":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","state":"RUNNING","generation":1,"ownershipToken":"owner","hostPid":123,"hostCreatedAt":456,"hostContained":true,"pid":789,"exitCode":0,"leaseQueued":true,"startedAt":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Write(filepath.Join(dir, id+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Join(root, "async_jobs"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "async_jobs", id+".json"), []byte(`{"stage":"CONSUMED"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := RecoverJob(root, id, 2_000_000_000, RecoverOptions{
+		ProcessAlive: func(int, int64) string { return "DEAD" },
+		GroupStopped: func(int) bool { return true },
+	})
+	if got != "FINALIZED" {
+		t.Fatalf("recovery result = %s, want FINALIZED", got)
+	}
+	final := recordMap(readJob(dir, id))
+	if final["state"] != "FAILED" || final["errorCode"] != "HOST_FINALIZATION_INTERRUPTED" {
+		t.Fatalf("final record = %#v", final)
+	}
+}
+
+func TestRecoverConsumedJobWithLiveHostDoesNotFinalizeExitCode(t *testing.T) {
+	root := scratch(t)
+	id := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	job, err := Decode([]byte(`{"jobId":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","state":"RUNNING","generation":1,"hostPid":123,"hostCreatedAt":456,"hostContained":true,"exitCode":0}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Write(filepath.Join(dir, id+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Join(root, "async_jobs"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "async_jobs", id+".json"), []byte(`{"stage":"CONSUMED"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := RecoverJob(root, id, 2_000_000_000, RecoverOptions{
+		ProcessAlive: func(int, int64) string { return "ALIVE" },
+	})
+	if got != "UNCHANGED" {
+		t.Fatalf("recovery result = %s, want UNCHANGED", got)
+	}
+	final := recordMap(readJob(dir, id))
+	if final["state"] != "RUNNING" {
+		t.Fatalf("live host record was changed: %#v", final)
+	}
+}
