@@ -18,8 +18,7 @@ const (
 	openCodeConfigEnv              = "OPENCODE_CONFIG_CONTENT"
 )
 
-// Adapter describes reviewer command construction and confinement. Envelope parsing
-// remains with results.go; ParseEnvelope is an explicit not-implemented stub here.
+// Adapter describes reviewer command construction, confinement, and response parsing.
 type Adapter interface {
 	Provider() string
 	AllowedModel() string
@@ -181,8 +180,12 @@ func (a reviewerAdapter) LaunchOptions() ProcessOptions {
 
 // Python adapters pass OpenCode confinement as OPENCODE_CONFIG_CONTENT; none writes a separate file.
 func (reviewerAdapter) ConfinementConfig([]string) (string, []byte) { return "", nil }
-func (reviewerAdapter) ParseEnvelope(string) (map[string]any, error) {
-	return nil, errors.New("not implemented: reviewer envelope parsing is owned by results.go")
+func (a reviewerAdapter) ParseEnvelope(stdout string) (map[string]any, error) {
+	parsed, err := ParseEnvelope(a.provider, []byte(stdout), true)
+	if err != nil {
+		return nil, err
+	}
+	return parsed.Map(), nil
 }
 
 func reviewerExecutable(config map[string]any, provider string) (string, error) {

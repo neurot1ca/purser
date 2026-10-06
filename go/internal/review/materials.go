@@ -21,6 +21,13 @@ import (
 var authorityHeadings = []string{"Authority", "Working scope", "Proportional validation", "Test and comment quality"}
 var markdownHeading = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
 var markdownHeadingStart = regexp.MustCompile(`^(#{1,6})\s+`)
+var gitExecutable = "git"
+
+func init() {
+	if resolved, err := exec.LookPath("git"); err == nil {
+		gitExecutable = resolved
+	}
+}
 
 // ValidateConfig applies the Reviewer-1 config checks performed by reviewer.py.
 func ValidateConfig(config map[string]any) error {
@@ -365,7 +372,7 @@ func safeDeltaPaths(delta map[string]any) ([]string, error) {
 func runGit(repo string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, gitExecutable, args...)
 	cmd.Dir = repo
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -392,7 +399,7 @@ func newFileDiff(repo, path string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "diff", "--binary", "--no-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--", os.DevNull, path)
+	cmd := exec.CommandContext(ctx, gitExecutable, "diff", "--binary", "--no-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--", os.DevNull, path)
 	cmd.Dir = repo
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

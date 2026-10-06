@@ -62,43 +62,23 @@ func TestReviewerAGYCommandAndOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := `{"conversation_id":"fake-1","status":"SUCCESS","response":"","duration_seconds":0.01,"num_turns":1,"usage":{},"structured_output":{"result":"CHANGES_REQUIRED","validation":"FAIL","findings":[{"code":"BUG","message":"bad"}]}}`
-	binDir := filepath.Join(scratch, "path")
-	if err := os.Mkdir(binDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	agyName := "agy.exe"
-	if runtime.GOOS != "windows" {
-		agyName = "agy"
-	}
-	agy := filepath.Join(binDir, agyName)
-	binary, err := os.ReadFile(fake)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(agy, binary, 0700); err != nil {
-		t.Fatal(err)
-	}
-	oldPath := os.Getenv("PATH")
 	missing := filepath.Join(scratch, "missing-agy.exe")
 	tests := []struct {
 		name, source, executable, wantExecutable, model, mode, errorCode string
 		extra                                                            []string
 		timeout                                                          time.Duration
-		pathLookup                                                       bool
 	}{
-		{"default model", "reviewer.py:176-182, 184-215, 667-679", "", agy, pinnedModel, "success", "", nil, time.Second, true},
-		{"configured model", "reviewer.py:178-182, 184-215, 1501-1508, 667-670", fake, fake, "gemini-3.8-flash-high", "success", "", nil, time.Second, false},
-		{"missing executable", "reviewer.py:667-679, 1391-1399", missing, missing, pinnedModel, "success", "REVIEWER_EXECUTABLE_MISSING", nil, time.Second, false},
-		{"refused flags", "reviewer.py:914-941, 1400-1407", fake, fake, pinnedModel, "success", "REVIEWER_RESPONSE_INVALID", []string{"--disable-slash-commands"}, time.Second, false},
-		{"failed command", "reviewer.py:1302-1329", fake, fake, pinnedModel, "failure", "REVIEWER_PROCESS_FAILED", nil, time.Second, false},
-		{"timeout", "reviewer.py:1280-1299", fake, fake, pinnedModel, "timeout", "REVIEWER_TIMEOUT", nil, 50 * time.Millisecond, false},
+		{"default model", "reviewer.py:176-182, 184-215, 667-679", fake, fake, pinnedModel, "success", "", nil, time.Second},
+		{"configured model", "reviewer.py:178-182, 184-215, 1501-1508, 667-670", fake, fake, "gemini-3.8-flash-high", "success", "", nil, time.Second},
+		{"missing executable", "reviewer.py:667-679, 1391-1399", missing, missing, pinnedModel, "success", "REVIEWER_EXECUTABLE_MISSING", nil, time.Second},
+		{"refused flags", "reviewer.py:914-941, 1400-1407", fake, fake, pinnedModel, "success", "REVIEWER_RESPONSE_INVALID", []string{"--disable-slash-commands"}, time.Second},
+		{"failed command", "reviewer.py:1302-1329", fake, fake, pinnedModel, "failure", "REVIEWER_PROCESS_FAILED", nil, time.Second},
+		{"timeout", "reviewer.py:1280-1299", fake, fake, pinnedModel, "timeout", "REVIEWER_TIMEOUT", nil, 50 * time.Millisecond},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Log("mirrors " + test.source)
-			if test.pathLookup {
-				t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
-			}
+			t.Setenv("PATH", t.TempDir())
 			t.Setenv("PURSER_FAKE_MODE", test.mode)
 			t.Setenv("PURSER_FAKE_OUTPUT", response)
 			t.Setenv("PURSER_REVIEW_TEST_ENV", "inherited-value")

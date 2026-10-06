@@ -9,6 +9,7 @@ import (
 )
 
 func TestAdapterGoldens(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	data, err := os.ReadFile("testdata/adapters/python_oracle.json")
 	if err != nil {
 		t.Fatal(err)
@@ -79,13 +80,15 @@ func TestAdapterGoldens(t *testing.T) {
 	}
 }
 
-func TestAdapterEnvelopeParserIsExplicitStub(t *testing.T) {
+func TestAdapterEnvelopeParser(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	adapter, err := ReviewerAdapter("agy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.ParseEnvelope("{}"); err == nil || err.Error() != "not implemented: reviewer envelope parsing is owned by results.go" {
-		t.Fatalf("parser stub error = %v", err)
+	parsed, err := adapter.ParseEnvelope(`{"conversation_id":"c","status":"success","response":"","duration_seconds":0.1,"num_turns":1,"usage":{},"structured_output":{"result":"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","validation":"PASS","findings":[]}}`)
+	if err != nil || parsed["conversation_id"] != "c" {
+		t.Fatalf("parsed envelope = %#v, %v", parsed, err)
 	}
 }
 
@@ -100,6 +103,7 @@ type adapterGolden struct {
 }
 
 func TestAdapterRefusalsMatchPython(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	if err := RefuseUnsafeFlags([]string{"agy", "--mode", "plan", "--disable-slash-commands"}, ""); err == nil || err.Error() != "--disable-slash-commands silently voids --mode plan; refusing unsafe reviewer command" {
 		t.Fatalf("unsafe refusal = %v", err)
 	}

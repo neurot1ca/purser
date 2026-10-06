@@ -2,11 +2,11 @@ package enforce
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +14,7 @@ import (
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/profile"
+	"purser-hook/internal/review"
 )
 
 func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
@@ -36,22 +37,13 @@ func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
 			}
 			loaded := map[string]any{"post_tool_output_field": "updatedToolOutput", "reviewer1_model_requested": "gemini-3.8-flash-high"}
 			gate := map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}
-			plugin := filepath.Join(state, "plugin")
-			bridge := filepath.Join(plugin, ".claude", "hooks", "orchestrator", "reviewer_bridge.py")
-			if err := os.MkdirAll(filepath.Dir(bridge), 0700); err != nil {
-				t.Fatal(err)
-			}
 			callsPath := filepath.Join(state, "reviewer.calls")
-			bridgeCode := "import sys\nsys.exit(2)\n"
-			if name != "reviewer_bridge_unavailable" {
-				attrs := `{"outcome":"completed","review_status":"COMPLETED","provider":"agy","reviewer1_model_requested":"gemini-3.8-flash-high","result":"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","validation":"PASS","findings":[]}`
-				bridgeCode = fmt.Sprintf("import json,os\nopen(os.environ['POST_REVIEW_CALLS'],'a').write('called\\n')\nprint(json.dumps(json.loads(%q)))\n", attrs)
+			if name == "reviewer_bridge_unavailable" {
+				configureNativeReviewer(t, state, &resolved, "", "")
+			} else {
+				configureNativeReviewer(t, state, &resolved, "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "PASS")
 			}
-			if err := os.WriteFile(bridge, []byte(bridgeCode), 0600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
-			t.Setenv("POST_REVIEW_CALLS", callsPath)
+			t.Setenv("PURser_ASYNC_REVIEW_CALLS", callsPath)
 			indexPath := filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json")
 			if err := writeAsyncObject(indexPath, index); err != nil {
 				t.Fatal(err)
@@ -115,23 +107,14 @@ func TestFinishAsyncSuccessRemainingFixtureCases(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// worker delta\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				plugin := filepath.Join(state, "plugin")
-				bridge := filepath.Join(plugin, ".claude", "hooks", "orchestrator", "reviewer_bridge.py")
-				if err := os.MkdirAll(filepath.Dir(bridge), 0700); err != nil {
-					t.Fatal(err)
-				}
 				result := "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE"
 				validation := "PASS"
 				if name == "success_reviewer_full" {
 					result, validation = "UNCERTAIN", "UNKNOWN"
 				}
 				callsPath := filepath.Join(state, "reviewer.calls")
-				body := fmt.Sprintf("import json, os\nopen(os.environ['POST_REVIEW_CALLS'],'a').write('called\\n')\nprint(json.dumps({'outcome':'completed','review_status':'COMPLETED','provider':'agy','reviewer1_model_requested':'gemini-3.8-flash-high','result':%q,'validation':%q,'findings':[]}))\n", result, validation)
-				if err := os.WriteFile(bridge, []byte(body), 0600); err != nil {
-					t.Fatal(err)
-				}
-				t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
-				t.Setenv("POST_REVIEW_CALLS", callsPath)
+				configureNativeReviewer(t, state, &resolved, result, validation)
+				t.Setenv("PURser_ASYNC_REVIEW_CALLS", callsPath)
 			}
 			response, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
 				map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
@@ -305,3 +288,111 @@ func responseBundle(t *testing.T, response map[string]any) map[string]any {
 }
 
 func intAddr(value int) *int { return &value }
+
+func configureNativeReviewer(t *testing.T, state string, resolved *postProfile, result, validation string) {
+	t.Helper()
+	goExecutable, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin := filepath.Join(state, "plugin")
+	configDir := filepath.Join(plugin, ".claude", "hooks", "orchestrator")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	config, err := json.Marshal(map[string]any{
+		"reviewer1_model_requested":  "gemini-3.8-flash-high",
+		"reviewer1_timeout_seconds":  60,
+		"reviewer1_packet_max_bytes": 200000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source := `package main
+import ("fmt"; "os")
+func main() { if calls := os.Getenv("PURser_ASYNC_REVIEW_CALLS"); calls != "" { f, err := os.OpenFile(calls, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600); if err == nil { _, _ = f.WriteString("called\n"); _ = f.Close() } }; fmt.Print(os.Getenv("PURser_ASYNC_REVIEW_OUTPUT")) }
+`
+	sourcePath := filepath.Join(state, "mock_reviewer.go")
+	if err := os.WriteFile(sourcePath, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	name := "mock-reviewer"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	executable := filepath.Join(state, name)
+	if output, err := exec.Command(goExecutable, "build", "-o", executable, sourcePath).CombinedOutput(); err != nil {
+		t.Fatalf("build native reviewer: %v: %s", err, output)
+	}
+	executable, err = filepath.Abs(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.ReviewerExecutable = executable
+	resolved.ReviewerCandidates = []profile.ReviewerCandidate{{Agent: "fixture-test", Model: "fixture-model"}}
+	registerAsyncNativeReviewer(t, executable, result == "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
+	if result == "" {
+		return
+	}
+	envelope, err := json.Marshal(map[string]any{
+		"conversation_id":  "fixture-review",
+		"status":           "success",
+		"response":         "",
+		"duration_seconds": 0.01,
+		"num_turns":        1,
+		"usage":            map[string]any{},
+		"structured_output": map[string]any{
+			"result": result, "validation": validation, "findings": []any{},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURser_ASYNC_REVIEW_OUTPUT", string(envelope))
+}
+
+type asyncNativeReviewer struct {
+	executable string
+	panicBuild bool
+}
+
+func (asyncNativeReviewer) Provider() string        { return "fixture-test" }
+func (asyncNativeReviewer) AllowedModel() string    { return "" }
+func (asyncNativeReviewer) Family(string) string    { return "" }
+func (asyncNativeReviewer) ValidateModel(any) error { return nil }
+func (a asyncNativeReviewer) BuildCommand(string, map[string]any, map[string]any, review.CommandOptions) ([]string, error) {
+	if a.panicBuild {
+		panic("fixture reviewer panic")
+	}
+	return []string{a.executable}, nil
+}
+func (asyncNativeReviewer) Environment([]string) map[string]string {
+	return map[string]string{"PATH": ""}
+}
+func (asyncNativeReviewer) LaunchOptions() review.ProcessOptions        { return review.ProcessOptions{} }
+func (asyncNativeReviewer) ConfinementConfig([]string) (string, []byte) { return "", nil }
+func (asyncNativeReviewer) ParseEnvelope(stdout string) (map[string]any, error) {
+	parsed, err := review.ParseEnvelope("agy", []byte(stdout), true)
+	if err != nil {
+		return nil, err
+	}
+	return parsed.Map(), nil
+}
+
+func registerAsyncNativeReviewer(t *testing.T, executable string, panicBuild bool) {
+	t.Helper()
+	agy, err := review.ReviewerAdapter("agy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := review.RegisterReviewerAdapter("fixture-test", asyncNativeReviewer{executable: executable, panicBuild: panicBuild}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = review.RegisterReviewerAdapter("fixture-test", agy) })
+	postReviewerAdapters["fixture-test"] = true
+	t.Cleanup(func() { delete(postReviewerAdapters, "fixture-test") })
+}
