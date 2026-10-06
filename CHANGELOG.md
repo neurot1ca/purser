@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.77 — 2026-10-06
+
+- **Fixed:** Codex task records written with whole-number floats are no longer reported as a corrupt ledger by the Go hook, and reusing a finished task id is denied plainly as TASK_ALREADY_FINISHED.
+- **Fixed:** The worker full-suite guard fires only on an explicit run/execute request and names the matched phrase; the Go waiter command uses an absolute path.
+- **Fixed:** When the Go Post/Failure helper fails, the mod keeps the result but tells Claude a FULL review is required, and a failed toast no longer drops enforcement output.
+
 ## 0.1.76 — 2026-10-06
 
 - **Fixed:** Purser's state no longer grows without bound: job cleanup lists git worktrees once per repository, retires finished jobs' worktrees and replay backups, and prunes expired job records with their raw outputs and bundles after distilling them into a learning summary capped at 4 MiB; every state directory has a registered retention policy and a total-size check.
