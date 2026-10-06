@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.83 — 2026-10-06
+
+- **Fixed:** Reviewer-1 gets its configured 180 s timeout again instead of a silent 90 s default; the Go Post hook now honors numeric config values (hook budgets, report limits).
+- **Fixed:** The Go binary builds for Linux and macOS again.
+- **Fixed:** The band job board no longer triggers an engine refusal when another plugin draws above the prompt.
+- **Fixed:** Model-version discovery checks routes in config order, matching Python.
+
 ## 0.1.82 — 2026-10-06
 
 - **Changed:** Python is no longer needed for core use: the codex-main MCP server, the job waiter, scope leases, SessionStart and MCP-start maintenance, Reviewer-1 and the readiness check all run natively in Go; the Python MCP fallback and the Python SessionStart hook are removed.
