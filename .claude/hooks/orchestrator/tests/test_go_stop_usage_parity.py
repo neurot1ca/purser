@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
@@ -49,7 +50,8 @@ def _oracle(root, case, monkeypatch):
         "canonical_transcript_path": os.path.normcase(os.path.realpath(transcript)), "transcript_dev": stat.st_dev,
         "transcript_ino": stat.st_ino, "transcript_ctime_ns": stat.st_ctime_ns,
         "initial_size": stat.st_size, "anchor_byte_offset": 0, "anchor_search_start_offset": 0,
-        "anchor_deferred": False, "created_at": "2026-10-05T00:00:00Z",
+        "anchor_deferred": False,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "completed": False, "invalidated": False,
     }
     if case.get("identity_changed"):
