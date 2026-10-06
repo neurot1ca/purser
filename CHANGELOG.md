@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.81 — 2026-10-06
+
+- **Fixed:** The plugin upgrade note and the free-model ranking notice appear again at session start under the Go hooks, and the daily pinned model-version discovery runs again.
+- **Fixed:** codex_apply releases an applied job's scope lease even after its worktree was retired.
+- **Added:** The detached Go job host writes its errors and recovered panics to diagnostics.jsonl.
+
 ## 0.1.80 — 2026-10-06
 
 - **Fixed:** Under the Go MCP host, codex_cancel waits for the job's terminal state instead of reporting it unconfirmed, and codex_apply releases the job's scope lease so later overlapping jobs no longer queue behind applied ones.
