@@ -70,7 +70,7 @@ func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
 	if strings.Contains(string(output), "DETACH_UNAVAILABLE_ACCESS_DENIED") {
 		t.Skip("Windows job policy denied CREATE_BREAKAWAY_FROM_JOB")
 	}
-	fields := strings.Fields(string(output))
+	fields := strings.Fields(strings.SplitN(string(output), "\n", 2)[0])
 	if len(fields) != 2 {
 		t.Fatalf("unexpected launcher result %q", output)
 	}

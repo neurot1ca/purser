@@ -17,6 +17,7 @@ const (
 	createNewProcessGroup  = 0x00000200
 	createNoWindow         = 0x08000000
 	processCreateProcess   = 0x00000080
+	processDupHandle       = 0x00000040
 	processQueryLimited    = 0x00001000
 	processSynchronize     = 0x00100000
 	waitObject0            = 0
@@ -98,7 +99,8 @@ func detachedParent() (syscall.Handle, error) {
 	if pid == 0 {
 		return 0, errors.New("desktop shell parent unavailable")
 	}
-	parent, err := syscall.OpenProcess(processCreateProcess, false, pid)
+	// Go duplicates the child's std handles into ParentProcess, which needs PROCESS_DUP_HANDLE.
+	parent, err := syscall.OpenProcess(processCreateProcess|processDupHandle, false, pid)
 	if err != nil {
 		return 0, fmt.Errorf("open detached parent process: %w", err)
 	}
