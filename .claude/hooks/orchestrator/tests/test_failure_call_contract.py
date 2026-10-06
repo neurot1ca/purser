@@ -18,8 +18,8 @@ SHARED_FIXTURE = PACKAGE / "tests" / "fixtures" / "go_policy" / "failure.json"
 
 
 def test_failure_registration_is_owned_by_go_mod():
-    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-    assert "PostToolUseFailure" not in hooks
+    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    assert hooks == {"modules": ["./register.ts"]}  # Failure registration is owned by the Go module.
     adapter = (ROOT / "hooks" / "mod" / "enforcement.ts").read_text(encoding="utf-8")
     assert 'on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse(\'PostToolUseFailure\', $, e, next))' in adapter
     assert "event === 'PostToolUseFailure' && !postToolUseFailureTools.has(e.tool_name)" in adapter

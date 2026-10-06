@@ -325,8 +325,8 @@ def test_mixed_go_pre_policy_deny_keeps_go_lifecycle_stop(repo, process, go_pre_
     denied = decision(result)["hookSpecificOutput"]
     assert denied["permissionDecision"] == "deny"
     assert not list(state.glob("pending/*.json"))
-    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-    assert "Stop" not in hooks
+    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    assert hooks == {"modules": ["./register.ts"]}  # Stop remains a native module lifecycle hook.
     register = (REPO_ROOT / "hooks" / "register.ts").read_text(encoding="utf-8")
     assert "on('classic.Stop', ($, e, next) => lifecycle($, e, next, 'Stop'))" in register
 
@@ -443,9 +443,8 @@ def test_go_post_mod_routes_success_and_failure_without_python_command_hooks():
         "mcp__plugin_purser_codex-main__codex_result",
         "mcp__plugin_purser_codex-main__codex_cancel",
     }
-    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-    assert "PostToolUse" not in hooks
-    assert "PostToolUseFailure" not in hooks
+    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    assert hooks == {"modules": ["./register.ts"]}  # Post dispatch is routed by the module.
 
 
 def test_malformed_json_uses_outer_recovery(repo, process):

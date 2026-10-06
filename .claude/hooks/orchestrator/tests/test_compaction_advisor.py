@@ -1161,8 +1161,7 @@ def test_precompact_refreshes_only_existing_handoff_state(setup, monkeypatch):
     hooks_dir = Path(__file__).parents[4] / "hooks"
     assert "on('classic.PreCompact'," in (hooks_dir / "register.ts").read_text(encoding="utf-8")
     hooks = json.loads((hooks_dir / "hooks.json").read_text(encoding="utf-8"))
-    assert not any(hook.get("args", [""])[-1].endswith("context_io_hook.py")
-                   for entry in hooks["hooks"].get("PreCompact", []) for hook in entry["hooks"])
+    assert hooks == {"modules": ["./register.ts"]}  # PreCompact is registered by the module, not hooks.json.
 
 
 def test_precompact_replaces_recent_turns_and_ignores_injected_summary_records(setup):

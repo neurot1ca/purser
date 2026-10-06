@@ -267,6 +267,16 @@ def test_go_post_dispatch_process_parity(case, case_tmp, go_binaries):
     assert python.returncode == go.returncode == 0, (case, python.stdout, python.stderr, go.stdout, go.stderr)
     python_output = _normalize(json.loads(python.stdout), python_state, repo, job_ids)
     go_output = _normalize(json.loads(go.stdout), go_state, repo, job_ids)
+    if case == "codex_start_success":
+        # Go owns the user-facing waiter command; Python's optional oracle still names purser_wait.py.
+        for output in (python_output, go_output):
+            tool_output = output["hookSpecificOutput"]["updatedToolOutput"][0]
+            message = json.loads(tool_output["text"])
+            if output is go_output:
+                assert "purser-hook" in message["next"] and " wait " in message["next"]
+                assert message["jobId"] in message["next"]
+            message["next"] = "__WAITER_COMMAND__"
+            tool_output["text"] = json.dumps(message, separators=(",", ":"))
     python_state_view = _state_view(python_state, pending_keys, job_ids, repo)
     go_state_view = _state_view(go_state, pending_keys, job_ids, repo)
     differences = {}
