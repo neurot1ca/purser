@@ -7,6 +7,8 @@ import (
 	"syscall"
 )
 
+func ConfigureNoWindow(_ *exec.Cmd) {}
+
 func ConfigureProcessTreeKill(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Cancel = func() error {

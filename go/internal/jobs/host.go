@@ -215,7 +215,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			if absErr != nil {
 				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
 			}
-			rootOut, gitErr := exec.Command("git", "-C", requested, "rev-parse", "--show-toplevel").Output()
+			gitCommand := exec.Command("git", "-C", requested, "rev-parse", "--show-toplevel")
+			proc.ConfigureNoWindow(gitCommand)
+			rootOut, gitErr := gitCommand.Output()
 			if gitErr != nil {
 				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
 			}

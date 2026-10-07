@@ -18,8 +18,7 @@ func ResolvePython(ctx context.Context, pluginRoot string) string {
 	locator := filepath.Join(pluginRoot, "bin", "python-locator.js")
 	pythonPath := ""
 	if err == nil {
-		cmd := exec.CommandContext(ctx, node, locator, "--resolve-json")
-		cmd.Env = os.Environ()
+		cmd := pythonLocatorCommand(ctx, node, locator)
 		if data, callErr := cmd.Output(); callErr == nil {
 			var python pythonLocatorResult
 			if json.Unmarshal(data, &python) == nil {
@@ -34,4 +33,11 @@ func ResolvePython(ctx context.Context, pluginRoot string) string {
 		return ""
 	}
 	return pythonPath
+}
+
+func pythonLocatorCommand(ctx context.Context, node, locator string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, node, locator, "--resolve-json")
+	cmd.Env = os.Environ()
+	ConfigureNoWindow(cmd)
+	return cmd
 }

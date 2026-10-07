@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"purser-hook/internal/proc"
 )
 
 const maxJournal = 64 << 10
@@ -145,6 +147,7 @@ func projectRoot(event map[string]any) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	cmd.Dir = abs
+	proc.ConfigureNoWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return ""

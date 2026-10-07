@@ -16,6 +16,7 @@ import (
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/learning"
 	"purser-hook/internal/lease"
+	"purser-hook/internal/proc"
 	"purser-hook/internal/retention"
 )
 
@@ -283,7 +284,9 @@ func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) {
 	retention.RetirePreparations(root, current, byteCheck)
 	for _, repo := range prune {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		_ = exec.CommandContext(ctx, "git", "-C", repo, "worktree", "prune").Run()
+		command := exec.CommandContext(ctx, "git", "-C", repo, "worktree", "prune")
+		proc.ConfigureNoWindow(command)
+		_ = command.Run()
 		cancel()
 	}
 	retention.PruneState(root, current, checkCeiling)
@@ -431,6 +434,7 @@ func gitWorktreeListing(repo string) *worktreeListing {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	c := exec.CommandContext(ctx, "git", "-C", repo, "worktree", "list", "--porcelain")
+	proc.ConfigureNoWindow(c)
 	b, e := c.Output()
 	if e != nil {
 		return nil
@@ -483,7 +487,9 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if exec.CommandContext(ctx, "git", "-C", l.command, "worktree", "remove", "--force", target).Run() != nil {
+	command := exec.CommandContext(ctx, "git", "-C", l.command, "worktree", "remove", "--force", target)
+	proc.ConfigureNoWindow(command)
+	if command.Run() != nil {
 		return false
 	}
 	next := l.paths[:0]
@@ -599,6 +605,7 @@ func cleanupGitOutput(dir string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	proc.ConfigureNoWindow(cmd)
 	b, e := cmd.Output()
 	if e != nil {
 		return ""

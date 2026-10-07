@@ -11,6 +11,7 @@ import (
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/proc"
 )
 
 // ApplyOptions injects the hand-resolution side effects for parity tests.
@@ -37,6 +38,7 @@ func applyResolvedJob(stateRoot, dir, jobID string, job *Record, repo, worktree,
 	}
 	command := exec.Command("git", "diff", "--name-only", "--diff-filter=U", "-z")
 	command.Dir = repo
+	proc.ConfigureNoWindow(command)
 	unmerged, err := command.Output()
 	if err != nil {
 		return fail("Repository has unmerged paths.")

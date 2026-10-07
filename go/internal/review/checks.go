@@ -144,6 +144,7 @@ func checkStatus(repoRoot string) map[string]string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	cmd.Dir, cmd.Stderr = repoRoot, io.Discard
+	proc.ConfigureNoWindow(cmd)
 	data, err := cmd.Output()
 	if err != nil {
 		return nil

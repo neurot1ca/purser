@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"purser-hook/internal/proc"
 )
 
 const stateStart = "<!-- PURSER:STATE:START -->"
@@ -414,6 +416,7 @@ func runGit(repository string, args ...string) (string, error) {
 	defer cancel()
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = repository
+	proc.ConfigureNoWindow(command)
 	output, err := command.Output()
 	return string(output), err
 }

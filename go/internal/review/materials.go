@@ -16,6 +16,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"purser-hook/internal/proc"
 )
 
 var authorityHeadings = []string{"Authority", "Working scope", "Proportional validation", "Test and comment quality"}
@@ -374,6 +376,7 @@ func runGit(repo string, args ...string) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, gitExecutable, args...)
 	cmd.Dir = repo
+	proc.ConfigureNoWindow(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
@@ -401,6 +404,7 @@ func newFileDiff(repo, path string) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, gitExecutable, "diff", "--binary", "--no-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--", os.DevNull, path)
 	cmd.Dir = repo
+	proc.ConfigureNoWindow(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
