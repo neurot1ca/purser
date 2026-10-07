@@ -146,7 +146,7 @@ def test_reply_heading_already_present(tmp_path, monkeypatch):
     write_session(projects, "s", [rec_user(), rec_assistant("a", text="x" * 900)])
     output = optimize.render(analyze(projects, home))
     assert "Your replies average" not in output
-    assert "# Replies" not in output
+    assert "Reply rule: # Replies is present" in output
 
 
 def sequence_session(projects, name):
@@ -196,7 +196,7 @@ def test_no_files_written_and_compaction_setting(tmp_path, monkeypatch):
     after = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
     assert before == after
     assert report["compaction"] == {"enabled": False, "threshold_tokens": 123456}
-    assert "Compaction advice" not in optimize.render(report)
+    assert "Compaction advice: Off; threshold: 123456" in optimize.render(report)
 
 
 def test_mcp_use_and_deferred_names_contribute_startup_cost(tmp_path):
@@ -236,7 +236,7 @@ def test_compaction_defaults_on_when_not_configured(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: home)
     report = analyze(tmp_path / "projects", home)
     assert report["compaction"]["enabled"] is True
-    assert "Compaction advice" not in optimize.render(report)
+    assert "Compaction advice: On; threshold: 250000" in optimize.render(report)
 
 
 def test_plain_output_reconfigures_cp1254_stdout_and_is_ascii(tmp_path, monkeypatch):
@@ -370,7 +370,10 @@ def test_contained_sequence_keeps_higher_saving_and_large_values_use_m(tmp_path)
 
 def _render_report(*, startup=(), hidden=(), sequences=(), days=30):
     return optimize.render({"startup": list(startup), "hidden": list(hidden),
-                            "sequences": list(sequences), "days": days})
+                            "sequences": list(sequences), "days": days,
+                            "compaction": {"enabled": True, "threshold_tokens": 250000},
+                            "duplicate_skills": [], "median_reply_chars": 0,
+                            "reply_count": 0, "reply_rule_present": False})
 
 
 def test_render_costs_scale_to_500_messages():
@@ -432,14 +435,14 @@ def test_anthropic_document_skills_are_grouped():
     assert output.count("Remove skills") == 1
 
 
-def test_dropped_report_sections_and_notes_are_absent():
+def test_restored_report_diagnostics_follow_ranked_table():
     output = _render_report(startup=[{"name": "plugin:design", "kind": "plugin",
                                       "tokens_per_request": 100, "requests_loaded": 2,
                                       "uses": 0, "flagged": True}])
-    for removed in ("A.", "B.", "C.", "D.", "E.", "F.", "Duplicate skills",
-                    "System prompt and eager tool schemas", "Compaction advice",
-                    "Long replies"):
-        assert removed not in output
+    assert output.index("| 1 |") < output.index("No additional duplicate-skill issues")
+    assert "System prompts and eager tool schemas are not recorded" in output
+    assert "Compaction advice: On" in output
+    assert "Median final reply" in output
 
 
 def test_disabled_plugin_is_stopped_with_no_action(tmp_path):
@@ -448,7 +451,11 @@ def test_disabled_plugin_is_stopped_with_no_action(tmp_path):
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"enabledPlugins": {"security-guidance@official": False}}), encoding="utf-8")
     projects = tmp_path / "projects"
-    records = [skill_listing(("security-guidance:unused", "x" * 2400)), rec_user(), rec_assistant("a")]
+    project = tmp_path / "repo"
+    project.mkdir()
+    assistant = rec_assistant("a")
+    assistant["cwd"] = str(project)
+    records = [skill_listing(("security-guidance:unused", "x" * 2400)), rec_user(cwd=str(project)), assistant]
     write_session(projects, "s", records, age_days=5)
     hidden = [rec_user("background job", "sdk-py", promptSource="sdk"),
               rec_assistant("background", entrypoint="sdk-py")]
@@ -495,23 +502,28 @@ def test_enabled_plugin_keeps_its_action(tmp_path):
     records = [skill_listing(("design:unused", "x" * 2400)), rec_user(), rec_assistant("a")]
     report = analyze(write_session(projects, "s", records), home)
     output = optimize.render(report)
-    assert "active" in output
+    assert "enabled but not observed" in output
     assert "Disable plugin" in output
 
 
-def test_current_session_plugin_tool_presence_overrides_disabled_setting(tmp_path):
+def test_current_session_plugin_presence_does_not_override_disabled_setting(tmp_path):
     home = tmp_path / "home"
     settings = home / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"enabledPlugins": {"design@official": False}}), encoding="utf-8")
     projects = tmp_path / "projects"
-    records = [skill_listing(("design:unused", "x" * 2400)), rec_user(),
-               rec_assistant("a", tools=[tool("mcp__plugin:design:server__query"),
-                                           tool("plugin:design:other")])]
+    project = tmp_path / "repo"
+    project.mkdir()
+    assistant = rec_assistant("a", tools=[tool("mcp__plugin:design:server__query"),
+                                           tool("plugin:design:other")])
+    assistant["cwd"] = str(project)
+    records = [skill_listing(("design:unused", "x" * 2400)), rec_user(cwd=str(project)), assistant]
     report = analyze(write_session(projects, "s", records), home)
     row = next(item for item in report["startup"] if item["name"] == "plugin:design")
-    assert row["status"] == "active"
+    assert row["status"] == "stopped"
+    assert row["observed_loaded"] is True
     assert row["last_seen"] is not None
+    assert "disabled in the current configuration but was loaded" in optimize.render(report)
 
 
 def test_stopped_hidden_sources_are_summarized_after_table():

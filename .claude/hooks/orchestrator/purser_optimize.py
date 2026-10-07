@@ -425,10 +425,10 @@ def _plugin_enabled(name: str, home: Path, project_root: Path | None) -> bool | 
         enabled = settings.get("enabledPlugins") if isinstance(settings, dict) else None
         if not isinstance(enabled, dict):
             continue
-        matches = [value for key, value in enabled.items()
-                   if key == name or key.startswith(name + "@") or name.startswith(key.split("@", 1)[0] + "@")]
+        exact = [enabled[name]] if name in enabled else []
+        matches = exact or [value for key, value in enabled.items() if key.startswith(name + "@")]
         if matches:
-            state = matches[-1] if isinstance(matches[-1], bool) else None
+            state = matches[0] if len(matches) == 1 and isinstance(matches[0], bool) else None
     return state
 
 
@@ -613,10 +613,12 @@ def analyze(projects_root: Path, days: int, home: Path | None = None,
     shown = _select_sequences(_sequence_candidates(sessions))
 
     settings = compaction_advisor._settings()
-    latest_session = max(sessions, key=lambda s: s["mtime"], default=None)
+    scoped_sessions = [s for s in sessions if project_root and s["cwd"] and
+                       Path(s["cwd"]).resolve() == project_root.resolve()]
+    latest_session = max(scoped_sessions, key=lambda s: s["mtime"], default=None)
 
     def source_seen(matches) -> str | None:
-        found = [_date_seen(session) for session in sessions if matches(session)]
+        found = [_date_seen(session) for session in scoped_sessions if matches(session)]
         return max(found) if found else None
 
     for item in startup_items:
@@ -625,7 +627,8 @@ def analyze(projects_root: Path, days: int, home: Path | None = None,
             plugin = name.removeprefix("plugin:")
             enabled = _plugin_enabled(plugin, home, project_root)
             present = bool(latest_session and _plugin_present(plugin, latest_session))
-            item["status"] = "active" if present or enabled is True else "stopped" if enabled is False else "unknown"
+            item["status"] = "stopped" if enabled is False else "enabled" if enabled is True else "unknown"
+            item["observed_loaded"] = present
             item["last_seen"] = source_seen(lambda session: (
                 _plugin_present(plugin, session)
                 or any(plugin in _installed_plugin_matches(prompt, home)
@@ -838,7 +841,7 @@ def render(report: dict[str, Any]) -> str:
                         f"Your replies average ~{round(report['median_reply_chars'])} characters.",
                         f"~{round(report['median_reply_chars'])} chars/reply",
                         _status_text("active", None), "Add reply rule to CLAUDE.md"))
-    entries.sort(key=lambda entry: ({"active": 0, "unknown": 1, "stopped": 2}.get(entry[0], 1), -entry[1]))
+    entries.sort(key=lambda entry: ({"active": 0, "enabled": 0, "unknown": 1, "stopped": 2}.get(entry[0], 1), -entry[1]))
     lines = ["> ⚓ **Purser optimize**", "> ", "> *Biggest token drains*", "> ",
              "> | # | Finding | Cost | Status | Action |",
              "> | --- | --- | --- | --- | --- |"]
@@ -860,6 +863,26 @@ def render(report: dict[str, Any]) -> str:
         lines.extend(["> ", "> *Already stopped: " + "; ".join(summaries) + ".*"])
     if not entries:
         lines.extend(["> ", "> *No clear token waste found in your recent sessions.*"])
+    lines.append("> ")
+    duplicates = report.get("duplicate_skills", [])
+    for item in duplicates:
+        lines.append(f"> Duplicate skills: {item['name']} appears in {', '.join(item['sources'])}.")
+    if not duplicates:
+        lines.append("> No additional duplicate-skill issues were found.")
+    advice = report.get("compaction", {})
+    if advice:
+        state = "On" if advice.get("enabled") else "Off"
+        lines.append(f"> Compaction advice: {state}; threshold: {advice.get('threshold_tokens', 'unknown')} context tokens.")
+    lines.append(f"> Median final reply: {round(report.get('median_reply_chars', 0))} characters across {report.get('reply_count', 0)} turns.")
+    if report.get("reply_rule_present"):
+        lines.append("> Reply rule: # Replies is present in ~/.claude/CLAUDE.md.")
+    if report.get("median_reply_chars", 0) > 800 and not report.get("reply_rule_present", False):
+        lines.extend(["> Suggested reply rule:", "> # Replies", "> Lead with the answer.",
+                      "> Keep replies short, at most 5 lines unless asked for detail.", "> No tables unless asked."])
+    for item in report.get("startup", []):
+        if item.get("kind") == "plugin" and item.get("status") == "stopped" and item.get("observed_loaded"):
+            lines.append(f"> Observation: {item['name'].removeprefix('plugin:')} is disabled in the current configuration but was loaded in the observed session.")
+    lines.append("> Estimates come from recorded session data. System prompts and eager tool schemas are not recorded, so their costs cannot be attributed here.")
     lines.extend(["> ", "> *🧠 Purser learns as it works in this project: it measures how long its work really takes, sharpens its estimates, and points out where tokens and time can be saved.*"])
     return "\n".join(lines)
 
@@ -869,6 +892,8 @@ def _status_text(status: str, last_seen: str | None, reason: str | None = None) 
         label = f"stopped: {reason or 'not loaded'}"
     elif status == "active":
         label = "active"
+    elif status == "enabled":
+        label = "enabled but not observed"
     else:
         label = "status unknown"
     return f"{label} · last seen {last_seen or 'unknown'}"
