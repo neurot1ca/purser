@@ -139,7 +139,7 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 			return nil, errors.New("Claude effort is required and sandbox is unsupported")
 		}
 		command := append([]string{}, in.Prefix...)
-		command = append(command, "--setting-sources", "", "--restricted", "--print", "--output-format", "json", "--model", in.Model, "--effort", effort,
+		command = append(command, "--setting-sources", "", "--restricted", "--permission-mode", "acceptEdits", "--print", "--output-format", "json", "--model", in.Model, "--effort", effort,
 			"--tools", "Read,Edit,Write,Glob,Grep")
 		if in.Tool == "codex-reply" {
 			if in.ThreadID == "" {

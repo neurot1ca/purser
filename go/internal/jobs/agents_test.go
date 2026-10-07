@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -85,11 +84,9 @@ func TestClaudeWorkerCarriesEffortAndSuppressesNestedHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(command, "\x00")
-	for _, expected := range []string{"--model\x00claude-sonnet-4-5", "--effort\x00high", "--setting-sources\x00", "--restricted", "--tools\x00Read,Edit,Write,Glob,Grep"} {
-		if !strings.Contains(joined, expected) {
-			t.Fatalf("Claude command omitted %q: %#v", expected, command)
-		}
+	want := []string{"claude", "--setting-sources", "", "--restricted", "--permission-mode", "acceptEdits", "--print", "--output-format", "json", "--model", "claude-sonnet-4-5", "--effort", "high", "--tools", "Read,Edit,Write,Glob,Grep", "work"}
+	if !reflect.DeepEqual(command, want) {
+		t.Fatalf("Claude command argv mismatch\n got: %#v\nwant: %#v", command, want)
 	}
 	if _, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "claude-sonnet-4-5", Prompt: "work"}); err == nil {
 		t.Fatal("Claude launch accepted a missing effort")
