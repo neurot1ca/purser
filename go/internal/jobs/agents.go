@@ -121,6 +121,33 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 			command = append(command, "--new-project", "--add-dir", in.CWD)
 		}
 		return command, nil
+	case "claude":
+		if !claudeModel.MatchString(in.Model) {
+			return nil, errors.New("Claude model is invalid")
+		}
+		effort := ""
+		for _, arg := range in.ConfigArgs {
+			const key = "model_reasoning_effort="
+			if !strings.HasPrefix(arg, key) || effort != "" {
+				return nil, errors.New("unsupported Claude config")
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(arg, key)), &effort); err != nil {
+				return nil, errors.New("Claude effort is invalid")
+			}
+		}
+		if !claudeEfforts[effort] || in.Sandbox != nil {
+			return nil, errors.New("Claude effort is required and sandbox is unsupported")
+		}
+		command := append([]string{}, in.Prefix...)
+		command = append(command, "--setting-sources", "", "--restricted", "--print", "--output-format", "json", "--model", in.Model, "--effort", effort,
+			"--tools", "Read,Edit,Write,Glob,Grep")
+		if in.Tool == "codex-reply" {
+			if in.ThreadID == "" {
+				return nil, errors.New("Claude reply requires a thread ID")
+			}
+			command = append(command, "--resume", in.ThreadID)
+		}
+		return append(command, in.Prompt), nil
 	case "opencode":
 		if in.Model == "" || !strings.Contains(in.Model, "/") || in.Model[0] == '/' || in.Model[len(in.Model)-1] == '/' {
 			return nil, errors.New("OpenCode model must be provider/model")
@@ -156,6 +183,9 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 		return nil, fmt.Errorf("unsupported agent: %s", in.Agent)
 	}
 }
+
+var claudeModel = regexp.MustCompile(`^claude-[A-Za-z0-9._-]+$`)
+var claudeEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
 // ValidateAgentResume rejects cross-agent threads and, for AGY, a resumed
 // conversation whose returned identity differs from the requested thread.

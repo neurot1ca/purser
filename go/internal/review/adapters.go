@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
 
-var reviewerCommands = map[string]string{"agy": "agy", "opencode": "opencode", "codex": "codex"}
+var reviewerCommands = map[string]string{"agy": "agy", "opencode": "opencode", "codex": "codex", "claude": "claude"}
 var openCodePermissions = map[string]string{"edit": "ask", "write": "ask", "bash": "ask", "webfetch": "ask", "task": "ask", "external_directory": "ask"}
 
 const (
@@ -45,7 +46,7 @@ func (e *CommandRefused) Error() string { return e.Message }
 
 type reviewerAdapter struct{ provider string }
 
-var reviewerAdapters = map[string]Adapter{"agy": reviewerAdapter{"agy"}, "opencode": reviewerAdapter{"opencode"}, "codex": reviewerAdapter{"codex"}}
+var reviewerAdapters = map[string]Adapter{"agy": reviewerAdapter{"agy"}, "opencode": reviewerAdapter{"opencode"}, "codex": reviewerAdapter{"codex"}, "claude": reviewerAdapter{"claude"}}
 
 func ReviewerAdapter(provider string) (Adapter, error) {
 	a, ok := reviewerAdapters[provider]
@@ -74,6 +75,8 @@ func (a reviewerAdapter) Family(model string) string {
 		return "google"
 	case "codex":
 		return "openai"
+	case "claude":
+		return "anthropic"
 	case "opencode":
 		p, _, ok := strings.Cut(model, "/")
 		if ok {
@@ -100,6 +103,11 @@ func (a reviewerAdapter) ValidateModel(model any) error {
 			if !ok || strings.TrimSpace(value) == "" {
 				return errors.New("Codex reviewer model must be a nonempty string")
 			}
+		}
+	case "claude":
+		value, ok := model.(string)
+		if !ok || !claudeReviewerModel.MatchString(value) {
+			return errors.New("Claude reviewer model is invalid")
 		}
 	}
 	return nil
@@ -156,9 +164,24 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 			command = append(command, "-m", model.(string))
 		}
 		return append(command, prompt), nil
+	case "claude":
+		effort, _ := config["reviewer1_effort"].(string)
+		if !claudeReviewerEfforts[effort] {
+			return nil, errors.New("reviewer1_effort must be low, medium, high, xhigh or max")
+		}
+		encoded, err := canonicalJSON(schema)
+		if err != nil {
+			return nil, err
+		}
+		return []string{executable, "--setting-sources", "", "--restricted", "--print", "--output-format", "json", "--json-schema", string(encoded),
+			"--model", model.(string), "--effort", effort, "--tools", "Read,Glob,Grep", prompt}, nil
 	}
 	return nil, fmt.Errorf("unknown reviewer adapter %q", a.provider)
 }
+
+var claudeReviewerModel = regexp.MustCompile(`^claude-[A-Za-z0-9._-]+$`)
+var claudeReviewerEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+
 func (a reviewerAdapter) Environment(command []string) map[string]string {
 	if a.provider != "opencode" {
 		return map[string]string{}

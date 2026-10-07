@@ -66,10 +66,33 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 		}
 		if model, exists := table["reviewer1_model_requested"]; exists && model != nil {
 			text, valid := model.(string)
-			if !valid || !agyModel.MatchString(text) {
+			agent, _ := table["reviewer1_agent"].(string)
+			if agent == "" {
+				agent = "agy"
+			}
+			if !valid || (agent == "claude" && !claudeModel.MatchString(text)) || (agent != "claude" && !agyModel.MatchString(text)) {
 				return nil, fmt.Errorf("[coding] reviewer1_model_requested is invalid")
 			}
 			config["reviewer1_model_requested"] = text
+		}
+		if raw, exists := table["reviewer1_agent"]; exists {
+			agent, valid := raw.(string)
+			if !valid || (agent != "agy" && agent != "claude" && agent != "codex" && agent != "opencode") {
+				return nil, fmt.Errorf("[coding] reviewer1_agent is invalid")
+			}
+			config["reviewer1_agent"] = agent
+		}
+		if raw, exists := table["reviewer1_effort"]; exists {
+			effort, valid := raw.(string)
+			if !valid || !claudeEfforts[effort] {
+				return nil, fmt.Errorf("[coding] reviewer1_effort is invalid")
+			}
+			config["reviewer1_effort"] = effort
+		}
+		if table["reviewer1_agent"] == "claude" {
+			if _, ok := table["reviewer1_model_requested"].(string); !ok || config["reviewer1_effort"] == nil {
+				return nil, fmt.Errorf("[coding] Claude reviewer requires model and effort")
+			}
 		}
 	}
 	if err := loadReadiness(config, table); err != nil {
@@ -173,20 +196,37 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 	config["coder_agent"] = agent
 	if fallback, exists := user["fallback"]; exists {
 		table, valid := fallback.(map[string]any)
-		if !valid || len(table) != 3 || !hasStringKeys(table, []string{"agent", "model", "family"}) {
+		_, hasEffort := table["effort"]
+		if !valid || (len(table) != 3 && (len(table) != 4 || !hasEffort)) || !hasStringKeys(table, []string{"agent", "model", "family"}) {
 			return nil, fmt.Errorf("[fallback] agent, model, or family is invalid")
 		}
 		fallbackAgent, agentOK := table["agent"].(string)
 		model, modelOK := table["model"].(string)
 		family, familyOK := table["family"].(string)
-		if !agentOK || (fallbackAgent != "codex" && fallbackAgent != "opencode" && fallbackAgent != "agy") || !modelOK || !familyOK || !coderFamily.MatchString(family) {
+		effort := ""
+		effortOK := true
+		if raw, exists := table["effort"]; exists {
+			effort, effortOK = raw.(string)
+		}
+		if !agentOK || (fallbackAgent != "codex" && fallbackAgent != "opencode" && fallbackAgent != "agy" && fallbackAgent != "claude") || !modelOK || !familyOK || !effortOK || !coderFamily.MatchString(family) {
 			return nil, fmt.Errorf("[fallback] agent, model, or family is invalid")
+		}
+		if effort != "" && (fallbackAgent != "claude" || !claudeEfforts[effort]) {
+			return nil, fmt.Errorf("[fallback] effort is unsupported for this agent")
+		}
+		if fallbackAgent == "claude" && family != "anthropic" && family != "claude" {
+			return nil, fmt.Errorf("[fallback] Claude family must be anthropic")
 		}
 		pattern := codexModel
 		if fallbackAgent == "opencode" {
 			pattern = opencodeModel
 		} else if fallbackAgent == "agy" {
 			pattern = agyModel
+		} else if fallbackAgent == "claude" {
+			pattern = claudeModel
+			if !claudeEfforts[effort] {
+				return nil, fmt.Errorf("[fallback] Claude effort is invalid")
+			}
 		}
 		if !pattern.MatchString(model) {
 			return nil, fmt.Errorf("[fallback] model is invalid")
@@ -203,6 +243,9 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 			return nil, fmt.Errorf("[fallback] model must differ from the primary coder model")
 		}
 		config["fallback"] = map[string]any{"agent": fallbackAgent, "model": model, "family": family}
+		if effort != "" {
+			config["fallback"].(map[string]any)["effort"] = effort
+		}
 	}
 	return config, validateHookConfig(config)
 }
@@ -229,6 +272,8 @@ func validateHookConfig(config map[string]any) error {
 }
 
 var codexModel = regexp.MustCompile(`\A[A-Za-z0-9._-]+\z`)
+var claudeModel = regexp.MustCompile(`\Aclaude-[A-Za-z0-9._-]+\z`)
+var claudeEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 var coderFamily = regexp.MustCompile(`\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z`)
 
 func loadReadiness(config, coding map[string]any) error {

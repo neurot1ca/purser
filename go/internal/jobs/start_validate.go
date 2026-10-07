@@ -130,7 +130,9 @@ func pythonQuote(v any) string {
 	return strings.NewReplacer(`\u2028`, " ", `\u2029`, " ").Replace(strings.TrimSuffix(b.String(), "\n"))
 }
 
-func validStartAgent(s string) bool { return s == "codex" || s == "opencode" || s == "agy" }
+func validStartAgent(s string) bool {
+	return s == "codex" || s == "opencode" || s == "agy" || s == "claude"
+}
 func validStartUUID(s string) bool {
 	s = strings.ReplaceAll(s, "urn:", "")
 	s = strings.ReplaceAll(s, "uuid:", "")

@@ -268,6 +268,9 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	if !reply {
 		updated["model"] = selection.Model
+		if fallback := mapValue(config["fallback"]); fallback != nil && active != nil && active["active_coder"] == "fallback" && selection.Agent == stringValue(fallback["agent"]) {
+			updated["agent"] = selection.Agent
+		}
 		codexConfig, ok := input["config"].(map[string]any)
 		if _, supplied := input["config"]; supplied && !ok {
 			return nil, errors.New("tool_input.config must be an object when supplied")

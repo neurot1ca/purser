@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +90,32 @@ func TestAdapterEnvelopeParser(t *testing.T) {
 	parsed, err := adapter.ParseEnvelope(`{"conversation_id":"c","status":"success","response":"","duration_seconds":0.1,"num_turns":1,"usage":{},"structured_output":{"result":"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","validation":"PASS","findings":[]}}`)
 	if err != nil || parsed["conversation_id"] != "c" {
 		t.Fatalf("parsed envelope = %#v, %v", parsed, err)
+	}
+}
+
+func TestClaudeReviewerLaunchCarriesModelAndEffort(t *testing.T) {
+	adapter, err := ReviewerAdapter("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	config := map[string]any{"reviewer1_executable": filepath.Join(cwd, "claude"), "reviewer1_model_requested": "claude-sonnet-4-5", "reviewer1_effort": "high"}
+	command, err := adapter.BuildCommand("review", map[string]any{"type": "object"}, config, CommandOptions{WorkingDirectory: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(command, "\x00")
+	if !strings.Contains(joined, "--model\x00claude-sonnet-4-5") || !strings.Contains(joined, "--effort\x00high") || !strings.Contains(joined, "--setting-sources\x00") || !strings.Contains(joined, "--restricted") {
+		t.Fatalf("Claude reviewer command did not carry the selected settings or restrictions: %#v", command)
+	}
+}
+
+func TestClaudeReviewerEffortSurvivesBridgeArgumentValidation(t *testing.T) {
+	args := nativeArgs(t.TempDir(), "", "")
+	args["reviewer_agent"], args["reviewer_model"], args["reviewer_effort"] = "claude", "claude-sonnet-4-5", "high"
+	parsed, err := parseBridgeArguments(args)
+	if err != nil || parsed["reviewer_effort"] != "high" {
+		t.Fatalf("Claude effort bridge arguments = %#v, %v", parsed, err)
 	}
 }
 

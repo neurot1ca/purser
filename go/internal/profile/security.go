@@ -87,7 +87,7 @@ func ValidateSecurityValue(section, key string, value any) (bool, string) {
 		allowed := map[string][]string{
 			"orchestrator": {"claude-code"},
 			"coder":        {"codex", "claude", "opencode", "agy"},
-			"reviewer":     {"agy", "opencode", "codex", "none"},
+			"reviewer":     {"agy", "opencode", "codex", "claude", "none"},
 		}
 		if choices, ok := allowed[key]; ok && valueIsOneOf(value, choices) {
 			return true, ""
@@ -180,12 +180,24 @@ func valueIsOneOf(value any, choices []string) bool {
 
 func validCandidate(value any) bool {
 	candidate, ok := value.(map[string]any)
-	if !ok || len(candidate) != 2 {
+	if !ok || (len(candidate) != 2 && len(candidate) != 3) {
 		return false
+	}
+	for key := range candidate {
+		if key != "agent" && key != "model" && key != "effort" {
+			return false
+		}
 	}
 	agent, agentOK := candidate["agent"].(string)
 	model, modelOK := candidate["model"].(string)
-	return agentOK && modelOK && len(agent) > 0 && len(agent) <= 64 && len(model) > 0 && len(model) <= 128
+	if !agentOK || !modelOK || len(agent) == 0 || len(agent) > 64 || len(model) == 0 || len(model) > 128 {
+		return false
+	}
+	if effort, exists := candidate["effort"]; exists {
+		value, ok := effort.(string)
+		return ok && (value == "low" || value == "medium" || value == "high" || value == "xhigh" || value == "max")
+	}
+	return agent != "claude"
 }
 
 func integerValue(value any) (int64, bool) {

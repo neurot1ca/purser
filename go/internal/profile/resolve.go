@@ -25,8 +25,9 @@ type Roles struct {
 }
 
 type ReviewerCandidate struct {
-	Agent string `json:"agent"`
-	Model string `json:"model"`
+	Agent  string `json:"agent"`
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"`
 }
 
 type WorktreeSetup struct {
@@ -145,11 +146,11 @@ func ResolveProfile(projectRoot string, user, project Tier) ResolvedProfile {
 			selected["agent"] = "agy"
 		}
 	}
-	candidates := []ReviewerCandidate{{Agent: selected["agent"].(string), Model: selected["model"].(string)}}
+	candidates := []ReviewerCandidate{{Agent: selected["agent"].(string), Model: selected["model"].(string), Effort: profileString(selected, "effort", "")}}
 	if alternatives, ok := userValues["reviewer.alternatives"].([]any); ok {
 		for _, item := range alternatives {
 			candidate := item.(map[string]any)
-			candidates = append(candidates, ReviewerCandidate{Agent: candidate["agent"].(string), Model: candidate["model"].(string)})
+			candidates = append(candidates, ReviewerCandidate{Agent: candidate["agent"].(string), Model: candidate["model"].(string), Effort: profileString(candidate, "effort", "")})
 		}
 	}
 	worktree := WorktreeSetup{Copy: []string{}, SetupTimeoutSeconds: 600}

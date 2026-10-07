@@ -67,11 +67,15 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 	if fallbackActive {
 		selection.Agent, _ = fallback["agent"].(string)
 		selection.Model, _ = fallback["model"].(string)
-		switch selection.Agent {
-		case "agy":
-			selection.Effort = "medium"
-		case "opencode":
-			selection.Effort = "none"
+		if effort, ok := fallback["effort"].(string); ok {
+			selection.Effort = effort
+		} else {
+			switch selection.Agent {
+			case "agy":
+				selection.Effort = "medium"
+			case "opencode":
+				selection.Effort = "none"
+			}
 		}
 		selection.ModelSource = "route"
 		mechanicalCandidate = false

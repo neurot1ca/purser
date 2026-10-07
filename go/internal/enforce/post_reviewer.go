@@ -100,6 +100,9 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		}
 		candidateArgs := clonePostMap(args)
 		candidateArgs["reviewer_agent"], candidateArgs["reviewer_model"] = candidate.Agent, candidate.Model
+		if candidate.Effort != "" {
+			candidateArgs["reviewer_effort"] = candidate.Effort
+		}
 		candidateArgs["reviewer_timeout_seconds"] = budget.Seconds()
 		bridgeResult, err := postReviewerBridge(context.Background(), root, candidateArgs, budget)
 		if err != nil {
@@ -144,7 +147,7 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	return last, nil
 }
 
-var postReviewerAdapters = map[string]bool{"agy": true, "opencode": true, "codex": true}
+var postReviewerAdapters = map[string]bool{"agy": true, "opencode": true, "codex": true, "claude": true}
 
 var postReviewerBridge = review.RunBridge
 

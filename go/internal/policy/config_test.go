@@ -62,6 +62,37 @@ func TestPythonCoderConfigGoldenParityP32(t *testing.T) {
 	testPythonCoderConfigGoldenParity(t, true)
 }
 
+func TestClaudeFallbackAndReviewerChoicesValidateAndPersist(t *testing.T) {
+	testRoot := filepath.Join("..", "..", "..", ".tmp", "claude-role-config")
+	if err := os.RemoveAll(testRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(testRoot, ".orchestrator"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(testRoot)
+	configPath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json")
+	userPath := filepath.Join(testRoot, ".orchestrator", "config.toml")
+	valid := "[coding]\nreviewer1_agent = \"claude\"\nreviewer1_model_requested = \"claude-sonnet-4-5\"\nreviewer1_effort = \"high\"\n\n[fallback]\nagent = \"claude\"\nmodel = \"claude-sonnet-4-5\"\nfamily = \"anthropic\"\neffort = \"high\"\n"
+	if err := os.WriteFile(userPath, []byte(valid), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadCoderConfig(configPath, userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded["reviewer1_agent"] != "claude" || loaded["reviewer1_model_requested"] != "claude-sonnet-4-5" || loaded["reviewer1_effort"] != "high" || loaded["fallback"].(map[string]any)["effort"] != "high" {
+		t.Fatalf("Claude role settings were not retained: %#v", loaded)
+	}
+	invalid := strings.Replace(valid, `effort = "high"`, `effort = "unbounded"`, 1)
+	if err := os.WriteFile(userPath, []byte(invalid), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCoderConfig(configPath, userPath); err == nil {
+		t.Fatal("unsupported Claude effort was accepted")
+	}
+}
+
 func testPythonCoderConfigGoldenParity(t *testing.T, p32Only bool) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "config_cases.json")
 	data, err := os.ReadFile(path)

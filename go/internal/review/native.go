@@ -30,6 +30,7 @@ var optionalBridgeArguments = map[string]func(any) bool{
 	"validation_summary": stringOrNil, "task_objective": stringOrNil, "acceptance_criteria": stringOrNil,
 	"reviewer_executable": stringOrNil, "authority_sources": func(v any) bool { return v == nil || isSlice(v) },
 	"reviewer_agent": isString, "reviewer_model": stringOrNil,
+	"reviewer_effort": func(v any) bool { value, ok := v.(string); return ok && claudeReviewerEfforts[value] },
 	"reviewer_timeout_seconds": func(v any) bool {
 		if v == nil {
 			return true
@@ -232,6 +233,9 @@ func nativeReview(ctx context.Context, pluginRoot string, args map[string]any) (
 		model = pinnedModel
 	}
 	config["reviewer1_model_requested"], config["reviewer1_agent"] = model, agent
+	if effort, ok := kwargs["reviewer_effort"].(string); ok && effort != "" {
+		config["reviewer1_effort"] = effort
+	}
 	if executable, ok := kwargs["reviewer_executable"].(string); ok && executable != "" {
 		config["reviewer1_executable"] = executable
 	}

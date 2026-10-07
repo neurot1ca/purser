@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,26 @@ func TestAgentCommandPythonParity(t *testing.T) {
 				t.Fatalf("argv mismatch\n got: %#v\nwant: %#v", got, test.Argv)
 			}
 		})
+	}
+}
+
+func TestClaudeWorkerCarriesEffortAndSuppressesNestedHooks(t *testing.T) {
+	command, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", CWD: t.TempDir(),
+		Model: "claude-sonnet-4-5", ConfigArgs: []string{`model_reasoning_effort="high"`}, Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(command, "\x00")
+	for _, expected := range []string{"--model\x00claude-sonnet-4-5", "--effort\x00high", "--setting-sources\x00", "--restricted", "--tools\x00Read,Edit,Write,Glob,Grep"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Claude command omitted %q: %#v", expected, command)
+		}
+	}
+	if _, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "claude-sonnet-4-5", Prompt: "work"}); err == nil {
+		t.Fatal("Claude launch accepted a missing effort")
+	}
+	if _, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "unsupported", ConfigArgs: []string{`model_reasoning_effort="high"`}, Prompt: "work"}); err == nil {
+		t.Fatal("Claude launch accepted an unsupported model")
 	}
 }
 

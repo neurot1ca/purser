@@ -181,6 +181,34 @@ func ParseEnvelope(adapter string, stdout []byte, includeMetadata bool) (ParsedE
 		return ParseOpenCodeEnvelope(stdout, includeMetadata)
 	case "codex":
 		return ParseCodexEnvelope(stdout, includeMetadata)
+	case "claude":
+		var envelope map[string]any
+		if err := decodeJSON(stdout, &envelope); err != nil {
+			return ParsedEnvelope{}, err
+		}
+		if envelope["type"] != "result" || envelope["subtype"] != "success" || envelope["is_error"] == true {
+			return ParsedEnvelope{}, errors.New("Claude envelope did not report success")
+		}
+		conversation, ok := envelope["session_id"].(string)
+		payload, structured := envelope["structured_output"]
+		if !ok || conversation == "" || !structured {
+			return ParsedEnvelope{}, errors.New("Claude envelope has no session or structured output")
+		}
+		response, err := ValidateResponse(payload)
+		if err != nil {
+			return ParsedEnvelope{}, err
+		}
+		parsed := ParsedEnvelope{ConversationID: conversation, Response: response, ServedModelAttestation: "UNAVAILABLE", IncludeMetadata: includeMetadata}
+		if includeMetadata {
+			if duration, ok := number(envelope["duration_ms"]); ok && duration >= 0 && !math.IsInf(duration, 0) && !math.IsNaN(duration) {
+				seconds := duration / 1000
+				parsed.DurationSeconds = &seconds
+			}
+			if usage, ok := envelope["usage"].(map[string]any); ok {
+				parsed.Usage = usageTokens(usage)
+			}
+		}
+		return parsed, nil
 	default:
 		return ParsedEnvelope{}, fmt.Errorf("unknown reviewer adapter %q", adapter)
 	}

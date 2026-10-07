@@ -110,6 +110,19 @@ func (s *EventStream) consume(line []byte) {
 				s.result.Usage = codexUsage(usage)
 			}
 		}
+	case "claude":
+		if kind == "result" {
+			session, _ = event["session_id"].(string)
+			message, _ := event["result"].(string)
+			if message != "" {
+				s.text = append(s.text, message)
+			}
+			terminal = true
+			success = event["is_error"] != true && event["subtype"] == "success"
+			if !success {
+				failure = firstString(event["result"], "Claude completion failed")
+			}
+		}
 	}
 	if s.result.ThreadID == "" && session != "" {
 		s.result.ThreadID = session
