@@ -3,6 +3,16 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.85 — 2026-10-07
+
+- **Changed:** Sol routes (normal, consequential, escalated, plan) default to gpt-6.1-sol; research jobs go on the normal route.
+- **Added:** Claude can serve as the fallback coder and as Reviewer-1 with its own model and effort; a same-family Claude reviewer is skipped.
+- **Changed:** `/purser:optimize` runs in Go, reports disabled plugins as stopped and restores its diagnostics.
+- **Changed:** Plans and plan summaries are stored complete; a summary too large for the bundle points to the plan file. Async plan jobs report `plan_path` too.
+- **Fixed:** A newer Codex model is detected at job start again, not only at session start.
+- **Fixed:** Git and Python-locator processes launched by Purser no longer open console windows on Windows.
+- **Fixed:** The job board wraps below the usage band on narrow windows instead of drawing over it.
+
 ## 0.1.84 — 2026-10-06
 
 - **Added:** `/purser:gear-up` and `/purser:gear-down` (or just ask in chat) switch a project's luna-high Codex work to the configured sol model at medium until geared down; Pre enforces it for new jobs.
