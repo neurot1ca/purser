@@ -283,8 +283,13 @@ func (s *Store) expire(value map[string]any, now float64) bool {
 			expired = hasDeadline && now >= deadline
 		} else if id, ok := jobID.(string); ok {
 			state := s.jobState(id)
+			started, hasStarted := pythonFloat(owner["acquired_at"])
+			if !hasStarted {
+				started, hasStarted = pythonFloat(owner["queued_at"])
+			}
+			orphaned := state == "MISSING" && hasStarted && now >= started+missingJobOrphanSeconds
 			cutoff, hasCutoff := pythonFloat(owner["retention_after"])
-			expired = s.staleJobLease(id, owner, now) || state == "JOB_EXPIRED" ||
+			expired = orphaned || s.staleJobLease(id, owner, now) || state == "JOB_EXPIRED" ||
 				(state != "UNREADABLE" && state != "QUEUED" && state != "RUNNING" && hasCutoff && now >= cutoff)
 		}
 		if expired {
@@ -303,13 +308,6 @@ func (s *Store) staleJobLease(jobID string, owner map[string]any, now float64) b
 		return false
 	}
 	raw, err := os.ReadFile(filepath.Join(s.jobsRoot, jobID+".json"))
-	if errors.Is(err, os.ErrNotExist) {
-		started, hasStarted := pythonFloat(owner["acquired_at"])
-		if !hasStarted {
-			started, hasStarted = pythonFloat(owner["queued_at"])
-		}
-		return hasStarted && now >= started+missingJobOrphanSeconds
-	}
 	if err != nil {
 		return false
 	}
