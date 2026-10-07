@@ -51,6 +51,27 @@ type loadedConfig struct {
 	RouteOrder []string
 }
 
+// Decide records a user's explicit model-version response using the same
+// locked notice state used by discovery.
+func Decide(version string, decline bool) error {
+	statePath := filepath.Join(stateRoot(), "model-version-notice.json")
+	unlock, err := contextio.LockFile(statePath + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	state := readNoticeState(statePath)
+	list := &state.Asked
+	if decline {
+		list = &state.Declined
+	}
+	*list = appendUnique(*list, version)
+	if state.Pending != nil && state.Pending.New == version {
+		state.Pending = nil
+	}
+	return writeNoticeState(statePath, state)
+}
+
 // DiscoverModelVersion checks pinned models at most once per UTC day and queues a newer version.
 func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	if strings.TrimSpace(repository) == "" {

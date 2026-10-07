@@ -31,6 +31,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "optimize" {
 		os.Exit(optimizeMain(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		os.Exit(initMain(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "op" || os.Args[1] == "host") {
 		os.Exit(privateMain())
 	}
