@@ -11,6 +11,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
+	"purser-hook/internal/models"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
@@ -481,6 +482,17 @@ func appendPostDispatchReceipt(response map[string]any, root string, event, pend
 			context += "\n"
 		}
 		context += guidance
+	}
+	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") &&
+		stringValue(mapValue(response["hookSpecificOutput"])["additionalContext"]) == "" &&
+		pending["async_ready"] == true {
+		if current, newer, ok := models.DiscoverCachedCodexVersion(); ok {
+			upgrade := contextio.ModelVersionGuidance(current, newer)
+			if context != "" {
+				context += "\n"
+			}
+			context += upgrade
+		}
 	}
 	if context == "" {
 		return response

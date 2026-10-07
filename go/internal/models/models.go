@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
 	"purser-hook/internal/proc"
@@ -126,6 +127,94 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	}
 	_ = recordCheck(statePath)
 	return "", "", false
+}
+
+// DiscoverCachedCodexVersion checks the visible models in CODEX_HOME without
+// invoking the Codex CLI or loading the model catalog.
+func DiscoverCachedCodexVersion() (current, newer string, ok bool) {
+	statePath := filepath.Join(stateRoot(), "model-version-notice.json")
+	unlock, err := contextio.LockFile(statePath + ".lock")
+	if err != nil {
+		return "", "", false
+	}
+	defer unlock()
+
+	state := readNoticeState(statePath)
+	if state.Pending != nil {
+		return "", "", false
+	}
+	candidates, err := cachedCodexModels()
+	if err != nil || len(candidates) == 0 {
+		return "", "", false
+	}
+	loaded, err := loadConfig()
+	if err != nil {
+		return "", "", false
+	}
+	routes, valid := loaded.Values["routes"].(map[string]any)
+	if !valid {
+		return "", "", false
+	}
+	seen := map[string]bool{}
+	ordered := append([]string(nil), loaded.RouteOrder...)
+	visited := map[string]bool{}
+	for _, name := range ordered {
+		visited[name] = true
+	}
+	for _, name := range sortedRouteNames(routes) {
+		if !visited[name] {
+			ordered = append(ordered, name)
+		}
+	}
+	for _, name := range ordered {
+		model := routeModel(routes[name])
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		candidate := newerVersion(model, candidates)
+		if candidate == "" || has(state.Asked, candidate) || has(state.Declined, candidate) {
+			continue
+		}
+		state.Pending = &noticePending{Current: model, New: candidate}
+		if writeNoticeState(statePath, state) != nil {
+			return "", "", false
+		}
+		return model, candidate, true
+	}
+	return "", "", false
+}
+
+func cachedCodexModels() ([]string, error) {
+	home := os.Getenv("CODEX_HOME")
+	if strings.TrimSpace(home) == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		home = filepath.Join(home, ".codex")
+	}
+	data, err := os.ReadFile(filepath.Join(expandHome(home), "models_cache.json"))
+	if err != nil {
+		return nil, err
+	}
+	var cache struct {
+		Models []struct {
+			Slug       string `json:"slug"`
+			Visibility string `json:"visibility"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(data, &cache); err != nil || cache.Models == nil {
+		return nil, errors.New("invalid Codex models cache")
+	}
+	ids := []string{}
+	for _, model := range cache.Models {
+		if model.Visibility == "list" && model.Slug != "" {
+			ids = appendUnique(ids, model.Slug)
+		}
+	}
+	return ids, nil
 }
 
 type modelCheck struct{ agent, model string }

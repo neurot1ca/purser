@@ -138,7 +138,7 @@ func SessionStart(event map[string]any) []byte {
 			current, currentOK := pending["current"].(string)
 			newVersion, newOK := pending["new"].(string)
 			if currentOK && newOK {
-				modelContext = modelVersionGuidance(current, newVersion)
+				modelContext = ModelVersionGuidance(current, newVersion)
 			}
 		}
 	}
@@ -1071,7 +1071,8 @@ func readModelNoticeState(path string) map[string]any {
 	return state
 }
 
-func modelVersionGuidance(current, newVersion string) string {
+// ModelVersionGuidance renders the approved model-upgrade notice for dispatch hooks.
+func ModelVersionGuidance(current, newVersion string) string {
 	return "Render this model-version notice in the user's language, translating from the English text while keeping ⚓ " +
 		"and both model names unchanged. Keep the three blockquote lines exactly formatted; do not change " +
 		"routes until the user says yes.\n" +

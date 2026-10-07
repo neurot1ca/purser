@@ -171,6 +171,91 @@ func TestDiscoverUnavailableListingRecordsCheckWithoutPending(t *testing.T) {
 	}
 }
 
+func writeCodexCache(t *testing.T, raw string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "models_cache.json"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscoverCachedCodexVersionQueuesVisibleUpgrade(t *testing.T) {
+	config := map[string]any{"routes": map[string]any{
+		"normal": "gpt-6-luna", "mechanical": "gpt-6-luna", "subtle": "gpt-6-sol",
+	}}
+	root := setupDiscoveryWithRouteOrder(t, config, []string{"normal", "mechanical", "subtle"}, nil)
+	writeCodexCache(t, `{"models":[{"slug":"gpt-6.1-sol","visibility":"list"},{"slug":"gpt-7-luna","visibility":"hide"}]}`)
+	current, newer, ok := DiscoverCachedCodexVersion()
+	if !ok || current != "gpt-6-sol" || newer != "gpt-6.1-sol" {
+		t.Fatalf("got %q -> %q, available = %v", current, newer, ok)
+	}
+	state := readStateJSON(t, root)
+	if got := state["pending"].(map[string]any); got["current"] != current || got["new"] != newer {
+		t.Fatalf("pending = %#v", got)
+	}
+}
+
+func TestDiscoverCachedCodexVersionRespectsNoticeState(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		asked    []string
+		declined []string
+		pending  *noticePending
+	}{
+		{name: "asked", asked: []string{"gpt-6.1-luna"}},
+		{name: "declined", declined: []string{"gpt-6.1-luna"}},
+		{name: "pending", pending: &noticePending{Current: "gpt-6-sol", New: "gpt-6.1-sol", Blocked: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := setupDiscovery(t, map[string]any{"routes": map[string]any{"normal": "gpt-6-luna"}}, nil)
+			writeCodexCache(t, `{"models":[{"slug":"gpt-6.1-luna","visibility":"list"}]}`)
+			if err := writeNoticeState(filepath.Join(root, "model-version-notice.json"), noticeState{
+				Asked: tc.asked, Declined: tc.declined, Pending: tc.pending,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, ok := DiscoverCachedCodexVersion(); ok {
+				t.Fatal("unexpected model notice")
+			}
+			state := readNoticeState(filepath.Join(root, "model-version-notice.json"))
+			if !reflect.DeepEqual(state.Pending, tc.pending) {
+				t.Fatalf("pending changed: got %#v want %#v", state.Pending, tc.pending)
+			}
+		})
+	}
+}
+
+func TestDiscoverCachedCodexVersionIgnoresUnavailableOrHiddenCache(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cache *string
+	}{
+		{name: "missing"},
+		{name: "malformed", cache: stringPointer("{")},
+		{name: "hidden only", cache: stringPointer(`{"models":[{"slug":"gpt-6.1-luna","visibility":"hide"}]}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := setupDiscovery(t, map[string]any{"routes": map[string]any{"normal": "gpt-6-luna"}}, nil)
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			if tc.cache != nil {
+				if err := os.WriteFile(filepath.Join(home, "models_cache.json"), []byte(*tc.cache), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, _, ok := DiscoverCachedCodexVersion(); ok {
+				t.Fatal("unexpected model notice")
+			}
+			if _, err := os.Stat(filepath.Join(root, "model-version-notice.json")); !os.IsNotExist(err) {
+				t.Fatalf("notice state changed: %v", err)
+			}
+		})
+	}
+}
+
+func stringPointer(value string) *string { return &value }
+
 func TestDiscoverChecksAgyReviewerAfterCoderModels(t *testing.T) {
 	calls := []string{}
 	root := setupDiscovery(t, map[string]any{

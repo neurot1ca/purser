@@ -202,7 +202,7 @@ func Stop(event map[string]any, started time.Time) []byte {
 	if model != nil && model["blocked"] != true {
 		model["blocked"] = true
 		_ = writeModelNoticeState(modelPath, modelState)
-		add("version", modelVersionGuidance(str(model["current"]), str(model["new"])))
+		add("version", ModelVersionGuidance(str(model["current"]), str(model["new"])))
 	}
 	if pending, ok := state["fallback_pending"].(map[string]any); ok && (pending["notice"] == true || pending["blocked"] != true) {
 		pending["blocked"] = true

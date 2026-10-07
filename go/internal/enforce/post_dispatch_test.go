@@ -1,8 +1,10 @@
 package enforce
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +160,95 @@ func TestPostToolUseDispatchStartApplyAndUnknown(t *testing.T) {
 		}
 	}
 }
+
+func TestPostToolUseDispatchOffersCachedCodexModelUpgrade(t *testing.T) {
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, codexHome, repo := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("CODEX_HOME", codexHome)
+	if err := os.WriteFile(filepath.Join(codexHome, "models_cache.json"), []byte(
+		`{"models":[{"slug":"gpt-6.1-sol","visibility":"list"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_use_id": "model-upgrade-dispatch", "session_id": "model-upgrade-session"}
+	call := "model-upgrade-call"
+	jobID := jobHash(call)
+	event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "RUNNING"}}
+	pending := map[string]any{"async_ready": true, "async_call": call, "tool_use_id": event["tool_use_id"],
+		"session_id": event["session_id"], "repo_root": repo, "project_key": "model-upgrade-project",
+		"route": "normal", "model": "gpt-6-sol", "effort": "high", "phase": "implementation"}
+	if err := writeFixtureJSON(mustPendingPath(t, state, event), pending); err != nil {
+		t.Fatal(err)
+	}
+	response, failure := PostToolUse(event, state)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	output := mapValue(response["hookSpecificOutput"])
+	context := stringValue(output["additionalContext"])
+	if !strings.Contains(context, "New model version available: `gpt-6.1-sol`") || !strings.Contains(context, "gpt-6-sol") {
+		t.Fatalf("model upgrade guidance missing from dispatch output: %q", context)
+	}
+	stateData, err := os.ReadFile(filepath.Join(state, "model-version-notice.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notice map[string]any
+	if err := json.Unmarshal(stateData, &notice); err != nil {
+		t.Fatal(err)
+	}
+	queued := mapValue(notice["pending"])
+	if queued["current"] != "gpt-6-sol" || queued["new"] != "gpt-6.1-sol" {
+		t.Fatalf("pending model notice = %#v", queued)
+	}
+}
+
+func TestPostDispatchModelCacheFailuresLeaveOutputUnchanged(t *testing.T) {
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("USERPROFILE", t.TempDir())
+	for _, tc := range []struct {
+		name  string
+		cache *string
+	}{
+		{name: "missing"},
+		{name: "malformed", cache: testStringPointer("{")},
+		{name: "hidden only", cache: testStringPointer(`{"models":[{"slug":"gpt-6.1-sol","visibility":"hide"}]}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, codexHome := t.TempDir(), t.TempDir()
+			t.Setenv("PURSER_STATE_DIR", state)
+			t.Setenv("CODEX_HOME", codexHome)
+			if tc.cache != nil {
+				if err := os.WriteFile(filepath.Join(codexHome, "models_cache.json"), []byte(*tc.cache), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pending := map[string]any{"async_ready": true, "async_call": "existing-call", "route": "normal",
+				"model": "gpt-6-sol", "effort": "medium", "task_id": "cache-failure"}
+			baseEvent := map[string]any{"tool_name": "mcp__codex-main__codex", "session_id": "cache-failure-session"}
+			want := appendPostDispatchReceipt(map[string]any{}, state, baseEvent, pending, "")
+			startEvent := map[string]any{"tool_name": "mcp__codex-main__codex_start", "session_id": "cache-failure-session"}
+			got := appendPostDispatchReceipt(map[string]any{}, state, startEvent, pending, "")
+			wantContext := stringValue(mapValue(want["hookSpecificOutput"])["additionalContext"])
+			gotContext := stringValue(mapValue(got["hookSpecificOutput"])["additionalContext"])
+			if gotContext != wantContext {
+				t.Fatalf("output changed: got %q want %q", gotContext, wantContext)
+			}
+		})
+	}
+}
+
+func testStringPointer(value string) *string { return &value }
 
 func TestPostToolUseAsyncResultDispatch(t *testing.T) {
 	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
