@@ -1806,12 +1806,12 @@
       }
     },
     "expected_code": "SOL_ROUTE_NEEDS_BASIS",
-    "expected_message": "route=normal runs gpt-6-sol. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle (gpt-6-luna) instead.",
+    "expected_message": "route=normal runs the Sol model. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle instead.",
     "ok": false,
     "result": {
       "valid": false,
       "code": "SOL_ROUTE_NEEDS_BASIS",
-      "message": "route=normal runs gpt-6-sol. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle (gpt-6-luna) instead.",
+      "message": "route=normal runs the Sol model. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle instead.",
       "prompt": "body",
       "task_id": "x",
       "phase": "operation",

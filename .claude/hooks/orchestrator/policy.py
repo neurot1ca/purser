@@ -462,9 +462,9 @@ def parse_orch_prompt(prompt: str, config: Mapping[str, Any]) -> OrchParseResult
             message = (f"route={route} requires basis=<the design choice left to the worker> "
                        "(for escalated: the concrete miss).")
         else:
-            message = (f"route={route} runs gpt-6-sol. Add basis=<the design choice left to the worker> "
+            message = (f"route={route} runs the Sol model. Add basis=<the design choice left to the worker> "
                        "(for escalated: the concrete miss). If the prompt already states the decisions, "
-                       "use route=subtle (gpt-6-luna) instead.")
+                       "use route=subtle instead.")
         return _orch_failure(
             remainder,
             SOL_ROUTE_NEEDS_BASIS,

@@ -52,7 +52,7 @@
       "active": "fallback_quota",
       "quota": "renewed",
       "outcome": "return_offer",
-      "question": "> ⚓ **gpt-6-sol's quota has renewed. Return to the primary coder?**",
+      "question": "> ⚓ **gpt-6.1-sol's quota has renewed. Return to the primary coder?**",
       "observations": []
     },
     {

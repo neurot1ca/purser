@@ -58,15 +58,15 @@
       "effort": "high"
     },
     "normal": {
-      "model": "gpt-6-sol",
+      "model": "gpt-6.1-sol",
       "effort": "medium"
     },
     "consequential": {
-      "model": "gpt-6-sol",
+      "model": "gpt-6.1-sol",
       "effort": "high"
     },
     "escalated": {
-      "model": "gpt-6-sol",
+      "model": "gpt-6.1-sol",
       "effort": "xhigh"
     },
     "operation": {
@@ -74,11 +74,11 @@
       "effort": "high"
     },
     "plan_standard": {
-      "model": "gpt-6-sol",
+      "model": "gpt-6.1-sol",
       "effort": "high"
     }
   },
-  "sol_model": "gpt-6-sol",
+  "sol_model": "gpt-6.1-sol",
   "always_full_routes": [
     "consequential",
     "escalated",

@@ -94,7 +94,7 @@ def thread(**overrides):
     values = {
         "task_id": "task-1",
         "route": "normal",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "medium",
     }
     values.update(overrides)
@@ -114,7 +114,7 @@ def test_valid_orch_is_structured_and_removed(config):
 def test_plan_pairing_and_read_scope(config):
     plan = policy.parse_orch_prompt(orch(phase="plan", route="plan_standard", scope="src, docs") + "\nPlan.", config)
     assert plan.valid and plan.scope == ("docs", "src")
-    assert policy.resolve_route(plan.route, config).model == "gpt-6-sol"
+    assert policy.resolve_route(plan.route, config).model == "gpt-6.1-sol"
     assert policy.resolve_route(plan.route, config).effort == "high"
     for phase, route in (("plan", "normal"), ("implementation", "plan_standard"), ("operation", "plan_standard")):
         denied = policy.parse_orch_prompt(orch(phase=phase, route=route), config)
@@ -226,9 +226,9 @@ def test_route_table_is_exact_and_has_no_fallback(config):
     expected = {
         "mechanical": ("gpt-6-luna", "high"),
         "subtle": ("gpt-6-luna", "high"),
-        "normal": ("gpt-6-sol", "medium"),
-        "consequential": ("gpt-6-sol", "high"),
-        "escalated": ("gpt-6-sol", "xhigh"),
+        "normal": ("gpt-6.1-sol", "medium"),
+        "consequential": ("gpt-6.1-sol", "high"),
+        "escalated": ("gpt-6.1-sol", "xhigh"),
         "operation": ("gpt-6-luna", "high"),
     }
     for route, pair in expected.items():
@@ -356,7 +356,7 @@ def test_corrupt_recorded_thread_allows_fresh_codex_with_anomaly_code():
     corrupt_recorded = {
         "task_id": "task-1",
         "route": "normal",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
     }
 
     result = policy.fresh_codex_decision(requested, corrupt_recorded)

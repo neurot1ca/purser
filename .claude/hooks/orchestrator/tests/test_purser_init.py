@@ -718,7 +718,7 @@ def test_switch_from_opencode_to_claude_clears_routes(site, monkeypatch):
     saved = tomllib.loads((home / ".orchestrator" / "config.toml").read_text(encoding="utf-8"))
     assert saved["roles"]["coder"] == "claude"
     assert saved["coding"] == {"coder_agent": "codex", "routes": {}}
-    assert coder_config.load(Path(__file__).parents[1] / "config.json")["routes"]["normal"]["model"] == "gpt-6-sol"
+    assert coder_config.load(Path(__file__).parents[1] / "config.json")["routes"]["normal"]["model"] == "gpt-6.1-sol"
 
 
 def test_balanced_persists_exact_shipped_codex_routes(site):

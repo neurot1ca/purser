@@ -286,7 +286,7 @@ def _orch_cases():
     add("invalid-scope-traversal", "ORCH|task=x|phase=implementation|route=normal|scope=src/../secret\nbody", expected_code="INVALID_SCOPE", expected_message="Scope must contain repository-relative paths without traversal.")
     add("unbounded-scope", "ORCH|task=x|phase=implementation|route=normal|scope=.\nbody", expected_code="UNBOUNDED_SCOPE", expected_message="Scope cannot resolve to the whole repository.")
     add("invalid-plan-pairing", "ORCH|task=x|phase=plan|route=normal\nbody", expected_code="INVALID_ENUM_VALUE", expected_message="The valid plan pairing is phase=plan with route=plan_standard; phase=plan cannot use other routes and route=plan_standard cannot use other phases.")
-    add("missing-sol-basis", "ORCH|task=x|phase=operation|route=normal\nbody", expected_code="SOL_ROUTE_NEEDS_BASIS", expected_message="route=normal runs gpt-6-sol. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle (gpt-6-luna) instead.")
+    add("missing-sol-basis", "ORCH|task=x|phase=operation|route=normal\nbody", expected_code="SOL_ROUTE_NEEDS_BASIS", expected_message="route=normal runs the Sol model. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle instead.")
     agy = _orch_config()
     agy["coder_agent"] = "agy"
     for route in agy["routes"].values():

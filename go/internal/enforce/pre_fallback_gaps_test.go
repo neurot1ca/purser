@@ -188,7 +188,7 @@ func TestPreFallbackGapsP63BFixture(t *testing.T) {
 					err = json.Unmarshal(advisor, &advisorState)
 				}
 				pending := mapValue(advisorState["fallback_pending"])
-				if err != nil || pending["line"] != item.Question || pending["model"] != "gpt-6-sol" || pending["project"] != repo || pending["notice"] != false || pending["blocked"] != false || pending["delivered"] != false {
+				if err != nil || pending["line"] != item.Question || pending["model"] != "gpt-6.1-sol" || pending["project"] != repo || pending["notice"] != false || pending["blocked"] != false || pending["delivered"] != false {
 					t.Fatalf("return question not queued: %v %#v", err, pending)
 				}
 			}

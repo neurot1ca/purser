@@ -84,7 +84,7 @@ func TestGearEligibilityDiscoveryAndRestore(t *testing.T) {
 	}
 	routeName := routes[0]
 	up := ResolveRoute(routeName, config, true)
-	if !up.Valid || *up.Model != "gpt-6-sol" || *up.Effort != "medium" {
+	if !up.Valid || *up.Model != "gpt-6.1-sol" || *up.Effort != "medium" {
 		t.Fatalf("gear up route = %#v", up)
 	}
 	down := ResolveRoute(routeName, config, false)

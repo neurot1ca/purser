@@ -65,10 +65,12 @@ behavior, leaving no semantic choice to the worker.
 |---|---|---|
 | Mechanical, narrow, low-risk; status or counting | `mechanical` | `gpt-6-luna` + `high` |
 | Narrow but semantically subtle, or fully resolved implementation | `subtle` | `gpt-6-luna` + `high` |
-| Ordinary implementation, debugging, or multi-file work with design left | `normal` | `gpt-6-sol` + `medium` |
-| Consequential and unresolved; diagnosis, design, or audit must find the rule | `consequential` | `gpt-6-sol` + `high` |
-| Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6-sol` + `xhigh` |
+| Ordinary implementation, debugging, or multi-file work with design left | `normal` | `gpt-6.1-sol` + `medium` |
+| Consequential and unresolved; diagnosis, design, or audit must find the rule | `consequential` | `gpt-6.1-sol` + `high` |
+| Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6.1-sol` + `xhigh` |
 | Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-6-luna` + `high` |
+
+Research/study jobs (source studies, docs research, analyses) use `route=normal` with basis `Research study: <question>`.
 
 Choose the lowest row likely to succeed in one pass; default to `subtle` when
 decisions are stated. `normal`, `consequential`, and `escalated` require `basis=`
@@ -76,7 +78,7 @@ naming the remaining design choice; the hook denies omission. Avoid cheap-first
 cascades: repair costs review. Effort cannot fix contradictory or unresolved
 prompts. Resolved consequential implementation may use `subtle` only with the
 accepted map and every invariant explicit; Claude still reviews it as
-consequential. `gpt-6-luna` + `xhigh` is invalid; unresolved work uses `gpt-6-sol`.
+consequential. `gpt-6-luna` + `xhigh` is invalid; unresolved work uses `gpt-6.1-sol`.
 
 Runtime configuration owns capability; never pass `sandbox` or
 `approval-policy`. Fail over on typed quota/credit exhaustion, never route
