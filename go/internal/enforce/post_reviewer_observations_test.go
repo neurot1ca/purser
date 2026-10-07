@@ -75,6 +75,35 @@ func TestPostReviewerObservationsPythonFixture(t *testing.T) {
 	}
 }
 
+func TestPostReviewerUnavailableDiagnosticsStayInTelemetry(t *testing.T) {
+	root := t.TempDir()
+	diagnostics := map[string]any{"reviewer_stdout": "stdout evidence", "reviewer_stderr": "stderr evidence", "reviewer_exit_code": 7, "reviewer_parse_error": "bad json"}
+	recordPostReviewerObservations(root, map[string]any{"session_id": "diagnostic-session"}, nil, "diagnostic-task", "0123456789abcdef",
+		true, "agy", "model", "", review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{"result": "REVIEWER1_UNAVAILABLE", "review_status": "UNAVAILABLE"}, Diagnostics: diagnostics},
+		nil, time.Second, -1)
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "events", "by_task", "diagnostic-task.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed map[string]any
+	for _, line := range splitObservationLines(data) {
+		var event map[string]any
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatal(err)
+		}
+		if event["event_type"] == "REVIEWER1_FAILED" {
+			failed = event
+		}
+	}
+	payload := mapValue(failed["payload"])
+	if failed == nil || payload["reviewer_stdout"] != "stdout evidence" || payload["reviewer_stderr"] != "stderr evidence" || payload["reviewer_exit"] != "exit code 7" || payload["reviewer_parse_error"] != "bad json" {
+		t.Fatalf("diagnostic telemetry = %#v", failed)
+	}
+	if _, leaked := review.Unavailable("REVIEWER_RESPONSE_INVALID", "bad", nil, "agy").Map()["reviewer_stdout"]; leaked {
+		t.Fatal("diagnostics leaked into Claude-facing attributes")
+	}
+}
+
 func splitObservationLines(data []byte) [][]byte {
 	var lines [][]byte
 	for len(data) > 0 {

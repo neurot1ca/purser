@@ -79,6 +79,15 @@ func TestSchedulePostReviewPythonFixture(t *testing.T) {
 	}
 }
 
+func TestSchedulePostReviewOperationSkipsBeforeDeltaValidation(t *testing.T) {
+	bundle := baseBundle("")
+	schedulePostReview(t.TempDir(), map[string]any{"phase": "operation"}, bundle, postProfile{}, nil,
+		map[string]any{}, time.Second, true, true)
+	if bundle["reviewer1_skipped_reason"] != review.PhaseOperation || bundle["claude_review_mode"] != review.Full {
+		t.Fatalf("operation review state = skipped:%v mode:%v", bundle["reviewer1_skipped_reason"], bundle["claude_review_mode"])
+	}
+}
+
 func anyList(values []string) []any {
 	result := make([]any, len(values))
 	for i, value := range values {

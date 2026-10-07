@@ -8,8 +8,9 @@ import (
 )
 
 type BridgeOutcome struct {
-	Outcome    string
-	Attributes map[string]any
+	Outcome     string
+	Attributes  map[string]any
+	Diagnostics map[string]any
 }
 
 // BridgeError marks invalid input and reviewer bridge failures as non-passes.

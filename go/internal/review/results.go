@@ -56,6 +56,7 @@ type UnavailableReview struct {
 	Provider                                    string
 	RetryCount                                  int
 	RetryRecovered                              bool
+	Diagnostics                                 map[string]any
 }
 
 func (r UnavailableReview) Map() map[string]any {
@@ -323,6 +324,9 @@ func ValidateResponse(value any) (map[string]any, error) {
 	}
 	if result == NoMaterialFinding && len(findings) > 0 {
 		return nil, errors.New("NO_MATERIAL finding verdict cannot include material findings")
+	}
+	if result == ChangesRequired && len(findings) == 0 {
+		return nil, errors.New("CHANGES_REQUIRED verdict must include at least one finding")
 	}
 	return map[string]any{"result": result, "validation": validation, "findings": clean}, nil
 }

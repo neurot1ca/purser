@@ -1942,7 +1942,7 @@ var observationRules = map[string]string{}
 
 var reviewerObservationFields = fields("reviewer1_retry_count reviewer1_retry_recovered reviewer1_provider reviewer1_model_requested served_model_attestation duration_ms gemini_usage_known gemini_input_tokens gemini_cached_input_tokens gemini_output_tokens gemini_reasoning_output_tokens gemini_total_tokens gemini_prompt_tokens gemini_completion_tokens gemini_cached_tokens gemini_cache_read_tokens gemini_cache_write_tokens gemini_thinking_tokens")
 var reviewerFinishedObservationFields = mergeFields(reviewerObservationFields, fields("reviewer1_result reviewer1_initial_finding_count"))
-var reviewerFailedObservationFields = mergeFields(reviewerObservationFields, fields("failure_code reviewer1_error_code reviewer1_result"))
+var reviewerFailedObservationFields = mergeFields(reviewerObservationFields, fields("failure_code reviewer1_error_code reviewer1_result reviewer_stdout reviewer_stderr reviewer_exit reviewer_parse_error"))
 
 var observationEventTypes = fields("TASK_ROUTE_SELECTED IMPLEMENTER_STARTED IMPLEMENTER_FINISHED IMPLEMENTER_FAILED MECHANICAL_MODEL_RANK_CHANGED REVIEWER1_STARTED REVIEWER1_FINISHED COMPACTION_ADVICE_OUTCOME STOP_BLOCKED SHADOW_FINISHED SCOPE_CONFLICT_OUTCOME REVIEWER1_SKIPPED REVIEWER1_FAILED ROUTING_PROTOCOL_VIOLATION THREAD_CONTINUITY_VIOLATION UNKNOWN_CONCURRENT_WRITER WORKFLOW_VERDICT_RECORDED TELEMETRY_WARNING CLAUDE_TASK_USAGE_RECORDED CONTEXT_IO_TURN_RECORDED CODEX_RESULT_UNFETCHED CLAUDE_DECISION_RECORDED WORKER_REPLAY_CONFLICT MECHANICAL_EDIT_OBSERVED MAINTENANCE_REPORT_FINISHED MAINTENANCE_REPORT_ACTED READINESS_CHECK_OUTCOME")
 
@@ -2057,6 +2057,7 @@ func init() {
 	setObservationRule("enum:denied queued promoted applied resolved_by_hand discarded expired", "action")
 	setObservationRule("time", "claude_usage_captured_at claude_5h_resets_at claude_7d_resets_at")
 	setObservationRule("scope", "claude_rate_limit_delta_scope")
+	setObservationRule("evidence", "reviewer_stdout reviewer_stderr reviewer_exit reviewer_parse_error")
 }
 
 func setObservationRule(rule, names string) {
@@ -2218,6 +2219,9 @@ func validateObservationValue(name string, value any) error {
 		parsed, err := time.Parse(time.RFC3339Nano, s)
 		_, offset := parsed.Zone()
 		valid = ok && len(s) <= 40 && err == nil && offset == 0
+	case rule == "evidence":
+		s, ok := value.(string)
+		valid = ok && len(s) <= 4200
 	case strings.HasPrefix(rule, "enum:"):
 		valid = oneOf(value, strings.TrimPrefix(rule, "enum:"))
 	case name == "model":

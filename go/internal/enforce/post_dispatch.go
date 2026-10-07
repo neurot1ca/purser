@@ -403,6 +403,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			}
 			return failed, failErr
 		}
+		_ = writePostDiagnostic(root, event, err)
 		response, failure := failAsyncFinalization(root, index, stringValue(loaded["post_tool_output_field"]))
 		return response, failure
 	}

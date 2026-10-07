@@ -155,11 +155,11 @@ func sortStrings(values []string) {
 func bridgeOutcome(value any) (BridgeOutcome, error) {
 	switch result := value.(type) {
 	case CompletedReview:
-		return BridgeOutcome{"completed", result.Map()}, nil
+		return BridgeOutcome{Outcome: "completed", Attributes: result.Map()}, nil
 	case UnavailableReview:
-		return BridgeOutcome{"unavailable", result.Map()}, nil
+		return BridgeOutcome{Outcome: "unavailable", Attributes: result.Map(), Diagnostics: result.Diagnostics}, nil
 	case IncompleteReview:
-		return BridgeOutcome{"incomplete", result.Map()}, nil
+		return BridgeOutcome{Outcome: "incomplete", Attributes: result.Map()}, nil
 	default:
 		return BridgeOutcome{}, errors.New("review returned an unknown outcome")
 	}
@@ -186,7 +186,7 @@ func bridgePanic(value any, args map[string]any) (BridgeOutcome, error) {
 		provider = "agy"
 	}
 	attrs := map[string]any{"reason": "REVIEWER_BRIDGE_EXCEPTION", "review_status": "UNAVAILABLE", "available": false, "provider": provider, "result": Reviewer1Unavailable, "validation": "UNKNOWN", "findings": []map[string]string{FindingMap("REVIEWER_BRIDGE_EXCEPTION", "Reviewer-1 failed unexpectedly ("+name+").")}, "error_code": "REVIEWER_BRIDGE_EXCEPTION", "reviewer1_model_requested": model, "served_model_attestation": "UNAVAILABLE"}
-	return BridgeOutcome{"unavailable", attrs}, &BridgeError{Code: "REVIEWER_BRIDGE_EXCEPTION", Err: fmt.Errorf("reviewer panic (%s)", name)}
+	return BridgeOutcome{Outcome: "unavailable", Attributes: attrs}, &BridgeError{Code: "REVIEWER_BRIDGE_EXCEPTION", Err: fmt.Errorf("reviewer panic (%s)", name)}
 }
 
 func nativeReview(ctx context.Context, pluginRoot string, args map[string]any) (BridgeOutcome, error) {
@@ -365,10 +365,11 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		}
 		return bridgeOutcome(Unavailable(code, "Reviewer-1 response or configuration was invalid ("+errorType(err)+"): "+err.Error(), config, provider))
 	}
-	stdout, stderr, elapsed, retries, callErr, exitCode := invokePacket(ctx, adapter, command, working, remaining)
+	stdout, stderr, elapsed, retries, callErr, exitCode, evidence := invokePacket(ctx, adapter, command, working, remaining)
 	if callErr != "" {
 		unavailable := Unavailable(callErr, reviewerFailureMessage(callErr, retries, exitCode), config, provider)
 		unavailable.ElapsedSeconds = nativeFloatPtr(elapsed.Seconds())
+		unavailable.Diagnostics = reviewerDiagnostics(evidence, callErr, elapsed, exitCode, "")
 		if stderr != "" {
 			unavailable.StderrTail = StderrTail(stderr)
 		}
@@ -384,12 +385,14 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		}
 		unavailable.DecoderDetail = &detail
 		unavailable.ElapsedSeconds = nativeFloatPtr(elapsed.Seconds())
+		unavailable.Diagnostics = reviewerDiagnostics(evidence, "", elapsed, 0, detail)
 		return bridgeOutcome(unavailable)
 	}
 	response := parsed["response"].(map[string]any)
 	if response["result"] == Reviewer1Unavailable {
 		unavailable := Unavailable("REVIEWER_MODEL_REPORTED_UNAVAILABLE", "Reviewer-1 returned REVIEWER1_UNAVAILABLE."+retrySuffix(retries), config, provider)
 		unavailable.ElapsedSeconds = nativeFloatPtr(elapsed.Seconds())
+		unavailable.Diagnostics = reviewerDiagnostics(evidence, "", elapsed, 0, "reviewer model reported unavailable")
 		if stderr != "" {
 			unavailable.StderrTail = StderrTail(stderr)
 		}
@@ -398,6 +401,22 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	result, _ := response["result"].(string)
 	findings, _ := response["findings"].([]any)
 	return bridgeOutcome(CompletedReview{Result: result, Validation: response["validation"].(string), Findings: findingsFromAny(findings), ConversationID: parsed["conversation_id"].(string), Reviewer1ModelRequested: RequestedModel(config), DurationSeconds: parsed["duration_seconds"].(*float64), Usage: parsed["usage"].(map[string]any), Provider: provider, ServedModelAttestation: fmt.Sprint(parsed["served_model_attestation"]), RetryCount: retries, RetryRecovered: retries > 0})
+}
+
+func reviewerDiagnostics(evidence map[string]any, failure string, elapsed time.Duration, exitCode int, parseError string) map[string]any {
+	diagnostics := map[string]any{"reviewer_elapsed_seconds": elapsed.Seconds()}
+	for key, value := range evidence {
+		diagnostics[key] = value
+	}
+	if failure == "REVIEWER_TIMEOUT" {
+		diagnostics["reviewer_exit"] = fmt.Sprintf("timeout after %.3fs", elapsed.Seconds())
+	} else if exitCode != 0 {
+		diagnostics["reviewer_exit_code"] = exitCode
+	}
+	if parseError != "" {
+		diagnostics["reviewer_parse_error"] = parseError
+	}
+	return diagnostics
 }
 
 func isFinite(value float64) bool           { return !math.IsInf(value, 0) && !math.IsNaN(value) }
@@ -437,13 +456,13 @@ func reviewerFailureMessage(code string, retries, exitCode int) string {
 	}
 }
 
-func invokePacket(parent context.Context, adapter Adapter, command []string, cwd string, timeout time.Duration) ([]byte, string, time.Duration, int, string, int) {
+func invokePacket(parent context.Context, adapter Adapter, command []string, cwd string, timeout time.Duration) ([]byte, string, time.Duration, int, string, int, map[string]any) {
 	started := time.Now()
 	retried := 0
 	for {
 		remaining := timeout - time.Since(started)
 		if remaining <= 0 {
-			return nil, "", time.Since(started), retried, "REVIEWER_TIMEOUT", 0
+			return nil, "", time.Since(started), retried, "REVIEWER_TIMEOUT", 0, nil
 		}
 		ctx, cancel := context.WithTimeout(parent, remaining)
 		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
@@ -461,41 +480,58 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, cwd
 		cmd.Stderr = &stderr
 		err := cmd.Run()
 		elapsed := time.Since(started)
+		evidence := map[string]any{"reviewer_stdout": stdout.evidence(), "reviewer_stderr": stderr.evidence()}
 		timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err == nil {
 			if stdout.overflowed {
-				return nil, StderrValue(stderr.Bytes()), elapsed, retried, ResponseInvalid, 0
+				return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, ResponseInvalid, 0, evidence
 			}
-			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "", 0
+			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "", 0, evidence
 		}
 		if timedOut {
-			return nil, StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_TIMEOUT", 0
+			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_TIMEOUT", 0, evidence
 		}
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) {
-			return nil, StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_EXECUTABLE_MISSING", 0
+			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_EXECUTABLE_MISSING", 0, evidence
 		}
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) {
-			return nil, StderrValue(stderr.Bytes()), elapsed, retried, ResponseInvalid, 0
+			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, ResponseInvalid, 0, evidence
 		}
 		left := timeout - elapsed
 		if retried == 0 && elapsed < time.Duration(fastProcessFailureRetrySeconds*float64(time.Second)) && left > time.Duration(minRetryRemainingSeconds*float64(time.Second)) {
 			retried = 1
 			continue
 		}
-		return nil, StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_PROCESS_FAILED", exit.ExitCode()
+		return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_PROCESS_FAILED", exit.ExitCode(), evidence
 	}
 }
 
 type boundedBuffer struct {
 	bytes.Buffer
-	limit      int
-	tail       bool
-	overflowed bool
+	limit         int
+	tail          bool
+	overflowed    bool
+	evidenceHead  []byte
+	evidenceTail  []byte
+	evidenceBytes int
 }
 
 func (b *boundedBuffer) Write(value []byte) (int, error) {
+	const evidenceLimit = 2048
+	if len(b.evidenceHead) < evidenceLimit {
+		b.evidenceHead = append(b.evidenceHead, value[:min(len(value), evidenceLimit-len(b.evidenceHead))]...)
+	}
+	b.evidenceBytes += len(value)
+	if len(value) >= evidenceLimit {
+		b.evidenceTail = append(b.evidenceTail[:0], value[len(value)-evidenceLimit:]...)
+	} else {
+		if overflow := len(b.evidenceTail) + len(value) - evidenceLimit; overflow > 0 {
+			b.evidenceTail = b.evidenceTail[overflow:]
+		}
+		b.evidenceTail = append(b.evidenceTail, value...)
+	}
 	if b.tail {
 		if len(value) >= b.limit {
 			b.Reset()
@@ -519,6 +555,18 @@ func (b *boundedBuffer) Write(value []byte) (int, error) {
 	}
 	_, _ = b.Buffer.Write(keep)
 	return len(value), nil
+}
+
+func (b *boundedBuffer) evidence() string {
+	const evidenceLimit = 2048
+	if b.evidenceBytes <= evidenceLimit {
+		return string(b.evidenceHead)
+	}
+	if b.evidenceBytes <= evidenceLimit*2 {
+		overlap := evidenceLimit*2 - b.evidenceBytes
+		return string(b.evidenceHead) + string(b.evidenceTail[overlap:])
+	}
+	return string(b.evidenceHead) + "\n...[truncated]...\n" + string(b.evidenceTail)
 }
 
 func StderrValue(value []byte) string {

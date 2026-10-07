@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"purser-hook/internal/review"
@@ -92,6 +93,16 @@ func recordPostReviewerObservations(root string, event map[string]any, repositor
 		}
 		if payload["reviewer1_error_code"] == nil && failureCode == "REVIEWER1_UNAVAILABLE" {
 			payload["reviewer1_error_code"] = failureCode
+		}
+	}
+	if len(result.Diagnostics) > 0 {
+		for key, value := range result.Diagnostics {
+			switch key {
+			case "reviewer_stdout", "reviewer_stderr", "reviewer_parse_error", "reviewer_exit":
+				payload[key] = value
+			case "reviewer_exit_code":
+				payload["reviewer_exit"] = "exit code " + fmt.Sprint(value)
+			}
 		}
 	}
 	preEmit(root, event, repository, taskID, project, "REVIEWER1_FAILED", payload)

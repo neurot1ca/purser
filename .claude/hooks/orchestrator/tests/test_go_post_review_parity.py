@@ -16,6 +16,7 @@ import codex
 CASES = [
     {"name": "no_delta", "phase": "implementation", "lines": 0, "files": 0, "checks": []},
     {"name": "plan_phase", "phase": "plan", "lines": 1, "files": 1, "checks": []},
+    {"name": "operation_phase", "phase": "operation", "lines": 1, "files": 1, "checks": []},
     {"name": "small_delta_audit", "phase": "implementation", "lines": 1, "files": 1, "checks": []},
     {"name": "large_delta_full", "phase": "implementation", "lines": 60, "files": 3, "checks": []},
     {"name": "protected_path_full", "phase": "implementation", "lines": 1, "files": 1, "protected": True, "checks": []},
@@ -88,6 +89,8 @@ def _oracle(case, root):
         "side_effect_paths": (observed.get("hook_checks_full") or {}).get("side_effect_paths", []),
         "findings_codes": [item.get("code") for item in result.get("findings", [])
                            if item.get("code") in {"PROFILE_FORCES_FULL", "HOOK_CHECK_FAILED", "HOOK_CHECK_UNKNOWN", "HOOK_CHECK_SIDE_EFFECTS", "TASK_CONTRACT_NOT_GROUNDED"}]}
+    if case["phase"] == "operation":
+        expected.update({"claude_review_mode": "FULL", "reviewer1_skipped_reason": "PHASE_OPERATION"})
     return {"name": case["name"], "phase": pending["phase"], "route": pending["route"], "delta": delta,
         "pending": serialized_pending, "profile": {"stored": True, "force_full_review": pending["force_full_review"], "protected_paths": pending["protected_paths"],
             "skip_max_lines": pending["skip_max_lines"], "skip_max_files": pending["skip_max_files"], "reviewer": pending.get("reviewer", "agy")},

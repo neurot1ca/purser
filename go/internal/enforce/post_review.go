@@ -14,6 +14,12 @@ import (
 func schedulePostReview(repoRoot string, pending map[string]any, bundle map[string]any, resolved postProfile, configured []profile.Check, gateConfig map[string]any, checkDeadline time.Duration, reviewerAvailable, routeKnown bool) {
 	delta, _ := bundle["delta"].(map[string]any)
 	phase := stringValue(pending["phase"])
+	if phase == "operation" {
+		bundle["reviewer1_result"] = nil
+		bundle["reviewer1_skipped_reason"] = review.PhaseOperation
+		bundle["claude_review_mode"] = review.Full
+		return
+	}
 	if delta == nil || delta["status"] != "OK" {
 		bundle["claude_review_mode"] = review.Full
 		return

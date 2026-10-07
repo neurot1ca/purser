@@ -321,6 +321,9 @@ func parse(stdout []byte) Outcome {
 	if result == "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE" && len(findings) != 0 {
 		return invalid()
 	}
+	if result == "CHANGES_REQUIRED" && len(findings) == 0 {
+		return invalid()
+	}
 	return Outcome{ReviewStatus: "COMPLETED", Result: result, Validation: validation, Findings: validatedFindings}
 }
 

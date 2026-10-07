@@ -127,7 +127,7 @@ func RunReadiness(ctx context.Context, pluginRoot string, request ReadinessReque
 	if !modelBound {
 		return unknownReadiness(), errors.New("readiness model could not be bound to the checker command")
 	}
-	stdout, _, _, _, callErr, _ := invokePacket(ctx, adapter, command, working, timeout)
+	stdout, _, _, _, callErr, _, _ := invokePacket(ctx, adapter, command, working, timeout)
 	if callErr != "" {
 		return unknownReadiness(), &BridgeError{Code: callErr}
 	}

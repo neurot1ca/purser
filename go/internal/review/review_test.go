@@ -134,6 +134,17 @@ func TestReviewerAGYCommandAndOutcomes(t *testing.T) {
 	}
 }
 
+func TestChangesRequiredNeedsFinding(t *testing.T) {
+	_, err := ValidateResponse(map[string]any{"result": "CHANGES_REQUIRED", "validation": "FAIL", "findings": []any{}})
+	if err == nil {
+		t.Fatal("CHANGES_REQUIRED without findings was accepted")
+	}
+	envelope := []byte(`{"conversation_id":"fixture","status":"SUCCESS","response":"","duration_seconds":0.1,"num_turns":1,"usage":{},"structured_output":{"result":"CHANGES_REQUIRED","validation":"FAIL","findings":[]}}`)
+	if got := parse(envelope); got.ReviewStatus != "UNAVAILABLE" || got.ErrorCode != "REVIEWER_RESPONSE_INVALID" {
+		t.Fatalf("native response outcome = %#v", got)
+	}
+}
+
 func TestReviewDecisionPrimitives(t *testing.T) {
 	tests := []struct {
 		name, source string

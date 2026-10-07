@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -317,6 +318,18 @@ func TestPostToolUseAsyncResultDispatch(t *testing.T) {
 	}
 	if got := responseBundle(t, response); got["thread_id"] != "thread-dispatch" {
 		t.Fatalf("async result bundle: %#v", got)
+	}
+}
+
+func TestAsyncFinalizeFailureWritesUnderlyingError(t *testing.T) {
+	root := t.TempDir()
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_result", "tool_use_id": "finalize-diagnostic"}
+	if err := writePostDiagnostic(root, event, errors.New("specific finalize cause")); err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(root, "diagnostics.jsonl"))
+	if readErr != nil || !strings.Contains(string(data), "specific finalize cause") {
+		t.Fatalf("diagnostic = %s, err=%v", data, readErr)
 	}
 }
 
