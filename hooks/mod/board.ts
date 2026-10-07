@@ -257,8 +257,9 @@ export function registerBoard(on) {
       }))
       if (!prior) return Box({ width: e.props.bodyColumns, flexDirection: 'row', flexWrap: 'nowrap', children: content })
       // The engine refuses its own node under a Box with a width, so the outer row stays unsized.
+      // It wraps so a narrow window moves the board below the band instead of drawing over it.
       return Box({
-        flexDirection: 'row', flexWrap: 'nowrap',
+        flexDirection: 'row', flexWrap: 'wrap',
         children: [prior, Text({ children: ' · ', dimColor: true }),
           Box({ flexDirection: 'row', flexWrap: 'nowrap', flexShrink: 1, children: content })],
       })
