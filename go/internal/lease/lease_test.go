@@ -1,7 +1,9 @@
 package lease
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +38,81 @@ func TestAdmissionHelper(t *testing.T) {
 	got := New(root).Acquire("owner", "task", []string{"src"}, AcquireOptions{}, 100)
 	if got.Status != "OK" || got.Code != "LEASE_ACQUIRED" {
 		t.Fatalf("free scope admission: %#v", got)
+	}
+}
+
+func TestAdmissionReleasesStaleJobLease(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		jobState string
+		missing  bool
+		seedNow  float64
+		retryNow float64
+	}{
+		{name: "missing_job", missing: true, seedNow: 100, retryNow: 100 + missingJobOrphanSeconds + 1},
+		{name: "terminal_job_worktree_gone", jobState: "SUCCEEDED", seedNow: 100, retryNow: 101},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := New(filepath.Join(root, "projects", "project"))
+			call := "terminal fixture"
+			jobID := fmt.Sprintf("%x", sha256.Sum256([]byte(call)))
+			if !tc.missing {
+				jobs := filepath.Join(root, "codex_exec_mcp", "jobs")
+				if err := os.MkdirAll(jobs, 0700); err != nil {
+					t.Fatal(err)
+				}
+				job, err := json.Marshal(map[string]any{"jobId": jobID, "call": call, "state": tc.jobState,
+					"worktreePath": filepath.Join(root, "removed-worktree")})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(jobs, jobID+".json"), job, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := store.Acquire("stale", "old-task", []string{"src"}, AcquireOptions{JobID: &jobID}, tc.seedNow); got.Status != "OK" {
+				t.Fatalf("seed stale lease: %#v", got)
+			}
+			got := store.Acquire("next", "next-task", []string{"src"}, AcquireOptions{}, tc.retryNow)
+			if got.Status != "OK" || got.Code != "LEASE_ACQUIRED" {
+				t.Fatalf("stale owner blocked admission: %#v", got)
+			}
+			value, err := store.read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			owners := value["owners"].(map[string]any)
+			if owners["stale"].(map[string]any)["state"] != "RELEASED" || owners["next"].(map[string]any)["state"] != "ACTIVE" {
+				t.Fatalf("stale lease was not reconciled: %#v", owners)
+			}
+		})
+	}
+}
+
+func TestAdmissionKeepsRecentMissingJobLease(t *testing.T) {
+	root := t.TempDir()
+	store := New(filepath.Join(root, "projects", "project"))
+	call := "recent missing fixture"
+	jobID := fmt.Sprintf("%x", sha256.Sum256([]byte(call)))
+	nextCall := "next fixture"
+	nextJobID := fmt.Sprintf("%x", sha256.Sum256([]byte(nextCall)))
+	if got := store.Acquire("recent", "recent-task", []string{"src"}, AcquireOptions{JobID: &jobID}, 100); got.Status != "OK" {
+		t.Fatalf("seed recent lease: %#v", got)
+	}
+	got := store.Acquire("next", "next-task", []string{"src"}, AcquireOptions{
+		JobID: &nextJobID, QueueConflict: true,
+	}, 101)
+	if got.Status != "OK" || got.Code != "LEASE_QUEUED" {
+		t.Fatalf("recent missing lease did not block the next admission: %#v", got)
+	}
+	value, err := store.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := value["owners"].(map[string]any)
+	if owners["recent"].(map[string]any)["state"] != "ACTIVE" || owners["next"].(map[string]any)["state"] != "QUEUED" {
+		t.Fatalf("recent missing lease was reconciled too early: %#v", owners)
 	}
 }
 

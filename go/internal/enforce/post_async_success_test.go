@@ -181,12 +181,29 @@ func TestFinishAsyncSuccessRemainingFixtureCases(t *testing.T) {
 			if retained, ok := want["lease_retention_after"].(float64); ok {
 				leaseState, leaseErr := readAsyncObject(filepath.Join(state, "projects", stringValue(index["project_key"]), "scope_leases.json"))
 				owner := mapValue(mapValue(leaseState["owners"])[stringValue(pending["lease_owner"])])
-				if leaseErr != nil || owner["retention_after"] != retained {
+				if name == "unapplied_worktree_lease_retained" {
+					if leaseErr != nil || owner["state"] != "RELEASED" {
+						t.Fatalf("no-delta worktree lease state=%v err=%v", owner["state"], leaseErr)
+					}
+				} else if leaseErr != nil || owner["retention_after"] != retained {
 					t.Fatalf("lease retention=%v want %v err=%v", owner["retention_after"], retained, leaseErr)
 				}
 			}
 			_ = job
 		})
+	}
+}
+
+func TestFinalizeNoDeltaReleasesScopeLease(t *testing.T) {
+	state, repo, event, index, pending, original, _, resolved, loaded := newAsyncSuccessCase(t, "unapplied_worktree_lease_retained")
+	if _, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	leases, err := readAsyncObject(filepath.Join(state, "projects", stringValue(pending["project_key"]), "scope_leases.json"))
+	owner := mapValue(mapValue(leases["owners"])[stringValue(pending["lease_owner"])])
+	if err != nil || owner["state"] != "RELEASED" {
+		t.Fatalf("no-delta lease state=%v err=%v", owner["state"], err)
 	}
 }
 

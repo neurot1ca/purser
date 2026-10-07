@@ -109,6 +109,23 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	if _, err = assemblePostDelta(repoRoot, pending, bundle, resolved.ProtectedPaths, nil); err != nil {
 		return nil, err
 	}
+	noDelta := stringValue(pending["phase"]) == "operation"
+	if count, exists := bundle["delta_files"]; exists && numberOr(count, -1) == 0 {
+		noDelta = true
+	}
+	paths, pathsOK := postStringList(bundle["changed_paths"])
+	if mapValue(bundle["delta"])["status"] == ledger.OK && pathsOK && len(paths) == 0 {
+		noDelta = true
+	}
+	if noDelta {
+		owner := stringValue(pending["lease_owner"])
+		if owner != "" {
+			err = leaseRelease(root, stringValue(pending["project_key"]), owner)
+			if err != nil && err.Error() != "LEASE_OWNER_MISSING" {
+				return nil, fmt.Errorf("scope lease cleanup failed: %w", err)
+			}
+		}
+	}
 	schedulePostReview(repoRoot, pending, bundle, resolved, checks, gateConfig, 30*time.Second, true, true)
 	delta := mapValue(bundle["delta"])
 	if bundle["reviewer1_skipped_reason"] == nil && bundle["claude_review_mode"] == review.Full {

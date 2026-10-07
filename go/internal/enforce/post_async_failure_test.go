@@ -89,6 +89,11 @@ func TestPostAsyncFailurePythonFixture(t *testing.T) {
 			if _, statErr := os.Stat(filepath.Join(root, "pending", key+".json")); !os.IsNotExist(statErr) {
 				t.Fatalf("pending remains: %v", statErr)
 			}
+			leases, leaseErr := readAsyncObject(filepath.Join(root, "projects", stringValue(pending["project_key"]), "scope_leases.json"))
+			owner := mapValue(mapValue(leases["owners"])[stringValue(pending["lease_owner"])])
+			if leaseErr != nil || owner["state"] != "RELEASED" {
+				t.Fatalf("terminal failure lease state=%v err=%v", owner["state"], leaseErr)
+			}
 			evidence, readErr := readAsyncObject(filepath.Join(root, "raw_tool_outputs", key+"-failure.json"))
 			if readErr != nil || !reflect.DeepEqual(replaceFailureRoot(evidence, root), want["evidence"]) {
 				t.Fatalf("evidence = %#v, %v", evidence, readErr)
@@ -103,6 +108,27 @@ func TestPostAsyncFailurePythonFixture(t *testing.T) {
 				t.Fatalf("failure observation missing: %v", obsErr)
 			}
 		})
+	}
+}
+
+func TestAsyncFailureFinalizeErrorReleasesScopeLease(t *testing.T) {
+	root := t.TempDir()
+	project, owner, call := "project-fixture", "lease-owner", "failed async call"
+	id := jobHash(call)
+	writeAsyncFixtureObject(t, filepath.Join(root, "codex_exec_mcp", "jobs"), id,
+		map[string]any{"jobId": id, "call": call, "state": "FAILED"})
+	index := map[string]any{"jobId": id, "call": call, "call_key": "invalid-call-key", "project_key": project, "stage": "FINALIZING"}
+	pending := map[string]any{"lease_owner": owner, "project_key": project}
+	if got := lease.New(filepath.Join(root, "projects", project)).Acquire(owner, "failed-task", []string{"src"}, lease.AcquireOptions{}, 100); got.Status != "OK" {
+		t.Fatalf("seed lease: %#v", got)
+	}
+	if _, handled, err := finalizeAsyncFailure(root, map[string]any{}, index, pending); err == nil || !handled {
+		t.Fatalf("finalize error handled=%v err=%v", handled, err)
+	}
+	leases, err := readAsyncObject(filepath.Join(root, "projects", project, "scope_leases.json"))
+	leaseOwner := mapValue(mapValue(leases["owners"])[owner])
+	if err != nil || leaseOwner["state"] != "RELEASED" {
+		t.Fatalf("finalize error lease state=%v err=%v", leaseOwner["state"], err)
 	}
 }
 

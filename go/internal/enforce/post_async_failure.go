@@ -36,6 +36,19 @@ func finalizeAsyncFailure(root string, event, index, pending map[string]any) (ma
 	default:
 		return nil, false, nil
 	}
+	project := stringValue(index["project_key"])
+	if project == "" {
+		project = stringValue(pending["project_key"])
+	}
+	owner := stringValue(pending["lease_owner"])
+	if owner == "" {
+		owner = stringValue(index["call_key"])
+	}
+	if project != "" && owner != "" {
+		defer func() {
+			_ = lease.New(filepath.Join(root, "projects", project)).Release(owner, float64(time.Now().UnixNano())/1e9)
+		}()
+	}
 	key := stringValue(index["call_key"])
 	if !asyncHash.MatchString(key) {
 		return nil, true, errors.New("async failure call key is invalid")
