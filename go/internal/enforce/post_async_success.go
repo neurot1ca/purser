@@ -67,6 +67,11 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		bundle["worker_validation"] = worker
 		bundle["validation"] = worker["status"]
 	}
+	if stringValue(pending["phase"]) == "plan" {
+		if _, planErr := storePostPlan(root, original, pending["task_id"], content, bundle); planErr != nil {
+			return nil, planErr
+		}
+	}
 	normalized := pythonCodexResultJSON(event["tool_response"], value)
 	if len(normalized) == 0 {
 		normalized, _ = canonicalJSON(value)

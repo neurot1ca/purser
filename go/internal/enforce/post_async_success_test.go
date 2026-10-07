@@ -190,6 +190,47 @@ func TestFinishAsyncSuccessRemainingFixtureCases(t *testing.T) {
 	}
 }
 
+func TestPostAsyncPlanCompletionStoresCompleteArtifact(t *testing.T) {
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("USERPROFILE", t.TempDir())
+	state, _, event, _, pending, original, _, _, _ := newAsyncSuccessCase(t, "plan_completion")
+	pending["phase"] = "plan"
+	plan := "# Summary: Async plan\n\nThe complete plan is stored here.\n\n## Milestone\nImplement it.\n"
+	event["tool_response"] = map[string]any{"structuredContent": map[string]any{
+		"jobId": stringValue(event["tool_input"].(map[string]any)["jobId"]), "state": "SUCCEEDED", "threadId": "thread-fixture", "content": plan,
+	}}
+	if err = writeAsyncObject(pendingPathForAsync(state, original), pending); err != nil {
+		t.Fatal(err)
+	}
+	response, err := PostToolUse(event, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := responseBundle(t, response)
+	planPath := stringValue(bundle["plan_path"])
+	if planPath == "" || stringValue(bundle["plan_summary"]) == "" {
+		t.Fatalf("async plan artifact pointer missing: %#v", bundle)
+	}
+	content, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != plan {
+		t.Fatalf("stored plan=%q want %q", content, plan)
+	}
+	replayed, err := PostToolUse(event, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stringValue(responseBundle(t, replayed)["plan_path"]); got != planPath {
+		t.Fatalf("replayed plan path=%q want %q", got, planPath)
+	}
+}
+
 func asyncSuccessEqual(a, b map[string]any) bool {
 	left, leftErr := canonicalJSON(a)
 	right, rightErr := canonicalJSON(b)
