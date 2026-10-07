@@ -68,6 +68,38 @@ func TestStartValidationPythonParity(t *testing.T) {
 	}
 }
 
+func TestValidateStartDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	args := map[string]any{"call": "00000000-0000-0000-0000-000000000001", "prompt": "run"}
+	request, failure := ValidateStart(args, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }})
+	root, err := resolveRepositoryRoot()
+	if err != nil || failure != nil || filepath.Clean(strings.ReplaceAll(root, "/", string(filepath.Separator))) != filepath.Clean(repo) {
+		t.Fatalf("missing cwd did not resolve to repository root: root=%q request=%#v failure=%#v err=%v", root, request, failure, err)
+	}
+	argv, err := BuildCodexCommand(LaunchArgs{Name: "codex", Cwd: root, BinaryOverride: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, value := range argv {
+		if value == "-C" && (i+1 == len(argv) || argv[i+1] == "") {
+			t.Fatalf("empty --cd value in argv: %#v", argv)
+		}
+	}
+	emptyArgs := map[string]any{"call": "00000000-0000-0000-0000-000000000002", "prompt": "run", "cwd": ""}
+	if _, failure = ValidateStart(emptyArgs, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }}); failure != nil {
+		t.Fatalf("empty cwd was not defaultable: %#v", failure)
+	}
+}
+
 func replayStart(t *testing.T, c startCase) {
 	state := t.TempDir()
 	expand := map[string]string{"<ROOT>": state}

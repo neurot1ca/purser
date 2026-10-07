@@ -403,7 +403,8 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			}
 			return failed, failErr
 		}
-		return nil, errors.New("async result could not be finalized")
+		response, failure := failAsyncFinalization(root, index, stringValue(loaded["post_tool_output_field"]))
+		return response, failure
 	}
 	if bundle := postResponseBundle(response, loaded); bundle != nil {
 		PostImplementerObservations(original, pending, bundle, root)
@@ -417,6 +418,22 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	}
 	contextio.ClearCompletedGearAdviceRecovery(root, stringValue(index["project_key"]), stringValue(index["jobId"]))
 	return response, err
+}
+
+func failAsyncFinalization(root string, index map[string]any, outputField string) (map[string]any, error) {
+	if outputField == "" {
+		outputField = "updatedToolOutput"
+	}
+	response, err := replacement(map[string]any{"status": "FAILED", "errorCode": "INTERNAL_POST_ERROR",
+		"message": "async result could not be finalized", "ambiguous_outcome": true, "claude_review_mode": review.Full}, outputField)
+	if err != nil {
+		return nil, err
+	}
+	index["stage"], index["errorCode"], index["claude_review_mode"], index["response"] = "FAILED", "INTERNAL_POST_ERROR", review.Full, response
+	if err = atomicAdmissionJSON(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func postResponseBundle(response, loaded map[string]any) map[string]any {

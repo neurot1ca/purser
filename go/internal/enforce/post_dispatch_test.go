@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -342,6 +343,36 @@ func TestPostAsyncDispatchWrapsEmptyCachedResponse(t *testing.T) {
 	if mapValue(response["hookSpecificOutput"]) == nil {
 		t.Fatalf("cached fallback is not replacement-wrapped: %#v", response)
 	}
+}
+
+func TestFailedAsyncFinalizationIsTerminalAndReturnsCachedError(t *testing.T) {
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("USERPROFILE", t.TempDir())
+	state, repo, event, index, pending, original, _, _, _ := newAsyncSuccessCase(t, "forced_finalize_failure")
+	pending["scope"] = "malformed"
+	if err = writeAsyncObject(pendingPathForAsync(state, original), pending); err != nil {
+		t.Fatal(err)
+	}
+	response, err := postAsyncDispatch(event, state)
+	if err != nil || response == nil {
+		t.Fatalf("failed finalization response=%#v err=%v", response, err)
+	}
+	stored, err := readAsyncObject(filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json"))
+	if err != nil || stored["stage"] != "FAILED" || stored["errorCode"] != "INTERNAL_POST_ERROR" || stored["claude_review_mode"] != review.Full || !reflect.DeepEqual(stored["response"], response) {
+		t.Fatalf("terminal failure index=%#v err=%v", stored, err)
+	}
+	if bundle := postResponseBundle(response, map[string]any{"post_tool_output_field": "updatedToolOutput"}); bundle["claude_review_mode"] != review.Full {
+		t.Fatalf("terminal failure did not force FULL review: %#v", bundle)
+	}
+	repeated, err := postAsyncDispatch(event, state)
+	if err != nil || !reflect.DeepEqual(repeated, response) {
+		t.Fatalf("repeat result=%#v err=%v, want cached %#v", repeated, err, response)
+	}
+	_ = repo
 }
 
 func mustPendingPath(t *testing.T, root string, event map[string]any) string {

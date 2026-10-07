@@ -77,7 +77,7 @@ def test_go_start_validation_matches_python_oracle(tmp_path, monkeypatch):
         _invalid("uuid", {"call": "bad", "prompt": "p"}, tmp_path, monkeypatch),
         _invalid("timeout", {"call": CALL, "prompt": "p", "timeoutSeconds": True}, tmp_path, monkeypatch),
         _invalid("mode", {"call": CALL, "prompt": "p", "mode": "resume"}, tmp_path, monkeypatch),
-        _invalid("cwd", {"call": CALL, "prompt": "p", "cwd": ""}, tmp_path, monkeypatch),
+        _invalid("cwd_type", {"call": CALL, "prompt": "p", "cwd": 1}, tmp_path, monkeypatch),
         _invalid("model", {"call": CALL, "prompt": "p", "model": 1}, tmp_path, monkeypatch),
         _invalid("config_type", {"call": CALL, "prompt": "p", "config": []}, tmp_path, monkeypatch),
         _invalid("config_value", {"call": CALL, "prompt": "p", "config": {"x": None}}, tmp_path, monkeypatch),

@@ -231,6 +231,40 @@ func TestPostAsyncPlanCompletionStoresCompleteArtifact(t *testing.T) {
 	}
 }
 
+func TestReplyAfterAppliedWorktreeFinalizesOnlyReplyDelta(t *testing.T) {
+	state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, "applied_reply")
+	worktree := filepath.Join(state, "reply-worktree")
+	runAsyncSuccessGit(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// applied\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, err := ledger.RebaseAppliedReply(repo, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(worktree, "src", "file.go"))
+	if err != nil || !strings.Contains(string(content), "// applied") {
+		t.Fatalf("reply worktree did not include applied state: %q err=%v", content, err)
+	}
+	if err = os.WriteFile(filepath.Join(worktree, "src", "reply.go"), []byte("package src\n// reply\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	job["worktreePath"], job["repoRoot"], job["snapshot"] = worktree, repo, snapshot
+	job["finishedAt"] = float64(1700000000)
+	if err = atomicAdmissionJSON(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	response, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := responseBundle(t, response)
+	if !reflect.DeepEqual(bundle["changed_paths"], []any{"src/reply.go"}) {
+		t.Fatalf("reply delta includes applied changes or omits reply changes: bundle=%#v", bundle)
+	}
+}
+
 func asyncSuccessEqual(a, b map[string]any) bool {
 	left, leftErr := canonicalJSON(a)
 	right, rightErr := canonicalJSON(b)

@@ -92,6 +92,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	}
 	args.Name = launch.Name
 	args.OutputPath = filepath.Join(dir, jobID+".host-output")
+	if args.Cwd == "" {
+		args.Cwd, err = resolveRepositoryRoot()
+		if err != nil {
+			return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Repository root could not be resolved for Codex launch")
+		}
+	}
 	defer os.Remove(args.OutputPath)
 	agent := launch.Agent
 	if agent == "" {

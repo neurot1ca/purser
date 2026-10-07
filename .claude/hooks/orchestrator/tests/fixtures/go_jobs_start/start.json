@@ -130,11 +130,11 @@
       }
     },
     {
-      "name": "cwd",
+      "name": "cwd_type",
       "args": {
         "call": "00000000-0000-4000-8000-000000000001",
         "prompt": "p",
-        "cwd": ""
+        "cwd": 1
       },
       "result": {
         "content": [

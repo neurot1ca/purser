@@ -25,7 +25,7 @@ func PostToolUseFailureAsyncFollowup(event map[string]any, root string) map[stri
 		return asyncFailureInterrupted()
 	}
 	defer releaseTaskUsageLock(lock)
-	if index["stage"] == "CONSUMED" {
+	if index["stage"] == "CONSUMED" || index["stage"] == "FAILED" {
 		if response, ok := cached.(map[string]any); ok && response != nil {
 			asyncFailureCleanupConsumed(root, index, pending, event)
 			return response

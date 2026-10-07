@@ -41,7 +41,7 @@ func claimAsyncResult(root string, event map[string]any, repoRoot string) (*os.F
 	if err != nil {
 		return release(err)
 	}
-	if index["stage"] == "CONSUMED" {
+	if index["stage"] == "CONSUMED" || index["stage"] == "FAILED" {
 		return lock, index, pending, original, index["response"], nil
 	}
 	index["stage"] = "FINALIZING"

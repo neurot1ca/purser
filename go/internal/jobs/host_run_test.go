@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -142,6 +143,52 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunHostGenerationDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	if err = os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "codex", "args": map[string]any{"prompt": "hello"},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		argv, buildErr := BuildCodexCommand(LaunchArgs{BinaryOverride: "codex", Name: args.Name, Cwd: args.Cwd})
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		for i, value := range argv {
+			if value == "-C" && (i+1 == len(argv) || filepath.Clean(strings.ReplaceAll(argv[i+1], "/", string(filepath.Separator))) != filepath.Clean(repo)) {
+				t.Errorf("Codex cwd argv=%#v, want repository root %q", argv, repo)
+			}
+		}
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}}
+	if _, err = RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
+		t.Fatal(err)
 	}
 }
 

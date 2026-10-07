@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -95,6 +96,14 @@ func ValidateStart(args map[string]any, opt StartValidationOptions) (StartReques
 	if mode != "new" && mode != "reply" {
 		return fail("INVALID_ARGUMENT", "invalid mode")
 	}
+	if mode == "new" {
+		cwd, exists := args["cwd"]
+		if !exists || cwd == "" {
+			if _, err := resolveRepositoryRoot(); err != nil {
+				return fail("INVALID_ARGUMENT", "Repository root could not be resolved for Codex launch")
+			}
+		}
+	}
 	name := "codex"
 	if mode == "reply" {
 		name = "codex-reply"
@@ -103,6 +112,19 @@ func ValidateStart(args map[string]any, opt StartValidationOptions) (StartReques
 		return fail("INVALID_ARGUMENT", "Invalid Codex launch arguments")
 	}
 	return StartRequest{JobID: jobID, Call: call, Prompt: prompt, Agent: agent, Mode: mode, Name: name, TimeoutSeconds: seconds, Args: args}, nil
+}
+
+func resolveRepositoryRoot() (string, error) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	command := exec.Command("git", "-C", workingDir, "rev-parse", "--show-toplevel")
+	root, err := command.Output()
+	if err != nil || strings.TrimSpace(string(root)) == "" {
+		return "", strconv.ErrSyntax
+	}
+	return strings.TrimSpace(string(root)), nil
 }
 
 func jobResult(value map[string]any) map[string]any {
@@ -169,10 +191,12 @@ func validateStartLaunch(a map[string]any, agent, mode, name string, opt StartVa
 	}
 	cwdText, _ := os.Getwd()
 	if cwd, present := a["cwd"]; present {
-		var ok bool
-		cwdText, ok = cwd.(string)
-		if !ok || cwdText == "" {
+		text, ok := cwd.(string)
+		if !ok {
 			return strconv.ErrSyntax
+		}
+		if text != "" {
+			cwdText = text
 		}
 	}
 	if cwdText == "" {

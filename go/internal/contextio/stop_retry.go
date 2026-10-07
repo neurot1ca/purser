@@ -68,7 +68,7 @@ func codexRetryReason(records []map[string]any, latestUser int, repository strin
 			continue
 		}
 		index, ok := readSmallObject(filepath.Join(root, id+".json"))
-		if !ok || index["jobId"] != id || index["project_key"] != projectKey || index["stage"] == "CONSUMED" {
+		if !ok || index["jobId"] != id || index["project_key"] != projectKey || index["stage"] == "CONSUMED" || index["stage"] == "FAILED" {
 			continue
 		}
 		job, ok := readSmallObject(filepath.Join(stateRoot(), "codex_exec_mcp", "jobs", id+".json"))

@@ -43,7 +43,7 @@ func asyncOwned(root string, event map[string]any, repoRoot string) (string, map
 		return "", nil, nil, nil, notOwned()
 	}
 	var pending, original map[string]any
-	if index["stage"] != "CONSUMED" {
+	if index["stage"] != "CONSUMED" && index["stage"] != "FAILED" {
 		pending, err = readAsyncObject(filepath.Join(root, "pending", callKeyValue+".json"))
 		if err != nil {
 			return "", nil, nil, nil, unknown()
@@ -77,7 +77,7 @@ func asyncOwned(root string, event map[string]any, repoRoot string) (string, map
 		if resolvedRoot == nil || project != projectKey(resolvedRoot) || event["tool_name"] != "mcp__codex-main__codex_result" && event["tool_name"] != "mcp__plugin_purser_codex-main__codex_result" {
 			return "", nil, nil, nil, notOwned()
 		}
-		if index["stage"] != "CONSUMED" && asyncJob(root, index) == nil {
+		if index["stage"] != "CONSUMED" && index["stage"] != "FAILED" && asyncJob(root, index) == nil {
 			return "", nil, nil, nil, asyncOwnershipError{"WiringError", "job and durable result do not match"}
 		}
 		if input["adopt"] != true {

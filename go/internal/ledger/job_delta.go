@@ -279,25 +279,24 @@ func AppliedReplyMatches(repoRoot, worktree, snapshot string) (bool, error) {
 	return true, nil
 }
 
-// RebaseAppliedReply resets a reply worktree to repoRoot's current HEAD; call under its apply lease lock.
+// RebaseAppliedReply resets a reply worktree to the current checkout state; call under its apply lease lock.
 func RebaseAppliedReply(repoRoot, worktree string) (string, string, error) {
 	headRaw, err := runGit(repoRoot, []string{"rev-parse", "--verify", "HEAD"}, 30*time.Second, "reading reply repository HEAD", nil, nil)
 	if err != nil {
 		return "", "", err
 	}
 	head := strings.TrimSpace(decodeGitPath(headRaw))
-	treeRaw, err := runGit(repoRoot, []string{"rev-parse", "--verify", head + "^{tree}"}, 30*time.Second, "reading reply repository tree", nil, nil)
+	snapshot, err := CheckoutSnapshot(repoRoot)
 	if err != nil {
 		return "", "", err
 	}
-	tree := strings.TrimSpace(decodeGitPath(treeRaw))
 	if _, err = runGit(worktree, []string{"clean", "-fd"}, 30*time.Second, "clearing applied reply worktree changes", nil, nil); err != nil {
 		return "", "", err
 	}
-	if _, err = runGit(worktree, []string{"reset", "--hard", head}, 30*time.Second, "resetting applied reply worktree HEAD", nil, nil); err != nil {
+	if _, err = runGit(worktree, []string{"read-tree", "--reset", "-u", snapshot}, 30*time.Second, "resetting applied reply worktree", nil, nil); err != nil {
 		return "", "", err
 	}
-	return head, tree, nil
+	return head, snapshot, nil
 }
 
 func filterPaths(paths []string, keep map[string]bool) []string {

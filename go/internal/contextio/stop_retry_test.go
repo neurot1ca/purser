@@ -69,6 +69,44 @@ func TestPythonStopRetryGoldenParity(t *testing.T) {
 	}
 }
 
+func TestStopRetrySkipsTerminalFailedAsyncIndex(t *testing.T) {
+	repository := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repository, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "state")
+	t.Setenv("PURSER_STATE_DIR", root)
+	id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	index := map[string]any{"jobId": id, "call": "call-1", "project_key": repositoryProjectKey(resolve(repository)), "stage": "FAILED"}
+	indexDir := filepath.Join(root, "async_jobs")
+	if err := os.MkdirAll(indexDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(indexDir, id+".json"), encoded, 0600); err != nil {
+		t.Fatal(err)
+	}
+	job := `{"jobId":"` + id + `","call":"call-1","state":"SUCCEEDED","label":"Build result"}`
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+	if err = os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(jobPath, []byte(job), 0600); err != nil {
+		t.Fatal(err)
+	}
+	records := []map[string]any{
+		{"type": "user", "message": map[string]any{"content": "Continue."}},
+		{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": "call-1", "name": "mcp__plugin_purser_codex-main__codex_start", "input": map[string]any{}}}}},
+		{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-1", "content": `{"jobId":"` + id + `"}`}}}},
+	}
+	if got := codexRetryReason(records, 0, repository); got != "" {
+		t.Fatalf("terminal failed job produced Stop retry text: %q", got)
+	}
+}
+
 func TestPythonStopRetryStateWriteParity(t *testing.T) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "stop_retry.json")
 	data, err := os.ReadFile(path)
