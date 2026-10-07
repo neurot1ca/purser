@@ -171,8 +171,20 @@ func TestPostToolUseDispatchOffersCachedCodexModelUpgrade(t *testing.T) {
 	t.Setenv("USERPROFILE", t.TempDir())
 	t.Setenv("PURSER_STATE_DIR", state)
 	t.Setenv("CODEX_HOME", codexHome)
+	configBytes, err := os.ReadFile(filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shippedConfig map[string]any
+	if err := json.Unmarshal(configBytes, &shippedConfig); err != nil {
+		t.Fatal(err)
+	}
+	currentRouteModel := stringValue(mapValue(mapValue(shippedConfig["routes"])["normal"])["model"])
+	if currentRouteModel == "" {
+		t.Fatal("shipped normal route model is missing")
+	}
 	if err := os.WriteFile(filepath.Join(codexHome, "models_cache.json"), []byte(
-		`{"models":[{"slug":"gpt-6.1-sol","visibility":"list"}]}`), 0600); err != nil {
+		`{"models":[{"slug":"gpt-6.2-sol","visibility":"list"}]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
@@ -182,7 +194,7 @@ func TestPostToolUseDispatchOffersCachedCodexModelUpgrade(t *testing.T) {
 	event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "RUNNING"}}
 	pending := map[string]any{"async_ready": true, "async_call": call, "tool_use_id": event["tool_use_id"],
 		"session_id": event["session_id"], "repo_root": repo, "project_key": "model-upgrade-project",
-		"route": "normal", "model": "gpt-6-sol", "effort": "high", "phase": "implementation"}
+		"route": "normal", "model": currentRouteModel, "effort": "high", "phase": "implementation"}
 	if err := writeFixtureJSON(mustPendingPath(t, state, event), pending); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +204,7 @@ func TestPostToolUseDispatchOffersCachedCodexModelUpgrade(t *testing.T) {
 	}
 	output := mapValue(response["hookSpecificOutput"])
 	context := stringValue(output["additionalContext"])
-	if !strings.Contains(context, "New model version available: `gpt-6.1-sol`") || !strings.Contains(context, "gpt-6-sol") {
+	if !strings.Contains(context, "New model version available: `gpt-6.2-sol`") || !strings.Contains(context, currentRouteModel) {
 		t.Fatalf("model upgrade guidance missing from dispatch output: %q", context)
 	}
 	stateData, err := os.ReadFile(filepath.Join(state, "model-version-notice.json"))
@@ -204,7 +216,7 @@ func TestPostToolUseDispatchOffersCachedCodexModelUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	queued := mapValue(notice["pending"])
-	if queued["current"] != "gpt-6-sol" || queued["new"] != "gpt-6.1-sol" {
+	if queued["current"] != currentRouteModel || queued["new"] != "gpt-6.2-sol" {
 		t.Fatalf("pending model notice = %#v", queued)
 	}
 }
