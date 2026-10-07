@@ -408,7 +408,7 @@
         "implementer_report": "",
         "micro_repair": null,
         "micro_repair_cleared_review": false,
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "phase": "implementation",
         "project_root_reason": null,
         "protected_paths_touched": [],

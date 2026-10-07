@@ -76,10 +76,13 @@ def test_p66_case_rewrite_and_display_shape(p66_workspace):
     specific = result["hookSpecificOutput"]
     assert specific["hookEventName"] == "PreToolUse"
     assert set(specific) == {"hookEventName", "updatedInput"}
-    assert specific["updatedInput"]["model"] == "gpt-6-sol"
+    assert specific["updatedInput"]["model"] == config["routes"]["normal"]["model"]
     assert "Do the work." in specific["updatedInput"]["prompt"]
     assert "CODE_MAP=" in specific["updatedInput"]["prompt"]
-    assert result["systemMessage"] == "Purser: route=normal -> gpt-6-sol / medium"
+    assert result["systemMessage"] == (
+        f"Purser: route=normal -> {config['routes']['normal']['model']} / "
+        f"{config['routes']['normal']['effort']}"
+    )
 
 
 def test_p66_case_additional_context_shape(p66_workspace, monkeypatch):

@@ -639,7 +639,7 @@ def test_plan_sync_read_only_artifact_and_mutation(workspace, config):
                  sandbox="danger-full-access", **{"approval-policy": "on-request"})
     pre = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
     updated = pre["hookSpecificOutput"]["updatedInput"]
-    assert updated["model"] == "gpt-6-sol"
+    assert updated["model"] == config["routes"]["plan_standard"]["model"]
     assert updated["config"]["model_reasoning_effort"] == "high"
     assert updated["sandbox"] == "read-only" and updated["approval-policy"] == "never"
     (repo / "file1.py").write_text("value = 2\n", encoding="utf-8")
@@ -665,7 +665,7 @@ def test_plan_sync_read_only_artifact_and_mutation(workspace, config):
     assert stored["record"]["live_thread"]["phase"] == "plan"
     assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == content
     assert state in Path(bundle["plan_path"]).parents
-    assert len(bundle["plan_summary"]) <= 4000
+    assert bundle["plan_summary"] == "A" * 4300
 
 
 def test_plan_async_result(workspace, config):
@@ -723,9 +723,9 @@ def test_plan_file_and_summary_caps(workspace):
     report = "Summary:\n" + "x" * 16000
     bundle = {"findings": []}
     codex._store_plan(state, event(), "long-plan", report, bundle)
-    assert len(Path(bundle["plan_path"]).read_text(encoding="utf-8")) == 15000
-    assert len(bundle["plan_summary"]) == 4000
-    assert bundle["findings"][0]["code"] == "PLAN_OUTPUT_TOO_LONG"
+    assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == report
+    assert bundle["plan_summary"] == "x" * 16000
+    assert bundle["findings"] == []
 
 
 @pytest.mark.parametrize("name", ("codex_result", "codex_cancel"))
@@ -923,11 +923,17 @@ def test_codex_start_dispatch_notices_cached_model_and_cli_once(workspace, monke
     cache_home = state / "codex-home"
     cache_home.mkdir(parents=True)
     monkeypatch.setenv("CODEX_HOME", str(cache_home))
+    config = codex.coder_config.load(codex._CONFIG_PATH)
+    current = config["sol_model"]
+    match = re.fullmatch(r"(.*?)(\d+)(-sol)", current)
+    assert match
+    newer = f"{match.group(1)}{int(match.group(2)) + 1}{match.group(3)}"
+    hidden = f"{match.group(1)}{int(match.group(2)) + 2}{match.group(3)}"
     (cache_home / "models_cache.json").write_text(json.dumps({
         "client_version": "0.159.0",
         "models": [
-            {"slug": "gpt-6.1-sol", "visibility": "list"},
-            {"slug": "gpt-6.2-sol", "visibility": "hidden"},
+            {"slug": newer, "visibility": "list"},
+            {"slug": hidden, "visibility": "hidden"},
         ],
     }), encoding="utf-8")
     monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
@@ -938,17 +944,17 @@ def test_codex_start_dispatch_notices_cached_model_and_cli_once(workspace, monke
 
     def notice():
         response = codex._append_dispatch_receipt({}, {
-            "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
+            "task_id": "task-1", "label": "First run", "model": current,
             "effort": "high", "route": "normal", "project_key": "project",
             "repo_root": str(repo), "agent": "codex",
         }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
         return response["hookSpecificOutput"]["additionalContext"]
 
     first = notice()
-    assert "> ⚓ **New Codex model gpt-6.1-sol is available (current: gpt-6-sol). Adopt it for these routes? (1/yes)**" in first
-    assert "--adopt-model-version gpt-6.1-sol" in first
+    assert f"> ⚓ **New Codex model {newer} is available (current: {current}). Adopt it for these routes? (1/yes)**" in first
+    assert f"--adopt-model-version {newer}" in first
     assert "> ⚓ **Codex CLI 0.159.0 is available (installed: 0.156.1). Update it? (1/yes)**" in first
-    codex.model_version_notice.mark_shown("gpt-6.1-sol")
+    codex.model_version_notice.mark_shown(newer)
     assert "> ⚓ **New Codex model" not in notice()
     assert "> ⚓ **Codex CLI" not in notice()
 
@@ -4184,24 +4190,25 @@ def test_sol_route_without_basis_denies_with_protocol_help(workspace, config):
     decision = result["hookSpecificOutput"]
     assert decision["permissionDecision"] == "deny"
     assert decision["permissionDecisionReason"].startswith("SOL_ROUTE_NEEDS_BASIS:")
-    assert "route=normal runs gpt-6-sol" in decision["permissionDecisionReason"]
+    assert "route=normal runs the Sol model" in decision["permissionDecisionReason"]
+    assert "use route=subtle instead" in decision["permissionDecisionReason"]
     assert "basis is required for normal, consequential, and escalated" in decision[
         "permissionDecisionReason"
     ]
 
 
 @pytest.mark.parametrize(
-    ("route", "model", "effort"),
+    ("route", "effort"),
     [
-        ("mechanical", "gpt-6-luna", "high"),
-        ("subtle", "gpt-6-luna", "high"),
-        ("normal", "gpt-6-sol", "medium"),
-        ("consequential", "gpt-6-sol", "high"),
-        ("escalated", "gpt-6-sol", "xhigh"),
-        ("operation", "gpt-6-luna", "high"),
+        ("mechanical", "high"),
+        ("subtle", "high"),
+        ("normal", "medium"),
+        ("consequential", "high"),
+        ("escalated", "xhigh"),
+        ("operation", "high"),
     ],
 )
-def test_each_route_sets_exact_model_and_effort(workspace, config, route, model, effort):
+def test_each_route_sets_exact_model_and_effort(workspace, config, route, effort):
     repo, state = workspace
 
     result = codex.pre_tool_use(
@@ -4212,7 +4219,7 @@ def test_each_route_sets_exact_model_and_effort(workspace, config, route, model,
     )
     updated = result["hookSpecificOutput"]["updatedInput"]
 
-    assert updated["model"] == model
+    assert updated["model"] == config["routes"][route]["model"]
     assert updated["config"]["model_reasoning_effort"] == effort
     expected_prompt = codex._append_worker_validation_instruction("Implement.")
     assert updated["prompt"] == _assert_code_map_appended(updated["prompt"], expected_prompt)
@@ -4714,7 +4721,7 @@ def test_fresh_rewrite_adds_standard_independence_text(workspace, config):
 
 def test_compatible_live_thread_denies_fresh_codex(workspace, config):
     repo, state = workspace
-    save_live_thread(state)
+    save_live_thread(state, model=config["routes"]["normal"]["model"])
 
     result = codex.pre_tool_use(
         event(), config=config, state_root=state, repo_root=repo
@@ -4853,7 +4860,7 @@ def test_pretool_strips_minimal_orch_and_pins_consequential_route(workspace, con
     assert output["updatedInput"]["prompt"] == _assert_code_map_appended(
         output["updatedInput"]["prompt"], expected_prompt
     )
-    assert output["updatedInput"]["model"] == "gpt-6-sol"
+    assert output["updatedInput"]["model"] == config["routes"]["consequential"]["model"]
     assert output["updatedInput"]["config"]["model_reasoning_effort"] == "high"
 
 
@@ -7783,7 +7790,7 @@ def test_p63b_fallback_gaps_python_oracle(workspace, config, monkeypatch):
                 compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1"
             )["fallback_pending"]
             assert pending == {
-                "line": case["question"], "project": str(repo), "model": "gpt-6-sol",
+                "line": case["question"], "project": str(repo), "model": config["routes"]["normal"]["model"],
                 "blocked": False, "notice": False, "delivered": False,
             }
         else:

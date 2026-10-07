@@ -30,6 +30,10 @@ def _snapshot(root):
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
+        # The OS lock file can remain on one platform after release. It is
+        # coordination machinery, not durable state to compare for parity.
+        if path.name == ".append.lock":
+            continue
         raw = path.read_text(encoding="utf-8")
         raw = raw.replace(str(root), "__STATE__").replace(str(ROOT), "__REPO__")
         try:
@@ -192,4 +196,3 @@ def test_go_failure_dispatch_process_parity(tmp_path):
         python_files, go_files = _snapshot(python_state), _snapshot(go_state)
         differences = _state_differences(python_files, go_files)
         assert not differences, f"{name}: {differences}"
-

@@ -11,7 +11,7 @@
         "reviewer1_provider": "agy",
         "reviewer1_model_requested": "gemini-3.8-flash-high",
         "implementer": "codex-main",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "medium",
         "validation": "PASS",
         "worker_validation": {
@@ -59,7 +59,7 @@
           "commit_command": "git add \"scope/file with spaces.py\" && git commit -m \"feat(fixture-task): implement changes\"",
           "effort": "medium",
           "implementer": "codex-main",
-          "model": "gpt-6-sol",
+          "model": "gpt-6.1-sol",
           "reviewer1_verdict": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
           "validation_summary": "validation=PASS, delta=2L/1F",
           "verdict": "READY_FOR_ONE_TURN_ACCEPT"
@@ -78,7 +78,7 @@
         "reviewer1_provider": "agy",
         "reviewer1_model_requested": "gemini-3.8-flash-high",
         "implementer": "codex-main",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "medium",
         "validation": "PASS",
         "worker_validation": {
@@ -147,7 +147,7 @@
         "reviewer1_provider": "agy",
         "reviewer1_model_requested": "gemini-3.8-flash-high",
         "implementer": "codex-main",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "medium",
         "validation": "UNKNOWN",
         "worker_validation": {
@@ -206,7 +206,7 @@
         "reviewer1_provider": "agy",
         "reviewer1_model_requested": "gemini-3.8-flash-high",
         "implementer": "codex-main",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "medium",
         "validation": "PASS",
         "worker_validation": {
@@ -280,7 +280,7 @@
         "reviewer1_provider": "agy",
         "reviewer1_model_requested": "gemini-3.8-flash-high",
         "implementer": "codex-main",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "medium",
         "validation": "UNKNOWN",
         "worker_validation": {
@@ -339,7 +339,7 @@
         "reviewer1_provider": "agy",
         "reviewer1_model_requested": "gemini-3.8-flash-high",
         "implementer": "codex-main",
-        "model": "gpt-6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "medium",
         "validation": "PASS",
         "worker_validation": {
@@ -380,7 +380,7 @@
           "commit_command": "git add \"scope/file with spaces.py\" && git commit -m \"feat(fixture-task): implement changes\"",
           "effort": "medium",
           "implementer": "codex-main",
-          "model": "gpt-6-sol",
+          "model": "gpt-6.1-sol",
           "reviewer1_verdict": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
           "validation_summary": "validation=PASS, delta=2L/1F",
           "verdict": "READY_FOR_ONE_TURN_ACCEPT"

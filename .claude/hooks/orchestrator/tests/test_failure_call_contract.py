@@ -154,6 +154,7 @@ FAILURE_CALL_CONTRACTS = {
     "re.compile": "go/internal/enforce.PostToolUseFailure (122)",
     "re.escape": "go/internal/enforce.PostToolUseFailure (122)",
     "re.fullmatch": "go/internal/enforce.PostToolUseFailure (122)",
+    "re.finditer": "go/internal/enforce.postPlanSummary (122)",
     "re.search": "go/internal/enforce.PostToolUseFailure (122)",
     "re.sub": "go/internal/enforce.PostToolUseFailure (122)",
     "shutil.which": "go/internal/enforce.PostToolUseFailure (122)",
