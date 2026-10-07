@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.86 — 2026-10-07
+
+- **Changed:** `/purser:init` runs in Go with the same detection, plan and model-version decisions.
+- **Fixed:** A Codex job without `cwd` runs in the repository root instead of failing on an empty `--cd`.
+- **Fixed:** An async result that cannot be finalized ends FAILED and logs its real cause, so Stop stops asking for it; a reply on an applied worktree finalizes its own delta.
+- **Fixed:** Finished jobs with no delta or a terminal failure release their scope lease; leases of terminal jobs whose worktree is gone are released at admission.
+- **Fixed:** Operation jobs record the Reviewer-1 phase skip instead of a false UNCERTAIN; CHANGES_REQUIRED without a finding is rejected; an unavailable Reviewer-1 keeps bounded stdout/stderr/exit evidence in telemetry.
+
 ## 0.1.85 — 2026-10-07
 
 - **Changed:** Sol routes (normal, consequential, escalated, plan) default to gpt-6.1-sol; research jobs go on the normal route.
