@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestPostArtifactsPythonFixture(t *testing.T) {
@@ -75,5 +77,26 @@ func TestPostArtifactsPythonFixture(t *testing.T) {
 		if !reflect.DeepEqual(saved[key], expected) {
 			t.Errorf("saved bundle[%s]=%#v want %#v", key, saved[key], expected)
 		}
+	}
+}
+
+func TestCompactBundleUsesPlanArtifactWhenMultibyteSummaryExceedsByteBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "complete-plan.md")
+	summary := strings.Repeat("界🙂", 1000)
+	bundle := map[string]any{
+		"plan_path": path, "plan_summary": summary, "findings": []any{}, "implementer_report": "",
+	}
+	notice := "Complete plan summary is available at " + path + "."
+	cap := utf8.RuneCountInString(summary) + 50
+	if utf8.RuneCountInString(summary) >= cap || len([]byte(summary)) <= cap {
+		t.Fatalf("test does not distinguish rune count from transport bytes: runes=%d bytes=%d cap=%d", utf8.RuneCountInString(summary), len([]byte(summary)), cap)
+	}
+	compact, overflow, err := compactBundle(bundle, cap)
+	mustPostTest(t, err)
+	if overflow || compact["plan_summary"] != notice || compact["plan_path"] != path {
+		t.Fatalf("compact bundle did not preserve artifact pointer with notice: overflow=%v bundle=%v", overflow, compact)
+	}
+	if size, sizeErr := nonReportBytes(compact); sizeErr != nil || size > cap {
+		t.Fatalf("compact bytes=%d cap=%d err=%v", size, cap, sizeErr)
 	}
 }

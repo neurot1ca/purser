@@ -150,10 +150,29 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 			}
 		}
 	}
+	planSummaryNotice := ""
+	if summary, ok := bundle["plan_summary"].(string); ok && summary != "" {
+		if planPath, ok := bundle["plan_path"].(string); ok && planPath != "" {
+			planSummaryNotice = "Complete plan summary is available at " + planPath + "."
+			candidate := make(map[string]any, len(compact))
+			for key, value := range compact {
+				candidate[key] = value
+			}
+			candidate["plan_summary"] = planSummaryNotice
+			if size, err := nonReportBytes(candidate); err != nil {
+				return nil, false, err
+			} else if size <= cap {
+				return candidate, false, nil
+			}
+		}
+	}
 
 	mandatory := map[string]any{}
 	for _, key := range []string{"task_id", "implementer", "model", "effort", "thread_id", "routing_enforced", "claude_review_mode", "reviewer1_result", "reviewer1_skipped_reason", "project_root_reason", "protected_paths_touched", "concurrent_writer", "micro_repair_cleared_review", "validation", "hook_checks", "full_bundle_path", "plan_path", "plan_summary"} {
 		mandatory[key] = bundle[key]
+	}
+	if planSummaryNotice != "" {
+		mandatory["plan_summary"] = planSummaryNotice
 	}
 	mandatory["micro_repair"] = nil
 	if repair, ok := bundle["micro_repair"].(map[string]any); ok {

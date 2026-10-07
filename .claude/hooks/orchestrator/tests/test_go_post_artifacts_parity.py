@@ -19,7 +19,9 @@ def _oracle():
     for name, task_id, report in (
         ("under", "task-5", "# Summary: Short plan\nDetails"),
         ("exact", "task-5", "x" * 15000),
-        ("over", "task /5", "x" * 15001),
+        ("over", "task /5", "x" * 15001 + "\n\n## Final milestone\nRisks\nHandoff\nAppendix"),
+        ("long-summary", "task-6", "# Summary:\n" + "s" * 5001 + "\n# Goal and boundaries\nPlan"),
+        ("nested-summary", "task-7", "# Summary: Overview\n## Nested detail\nIncluded in summary\n# Goal and boundaries\nOutside summary"),
     ):
         bundle = {"findings": []}
         root = Path(".tmp") / "post-artifacts-oracle"
@@ -73,6 +75,13 @@ def _oracle():
 
 def test_post_artifacts_match_python_fixture():
     fixture = _oracle()
+    over_plan = next(plan for plan in fixture["plans"] if plan["name"] == "over")
+    long_summary = next(plan for plan in fixture["plans"] if plan["name"] == "long-summary")
+    nested_summary = next(plan for plan in fixture["plans"] if plan["name"] == "nested-summary")
+    assert over_plan["content"].endswith("## Final milestone\nRisks\nHandoff\nAppendix")
+    assert over_plan["findings"] == []
+    assert long_summary["summary"] == "s" * 5001
+    assert nested_summary["summary"] == "Overview\n## Nested detail\nIncluded in summary"
     if os.environ.get("POST_ARTIFACTS_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
         FIXTURE.write_text(json.dumps(fixture, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -84,3 +93,17 @@ def test_post_artifacts_match_python_fixture():
     result = subprocess.run(["go", "test", "-run", "^TestPostArtifactsPythonFixture$", "-count=1", "./internal/enforce"],
                             cwd=ROOT / "go", env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_multibyte_plan_summary_budget_uses_complete_artifact():
+    summary = "界🙂" * 1000
+    path = str(Path(".tmp") / "complete-plan.md")
+    bundle = {"plan_path": path, "plan_summary": summary, "findings": [], "implementer_report": ""}
+    notice = f"Complete plan summary is available at {path}."
+    cap = len(summary) + 50
+    assert codex._non_report_bytes({**bundle, "plan_summary": notice}) <= cap < len(summary.encode("utf-8"))
+    compact, overflow = codex._compact_bundle(bundle, cap)
+    assert not overflow
+    assert compact["plan_path"] == path
+    assert compact["plan_summary"] == notice
+    assert codex._non_report_bytes(compact) <= cap

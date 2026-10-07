@@ -3560,20 +3560,23 @@ def _plan_summary(report: str) -> str:
     match = re.search(r"(?im)^#{0,6}\s*Summary:\s*(.*)$", report)
     if match:
         tail = report[match.start(1):]
-        next_heading = re.search(r"(?m)^#{1,6}\s+\S", tail[1:])
-        return tail[:next_heading.start() + 1 if next_heading else None].strip()[:4000]
-    return report[:4000]
+        heading = report[match.start():match.start(1)]
+        level = len(heading) - len(heading.lstrip("#"))
+        for next_heading in re.finditer(r"(?m)^(#{1,6})\s+\S", tail):
+            if level == 0 or len(next_heading.group(1)) <= level:
+                tail = tail[:next_heading.start()]
+                break
+        return tail.strip()
+    return report
 
 
 def _store_plan(runtime_root: Path, event: Mapping[str, Any], task_id: Any,
                 report: str, bundle: dict[str, Any]) -> None:
     safe_task = re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id or "task"))[:80]
     path = (runtime_root / "plans" / f"{safe_task}-{_call_key(event)}.md").resolve()
-    if len(report) > 15000:
-        bundle["findings"].append(_finding("PLAN_OUTPUT_TOO_LONG", "Plan exceeds 15,000 characters."))
     if not report.strip():
         bundle["findings"].append(_finding("PLAN_OUTPUT_EMPTY", "Plan output is empty."))
-    content = report[:15000]
+    content = report
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -3723,6 +3726,14 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
         if _non_report_bytes(compact) <= cap:
             return compact, False
 
+    plan_summary_notice = ""
+    if bundle.get("plan_summary") and bundle.get("plan_path"):
+        plan_summary_notice = f"Complete plan summary is available at {bundle['plan_path']}."
+        candidate = dict(compact)
+        candidate["plan_summary"] = plan_summary_notice
+        if _non_report_bytes(candidate) <= cap:
+            return candidate, False
+
     # For unusually small configured caps, discard non-contract metadata before
     # sacrificing any verdict, identity, safety field, finding code, or artifact pointer.
     audit = bundle.get("audit_receipt")
@@ -3757,7 +3768,7 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
         "findings": _copy_findings(bundle.get("findings"), 0),
         "full_bundle_path": bundle.get("full_bundle_path"),
         "plan_path": bundle.get("plan_path"),
-        "plan_summary": bundle.get("plan_summary"),
+        "plan_summary": plan_summary_notice or bundle.get("plan_summary"),
         "implementer_report": bundle.get("implementer_report", ""),
     }
     if "known_concurrent_scopes" in compact:

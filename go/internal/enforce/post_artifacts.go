@@ -9,10 +9,8 @@ import (
 	"unicode/utf8"
 )
 
-const planOutputLimit = 15000
-
 var planSummaryHeading = regexp.MustCompile(`(?im)^#{0,6}\s*Summary:\s*(.*)$`)
-var planNextHeading = regexp.MustCompile(`(?m)^#{1,6}\s+\S`)
+var planNextHeading = regexp.MustCompile(`(?m)^(#{1,6})\s+\S`)
 
 func storePostPlan(root string, event map[string]any, taskID any, report string, bundle map[string]any) (string, error) {
 	name := fmt.Sprint(taskID)
@@ -31,12 +29,7 @@ func storePostPlan(root string, event map[string]any, taskID any, report string,
 	if err != nil {
 		return "", err
 	}
-	runes := []rune(report)
-	if len(runes) > planOutputLimit {
-		bundle["findings"] = appendFinding(bundle["findings"], "PLAN_OUTPUT_TOO_LONG", "Plan exceeds 15,000 characters.")
-		runes = runes[:planOutputLimit]
-	}
-	content := string(runes)
+	content := report
 	if strings.TrimSpace(report) == "" {
 		bundle["findings"] = appendFinding(bundle["findings"], "PLAN_OUTPUT_EMPTY", "Plan output is empty.")
 	}
@@ -58,15 +51,18 @@ func appendFinding(value any, code, message string) []any {
 func postPlanSummary(report string) string {
 	match := planSummaryHeading.FindStringSubmatchIndex(report)
 	if match == nil {
-		return prefixRunes(report, 4000)
+		return report
 	}
 	tail := report[match[2]:]
-	if len(tail) > 0 {
-		if next := planNextHeading.FindStringIndex(tail[1:]); next != nil {
-			tail = tail[:next[0]+1]
+	level := len(strings.TrimSpace(report[match[0]:match[1]])) - len(strings.TrimLeft(strings.TrimSpace(report[match[0]:match[1]]), "#"))
+	for _, next := range planNextHeading.FindAllStringSubmatchIndex(tail, -1) {
+		nextLevel := next[3] - next[2]
+		if level == 0 || nextLevel <= level {
+			tail = tail[:next[0]]
+			break
 		}
 	}
-	return prefixRunes(strings.TrimSpace(tail), 4000)
+	return strings.TrimSpace(tail)
 }
 
 func prefixRunes(value string, limit int) string {
