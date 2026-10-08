@@ -82,6 +82,50 @@ func TestPluginCacheIgnoresNonSemverAndLinks(t *testing.T) {
 	}
 }
 
+func TestPluginCacheRemovesLeftoverPruneDirectory(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "market", "purser")
+	if err := os.MkdirAll(filepath.Join(cache, "2.0.0"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	leftover := filepath.Join(cache, ".1.0.0.prune")
+	putFile(t, filepath.Join(leftover, "hooks", "hook.js"), []byte("old"), 1000)
+
+	PrunePluginCache(filepath.Join(cache, "2.0.0", "bin", "purser.exe"))
+	if _, err := os.Lstat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("leftover prune directory remains: %v", err)
+	}
+}
+
+func TestPluginCacheRenameFailureLeavesVersionIntact(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "market", "purser")
+	for _, version := range []string{"3.0.0", "2.0.0", "1.0.0"} {
+		if err := os.MkdirAll(filepath.Join(cache, version), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := filepath.Join(cache, "1.0.0", "hooks", "hook.js")
+	if err := os.MkdirAll(filepath.Dir(marker), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte("must survive"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalRename := renamePluginPath
+	renamePluginPath = func(oldPath, newPath string) error {
+		if oldPath == filepath.Join(cache, "1.0.0") {
+			return os.ErrPermission
+		}
+		return originalRename(oldPath, newPath)
+	}
+	t.Cleanup(func() { renamePluginPath = originalRename })
+
+	PrunePluginCache(filepath.Join(cache, "3.0.0", "bin", "purser.exe"))
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "must survive" {
+		t.Fatalf("version contents changed after rename failure: %q %v", data, err)
+	}
+}
+
 func TestPluginCacheSkipsNonPluginLayout(t *testing.T) {
 	root := t.TempDir()
 	for _, executable := range []string{

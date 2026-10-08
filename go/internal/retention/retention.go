@@ -29,6 +29,7 @@ var stateRootMaxBytes int64 = 16 * gib
 var maxPrepBytes int64 = 2 * gib
 var warningOnce sync.Once
 var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var renamePluginPath = os.Rename
 
 type policy struct {
 	owner       string
@@ -68,6 +69,17 @@ func PrunePluginCache(executable string) {
 	if err != nil {
 		return
 	}
+	for _, entry := range entries {
+		name := entry.Name()
+		version := strings.TrimSuffix(strings.TrimPrefix(name, "."), ".prune")
+		if name != "."+version+".prune" || !validPluginVersion(version) {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil && info.IsDir() && !isReparseInfo(info) {
+			_ = removePluginTree(filepath.Join(cache, name))
+		}
+	}
 	previous := ""
 	for _, entry := range entries {
 		name := entry.Name()
@@ -86,7 +98,11 @@ func PrunePluginCache(executable string) {
 		}
 		info, err := entry.Info()
 		if err == nil && info.IsDir() && !isReparseInfo(info) {
-			_ = removePluginTree(filepath.Join(cache, name))
+			path := filepath.Join(cache, name)
+			prunePath := filepath.Join(cache, "."+name+".prune")
+			if renamePluginPath(path, prunePath) == nil {
+				_ = removePluginTree(prunePath)
+			}
 		}
 	}
 }
