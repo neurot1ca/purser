@@ -4,6 +4,61 @@ import "strings"
 
 const stopFlowReminder = "Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question."
 
+func planCodexDispatched(records []map[string]any, latestUser int, planID string) bool {
+	if latestUser < 0 || latestUser >= len(records) || planID == "" {
+		return false
+	}
+	for _, record := range records[latestUser+1:] {
+		for _, raw := range transcriptBlocks(record) {
+			block, ok := raw.(map[string]any)
+			if !ok || block["type"] != "tool_use" || shortStopToolName(str(block["name"])) != "codex_start" {
+				continue
+			}
+			if planTaskInDispatchInput(block["input"], planID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func planTaskInDispatchInput(value any, planID string) bool {
+	switch input := value.(type) {
+	case map[string]any:
+		for key, child := range input {
+			if key == "task_id" || key == "taskId" {
+				if taskID, ok := child.(string); ok && PlanTaskMatches(planID, taskID) {
+					return true
+				}
+			}
+			if planTaskInDispatchInput(child, planID) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range input {
+			if planTaskInDispatchInput(child, planID) {
+				return true
+			}
+		}
+	case string:
+		if PlanTaskMatches(planID, input) {
+			return true
+		}
+		for _, marker := range strings.Split(input, "ORCH|task=")[1:] {
+			fields := strings.FieldsFunc(marker, func(r rune) bool { return r == '|' || r == ' ' || r == '\t' || r == '\r' || r == '\n' })
+			if len(fields) == 0 {
+				continue
+			}
+			taskID := fields[0]
+			if PlanTaskMatches(planID, taskID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // stopFlowReason mirrors the question guard in compaction_advisor.stop. It is
 // considered only when no other Stop reason was selected.
 func stopFlowReason(records []map[string]any, latestUser, blockedUser int, hasReasons bool) (string, int) {

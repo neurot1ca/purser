@@ -33,6 +33,7 @@ When the user accepts the plan, implement its milestones in order. For each, rea
 
 When the user explicitly accepts milestones, call `purser-hook plan accept` with the repository `--cwd`, plan `--task-id`, returned `--artifact` path, and comma-separated accepted `--milestones`.
 When a milestone is fully accepted, call `purser-hook plan complete-milestone` with `--cwd` and the active plan `--revision` from `purser-hook plan status`.
+Treat Purser's Stop reminder as the continuation signal, and call `complete-milestone` when all passes in a milestone are accepted.
 Call `purser-hook plan stop` or `resume` only on an explicit user request, with `--cwd` and the current `--revision`; never infer either action from a topic change, failure, or review rejection.
 
 ## User request
