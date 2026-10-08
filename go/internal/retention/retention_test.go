@@ -202,3 +202,16 @@ func TestPreparationByteWalkOnlyRunsWhenRequested(t *testing.T) {
 		t.Fatalf("unexpected byte warning: %#v", health)
 	}
 }
+
+func TestPreparationRetiresTimedOutUnappliedJob(t *testing.T) {
+	root := t.TempDir()
+	id := "3333333333333333333333333333333333333333333333333333333333333333"
+	path := filepath.Join(root, "preparations", id, "revision-1")
+	putFile(t, filepath.Join(path, "state.json"), []byte(`{"state":"PREPARED"}`), 1000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"TIMED_OUT","applyState":"unapplied","finishedAt":1000}`), 1000)
+	putFile(t, filepath.Join(root, "async_jobs", id+".json"), []byte(`{"stage":"CONSUMED"}`), 1000)
+	RetirePreparations(root, 1000+maxPrepAge+86400, false)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("TIMED_OUT unapplied preparation remains: %v", err)
+	}
+}
