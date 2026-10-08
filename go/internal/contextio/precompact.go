@@ -20,8 +20,6 @@ const stateStart = "<!-- PURSER:STATE:START -->"
 const stateEnd = "<!-- PURSER:STATE:END -->"
 
 var orchestrationTask = regexp.MustCompile(`^ORCH\|task=([^|\s]+)\|`)
-var planTask = regexp.MustCompile(`^(.+)-m([1-5])of([1-5])$`)
-var planJobID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func PreCompact(event map[string]any) {
 	repository := projectRoot(event)
@@ -82,7 +80,7 @@ func compactionMechanicalState(repository string, records []map[string]any) stri
 		}
 		lines = append(lines, fmt.Sprintf("- task=%s tool=%s threadId=%s claude_review_mode=%s", call["task_id"], call["tool"], thread, review))
 	}
-	if plan := activePlanLine(repository); plan != "" {
+	if plan := renderActivePlanPointer(repository); plan != "" {
 		lines = append(lines, plan)
 	}
 	if output, err := runGit(repository, "log", "--oneline", "-5"); err == nil {
@@ -297,95 +295,58 @@ func extractResultJSON(value any) map[string]any {
 	return map[string]any{}
 }
 
-func activePlanLine(repository string) string {
-	paths, _ := filepath.Glob(filepath.Join(stateRoot(), "codex_exec_mcp", "jobs", "*.json"))
-	type entry struct {
-		job           map[string]any
-		number, total int
-	}
-	byPlan := map[string]map[int]entry{}
-	newestPlan, newestAt := "", math.Inf(-1)
-	for _, path := range paths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var job map[string]any
-		if json.Unmarshal(data, &job) != nil || job["phase"] != "implementation" || job["repoRoot"] != repository {
-			continue
-		}
-		id := strings.TrimSuffix(filepath.Base(path), ".json")
-		if job["jobId"] != id || !planJobID.MatchString(id) {
-			continue
-		}
-		task, _ := job["taskId"].(string)
-		match := planTask.FindStringSubmatch(task)
-		if len(match) != 4 {
-			continue
-		}
-		number, _ := strconv.Atoi(match[2])
-		total, _ := strconv.Atoi(match[3])
-		if number > total {
-			continue
-		}
-		plan := match[1]
-		accepted, _ := job["acceptedAt"].(float64)
-		if accepted > newestAt {
-			newestPlan, newestAt = plan, accepted
-		}
-		jobs := byPlan[plan]
-		if jobs == nil {
-			jobs = map[int]entry{}
-			byPlan[plan] = jobs
-		}
-		previous, exists := jobs[number]
-		if !exists || accepted > numberValue(previous.job["acceptedAt"]) {
-			jobs[number] = entry{job: job, number: number, total: total}
-		}
-	}
-	jobs := byPlan[newestPlan]
-	if len(jobs) == 0 {
+func renderActivePlanPointer(repository string) string {
+	state, err := ReconcilePlanJob(stateRoot(), repository)
+	if err != nil || state == nil || state.UserStopped || state.CurrentMilestone == 0 {
 		return ""
 	}
-	maxNumber := 0
-	for number := range jobs {
-		if number > maxNumber {
-			maxNumber = number
-		}
-	}
-	total := jobs[maxNumber].total
-	parts, next := []string{}, 0
-	for number := 1; number <= total; number++ {
-		item, exists := jobs[number]
-		if !exists {
-			if next == 0 {
-				next = number
-			}
-			continue
-		}
-		job := item.job
-		state, _ := job["state"].(string)
-		if state == "" {
-			state = "unknown"
-		}
-		if job["applyState"] != "applied" && next == 0 {
-			next = number
-		}
-		if job["applyState"] == "applied" {
-			state = "applied"
-		}
-		parts = append(parts, fmt.Sprintf("M%d %s (job=%v)", number, state, job["jobId"]))
-	}
-	if next == 0 {
+	if !containsMilestone(state.AcceptedMilestones, state.CurrentMilestone) {
 		return ""
 	}
-	parts = append(parts, fmt.Sprintf("next M%d", next))
-	return fmt.Sprintf("Plan %s: %s", newestPlan, strings.Join(parts, ", "))
+	action := state.PendingNextAction
+	if state.Gate != "" {
+		action = "gate: " + state.Gate
+	}
+	if action == "" {
+		return ""
+	}
+	return fmt.Sprintf("Plan %s: milestone %d of %d; %d applied passes; next action: %s; plan: %s.", state.TaskID, state.CurrentMilestone, len(state.AcceptedMilestones), len(state.AppliedPasses), action, state.ArtifactPath)
 }
 
-func numberValue(value any) float64 {
-	number, _ := value.(float64)
-	return number
+func deliverPlanPointer(repository, statePath, session string, sessionStart bool) string {
+	if repository == "" || statePath == "" || session == "" {
+		return ""
+	}
+	pointer := renderActivePlanPointer(repository)
+	if os.MkdirAll(filepath.Dir(statePath), 0700) != nil {
+		return ""
+	}
+	lock, err := os.OpenFile(statePath+".injections.lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return ""
+	}
+	defer lock.Close()
+	if tryLock(lock) != nil {
+		return ""
+	}
+	defer unlock(lock)
+	state := readAdvisorState(statePath, session)
+	previous, _ := state["last_plan_pointer"].(string)
+	if pointer == "" {
+		if previous != "" {
+			delete(state, "last_plan_pointer")
+			_ = writeAdvisorState(statePath, state)
+		}
+		return ""
+	}
+	if !sessionStart && pointer == previous {
+		return ""
+	}
+	state["last_plan_pointer"] = pointer
+	if writeAdvisorState(statePath, state) != nil {
+		return ""
+	}
+	return pointer
 }
 
 func transcriptRecordType(record map[string]any) string {

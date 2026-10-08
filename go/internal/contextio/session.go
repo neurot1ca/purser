@@ -127,6 +127,9 @@ func SessionStart(event map[string]any) []byte {
 		line = ""
 	}
 	additional = joinContext(line, additional)
+	if validSession && repository != "" {
+		additional = joinContext(additional, deliverPlanPointer(repository, statePath, session, true))
+	}
 	additional = joinContext(additional, updateContext)
 
 	modelContext := ""

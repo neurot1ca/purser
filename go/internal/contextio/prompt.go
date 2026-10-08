@@ -35,6 +35,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 			markFallbackAnswerable(repository, session)
 			advice := compactionAdvice(event, repository, statePath, session)
 			retry := promptRetryContext(statePath, session)
+			planPointer := deliverPlanPointer(repository, statePath, session, false)
 			languageLine, injectPlan := contextInjections(statePath, session, language, planningHint(event["prompt"]), true)
 			planLine := ""
 			if injectPlan {
@@ -42,7 +43,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 			}
 			state := readAdvisorState(statePath, session)
 			lifecycle := lifecycleGuidance(state)
-			additional := joinContext(languageLine, advice, retry, planLine, lifecycle)
+			additional := joinContext(languageLine, advice, retry, planLine, lifecycle, planPointer)
 			if additional == "" {
 				return nil
 			}

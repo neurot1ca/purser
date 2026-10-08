@@ -464,7 +464,7 @@ func updateAdvisorHandoff(repository string, records []map[string]any, context i
 		}
 		lines = append(lines, fmt.Sprintf("- task=%v tool=%v threadId=%v claude_review_mode=%v", call["task_id"], call["tool"], thread, review))
 	}
-	if plan := activePlanLine(repository); plan != "" {
+	if plan := renderActivePlanPointer(repository); plan != "" {
 		lines = append(lines, plan)
 	}
 	if output, e := runGit(repository, "log", "--oneline", "-5"); e == nil {
