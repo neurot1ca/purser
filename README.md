@@ -6,6 +6,9 @@ independently reviewed by a model of a different family — and the orchestrator
 counts every token it spends, because saving Claude's context and time is the
 reason it exists.
 
+The user runtime requires Node.js for the MCP launcher and uses the bundled Go
+binary for hooks and Purser commands. Python is development-only.
+
 ## Status
 
 Extracted on 2026-09-21 from `polymarket-btc5m-lab` (branch

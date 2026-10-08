@@ -8,32 +8,9 @@ the manual installer.
 The MCP definition lives under `plugin/`, since a root `.mcp.json` would be
 loaded as project configuration before the plugin is enabled.
 
-| Event | Matcher | Script | Timeout |
-| --- | --- | --- | ---: |
-| PreToolUse | `^mcp__plugin_purser_codex-main__(codex|codex-reply)$` | `hook.py` | 60s |
-| PreToolUse | `^Read$` | `context_io_hook.py` | 60s |
-| PostToolUse | `^mcp__plugin_purser_codex-main__(codex|codex-reply)$` | `hook.py` | 300s |
-| PostToolUseFailure | `^mcp__plugin_purser_codex-main__(codex|codex-reply)$` | `hook.py` | 60s |
-| Stop | *(none)* | `hook.py` | 60s |
-| Stop | *(none)* | `context_io_hook.py` | 60s |
-| UserPromptSubmit | *(none)* | `context_io_hook.py` | 60s |
-
-## Cutover
-
-Run the standard-library cutover script once to inspect, apply, or roll back the
-move from manual registration:
-
-```powershell
-python .claude/hooks/orchestrator/purser_cutover.py --plan
-python .claude/hooks/orchestrator/purser_cutover.py --apply
-```
-
-Apply saves timestamped backups of `~/.claude/settings.json` and
-`~/.claude.json`. To restore the newest backup pair:
-
-```powershell
-python .claude/hooks/orchestrator/purser_cutover.py --rollback
-```
+Hooks are registered through the mod in `hooks/hooks.json` and
+`hooks/register.ts`, which calls the bundled
+`bin/purser-hook-<os>-<arch>` binary.
 
 ## Local release marketplace
 
@@ -46,10 +23,15 @@ claude plugin marketplace add <dir>
 claude plugin install purser@purser-local
 ```
 
-`scripts/release.py` refreshes this marketplace from the release commit before
-running the plugin update commands. To refresh it without a version bump, run
-`python scripts/release.py --export-only`; use `--marketplace-dir <dir>` to
-choose another local path.
+For development, Python is used by `scripts/release.py` to refresh this
+marketplace from the release commit before running the plugin update commands.
+To refresh it without a version bump, run:
+
+```powershell
+python scripts/release.py --export-only
+```
+
+Use `--marketplace-dir <dir>` to choose another local path.
 
 Restart Claude Code after switching the local marketplace, then run
 `/purser:check`. The check should report plugin-only registration.
@@ -57,14 +39,13 @@ Restart Claude Code after switching the local marketplace, then run
 Run `/purser:check` to read-only check the installation and see actionable next steps.
 Run `/purser:init` for guided role selection, project trust, and optional profile scaffolding.
 
-## Python locator
+## Runtime
 
-Plugin hooks and the MCP server use `bin/python-locator.js` to run a verified
-Python 3.11+ interpreter. It tries `PURSER_PYTHON`, then the path saved by
-`/purser:init` in `~/.orchestrator/python`, then `py -3` on Windows, `python3`,
-and `python`. Set `PURSER_PYTHON` to a specific interpreter to override the
-saved path. Node.js must be available for the launcher; `/purser:check` reports
-what it resolves.
+The MCP server starts with Node.js through
+`bin/purser-launcher.js go-mcp`. Hooks and Purser commands run through the
+bundled platform Go binary. `/purser:check`, `/purser:init`,
+`/purser:optimize`, maintenance reports, and code-map generation use that binary.
+The check reports `Runtime | OK | purser-hook <version> (<GOOS>/<GOARCH>)`.
 
 Plugin layout and scoped MCP tool names follow the [Claude Code plugin
 reference](https://code.claude.com/docs/en/plugins-reference). Local marketplace
