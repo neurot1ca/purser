@@ -406,6 +406,265 @@
           ]
         ]
       }
+    },
+    {
+      "name": "p3e_oracle_php",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.php": "<?php\nclass Box { public function get($x) {} }\ninterface Draw { public function draw(); }\nfunction add($a, $b) {}\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: php\n\nsample.php\n  2 class Box\n  2 method Box.get\n  3 interface Draw\n  3 method Draw.draw\n  4 function add\n",
+      "expected_symbols": {
+        "sample.php": [
+          [
+            2,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            3,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            3,
+            "method",
+            "Draw.draw",
+            ""
+          ],
+          [
+            4,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_swift",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.swift": "class Box {}\nfunc add(_ a: Int, _ b: Int) -> Int { a+b }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: swift\n\nsample.swift\n  1 class Box\n  2 function add\n",
+      "expected_symbols": {
+        "sample.swift": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_kotlin",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.kt": "class Box {\n fun get(x: Int): Int = x\n}\ninterface Draw { fun draw() }\nfun add(a: Int, b: Int) = a+b\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: kotlin\n\nsample.kt\n  1 class Box\n  2 method Box.get\n  4 class Draw\n  4 method Draw.draw\n  5 function add\n",
+      "expected_symbols": {
+        "sample.kt": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            4,
+            "class",
+            "Draw",
+            ""
+          ],
+          [
+            4,
+            "method",
+            "Draw.draw",
+            ""
+          ],
+          [
+            5,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_scala",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.scala": "class Box {\n def get(x: Int): Int = x\n}\ntrait Draw { def draw(): Unit }\ndef add(a: Int, b: Int): Int = a+b\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: scala\n\nsample.scala\n  1 class Box\n  2 method Box.get\n  4 interface Draw\n  5 method add\n",
+      "expected_symbols": {
+        "sample.scala": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            4,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            5,
+            "method",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_lua",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.lua": "function Box.get(x)\n return x\nend\nlocal function add(a, b)\n return a+b\nend\nBox.other = function(x) return x end\nlocal t = {f = function(x) return x end}\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: lua\n\nsample.lua\n  1 function get\n  4 function add\n  7 function other\n  8 function f\n",
+      "expected_symbols": {
+        "sample.lua": [
+          [
+            1,
+            "function",
+            "get",
+            ""
+          ],
+          [
+            4,
+            "function",
+            "add",
+            ""
+          ],
+          [
+            7,
+            "function",
+            "other",
+            ""
+          ],
+          [
+            8,
+            "function",
+            "f",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_bash",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.sh": "function greet() {\n echo hi\n}\nadd() {\n :\n}\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: bash\n\nsample.sh\n  1 function greet\n  4 function add\n",
+      "expected_symbols": {
+        "sample.sh": [
+          [
+            1,
+            "function",
+            "greet",
+            ""
+          ],
+          [
+            4,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_go_only_c_sharp",
+      "op": "oracle",
+      "oracle": "GO_ONLY: Python tree-sitter-language-pack does not ship c_sharp",
+      "sources": {
+        "sample.cs": "class Box { int Get() { return 1; } }\ninterface Draw { void Draw(); }\nstruct Point { int X; }\nenum Color { Red }\n"
+      },
+      "expected_map": "# Code map v5\nParser: native Go/Python/tree-sitter\nCovered languages: c_sharp\n\nsample.cs\n  1 class Box\n  1 method Box.Get\n  2 interface Draw\n  2 method Draw.Draw\n  3 struct Point\n  4 enum Color\n",
+      "expected_symbols": {
+        "sample.cs": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            1,
+            "method",
+            "Box.Get",
+            ""
+          ],
+          [
+            2,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Draw.Draw",
+            ""
+          ],
+          [
+            3,
+            "struct",
+            "Point",
+            ""
+          ],
+          [
+            4,
+            "enum",
+            "Color",
+            ""
+          ]
+        ]
+      }
     }
   ]
 }

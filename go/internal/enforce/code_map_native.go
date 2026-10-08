@@ -40,6 +40,13 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 		"c":          func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "c") },
 		"cpp":        func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "cpp") },
 		"ruby":       func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "ruby") },
+		"php":        func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "php") },
+		"swift":      func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "swift") },
+		"kotlin":     func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "kotlin") },
+		"scala":      func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "scala") },
+		"lua":        func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "lua") },
+		"bash":       func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "bash") },
+		"c_sharp":    func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "c_sharp") },
 	}
 	for language, extract := range extractors {
 		registered[language] = extract

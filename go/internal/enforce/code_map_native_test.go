@@ -45,7 +45,7 @@ func TestCodeMapPass3dOracleSymbols(t *testing.T) {
 	}
 	languages := map[string]string{
 		"p3d_oracle_rust": "rust", "p3d_oracle_java": "java", "p3d_oracle_c": "c",
-		"p3d_oracle_cpp": "cpp", "p3d_oracle_c_sharp": "c_sharp", "p3d_oracle_ruby": "ruby",
+		"p3d_oracle_cpp": "cpp", "p3d_oracle_ruby": "ruby",
 	}
 	for _, item := range fixture.Cases {
 		language, ok := languages[item.Name]
@@ -58,12 +58,6 @@ func TestCodeMapPass3dOracleSymbols(t *testing.T) {
 			}
 			for path, source := range item.Sources {
 				got, err := extractTreeSitterSymbols([]byte(source), language)
-				if language == "c_sharp" {
-					if err == nil || len(item.ExpectedSymbols[path]) != 0 {
-						t.Fatalf("unavailable oracle language became supported: symbols=%#v err=%v", got, err)
-					}
-					return
-				}
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -83,6 +77,58 @@ func TestCodeMapPass3dOracleSymbols(t *testing.T) {
 				}
 				if fmt.Sprint(got) != fmt.Sprint(want) {
 					t.Fatalf("symbols=%#v want oracle=%#v", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestCodeMapPass3eSymbols(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "code_map.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name            string             `json:"name"`
+			Sources         map[string]string  `json:"sources"`
+			ExpectedSymbols map[string][][]any `json:"expected_symbols"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	languages := map[string]string{"php": "php", "swift": "swift", "kotlin": "kotlin", "scala": "scala", "lua": "lua", "bash": "bash", "go_only_c_sharp": "c_sharp"}
+	for _, item := range fixture.Cases {
+		if !strings.HasPrefix(item.Name, "p3e_") {
+			continue
+		}
+		language := ""
+		for suffix, value := range languages {
+			if strings.HasSuffix(item.Name, suffix) {
+				language = value
+				break
+			}
+		}
+		if language == "" {
+			t.Fatalf("unclassified p3e case %s", item.Name)
+		}
+		t.Run(item.Name, func(t *testing.T) {
+			for path, source := range item.Sources {
+				got, err := extractTreeSitterSymbols([]byte(source), language)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want []codeMapSymbol
+				for _, symbol := range item.ExpectedSymbols[path] {
+					line, _ := symbol[0].(float64)
+					kind, _ := symbol[1].(string)
+					name, _ := symbol[2].(string)
+					signature, _ := symbol[3].(string)
+					want = append(want, codeMapSymbol{Line: int(line), Kind: kind, Name: name, Signature: signature})
+				}
+				if fmt.Sprint(got) != fmt.Sprint(want) {
+					t.Fatalf("symbols=%#v want=%#v", got, want)
 				}
 			}
 		})

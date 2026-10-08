@@ -1,4 +1,4 @@
 package enforce
 
 // codeMapGrammarTags is the release build's single source of truth.
-const codeMapGrammarTags = "grammar_subset grammar_subset_python grammar_subset_javascript grammar_subset_typescript grammar_subset_tsx grammar_subset_rust grammar_subset_java grammar_subset_c grammar_subset_cpp grammar_subset_ruby"
+const codeMapGrammarTags = "grammar_subset grammar_subset_python grammar_subset_javascript grammar_subset_typescript grammar_subset_tsx grammar_subset_rust grammar_subset_java grammar_subset_c grammar_subset_cpp grammar_subset_ruby grammar_subset_php grammar_subset_swift grammar_subset_kotlin grammar_subset_scala grammar_subset_lua grammar_subset_bash grammar_subset_c_sharp"

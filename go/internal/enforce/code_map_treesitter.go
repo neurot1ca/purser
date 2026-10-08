@@ -6,12 +6,19 @@ import (
 	"strings"
 
 	"github.com/odvcencio/gotreesitter"
+	"github.com/odvcencio/gotreesitter/grammars/bash"
 	"github.com/odvcencio/gotreesitter/grammars/c"
+	"github.com/odvcencio/gotreesitter/grammars/c_sharp"
 	"github.com/odvcencio/gotreesitter/grammars/cpp"
 	"github.com/odvcencio/gotreesitter/grammars/java"
 	"github.com/odvcencio/gotreesitter/grammars/javascript"
+	"github.com/odvcencio/gotreesitter/grammars/kotlin"
+	"github.com/odvcencio/gotreesitter/grammars/lua"
+	"github.com/odvcencio/gotreesitter/grammars/php"
 	"github.com/odvcencio/gotreesitter/grammars/ruby"
 	"github.com/odvcencio/gotreesitter/grammars/rust"
+	"github.com/odvcencio/gotreesitter/grammars/scala"
+	"github.com/odvcencio/gotreesitter/grammars/swift"
 	"github.com/odvcencio/gotreesitter/grammars/tsx"
 	"github.com/odvcencio/gotreesitter/grammars/typescript"
 )
@@ -35,6 +42,20 @@ func extractTreeSitterSymbols(source []byte, language string) ([]codeMapSymbol, 
 		grammar = cpp.Language()
 	case "ruby":
 		grammar = ruby.Language()
+	case "php":
+		grammar = php.Language()
+	case "swift":
+		grammar = swift.Language()
+	case "kotlin":
+		grammar = kotlin.Language()
+	case "scala":
+		grammar = scala.Language()
+	case "lua":
+		grammar = lua.Language()
+	case "bash":
+		grammar = bash.Language()
+	case "c_sharp":
+		grammar = c_sharp.Language()
 	default:
 		return nil, errors.New("unsupported tree-sitter language")
 	}
@@ -48,7 +69,7 @@ func extractTreeSitterSymbols(source []byte, language string) ([]codeMapSymbol, 
 	if tree.RootNode().HasError() {
 		return nil, errors.New("invalid syntax")
 	}
-	if language == "rust" || language == "java" || language == "c" || language == "cpp" || language == "ruby" {
+	if language != "javascript" && language != "typescript" && language != "tsx" {
 		return extractTreeSitterTagSymbols(source, grammar, language, tree.RootNode())
 	}
 	var symbols []codeMapSymbol
@@ -195,6 +216,98 @@ func extractTreeSitterTagSymbols(source []byte, grammar *gotreesitter.Language, 
 			case "method", "singleton_method":
 				add("method", field(node, "name", "identifier"))
 			}
+		case "php":
+			switch typ {
+			case "class_declaration":
+				add("class", field(node, "name", "name"))
+			case "interface_declaration":
+				add("interface", field(node, "name", "name"))
+			case "method_declaration":
+				add("method", field(node, "name", "name"))
+			case "function_definition":
+				add("function", field(node, "name", "name"))
+			}
+		case "swift":
+			switch typ {
+			case "class_declaration":
+				add("class", field(node, "name", "type_identifier"))
+				// The Python tags query captures the enclosing declaration as a method
+				// when it contains a method declaration.
+				if name := field(node, "name", "type_identifier"); name != nil && hasDescendantType(node, grammar, "function_declaration") {
+					add("method", name)
+				}
+			case "protocol_declaration":
+				add("interface", field(node, "name", "type_identifier"))
+				if name := field(node, "name", "type_identifier"); name != nil {
+					add("method", name)
+				}
+			case "function_declaration":
+				add("function", field(node, "name", "simple_identifier"))
+			case "init_declaration":
+				add("method", field(node, "name", "simple_identifier"))
+			case "deinit_declaration":
+				add("method", field(node, "name", "simple_identifier"))
+			}
+		case "kotlin":
+			switch typ {
+			case "class_declaration":
+				add("class", firstDescendantType(node, grammar, "type_identifier"))
+			case "object_declaration", "companion_object":
+				add("class", firstDescendantType(node, grammar, "type_identifier"))
+			case "function_declaration":
+				add("function", firstDescendantType(node, grammar, "simple_identifier"))
+			case "type_alias":
+				add("type", firstDescendantType(node, grammar, "type_identifier"))
+			}
+		case "scala":
+			switch typ {
+			case "class_definition":
+				add("class", field(node, "name", "identifier"))
+			case "trait_definition":
+				add("interface", field(node, "name", "identifier"))
+			case "function_definition":
+				add("method", field(node, "name", "identifier"))
+			}
+		case "lua":
+			switch typ {
+			case "function_declaration":
+				name := field(node, "name", "identifier")
+				if name == nil {
+					name = lastDescendantType(node.ChildByFieldName("name", grammar), grammar, "identifier")
+				}
+				kind := "function"
+				if named := node.ChildByFieldName("name", grammar); named != nil && named.Type(grammar) == "method_index_expression" {
+					kind = "method"
+				}
+				add(kind, name)
+			case "assignment_statement":
+				if values := firstDescendantType(node, grammar, "expression_list"); values != nil && values.NamedChildCount() > 0 && values.NamedChild(0).Type(grammar) == "function_definition" {
+					if names := firstDescendantType(node, grammar, "variable_list"); names != nil {
+						add("function", lastDescendantType(names, grammar, "identifier"))
+					}
+				}
+			case "field":
+				if field(node, "value", "function_definition") != nil {
+					add("function", field(node, "name", "identifier"))
+				}
+			}
+		case "bash":
+			if typ == "function_definition" {
+				add("function", field(node, "name", "word"))
+			}
+		case "c_sharp":
+			switch typ {
+			case "class_declaration":
+				add("class", field(node, "name", "identifier"))
+			case "interface_declaration":
+				add("interface", field(node, "name", "identifier"))
+			case "struct_declaration":
+				add("struct", field(node, "name", "identifier"))
+			case "enum_declaration":
+				add("enum", field(node, "name", "identifier"))
+			case "method_declaration", "constructor_declaration", "local_function_statement":
+				add("method", field(node, "name", "identifier"))
+			}
 		}
 		for i := 0; i < node.NamedChildCount(); i++ {
 			walk(node.NamedChild(i))
@@ -243,6 +356,41 @@ func extractTreeSitterTagSymbols(source []byte, grammar *gotreesitter.Language, 
 		return symbols[i].Name < symbols[j].Name
 	})
 	return symbols, nil
+}
+
+func firstDescendantType(node *gotreesitter.Node, grammar *gotreesitter.Language, typ string) *gotreesitter.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Type(grammar) == typ {
+		return node
+	}
+	for i := 0; i < node.NamedChildCount(); i++ {
+		if found := firstDescendantType(node.NamedChild(i), grammar, typ); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func lastDescendantType(node *gotreesitter.Node, grammar *gotreesitter.Language, typ string) *gotreesitter.Node {
+	if node == nil {
+		return nil
+	}
+	var found *gotreesitter.Node
+	if node.Type(grammar) == typ {
+		found = node
+	}
+	for i := 0; i < node.NamedChildCount(); i++ {
+		if child := lastDescendantType(node.NamedChild(i), grammar, typ); child != nil {
+			found = child
+		}
+	}
+	return found
+}
+
+func hasDescendantType(node *gotreesitter.Node, grammar *gotreesitter.Language, typ string) bool {
+	return firstDescendantType(node, grammar, typ) != nil
 }
 
 func treeSitterScopeKind(kind string) bool {
