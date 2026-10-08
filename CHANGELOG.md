@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.89 — 2026-10-08
+
+- **Fixed:** Auto-compact retries on timers that outlive the finished turn and logs each decision to `~/.claude/purser/auto-compact.log`.
+- **Changed:** Mechanical shadow runs start through `purser-hook` instead of Python.
+
 ## 0.1.88 — 2026-10-08
 
 - **Added:** After a main turn at 250k context tokens Purser compacts the conversation itself, so you no longer type `/compact` (`PURSER_AUTO_COMPACT_TOKENS` sets the threshold, `0` turns it off).
