@@ -115,6 +115,33 @@ func TestPrivateOperationRejectsUnknownAndMalformedInput(t *testing.T) {
 	}
 }
 
+func TestCodexStartOpenCodeIgnoresEmptyCodexOverride(t *testing.T) {
+	t.Setenv("PURSER_AGENT", "")
+	t.Setenv("PURSER_CODEX_BIN", "")
+	state := t.TempDir()
+	call := "123e4567-e89b-12d3-a456-426614174004"
+	args := map[string]any{
+		"agent": "opencode", "call": call, "config": map[string]any{}, "cwd": t.TempDir(),
+		"model": "provider/model", "prompt": "test",
+	}
+	result, err := dispatchOperation(t.Context(), "codex_start", args, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sha256.Sum256([]byte(call))
+	launch, err := os.ReadFile(filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(id[:])+".launch"))
+	if err != nil {
+		t.Fatalf("OpenCode launch record unavailable: result=%#v err=%v", result, err)
+	}
+	var recorded map[string]any
+	if err = json.Unmarshal(launch, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded["agent"] != "opencode" || recorded["codexBin"] != nil {
+		t.Fatalf("Codex override leaked into OpenCode launch: %s", launch)
+	}
+}
+
 func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	binary := buildPurserHook(t)
 	plugin := t.TempDir()
@@ -173,8 +200,8 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	if err = json.Unmarshal(launch, &recorded); err != nil {
 		t.Fatal(err)
 	}
-	if recorded["agent"] != "agy" || recorded["codexBin"] != override {
-		t.Fatalf("launch did not preserve configured agent and executable override: %s", launch)
+	if recorded["agent"] != "agy" || recorded["codexBin"] != nil {
+		t.Fatalf("Codex executable override leaked into configured agent launch: %s", launch)
 	}
 	t.Setenv("PURSER_AGENT", "codex")
 	args["call"] = "123e4567-e89b-12d3-a456-426614174003"
@@ -191,11 +218,11 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	if err = json.Unmarshal(launch, &recorded); err != nil {
 		t.Fatal(err)
 	}
-	if recorded["agent"] != "codex" {
-		t.Fatalf("PURSER_AGENT did not override coder_agent: %s", launch)
+	if recorded["agent"] != "codex" || recorded["codexBin"] != override {
+		t.Fatalf("PURSER_AGENT did not select Codex with its executable override: %s", launch)
 	}
-	t.Setenv("PURSER_AGENT", "")
-	t.Setenv("PURSER_CODEX_BIN", "[")
+	t.Setenv("PURSER_AGENT", "codex")
+	t.Setenv("PURSER_CODEX_BIN", "[]")
 	args["call"] = "123e4567-e89b-12d3-a456-426614174002"
 	input, _ = json.Marshal(map[string]any{"args": args})
 	code, output = runPrivate(t, binary, state, "op codex_start", string(input))

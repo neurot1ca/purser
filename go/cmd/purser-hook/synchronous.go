@@ -193,7 +193,7 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 		if sandbox != "" {
 			sandboxArg = &sandbox
 		}
-		prefix, prefixErr := jobs.ResolveAgentPrefix(agent, os.Getenv("PURSER_CODEX_BIN"))
+		prefix, prefixErr := jobs.ResolveAgentPrefix(agent, nil)
 		if prefixErr != nil {
 			return legacyError(nil, prefixErr.Error()), nil
 		}

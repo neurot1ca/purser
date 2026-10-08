@@ -105,7 +105,7 @@ func dispatchOperation(ctx context.Context, tool string, args map[string]any, ro
 				_, err := jobs.ResolveCodexPrefix(override)
 				return err
 			}
-			_, err := jobs.ResolveAgentPrefix(agent, override)
+			_, err := jobs.ResolveAgentPrefix(agent, nil)
 			return err
 		}
 		selectedByEnv := os.Getenv("PURSER_AGENT") != ""

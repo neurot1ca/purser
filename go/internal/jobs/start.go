@@ -196,7 +196,11 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 			}
 		}
 	}
-	launch, err := marshalPythonJSON(map[string]any{"name": req.Name, "args": args, "codexBin": opt.CodexBin, "agent": req.Agent})
+	codexBin := opt.CodexBin
+	if req.Agent != "codex" {
+		codexBin = nil
+	}
+	launch, err := marshalPythonJSON(map[string]any{"name": req.Name, "args": args, "codexBin": codexBin, "agent": req.Agent})
 	if err != nil {
 		return nil, nil, err
 	}
