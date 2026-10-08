@@ -63,6 +63,13 @@ func TestStartValidationPythonParity(t *testing.T) {
 				_ = json.Unmarshal(b, &got)
 				want = c.Request
 			}
+			if actual, ok := got["structuredContent"].(map[string]any); ok {
+				if expected, ok := c.Result["structuredContent"].(map[string]any); ok && expected["message"] == "Invalid Codex launch arguments" {
+					if message, ok := actual["message"].(string); ok && strings.HasPrefix(message, "Invalid Codex launch arguments: ") {
+						actual["message"], got["content"] = expected["message"], c.Result["content"]
+					}
+				}
+			}
 			if !sameStart(got, want) {
 				t.Fatalf("got %#v want %#v", got, want)
 			}
@@ -99,6 +106,38 @@ func TestValidateStartDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
 	emptyArgs := map[string]any{"call": "00000000-0000-0000-0000-000000000002", "prompt": "run", "cwd": ""}
 	if _, failure = ValidateStart(emptyArgs, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }}); failure != nil {
 		t.Fatalf("empty cwd was not defaultable: %#v", failure)
+	}
+}
+
+func TestValidateStartAcceptsMechanicalOpenCodeArguments(t *testing.T) {
+	t.Setenv("PURSER_AGENT", "")
+	args := map[string]any{
+		"agent": "opencode", "call": "00000000-0000-4000-8000-000000000001", "config": map[string]any{},
+		"cwd": `C:\Projects\purser`, "etaMinutes": 3, "jobEffort": "high", "jobLabel": "mechanical task",
+		"jobModel": "opencode/nemotron-3-ultra-free", "jobPhase": "implementation", "mode": "new",
+		"model": "opencode/nemotron-3-ultra-free", "prompt": "implement the task",
+	}
+	request, failure := ValidateStart(args, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(agent string) error {
+		_, err := ResolveAgentPrefix(agent, nil)
+		return err
+	}})
+	if failure != nil || request.Agent != "opencode" || request.Mode != "new" {
+		t.Fatalf("OpenCode mechanical start failed validation: request=%#v failure=%#v", request, failure)
+	}
+}
+
+func TestValidateStartReportsOpenCodeLaunchValidationError(t *testing.T) {
+	args := map[string]any{
+		"agent": "opencode", "call": "00000000-0000-4000-8000-000000000002", "config": map[string]any{},
+		"cwd": t.TempDir(), "mode": "new", "model": "invalid-model", "prompt": "run",
+	}
+	_, failure := ValidateStart(args, StartValidationOptions{Agent: "codex", FixedAgent: true})
+	if failure == nil {
+		t.Fatal("invalid OpenCode model passed validation")
+	}
+	result := failure["structuredContent"].(map[string]any)
+	if got, want := result["message"], "Invalid Codex launch arguments: OpenCode model must be provider/model"; got != want {
+		t.Fatalf("message = %v, want %q", got, want)
 	}
 }
 

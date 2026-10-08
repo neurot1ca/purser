@@ -108,8 +108,8 @@ func ValidateStart(args map[string]any, opt StartValidationOptions) (StartReques
 	if mode == "reply" {
 		name = "codex-reply"
 	}
-	if validateStartLaunch(args, agent, mode, name, opt) != nil {
-		return fail("INVALID_ARGUMENT", "Invalid Codex launch arguments")
+	if err := validateStartLaunch(args, agent, mode, name, opt); err != nil {
+		return fail("INVALID_ARGUMENT", "Invalid Codex launch arguments: "+err.Error())
 	}
 	return StartRequest{JobID: jobID, Call: call, Prompt: prompt, Agent: agent, Mode: mode, Name: name, TimeoutSeconds: seconds, Args: args}, nil
 }
