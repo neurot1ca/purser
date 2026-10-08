@@ -253,7 +253,11 @@ func formatMaintenanceNotice(notice map[string]any) string {
 			countText = "an unknown number of"
 		}
 		lines := []string{}
-		if coverage, ok := notice["line_coverage_pct"].(float64); ok && coverage > 90 {
+		target, validTarget := notice["coverage_target_pct"].(float64)
+		if !validTarget || math.IsNaN(target) || math.IsInf(target, 0) || target <= 0 || target > 100 {
+			target = 90
+		}
+		if coverage, ok := notice["line_coverage_pct"].(float64); ok && !math.IsNaN(coverage) && !math.IsInf(coverage, 0) && coverage >= target {
 			lines = append(lines, fmt.Sprintf("> ⚓ **Purser: your code is now %d%% covered by tests! 🚀** You have reached a top-tier quality bar. Purser found the gaps for you in the background while you focused on your work. Type /purser:optimize for the last few steps.", int(math.Floor(coverage+0.5))))
 		}
 		lines = append(lines, "> ⚓ **Purser checked your tests in the background while you worked: the report lists "+countText+" missing tests.**")
@@ -261,7 +265,7 @@ func formatMaintenanceNotice(notice map[string]any) string {
 			lines = append(lines, "> *The findings could not be parsed; report: `"+path+"`.*")
 		} else {
 			lines = append(lines, "> *The table below shows each gap and its evidence; the full report is at `"+path+"`.*", "> | Gap | Evidence |", "> | --- | --- |")
-			for _, item := range rankMaintenanceFindings(findings, 5) {
+			for _, item := range rankMaintenanceFindings(findings, 5, true) {
 				lines = append(lines, fmt.Sprintf("> | %s | %s |", truncateRunes(maintenanceCandidate(item), 48), truncateRunes(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)))
 			}
 		}
@@ -278,7 +282,7 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	if !findingsOK {
 		return "> " + intro + "\n> *The findings could not be parsed; report: `" + path + "`.*"
 	}
-	ranked := rankMaintenanceFindings(findings, 5)
+	ranked := rankMaintenanceFindings(findings, 5, false)
 	instruction := "The table below lists each finding and its evidence. Just say \"clean up\" to have them cleaned."
 	if len(findings) > 5 {
 		instruction = "The table below lists the top 5 findings and their evidence. Just say \"clean up\" to have them cleaned. The other findings are in this file to save tokens: `" + path + "`"
@@ -296,7 +300,7 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	return strings.Join(lines, "\n")
 }
 
-func rankMaintenanceFindings(findings []any, limit int) []map[string]any {
+func rankMaintenanceFindings(findings []any, limit int, preserveOrder bool) []map[string]any {
 	type rankedFinding struct {
 		item map[string]any
 		rank int
@@ -320,7 +324,9 @@ func rankMaintenanceFindings(findings []any, limit int) []map[string]any {
 		}
 		ranked = append(ranked, rankedFinding{item, rank})
 	}
-	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].rank > ranked[j].rank })
+	if !preserveOrder {
+		sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].rank > ranked[j].rank })
+	}
 	if len(ranked) > limit {
 		ranked = ranked[:limit]
 	}

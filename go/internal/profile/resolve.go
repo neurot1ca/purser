@@ -45,6 +45,7 @@ type ResolvedProfile struct {
 	ProtectedPaths     []string            `json:"protected_paths"`
 	ForceFullReview    bool                `json:"force_full_review"`
 	FullSuiteRequired  bool                `json:"full_suite_required"`
+	CoverageTargetPct  float64             `json:"-"`
 	SkipMaxLines       int                 `json:"skip_max_lines"`
 	SkipMaxFiles       int                 `json:"skip_max_files"`
 	Trusted            bool                `json:"trusted"`
@@ -165,7 +166,11 @@ func ResolveProfile(projectRoot string, user, project Tier) ResolvedProfile {
 	if trusted {
 		checks = profileChecks(projectValues["checks"])
 	}
-	return ResolvedProfile{Configured: project.Status != "missing", ProjectID: profileOptionalString(projectValues["project.id"]), MeasurementLedger: profileOptionalString(projectValues["project.measurement_ledger"]), ProtectedPaths: protected, ForceFullReview: forceFull, FullSuiteRequired: profileBool(projectValues, "review.full_suite_required"), SkipMaxLines: lines, SkipMaxFiles: files, Trusted: trusted, ReviewerExecutable: profileOptionalString(userValues["reviewer.executable"]), ReviewerCandidates: candidates, Roles: roles, AuthoritySources: sources, Checks: checks, Worktree: worktree, VaultRoot: profileOptionalString(userValues["telemetry.vault_root"]), LooseningsIgnored: ignored, UserStatus: user.Status, ProjectStatus: project.Status, Warnings: warnings}
+	coverageTarget := 90.0
+	if value, ok := projectValues["maintenance.coverage_target_pct"].(float64); ok {
+		coverageTarget = value
+	}
+	return ResolvedProfile{Configured: project.Status != "missing", ProjectID: profileOptionalString(projectValues["project.id"]), MeasurementLedger: profileOptionalString(projectValues["project.measurement_ledger"]), ProtectedPaths: protected, ForceFullReview: forceFull, FullSuiteRequired: profileBool(projectValues, "review.full_suite_required"), CoverageTargetPct: coverageTarget, SkipMaxLines: lines, SkipMaxFiles: files, Trusted: trusted, ReviewerExecutable: profileOptionalString(userValues["reviewer.executable"]), ReviewerCandidates: candidates, Roles: roles, AuthoritySources: sources, Checks: checks, Worktree: worktree, VaultRoot: profileOptionalString(userValues["telemetry.vault_root"]), LooseningsIgnored: ignored, UserStatus: user.Status, ProjectStatus: project.Status, Warnings: warnings}
 }
 
 // IsTrusted requires a canonical path equality, never a parent/child match.

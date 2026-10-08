@@ -14,7 +14,7 @@ import (
 
 func TestReportPromptBytes(t *testing.T) {
 	repo := "<REPO>"
-	cleanup, err := BuildReportPrompt(repo, "cleanup")
+	cleanup, err := BuildReportPrompt(repo, "cleanup", 90)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestReportPromptBytes(t *testing.T) {
 	if cleanup != wantCleanup {
 		t.Fatalf("cleanup prompt mismatch\n got: %q\nwant: %q", cleanup, wantCleanup)
 	}
-	testGaps, err := BuildReportPrompt(repo, "test-gaps")
+	testGaps, err := BuildReportPrompt(repo, "test-gaps", 90)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestReportPromptBytes(t *testing.T) {
 
 func TestReportPromptsRequireNoDownloadsAndLanguageScope(t *testing.T) {
 	for _, reportType := range []string{"cleanup", "test-gaps"} {
-		prompt, err := BuildReportPrompt("<REPO>", reportType)
+		prompt, err := BuildReportPrompt("<REPO>", reportType, 90)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,6 +123,13 @@ func TestFindingsParsingOracle(t *testing.T) {
 			}
 		})
 	}
+	body := "```purser-findings-json\n{\"findings\":[{\"path_line\":\"a.py:1\",\"symbol\":\"a\",\"evidence\":\"e\",\"confidence\":\"low\"},{\"path_line\":\"b.py:2\",\"symbol\":\"b\",\"evidence\":\"e\",\"confidence\":\"high\"}],\"line_coverage_pct\":80}\n```"
+	if got := ParseFindings(body, "test-gaps"); got[0]["symbol"] != "a" {
+		t.Fatalf("test-gaps worker order = %#v", got)
+	}
+	if got := ParseFindings(body, "cleanup"); got[0]["symbol"] != "b" {
+		t.Fatalf("cleanup confidence order = %#v", got)
+	}
 }
 
 func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
@@ -141,7 +148,16 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 			if err := os.MkdirAll(repo, 0700); err != nil {
 				t.Fatal(err)
 			}
-			result := map[string]any{"state": "SUCCEEDED", "content": "Body.\n```purser-findings-json\n{\"findings\":[{\"path_line\":\"a.py:1\",\"symbol\":\"f\",\"evidence\":\"source\",\"confidence\":\"high\"}],\"line_coverage_pct\":91.2}\n```", "usage": map[string]any{"total_tokens": 21}}
+			if !failed {
+				profileDir := filepath.Join(repo, ".orchestrator")
+				if err := os.MkdirAll(profileDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(profileDir, "profile.toml"), []byte("schema_version = 1\n[maintenance]\ncoverage_target_pct = 80\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result := map[string]any{"state": "SUCCEEDED", "content": "Body.\n```purser-findings-json\n{\"findings\":[{\"path_line\":\"a.py:1\",\"symbol\":\"f\",\"evidence\":\"source\",\"confidence\":\"low\"}],\"line_coverage_pct\":80}\n```", "usage": map[string]any{"total_tokens": 21}}
 			if failed {
 				result = map[string]any{"state": "FAILED", "errorCode": "CODEX_FAILED", "message": "worker failed"}
 			}
@@ -174,9 +190,12 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Fatal(err)
 			}
-			prompt, _ := BuildReportPrompt(repo, "test-gaps")
+			prompt, _ := BuildReportPrompt(repo, "test-gaps", 80)
 			if fake.started["prompt"] != prompt {
 				t.Fatal("runner prompt differs from builder")
+			}
+			if !strings.Contains(prompt, "80% line-coverage target") {
+				t.Fatalf("override missing from prompt: %s", prompt)
 			}
 			content, _ := os.ReadFile(path)
 			if !strings.Contains(string(content), "- Findings: 1") || !strings.Contains(string(content), `"total_tokens":21`) {
@@ -187,7 +206,7 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			notice, _ := os.ReadFile(strings.TrimSuffix(path, ".md") + ".notice.json")
-			if !strings.Contains(string(notice), `"line_coverage_pct":91.2`) {
+			if !strings.Contains(string(notice), `"line_coverage_pct":80`) || !strings.Contains(string(notice), `"coverage_target_pct":80`) {
 				t.Fatalf("notice: %s", notice)
 			}
 			events, _ := filepath.Glob(filepath.Join(state, "telemetry", "events", "*", "session_unknown.jsonl"))
@@ -200,7 +219,7 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 				t.Fatalf("completion telemetry: %s", lines)
 			}
 			payload := event["payload"].(map[string]any)
-			if payload["findings_high_count"] != float64(1) || payload["line_coverage_pct"] != 91.2 || payload["quota_change_active_window_pct"] != nil {
+			if payload["findings_high_count"] != float64(0) || payload["line_coverage_pct"] != float64(80) || payload["quota_change_active_window_pct"] != nil {
 				t.Fatalf("completion telemetry payload: %#v", payload)
 			}
 		})

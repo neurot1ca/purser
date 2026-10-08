@@ -3,6 +3,7 @@ package profile
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,7 +21,8 @@ type Tier struct {
 var userNonSecurity = map[string]map[string]bool{"telemetry": {"vault_root": true}}
 var projectNonSecurity = map[string]map[string]bool{
 	"project": {"id": true, "measurement_ledger": true}, "authority": {"sources": true},
-	"worktree": {"copy": true, "setup": true, "setup_timeout_seconds": true},
+	"worktree":    {"copy": true, "setup": true, "setup_timeout_seconds": true},
+	"maintenance": {"coverage_target_pct": true},
 }
 
 // ValidateTier mirrors project_profile._load_tier after TOML decoding. Pass
@@ -85,7 +87,7 @@ func validateTier(tier string, data map[string]any, order *tierKeyOrder) Tier {
 		security = projectSecurity
 		nonSecurity = projectNonSecurity
 		securityOrder = []string{"paths", "review"}
-		nonSecurityOrder = []string{"project", "authority", "worktree"}
+		nonSecurityOrder = []string{"project", "authority", "worktree", "maintenance"}
 	}
 	if tier == "user" {
 		if _, exists := data["checks"]; exists {
@@ -183,6 +185,14 @@ func validateTier(tier string, data map[string]any, order *tierKeyOrder) Tier {
 				}
 				continue
 			}
+			if sectionName == "maintenance" && key == "coverage_target_pct" {
+				if target, valid := profileNumber(value); valid && target > 0 && target <= 100 {
+					values["maintenance.coverage_target_pct"] = target
+				} else {
+					warnings = append(warnings, tier+": [maintenance] coverage_target_pct must be a finite number greater than 0 and at most 100; using 90")
+				}
+				continue
+			}
 			if text, valid := value.(string); valid {
 				values[sectionName+"."+key] = text
 			} else {
@@ -191,6 +201,19 @@ func validateTier(tier string, data map[string]any, order *tierKeyOrder) Tier {
 		}
 	}
 	return Tier{Status: "ok", Values: values, Warnings: warnings}
+}
+
+func profileNumber(value any) (float64, bool) {
+	var number float64
+	switch value := value.(type) {
+	case int64:
+		number = float64(value)
+	case float64:
+		number = value
+	default:
+		return 0, false
+	}
+	return number, !math.IsNaN(number) && !math.IsInf(number, 0)
 }
 
 func orderedKeys(values map[string]any, order *tierKeyOrder, section string) []string {

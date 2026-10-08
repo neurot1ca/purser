@@ -81,6 +81,7 @@ func failedProfile(reason string) ResolvedProfile {
 	return ResolvedProfile{
 		Configured: false, ProtectedPaths: protected,
 		ForceFullReview: true, SkipMaxLines: 50, SkipMaxFiles: 2,
+		CoverageTargetPct:  90,
 		ReviewerCandidates: []ReviewerCandidate{{Agent: "agy", Model: "gemini-3.8-flash-high"}},
 		Roles:              Roles{Orchestrator: "claude-code", Coder: "codex", Reviewer: "agy"},
 		AuthoritySources:   DefaultAuthoritySources(),

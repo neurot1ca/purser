@@ -19,15 +19,16 @@ import (
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/proc"
+	"purser-hook/internal/profile"
 )
 
 const findingsStart = "```purser-findings-json"
 
 var findingPathLine = regexp.MustCompile(`^(.+?):([0-9]+)$`)
 
-// BuildReportPrompt returns the maintenance worker prompt verbatim, with only
-// the canonical repository path substituted.
-func BuildReportPrompt(repository, reportType string) (string, error) {
+// BuildReportPrompt returns the maintenance worker prompt with its effective
+// coverage target and canonical repository path substituted.
+func BuildReportPrompt(repository, reportType string, coverageTargetPct float64) (string, error) {
 	switch reportType {
 	case "cleanup":
 		return fmt.Sprintf("Produce a cleanup report for the repository at %s.\n"+
@@ -73,7 +74,7 @@ func BuildReportPrompt(repository, reportType string) (string, error) {
 			"provider, or dependency. If unavailable, use search evidence and state its limits.\n"+
 			"Include a compact per-language scope table: language, file count, tool+version or search-only/\n"+
 			"not-scanned, command, limitation. State coverage per language and overall against a\n"+
-			"90%% line-coverage target; order candidate tests by how much uncovered code they\n"+
+			"%g%% line-coverage target; order candidate tests by how much uncovered code they\n"+
 			"exercise. line_coverage_pct is the overall number or null if any detected language\n"+
 			"lacks a measurement.\n"+
 			"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n"+
@@ -82,7 +83,7 @@ func BuildReportPrompt(repository, reportType string) (string, error) {
 			"be the overall percentage or null:\n"+
 			"```purser-findings-json\n"+
 			"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n"+
-			"```\n", repository), nil
+			"```\n", repository, coverageTargetPct), nil
 	default:
 		return "", fmt.Errorf("unsupported maintenance report type: %s", reportType)
 	}
@@ -90,7 +91,7 @@ func BuildReportPrompt(repository, reportType string) (string, error) {
 
 // ParseFindings parses the worker's final structured block. Any malformed
 // evidence returns nil (unknown), preserving Python's fail-closed behavior.
-func ParseFindings(body string) []map[string]any {
+func ParseFindings(body string, reportTypes ...string) []map[string]any {
 	value, ok := findingsJSON(body)
 	if !ok {
 		return nil
@@ -125,8 +126,10 @@ func ParseFindings(body string) []map[string]any {
 		}
 		result = append(result, map[string]any{"path_line": pathLine, "symbol": symbol, "evidence": evidence, "confidence": confidence, "confidence_rank": rank})
 	}
-	// Stable sort preserves worker order for equal confidence, as Python does.
-	sort.SliceStable(result, func(i, j int) bool { return result[i]["confidence_rank"].(int) > result[j]["confidence_rank"].(int) })
+	if len(reportTypes) == 0 || reportTypes[0] != "test-gaps" {
+		// Stable sort preserves worker order for equal confidence, as Python does.
+		sort.SliceStable(result, func(i, j int) bool { return result[i]["confidence_rank"].(int) > result[j]["confidence_rank"].(int) })
+	}
 	return result
 }
 
@@ -201,7 +204,7 @@ func confidenceRank(value string) int {
 
 // PersistReport writes the report, last-run marker, and Python-compatible
 // notice record. Timestamp must use Python's YYYYmmddTHHMMSS.ffffffZ format.
-func PersistReport(state, repository, reportType, timestamp, commit, body string, versions []string, limitations string, findings []map[string]any, coverage any, cost map[string]any) (string, error) {
+func PersistReport(state, repository, reportType, timestamp, commit, body string, versions []string, limitations string, findings []map[string]any, coverage any, coverageTargetPct float64, cost map[string]any) (string, error) {
 	project := filepath.Join(state, "projects", contextio.ProjectKey(repository), "maintenance")
 	reports := filepath.Join(project, "reports", reportType)
 	path := filepath.Join(reports, timestamp+".md")
@@ -246,7 +249,7 @@ func PersistReport(state, repository, reportType, timestamp, commit, body string
 	if err = writeJSONAtomic(lastRunPath(project, reportType), map[string]any{"completed_at": float64(time.Now().UnixNano()) / 1e9}); err != nil {
 		return "", err
 	}
-	notice := map[string]any{"report_type": reportType, "report_path": path, "findings": findings, "finding_count": nullableCount(findings), "line_coverage_pct": coverage, "shown": false}
+	notice := map[string]any{"report_type": reportType, "report_path": path, "findings": findings, "finding_count": nullableCount(findings), "line_coverage_pct": coverage, "coverage_target_pct": coverageTargetPct, "shown": false}
 	if err = writeJSONAtomic(strings.TrimSuffix(path, ".md")+".notice.json", notice); err != nil {
 		return "", err
 	}
@@ -308,7 +311,8 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	if err != nil {
 		return "", err
 	}
-	prompt, err := BuildReportPrompt(root, reportType)
+	coverageTargetPct := profile.LoadProfile(root).CoverageTargetPct
+	prompt, err := BuildReportPrompt(root, reportType, coverageTargetPct)
 	if err != nil {
 		return "", err
 	}
@@ -336,7 +340,7 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 		return "", runErr
 	}
 	body := stringValue(result["content"], "")
-	findings := ParseFindings(body)
+	findings := ParseFindings(body, reportType)
 	coverage := any(nil)
 	if reportType == "test-gaps" {
 		coverage = LineCoverage(body)
@@ -353,7 +357,7 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	jobID, _ := result["jobId"].(string)
 	quotaChange := maintenanceQuotaChange(quotaBefore, quotaAfter, jobsBefore, maintenanceJobIDs(state), jobID, state)
 	cost := map[string]any{"tokens": tokens, "elapsed_seconds": roundSeconds(time.Since(started)), "quota_before": quotaOrUnknown(quotaBefore), "quota_after": quotaOrUnknown(quotaAfter), "quota_change_active_window_pct": quotaChange}
-	path, err := PersistReport(state, root, reportType, timestamp, commit, body, versions, limitations, findings, coverage, cost)
+	path, err := PersistReport(state, root, reportType, timestamp, commit, body, versions, limitations, findings, coverage, coverageTargetPct, cost)
 	if err != nil {
 		recordReportFailure(state, root, reportType, timestamp, result, err, started, quotaBefore)
 		return "", err
