@@ -60,7 +60,7 @@ func gearAdviceFixture(t *testing.T) (string, string, string) {
 	}
 	quota := map[string]any{"timestamp": now.Format(time.RFC3339Nano), "payload": map[string]any{
 		"plan_type": "plus", "rate_limits": map[string]any{
-			"primary":   map[string]any{"window_minutes": 300, "used_percent": 10.0, "resets_at": float64(now.Add(2 * time.Hour).Unix())},
+			"primary":   map[string]any{"window_minutes": 300, "used_percent": 10.0, "resets_at": float64(now.Add(80 * time.Minute).Unix())},
 			"secondary": map[string]any{"window_minutes": 10080, "used_percent": 20.0, "resets_at": float64(now.Add(6 * 24 * time.Hour).Unix())},
 		},
 	}}
