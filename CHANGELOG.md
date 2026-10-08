@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.90 — 2026-10-08
+
+- **Added:** An accepted plan keeps moving: Purser records it, restores where it stopped after compaction or a new session, and reminds Claude to dispatch the next step; only an explicit `/purser:plan stop` pauses it.
+- **Changed:** The code map is built natively for 17 languages (C# newly covered) and completes itself in the background; Pre no longer runs Python.
+- **Changed:** Maintenance reports and their commands run through `purser-hook maintenance`; SessionStart no longer launches Python.
+
 ## 0.1.89 — 2026-10-08
 
 - **Fixed:** Auto-compact retries on timers that outlive the finished turn and logs each decision to `~/.claude/purser/auto-compact.log`.
