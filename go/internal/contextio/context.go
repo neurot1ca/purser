@@ -143,16 +143,24 @@ func projectRoot(event map[string]any) string {
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
-	cmd.Dir = abs
-	proc.ConfigureNoWindow(cmd)
-	out, err := cmd.Output()
+	root, err := gitTopLevel(abs)
 	if err != nil {
 		return ""
 	}
-	return resolve(strings.TrimSpace(string(out)))
+	return root
+}
+
+func gitTopLevel(directory string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	cmd.Dir = directory
+	proc.ConfigureNoWindow(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return resolve(strings.TrimSpace(string(out))), nil
 }
 
 // ProjectRoot resolves the repository associated with a hook event.
