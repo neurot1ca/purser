@@ -82,11 +82,12 @@ func TestSessionMaintenanceCleansJobsWithoutRepository(t *testing.T) {
 		t.Fatal("model discovery called without a repository")
 		return "", "", false
 	}
-	cleanupSessionJobs = func(root string, now time.Time, checkCeiling bool) {
+	cleanupSessionJobs = func(root string, now time.Time, checkCeiling bool) error {
 		called = true
 		if root != stateRoot() || time.Since(now) > time.Second || !checkCeiling {
 			t.Fatalf("cleanup args = %q, %v, %v", root, now, checkCeiling)
 		}
+		return nil
 	}
 	sessionMaintenance(map[string]any{})
 	if !called {
@@ -102,7 +103,7 @@ func TestSessionStartOutputSurvivesMaintenancePanic(t *testing.T) {
 	writeSessionOutput = func(data []byte) { written = append(written, data...) }
 	discoverSessionModelVersion = func(string) (string, string, bool) { panic("maintenance failure") }
 	cleanupCalled := false
-	cleanupSessionJobs = func(string, time.Time, bool) { cleanupCalled = true }
+	cleanupSessionJobs = func(string, time.Time, bool) error { cleanupCalled = true; return nil }
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
