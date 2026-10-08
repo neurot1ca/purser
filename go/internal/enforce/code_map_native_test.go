@@ -12,6 +12,65 @@ import (
 	"purser-hook/internal/contextio"
 )
 
+func TestCodeMapGoExtractor(t *testing.T) {
+	source := []byte("package sample\n\ntype Widget struct { Value int }\n\nfunc NewWidget(value int) *Widget { return &Widget{Value: value} }\n\nfunc (w *Widget) Set(value int) error { w.Value = value; return nil }\n")
+	symbols, err := extractCodeMapGo(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []codeMapSymbol{
+		{Line: 3, Kind: "type", Name: "Widget", Signature: "type Widget struct{ Value int }"},
+		{Line: 5, Kind: "function", Name: "NewWidget", Signature: "func NewWidget(value int) *Widget"},
+		{Line: 7, Kind: "method", Name: "Widget.Set", Signature: "func (w *Widget) Set(value int) error"},
+	}
+	if fmt.Sprint(symbols) != fmt.Sprint(want) {
+		t.Fatalf("symbols=%#v want=%#v", symbols, want)
+	}
+}
+
+func TestCodeMapNativeResumesPendingExtraction(t *testing.T) {
+	r, s := nativeMapRepo(t, map[string]string{"a.js": "a", "b.js": "b", "c.js": "c"})
+	calls := map[string]int{}
+	extract := map[string]codeMapSymbolExtractor{"javascript": func(src []byte) ([]codeMapSymbol, error) {
+		calls[string(src)]++
+		if string(src) == "a" {
+			time.Sleep(1100 * time.Millisecond)
+		}
+		return []codeMapSymbol{{Line: 1, Kind: "function", Name: string(src)}}, nil
+	}}
+	p, status := refreshCodeMapNative(r, s, time.Second, extract, nil)
+	first, err := os.ReadFile(p)
+	if err != nil || status != "STALE" || calls["a"] != 1 || calls["b"] != 0 || calls["c"] != 0 || !strings.Contains(string(first), "b.js\n  symbols: pending") || !strings.Contains(string(first), "c.js\n  symbols: pending") {
+		t.Fatalf("first status=%s err=%v calls=%v\n%s", status, err, calls, first)
+	}
+	_, status = refreshCodeMapNative(r, s, time.Second, extract, nil)
+	second, err := os.ReadFile(p)
+	if err != nil || status != "FRESH" || calls["a"] != 1 || calls["b"] != 1 || calls["c"] != 1 || strings.Contains(string(second), "symbols: pending") {
+		t.Fatalf("second status=%s err=%v calls=%v\n%s", status, err, calls, second)
+	}
+}
+
+func TestCodeMapNativeDeadlineBetweenFilesKeepsCompletedEntries(t *testing.T) {
+	r, s := nativeMapRepo(t, map[string]string{"a.js": "a", "b.js": "b", "c.js": "c"})
+	calls := map[string]int{}
+	extract := map[string]codeMapSymbolExtractor{"javascript": func(src []byte) ([]codeMapSymbol, error) {
+		calls[string(src)]++
+		if string(src) == "b" {
+			time.Sleep(1100 * time.Millisecond)
+		}
+		return []codeMapSymbol{{Line: 1, Kind: "function", Name: string(src)}}, nil
+	}}
+	p, status := refreshCodeMapNative(r, s, time.Second, extract, nil)
+	got, err := os.ReadFile(p)
+	text := string(got)
+	if err != nil || status != "STALE" || calls["a"] != 1 || calls["b"] != 1 || calls["c"] != 0 || !strings.Contains(text, "a.js\n  1 function a") || !strings.Contains(text, "c.js\n  symbols: pending") {
+		t.Fatalf("status=%s err=%v calls=%v\n%s", status, err, calls, got)
+	}
+	if strings.Index(text, "a.js") > strings.Index(text, "c.js") {
+		t.Fatalf("completed entry was not rendered before pending entry:\n%s", got)
+	}
+}
+
 func TestCodeMapNativeOracleUnavailable(t *testing.T) {
 	w := nativeMapFixture(t, "p43_oracle_unavailable")
 	r, s := nativeMapRepo(t, map[string]string{"sample.js": "function hello() {}\n"})

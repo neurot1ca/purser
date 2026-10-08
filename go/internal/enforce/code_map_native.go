@@ -30,6 +30,11 @@ type codeMapNativeEntry struct {
 }
 
 func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extractors map[string]codeMapSymbolExtractor, write func(string, []byte) error) (string, string) {
+	registered := map[string]codeMapSymbolExtractor{"go": extractCodeMapGo}
+	for language, extract := range extractors {
+		registered[language] = extract
+	}
+	extractors = registered
 	repo, err := filepath.Abs(repo)
 	if err != nil {
 		return "", "UNAVAILABLE"
@@ -102,13 +107,22 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 	}
 	entries := make(map[string]codeMapNativeEntry, len(files))
 	changed := false
-	for _, file := range files {
+	pending := false
+	deadlineDuringFiles := false
+	markDeadline := func(start int) {
+		deadlineDuringFiles = true
+		markedPending, markedChanged := codeMapMarkPending(files, start, old, entries)
+		pending = pending || markedPending
+		changed = changed || markedChanged
+	}
+	for i, file := range files {
 		if err = codeMapCheckDeadline(deadline); err != nil {
-			return fail()
+			markDeadline(i)
+			break
 		}
 		key := codeMapCacheKey(file.Info)
 		var prior codeMapNativeEntry
-		if file.Regular && file.Contained && old[file.Path] != nil && json.Unmarshal(old[file.Path], &prior) == nil && prior.MTimeNS == key.MTimeNS && prior.Size == key.Size {
+		if file.Regular && file.Contained && old[file.Path] != nil && json.Unmarshal(old[file.Path], &prior) == nil && prior.MTimeNS == key.MTimeNS && prior.Size == key.Size && prior.Coverage != "pending" {
 			entries[file.Path] = prior
 			continue
 		}
@@ -123,6 +137,10 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 		if readErr != nil {
 			return fail()
 		}
+		if codeMapCheckDeadline(deadline) != nil {
+			markDeadline(i)
+			break
+		}
 		after, statErr := os.Stat(filepath.Join(repo, filepath.FromSlash(file.Path)))
 		if statErr != nil || codeMapCacheKey(after) != key {
 			return fail()
@@ -132,6 +150,10 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 			continue
 		}
 		if extract := extractors[entry.Language]; extract != nil {
+			if codeMapCheckDeadline(deadline) != nil {
+				markDeadline(i)
+				break
+			}
 			symbols, parseErr := extract(source)
 			if parseErr == nil {
 				entry.Coverage = "native"
@@ -139,11 +161,16 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 					entry.Symbols = append(entry.Symbols, []any{symbol.Line, symbol.Kind, symbol.Name, symbol.Signature})
 				}
 			}
+			if !time.Now().Before(deadline) {
+				entries[file.Path] = entry
+				markDeadline(i + 1)
+				break
+			}
 		}
 		entries[file.Path] = entry
 	}
 	data, err := renderCodeMapNative(entries)
-	if err != nil || codeMapCheckDeadline(deadline) != nil {
+	if err != nil || (!deadlineDuringFiles && codeMapCheckDeadline(deadline) != nil) {
 		return fail()
 	}
 	if len(old) != len(entries) {
@@ -166,8 +193,31 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 			return fail()
 		}
 	}
+	if pending || deadlineDuringFiles {
+		return target, "STALE"
+	}
 	return target, "FRESH"
 }
+
+func codeMapMarkPending(files []codeMapFile, start int, old map[string]json.RawMessage, entries map[string]codeMapNativeEntry) (pending, changed bool) {
+	for _, rest := range files[start:] {
+		restKey := codeMapCacheKey(rest.Info)
+		var cached codeMapNativeEntry
+		if rest.Regular && rest.Contained && old[rest.Path] != nil && json.Unmarshal(old[rest.Path], &cached) == nil && cached.MTimeNS == restKey.MTimeNS && cached.Size == restKey.Size && cached.Coverage != "pending" {
+			entries[rest.Path] = cached
+			continue
+		}
+		changed = true
+		pendingEntry := codeMapNativeEntry{MTimeNS: restKey.MTimeNS, Size: restKey.Size, Language: codeMapLanguage(rest.Path), Coverage: "pending", Symbols: [][]any{}}
+		if !rest.Regular || !rest.Contained {
+			pendingEntry.Language = "unknown"
+		}
+		entries[rest.Path] = pendingEntry
+		pending = true
+	}
+	return pending, changed
+}
+
 func codeMapLanguage(path string) string {
 	language := map[string]string{".py": "python", ".pyi": "python", ".js": "javascript", ".jsx": "javascript", ".ts": "typescript", ".tsx": "tsx", ".go": "go", ".rs": "rust", ".java": "java", ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp", ".cs": "c_sharp", ".rb": "ruby", ".php": "php", ".swift": "swift", ".kt": "kotlin", ".kts": "kotlin", ".scala": "scala", ".lua": "lua", ".sh": "bash", ".bash": "bash"}
 	if value := language[strings.ToLower(filepath.Ext(path))]; value != "" {
@@ -178,7 +228,7 @@ func codeMapLanguage(path string) string {
 func renderCodeMapNative(entries map[string]codeMapNativeEntry) ([]byte, error) {
 	coveredSet := map[string]bool{}
 	for _, entry := range entries {
-		if entry.Coverage != "unavailable" {
+		if entry.Coverage == "native" {
 			coveredSet[entry.Language] = true
 		}
 	}
@@ -199,7 +249,9 @@ func renderCodeMapNative(entries map[string]codeMapNativeEntry) ([]byte, error) 
 	for _, path := range paths {
 		entry := entries[path]
 		lines = append(lines, path)
-		if entry.Coverage == "unavailable" && entry.Language != "unknown" && entry.Language != "python" {
+		if entry.Coverage == "pending" {
+			lines = append(lines, "  symbols: pending")
+		} else if entry.Coverage == "unavailable" && entry.Language != "unknown" && entry.Language != "python" {
 			lines = append(lines, "  symbols: unavailable (install tree-sitter-language-pack)")
 		}
 		for _, symbol := range entry.Symbols {
