@@ -93,6 +93,65 @@ func TestClaudeFallbackAndReviewerChoicesValidateAndPersist(t *testing.T) {
 	}
 }
 
+func TestClaudeCoderUsesTierAliasesAndRequiresClaudeRole(t *testing.T) {
+	testRoot := filepath.Join("..", "..", "..", ".tmp", "claude-coder-config")
+	if err := os.MkdirAll(filepath.Join(testRoot, ".orchestrator"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(testRoot)
+	configPath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json")
+	userPath := filepath.Join(testRoot, ".orchestrator", "config.toml")
+	if err := os.WriteFile(userPath, []byte("[roles]\ncoder = \"claude\"\n\n[coding]\ncoder_agent = \"claude\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadCoderConfig(configPath, userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]string{
+		"escalated": {"opus", "xhigh"}, "plan_standard": {"opus", "high"},
+		"normal": {"sonnet", "medium"}, "mechanical": {"haiku", "none"},
+		"operation": {"haiku", "none"}, "subtle": {"sonnet", "medium"},
+		"consequential": {"opus", "high"},
+	}
+	for route, pair := range want {
+		got := ResolveRoute(route, loaded, false)
+		if !got.Valid || got.Model == nil || *got.Model != pair[0] || got.Effort == nil || *got.Effort != pair[1] {
+			t.Errorf("ResolveRoute(%q) = %#v, want %s/%s", route, got, pair[0], pair[1])
+		}
+	}
+
+	if err := os.WriteFile(userPath, []byte("[roles]\ncoder = \"codex\"\n\n[coding]\ncoder_agent = \"claude\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCoderConfig(configPath, userPath); err == nil || err.Error() != "[coding] coder routes or role are invalid" {
+		t.Errorf("mismatched Claude role error = %v", err)
+	}
+
+	invalidRoutes := "[roles]\ncoder = \"claude\"\n\n[coding]\ncoder_agent = \"claude\"\n\n[coding.routes.mechanical]\nmodel = \"haiku\"\neffort = \"none\"\n\n[coding.routes.operation]\nmodel = \"haiku\"\neffort = \"none\"\n\n[coding.routes.subtle]\nmodel = \"sonnet\"\neffort = \"medium\"\n\n[coding.routes.normal]\nmodel = \"gpt-x\"\neffort = \"medium\"\n\n[coding.routes.consequential]\nmodel = \"opus\"\neffort = \"high\"\n\n[coding.routes.plan_standard]\nmodel = \"opus\"\neffort = \"high\"\n\n[coding.routes.escalated]\nmodel = \"opus\"\neffort = \"xhigh\"\n"
+	if err := os.WriteFile(userPath, []byte(invalidRoutes), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCoderConfig(configPath, userPath); err == nil || !strings.Contains(err.Error(), "INVALID_ROUTE_ENTRY") {
+		t.Errorf("non-Claude route error = %v, want INVALID_ROUTE_ENTRY", err)
+	}
+	customRoutes := strings.Replace(invalidRoutes, `model = "gpt-x"`, `model = "claude-sonnet-4-5"`, 1)
+	customRoutes = strings.Replace(customRoutes, `effort = "none"`, `effort = ""`, 1)
+	if err := os.WriteFile(userPath, []byte(customRoutes), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = LoadCoderConfig(configPath, userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveRoute("normal", loaded, false); !got.Valid || got.Model == nil || *got.Model != "claude-sonnet-4-5" {
+		t.Errorf("user-supplied Claude model route = %#v", got)
+	}
+	if got := ResolveRoute("mechanical", loaded, false); !got.Valid || got.Effort == nil || *got.Effort != "none" {
+		t.Errorf("empty Claude route effort was not normalized to none: %#v", got)
+	}
+}
+
 func testPythonCoderConfigGoldenParity(t *testing.T, p32Only bool) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "config_cases.json")
 	data, err := os.ReadFile(path)

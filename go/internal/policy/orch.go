@@ -170,7 +170,7 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 	if solRoutes[values["route"]] && strings.TrimSpace(values["basis"]) == "" {
 		route := values["route"]
 		message := fmt.Sprintf("route=%s runs the Sol model. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle instead.", route)
-		if agent, _ := config["coder_agent"].(string); agent == "opencode" || agent == "agy" {
+		if agent, _ := config["coder_agent"].(string); agent == "opencode" || agent == "agy" || agent == "claude" {
 			message = fmt.Sprintf("route=%s requires basis=<the design choice left to the worker> (for escalated: the concrete miss).", route)
 		}
 		return orchFailure(remainder, orchNeedsBasis, message, values)

@@ -102,7 +102,7 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 	if value, exists := table["coder_agent"]; exists {
 		var valid bool
 		agent, valid = value.(string)
-		if !valid || (agent != "codex" && agent != "opencode" && agent != "agy") {
+		if !valid || (agent != "codex" && agent != "opencode" && agent != "agy" && agent != "claude") {
 			return nil, fmt.Errorf("[coding] coder_agent is invalid")
 		}
 	}
@@ -168,6 +168,36 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 				converted[name] = map[string]any{"model": raw, "effort": "none"}
 			}
 			routeMap = converted
+		}
+		config["routes"] = routeMap
+	} else if agent == "claude" {
+		routeMap, valid := routes.(map[string]any)
+		required, _ := config["required_routes"].([]any)
+		if role != "claude" {
+			return nil, fmt.Errorf("[coding] coder routes or role are invalid")
+		}
+		if !routesExist {
+			routeMap = map[string]any{
+				"mechanical":    map[string]any{"model": "haiku", "effort": "none"},
+				"operation":     map[string]any{"model": "haiku", "effort": "none"},
+				"subtle":        map[string]any{"model": "sonnet", "effort": "medium"},
+				"normal":        map[string]any{"model": "sonnet", "effort": "medium"},
+				"consequential": map[string]any{"model": "opus", "effort": "high"},
+				"plan_standard": map[string]any{"model": "opus", "effort": "high"},
+				"escalated":     map[string]any{"model": "opus", "effort": "xhigh"},
+			}
+		} else if !valid || len(routeMap) != len(required) || !hasRouteKeys(routeMap, required) {
+			return nil, fmt.Errorf("[coding] coder routes or role are invalid")
+		} else {
+			for _, route := range required {
+				entry, valid := routeMap[route.(string)].(map[string]any)
+				if !valid || len(entry) != 2 {
+					return nil, configError("INVALID_ROUTE_ENTRY", "invalid route entry for "+pythonRepr(route))
+				}
+				if effort, ok := entry["effort"].(string); ok && effort == "" {
+					entry["effort"] = "none"
+				}
+			}
 		}
 		config["routes"] = routeMap
 	} else {
@@ -272,7 +302,7 @@ func validateHookConfig(config map[string]any) error {
 }
 
 var codexModel = regexp.MustCompile(`\A[A-Za-z0-9._-]+\z`)
-var claudeModel = regexp.MustCompile(`\Aclaude-[A-Za-z0-9._-]+\z`)
+var claudeModel = regexp.MustCompile(`\A(?:claude-[A-Za-z0-9._-]+|haiku|sonnet|opus)\z`)
 var claudeEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 var coderFamily = regexp.MustCompile(`\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z`)
 
@@ -407,7 +437,7 @@ func ValidateConfig(config map[string]any) error {
 	if !exists {
 		agent = "codex"
 	}
-	if agent != "codex" && agent != "opencode" && agent != "agy" {
+	if agent != "codex" && agent != "opencode" && agent != "agy" && agent != "claude" {
 		return configError("INVALID_CONFIG_FIELD", "coder_agent must be codex, opencode or agy")
 	}
 	allowedEffortSet := stringSet(allowedEfforts)
@@ -439,10 +469,14 @@ func ValidateConfig(config map[string]any) error {
 		if agent == "agy" && !agyModel.MatchString(model) {
 			return configError("INVALID_ROUTE_ENTRY", "route "+pythonRepr(route)+" Antigravity model must be Gemini")
 		}
+		if agent == "claude" && !claudeModel.MatchString(model) {
+			return configError("INVALID_ROUTE_ENTRY", "route "+pythonRepr(route)+" Claude model must be a tier alias or Claude model id")
+		}
 		effortText, effortOK := effort.(string)
 		if !effortOK || (agent == "codex" && !allowedEffortSet[effortText]) ||
 			(agent == "opencode" && effortText != "none" && !opencodeEffort.MatchString(effortText)) ||
-			(agent == "agy" && effortText != "low" && effortText != "medium" && effortText != "high" && effortText != "max") {
+			(agent == "agy" && effortText != "low" && effortText != "medium" && effortText != "high" && effortText != "max") ||
+			(agent == "claude" && effortText != "none" && !claudeEfforts[effortText]) {
 			return configError("INVALID_ROUTE_EFFORT", "route "+pythonRepr(route)+" names unsupported effort "+pythonRepr(effort))
 		}
 	}
