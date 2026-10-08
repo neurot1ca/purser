@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"purser-hook/internal/contextio"
 )
 
 type startCase struct {
@@ -97,6 +99,79 @@ func TestValidateStartDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
 	emptyArgs := map[string]any{"call": "00000000-0000-0000-0000-000000000002", "prompt": "run", "cwd": ""}
 	if _, failure = ValidateStart(emptyArgs, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }}); failure != nil {
 		t.Fatalf("empty cwd was not defaultable: %#v", failure)
+	}
+}
+
+func TestStartBindsRegisteredPlanBeforeLaunch(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	gitStart(t, repo, "init", "-q")
+	artifact := filepath.Join(base, "plan.md")
+	if err := os.WriteFile(artifact, []byte("accepted"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(base, "state")
+	if _, err := contextio.AcceptPlan(stateRoot, repo, "plan-1", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"call": "00000000-0000-4000-8000-000000000001", "prompt": "pass", "cwd": repo, "taskId": "plan-1-m1of1-p1c"}
+	launched := false
+	_, _, err := Start(stateRoot, args, StartOptions{
+		StateRoot:  stateRoot,
+		Validation: StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }},
+		Launch: func(jobID string, _ int64, _ string) error {
+			launched = true
+			plan, e := contextio.ReadPlan(stateRoot, repo)
+			if e != nil || len(plan.LinkedJobs) != 1 || plan.LinkedJobs[0] != jobID || plan.PendingNextAction != "apply" {
+				t.Fatalf("plan was not bound before launch: %+v err=%v", plan, e)
+			}
+			return nil
+		},
+		Await: func(id string, _ *Record) map[string]any {
+			return jobResult(map[string]any{"jobId": id, "state": "QUEUED"})
+		},
+	})
+	if err != nil || !launched {
+		t.Fatalf("Start launched=%v err=%v", launched, err)
+	}
+}
+
+func TestStartLaunchesWhenPlanReadFails(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	gitStart(t, repo, "init", "-q")
+	artifact := filepath.Join(base, "plan.md")
+	if err := os.WriteFile(artifact, []byte("accepted"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(base, "state")
+	if _, err := contextio.AcceptPlan(stateRoot, repo, "plan-1", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact, []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"call": "00000000-0000-4000-8000-000000000002", "prompt": "pass", "cwd": repo, "taskId": "plan-1-m1of1-p1"}
+	launched := false
+	_, _, err := Start(stateRoot, args, StartOptions{
+		StateRoot:  stateRoot,
+		Validation: StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }},
+		Launch: func(string, int64, string) error {
+			launched = true
+			return nil
+		},
+		Await: func(id string, _ *Record) map[string]any {
+			return jobResult(map[string]any{"jobId": id, "state": "QUEUED"})
+		},
+	})
+	if err != nil || !launched {
+		t.Fatalf("Start did not launch after plan read failure: launched=%v err=%v", launched, err)
 	}
 }
 

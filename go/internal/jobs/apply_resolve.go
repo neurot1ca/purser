@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
@@ -132,6 +133,12 @@ func recordScopeOutcome(opt ApplyOptions, root string, job map[string]any, actio
 func recordApplyDecision(opt ApplyOptions, root string, job map[string]any, decision, kind, source string, reviewerCounts ...any) {
 	if task, _ := job["taskId"].(string); task == "" {
 		return
+	}
+	if decision == "accepted" && kind == "apply" {
+		if repository, _ := job["repoRoot"].(string); repository != "" {
+			jobID, _ := job["jobId"].(string)
+			_ = contextio.RecordPlanApply(root, repository, nonemptyString(job["taskId"]), jobID)
+		}
 	}
 	defer func() { _ = recover() }()
 	if opt.RecordDecision != nil {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
@@ -147,6 +148,7 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	}
 	accepted := float64(time.Now().UnixNano()) / 1e9
 	job := map[string]any{"jobId": req.JobID, "call": req.Call, "state": "QUEUED", "acceptedAt": accepted, "deadlineAt": accepted + req.TimeoutSeconds, "signalToken": hex.EncodeToString(signal[:]), "generation": 1, "ownershipToken": hex.EncodeToString(owner[:])}
+	planRepository := ""
 	if thread != nil {
 		for _, k := range []string{"worktreePath", "snapshot", "head", "repoRoot", "baselineSnapshot"} {
 			if v, ok := thread[k]; ok {
@@ -180,6 +182,20 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	if readyCheck(args) {
 		job["readinessCheck"] = readinessValue(args)
 	}
+	if taskID := nonemptyString(job["taskId"]); req.Mode == "new" && taskID != "" {
+		repository := nonemptyString(args["cwd"])
+		if repository != "" && contextio.ProjectRoot(map[string]any{"cwd": repository}) != "" {
+			plan, e := contextio.ReadPlan(stateRoot, repository)
+			if e == nil {
+				if reconciled, reconcileErr := contextio.ReconcilePlanJob(stateRoot, repository); reconcileErr == nil {
+					plan = reconciled
+				}
+				if contextio.PlanTaskMatches(plan.TaskID, taskID) {
+					planRepository = repository
+				}
+			}
+		}
+	}
 	launch, err := marshalPythonJSON(map[string]any{"name": req.Name, "args": args, "codexBin": opt.CodexBin, "agent": req.Agent})
 	if err != nil {
 		return nil, nil, err
@@ -197,6 +213,10 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	}
 	if err = Write(filepath.Join(dir, req.JobID+".json"), r); err != nil {
 		return nil, nil, err
+	}
+	if planRepository != "" {
+		taskID := nonemptyString(job["taskId"])
+		_, _, _ = contextio.BindPlanJob(stateRoot, planRepository, taskID, req.JobID)
 	}
 	if req.Mode == "new" && nonemptyString(job["taskId"]) != "" {
 		entries, _ := os.ReadDir(dir)
