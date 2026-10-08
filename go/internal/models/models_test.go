@@ -35,10 +35,10 @@ func routeNames(config map[string]any) []string {
 	return order
 }
 
-func writeCheckedState(t *testing.T, root, date string, asked, declined []string) {
+func writeCheckedState(t *testing.T, root, date string, report *noticeReport) {
 	t.Helper()
 	if err := writeNoticeState(filepath.Join(root, "model-version-notice.json"), noticeState{
-		CheckedOn: &date, Asked: asked, Declined: declined,
+		CheckedOn: &date, Report: report,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestDiscoverModelVersionNotDueDoesNotList(t *testing.T) {
 		t.Fatal("listing called when daily check is already recorded")
 		return listingResult{}
 	})
-	writeCheckedState(t, root, today, nil, nil)
+	writeCheckedState(t, root, today, nil)
 	if _, _, ok := DiscoverModelVersion(t.TempDir()); ok {
 		t.Fatal("unexpected discovery")
 	}
@@ -165,7 +165,7 @@ func TestDiscoveryCachesAllAgentsBeforeNotice(t *testing.T) {
 	}
 }
 
-func TestDiscoverNewerWritesPendingAndDailyCheck(t *testing.T) {
+func TestDiscoverNewerWritesReportAndDailyCheck(t *testing.T) {
 	root := setupDiscovery(t, map[string]any{"coder_agent": "codex", "routes": map[string]any{
 		"normal": map[string]any{"model": "gpt-6-luna"}, "mechanical": "gpt-6-luna",
 	}}, func(agent string, _ map[string]map[string]json.RawMessage) listingResult {
@@ -174,13 +174,14 @@ func TestDiscoverNewerWritesPendingAndDailyCheck(t *testing.T) {
 		}
 		return listingResult{available: true, ids: []string{"gpt-6.1-luna"}}
 	})
+	writeCodexCache(t, `{"models":[{"slug":"gpt-6.1-luna","visibility":"list"}]}`)
 	current, newer, ok := DiscoverModelVersion(t.TempDir())
 	if !ok || current != "gpt-6-luna" || newer != "gpt-6.1-luna" {
 		t.Fatalf("got %q %q %v", current, newer, ok)
 	}
 	state := readStateJSON(t, root)
-	want := map[string]any{"checked_on": nowDate(), "asked": []any{}, "declined": []any{},
-		"pending": map[string]any{"current": "gpt-6-luna", "new": "gpt-6.1-luna", "blocked": false, "delivered": false}}
+	want := map[string]any{"checked_on": nowDate(),
+		"report": map[string]any{"current": "gpt-6-luna", "new": "gpt-6.1-luna", "delivered": false}}
 	if !reflect.DeepEqual(state, want) {
 		t.Fatalf("state mismatch\n got: %#v\nwant: %#v", state, want)
 	}
@@ -200,13 +201,14 @@ func TestDiscoverChecksRoutesInConfigOrder(t *testing.T) {
 		}
 		return listingResult{available: true, ids: []string{"gpt-6.1-luna", "gpt-6.1-sol", "gpt-6.1-astra"}}
 	})
+	writeCodexCache(t, `{"models":[{"slug":"gpt-6.1-luna","visibility":"list"},{"slug":"gpt-6.1-sol","visibility":"list"},{"slug":"gpt-6.1-astra","visibility":"list"}]}`)
 
 	current, newer, ok := DiscoverModelVersion(t.TempDir())
 	if !ok || current != "gpt-6-luna" || newer != "gpt-6.1-luna" {
 		t.Fatalf("first route checked = %q -> %q, available = %v; want zeta route gpt-6-luna", current, newer, ok)
 	}
-	if got := readStateJSON(t, root)["pending"].(map[string]any)["current"]; got != current {
-		t.Fatalf("pending current = %v, want %q", got, current)
+	if got := readStateJSON(t, root)["report"].(map[string]any)["current"]; got != current {
+		t.Fatalf("report current = %v, want %q", got, current)
 	}
 }
 
@@ -220,41 +222,41 @@ func TestDiscoverChecksOverlayOnlyRoute(t *testing.T) {
 		}
 		return listingResult{available: true, ids: []string{"gpt-6-luna", "gpt-6.1-sol"}}
 	})
+	writeCodexCache(t, `{"models":[{"slug":"gpt-6.1-sol","visibility":"list"}]}`)
 
 	current, newer, ok := DiscoverModelVersion(t.TempDir())
 	if !ok || current != "gpt-6-sol" || newer != "gpt-6.1-sol" {
 		t.Fatalf("got %q -> %q, available = %v; want overlay route", current, newer, ok)
 	}
-	if got := readStateJSON(t, root)["pending"].(map[string]any)["current"]; got != current {
-		t.Fatalf("pending current = %v, want %q", got, current)
+	if got := readStateJSON(t, root)["report"].(map[string]any)["current"]; got != current {
+		t.Fatalf("report current = %v, want %q", got, current)
 	}
 }
 
-func TestDiscoverAskedAndDeclinedVersionsAreSuppressed(t *testing.T) {
-	for _, decision := range []string{"asked", "declined"} {
-		t.Run(decision, func(t *testing.T) {
-			root := setupDiscovery(t, map[string]any{"routes": map[string]any{"normal": "gpt-6-luna"}}, func(string, map[string]map[string]json.RawMessage) listingResult {
-				return listingResult{available: true, ids: []string{"gpt-6.1-luna"}}
-			})
-			asked, declined := []string{}, []string{}
-			if decision == "asked" {
-				asked = []string{"gpt-6.1-luna"}
-			} else {
-				declined = []string{"gpt-6.1-luna"}
-			}
-			writeCheckedState(t, root, "2000-01-01", asked, declined)
-			if _, _, ok := DiscoverModelVersion(t.TempDir()); ok {
-				t.Fatal("suppressed version was offered")
-			}
-			state := readStateJSON(t, root)
-			if state["pending"] != nil || state["checked_on"] != nowDate() {
-				t.Fatalf("unexpected state: %#v", state)
-			}
-		})
+func TestDiscoverReportsEachChangeOnce(t *testing.T) {
+	root := setupDiscovery(t, map[string]any{"routes": map[string]any{"normal": "gpt-6-luna"}}, func(string, map[string]map[string]json.RawMessage) listingResult {
+		return listingResult{available: true, ids: []string{"gpt-6.1-luna"}}
+	})
+	writeCodexCache(t, `{"models":[{"slug":"gpt-6.1-luna","visibility":"list"}]}`)
+	if current, newer, ok := DiscoverModelVersion(t.TempDir()); !ok || current != "gpt-6-luna" || newer != "gpt-6.1-luna" {
+		t.Fatalf("first report = %q -> %q, available = %v", current, newer, ok)
+	}
+	state := readNoticeState(filepath.Join(root, "model-version-notice.json"))
+	if state.Report == nil || state.Report.New != ResolveLatest("codex", "gpt-6-luna") {
+		t.Fatalf("report does not match resolver: %#v", state.Report)
+	}
+	state.Report.Delivered = true
+	yesterday := "2000-01-01"
+	state.CheckedOn = &yesterday
+	if err := writeNoticeState(filepath.Join(root, "model-version-notice.json"), state); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := DiscoverModelVersion(t.TempDir()); ok {
+		t.Fatal("same change was reported again after delivery")
 	}
 }
 
-func TestDiscoverUnavailableListingRecordsCheckWithoutPending(t *testing.T) {
+func TestDiscoverUnavailableListingRecordsCheckWithoutReport(t *testing.T) {
 	root := setupDiscovery(t, map[string]any{"routes": map[string]any{"normal": "gpt-6-luna"}}, func(string, map[string]map[string]json.RawMessage) listingResult {
 		return listingResult{}
 	})
@@ -262,7 +264,7 @@ func TestDiscoverUnavailableListingRecordsCheckWithoutPending(t *testing.T) {
 		t.Fatal("unavailable listing discovered a model")
 	}
 	state := readStateJSON(t, root)
-	if state["pending"] != nil || state["checked_on"] != nowDate() {
+	if state["report"] != nil || state["checked_on"] != nowDate() {
 		t.Fatalf("unexpected state: %#v", state)
 	}
 }
@@ -276,7 +278,7 @@ func writeCodexCache(t *testing.T, raw string) {
 	}
 }
 
-func TestDiscoverCachedCodexVersionQueuesVisibleUpgrade(t *testing.T) {
+func TestDiscoverCachedCodexVersionReportsVisibleUpgrade(t *testing.T) {
 	config := map[string]any{"routes": map[string]any{
 		"normal": "gpt-6-luna", "mechanical": "gpt-6-luna", "subtle": "gpt-6-sol",
 	}}
@@ -286,37 +288,34 @@ func TestDiscoverCachedCodexVersionQueuesVisibleUpgrade(t *testing.T) {
 	if !ok || current != "gpt-6-sol" || newer != "gpt-6.1-sol" {
 		t.Fatalf("got %q -> %q, available = %v", current, newer, ok)
 	}
+	if resolved := ResolveLatest("codex", current); resolved != newer {
+		t.Fatalf("reported model %q differs from resolver %q", newer, resolved)
+	}
 	state := readStateJSON(t, root)
-	if got := state["pending"].(map[string]any); got["current"] != current || got["new"] != newer {
-		t.Fatalf("pending = %#v", got)
+	if got := state["report"].(map[string]any); got["current"] != current || got["new"] != newer {
+		t.Fatalf("report = %#v", got)
 	}
 }
 
 func TestDiscoverCachedCodexVersionRespectsNoticeState(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		asked    []string
-		declined []string
-		pending  *noticePending
+		name   string
+		report *noticeReport
 	}{
-		{name: "asked", asked: []string{"gpt-6.1-luna"}},
-		{name: "declined", declined: []string{"gpt-6.1-luna"}},
-		{name: "pending", pending: &noticePending{Current: "gpt-6-sol", New: "gpt-6.1-sol", Blocked: true}},
+		{name: "delivered report", report: &noticeReport{Current: "gpt-6-luna", New: "gpt-6.1-luna", Delivered: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := setupDiscovery(t, map[string]any{"routes": map[string]any{"normal": "gpt-6-luna"}}, nil)
 			writeCodexCache(t, `{"models":[{"slug":"gpt-6.1-luna","visibility":"list"}]}`)
-			if err := writeNoticeState(filepath.Join(root, "model-version-notice.json"), noticeState{
-				Asked: tc.asked, Declined: tc.declined, Pending: tc.pending,
-			}); err != nil {
+			if err := writeNoticeState(filepath.Join(root, "model-version-notice.json"), noticeState{Report: tc.report}); err != nil {
 				t.Fatal(err)
 			}
 			if _, _, ok := DiscoverCachedCodexVersion(); ok {
 				t.Fatal("unexpected model notice")
 			}
 			state := readNoticeState(filepath.Join(root, "model-version-notice.json"))
-			if !reflect.DeepEqual(state.Pending, tc.pending) {
-				t.Fatalf("pending changed: got %#v want %#v", state.Pending, tc.pending)
+			if !reflect.DeepEqual(state.Report, tc.report) {
+				t.Fatalf("report changed: got %#v want %#v", state.Report, tc.report)
 			}
 		})
 	}
@@ -371,8 +370,8 @@ func TestDiscoverChecksAgyReviewerAfterCoderModels(t *testing.T) {
 	if !reflect.DeepEqual(calls, []string{"codex", "agy"}) {
 		t.Fatalf("listing order = %v", calls)
 	}
-	if got := readStateJSON(t, root)["pending"].(map[string]any)["current"]; got != current {
-		t.Fatalf("pending current = %v", got)
+	if got := readStateJSON(t, root)["report"].(map[string]any)["current"]; got != current {
+		t.Fatalf("report current = %v", got)
 	}
 }
 

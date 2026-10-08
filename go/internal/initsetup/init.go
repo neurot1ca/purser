@@ -20,19 +20,17 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/jobs"
-	"purser-hook/internal/models"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 )
 
 type options struct {
-	detect, list, plan, apply, concise, trust, scaffold, jsonOutput                                   bool
-	adopt, decline, coder, model, fallbackAgent, fallbackModel, mode, effort, reviewer, reviewerModel string
-	maintenance, mechanical                                                                           *bool
+	detect, list, plan, apply, concise, trust, scaffold, jsonOutput                   bool
+	coder, model, fallbackAgent, fallbackModel, mode, effort, reviewer, reviewerModel string
+	maintenance, mechanical                                                           *bool
 }
 
-var idPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // Run parses and executes one init operation, returning the CLI exit code.
@@ -45,8 +43,6 @@ func Run(stdout, stderr io.Writer, args []string) int {
 	fs.BoolVar(&o.plan, "plan", false, "show setup plan")
 	fs.BoolVar(&o.apply, "apply", false, "apply setup")
 	fs.BoolVar(&o.concise, "enable-concise-style", false, "enable concise style")
-	fs.StringVar(&o.adopt, "adopt-model-version", "", "adopt a model version")
-	fs.StringVar(&o.decline, "decline-model-version", "", "decline a model version")
 	fs.BoolVar(&o.jsonOutput, "json", false, "JSON output")
 	fs.StringVar(&o.coder, "coder", "", "coder agent")
 	fs.StringVar(&o.model, "model", "", "coder model")
@@ -87,7 +83,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		o.mechanical = &v
 	}
 	count := 0
-	for _, yes := range []bool{o.detect, o.list, o.plan, o.apply, o.concise, o.adopt != "", o.decline != ""} {
+	for _, yes := range []bool{o.detect, o.list, o.plan, o.apply, o.concise} {
 		if yes {
 			count++
 		}
@@ -116,13 +112,6 @@ func Run(stdout, stderr io.Writer, args []string) int {
 			return 2
 		}
 		return enableConcise(stdout, stderr)
-	}
-	if o.adopt != "" || o.decline != "" {
-		if o.adopt != "" && o.decline != "" {
-			fmt.Fprintln(stderr, "purser:init: choose adopt or decline")
-			return 2
-		}
-		return decideModel(stdout, stderr, first(o.adopt, o.decline), o.adopt != "")
 	}
 	if o.plan && o.jsonOutput || (!o.detect && !o.list && (o.coder == "" || o.reviewer == "")) {
 		fmt.Fprintln(stderr, "purser:init: --plan requires --coder and --reviewer without --json; --apply requires --coder and --reviewer")
@@ -1527,168 +1516,3 @@ func enableConcise(out, errOut io.Writer) int {
 	return 0
 }
 func mustCwd() string { p, _ := os.Getwd(); return p }
-func decideModel(out, errOut io.Writer, version string, adopt bool) int {
-	if !idPattern.MatchString(version) {
-		return printError(errOut, errors.New("model version is invalid"))
-	}
-	if !adopt {
-		if err := models.Decide(version, true); err != nil {
-			return printError(errOut, err)
-		}
-		fmt.Fprintf(out, "Declined model version %s.\n", version)
-		return 0
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return printError(errOut, err)
-	}
-	configPath := filepath.Join(home, ".orchestrator", "config.toml")
-	original, err := os.ReadFile(configPath)
-	if err != nil && !os.IsNotExist(err) {
-		return printError(errOut, err)
-	}
-	values := map[string]any{}
-	if len(original) > 0 {
-		values, _, err = profile.DecodeTOML(original)
-		if err != nil {
-			return printError(errOut, err)
-		}
-	}
-	coding, _ := values["coding"].(map[string]any)
-	reviewerModel, _ := coding["reviewer1_model_requested"].(string)
-	agentName := "codex"
-	if reviewerModel != "" && strictlyOlderSameFamily(reviewerModel, version) {
-		agentName = "agy"
-	}
-	listing := discoverModels(agentName, loadProviders(home))
-	listed := []any{}
-	for _, m := range listing.models {
-		listed = append(listed, m["id"])
-	}
-	found := false
-	for _, v := range listed {
-		if v == version {
-			found = true
-		}
-	}
-	if !found {
-		return printError(errOut, fmt.Errorf("model %q is absent from the live %s listing", version, agentName))
-	}
-	if agentName == "agy" {
-		coding["reviewer1_model_requested"] = version
-		text := string(original)
-		if text == "" {
-			text = "schema_version = 1\n"
-		}
-		text = upsert(text, "coding", "reviewer1_model_requested", tomlString(version), newlineFor(text))
-		now, _ := os.ReadFile(configPath)
-		if !bytes.Equal(now, original) {
-			return printError(errOut, errors.New("config changed during model adoption"))
-		}
-		if len(original) > 0 {
-			if err = backup(configPath, original); err != nil {
-				return printError(errOut, err)
-			}
-		}
-		if err = atomicWrite(configPath, []byte(text), false); err != nil {
-			return printError(errOut, err)
-		}
-		if err = models.Decide(version, false); err != nil {
-			return printError(errOut, err)
-		}
-		fmt.Fprintf(out, "Adopted model version %s for Reviewer-1.\n", version)
-		return 0
-	}
-	routes, _ := coding["routes"].(map[string]any)
-	if len(routes) == 0 {
-		var cfg map[string]any
-		raw, _ := os.ReadFile(obsidian.ConfigPath())
-		_ = json.Unmarshal(raw, &cfg)
-		routes, _ = cfg["routes"].(map[string]any)
-	}
-	changed := false
-	for name, v := range routes {
-		m, ok := v.(map[string]any)
-		current := fmt.Sprint(v)
-		if ok {
-			current = fmt.Sprint(m["model"])
-		}
-		if strictlyOlderSameFamily(current, version) {
-			if ok {
-				m["model"] = version
-				routes[name] = m
-			} else {
-				routes[name] = version
-			}
-			changed = true
-		}
-	}
-	if !changed {
-		return printError(errOut, fmt.Errorf("no pinned route has a strictly older version in %q's model family", version))
-	}
-	if _, ok := values["coding"]; !ok {
-		coding = map[string]any{}
-		values["coding"] = coding
-	}
-	if _, ok := coding["coder_agent"]; !ok {
-		coding["coder_agent"] = "codex"
-	}
-	coding["routes"] = routes
-	text := string(original)
-	if text == "" {
-		text = "schema_version = 1\n"
-	}
-	text = upsert(text, "coding", "coder_agent", tomlString(fmt.Sprint(coding["coder_agent"])), newlineFor(text))
-	text = upsert(text, "coding", "routes", tomlRoutes(routes), newlineFor(text))
-	now, _ := os.ReadFile(configPath)
-	if !bytes.Equal(now, original) {
-		return printError(errOut, errors.New("config changed during model adoption"))
-	}
-	if len(original) > 0 {
-		if err = backup(configPath, original); err != nil {
-			return printError(errOut, err)
-		}
-	}
-	if err = atomicWrite(configPath, []byte(text), false); err != nil {
-		return printError(errOut, err)
-	}
-	if err = models.Decide(version, false); err != nil {
-		return printError(errOut, err)
-	}
-	fmt.Fprintf(out, "Adopted model version %s for its pinned routes.\n", version)
-	return 0
-}
-
-func newlineFor(text string) string {
-	if strings.Contains(text, "\r\n") {
-		return "\r\n"
-	}
-	return "\n"
-}
-
-var versionRE = regexp.MustCompile(`^(.+?)(\d+(?:\.\d+)*)([^0-9]*)$`)
-
-func sameVersionFamily(a, b string) bool {
-	x, y := versionRE.FindStringSubmatch(a), versionRE.FindStringSubmatch(b)
-	return len(x) == 4 && len(y) == 4 && x[1] == y[1] && x[3] == y[3]
-}
-func strictlyOlderSameFamily(a, b string) bool {
-	if !sameVersionFamily(a, b) {
-		return false
-	}
-	x, y := versionRE.FindStringSubmatch(a), versionRE.FindStringSubmatch(b)
-	aa, bb := strings.Split(x[2], "."), strings.Split(y[2], ".")
-	for i := 0; i < len(aa) || i < len(bb); i++ {
-		ai, bi := 0, 0
-		if i < len(aa) {
-			ai, _ = strconv.Atoi(aa[i])
-		}
-		if i < len(bb) {
-			bi, _ = strconv.Atoi(bb[i])
-		}
-		if ai != bi {
-			return ai < bi
-		}
-	}
-	return false
-}

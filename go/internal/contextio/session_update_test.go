@@ -88,6 +88,25 @@ func TestSessionStartPluginVersionNoticeParity(t *testing.T) {
 	}
 }
 
+func TestSessionStartReportsModelChangeOnce(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", stateRoot)
+	repo := updateSessionTestRepo(t)
+	path := filepath.Join(stateRoot, "model-version-notice.json")
+	if err := os.WriteFile(path, []byte(`{"report":{"current":"gpt-6-luna","new":"gpt-6.1-luna","delivered":false}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	event := map[string]any{"hook_event_name": "SessionStart", "session_id": "model-report", "source": "startup", "cwd": repo}
+	want := "> ⚓ **Purser now uses `gpt-6.1-luna` (was `gpt-6-luna`).**"
+	first := sessionStartContext(t, event)
+	if !strings.Contains(first, want) || strings.Contains(strings.ToLower(first), "adopt") || strings.Contains(strings.ToLower(first), "decline") || strings.Contains(strings.ToLower(first), "yes") {
+		t.Fatalf("model report output = %q", first)
+	}
+	if repeated := sessionStartContext(t, event); strings.Contains(repeated, want) {
+		t.Fatalf("model report repeated: %q", repeated)
+	}
+}
+
 func TestSessionStartMechanicalLeaderNoticeParity(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", stateRoot)

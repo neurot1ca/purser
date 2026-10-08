@@ -129,18 +129,9 @@ func SessionStart(event map[string]any) []byte {
 	additional = joinContext(line, additional)
 	additional = joinContext(additional, updateContext)
 
-	var modelState map[string]any
 	modelContext := ""
-	modelStatePath := filepath.Join(stateRoot(), "model-version-notice.json")
 	if validSession && statePath != "" {
-		modelState = readModelNoticeState(modelStatePath)
-		if pending, ok := modelState["pending"].(map[string]any); ok && pending["blocked"] != true && pending["delivered"] != true {
-			current, currentOK := pending["current"].(string)
-			newVersion, newOK := pending["new"].(string)
-			if currentOK && newOK {
-				modelContext = ModelVersionGuidance(current, newVersion)
-			}
-		}
+		modelContext = TakeModelVersionReport()
 	}
 	additional = joinContext(additional, modelContext)
 	if validSession && repository != "" {
@@ -165,13 +156,6 @@ func SessionStart(event map[string]any) []byte {
 		if delivered != "" {
 			markLifecycleDelivered(state)
 			_ = writeAdvisorState(statePath, state)
-		}
-		if modelContext != "" {
-			if pending, ok := modelState["pending"].(map[string]any); ok {
-				pending["delivered"] = true
-				modelState["pending"] = pending
-				_ = writeModelNoticeState(modelStatePath, modelState)
-			}
 		}
 	}
 	return []byte(output)
@@ -1032,53 +1016,45 @@ func newEventID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
 }
 
-func readModelNoticeState(path string) map[string]any {
-	state := map[string]any{"checked_on": nil, "asked": []any{}, "declined": []any{}, "pending": nil}
+// TakeModelVersionReport returns an undelivered model change report once.
+func TakeModelVersionReport() string {
+	path := filepath.Join(stateRoot(), "model-version-notice.json")
+	unlock, err := LockFile(path + ".lock")
+	if err != nil {
+		return ""
+	}
+	defer unlock()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return state
+		return ""
 	}
-	var prior map[string]any
-	if json.Unmarshal(data, &prior) != nil {
-		return state
+	var state map[string]any
+	if json.Unmarshal(data, &state) != nil || state == nil {
+		return ""
 	}
-	if checked, ok := prior["checked_on"].(string); ok {
-		state["checked_on"] = checked
+	report, ok := state["report"].(map[string]any)
+	if !ok { // accept an undelivered notice left by an earlier release
+		report, ok = state["pending"].(map[string]any)
 	}
-	for _, field := range []string{"asked", "declined"} {
-		if values, ok := prior[field].([]any); ok {
-			seen := map[string]bool{}
-			unique := make([]any, 0, len(values))
-			for _, value := range values {
-				if item, ok := value.(string); ok && !seen[item] {
-					seen[item] = true
-					unique = append(unique, item)
-				}
-			}
-			state[field] = unique
-		}
+	current, currentOK := report["current"].(string)
+	newVersion, newOK := report["new"].(string)
+	if !ok || !currentOK || !newOK || report["delivered"] == true {
+		return ""
 	}
-	if pending, ok := prior["pending"].(map[string]any); ok {
-		if current, currentOK := pending["current"].(string); currentOK {
-			if newVersion, newOK := pending["new"].(string); newOK {
-				state["pending"] = map[string]any{
-					"current": current, "new": newVersion,
-					"blocked": pending["blocked"] == true, "delivered": pending["delivered"] == true,
-				}
-			}
-		}
+	report["delivered"] = true
+	state["report"] = report
+	delete(state, "pending")
+	delete(state, "asked")
+	delete(state, "declined")
+	if writeModelNoticeState(path, state) != nil {
+		return ""
 	}
-	return state
+	return ModelVersionGuidance(current, newVersion)
 }
 
-// ModelVersionGuidance renders the approved model-upgrade notice for dispatch hooks.
+// ModelVersionGuidance renders the approved model change report.
 func ModelVersionGuidance(current, newVersion string) string {
-	return "Render this model-version notice in the user's language, translating from the English text while keeping ⚓ " +
-		"and both model names unchanged. Keep the three blockquote lines exactly formatted; do not change " +
-		"routes until the user says yes.\n" +
-		"> ⚓ **New model version available: `" + newVersion + "` (you are on `" + current + "`).**\n" +
-		"> *Should Purser switch to it? (1-yes 2-no)*\n" +
-		"> *If you say no, Purser won't ask about this version again. You can switch anytime with `/purser:init`.*"
+	return "> ⚓ **Purser now uses `" + newVersion + "` (was `" + current + "`).**"
 }
 
 func writeAdvisorState(path string, state map[string]any) error {

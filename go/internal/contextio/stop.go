@@ -46,9 +46,6 @@ func Stop(event map[string]any, started time.Time) []byte {
 			state[field] = nil
 		}
 	}
-	modelPath := filepath.Join(stateRoot(), "model-version-notice.json")
-	modelState := readModelNoticeState(modelPath)
-	model, _ := modelState["pending"].(map[string]any)
 	records := readTranscriptRecords(str(event["transcript_path"]))
 	latestUser := -1
 	for i, record := range records {
@@ -130,28 +127,6 @@ func Stop(event map[string]any, started time.Time) []byte {
 			}
 		}
 	}
-	if model != nil {
-		for _, line := range strings.Split(joined, "\n") {
-			if strings.Contains(line, "⚓") && strings.Contains(line, str(model["new"])) && strings.Contains(line, str(model["current"])) {
-				modelState["pending"] = nil
-				asked, _ := modelState["asked"].([]any)
-				seen := false
-				for _, value := range asked {
-					if value == model["new"] {
-						seen = true
-						break
-					}
-				}
-				if !seen {
-					asked = append(asked, model["new"])
-				}
-				modelState["asked"] = asked
-				_ = writeModelNoticeState(modelPath, modelState)
-				model = nil
-				break
-			}
-		}
-	}
 	if pending, ok := state["fallback_pending"].(map[string]any); ok && len(anchorLine.FindAllString(joined, -1)) == 1 && strings.Contains(anchorLine.FindString(joined), str(pending["model"])) {
 		markFallbackShown(str(pending["project"]), session)
 		clear("fallback_pending")
@@ -198,11 +173,6 @@ func Stop(event map[string]any, started time.Time) []byte {
 	if pending, ok := state["leader_pending"].(map[string]any); ok && str(pending["model"]) != "" && pending["blocked"] != true {
 		pending["blocked"] = true
 		add("leader", "Include one visible line containing both `⚓` and `"+str(pending["model"])+"` to announce the new free mechanical model leader.")
-	}
-	if model != nil && model["blocked"] != true {
-		model["blocked"] = true
-		_ = writeModelNoticeState(modelPath, modelState)
-		add("version", ModelVersionGuidance(str(model["current"]), str(model["new"])))
 	}
 	if pending, ok := state["fallback_pending"].(map[string]any); ok && (pending["notice"] == true || pending["blocked"] != true) {
 		pending["blocked"] = true

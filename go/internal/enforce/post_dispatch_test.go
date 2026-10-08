@@ -206,7 +206,7 @@ func TestPostToolUseDispatchOffersCachedCodexModelUpgrade(t *testing.T) {
 	}
 	output := mapValue(response["hookSpecificOutput"])
 	context := stringValue(output["additionalContext"])
-	if !strings.Contains(context, "New model version available: `gpt-6.2-sol`") || !strings.Contains(context, currentRouteModel) {
+	if !strings.Contains(context, "> ⚓ **Purser now uses `gpt-6.2-sol` (was `"+currentRouteModel+"`).**") || strings.Contains(strings.ToLower(context), "yes") {
 		t.Fatalf("model upgrade guidance missing from dispatch output: %q", context)
 	}
 	stateData, err := os.ReadFile(filepath.Join(state, "model-version-notice.json"))
@@ -217,9 +217,9 @@ func TestPostToolUseDispatchOffersCachedCodexModelUpgrade(t *testing.T) {
 	if err := json.Unmarshal(stateData, &notice); err != nil {
 		t.Fatal(err)
 	}
-	queued := mapValue(notice["pending"])
-	if queued["current"] != currentRouteModel || queued["new"] != "gpt-6.2-sol" {
-		t.Fatalf("pending model notice = %#v", queued)
+	report := mapValue(notice["report"])
+	if report["current"] != currentRouteModel || report["new"] != "gpt-6.2-sol" || report["delivered"] != true {
+		t.Fatalf("model report = %#v", report)
 	}
 }
 

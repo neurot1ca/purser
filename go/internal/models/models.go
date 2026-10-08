@@ -70,16 +70,13 @@ var listingID = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 var opencodeID = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 
 type noticeState struct {
-	CheckedOn *string        `json:"checked_on"`
-	Asked     []string       `json:"asked"`
-	Declined  []string       `json:"declined"`
-	Pending   *noticePending `json:"pending"`
+	CheckedOn *string       `json:"checked_on"`
+	Report    *noticeReport `json:"report"`
 }
 
-type noticePending struct {
+type noticeReport struct {
 	Current   string `json:"current"`
 	New       string `json:"new"`
-	Blocked   bool   `json:"blocked"`
 	Delivered bool   `json:"delivered"`
 }
 
@@ -92,33 +89,17 @@ type loadedConfig struct {
 	RouteOrder []string
 }
 
-// Decide records a user's explicit model-version response using the same
-// locked notice state used by discovery.
-func Decide(version string, decline bool) error {
-	statePath := filepath.Join(stateRoot(), "model-version-notice.json")
-	unlock, err := contextio.LockFile(statePath + ".lock")
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	state := readNoticeState(statePath)
-	list := &state.Asked
-	if decline {
-		list = &state.Declined
-	}
-	*list = appendUnique(*list, version)
-	if state.Pending != nil && state.Pending.New == version {
-		state.Pending = nil
-	}
-	return writeNoticeState(statePath, state)
-}
-
-// DiscoverModelVersion checks pinned models at most once per UTC day and queues a newer version.
+// DiscoverModelVersion checks configured models at most once per UTC day and records a newer version.
 func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	if strings.TrimSpace(repository) == "" {
 		return "", "", false
 	}
 	statePath := filepath.Join(stateRoot(), "model-version-notice.json")
+	unlock, err := contextio.LockFile(statePath + ".lock")
+	if err != nil {
+		return "", "", false
+	}
+	defer unlock()
 	state := readNoticeState(statePath)
 	if state.CheckedOn != nil && *state.CheckedOn == time.Now().UTC().Format("2006-01-02") {
 		return "", "", false
@@ -185,11 +166,13 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 		if !result.available {
 			continue
 		}
-		candidate := newerVersion(check.model, result.ids)
-		if candidate == "" || has(state.Asked, candidate) || has(state.Declined, candidate) {
+		candidate := ResolveLatest(check.agent, check.model)
+		if candidate == check.model || (state.Report != nil && state.Report.Current == check.model && state.Report.New == candidate && state.Report.Delivered) {
 			continue
 		}
-		state.Pending = &noticePending{Current: check.model, New: candidate}
+		if state.Report == nil || state.Report.Current != check.model || state.Report.New != candidate {
+			state.Report = &noticeReport{Current: check.model, New: candidate}
+		}
 		if writeNoticeState(statePath, state) != nil {
 			return "", "", false
 		}
@@ -213,8 +196,8 @@ func DiscoverCachedCodexVersion() (current, newer string, ok bool) {
 	defer unlock()
 
 	state := readNoticeState(statePath)
-	if state.Pending != nil {
-		return "", "", false
+	if state.Report != nil && !state.Report.Delivered {
+		return state.Report.Current, state.Report.New, true
 	}
 	candidates, err := cachedCodexModels()
 	if err != nil || len(candidates) == 0 {
@@ -246,10 +229,12 @@ func DiscoverCachedCodexVersion() (current, newer string, ok bool) {
 		}
 		seen[model] = true
 		candidate := newerVersion(model, candidates)
-		if candidate == "" || has(state.Asked, candidate) || has(state.Declined, candidate) {
+		if candidate == "" || (state.Report != nil && state.Report.Current == model && state.Report.New == candidate && state.Report.Delivered) {
 			continue
 		}
-		state.Pending = &noticePending{Current: model, New: candidate}
+		if state.Report == nil || state.Report.Current != model || state.Report.New != candidate {
+			state.Report = &noticeReport{Current: model, New: candidate}
+		}
 		if writeNoticeState(statePath, state) != nil {
 			return "", "", false
 		}
@@ -691,7 +676,7 @@ func resolve(path string) string {
 }
 
 func readNoticeState(path string) noticeState {
-	fallback := noticeState{Asked: []string{}, Declined: []string{}}
+	fallback := noticeState{}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fallback
@@ -701,29 +686,24 @@ func readNoticeState(path string) noticeState {
 		return fallback
 	}
 	_ = json.Unmarshal(raw["checked_on"], &fallback.CheckedOn)
-	decodeStrings := func(key string) []string {
-		var values []json.RawMessage
-		if json.Unmarshal(raw[key], &values) != nil {
-			return []string{}
-		}
-		unique := []string{}
-		for _, rawValue := range values {
-			var value string
-			if json.Unmarshal(rawValue, &value) == nil {
-				unique = appendUnique(unique, value)
-			}
-		}
-		return unique
-	}
-	fallback.Asked, fallback.Declined = decodeStrings("asked"), decodeStrings("declined")
-	var pending map[string]json.RawMessage
-	if json.Unmarshal(raw["pending"], &pending) == nil && pending != nil {
+	var report map[string]json.RawMessage
+	if json.Unmarshal(raw["report"], &report) == nil && report != nil {
 		var current, newVersion string
-		if json.Unmarshal(pending["current"], &current) == nil && json.Unmarshal(pending["new"], &newVersion) == nil {
-			var blocked, delivered bool
-			_ = json.Unmarshal(pending["blocked"], &blocked)
-			_ = json.Unmarshal(pending["delivered"], &delivered)
-			fallback.Pending = &noticePending{Current: current, New: newVersion, Blocked: blocked, Delivered: delivered}
+		if json.Unmarshal(report["current"], &current) == nil && json.Unmarshal(report["new"], &newVersion) == nil {
+			var delivered bool
+			_ = json.Unmarshal(report["delivered"], &delivered)
+			fallback.Report = &noticeReport{Current: current, New: newVersion, Delivered: delivered}
+		}
+	}
+	if fallback.Report == nil { // migrate an undelivered notice created by an earlier release
+		var pending map[string]json.RawMessage
+		if json.Unmarshal(raw["pending"], &pending) == nil && pending != nil {
+			var current, newVersion string
+			if json.Unmarshal(pending["current"], &current) == nil && json.Unmarshal(pending["new"], &newVersion) == nil {
+				var delivered bool
+				_ = json.Unmarshal(pending["delivered"], &delivered)
+				fallback.Report = &noticeReport{Current: current, New: newVersion, Delivered: delivered}
+			}
 		}
 	}
 	return fallback

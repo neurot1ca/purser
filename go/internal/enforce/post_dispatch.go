@@ -501,15 +501,13 @@ func appendPostDispatchReceipt(response map[string]any, root string, event, pend
 		}
 		context += guidance
 	}
-	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") &&
-		stringValue(mapValue(response["hookSpecificOutput"])["additionalContext"]) == "" &&
-		pending["async_ready"] == true {
-		if current, newer, ok := models.DiscoverCachedCodexVersion(); ok {
-			upgrade := contextio.ModelVersionGuidance(current, newer)
+	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") && pending["async_ready"] == true {
+		_, _, _ = models.DiscoverCachedCodexVersion()
+		if report := contextio.TakeModelVersionReport(); report != "" {
 			if context != "" {
 				context += "\n"
 			}
-			context += upgrade
+			context += report
 		}
 	}
 	if context == "" {
