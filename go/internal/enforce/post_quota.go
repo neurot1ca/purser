@@ -43,6 +43,9 @@ func postReadQuota(threadID string) map[string]any {
 	return nil
 }
 
+// ReadQuota returns the quota snapshot for a Codex rollout thread.
+func ReadQuota(threadID string) map[string]any { return postReadQuota(threadID) }
+
 func postReadQuotaPath(path string) map[string]any {
 	file, err := os.Open(path)
 	if err != nil {

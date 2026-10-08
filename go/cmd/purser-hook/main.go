@@ -37,6 +37,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "optimize" {
 		os.Exit(optimizeMain(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "check" {
+		os.Exit(checkMain(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "mechanical-shadow" {
 		os.Exit(mechanicalShadowMain(os.Args[2:]))
 	}
