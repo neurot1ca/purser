@@ -429,6 +429,31 @@ func TestCleanupArtifactByteBoundEvictsOldestTerminalFirst(t *testing.T) {
 	}
 }
 
+func TestCleanupArtifactByteBoundKeepsWorktreeUsedByRunningJob(t *testing.T) {
+	root := t.TempDir()
+	repo := cleanupRepo(t, root)
+	wt := cleanupWT(t, root, repo, "active-over-byte-bound")
+	if err := os.WriteFile(filepath.Join(wt, "payload"), make([]byte, 1024), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cleanupJob(t, root, strings.Repeat("a", 64), "SUCCEEDED", map[string]any{
+		"worktreePath": wt, "repoRoot": repo, "applyState": "applied",
+		"finishedAt": float64(cleanupNow().Unix()) - 2*86400,
+	})
+	cleanupJob(t, root, strings.Repeat("b", 64), "RUNNING", map[string]any{
+		"worktreePath": wt, "repoRoot": repo,
+	})
+	previous := maxArtifactBytes
+	maxArtifactBytes = 0
+	t.Cleanup(func() { maxArtifactBytes = previous })
+	if err := CleanupJobs(root, cleanupNow(), false); err != nil {
+		t.Fatalf("CleanupJobs() error = %v", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("worktree used by running job removed over byte bound: %v", err)
+	}
+}
+
 func TestCleanupArtifactByteBoundCanEvictLatestAppliedWorktree(t *testing.T) {
 	root := t.TempDir()
 	repo := cleanupRepo(t, root)

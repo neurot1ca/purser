@@ -660,6 +660,26 @@ func enforceArtifactSizeLimit(root string, now float64, records []cleanupRecord,
 	}
 	var candidates []candidate
 	seenWT := map[string]bool{}
+	inUseWT := map[string]bool{}
+	for _, record := range records {
+		job := record.job
+		state, _ := job["state"].(string)
+		inUse := state == "UNKNOWN_OR_IN_PROGRESS" || !cleanupTerminal[state] || cleanupConflictProtected(root, job, state, now, record.path)
+		if !inUse && cleanupTerminal[state] && job["applyState"] != "applied" {
+			stamp, ok := cleanupNumber(job["finishedAt"])
+			if !ok || stamp <= 0 {
+				if info, err := os.Stat(record.path); err == nil {
+					stamp = float64(info.ModTime().UnixNano()) / 1e9
+				}
+			}
+			inUse = stamp > 0 && now-stamp < (24*time.Hour).Seconds()
+		}
+		if inUse {
+			if key := worktreeKey(job["worktreePath"]); key != "" {
+				inUseWT[key] = true
+			}
+		}
+	}
 	for _, record := range records {
 		job := record.job
 		state, _ := job["state"].(string)
@@ -680,6 +700,9 @@ func enforceArtifactSizeLimit(root string, now float64, records []cleanupRecord,
 		}
 		wt, _ := job["worktreePath"].(string)
 		key := worktreeKey(wt)
+		if inUseWT[key] {
+			continue
+		}
 		worktreeSize, prepSize := int64(0), int64(0)
 		if wt != "" && key != "" && !seenWT[key] {
 			worktreeSize = cleanupTreeBytes(wt)
