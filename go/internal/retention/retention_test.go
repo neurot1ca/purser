@@ -114,7 +114,7 @@ func TestRetirementDoesNotFollowPreparationSymlink(t *testing.T) {
 	if err := os.Symlink(external, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"applyState":"applied"}`), 1000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"SUCCEEDED","applyState":"applied"}`), 1000)
 	putFile(t, filepath.Join(root, "async_jobs", id+".json"), []byte(`{"stage":"CONSUMED"}`), 1000)
 	RetirePreparations(root, 2000, false)
 	if _, err := os.Stat(generation); !os.IsNotExist(err) {
@@ -143,7 +143,7 @@ func TestPreparationRetiresCompletedAndOldOrphanButKeepsProtectedStates(t *testi
 			}
 		}
 	}
-	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", completed+".json"), []byte(`{"applyState":"applied"}`), 1000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", completed+".json"), []byte(`{"jobId":"`+completed+`","state":"SUCCEEDED","applyState":"applied"}`), 1000)
 	putFile(t, filepath.Join(root, "async_jobs", completed+".json"), []byte(`{"stage":"CONSUMED"}`), 1000)
 	RetirePreparations(root, 1000+maxPrepAge+1, false)
 	for _, path := range []string{completedPath, orphanOldPath} {
@@ -155,6 +155,25 @@ func TestPreparationRetiresCompletedAndOldOrphanButKeepsProtectedStates(t *testi
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("protected preparation was removed %s: %v", path, err)
 		}
+	}
+}
+
+func TestPreparationKeepsRecentConflictAndRetiresOldTerminalConflict(t *testing.T) {
+	root := t.TempDir()
+	recent := "1111111111111111111111111111111111111111111111111111111111111111"
+	old := "2222222222222222222222222222222222222222222222222222222222222222"
+	recentPath := filepath.Join(root, "preparations", recent, "revision-1")
+	oldPath := filepath.Join(root, "preparations", old, "revision-1")
+	putFile(t, filepath.Join(recentPath, "state.json"), []byte(`{"state":"CONFLICT"}`), 2000)
+	putFile(t, filepath.Join(oldPath, "state.json"), []byte(`{"state":"CONFLICT"}`), 1000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", recent+".json"), []byte(`{"jobId":"`+recent+`","state":"SUCCEEDED","finishedAt":2000}`), 2000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", old+".json"), []byte(`{"jobId":"`+old+`","state":"SUCCEEDED","finishedAt":1000}`), 1000)
+	RetirePreparations(root, 1000+maxPrepAge+1, false)
+	if _, err := os.Stat(recentPath); err != nil {
+		t.Fatalf("recent conflict was removed: %v", err)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("old terminal conflict remains: %v", err)
 	}
 }
 

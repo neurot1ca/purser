@@ -23,11 +23,10 @@ const (
 	gib          = 1024 * mib
 	maxPrepAge   = 7 * 86400
 	maxPrepCount = 128
-	maxPrepDrop  = 8
 )
 
 var stateRootMaxBytes int64 = 16 * gib
-var maxPrepBytes int64 = 8 * gib
+var maxPrepBytes int64 = 2 * gib
 var warningOnce sync.Once
 var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -400,31 +399,26 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 	var eligible []eligibleGeneration
 	protected := make(map[string]bool)
 	for jobID, paths := range byJob {
-		states := make([]string, 0, len(paths))
+		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+		job := readObject(jobPath)
 		for _, path := range paths {
 			state, ok := preparationState(path)
-			if !ok || state == "PREPARING" || state == "BLOCKED" || state == "RESOLVING" || state == "CONFLICT" {
+			if ok && protectedPreparationState(path, state, job, now) {
 				protected[jobID] = true
 			}
-			states = append(states, state)
 		}
 		if !jobIDPattern.MatchString(jobID) {
 			protected[jobID] = true
 			continue
 		}
 		indexPath := filepath.Join(root, "async_jobs", jobID+".json")
-		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
-		job := readObject(jobPath)
 		index := readObject(indexPath)
-		indexExists := pathExists(indexPath)
 		if index != nil && index["stage"] == "FINALIZING" {
 			protected[jobID] = true
 			continue
 		}
 		if pathExists(jobPath) {
-			discarded := discardedJob(job)
-			completed := job != nil && (job["applyState"] == "applied" || discarded)
-			if !completed || protected[jobID] || (indexExists && (index == nil || index["stage"] != "CONSUMED")) {
+			if job == nil || !cleanupTerminalState(stringValue(job["state"])) || !preparationJobEligible(job, jobPath, now) || protected[jobID] {
 				protected[jobID] = true
 				continue
 			}
@@ -433,15 +427,14 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 			valid := true
 			for _, path := range paths {
 				mtime, e1 := fileMtime(path)
-				stateMtime, e2 := fileMtime(filepath.Join(path, "state.json"))
-				if e1 != nil || e2 != nil {
+				if e1 != nil {
 					valid = false
 					break
 				}
 				if mtime > newest {
 					newest = mtime
 				}
-				if stateMtime > newest {
+				if stateMtime, stateErr := fileMtime(filepath.Join(path, "state.json")); stateErr == nil && stateMtime > newest {
 					newest = stateMtime
 				}
 			}
@@ -481,11 +474,7 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 		protectedBytes = total - protectedBytes
 	}
 	removalFailed := false
-	limit := len(eligible)
-	if limit > maxPrepDrop {
-		limit = maxPrepDrop
-	}
-	for _, item := range eligible[:limit] {
+	for _, item := range eligible {
 		indexPath := filepath.Join(root, "async_jobs", filepath.Base(item.owner)+".json")
 		unlock, lockErr := jobsLock(indexPath)
 		if lockErr != nil {
@@ -495,12 +484,14 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", filepath.Base(item.owner)+".json")
 		job := readObject(jobPath)
 		index := readObject(indexPath)
-		indexExists := pathExists(indexPath)
 		state, stateOK := preparationState(item.path)
-		safe := stateOK && state != "PREPARING" && state != "BLOCKED" && state != "RESOLVING" && state != "CONFLICT"
+		safe := !protected[filepath.Base(item.owner)]
+		if stateOK && protectedPreparationState(item.path, state, job, now) {
+			safe = false
+		}
 		for _, sibling := range byJob[filepath.Base(item.owner)] {
 			siblingState, ok := preparationState(sibling)
-			if !ok || siblingState == "PREPARING" || siblingState == "BLOCKED" || siblingState == "RESOLVING" || siblingState == "CONFLICT" {
+			if ok && protectedPreparationState(sibling, siblingState, job, now) {
 				safe = false
 			}
 		}
@@ -508,8 +499,7 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 			safe = false
 		}
 		if pathExists(jobPath) {
-			safe = safe && job != nil && (job["applyState"] == "applied" || discardedJob(job))
-			safe = safe && (!indexExists || (index != nil && index["stage"] == "CONSUMED"))
+			safe = safe && job != nil && cleanupTerminalState(stringValue(job["state"])) && preparationJobEligible(job, jobPath, now)
 		} else {
 			mtime, err := fileMtime(item.path)
 			safe = safe && err == nil && now-mtime >= maxPrepAge
@@ -530,6 +520,41 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 		(removalFailed && (count > maxPrepCount || (checkBytes && total > maxPrepBytes))) {
 		Warning(root)
 	}
+}
+
+func cleanupTerminalState(state string) bool {
+	return state == "SUCCEEDED" || state == "FAILED" || state == "CANCELLED"
+}
+
+// RemovePreparationTree removes one job-owned preparation directory after validating its state-root boundary.
+func RemovePreparationTree(root, path string) bool {
+	return removeStateTree(path, filepath.Join(root, "preparations"))
+}
+
+func preparationJobEligible(job map[string]any, path string, now float64) bool {
+	if job["applyState"] == "applied" || job["discarded"] == true {
+		return true
+	}
+	finished, ok := job["finishedAt"].(float64)
+	if !ok || finished <= 0 {
+		var err error
+		finished, err = fileMtime(path)
+		if err != nil {
+			return false
+		}
+	}
+	return now-finished >= maxPrepAge
+}
+
+func protectedPreparationState(path, state string, job map[string]any, now float64) bool {
+	if state != "PREPARING" && state != "BLOCKED" && state != "RESOLVING" && state != "CONFLICT" {
+		return false
+	}
+	if job != nil && !cleanupTerminalState(stringValue(job["state"])) {
+		return true
+	}
+	stamp, err := fileMtime(filepath.Join(path, "state.json"))
+	return err != nil || now-stamp < maxPrepAge
 }
 
 type generation struct{ owner, path string }
@@ -723,20 +748,6 @@ func regularFile(path string) bool {
 func pathExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
-}
-
-func discardedJob(job map[string]any) bool {
-	if job == nil {
-		return false
-	}
-	if job["discarded"] == true {
-		return true
-	}
-	_, hasApplyState := job["applyState"]
-	if !hasApplyState && strings.Contains(" FAILED CANCELLED TIMED_OUT ", " "+stringValue(job["state"])+" ") {
-		return true
-	}
-	return false
 }
 
 func stringValue(value any) string { s, _ := value.(string); return s }
