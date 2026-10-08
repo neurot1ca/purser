@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"testing"
 )
@@ -115,5 +116,5 @@ func TestPostAsyncClaimPythonFixture(t *testing.T) {
 }
 
 func execGitInit(repo string) ([]byte, error) {
-	return exec.Command("git", "init", "-q", repo).CombinedOutput()
+	return testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput()
 }

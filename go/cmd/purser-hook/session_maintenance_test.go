@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func TestMaintenanceReportWakeRequiresMatchingOptIn(t *testing.T) {
 	saveSessionMaintenanceHooks(t)
 	state, root := t.TempDir(), t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", state)
-	if output, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command("git", "-C", root, "init", "-q")).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
 	resolved, err := filepath.EvalSymlinks(root)

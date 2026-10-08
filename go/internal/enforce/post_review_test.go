@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"testing"
 	"time"
@@ -98,7 +99,7 @@ func anyList(values []string) []any {
 
 func postReviewRepo(t *testing.T, root string, delta map[string]any) {
 	t.Helper()
-	command := exec.Command("git", "init", "-q", root)
+	command := testutil.Hide(exec.Command("git", "init", "-q", root))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
@@ -115,11 +116,11 @@ func postReviewRepo(t *testing.T, root string, delta map[string]any) {
 			t.Fatal(err)
 		}
 	}
-	command = exec.Command("git", "-C", root, "add", "--all")
+	command = testutil.Hide(exec.Command("git", "-C", root, "add", "--all"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git add: %v: %s", err, output)
 	}
-	command = exec.Command("git", "-C", root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
+	command = testutil.Hide(exec.Command("git", "-C", root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %v: %s", err, output)
 	}

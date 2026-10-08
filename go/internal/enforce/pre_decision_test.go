@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"strings"
 	"testing"
 
@@ -44,7 +45,7 @@ func TestPreDecisionsP63Fixture(t *testing.T) {
 			if err := os.MkdirAll(repo, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v %s", err, out)
 			}
 			if err := os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("Claude runs the full suite once before acceptance.\n"), 0600); err != nil {
@@ -109,7 +110,7 @@ func TestPreTelemetryScopePathCount(t *testing.T) {
 	if err := os.MkdirAll(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
 	home, _ := filepath.Abs(filepath.Join(scratch, "home"))
@@ -160,7 +161,7 @@ func TestPreLatestModelDispatchAndReplies(t *testing.T) {
 			if err := os.MkdirAll(repo, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v %s", err, out)
 			}
 			t.Setenv("HOME", root)
@@ -227,7 +228,7 @@ func TestPreCodexStartRejectsFinishedTaskID(t *testing.T) {
 	if err := os.MkdirAll(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
 	home := filepath.Join(scratch, "home")

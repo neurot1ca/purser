@@ -5,13 +5,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"testing"
 )
 
 func materialGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testutil.Hide(exec.Command("git", args...))
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=NUL", "GIT_AUTHOR_NAME=Materials Test", "GIT_AUTHOR_EMAIL=materials@example.invalid", "GIT_COMMITTER_NAME=Materials Test", "GIT_COMMITTER_EMAIL=materials@example.invalid")
 	out, err := cmd.CombinedOutput()

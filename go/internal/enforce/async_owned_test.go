@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"testing"
 )
@@ -34,7 +35,7 @@ func TestAsyncOwnedFixture(t *testing.T) {
 			if err := os.Mkdir(repo, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if output, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+			if output, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v: %s", err, output)
 			}
 			project := projectKey(&repo)

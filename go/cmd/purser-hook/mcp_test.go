@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"runtime"
 	"strconv"
 	"strings"
@@ -66,7 +67,7 @@ func TestMCPStartupRunsNativeCleanupWithoutPython(t *testing.T) {
 func mcpTestStartup(delay time.Duration, exitCode int, done chan<- struct{}) func(context.Context, io.Writer, io.Writer) {
 	return func(ctx context.Context, stdout, stderr io.Writer) {
 		defer close(done)
-		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPMaintenanceChild$")
+		cmd := testutil.Hide(exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPMaintenanceChild$"))
 		cmd.Env = append(os.Environ(), "PURSER_MCP_CHILD=1",
 			"PURSER_MCP_CHILD_DELAY_MS="+strconv.Itoa(int(delay/time.Millisecond)),
 			"PURSER_MCP_CHILD_EXIT="+strconv.Itoa(exitCode))
@@ -197,7 +198,7 @@ func TestMCPToolSchemasMatchPythonOracle(t *testing.T) {
 	repo := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := "python"
 	code := `import importlib.util,json,sys; sys.path.insert(0,sys.argv[1]); s=importlib.util.spec_from_file_location("oracle",sys.argv[2]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(json.dumps(m.TOOL_SCHEMAS,ensure_ascii=False,separators=(",",":")))`
-	cmd := exec.Command(python, "-c", code, filepath.Join(repo, ".claude", "hooks", "orchestrator"), filepath.Join(repo, ".claude", "hooks", "orchestrator", "codex_exec_mcp.py"))
+	cmd := testutil.Hide(exec.Command(python, "-c", code, filepath.Join(repo, ".claude", "hooks", "orchestrator"), filepath.Join(repo, ".claude", "hooks", "orchestrator", "codex_exec_mcp.py")))
 	data, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("load Python MCP oracle: %v", err)

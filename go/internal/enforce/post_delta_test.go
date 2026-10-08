@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"testing"
 
 	"purser-hook/internal/ledger"
@@ -111,7 +112,7 @@ func TestAssemblePostDeltaPythonFixture(t *testing.T) {
 func postDeltaRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	cmd := exec.Command("git", "init", "-q", root)
+	cmd := testutil.Hide(exec.Command("git", "init", "-q", root))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
@@ -125,7 +126,7 @@ func postDeltaRepo(t *testing.T) string {
 		}
 	}
 	git(t, root, "add", "--all")
-	commit := exec.Command("git", "-C", root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
+	commit := testutil.Hide(exec.Command("git", "-C", root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"))
 	commit.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2000-01-01T00:00:00+00:00", "GIT_COMMITTER_DATE=2000-01-01T00:00:00+00:00")
 	if out, err := commit.CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %v: %s", err, out)

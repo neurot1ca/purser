@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"runtime"
 	"strings"
 	"testing"
@@ -20,7 +21,7 @@ func buildPurserHook(t *testing.T) string {
 		name += ".exe"
 	}
 	path := filepath.Join(t.TempDir(), name)
-	command := exec.Command("go", "build", "-o", path, ".")
+	command := testutil.Hide(exec.Command("go", "build", "-o", path, "."))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build purser-hook: %v\n%s", err, output)
 	}
@@ -33,7 +34,7 @@ func runPrivate(t *testing.T, binary, state, operation, input string) (int, []by
 	if operation != "" {
 		argv = strings.Fields(operation)
 	}
-	command := exec.Command(binary, argv...)
+	command := testutil.Hide(exec.Command(binary, argv...))
 	command.Dir = t.TempDir()
 	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state)
 	command.Stdin = strings.NewReader(input)
@@ -179,7 +180,7 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		override += ".exe"
 	}
-	build := exec.Command("go", "build", "-o", override, fakeSource)
+	build := testutil.Hide(exec.Command("go", "build", "-o", override, fakeSource))
 	if output, buildErr := build.CombinedOutput(); buildErr != nil {
 		t.Fatalf("build fake worker: %v\n%s", buildErr, output)
 	}
@@ -267,7 +268,7 @@ func TestHostEntryPointReportsExplicitErrorStatus(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, jobID+".launch"), launch, 0600); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(binary, "host", dir, jobID, "1", token)
+	command := testutil.Hide(exec.Command(binary, "host", dir, jobID, "1", token))
 	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state)
 	output, err := command.CombinedOutput()
 	if err == nil {

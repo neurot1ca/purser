@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"runtime"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ case "timeout": time.Sleep(2*time.Second)
 	if err := os.WriteFile(sourcePath, []byte(source), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("go", "build", "-o", binary, sourcePath).CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command("go", "build", "-o", binary, sourcePath)).CombinedOutput(); err != nil {
 		t.Fatalf("build fake reviewer: %v: %s", err, output)
 	}
 	binary, err = filepath.Abs(binary)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"runtime"
 	"strconv"
 	"strings"
@@ -58,16 +59,16 @@ func TestChecksParityFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !item.NoGit {
-			if err := exec.Command("git", "-C", repo, "init", "-q").Run(); err != nil {
+			if err := testutil.Hide(exec.Command("git", "-C", repo, "init", "-q")).Run(); err != nil {
 				t.Fatal(err)
 			}
-			if exec.Command("git", "-C", repo, "rev-parse", "--verify", "HEAD").Run() == nil {
-				cmd := exec.Command("git", "-C", repo, "reset", "--hard")
+			if testutil.Hide(exec.Command("git", "-C", repo, "rev-parse", "--verify", "HEAD")).Run() == nil {
+				cmd := testutil.Hide(exec.Command("git", "-C", repo, "reset", "--hard"))
 				if err := cmd.Run(); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := exec.Command("git", "-C", repo, "clean", "-fdx").Run(); err != nil {
+			if err := testutil.Hide(exec.Command("git", "-C", repo, "clean", "-fdx")).Run(); err != nil {
 				t.Fatal(err)
 			}
 			for name, content := range item.Tracked {
@@ -77,7 +78,7 @@ func TestChecksParityFixture(t *testing.T) {
 			}
 			if len(item.Tracked) > 0 {
 				for _, args := range [][]string{{"config", "user.email", "parity@example.invalid"}, {"config", "user.name", "Parity"}, {"add", "."}, {"commit", "--allow-empty", "-qm", "baseline"}} {
-					cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+					cmd := testutil.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...))
 					if output, err := cmd.CombinedOutput(); err != nil {
 						t.Fatalf("git %v: %v: %s", args, err, output)
 					}
@@ -200,7 +201,7 @@ func waitCheckPID(t *testing.T, path string) string {
 }
 func checkProcessExists(pid string) bool {
 	if runtime.GOOS == "windows" {
-		err := exec.Command("powershell.exe", "-NoProfile", "-Command", "$p=Get-Process -Id "+pid+" -ErrorAction SilentlyContinue; if ($p) { exit 0 }; exit 1").Run()
+		err := testutil.Hide(exec.Command("powershell.exe", "-NoProfile", "-Command", "$p=Get-Process -Id "+pid+" -ErrorAction SilentlyContinue; if ($p) { exit 0 }; exit 1")).Run()
 		if err == nil {
 			return true
 		}

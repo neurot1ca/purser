@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"runtime"
 	"strings"
@@ -334,7 +335,7 @@ func newAsyncSuccessCase(t *testing.T, name string) (state, repo string, event, 
 	pending = map[string]any{"task_id": task, "phase": "implementation", "scope": []any{"src"}, "baseline": baseline, "lease_owner": owner, "project_key": project, "session_id": "session", "route": "normal", "model": "openai/gpt-5", "effort": "medium", "agent": "agy", "task_contract_grounded": true, "worker_validation": map[string]any{"status": "PASS", "summary": "passed"}, "task_objective": "review async result", "acceptance_criteria": "record the outcome", "tool_use_id": "origin", "job_id": jobID, "async_call": call, "repo_root": repo}
 	job = map[string]any{"jobId": jobID, "call": call, "state": "SUCCEEDED", "threadId": "thread-fixture", "repoRoot": repo}
 	if name == "unapplied_worktree_lease_retained" {
-		head, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+		head, err := testutil.Hide(exec.Command("git", "-C", repo, "rev-parse", "HEAD")).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -363,7 +364,7 @@ func newAsyncSuccessCase(t *testing.T, name string) (state, repo string, event, 
 
 func runAsyncSuccessGit(t *testing.T, repo string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	cmd := testutil.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
@@ -416,7 +417,7 @@ func main() { if calls := os.Getenv("PURser_ASYNC_REVIEW_CALLS"); calls != "" { 
 		name += ".exe"
 	}
 	executable := filepath.Join(state, name)
-	if output, err := exec.Command(goExecutable, "build", "-o", executable, sourcePath).CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command(goExecutable, "build", "-o", executable, sourcePath)).CombinedOutput(); err != nil {
 		t.Fatalf("build native reviewer: %v: %s", err, output)
 	}
 	executable, err = filepath.Abs(executable)

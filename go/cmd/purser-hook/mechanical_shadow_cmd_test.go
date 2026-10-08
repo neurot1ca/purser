@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"runtime"
 	"testing"
 )
@@ -26,7 +27,7 @@ func TestMechanicalShadowCommandRunsJob(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		fake += ".exe"
 	}
-	if output, err := exec.Command("go", "build", "-o", fake, fakeSource).CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command("go", "build", "-o", fake, fakeSource)).CombinedOutput(); err != nil {
 		t.Fatalf("build fake OpenCode: %v: %s", err, output)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

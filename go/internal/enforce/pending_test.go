@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"strings"
 	"testing"
@@ -118,7 +119,7 @@ func pendingRepo(t *testing.T, content string) string {
 	t.Setenv("GIT_COMMITTER_DATE", "2000-01-01T00:00:00+00:00")
 	command := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := testutil.Hide(exec.Command("git", args...))
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)

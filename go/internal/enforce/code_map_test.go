@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -349,7 +350,7 @@ func TestCodeMapP43CacheFailuresAreNeverFresh(t *testing.T) {
 
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testutil.Hide(exec.Command("git", append([]string{"-C", dir}, args...)...))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}

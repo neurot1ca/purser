@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"testing"
 )
 
@@ -71,7 +72,7 @@ func TestPreParityFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 		if name != "outside" {
-			if out, e := exec.Command("git", "init", "-q", root).CombinedOutput(); e != nil {
+			if out, e := testutil.Hide(exec.Command("git", "init", "-q", root)).CombinedOutput(); e != nil {
 				t.Fatalf("git init: %v %s", e, out)
 			}
 		}
@@ -105,7 +106,7 @@ func TestPreParityFixture(t *testing.T) {
 	if err = os.MkdirAll(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if out, e := exec.Command("git", "init", "-q", repo).CombinedOutput(); e != nil {
+	if out, e := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); e != nil {
 		t.Fatalf("git init: %v %s", e, out)
 	}
 	runtimeRoot := filepath.Join(scratch, "runtime")

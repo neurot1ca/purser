@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"strings"
 	"testing"
@@ -181,7 +182,7 @@ func TestObservationP49ProcessContention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestObservationP49ProcessContention$")
+	cmd := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestObservationP49ProcessContention$"))
 	cmd.Env = append(os.Environ(), "P49_OBSERVATION_CHILD_ROOT="+root)
 	output, err := cmd.CombinedOutput()
 	if unlockErr := release(); unlockErr != nil {
@@ -367,7 +368,7 @@ func TestObservationP50CrashRecoveryAndConcurrentMerge(t *testing.T) {
 	}
 	// A child exits after the canonical append, leaving the Python marker and
 	// spool file in place. The next real merge must finish only the task index.
-	cmd := exec.Command(os.Args[0], "-test.run=^TestObservationP50Process$")
+	cmd := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestObservationP50Process$"))
 	cmd.Env = append(os.Environ(), "P50_OBSERVATION_MODE=crash", "P50_OBSERVATION_ROOT="+root)
 	if output, runErr := cmd.CombinedOutput(); runErr == nil || !strings.Contains(runErr.Error(), "exit status 77") {
 		t.Fatalf("crash child = %v, output %s", runErr, output)
@@ -408,7 +409,7 @@ func TestObservationP50CrashRecoveryAndConcurrentMerge(t *testing.T) {
 	children := make([]*exec.Cmd, 2)
 	var outputs [2]bytes.Buffer
 	for i := range children {
-		children[i] = exec.Command(os.Args[0], "-test.run=^TestObservationP50Process$")
+		children[i] = testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestObservationP50Process$"))
 		children[i].Env = append(os.Environ(), "P50_OBSERVATION_MODE=merge", "P50_OBSERVATION_ROOT="+concurrentRoot)
 		children[i].Stdout, children[i].Stderr = &outputs[i], &outputs[i]
 		if err = children[i].Start(); err != nil {
@@ -907,7 +908,7 @@ func TestObservationP55ProjectionBoundaries(t *testing.T) {
 			if tc.Symlink != "" {
 				link := filepath.Join(root, tc.Symlink)
 				if err := os.Symlink(outside, link); err != nil {
-					if junctionErr := exec.Command("cmd", "/c", "mklink", "/J", link, outside).Run(); junctionErr != nil {
+					if junctionErr := testutil.Hide(exec.Command("cmd", "/c", "mklink", "/J", link, outside)).Run(); junctionErr != nil {
 						t.Fatalf("symlink/junction unavailable: %v; %v", err, junctionErr)
 					}
 				}

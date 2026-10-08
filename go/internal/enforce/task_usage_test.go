@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"runtime"
 	"strings"
 	"testing"
@@ -141,7 +142,7 @@ func TestTaskUsageP61PythonFinalizerReadsGoRecord(t *testing.T) {
 		t.Fatal("Python interpreter required for Go-to-Python finalizer cross-check")
 	}
 	script := `import sys; sys.path.insert(0, sys.argv[1]); import claude_transcript_usage as u; import telemetry; telemetry.emit=lambda *a,**k: None; telemetry.update_task=lambda *a,**k: None; result=u.finalize_stop_task(sys.argv[2], session_id=sys.argv[3], allowed_projects_root=sys.argv[4]); assert result["status"] == "COMPLETED" and result["usage"]["claude_task_input_tokens"] == 7, result`
-	cmd := exec.Command(python, "-c", script, pythonRoot, root, session, projects)
+	cmd := testutil.Hide(exec.Command(python, "-c", script, pythonRoot, root, session, projects))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Python finalize_stop_task failed reading Go record: %v\n%s", err, output)
 	}

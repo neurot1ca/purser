@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -40,16 +41,16 @@ func TestPreSuccessP64Fixture(t *testing.T) {
 			if err := os.MkdirAll(repo, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v %s", err, out)
 			}
 			if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("p64 fixture baseline\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command("git", "-C", repo, "add", "README.md").CombinedOutput(); err != nil {
+			if out, err := testutil.Hide(exec.Command("git", "-C", repo, "add", "README.md")).CombinedOutput(); err != nil {
 				t.Fatalf("git add: %v %s", err, out)
 			}
-			commit := exec.Command("git", "-C", repo, "-c", "user.name=Purser Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture baseline")
+			commit := testutil.Hide(exec.Command("git", "-C", repo, "-c", "user.name=Purser Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture baseline"))
 			commit.Env = append(os.Environ(), "GIT_AUTHOR_DATE=1700000000 +0000", "GIT_COMMITTER_DATE=1700000000 +0000")
 			if out, err := commit.CombinedOutput(); err != nil {
 				t.Fatalf("git commit: %v %s", err, out)

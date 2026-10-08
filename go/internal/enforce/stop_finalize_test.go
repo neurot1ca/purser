@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func TestStopFinalizeP128Fixture(t *testing.T) {
 				}
 			}
 			if c.Contention {
-				cmd := exec.Command(os.Args[0], "-test.run=^TestStopFinalizeLockHelper$")
+				cmd := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestStopFinalizeLockHelper$"))
 				cmd.Env = append(os.Environ(), stopLockHelperEnv+"=1", "PURSER_STOP_FINALIZE_ROOT="+root)
 				stdin, err := cmd.StdinPipe()
 				if err != nil {

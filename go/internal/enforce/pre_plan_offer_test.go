@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -41,7 +42,7 @@ func TestPrePlanRedirect(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v %s", err, out)
 			}
 			plugin, _ := filepath.Abs(filepath.Join("..", "..", ".."))

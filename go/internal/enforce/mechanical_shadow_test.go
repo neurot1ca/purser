@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"strconv"
 	"strings"
 	"testing"
@@ -209,7 +210,7 @@ func main() {
 	if os.PathSeparator == '\\' {
 		path += ".exe"
 	}
-	if output, err := exec.Command("go", "build", "-o", path, src).CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command("go", "build", "-o", path, src)).CombinedOutput(); err != nil {
 		t.Fatalf("build fake OpenCode: %v: %s", err, output)
 	}
 	return path

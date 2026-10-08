@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func TestPreFallbackGapsP63BFixture(t *testing.T) {
 			if err := os.MkdirAll(repo, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v %s", err, out)
 			}
 			if err := os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("Claude runs the full suite once before acceptance.\n"), 0600); err != nil {

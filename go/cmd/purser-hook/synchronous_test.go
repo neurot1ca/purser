@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"runtime"
 	"strings"
@@ -103,7 +104,7 @@ func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			command := exec.Command(binary, "op", testCase.Tool)
+			command := testutil.Hide(exec.Command(binary, "op", testCase.Tool))
 			command.Stdin = strings.NewReader(string(payload))
 			output, err := command.CombinedOutput()
 			if err != nil {

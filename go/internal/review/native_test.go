@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"runtime"
 	"strconv"
 	"strings"
@@ -31,7 +32,7 @@ func isolateReviewerPath(t *testing.T) {
 }
 
 func nativeHead(root string) string {
-	output, _ := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	output, _ := testutil.Hide(exec.Command("git", "-C", root, "rev-parse", "HEAD")).Output()
 	return strings.TrimSpace(string(output))
 }
 
@@ -58,7 +59,7 @@ func nativeFixture(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Native test"}, {"add", "change.txt"}, {"commit", "-qm", "baseline"}} {
-		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd := testutil.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
@@ -77,7 +78,7 @@ func main() { if d := os.Getenv("MOCK_SLEEP_MS"); d != "" { var n int; fmt.Sscan
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	if out, err := exec.Command("go", "build", "-o", bin, src).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("go", "build", "-o", bin, src)).CombinedOutput(); err != nil {
 		t.Fatalf("build mock reviewer: %v: %s", err, out)
 	}
 	config := map[string]any{"reviewer1_model_requested": pinnedModel, "reviewer1_timeout_seconds": 60, "reviewer1_packet_max_bytes": 200000}
@@ -199,7 +200,7 @@ func TestNativeRunBridgeDifferential(t *testing.T) {
 	pythonCode := "import os,runpy,tempfile,uuid,shutil; tempfile.tempdir=" + strconv.Quote(root) + "; exec(\"def named(mode='w+b',prefix='tmp',suffix='',dir=None,delete=True,**kwargs):\\n return open(os.path.join(dir or tempfile.tempdir,prefix+uuid.uuid4().hex+suffix),mode)\\nclass TempDir:\\n def __init__(self,suffix=None,prefix='tmp',dir=None): self.name=os.path.join(dir or tempfile.tempdir,prefix+uuid.uuid4().hex); os.mkdir(self.name)\\n def __enter__(self): return self.name\\n def __exit__(self,*a): shutil.rmtree(self.name,ignore_errors=True)\"); tempfile.NamedTemporaryFile=named; tempfile.TemporaryDirectory=TempDir; runpy.run_path(" + strconv.Quote(script) + ",run_name='__main__')"
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, python, "-c", pythonCode)
+	cmd := testutil.Hide(exec.CommandContext(ctx, python, "-c", pythonCode))
 	cmd.Stdin = strings.NewReader(string(payload))
 	cmd.Env = append(os.Environ(), "PATH="+hostPath, "PYTHONPATH="+filepath.Dir(script))
 	var pythonStderr bytes.Buffer

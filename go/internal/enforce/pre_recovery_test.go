@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -65,7 +66,7 @@ func TestPreRecoveryP65Fixture(t *testing.T) {
 			if err := os.MkdirAll(repo, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v %s", err, out)
 			}
 			home := filepath.Join(scratch, "home")
