@@ -18,49 +18,70 @@ import (
 )
 
 const (
-	codeMapVersion      = 5
-	codeMapMaxFiles     = 5000
-	codeMapMaxFileBytes = 512 * 1024
-	codeMapMaxTotal     = 32 * 1024 * 1024
-	codeMapMaxBytes     = 256 * 1024
-	codeMapMaxSeconds   = 10 * time.Second
-	codeMapProcessLimit = 2 * time.Second
+	codeMapVersion              = 5
+	codeMapMaxFiles             = 5000
+	codeMapMaxFileBytes         = 512 * 1024
+	codeMapMaxTotal             = 32 * 1024 * 1024
+	codeMapMaxBytes             = 256 * 1024
+	codeMapMaxSeconds           = 10 * time.Second
+	codeMapCompletionMaxSeconds = time.Minute
 )
 
-// refreshCodeMapForPre delegates all symbol parsing to the Python oracle.
-func refreshCodeMapForPre(repo string) (string, string) {
-	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
-	if pluginRoot == "" {
-		executable, err := os.Executable()
-		if err != nil {
-			return "", "UNAVAILABLE"
-		}
-		pluginRoot = filepath.Dir(filepath.Dir(executable))
-	}
-	deadline := time.Now().Add(codeMapProcessLimit)
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
-	pythonPath := proc.ResolvePython(ctx, pluginRoot)
-	if pythonPath == "" || ctx.Err() != nil {
-		return "", "UNAVAILABLE"
-	}
-	if !time.Now().Before(deadline) {
-		return "", "UNAVAILABLE"
-	}
-	cmd := exec.CommandContext(ctx, pythonPath, filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "code_map.py"), "--repo", repo, "--budget-seconds", "0.2")
-	cmd.Dir = repo
-	output, err := cmd.Output()
-	if ctx.Err() != nil {
-		return "", "UNAVAILABLE"
-	}
-	path, status, parseErr := parseCodeMapLine(output)
-	if parseErr != nil || (err != nil && status != "UNAVAILABLE") {
-		return "", "UNAVAILABLE"
+var startCodeMapCompletionDetached = proc.StartDetached
+
+func refreshCodeMapForPre(repo, stateRoot string) (string, string) {
+	return refreshCodeMapForPreWith(repo, stateRoot, 200*time.Millisecond, nil, nil, startCodeMapCompletionDetached)
+}
+
+func refreshCodeMapForPreWith(repo, stateRoot string, budget time.Duration, extractors map[string]codeMapSymbolExtractor, write func(string, []byte) error, start func([]string, []string, string) error) (string, string) {
+	path, status := refreshCodeMapNative(repo, stateRoot, budget, extractors, write)
+	if status == "STALE" && start != nil {
+		startCodeMapCompletion(repo, stateRoot, start)
 	}
 	return path, status
 }
 
+func startCodeMapCompletion(repo, stateRoot string, start func([]string, []string, string) error) {
+	path, err := codeMapCompletionMarker(repo, stateRoot)
+	if err != nil {
+		return
+	}
+	marker, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if errors.Is(err, os.ErrExist) {
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 5*time.Minute {
+			_ = os.Remove(path)
+			marker, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		}
+	}
+	if err != nil {
+		return
+	}
+	_ = marker.Close()
+	executable, err := os.Executable()
+	if err == nil {
+		err = start([]string{executable, "code-map", "--repo", repo, "--budget-seconds", "60"}, os.Environ(), repo)
+	}
+	if err != nil {
+		_ = os.Remove(path)
+	}
+}
+
+func codeMapCompletionMarker(repo, stateRoot string) (string, error) {
+	root, err := filepath.Abs(repo)
+	if err != nil {
+		return "", err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(stateRoot, "projects", contextio.ProjectKey(root), "code-map", "completion.lock"), nil
+}
+
 func parseCodeMapLine(output []byte) (string, string, error) {
+	if len(output) > 4096 {
+		return "", "", errors.New("oversized code map output")
+	}
 	line := strings.TrimSuffix(string(output), "\n")
 	line = strings.TrimSuffix(line, "\r")
 	if line == "" || strings.ContainsAny(line, "\r\n") || !strings.HasPrefix(line, "CODE_MAP=") {

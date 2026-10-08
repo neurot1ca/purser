@@ -284,7 +284,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		updated["agent"] = selection.Agent
 	}
 	if root != nil && (pointerValue(parsed.Phase) == "implementation" || pointerValue(parsed.Phase) == "plan") {
-		path, status := refreshCodeMapForPre(*root)
+		path, status := refreshCodeMapForPre(*root, defaultPreStateRoot(runtimeRoot))
 		if status != "FRESH" && status != "STALE" {
 			path = filepath.Join(defaultPreStateRoot(runtimeRoot), "projects", projectKey(root), "code-map", "map.txt")
 			status = "UNAVAILABLE"

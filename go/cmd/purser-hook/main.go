@@ -31,6 +31,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "plan" {
 		os.Exit(planMain(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "code-map" {
+		os.Exit(codeMapMain(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "optimize" {
 		os.Exit(optimizeMain(os.Args[2:]))
 	}

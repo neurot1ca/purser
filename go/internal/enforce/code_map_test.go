@@ -14,86 +14,125 @@ import (
 	"purser-hook/internal/contextio"
 )
 
-func TestCodeMapP44Subprocess(t *testing.T) {
-	python, err := exec.LookPath("python")
-	if err != nil {
-		python, err = exec.LookPath("python3")
-	}
-	if err != nil {
-		t.Fatal("Python 3.11+ required by python-locator")
-	}
-	if _, err = exec.LookPath("node"); err != nil {
-		t.Fatal("Node required by python-locator")
-	}
-	pluginRoot := t.TempDir()
-	if err = os.MkdirAll(filepath.Join(pluginRoot, "bin"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	locatorPath := filepath.Join(pluginRoot, "bin", "python-locator.js")
-	locator := "process.stdout.write(JSON.stringify({path: process.env.P44_PYTHON}) + '\\n');\n"
-	if err = os.WriteFile(locatorPath, []byte(locator), 0600); err != nil {
-		t.Fatal(err)
-	}
-	mapDir := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator")
-	if err = os.MkdirAll(mapDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	mapScript := "import os, sys, time\n"
-	mapScript += "assert sys.argv[1:] == ['--repo', os.environ['P44_REPO'], '--budget-seconds', '0.2']\n"
-	mapScript += "mode = os.environ['P44_MODE']\n"
-	mapScript += "if mode == 'timeout': time.sleep(5)\n"
-	mapScript += "print(os.environ['P44_OUTPUT'])\n"
-	mapScript += "raise SystemExit(2 if mode == 'failure' else 1 if mode == 'unavailable' else 0)\n"
-	if err = os.WriteFile(filepath.Join(mapDir, "code_map.py"), []byte(mapScript), 0600); err != nil {
-		t.Fatal(err)
-	}
-	repo := t.TempDir()
-	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
-	t.Setenv("P44_PYTHON", python)
-	t.Setenv("P44_REPO", repo)
-	t.Setenv("P44_MODE", "golden")
-	const mapPath = `C:\Users\test\code map\map.txt`
-	for _, item := range []struct{ name, status string }{{"fresh", "FRESH"}, {"stale", "STALE"}, {"unavailable", "UNAVAILABLE"}} {
-		t.Run("p44_golden_"+item.name, func(t *testing.T) {
-			t.Setenv("P44_MODE", item.name)
-			t.Setenv("P44_OUTPUT", "CODE_MAP="+mapPath+" STATUS="+item.status)
-			gotPath, gotStatus := refreshCodeMapForPre(repo)
-			if gotPath != mapPath || gotStatus != item.status {
-				t.Fatalf("got %q %q", gotPath, gotStatus)
-			}
-		})
-	}
-	for _, item := range []struct{ name, output string }{
-		{"failure", "CODE_MAP=" + mapPath + " STATUS=FRESH"},
-		{"malformed", "not a code map line"},
-	} {
-		t.Run("p44_unavailable_"+item.name, func(t *testing.T) {
-			t.Setenv("P44_MODE", item.name)
-			t.Setenv("P44_OUTPUT", item.output)
-			if path, status := refreshCodeMapForPre(repo); status != "UNAVAILABLE" || path != "" {
-				t.Fatalf("failure became %q %q", path, status)
-			}
-		})
-	}
-	t.Run("p44_unavailable_timeout", func(t *testing.T) {
-		t.Setenv("P44_MODE", "timeout")
-		t.Setenv("P44_OUTPUT", "CODE_MAP="+mapPath+" STATUS=FRESH")
-		started := time.Now()
-		if path, status := refreshCodeMapForPre(repo); status != "UNAVAILABLE" || path != "" {
-			t.Fatalf("timeout became %q %q", path, status)
-		}
-		if elapsed := time.Since(started); elapsed >= codeMapProcessLimit+time.Second {
-			t.Fatalf("deadline exceeded: %s", elapsed)
-		}
-	})
-	t.Run("p44_unavailable_missing_interpreter", func(t *testing.T) {
-		if err := os.WriteFile(locatorPath, []byte("process.stdout.write('null\\n'); process.exit(1);\n"), 0600); err != nil {
+func TestCodeMapNativePreBoundaryAndCompletion(t *testing.T) {
+	t.Run("unwritable state is never fresh", func(t *testing.T) {
+		r, s := nativeMapRepo(t, map[string]string{"one.js": "one"})
+		invalidStateRoot := filepath.Join(s, "not-a-directory")
+		if err := os.WriteFile(invalidStateRoot, []byte("not a directory"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if path, status := refreshCodeMapForPre(repo); status != "UNAVAILABLE" || path != "" {
-			t.Fatalf("missing interpreter became %q %q", path, status)
+		if _, status := refreshCodeMapForPreWith(r, invalidStateRoot, time.Second, nil, nil, nil); status == "FRESH" {
+			t.Fatal("unwritable state became fresh")
 		}
 	})
+	t.Run("lock contention is never fresh", func(t *testing.T) {
+		r, s := nativeMapRepo(t, map[string]string{"one.js": "one"})
+		p, status := refreshCodeMapNative(r, s, time.Second, nil, nil)
+		if status != "FRESH" {
+			t.Fatalf("seed status %s", status)
+		}
+		unlock, err := contextio.LockFile(filepath.Join(filepath.Dir(p), "index.lock"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unlock()
+		starts := 0
+		starter := func([]string, []string, string) error { starts++; return nil }
+		if _, status = refreshCodeMapForPreWith(r, s, 25*time.Millisecond, nil, nil, starter); status == "FRESH" {
+			t.Fatal("lock contention became fresh")
+		}
+		if starts != 1 {
+			t.Fatalf("stale map under lock contention started %d completions", starts)
+		}
+	})
+	t.Run("expired pre budget keeps the published map stale and starts completion", func(t *testing.T) {
+		r, s := nativeMapRepo(t, map[string]string{"one.js": "one"})
+		p, status := refreshCodeMapNative(r, s, time.Second, nil, nil)
+		if status != "FRESH" {
+			t.Fatalf("seed status %s", status)
+		}
+		starts := 0
+		starter := func([]string, []string, string) error { starts++; return nil }
+		if got, status := refreshCodeMapForPreWith(r, s, 0, nil, nil, starter); status != "STALE" || got != p {
+			t.Fatalf("expired pre status=%s path=%q want stale %q", status, got, p)
+		}
+		if starts != 1 {
+			t.Fatalf("completion starts=%d, want 1", starts)
+		}
+	})
+	t.Run("malformed and oversized output are rejected", func(t *testing.T) {
+		for _, output := range [][]byte{[]byte("CODE_MAP=x STATUS=FRESH\nextra"), make([]byte, 4097)} {
+			if _, status, err := parseCodeMapLine(output); err == nil || status == "FRESH" {
+				t.Fatalf("invalid output became %q (%v)", status, err)
+			}
+		}
+	})
+	t.Run("pending starts one detached completion", func(t *testing.T) {
+		r, s := nativeMapRepo(t, map[string]string{"a.js": "a", "b.js": "b", "c.js": "c"})
+		calls := 0
+		extract := map[string]codeMapSymbolExtractor{"javascript": func(src []byte) ([]codeMapSymbol, error) {
+			time.Sleep(300 * time.Millisecond)
+			return nil, nil
+		}}
+		starter := func(args, _ []string, dir string) error {
+			calls++
+			if len(args) < 2 || args[1] != "code-map" || dir != r {
+				t.Fatalf("unexpected detached command args=%q dir=%q", args, dir)
+			}
+			return nil
+		}
+		if _, status := refreshCodeMapForPreWith(r, s, 250*time.Millisecond, extract, nil, starter); status != "STALE" {
+			t.Fatalf("pending status %s", status)
+		}
+		if _, status := refreshCodeMapForPreWith(r, s, 250*time.Millisecond, extract, nil, starter); status != "STALE" {
+			t.Fatalf("repeated pending status %s", status)
+		}
+		if calls != 1 {
+			t.Fatalf("detached completions=%d, want 1", calls)
+		}
+	})
+	t.Run("fresh starts no completion and completion resolves stale", func(t *testing.T) {
+		r, s := nativeMapRepo(t, map[string]string{"a.js": "a", "b.js": "b", "c.js": "c"})
+		calls := 0
+		starter := func([]string, []string, string) error { calls++; return nil }
+		if _, status := refreshCodeMapForPreWith(r, s, time.Second, nil, nil, starter); status != "FRESH" || calls != 0 {
+			t.Fatalf("fresh status=%s starts=%d", status, calls)
+		}
+		if err := os.WriteFile(filepath.Join(r, "a.js"), []byte("changed"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(r, "d.js"), []byte("new"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		delayed := map[string]codeMapSymbolExtractor{"javascript": func([]byte) ([]codeMapSymbol, error) { time.Sleep(300 * time.Millisecond); return nil, nil }}
+		if _, status := refreshCodeMapForPreWith(r, s, 250*time.Millisecond, delayed, nil, starter); status != "STALE" {
+			t.Fatalf("pending status %s", status)
+		}
+		if _, status := RunCodeMapCompletion(r, s, time.Second); status != "FRESH" {
+			t.Fatalf("completion status %s", status)
+		}
+	})
+}
+
+func TestCodeMapNativeFitsOversizedRender(t *testing.T) {
+	entries := make(map[string]codeMapNativeEntry, 5000)
+	for i := 0; i < 5000; i++ {
+		path := fmt.Sprintf("src/file-%04d.go", i)
+		entries[path] = codeMapNativeEntry{MTimeNS: int64(i), Size: 1, Language: "go", Coverage: "native", Symbols: [][]any{{i + 1, "function", fmt.Sprintf("Function%04d", i), "(argument string)"}}}
+	}
+	data, err := renderCodeMapNativeWithPriority(entries, map[string]bool{"src/file-4999.go": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > codeMapMaxBytes {
+		t.Fatalf("rendered %d bytes, limit %d", len(data), codeMapMaxBytes)
+	}
+	if !strings.Contains(string(data), "files omitted:") {
+		t.Fatal("oversized render did not mark omitted files")
+	}
+	if !strings.Contains(string(data), "src/file-4999.go") {
+		t.Fatal("changed file was not prioritized")
+	}
 }
 
 func TestCodeMapP43Fixture(t *testing.T) {

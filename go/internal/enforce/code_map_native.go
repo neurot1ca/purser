@@ -30,6 +30,14 @@ type codeMapNativeEntry struct {
 }
 
 func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extractors map[string]codeMapSymbolExtractor, write func(string, []byte) error) (string, string) {
+	return refreshCodeMapNativeWithLimit(repo, stateRoot, budget, codeMapMaxSeconds, extractors, write)
+}
+
+func RunCodeMapCompletion(repo, stateRoot string, budget time.Duration) (string, string) {
+	return refreshCodeMapNativeWithLimit(repo, stateRoot, budget, codeMapCompletionMaxSeconds, nil, nil)
+}
+
+func refreshCodeMapNativeWithLimit(repo, stateRoot string, budget, maxBudget time.Duration, extractors map[string]codeMapSymbolExtractor, write func(string, []byte) error) (string, string) {
 	registered := map[string]codeMapSymbolExtractor{
 		"go": extractCodeMapGo, "python": extractPythonSymbols,
 		"javascript": func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "javascript") },
@@ -64,7 +72,7 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 	if write == nil {
 		write = atomicWrite
 	}
-	deadline := time.Now().Add(min(codeMapMaxSeconds, max(0, budget)))
+	deadline := time.Now().Add(min(maxBudget, max(0, budget)))
 	fail := func() (string, string) {
 		if info, err := os.Stat(target); err == nil && info.Mode().IsRegular() {
 			return target, "STALE"
@@ -123,6 +131,7 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 		return fail()
 	}
 	entries := make(map[string]codeMapNativeEntry, len(files))
+	changedPaths := make(map[string]bool)
 	changed := false
 	pending := false
 	deadlineDuringFiles := false
@@ -144,6 +153,7 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 			continue
 		}
 		changed = true
+		changedPaths[file.Path] = true
 		entry := codeMapNativeEntry{MTimeNS: key.MTimeNS, Size: key.Size, Language: codeMapLanguage(file.Path), Coverage: "unavailable", Symbols: [][]any{}}
 		if !file.Regular || !file.Contained {
 			entry.Language = "unknown"
@@ -186,7 +196,7 @@ func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extracto
 		}
 		entries[file.Path] = entry
 	}
-	data, err := renderCodeMapNative(entries)
+	data, err := renderCodeMapNativeWithPriority(entries, changedPaths)
 	if err != nil || (!deadlineDuringFiles && codeMapCheckDeadline(deadline) != nil) {
 		return fail()
 	}
@@ -243,8 +253,50 @@ func codeMapLanguage(path string) string {
 	return "unknown"
 }
 func renderCodeMapNative(entries map[string]codeMapNativeEntry) ([]byte, error) {
+	return renderCodeMapNativeWithPriority(entries, nil)
+}
+
+func renderCodeMapNativeWithPriority(entries map[string]codeMapNativeEntry, changed map[string]bool) ([]byte, error) {
+	paths := make([]string, 0, len(entries))
+	for path := range entries {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	data := renderCodeMapNativePaths(entries, paths, 0)
+	if len(data) <= codeMapMaxBytes {
+		return data, nil
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		left, right := entries[paths[i]], entries[paths[j]]
+		if changed[paths[i]] != changed[paths[j]] {
+			return changed[paths[i]]
+		}
+		if left.MTimeNS != right.MTimeNS {
+			return left.MTimeNS > right.MTimeNS
+		}
+		return paths[i] < paths[j]
+	})
+	low, high := 0, len(paths)
+	for low < high {
+		middle := low + (high-low+1)/2
+		candidate := renderCodeMapNativePaths(entries, paths[:middle], len(paths)-middle)
+		if len(candidate) <= codeMapMaxBytes {
+			low = middle
+		} else {
+			high = middle - 1
+		}
+	}
+	data = renderCodeMapNativePaths(entries, paths[:low], len(paths)-low)
+	if len(data) > codeMapMaxBytes {
+		return nil, errors.New("rendered map")
+	}
+	return data, nil
+}
+
+func renderCodeMapNativePaths(entries map[string]codeMapNativeEntry, paths []string, omitted int) []byte {
 	coveredSet := map[string]bool{}
-	for _, entry := range entries {
+	for _, path := range paths {
+		entry := entries[path]
 		if entry.Coverage == "native" {
 			coveredSet[entry.Language] = true
 		}
@@ -258,11 +310,6 @@ func renderCodeMapNative(entries map[string]codeMapNativeEntry) ([]byte, error) 
 		covered = []string{"none"}
 	}
 	lines := []string{fmt.Sprintf("# Code map v%d", codeMapVersion), "Parser: native Go/Python/tree-sitter", "Covered languages: " + strings.Join(covered, ", "), ""}
-	paths := make([]string, 0, len(entries))
-	for path := range entries {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
 	for _, path := range paths {
 		entry := entries[path]
 		lines = append(lines, path)
@@ -285,9 +332,8 @@ func renderCodeMapNative(entries map[string]codeMapNativeEntry) ([]byte, error) 
 			lines = append(lines, rendered)
 		}
 	}
-	data := []byte(strings.Join(lines, "\n") + "\n")
-	if len(data) > codeMapMaxBytes {
-		return nil, errors.New("rendered map")
+	if omitted > 0 {
+		lines = append(lines, fmt.Sprintf("  files omitted: %d (map size limit)", omitted))
 	}
-	return data, nil
+	return []byte(strings.Join(lines, "\n") + "\n")
 }
