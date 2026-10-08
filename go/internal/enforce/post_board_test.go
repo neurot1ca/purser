@@ -79,3 +79,37 @@ func TestPostBoardPythonFixture(t *testing.T) {
 		t.Errorf("guidance=%q want %q", got, fixture.Guidance)
 	}
 }
+
+func TestPostApplyGuidanceUsesModelContext(t *testing.T) {
+	jobID := strings.Repeat("a", 64)
+	quota := "⚓ Purser: Codex quota left: 5h 97% (resets 23:50) · 7d 76% (resets Oct 14)"
+	response := map[string]any{
+		"systemMessage": quota,
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":     "ExistingEvent",
+			"additionalContext": "Existing model context",
+		},
+	}
+
+	appendPostApplyGuidance(response, jobID)
+
+	output := mapValue(response["hookSpecificOutput"])
+	context := stringValue(output["additionalContext"])
+	if want := "Existing model context\n" + PostApplyGuidance("", jobID); context != want {
+		t.Fatalf("additionalContext=%q want %q", context, want)
+	}
+	if output["hookEventName"] != "ExistingEvent" {
+		t.Fatalf("hookEventName=%v want existing value", output["hookEventName"])
+	}
+	message := stringValue(response["systemMessage"])
+	if message != quota || strings.Contains(message, "**") || strings.Contains(message, jobID) {
+		t.Fatalf("systemMessage=%q want plain quota only", message)
+	}
+
+	withoutOutput := map[string]any{}
+	appendPostApplyGuidance(withoutOutput, jobID)
+	missingOutput := mapValue(withoutOutput["hookSpecificOutput"])
+	if missingOutput["hookEventName"] != "PostToolUse" || stringValue(missingOutput["additionalContext"]) != PostApplyGuidance("", jobID) {
+		t.Fatalf("default hook output=%#v", missingOutput)
+	}
+}

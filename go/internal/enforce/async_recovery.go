@@ -73,7 +73,7 @@ func recoverAsyncFinalizing(root string, event, index, pending map[string]any, c
 		return nil, false, err
 	}
 	if bundle["apply"] == "codex_apply" && job != nil {
-		response["systemMessage"] = PostApplyGuidance(stringValue(response["systemMessage"]), stringValue(index["jobId"]))
+		appendPostApplyGuidance(response, stringValue(index["jobId"]))
 	}
 	index["stage"], index["bundle_path"], index["response"] = "CONSUMED", path, response
 	encoded, err := canonicalJSON(index)

@@ -153,7 +153,7 @@ func postQuotaSystemMessage(value any) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "⚓ **Purser:** Codex quota left: " + strings.Join(parts, " · ")
+	return "⚓ Purser: Codex quota left: " + strings.Join(parts, " · ")
 }
 
 func appendPostQuotaSystemMessage(response map[string]any, quota any) {

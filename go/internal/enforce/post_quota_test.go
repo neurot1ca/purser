@@ -37,7 +37,7 @@ func TestPostQuotaPythonOracleValues(t *testing.T) {
 	oldLocal := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = oldLocal })
-	wantMessage := "⚓ **Purser:** Codex quota left: 5h 85% (resets 12:00) · 7d 20% (resets Oct 5)"
+	wantMessage := "⚓ Purser: Codex quota left: 5h 85% (resets 12:00) · 7d 20% (resets Oct 5)"
 	if got := postQuotaSystemMessage(want); got != wantMessage {
 		t.Fatalf("quota message=%q want %q", got, wantMessage)
 	}

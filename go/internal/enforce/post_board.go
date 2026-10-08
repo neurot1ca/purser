@@ -389,6 +389,26 @@ func PostApplyGuidance(prior, jobID string) string {
 	return sentence
 }
 
+func appendPostApplyGuidance(response map[string]any, jobID string) {
+	if response == nil {
+		return
+	}
+	output := mapValue(response["hookSpecificOutput"])
+	if output == nil {
+		output = map[string]any{}
+		response["hookSpecificOutput"] = output
+	}
+	if _, ok := output["hookEventName"]; !ok {
+		output["hookEventName"] = "PostToolUse"
+	}
+	guidance := PostApplyGuidance("", jobID)
+	if prior := stringValue(output["additionalContext"]); prior != "" {
+		output["additionalContext"] = prior + "\n" + guidance
+	} else {
+		output["additionalContext"] = guidance
+	}
+}
+
 // PostReceiptAdvice mirrors compaction_advisor._receipt_advice.
 func PostReceiptAdvice(receipt map[string]any, now time.Time) string {
 	parts := []string{"model " + fmt.Sprint(receipt["model"]), "effort " + fmt.Sprint(receipt["effort"])}

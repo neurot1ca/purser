@@ -197,7 +197,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	postGearAdvice(root, original, pending, loaded, response,
 		workerDuration(job["startedAt"], job["finishedAt"]), stringValue(index["jobId"]))
 	if bundle["apply"] == "codex_apply" {
-		response["systemMessage"] = PostApplyGuidance(stringValue(response["systemMessage"]), stringValue(index["jobId"]))
+		appendPostApplyGuidance(response, stringValue(index["jobId"]))
 	}
 	if err = consumeAsyncResult(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index, artifact, response); err != nil {
 		return nil, err
