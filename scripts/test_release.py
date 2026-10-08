@@ -452,6 +452,17 @@ def test_export_includes_runtime_mod_imports():
     assert not missing, f"runtime mod imports missing from MOD_SOURCE_FILES: {sorted(missing)}"
 
 
+def test_command_files_matches_repository():
+    module_spec = importlib.util.spec_from_file_location("release_under_test", RELEASE)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    repo_commands = sorted((p.relative_to(ROOT).as_posix() for p in ROOT.glob("commands/*.md")))
+    assert list(module.COMMAND_FILES) == repo_commands, (
+        f"COMMAND_FILES mismatch: expected {repo_commands}, got {list(module.COMMAND_FILES)}"
+    )
+
+
 @pytest.mark.parametrize(
     ("name", "importer", "statement", "target"),
     (
