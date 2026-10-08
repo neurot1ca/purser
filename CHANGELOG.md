@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.94 — 2026-10-08
+
+- **Fixed:** Mechanical OpenCode jobs start again; `PURSER_CODEX_BIN` applies only to Codex.
+- **Fixed:** No console window flashes on Windows when Purser starts git or helper processes (codex_start, codex_result, tests).
+- **Fixed:** Reviewer-1 token usage is recorded again.
+- **Changed:** The auto-compact wake message is a bold Purser line naming `/compact`; the expected headless refusal no longer shows in the transcript.
+
 ## 0.1.93 — 2026-10-08
 
 - **Changed:** Purser no longer needs Python: `/purser:check` runs in Go with a Runtime row, the MCP launcher only starts the Go binary, maintenance reports show the Runtime line, and released plugins ship no Python files.
