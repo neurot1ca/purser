@@ -29,6 +29,12 @@ GO_HOOK_TARGETS = (
     ("darwin", "amd64"), ("darwin", "arm64"),
 )
 MOD_SOURCE_FILES = ("hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts", "hooks/mod/board.ts", "hooks/mod/usage.ts", "hooks/mod/enforcement.ts", "hooks/mod/autocompact.ts")
+PLUGIN_RUNTIME_FILES = (
+    "bin/purser-launcher.js", "plugin/mcp.json", "hooks/hooks.json",
+    ".claude/hooks/orchestrator/config.json",
+    ".claude/hooks/orchestrator/model_catalog_bootstrap.json",
+)
+COMMAND_FILES = tuple(f"commands/{name}.md" for name in ("check", "gear-down", "gear-up", "init", "optimize", "plan"))
 
 
 class ReleaseError(Exception):
@@ -115,6 +121,17 @@ def _extract_archive(archive, destination, members):
             os.chmod(directory, mode & 0o777)
 
 
+def _filter_python_sources(staged_tree):
+    for path in sorted(staged_tree.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.name == "__pycache__":
+            if path.is_symlink():
+                path.unlink()
+            else:
+                shutil.rmtree(path)
+        elif path.is_file() and path.suffix.lower() in (".py", ".pyc"):
+            path.unlink()
+
+
 def _build_go_hook(staged_tree):
     go = shutil.which("go")
     if not go:
@@ -183,6 +200,7 @@ def export_marketplace(commit, marketplace_dir):
         with tarfile.open(fileobj=io.BytesIO(archive_result.stdout), mode="r:") as archive:
             members = _safe_archive_members(archive, staged_tree)
             _extract_archive(archive, staged_tree, members)
+        _filter_python_sources(staged_tree)
         _verify_staged_mod_assets(staged_tree, include_binaries=False)
         phase = "build Go hook binaries"
         _build_go_hook(staged_tree)
@@ -245,7 +263,7 @@ def export_marketplace(commit, marketplace_dir):
 
 
 def _verify_staged_mod_assets(staged_tree, *, include_binaries):
-    required = list(MOD_SOURCE_FILES)
+    required = [*MOD_SOURCE_FILES, *PLUGIN_RUNTIME_FILES, *COMMAND_FILES]
     if include_binaries:
         required.extend(
             f"bin/purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")
@@ -254,6 +272,13 @@ def _verify_staged_mod_assets(staged_tree, *, include_binaries):
     missing = [path for path in required if not (staged_tree / path).is_file()]
     if missing:
         raise ReleaseError("staged export is missing required file(s): " + ", ".join(missing))
+    python_artifacts = [
+        path.relative_to(staged_tree).as_posix()
+        for path in staged_tree.rglob("*")
+        if path.name == "__pycache__" or path.is_file() and path.suffix.lower() in (".py", ".pyc")
+    ]
+    if python_artifacts:
+        raise ReleaseError("staged export contains Python artifact(s): " + ", ".join(python_artifacts))
 
 
 def write_step(label, path, data):

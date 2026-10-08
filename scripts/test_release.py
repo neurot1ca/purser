@@ -103,6 +103,14 @@ def repo(tmp_path):
         source = path / relative
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("// mod source\n", encoding="utf-8")
+    for relative in module.PLUGIN_RUNTIME_FILES:
+        source = path / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("{}\n", encoding="utf-8")
+    for relative in module.COMMAND_FILES:
+        source = path / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("# Command\n", encoding="utf-8")
     fake_bin = fake_go(tmp_path)
     env["PATH"] = str(fake_bin) + os.pathsep + os.environ.get("PATH", "")
     env["GOCACHE"] = str(tmp_path / "go-cache")
@@ -326,6 +334,14 @@ def test_export_only_uses_committed_tree_and_local_manifest(tmp_path):
     assert (exported / "hooks" / "mod" / "read.ts").is_file()
     assert (exported / "hooks" / "mod" / "usage.ts").is_file()
     assert (exported / "hooks" / "mod" / "enforcement.ts").is_file()
+    for relative in (
+        "bin/purser-launcher.js", "plugin/mcp.json", "hooks/hooks.json",
+        ".claude/hooks/orchestrator/config.json",
+        ".claude/hooks/orchestrator/model_catalog_bootstrap.json",
+    ):
+        assert (exported / relative).is_file()
+    assert not [path for path in exported.rglob("*") if path.is_file() and path.suffix.lower() in (".py", ".pyc")]
+    assert not [path for path in exported.rglob("*") if path.name == "__pycache__"]
     manifest = json.loads((marketplace / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "purser-local"
     assert manifest["owner"]["name"] == "Purser"
@@ -347,13 +363,17 @@ def test_export_builds_six_go_binaries_in_staged_plugin(tmp_path):
         "darwin-amd64", "darwin-arm64",
     }
     binaries = marketplace / "purser" / "bin"
-    assert {item.name.removeprefix("purser-hook-") for item in binaries.iterdir()} == expected
+    assert (binaries / "purser-launcher.js").is_file()
+    assert {item.name.removeprefix("purser-hook-") for item in binaries.iterdir() if item.name.startswith("purser-hook-")} == expected
     builds = log.read_text(encoding="utf-8").splitlines()
     assert len(builds) == 6
     assert {line.split()[0] for line in builds} == {
         "windows/amd64", "windows/arm64", "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64",
     }
-    assert all("build -tags grammar_subset,grammar_subset_python,grammar_subset_javascript,grammar_subset_typescript,grammar_subset_tsx -trimpath -ldflags -s -w -o " in line and "./cmd/purser-hook" in line for line in builds)
+    tags = ",".join((path / "go" / "internal" / "enforce" / "code_map_grammar_tags.go").read_text(encoding="utf-8").split('codeMapGrammarTags = "', 1)[1].split('"', 1)[0].split())
+    for line in builds:
+        assert f"build -tags {tags} -trimpath -ldflags -s -w -o " in line
+        assert line.endswith(" ./cmd/purser-hook")
 
 
 def test_staged_export_requires_mod_sources_and_all_six_binaries(tmp_path):
@@ -371,16 +391,55 @@ def test_staged_export_requires_mod_sources_and_all_six_binaries(tmp_path):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"binary")
 
-    module._verify_staged_mod_assets(staged, include_binaries=True)
     for relative in module.MOD_SOURCE_FILES:
         missing = staged / relative
         missing.unlink()
         with pytest.raises(module.ReleaseError, match=relative.replace(".", r"\.")):
             module._verify_staged_mod_assets(staged, include_binaries=True)
         missing.write_text("source\n", encoding="utf-8")
+    for relative in module.PLUGIN_RUNTIME_FILES:
+        target = staged / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}\n", encoding="utf-8")
+    for relative in module.COMMAND_FILES:
+        command = staged / relative
+        command.parent.mkdir(parents=True, exist_ok=True)
+        command.write_text("# Command\n", encoding="utf-8")
+    module._verify_staged_mod_assets(staged, include_binaries=True)
+    (staged / "bin" / "purser-launcher.js").unlink()
+    with pytest.raises(module.ReleaseError, match="bin/purser-launcher.js"):
+        module._verify_staged_mod_assets(staged, include_binaries=True)
+    (staged / "bin" / "purser-launcher.js").write_text("launcher\n", encoding="utf-8")
     (staged / "bin" / "purser-hook-darwin-arm64").unlink()
     with pytest.raises(module.ReleaseError, match="purser-hook-darwin-arm64"):
         module._verify_staged_mod_assets(staged, include_binaries=True)
+
+
+def test_python_injected_after_filter_fails_and_preserves_previous_tree(tmp_path, monkeypatch):
+    path, _ = repo(tmp_path)
+    marketplace = tmp_path / "marketplace"
+    previous = marketplace / "purser"
+    previous.mkdir(parents=True)
+    sentinel = previous / "sentinel.txt"
+    sentinel.write_text("previous tree\n", encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location("release_under_test", path / "scripts" / "release.py")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    def build_with_python(staged_tree):
+        binary_dir = staged_tree / "bin"
+        binary_dir.mkdir(exist_ok=True)
+        for goos, goarch in module.GO_HOOK_TARGETS:
+            name = f"purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")
+            (binary_dir / name).write_bytes(b"binary")
+        (staged_tree / "injected.py").write_text("print('unexpected')\n", encoding="utf-8")
+
+    monkeypatch.setattr(module, "_build_go_hook", build_with_python)
+    commit = run(["git", "rev-parse", "HEAD"], path).stdout.strip()
+    with pytest.raises(module.ReleaseError, match="Python artifact.*injected.py"):
+        module.export_marketplace(commit, marketplace)
+    assert sentinel.read_text(encoding="utf-8") == "previous tree\n"
+    assert not list(marketplace.glob("purser-export-*"))
 
 
 def test_export_includes_runtime_mod_imports():
