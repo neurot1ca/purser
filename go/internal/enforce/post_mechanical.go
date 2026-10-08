@@ -26,10 +26,13 @@ func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey 
 	validation, _ := bundle["worker_validation"].(map[string]any)
 	accepted := skipped == "NO_DELTA" || skipped == "BELOW_THRESHOLD"
 	if accepted {
-		accepted = validation["status"] == "PASS"
+		accepted = workerValidationPassed(validation)
 	} else {
-		accepted = bundle["reviewer1_skipped_reason"] == nil && bundle["validation"] == "PASS" && bundle["reviewer1_result"] == "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE"
+		accepted = bundle["reviewer1_skipped_reason"] == nil && workerValidationPassed(validation) &&
+			(bundle["validation"] == "PASS" || bundle["validation"] == "UNKNOWN") &&
+			bundle["reviewer1_result"] == "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE"
 	}
+	accepted = accepted && bundle["validation"] != "FAIL" && validation["status"] != "FAIL"
 	accepted = accepted && bundle["micro_repair"] == nil && bundle["micro_repair_cleared_review"] != true
 	if pending["agent"] == "opencode" {
 		if models, ok := pending["attempted_models"].([]any); ok {
@@ -57,6 +60,39 @@ func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey 
 		served = fmt.Sprint(pending["model"])
 	}
 	_ = startMechanicalShadow(root, projectKey, fmt.Sprint(repository), fmt.Sprint(pending["shadow_prompt"]), fmt.Sprint(bundle["implementer_report"]), served)
+}
+
+func workerValidationPassed(validation map[string]any) bool {
+	if validation["status"] != "PASS" {
+		return false
+	}
+	commands, ok := postStringList(validation["commands"])
+	if !ok || len(commands) == 0 {
+		return false
+	}
+	exitCodes, ok := validation["exit_codes"].([]any)
+	if !ok || len(exitCodes) != len(commands) {
+		return false
+	}
+	for _, code := range exitCodes {
+		switch code := code.(type) {
+		case json.Number:
+			if code.String() != "0" {
+				return false
+			}
+		case float64:
+			if code != 0 {
+				return false
+			}
+		case int:
+			if code != 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func recordMechanicalSample(root, model string, success bool) error {

@@ -152,6 +152,60 @@ func TestStartMechanicalShadowLaunchesBundledCommand(t *testing.T) {
 	}
 }
 
+func TestPostMechanicalAcceptanceUsesWorkerValidationAndReviewer(t *testing.T) {
+	tests := []struct {
+		name     string
+		worker   map[string]any
+		reviewer string
+		want     bool
+	}{
+		{name: "unknown bundle validation with worker pass and clean review", worker: mechanicalWorkerValidation("PASS", 0), reviewer: "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", want: true},
+		{name: "worker validation fail", worker: mechanicalWorkerValidation("FAIL", 1), reviewer: "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE"},
+		{name: "reviewer finding", worker: mechanicalWorkerValidation("PASS", 0), reviewer: "CHANGES_REQUIRED"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeMechanicalInventory(t, root)
+			launches := 0
+			startMechanicalShadowDetached = func([]string, []string, string) error { launches++; return nil }
+			t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
+			bundle := map[string]any{
+				"validation": "UNKNOWN", "worker_validation": tc.worker,
+				"reviewer1_result": tc.reviewer, "implementer_report": "accepted",
+			}
+			PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", mechanicalPending(), bundle)
+			if got := launches > 0; got != tc.want {
+				t.Fatalf("shadow launch = %v, want accepted=%v (launches=%d)", got, tc.want, launches)
+			}
+			var inventory map[string]any
+			data, err := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = json.Unmarshal(data, &inventory); err != nil {
+				t.Fatal(err)
+			}
+			candidates := inventory["candidates"].([]any)
+			for _, value := range candidates {
+				candidate := value.(map[string]any)
+				if candidate["id"] == "served" {
+					samples := candidate["mechanical_samples"].([]any)
+					if got := samples[len(samples)-1] == true; got != tc.want {
+						t.Fatalf("latest mechanical sample success = %v, want %v", got, tc.want)
+					}
+					return
+				}
+			}
+			t.Fatal("served candidate missing")
+		})
+	}
+}
+
+func mechanicalWorkerValidation(status string, exitCode int) map[string]any {
+	return map[string]any{"source": "WORKER_REPORTED", "status": status, "commands": []any{"go test ./..."}, "exit_codes": []any{exitCode}}
+}
+
 func writeMechanicalInventory(t *testing.T, root string) {
 	t.Helper()
 	path := filepath.Join(root, "opencode", "candidates.json")
@@ -207,5 +261,5 @@ func mechanicalPending() map[string]any {
 	return map[string]any{"mechanical_opencode": true, "agent": "opencode", "model": "served", "shadow_prompt": "prompt", "repo_root": "repo"}
 }
 func mechanicalBundle() map[string]any {
-	return map[string]any{"validation": "PASS", "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "implementer_report": "accepted"}
+	return map[string]any{"validation": "PASS", "worker_validation": mechanicalWorkerValidation("PASS", 0), "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "implementer_report": "accepted"}
 }
