@@ -31,6 +31,10 @@ Use the normal one-line dispatch receipt in the user's language: route `plan_sta
 
 When the user accepts the plan, implement its milestones in order. For each, read only that milestone's section from the returned `plan_path`, turn it into a normal, bounded implementation task with its scope and acceptance criteria, and follow the ordinary implementation routing and review process. Use task ID `<plan-task-id>-m<N>of<T>` for every milestone job, where `T` is the number of accepted milestones. The existing job records supply the compact handoff with each milestone's job ID, apply state, and next step. After a milestone is accepted, start the next one without asking. Stop only for a real decision, a failed review, an approval-gated action, or user-visible text, which still needs the user's approval. If the user accepts only some milestones, implement only those.
 
+When the user explicitly accepts milestones, call `purser-hook plan accept` with the repository `--cwd`, plan `--task-id`, returned `--artifact` path, and comma-separated accepted `--milestones`.
+When a milestone is fully accepted, call `purser-hook plan complete-milestone` with `--cwd` and the active plan `--revision` from `purser-hook plan status`.
+Call `purser-hook plan stop` or `resume` only on an explicit user request, with `--cwd` and the current `--revision`; never infer either action from a topic change, failure, or review rejection.
+
 ## User request
 
 $ARGUMENTS
