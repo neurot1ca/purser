@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.96 — 2026-10-08
+
+- **Fixed:** Reviewer-1 no longer comes back unavailable when Gemini stalls: Claude Haiku, then Codex, review in its place.
+- **Changed:** The gear-up suggestion appears 90 minutes before the 5-hour reset, in the same style as the Codex done line.
+- **Changed:** Maintenance reports run up to three times a week after 5 quiet minutes, and `/purser:init` runs the first one right after you opt in.
+- **Changed:** Maintenance notices say why each finding matters and how to turn the reports off.
+- **Changed:** Auto-compact announces itself as a Purser line in the transcript, and the context advisor no longer asks you to type `/compact` while it is on.
+
 ## 0.1.95 — 2026-10-08
 
 - **Fixed:** Purser's state folder no longer grows without bound: finished job worktrees and preparations are removed after 7 days, and the folder is capped at 2 GiB.
