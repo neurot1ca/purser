@@ -158,5 +158,78 @@
         "projects/<PROJECT_KEY>/maintenance/reports/test-gaps/last-run.json": {"completed_at":"<TIME>"}
       }
     }
-  ]
+   ],
+  "ownership_cases": [
+  {
+    "name": "free-slot",
+    "acquired": true,
+    "fields": [
+      "pid",
+      "started_at"
+    ],
+    "exists_while_held": true,
+    "exists_after_release": false
+  },
+  {
+    "name": "held-slot",
+    "blocked": true,
+    "still_exists": true
+  },
+  {
+    "name": "python-held-slot-seen-by-go",
+    "marker_fields": [
+      "pid",
+      "started_at"
+    ],
+    "blocked": true
+  },
+  {
+    "name": "go-held-slot-seen-by-python",
+    "marker_fields": [
+      "pid",
+      "started_at"
+    ],
+    "blocked": true
+  },
+  {
+    "name": "stale-slot-recovery",
+    "stale_before": true,
+    "recovered": true,
+    "fields": [
+      "pid",
+      "started_at"
+    ],
+    "exists_after_release": false
+  },
+  {
+    "name": "live-active-marker",
+    "stale": false
+  },
+  {
+    "name": "stale-active-marker",
+    "stale": true
+  },
+  {
+    "name": "live-job-active-marker",
+    "stale": false,
+    "job_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "job_state": "RUNNING"
+  },
+  {
+    "name": "stale-job-active-marker",
+    "stale": true,
+    "job_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "job_state": "SUCCEEDED"
+  },
+  {
+    "name": "malformed-active-marker",
+    "stale": false,
+    "readable": false
+  },
+  {
+    "name": "malformed-timestamp-active-marker",
+    "stale": false,
+    "readable": true
+  }
+]
 }

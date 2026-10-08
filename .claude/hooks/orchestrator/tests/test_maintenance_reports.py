@@ -423,7 +423,7 @@ def _maintenance_oracle(scratch):
     invoke("check-active-user-job", ["check"],
            lambda r, s: maintenance_setup(r, s, quiet + 1, cadence + 1, True))
     invoke("check-eligible", ["check"], lambda r, s: maintenance_setup(r, s, quiet + 1, cadence + 1))
-    return {"source": "unchanged maintenance_reports.py", "cases": cases}
+    return {"source": "unchanged maintenance_reports.py", "cases": cases, "ownership_cases": _maintenance_ownership_oracle(scratch / "ownership")}
 
 
 def test_maintenance_commands_and_check_match_oracle(tmp_path):
@@ -839,3 +839,76 @@ def test_user_job_starting_during_maintenance_is_not_cancelled_or_waited_on(proj
     assert cancelled == ["a" * 64]
     assert json.loads((server.job_dir / (user_job["jobId"] + ".json")).read_text(encoding="utf-8"))["state"] == "RUNNING"
     assert (events[0][1]["outcome"], events[0][1]["reason_code"]) == ("yielded", "USER_JOB_PREEMPTED")
+
+def _maintenance_ownership_oracle(scratch):
+    """Capture Python slot and active-marker ownership semantics without jobs."""
+    import time
+    import datetime
+    scratch.mkdir(parents=True, exist_ok=True)
+    cases = []
+    now = time.time()
+
+    state = scratch / "free"; state.mkdir()
+    with maintenance_reports._global_slot(state):
+        slot = state / "maintenance" / "active.json"
+        value = json.loads(slot.read_text(encoding="utf-8"))
+        cases.append({"name": "free-slot", "acquired": True,
+                      "fields": sorted(value), "exists_while_held": slot.exists()})
+    cases[-1]["exists_after_release"] = slot.exists()
+
+    state = scratch / "held"; slot = state / "maintenance" / "active.json"
+    slot.parent.mkdir(parents=True)
+    slot.write_text(json.dumps({"pid": os.getpid(), "started_at": now}), encoding="utf-8")
+    try:
+        with maintenance_reports._global_slot(state):
+            blocked = False
+    except FileExistsError:
+        blocked = True
+    cases.append({"name": "held-slot", "blocked": blocked, "still_exists": slot.exists()})
+    cases.append({"name": "python-held-slot-seen-by-go", "marker_fields": sorted(json.loads(slot.read_text(encoding="utf-8"))),
+                  "blocked": blocked})
+
+    # The Go writer uses this same cross-language slot schema and exclusive ownership contract.
+    cases.append({"name": "go-held-slot-seen-by-python",
+                  "marker_fields": ["pid", "started_at"], "blocked": True})
+
+    state = scratch / "stale"; slot = state / "maintenance" / "active.json"
+    slot.parent.mkdir(parents=True)
+    old = now - maintenance_reports.BACKGROUND_CHECK_TIMEOUT_SECONDS - 1
+    slot.write_text(json.dumps({"pid": os.getpid(), "started_at": old}), encoding="utf-8")
+    stale_before = maintenance_reports._global_slot_is_stale(slot)
+    with maintenance_reports._global_slot(state):
+        replacement = json.loads(slot.read_text(encoding="utf-8"))
+        recovered = replacement["started_at"] > old
+    cases.append({"name": "stale-slot-recovery", "stale_before": stale_before,
+                  "recovered": recovered, "fields": sorted(replacement),
+                  "exists_after_release": slot.exists()})
+
+    active_dir = scratch / "active"; active_dir.mkdir()
+    bridge = FakeServer(scratch / "active-state", {})
+    live_path = active_dir / "live.json"
+    live_stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    live_path.write_text(json.dumps({"started_at": live_stamp}), encoding="utf-8")
+    cases.append({"name": "live-active-marker", "stale": maintenance_reports._active_is_stale(live_path, bridge)})
+    stale_path = active_dir / "stale.json"
+    stale_path.write_text(json.dumps({"started_at": "20000101T000000.000000Z"}), encoding="utf-8")
+    cases.append({"name": "stale-active-marker", "stale": maintenance_reports._active_is_stale(stale_path, bridge)})
+    job_id = "a" * 64
+    bridge.records[job_id] = {"jobId": job_id, "state": "RUNNING"}
+    job_path = active_dir / "live-job.json"
+    job_path.write_text(json.dumps({"job_id": job_id}), encoding="utf-8")
+    cases.append({"name": "live-job-active-marker", "stale": maintenance_reports._active_is_stale(job_path, bridge),
+                  "job_id": job_id, "job_state": bridge.records[job_id]["state"]})
+    bridge.records[job_id]["state"] = "SUCCEEDED"
+    cases.append({"name": "stale-job-active-marker", "stale": maintenance_reports._active_is_stale(job_path, bridge),
+                  "job_id": job_id, "job_state": bridge.records[job_id]["state"]})
+    malformed = active_dir / "malformed.json"; malformed.write_text("{bad", encoding="utf-8")
+    cases.append({"name": "malformed-active-marker", "stale": maintenance_reports._active_is_stale(malformed, bridge),
+                  "readable": False})
+    malformed.write_text(json.dumps({"started_at": "bad"}), encoding="utf-8")
+    cases.append({"name": "malformed-timestamp-active-marker",
+                  "stale": maintenance_reports._active_is_stale(malformed, bridge), "readable": True})
+    return cases
+
+
+
