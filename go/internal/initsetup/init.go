@@ -754,12 +754,24 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	pythonChange := len(pythonPath) > 0 && !bytes.Equal(pythonOld, pythonContent)
 	if o.plan {
 		planned := map[string]any{}
-		showRoutes := o.mode != "" || oneOf(o.coder, "opencode", "agy")
+		showRoutes := o.mode != "" || oneOf(o.coder, "opencode", "agy", "claude")
 		if showRoutes {
-			parsed, _, er := profile.DecodeTOML(changed)
-			if er == nil {
-				coding, _ := parsed["coding"].(map[string]any)
-				planned, _ = coding["routes"].(map[string]any)
+			if o.coder == "claude" {
+				planned = map[string]any{
+					"mechanical":    map[string]any{"model": "haiku", "effort": "none"},
+					"operation":     map[string]any{"model": "haiku", "effort": "none"},
+					"subtle":        map[string]any{"model": "sonnet", "effort": "medium"},
+					"normal":        map[string]any{"model": "sonnet", "effort": "medium"},
+					"consequential": map[string]any{"model": "opus", "effort": "high"},
+					"plan_standard": map[string]any{"model": "opus", "effort": "high"},
+					"escalated":     map[string]any{"model": "opus", "effort": "xhigh"},
+				}
+			} else {
+				parsed, _, er := profile.DecodeTOML(changed)
+				if er == nil {
+					coding, _ := parsed["coding"].(map[string]any)
+					planned, _ = coding["routes"].(map[string]any)
+				}
 			}
 		}
 		if showRoutes && len(planned) > 0 {
@@ -1174,7 +1186,7 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 			}
 		}
 	}
-	if o.coder == "opencode" || o.coder == "agy" || o.mode != "" || before["coding"] != nil {
+	if o.coder == "opencode" || o.coder == "agy" || o.coder == "claude" || o.mode != "" || before["coding"] != nil {
 		c, ok := before["coding"].(map[string]any)
 		if !ok {
 			if before["coding"] != nil {
@@ -1184,11 +1196,15 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 			before["coding"] = c
 		}
 		agentName := o.coder
-		if agentName != "opencode" && agentName != "agy" {
+		if !oneOf(agentName, "opencode", "agy", "claude") {
 			agentName = "codex"
 		}
 		c["coder_agent"] = agentName
 		*text = upsert(*text, "coding", "coder_agent", tomlString(agentName), nl)
+		if o.coder == "claude" {
+			delete(c, "routes")
+			*text = removeCoderRoutes(*text)
+		}
 		routes := map[string]any{}
 		if o.mode == "balanced" || o.mode == "" && o.coder == "codex" {
 			var cfg map[string]any
@@ -1224,7 +1240,7 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 				}
 			}
 		}
-		if routes != nil {
+		if routes != nil && o.coder != "claude" {
 			c["routes"] = routes
 			*text = upsert(*text, "coding", "routes", tomlRoutes(routes), nl)
 		}
@@ -1331,6 +1347,31 @@ func upsert(text, section, key, value, nl string) string {
 		lines = append(lines[:end], append([]string{key + " = " + value + nl}, lines[end:]...)...)
 	}
 	return strings.Join(lines, "")
+}
+func removeCoderRoutes(text string) string {
+	lines := strings.SplitAfter(text, "\n")
+	kept := lines[:0]
+	section, inRoutes := "", false
+	for _, line := range lines {
+		trimmed := strings.TrimRight(line, "\r\n")
+		if match := sectionRE.FindStringSubmatch(trimmed); match != nil {
+			section = match[1]
+			inRoutes = section == "coding.routes" || strings.HasPrefix(section, "coding.routes.")
+			if inRoutes {
+				continue
+			}
+		}
+		if inRoutes {
+			continue
+		}
+		if section == "coding" {
+			if match := keyRE.FindStringSubmatch(trimmed); match != nil && match[1] == "routes" {
+				continue
+			}
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
 }
 func tomlArrayEnd(lines []string, start, limit int) (int, bool) {
 	depth := 0

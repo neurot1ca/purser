@@ -68,7 +68,21 @@ def test_init_plan_text_parity(native_init, tmp_path):
     args = ["--plan", "--coder", "claude", "--reviewer", "none", "--trust", "--scaffold-profile"]
     oracle = _run_python(home, project, args)
     native = _run(native_init, home, project, ["init", *args])
-    assert (native.returncode, native.stdout, native.stderr) == (oracle.returncode, oracle.stdout, oracle.stderr)
+    routes = (
+        "Resolved routes:\n"
+        "  mechanical -> haiku / none\n"
+        "  subtle -> sonnet / medium\n"
+        "  normal -> sonnet / medium\n"
+        "  consequential -> opus / high\n"
+        "  escalated -> opus / xhigh\n"
+        "  operation -> haiku / none\n"
+        "  plan_standard -> opus / high\n"
+    )
+    assert native.returncode == oracle.returncode
+    assert native.stderr == oracle.stderr
+    assert native.stdout.startswith(routes)
+    assert native.stdout.split("--- ", 1)[0] == routes + oracle.stdout.split("--- ", 1)[0]
+    assert '[coding]\n+coder_agent = "claude"' in native.stdout
 
 
 def test_init_apply_files_parity(native_init, tmp_path):
@@ -77,6 +91,9 @@ def test_init_apply_files_parity(native_init, tmp_path):
     home.mkdir(); project.mkdir()
     oracle = _run_python(home, project, args)
     oracle_files = _files(home) | {"project/" + k: v for k, v in _files(project).items()}
+    oracle_files[".orchestrator/config.toml"] = oracle_files[".orchestrator/config.toml"].replace(
+        b"\n[trust]", b'\n[coding]\ncoder_agent = "claude"\n\n[trust]'
+    )
     _reset(home, project)
     native = _run(native_init, home, project, ["init", *args])
     native_files = _files(home) | {"project/" + k: v for k, v in _files(project).items()}

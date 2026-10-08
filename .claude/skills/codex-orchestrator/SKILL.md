@@ -70,6 +70,8 @@ behavior, leaving no semantic choice to the worker.
 | Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6.1-sol` + `xhigh` |
 | Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-6-luna` + `high` |
 
+With Claude as coder, the same routes run Haiku (mechanical, operation), Sonnet medium (subtle, normal), Opus high (consequential, plan) and Opus xhigh (escalated), always the newest model of each tier.
+
 Research/study jobs (source studies, docs research, analyses) use `route=normal` with basis `Research study: <question>`.
 
 Choose the lowest row likely to succeed in one pass; default to `subtle` when
