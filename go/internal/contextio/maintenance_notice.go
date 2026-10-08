@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -351,11 +350,7 @@ func truncateRunes(value string, limit int) string {
 }
 
 func promptMaintenanceGuidance(pending map[string]any) string {
-	python := "python"
-	if command, err := exec.LookPath("python"); err == nil {
-		python, _ = filepath.Abs(command)
-	}
-	cli := fmt.Sprintf("\"%s\" \"%s\"", python, maintenanceScriptPath())
+	cli := fmt.Sprintf("\"%s\" maintenance", maintenanceCommandPath())
 	text, noticeFile := str(pending["text"]), str(pending["notice_file"])
 	if strings.HasSuffix(noticeFile, "consent.json") {
 		return fmt.Sprintf("Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. If the user says yes, run `%s consent yes --repo \"<repository-root>\"`; if no, run `%s consent no --repo \"<repository-root>\"`. Do not infer consent.\n%s", cli, cli, text)

@@ -11,9 +11,9 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1229,7 +1229,7 @@ func quotaWindow(window map[string]any, now int64) (float64, bool) {
 	return used, minOK && usedOK && resetOK && (minutes == 300 || minutes == 10080) && reset > float64(now)
 }
 
-func maintenanceScriptPath() string {
+func maintenanceCommandPath() string {
 	root := os.Getenv("CLAUDE_PLUGIN_ROOT")
 	if root == "" {
 		executable, err := os.Executable()
@@ -1238,7 +1238,11 @@ func maintenanceScriptPath() string {
 		}
 		root = filepath.Dir(filepath.Dir(executable))
 	}
-	return filepath.Join(root, ".claude", "hooks", "orchestrator", "maintenance_reports.py")
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	return filepath.Join(root, "bin", "purser-hook-"+runtime.GOOS+"-"+runtime.GOARCH+suffix)
 }
 
 func lifecycleGuidance(state map[string]any) string {
@@ -1249,12 +1253,7 @@ func lifecycleGuidance(state map[string]any) string {
 	if pending, ok := state["maintenance_pending"].(map[string]any); ok && pending["delivered"] != true && pending["blocked"] != true {
 		if noticeFile, fileOK := pending["notice_file"].(string); fileOK {
 			if text, textOK := pending["text"].(string); textOK {
-				python, err := exec.LookPath("python")
-				if err == nil {
-					python, _ = filepath.Abs(python)
-				}
-				script := maintenanceScriptPath()
-				cli := `"` + python + `" "` + script + `"`
+				cli := `"` + maintenanceCommandPath() + `" maintenance`
 				if !strings.HasSuffix(noticeFile, "consent.json") {
 					parts = append(parts, promptMaintenanceGuidance(pending))
 				} else {

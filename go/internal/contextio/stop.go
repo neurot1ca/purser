@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -443,11 +442,7 @@ func markFallbackShown(project, session string) {
 }
 
 func maintenanceGuidance(p map[string]any) string {
-	python := "python"
-	if command, err := exec.LookPath("python"); err == nil {
-		python, _ = filepath.Abs(command)
-	}
-	cli := `"` + python + `" "` + maintenanceScriptPath() + `"`
+	cli := `"` + maintenanceCommandPath() + `" maintenance`
 	if strings.HasSuffix(str(p["notice_file"]), "consent.json") {
 		return "Render the maintenance API-cost consent question below in the user's language, translating from the English text and preserving ⚓ and bold. If the user says yes, run `" + cli + ` consent yes --repo "<repository-root>"` + "`; if no, run `" + cli + ` consent no --repo "<repository-root>"` + "`. Do not infer consent.\n" + str(p["text"])
 	}

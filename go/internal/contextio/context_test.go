@@ -393,32 +393,31 @@ func TestMaintenanceConsentUsesPluginRoot(t *testing.T) {
 		t.Fatal("plugin and project roots must differ")
 	}
 	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
-	python, err := exec.LookPath("python")
-	if err != nil {
-		t.Skip("python is not on PATH")
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
 	}
-	python, _ = filepath.Abs(python)
-	pluginScript := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "maintenance_reports.py")
-	projectScript := filepath.Join(projectRoot, ".claude", "hooks", "orchestrator", "maintenance_reports.py")
+	pluginCommand := filepath.Join(pluginRoot, "bin", "purser-hook-"+runtime.GOOS+"-"+runtime.GOARCH+suffix)
+	projectCommand := filepath.Join(projectRoot, "bin", "purser-hook-"+runtime.GOOS+"-"+runtime.GOARCH+suffix)
 	state := map[string]any{"maintenance_pending": map[string]any{
 		"notice_file": filepath.Join(projectRoot, "maintenance", "consent.json"),
 		"text":        "> ⚓ **Run it?**",
 	}}
 	got := lifecycleGuidance(state)
-	if !strings.Contains(got, `"`+python+`" "`+pluginScript+`"`) {
-		t.Fatalf("maintenance CLI did not use plugin script path %q: %s", pluginScript, got)
+	if !strings.Contains(got, `"`+pluginCommand+`" maintenance`) {
+		t.Fatalf("maintenance CLI did not use plugin command path %q: %s", pluginCommand, got)
 	}
-	if strings.Contains(got, projectScript) {
-		t.Fatalf("maintenance CLI used project script path %q: %s", projectScript, got)
+	if strings.Contains(got, projectCommand) {
+		t.Fatalf("maintenance CLI used project command path %q: %s", projectCommand, got)
 	}
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	fallback := filepath.Join(filepath.Dir(filepath.Dir(executable)), ".claude", "hooks", "orchestrator", "maintenance_reports.py")
-	if got := maintenanceScriptPath(); got != fallback {
-		t.Fatalf("maintenance script fallback = %q, want %q", got, fallback)
+	fallback := filepath.Join(filepath.Dir(filepath.Dir(executable)), "bin", "purser-hook-"+runtime.GOOS+"-"+runtime.GOARCH+suffix)
+	if got := maintenanceCommandPath(); got != fallback {
+		t.Fatalf("maintenance command fallback = %q, want %q", got, fallback)
 	}
 }
 
