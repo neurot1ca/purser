@@ -25,20 +25,27 @@ const findingsStart = "```purser-findings-json"
 
 var findingPathLine = regexp.MustCompile(`^(.+?):([0-9]+)$`)
 
-// BuildReportPrompt returns the Python maintenance worker prompt verbatim,
-// with only the canonical repository path substituted.
+// BuildReportPrompt returns the maintenance worker prompt verbatim, with only
+// the canonical repository path substituted.
 func BuildReportPrompt(repository, reportType string) (string, error) {
 	switch reportType {
 	case "cleanup":
 		return fmt.Sprintf("Produce a cleanup report for the repository at %s.\n"+
 			"This is a strictly read-only inspection. Do not edit files, create repository files,\n"+
-			"install tools, or run package managers. Report only evidence-backed candidates.\n"+
-			"For every item include (1) exact tool output or search evidence, (2) repository\n"+
-			"path and symbol, and (3) checks against entry points, hooks, and dynamic/reflection\n"+
-			"use before calling it unused. If vulture is available, use its installed version;\n"+
-			"otherwise state that vulture is unavailable and use grep-based searches, explaining\n"+
-			"that grep can miss indirect or dynamic use. Never install any tool. Include the\n"+
-			"commands/searches used and distinguish uncertain candidates from confirmed facts.\n"+
+			"install tools, or run package managers. Detect languages from `git ls-files -co --exclude-standard`\n"+
+			"extensions, go.mod, package.json, Cargo.toml, pyproject.toml/setup.cfg, and shebangs.\n"+
+			"Use only locally resolved, already-installed tools; never\n"+
+			"download tools, dependencies, or toolchains (including npx fetches, `go run\n"+
+			"pkg@version`, or `cargo install`). Report only evidence-backed candidates.\n"+
+			"For Go use deadcode, else staticcheck -checks U1000; TS/JS use project-local knip\n"+
+			"or ts-prune; Rust use compiler dead_code warnings (`cargo check --offline` only if\n"+
+			"it needs no download); Python use vulture. Other languages use an existing configured\n"+
+			"analyzer. If none is usable, use search evidence and state its limits for that language.\n"+
+			"Include a compact per-language scope table: language, file count, tool+version or\n"+
+			"search-only/not-scanned, command, and limitation. For each item include exact tool\n"+
+			"output or search evidence, repository path and symbol, and checks against entry points,\n"+
+			"hooks, and dynamic/reflection use before calling it unused. Include commands/searches\n"+
+			"and distinguish uncertain candidates from confirmed facts.\n"+
 			"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n"+
 			"continue consuming resources once it needs the machine. End your report with this\n"+
 			"machine-readable list, using one object per finding and an empty list for no findings:\n"+
@@ -48,23 +55,31 @@ func BuildReportPrompt(repository, reportType string) (string, error) {
 	case "test-gaps":
 		return fmt.Sprintf("Produce a test-gaps report for the repository at %s.\n"+
 			"This is a strictly read-only inspection. Do not edit files, create repository files,\n"+
-			"install tools, or run package managers. Report only evidence-bound candidate tests.\n"+
+			"install tools, or run package managers. Detect languages from `git ls-files -co --exclude-standard`\n"+
+			"extensions, go.mod, package.json, Cargo.toml, pyproject.toml/setup.cfg, and shebangs.\n"+
+			"Use only locally resolved, already-installed tools; never\n"+
+			"download tools, dependencies, toolchains, or coverage providers (including npx\n"+
+			"fetches, `go run pkg@version`, or `cargo install`). Report only evidence-bound tests.\n"+
 			"For each candidate, give the target path:line and symbol, the untested behaviour,\n"+
 			"evidence from source, the exact command used to search existing tests and its result\n"+
 			"showing no test already covers that behaviour, and a high, medium, or low confidence\n"+
 			"level. Include a compact contract evidence section covering documented requirements,\n"+
 			"invariants, boundaries, and affected callers, cite each item to a source path:line,\n"+
 			"and write \"unknown\" where evidence is absent.\n"+
-			"Check whether a coverage tool is already available in this project's environment.\n"+
-			"For Python coverage, if `python -m coverage --version` succeeds, run\n"+
-			"`python -m coverage report --format=total`; report its total line coverage as a\n"+
-			"number and include that exact command. Use an existing configured command for other\n"+
-			"available coverage tools. If no usable coverage tool or coverage data is available,\n"+
-			"report coverage as unknown. Never install anything.\n"+
+			"Measure each language with existing local tools/data: Go existing coverprofile or\n"+
+			"`go test -cover` (statement coverage); TS/JS configured jest, vitest, or c8 coverage;\n"+
+			"Rust installed cargo llvm-cov or tarpaulin; Python existing data via `python -m\n"+
+			"coverage report`; others an existing configured command/artifact. Never fetch a tool,\n"+
+			"provider, or dependency. If unavailable, use search evidence and state its limits.\n"+
+			"Include a compact per-language scope table: language, file count, tool+version or search-only/\n"+
+			"not-scanned, command, limitation. State coverage per language and overall against a\n"+
+			"90%% line-coverage target; order candidate tests by how much uncovered code they\n"+
+			"exercise. line_coverage_pct is the overall number or null if any detected language\n"+
+			"lacks a measurement.\n"+
 			"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n"+
 			"continue consuming resources once it needs the machine. End with one JSON object in\n"+
 			"this machine-readable block. Findings use the cleanup shape; line_coverage_pct must\n"+
-			"be a number or null:\n"+
+			"be the overall percentage or null:\n"+
 			"```purser-findings-json\n"+
 			"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n"+
 			"```\n", repository), nil
