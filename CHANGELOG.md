@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.87 — 2026-10-08
+
+- **Added:** Claude can be the primary coder and planner; each tier (Haiku, Sonnet, Opus) always runs its newest model, and `/purser:init` sets it up.
+- **Changed:** New jobs and Reviewer-1 run the newest model of the configured family from local caches; a newer model is reported once instead of asking, and the adopt/decline model flags are gone.
+- **Added:** A new implementation call with five or more non-test scope paths or a consequential/escalated route is sent to `/purser:plan` first, unless it belongs to a completed plan.
+- **Changed:** The `/purser:init` intro mentions parallel worktree jobs with queueing and plans offered when a task needs one.
+
 ## 0.1.86 — 2026-10-07
 
 - **Changed:** `/purser:init` runs in Go with the same detection, plan and model-version decisions.
