@@ -5,7 +5,10 @@
 export const DEFAULT_THRESHOLD = 250_000
 const RETRY_DELAYS_MS = [1_000, 3_000, 10_000]
 
+const LOG_LINES = 40
+
 let inFlight = false
+let lines: string[] = []
 
 export function thresholdFrom(value: string | undefined): number | undefined {
   if (value === '0' || value?.toLowerCase() === 'off') return undefined
@@ -13,27 +16,39 @@ export function thresholdFrom(value: string | undefined): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_THRESHOLD
 }
 
+// The only durable trace: the last LOG_LINES decisions in ~/.claude/purser/auto-compact.log
+// (fs.write replaces the file), because $.ui.log shows nothing when a hook runs late.
+async function trace($, text: string) {
+  try {
+    const stamp = new Date(await $.clock.now()).toISOString()
+    lines = [...lines, `${stamp} ${text}`].slice(-LOG_LINES)
+    const os = await $.env.get('OS')
+    const home = os === 'Windows_NT' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
+    if (home) await $.fs.write(`${home}/.claude/purser/auto-compact.log`, `${lines.join('\n')}\n`)
+  } catch { /* logging must not affect the turn */ }
+}
+
 async function log($, text: string) {
-  try { await $.ui.log(`Purser auto-compact: ${text}`) } catch { /* logging must not affect the turn */ }
+  await trace($, text)
+  try { await $.ui.log(`Purser auto-compact: ${text}`) } catch { /* as above */ }
 }
 
 // compact rejects while a turn runs; the turn that just completed may still be
-// winding down, so wait briefly and retry a few times.
-async function compactWhenIdle($, tokens: number) {
-  try {
-    for (const delay of RETRY_DELAYS_MS) {
-      await $.clock.sleep(delay)
-      try {
-        const result = await $.session.compact()
-        await log($, result?.skip ? `skipped at ${tokens} tokens: ${result.skip}` : `compacted at ${tokens} tokens`)
-        return
-      } catch (error) {
-        await log($, `attempt failed at ${tokens} tokens: ${String(error)}`)
-      }
+// winding down, so retry a few times. Each attempt is a clock.after timer, not a
+// sleep inside the hook: a timer outlives the turn.complete dispatch, a detached
+// promise does not.
+function compactWhenIdle($, tokens: number, attempt = 0) {
+  $.clock.after(RETRY_DELAYS_MS[attempt]!, async () => {
+    try {
+      const result = await $.session.compact()
+      await log($, result?.skip ? `skipped at ${tokens} tokens: ${result.skip}` : `compacted at ${tokens} tokens`)
+      inFlight = false
+    } catch (error) {
+      await log($, `attempt ${attempt + 1} failed at ${tokens} tokens: ${String(error)}`)
+      if (attempt + 1 < RETRY_DELAYS_MS.length) compactWhenIdle($, tokens, attempt + 1)
+      else inFlight = false
     }
-  } finally {
-    inFlight = false
-  }
+  })
 }
 
 export function registerAutoCompact(on) {
@@ -44,9 +59,11 @@ export function registerAutoCompact(on) {
       const threshold = thresholdFrom(await $.env.get('PURSER_AUTO_COMPACT_TOKENS'))
       if (threshold === undefined) return result
       const tokens = (await $.session.usage()).context.tokens
-      if (tokens === undefined || tokens < threshold) return result
+      const compacting = tokens !== undefined && tokens >= threshold
+      await trace($, `turn ${e.turnId}: ${tokens ?? 'no'} tokens, threshold ${threshold}, ${compacting ? 'compacting' : 'below'}`)
+      if (!compacting) return result
       inFlight = true
-      compactWhenIdle($, tokens).catch(() => { inFlight = false })
+      compactWhenIdle($, tokens)
     } catch (error) {
       inFlight = false
       await log($, `check failed: ${String(error)}`)
