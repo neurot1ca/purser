@@ -3,6 +3,16 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.95 — 2026-10-08
+
+- **Fixed:** Purser's state folder no longer grows without bound: finished job worktrees and preparations are removed after 7 days, and the folder is capped at 2 GiB.
+- **Fixed:** An accepted OpenCode job counts as accepted, so shadow sampling of other models starts.
+- **Changed:** The Codex quota popup shows only the quota line; apply guidance goes to the model instead.
+- **Changed:** Implementation and plan prompts carry the in-scope code map excerpt instead of a path.
+- **Changed:** Plan jobs get the required plan shape from Purser; plans without it are flagged.
+- **Changed:** Maintenance reports scan every project language with its installed tools; the coverage target is configurable (`[maintenance] coverage_target_pct`, default 90).
+- **Changed:** The auto-compact wake message shows how much cheaper later messages are.
+
 ## 0.1.94 — 2026-10-08
 
 - **Fixed:** Mechanical OpenCode jobs start again; `PURSER_CODEX_BIN` applies only to Codex.
