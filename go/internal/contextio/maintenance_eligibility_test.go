@@ -134,6 +134,43 @@ func TestMaintenanceEligibilityNonNumericCompletionIsNotDue(t *testing.T) {
 	}
 }
 
+func TestMaintenanceEligibilityTimingBoundaries(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	repo, state := t.TempDir(), t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	root, err := canonicalMaintenanceRoot(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance := filepath.Join(state, "projects", ProjectKey(root), "maintenance")
+	writeMaintenanceFixture(t, filepath.Join(maintenance, "opt-in.json"), map[string]any{"project_root": root, "enabled": true})
+	quota := map[string]any{"snapshot_at": now.Format(time.RFC3339Nano), "5h_used_pct": float64(1), "5h_resets_at": "cycle-a"}
+
+	for _, tc := range []struct {
+		name         string
+		activityAge  time.Duration
+		runAge       time.Duration
+		wantEligible bool
+		wantReason   string
+	}{
+		{name: "quiet period at 4m59s", activityAge: 4*time.Minute + 59*time.Second, runAge: 56 * time.Hour, wantReason: "quiet_period"},
+		{name: "quiet period at 5m", activityAge: 5 * time.Minute, runAge: 56 * time.Hour, wantEligible: true, wantReason: "eligible"},
+		{name: "cadence at 56h", activityAge: 5 * time.Minute, runAge: 56 * time.Hour, wantEligible: true, wantReason: "eligible"},
+		{name: "recent run refused", activityAge: 5 * time.Minute, runAge: 56*time.Hour - time.Second, wantReason: "cadence"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeMaintenanceFixture(t, filepath.Join(maintenance, "last-activity.json"), map[string]any{"at": float64(now.Add(-tc.activityAge).Unix())})
+			writeMaintenanceFixture(t, filepath.Join(maintenance, "last-run.json"), map[string]any{"completed_at": float64(now.Add(-tc.runAge).Unix())})
+			result := MaintenanceEligible(root, state, now, quota, "cleanup")
+			if result.Eligible != tc.wantEligible || result.Reason != tc.wantReason {
+				t.Fatalf("eligibility = (%v, %q), want (%v, %q)", result.Eligible, result.Reason, tc.wantEligible, tc.wantReason)
+			}
+		})
+	}
+}
+
 func TestCanonicalMaintenanceRootUsesResolvedPath(t *testing.T) {
 	repo := t.TempDir()
 	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {

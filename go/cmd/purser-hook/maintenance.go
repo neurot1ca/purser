@@ -109,7 +109,7 @@ func maintenanceMain(args []string) int {
 	if command == "check" {
 		root, err := maintenance.CanonicalRepository(repo)
 		if err == nil {
-			_, err = maintenance.DelayedCheck(root, state, 15*time.Minute, time.Now(), maintenance.LatestQuota(time.Now()), maintenance.Runner{Jobs: maintenanceJobs{}})
+			_, err = maintenance.DelayedCheck(root, state, 5*time.Minute, time.Now(), maintenance.LatestQuota(time.Now()), maintenance.Runner{Jobs: maintenanceJobs{}})
 		}
 		if errors.Is(err, os.ErrExist) {
 			return 0

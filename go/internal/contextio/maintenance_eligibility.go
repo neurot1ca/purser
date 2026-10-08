@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	maintenanceQuietPeriod = 15 * time.Minute
-	maintenanceCadence     = 7 * 24 * time.Hour
+	maintenanceQuietPeriod = 5 * time.Minute
+	maintenanceCadence     = 56 * time.Hour
 	maintenanceMaxQuota    = 50.0
 	maintenanceQuotaAge    = 30 * time.Minute
 )

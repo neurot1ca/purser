@@ -187,7 +187,7 @@ func Control(state, command, repository, decision, report string, acted []string
 // DelayedCheck is the detached SessionStart worker. It scans enabled projects,
 // honors the requested project, then chooses its oldest due report type.
 func DelayedCheck(repository, state string, delay time.Duration, now time.Time, quota map[string]any, runner Runner) (string, error) {
-	checkSleep(minDuration(maxDuration(delay, 0), 15*time.Minute))
+	checkSleep(minDuration(maxDuration(delay, 0), 5*time.Minute))
 	root, err := CanonicalRepository(repository)
 	if err != nil {
 		return "", err
