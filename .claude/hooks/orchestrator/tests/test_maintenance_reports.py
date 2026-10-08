@@ -149,6 +149,52 @@ def test_report_is_atomically_persisted_with_source_and_tool_header(project, mon
     assert not list(report.parent.glob("*.tmp"))
 
 
+def test_report_layer_oracle_capture_prompts_parsing_and_persistence(project, monkeypatch):
+    """Capture Python's pass-5 report contract without starting a real job."""
+    state = _state(project)
+    maintenance_reports.opt_in(project, state=state)
+    monkeypatch.setattr(maintenance_reports, "_tool_info", lambda: (
+        "vulture: unavailable", "Vulture unavailable; grep-based search only."))
+    good = ('Report.\n```purser-findings-json\n'
+            '{"findings":[{"path_line":"module.py:1","symbol":"unused","evidence":"source",'
+            '"confidence":"low"},{"path_line":"module.py:2","symbol":"other","evidence":"test search",'
+            '"confidence":"high"}],"line_coverage_pct":73.5}\n```')
+    cleanup_server = FakeServer(state, {"state": "SUCCEEDED", "content": "No candidates."})
+    cleanup_report = maintenance_reports.run_cleanup(project, state=state, server=cleanup_server)
+    cleanup_prompt = cleanup_server.args["prompt"]
+    (cleanup_server.job_dir / ("a" * 64 + ".json")).write_text(
+        json.dumps({"jobId": "a" * 64, "state": "SUCCEEDED", "jobPhase": "operation"}), encoding="utf-8")
+    gaps_server = cleanup_server
+    gaps_server.result = {"state": "SUCCEEDED", "content": good, "usage": {"total_tokens": 21}}
+    gaps_report = maintenance_reports.run_test_gaps(project, state=state, server=gaps_server)
+    assert "Produce a cleanup report for the repository at " + str(project.resolve()) in cleanup_prompt
+    assert "Produce a test-gaps report for the repository at " + str(project.resolve()) in gaps_server.args["prompt"]
+    assert cleanup_prompt.endswith('```purser-findings-json\n[{"path_line":"relative/path.py:12","symbol":"name","evidence":"short evidence","confidence":"high|medium|low"}]\n```\n')
+    assert gaps_server.args["prompt"].endswith('```purser-findings-json\n{"findings":[{"path_line":"relative/path.py:12","symbol":"name","evidence":"source evidence; untested behaviour; test search command and no-match result","confidence":"high|medium|low"}],"line_coverage_pct":null}\n```\n')
+    assert maintenance_reports.parse_findings(good)[0]["confidence"] == "high"
+    assert maintenance_reports.parse_findings('```purser-findings-json\n[]\n```') == []
+    assert maintenance_reports.parse_findings('```purser-findings-json\n{bad}\n```') is None
+    partial = '```purser-findings-json\n{"findings":[],"line_coverage_pct":101}\n```'
+    assert maintenance_reports.parse_findings(partial) is None
+    assert maintenance_reports._line_coverage(partial) is None
+    success = json.loads(gaps_report.with_suffix(".notice.json").read_text(encoding="utf-8"))
+    assert success["finding_count"] == 2 and success["line_coverage_pct"] == 73.5
+    assert (gaps_report.parent / "last-run.json").is_file()
+    assert "- Findings: 2" in gaps_report.read_text(encoding="utf-8")
+    assert cleanup_report.is_file()
+    # Reuse the fake backend guard: a failed terminal response cannot reach _start_job.
+    (gaps_server.job_dir / ("a" * 64 + ".json")).write_text(
+        json.dumps({"jobId": "a" * 64, "state": "SUCCEEDED", "jobPhase": "operation"}), encoding="utf-8")
+    failure_server = gaps_server
+    failure_server.result = {"state": "FAILED", "errorCode": "CODEX_FAILED", "message": "worker failed"}
+    with pytest.raises(RuntimeError, match="Codex job FAILED"):
+        maintenance_reports.run_cleanup(project, state=state, server=failure_server)
+    failures = list((cleanup_report.parent / "failures").glob("*.json"))
+    failure = json.loads(failures[-1].read_text(encoding="utf-8"))
+    assert failure["state"] == "FAILED" and failure["job_id"] == "a" * 64
+    assert failure["cost"]["tokens"] == "unknown"
+
+
 def test_report_completion_and_mark_done_emit_valid_telemetry(project, monkeypatch):
     state = _state(project)
     maintenance_reports.opt_in(project, state=state)

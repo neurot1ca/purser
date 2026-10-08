@@ -1260,7 +1260,7 @@ func fields(names string) map[string]bool {
 var (
 	callObservationFields  = fields("phase route model model_source effort routing_enforced fresh_thread reply_call reason reason_source previous_route new_route eta_minutes worker_prompt_chars scope_path_count task_type suspected_route_mismatch agent provider")
 	startObservationFields = fields("implementer claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
-	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CODEX_RESULT_UNFETCHED": fields("route code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source reviewer1_valid_count reviewer1_false_count"), "READINESS_CHECK_OUTCOME": fields("verdict agent duration_ms"), "PLAN_REDIRECT": fields("route non_test_scope_count")}
+	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CODEX_RESULT_UNFETCHED": fields("route code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source reviewer1_valid_count reviewer1_false_count"), "READINESS_CHECK_OUTCOME": fields("verdict agent duration_ms"), "PLAN_REDIRECT": fields("route non_test_scope_count"), "MAINTENANCE_REPORT_FINISHED": fields("report_id report_type outcome reason_code elapsed_seconds quota_change_active_window_pct findings_high_count findings_medium_count findings_low_count line_coverage_pct")}
 	observationID          = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	observationUUID        = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	unsafeObservationID    = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -2058,6 +2058,11 @@ func init() {
 	setObservationRule("time", "claude_usage_captured_at claude_5h_resets_at claude_7d_resets_at")
 	setObservationRule("scope", "claude_rate_limit_delta_scope")
 	setObservationRule("evidence", "reviewer_stdout reviewer_stderr reviewer_exit reviewer_parse_error")
+	setObservationRule("id", "report_id reason_code")
+	setObservationRule("enum:cleanup test-gaps", "report_type")
+	setObservationRule("enum:completed failed yielded", "outcome")
+	setObservationRule("int", "findings_high_count findings_medium_count findings_low_count")
+	setObservationRule("number", "elapsed_seconds quota_change_active_window_pct line_coverage_pct")
 }
 
 func setObservationRule(rule, names string) {
@@ -2094,6 +2099,20 @@ func buildObservation(eventType string, envelope, payload map[string]any, taskID
 	return buildObservationAtStateRoot(eventType, envelope, payload, taskID, "")
 }
 
+// EmitMaintenanceReportObservation routes maintenance telemetry through the
+// same observation schema, locking, spool, and append writer as hook events.
+func EmitMaintenanceReportObservation(stateRoot, repository, eventType string, payload map[string]any) error {
+	project := contextio.ProjectKey(repository)
+	event, err := buildObservationAtStateRoot(eventType, map[string]any{
+		"project_key": project,
+	}, payload, nil, stateRoot)
+	if err != nil {
+		return err
+	}
+	_, err = persistObservation(filepath.Join(stateRoot, "telemetry"), event)
+	return err
+}
+
 func buildObservationAtStateRoot(eventType string, envelope, payload map[string]any, taskID any, stateRoot string) (map[string]any, error) {
 	allowed, ok := observationFields[eventType]
 	if !ok {
@@ -2117,7 +2136,7 @@ func buildObservationAtStateRoot(eventType string, envelope, payload map[string]
 		if !allowed[name] {
 			return nil, fmt.Errorf("telemetry payload contains an unregistered field")
 		}
-		if value == nil && name != "eta_minutes" {
+		if value == nil && name != "eta_minutes" && !(eventType == "MAINTENANCE_REPORT_FINISHED" && (name == "quota_change_active_window_pct" || name == "findings_high_count" || name == "findings_medium_count" || name == "findings_low_count" || name == "line_coverage_pct")) {
 			continue
 		}
 		if err := validateObservationValue(name, value); err != nil {
@@ -2182,6 +2201,8 @@ func validateObservationValue(name string, value any) error {
 	rule := observationRules[name]
 	valid := false
 	switch {
+	case name == "quota_change_active_window_pct" || name == "findings_high_count" || name == "findings_medium_count" || name == "findings_low_count" || name == "line_coverage_pct":
+		valid = value == nil || (name == "findings_high_count" || name == "findings_medium_count" || name == "findings_low_count") && validNumber(value, true) || (name == "quota_change_active_window_pct" || name == "line_coverage_pct") && validNumber(value, false)
 	case name == "reviewer1_retry_count":
 		valid = validNumber(value, true) && oneOfNumeric(value, 0, 1)
 	case rule == "bool":

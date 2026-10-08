@@ -119,10 +119,16 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 		result := structured(r.Jobs.Result(state, jobID))
 		status := stringValue(result["state"], "")
 		if status == "SUCCEEDED" {
+			if result["jobId"] == nil {
+				result["jobId"] = jobID
+			}
 			return result, nil
 		}
 		if terminal(status, true) {
-			return nil, fmt.Errorf("Codex job %s: %s %s", status, stringValue(result["errorCode"], ""), stringValue(result["message"], ""))
+			if result["jobId"] == nil {
+				result["jobId"] = jobID
+			}
+			return result, fmt.Errorf("Codex job %s: %s %s", status, stringValue(result["errorCode"], ""), stringValue(result["message"], ""))
 		}
 		sleep(poll)
 	}
