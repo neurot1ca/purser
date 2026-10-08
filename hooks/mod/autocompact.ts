@@ -38,6 +38,29 @@ async function log($, text: string) {
   try { await $.ui.log(`Purser auto-compact: ${text}`) } catch { /* as above */ }
 }
 
+export function resumeMessage(before: number, after: number | undefined): string {
+  const saving = after !== undefined && after < before ? Math.round((1 - after / before) * 100) : undefined
+  return [
+    `> ⚓ **Context passed ${Math.floor(before / 1000)}K. Purser compacted the conversation.**`,
+    ...(saving !== undefined ? [`> *Every later message is now **~${saving}%** cheaper.*`] : []),
+    '> *The ship stays dry: decisions and the next step were carried over from the handoff Purser prepared. Nothing is lost.*',
+    '> *Continue the task in progress; if nothing was in progress, reply with one line.*',
+  ].join('\n')
+}
+
+// /compact leaves the session idle, so wake it: the next turn carries on with
+// the work that was running.
+async function resume($, before: number) {
+  try {
+    let after: number | undefined
+    try { after = (await $.session.usage()).context.tokens } catch { /* message without the saving */ }
+    await $.prompt.submit({ text: resumeMessage(before, after) })
+    await trace($, `resumed after compact (${after ?? 'unknown'} tokens)`)
+  } catch (error) {
+    await log($, `resume failed: ${String(error)}`)
+  }
+}
+
 // compact rejects while a turn runs; the turn that just completed may still be
 // winding down, so retry a few times. Each attempt is a clock.after timer, not a
 // sleep inside the hook: a timer outlives the turn.complete dispatch, a detached
@@ -55,7 +78,10 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
       // retrying a call that cannot succeed.
       if (needsCompactPrompt(error)) {
         $.command.run({ command: 'compact' }).then(
-          () => log($, `ran /compact at ${tokens} tokens`),
+          async () => {
+            await log($, `ran /compact at ${tokens} tokens`)
+            await resume($, tokens)
+          },
           (runError) => log($, `/compact failed at ${tokens} tokens: ${String(runError)}`),
         ).finally(() => { inFlight = false })
       } else if (attempt + 1 < RETRY_DELAYS_MS.length) compactWhenIdle($, tokens, attempt + 1)

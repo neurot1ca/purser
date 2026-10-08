@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { DEFAULT_THRESHOLD, needsCompactPrompt, thresholdFrom } from './autocompact.js'
+import { DEFAULT_THRESHOLD, needsCompactPrompt, resumeMessage, thresholdFrom } from './autocompact.js'
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 
@@ -85,4 +85,12 @@ test('writes each main turn decision to the auto-compact log', async ($, on) => 
 test('recognises the SDK-host refusal that needs a /compact prompt', () => {
   expect(needsCompactPrompt(new Error('HooksError: purser: $.session.compact: not available in a headless (-p / SDK) session yet'))).toBe(true)
   expect(needsCompactPrompt(new Error('a turn is running'))).toBe(false)
+})
+
+test('resume message reports the measured saving and asks the model to continue', () => {
+  const text = resumeMessage(415_943, 83_000)
+  expect(text).toContain('Context passed 415K. Purser compacted the conversation.')
+  expect(text).toContain('**~80%** cheaper')
+  expect(text).toContain('Continue the task in progress')
+  expect(resumeMessage(415_943, undefined)).not.toContain('cheaper')
 })
