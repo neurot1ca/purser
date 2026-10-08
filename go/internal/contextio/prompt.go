@@ -35,7 +35,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 			markFallbackAnswerable(repository, session)
 			advice := compactionAdvice(event, repository, statePath, session)
 			retry := promptRetryContext(statePath, session)
-			languageLine, injectPlan := contextInjections(statePath, session, language, planningHint(event["prompt"]))
+			languageLine, injectPlan := contextInjections(statePath, session, language, planningHint(event["prompt"]), true)
 			planLine := ""
 			if injectPlan {
 				planLine = "The user mentioned planning; offer /purser:plan once in this session if you have not already."
@@ -144,18 +144,50 @@ func recordPromptTurn(event map[string]any, processStart time.Time) {
 	markContention(contention)
 }
 
-func contextInjections(statePath, session, language string, planning bool) (string, bool) {
+// ImplementationPlanOffer uses the same session counter as prompt-triggered offers.
+func ImplementationPlanOffer(root, project, session, task, route string, scope []string) string {
+	// Four declared paths or a consequential/escalated route warrants an offer.
+	// Accepted plan milestones use <plan-task>-m<N>of<T>, as in commands/plan.md.
+	if session == "" || planTask.MatchString(task) || (len(scope) < 4 && route != "consequential" && route != "escalated") {
+		return ""
+	}
+	path := filepath.Join(root, "projects", project, "telemetry", "compaction_advisor.json")
+	_, offer := contextInjections(path, session, "", true, false)
+	if offer {
+		return "This task looks large enough for a plan; offer /purser:plan once in this session if you have not already."
+	}
+	return ""
+}
+
+func contextInjections(statePath, session, language string, planning, promptTurn bool) (string, bool) {
+	if os.MkdirAll(filepath.Dir(statePath), 0700) != nil {
+		return "", false
+	}
+	lock, err := os.OpenFile(statePath+".injections.lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return "", false
+	}
+	defer lock.Close()
+	if tryLock(lock) != nil {
+		return "", false
+	}
+	defer unlock(lock)
 	instruction := languageInstruction(language)
 	state := readAdvisorState(statePath, session)
-	count := number(state["context_prompt_count"]) + 1
-	state["context_prompt_count"] = count
-	previous, _ := state["last_context_language"].(string)
-	current := nullableLanguage(language)
-	injectLanguage := instruction != "" && (state["language_after_reset"] == true || !strings.EqualFold(language, previous) || count%20 == 0)
-	state["language_after_reset"] = false
-	state["last_context_language"] = current
-	if injectLanguage {
-		state["language_injections"] = number(state["language_injections"]) + 1
+	if promptTurn {
+		count := number(state["context_prompt_count"]) + 1
+		state["context_prompt_count"] = count
+		previous, _ := state["last_context_language"].(string)
+		current := nullableLanguage(language)
+		injectLanguage := instruction != "" && (state["language_after_reset"] == true || !strings.EqualFold(language, previous) || count%20 == 0)
+		state["language_after_reset"] = false
+		state["last_context_language"] = current
+		if injectLanguage {
+			state["language_injections"] = number(state["language_injections"]) + 1
+		}
+		if !injectLanguage {
+			instruction = ""
+		}
 	}
 	injectPlan := planning && number(state["planning_injections"]) == 0
 	if injectPlan {
@@ -163,9 +195,6 @@ func contextInjections(statePath, session, language string, planning bool) (stri
 	}
 	if writeAdvisorState(statePath, state) != nil {
 		return instruction, false
-	}
-	if !injectLanguage {
-		instruction = ""
 	}
 	return instruction, injectPlan
 }

@@ -610,7 +610,13 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	}
 	pendingWritten = false
 	leased = false
-	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated},
+	hook := map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}
+	if !reply && phase == "implementation" && repository != nil {
+		if line := contextio.ImplementationPlanOffer(defaultPreStateRoot(runtimeRoot), project, stringValue(event["session_id"]), taskID, routeName, parsed.Scope); line != "" {
+			hook["additionalContext"] = line
+		}
+	}
+	return map[string]any{"hookSpecificOutput": hook,
 		"systemMessage": fmt.Sprintf("Purser: route=%s -> %s / %s", fallbackValue(routeName), fallbackValue(selection.Model), fallbackValue(selection.Effort))}, nil
 }
 
