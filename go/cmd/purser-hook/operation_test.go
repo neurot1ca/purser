@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/jobs"
 	"purser-hook/internal/testutil"
 	"runtime"
 	"strings"
@@ -119,18 +120,59 @@ func TestPrivateOperationRejectsUnknownAndMalformedInput(t *testing.T) {
 func TestCodexStartOpenCodeIgnoresEmptyCodexOverride(t *testing.T) {
 	t.Setenv("PURSER_AGENT", "")
 	t.Setenv("PURSER_CODEX_BIN", "")
+	fakeDir := t.TempDir()
+	fakeSource := filepath.Join(fakeDir, "main.go")
+	if err := os.WriteFile(fakeSource, []byte("package main\nfunc main() {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fakeAgent := filepath.Join(fakeDir, "opencode")
+	if runtime.GOOS == "windows" {
+		fakeAgent += ".exe"
+	}
+	build := testutil.Hide(exec.Command("go", "build", "-o", fakeAgent, fakeSource))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build fake OpenCode: %v\n%s", err, output)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	state := t.TempDir()
 	call := "123e4567-e89b-12d3-a456-426614174004"
 	args := map[string]any{
 		"agent": "opencode", "call": call, "config": map[string]any{}, "cwd": t.TempDir(),
 		"model": "provider/model", "prompt": "test",
 	}
-	result, err := dispatchOperation(t.Context(), "codex_start", args, state)
+	override := os.Getenv("PURSER_CODEX_BIN")
+	var codexBin any
+	if override != "" {
+		codexBin = override
+	}
+	result, _, err := jobs.Start(state, args, jobs.StartOptions{
+		CodexBin: codexBin,
+		Validation: jobs.StartValidationOptions{
+			Agent: os.Getenv("PURSER_AGENT"), FixedAgent: os.Getenv("PURSER_AGENT") != "",
+			ValidateAgent: func(agent string) error {
+				if agent == "codex" {
+					_, err := jobs.ResolveCodexPrefix(override)
+					return err
+				}
+				_, err := jobs.ResolveAgentPrefix(agent, nil)
+				return err
+			},
+		},
+		Launch: func(string, int64, string) error { return nil },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := sha256.Sum256([]byte(call))
-	launch, err := os.ReadFile(filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(id[:])+".launch"))
+	jobID := hex.EncodeToString(id[:])
+	structured, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("start result missing structured content: %#v", result)
+	}
+	if structured["errorCode"] == "INVALID_ARGUMENT" {
+		t.Fatalf("OpenCode start was rejected as an invalid argument: %#v", result)
+	}
+	launch, err := os.ReadFile(filepath.Join(state, "codex_exec_mcp", "jobs", jobID+".launch"))
 	if err != nil {
 		t.Fatalf("OpenCode launch record unavailable: result=%#v err=%v", result, err)
 	}
