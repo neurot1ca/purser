@@ -24,6 +24,77 @@ func putFile(t *testing.T, path string, data []byte, stamp int64) {
 
 func unixTime(seconds int64) time.Time { return time.Unix(seconds, 0) }
 
+func TestPluginCacheKeepsRunningAndNewestOtherVersion(t *testing.T) {
+	root := t.TempDir()
+	cache := filepath.Join(root, "marketplace", "purser")
+	for _, version := range []string{"1.0.0", "1.2.0", "1.1.9"} {
+		if err := os.MkdirAll(filepath.Join(cache, version), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	PrunePluginCache(filepath.Join(cache, "1.0.0", "bin", "purser.exe"))
+	for _, version := range []string{"1.0.0", "1.2.0"} {
+		if _, err := os.Stat(filepath.Join(cache, version)); err != nil {
+			t.Errorf("version %s was removed: %v", version, err)
+		}
+	}
+}
+
+func TestPluginCacheRemovesOlderVersions(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "market", "purser")
+	for _, version := range []string{"2.0.0", "1.9.9", "1.10.0"} {
+		if err := os.MkdirAll(filepath.Join(cache, version), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	PrunePluginCache(filepath.Join(cache, "2.0.0", "bin", "purser.exe"))
+	if _, err := os.Stat(filepath.Join(cache, "1.9.9")); !os.IsNotExist(err) {
+		t.Fatalf("old version remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "1.10.0")); err != nil {
+		t.Fatalf("newest rollback version was removed: %v", err)
+	}
+}
+
+func TestPluginCacheIgnoresNonSemverAndLinks(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "market", "purser")
+	for _, name := range []string{"current", "1.0", "1.0.0-beta", "2.0.0"} {
+		if err := os.MkdirAll(filepath.Join(cache, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := t.TempDir()
+	marker := filepath.Join(target, "keep")
+	if err := os.WriteFile(marker, []byte("safe"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(cache, "3.0.0")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	PrunePluginCache(filepath.Join(cache, "1.0.0", "bin", "purser.exe"))
+	for _, name := range []string{"current", "1.0", "1.0.0-beta", "3.0.0"} {
+		if _, err := os.Lstat(filepath.Join(cache, name)); err != nil {
+			t.Errorf("ignored entry %s changed: %v", name, err)
+		}
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "safe" {
+		t.Fatalf("symlink target changed: %q %v", data, err)
+	}
+}
+
+func TestPluginCacheSkipsNonPluginLayout(t *testing.T) {
+	root := t.TempDir()
+	for _, executable := range []string{
+		filepath.Join(root, "dev", "purser.exe"),
+		filepath.Join(root, "market", "not-purser", "1.0.0", "bin", "purser.exe"),
+	} {
+		PrunePluginCache(executable)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("non-plugin layout was modified: %v", err)
+	}
+}
+
 func TestAgePrunesExpiredAllowlistedFiles(t *testing.T) {
 	root := t.TempDir()
 	old := filepath.Join(root, "old.cache")

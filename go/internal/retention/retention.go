@@ -50,6 +50,105 @@ func aged(days, files int, bytes int64) policy {
 
 func byteLimit(bytes int64) policy { return policy{maxAgeDays: -1, maxFiles: -1, maxBytes: bytes} }
 
+func PrunePluginCache(executable string) {
+	executable, err := filepath.Abs(executable)
+	if err != nil || filepath.Base(filepath.Dir(executable)) != "bin" {
+		return
+	}
+	versionDir := filepath.Dir(filepath.Dir(executable))
+	running := filepath.Base(versionDir)
+	if !validPluginVersion(running) {
+		return
+	}
+	cache := filepath.Dir(versionDir)
+	if filepath.Base(cache) != "purser" || !safeRoot(cache) {
+		return
+	}
+	entries, err := os.ReadDir(cache)
+	if err != nil {
+		return
+	}
+	previous := ""
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == running || !validPluginVersion(name) {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil && info.IsDir() && !isReparseInfo(info) && (previous == "" || newerPluginVersion(name, previous)) {
+			previous = name
+		}
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == running || name == previous || !validPluginVersion(name) {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil && info.IsDir() && !isReparseInfo(info) {
+			_ = removePluginTree(filepath.Join(cache, name))
+		}
+	}
+}
+
+func removePluginTree(path string) bool {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	if isReparseInfo(info) || !info.IsDir() {
+		if !isReparseInfo(info) {
+			_ = os.Chmod(path, info.Mode().Perm()|0200)
+		}
+		return os.Remove(path) == nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !removePluginTree(filepath.Join(path, entry.Name())) {
+			return false
+		}
+	}
+	_ = os.Chmod(path, info.Mode().Perm()|0700)
+	return os.Remove(path) == nil
+}
+
+func validPluginVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || (len(part) > 1 && part[0] == '0') {
+			return false
+		}
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func newerPluginVersion(a, b string) bool {
+	left, right := strings.Split(a, "."), strings.Split(b, ".")
+	for i := range left {
+		if len(left[i]) != len(right[i]) {
+			return len(left[i]) > len(right[i])
+		}
+		if left[i] != right[i] {
+			return left[i] > right[i]
+		}
+	}
+	return false
+}
+
 var registry = map[string]policy{
 	"preparations":              bounded("preparations"),
 	"wt":                        bounded("worktrees"),
