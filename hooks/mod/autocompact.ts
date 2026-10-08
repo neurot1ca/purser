@@ -9,6 +9,9 @@ const LOG_LINES = 40
 
 let inFlight = false
 let lines: string[] = []
+// The size the last main-conversation compaction left, from its own result:
+// usage() cannot report it right after a /compact command.
+let compactedTokens: number | undefined
 
 export function thresholdFrom(value: string | undefined): number | undefined {
   if (value === '0' || value?.toLowerCase() === 'off') return undefined
@@ -53,8 +56,11 @@ export function resumeMessage(before: number, after: number | undefined): string
 // the work that was running.
 async function resume($, before: number) {
   try {
-    let after: number | undefined
-    try { after = (await $.session.usage()).context.tokens } catch { /* message without the saving */ }
+    let after = compactedTokens
+    compactedTokens = undefined
+    if (after === undefined) {
+      try { after = (await $.session.usage()).context.tokens } catch { /* message without the saving */ }
+    }
     await trace($, `submitting resume (${after ?? 'unknown'} tokens)`)
     await $.prompt.submit({ text: resumeMessage(before, after) })
     await trace($, `resumed after compact (${after ?? 'unknown'} tokens)`)
@@ -96,6 +102,11 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
 }
 
 export function registerAutoCompact(on) {
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (!e.agentId && e.trigger !== 'precompute' && result && 'tokensAfter' in result) compactedTokens = result.tokensAfter
+    return result
+  })
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId || e.isAborted || inFlight) return result
