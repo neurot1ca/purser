@@ -47,6 +47,4 @@ suffix=""; [ "$os" = windows ] && suffix=".exe"
 9. Run `/purser:check` and show its result.
 10. Offer `/purser:optimize` in one sentence; do not run it automatically.
 
-The plan shows the Python 3.11+ interpreter path that `--apply` stores in `~/.orchestrator/python` for plugin launches.
-
 Never edit `~/.orchestrator/config.toml` or `.orchestrator/profile.toml` by hand. If detection or planning fails, show the error and stop setup.

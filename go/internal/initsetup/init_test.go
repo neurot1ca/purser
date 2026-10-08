@@ -36,6 +36,12 @@ func TestClaudeCoderPlanAndApply(t *testing.T) {
 	if code := Run(&plan, &bytes.Buffer{}, []string{"--plan", "--coder", "claude", "--reviewer", "agy"}); code != 0 {
 		t.Fatalf("plan failed: %s", plan.String())
 	}
+	if strings.Contains(strings.ToLower(plan.String()), "python") {
+		t.Errorf("plan unexpectedly mentions Python:\n%s", plan.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".orchestrator", "python")); !os.IsNotExist(err) {
+		t.Errorf("plan unexpectedly created ~/.orchestrator/python (stat error: %v)", err)
+	}
 	for _, route := range []string{
 		"mechanical -> haiku / none", "subtle -> sonnet / medium", "normal -> sonnet / medium",
 		"consequential -> opus / high", "escalated -> opus / xhigh", "operation -> haiku / none",
@@ -53,8 +59,20 @@ func TestClaudeCoderPlanAndApply(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(prior), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	pythonPath := filepath.Join(home, ".orchestrator", "python")
+	pythonPrior := []byte("user-owned locator\r\nwith exact bytes\n")
+	if err := os.WriteFile(pythonPath, pythonPrior, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, []string{"--apply", "--coder", "claude", "--reviewer", "agy"}); code != 0 {
 		t.Fatal("apply failed")
+	}
+	pythonAfter, err := os.ReadFile(pythonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(pythonAfter, pythonPrior) {
+		t.Errorf("existing ~/.orchestrator/python changed: got %q, want %q", pythonAfter, pythonPrior)
 	}
 	loaded, err := policy.LoadCoderConfig(shippedConfig, configPath)
 	if err != nil {

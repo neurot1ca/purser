@@ -13,8 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -736,11 +734,6 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		scaffold = []byte(profileText(root))
 	}
 	handoff := filepath.Join(stateRootPath(), "projects", contextio.ProjectKey(root), "telemetry", "purser-handoff.md")
-	pythonFile := filepath.Join(home, ".orchestrator", "python")
-	pythonPath := pythonExecutable()
-	pythonContent := []byte(pythonPath + "\n")
-	pythonOld, _ := os.ReadFile(pythonFile)
-	pythonChange := len(pythonPath) > 0 && !bytes.Equal(pythonOld, pythonContent)
 	if o.plan {
 		planned := map[string]any{}
 		showRoutes := o.mode != "" || oneOf(o.coder, "opencode", "agy", "claude")
@@ -789,22 +782,16 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 				fmt.Fprintln(out, "Maintenance reports: disabled for this project")
 			}
 		}
-		if pythonPath != "" {
-			fmt.Fprintf(out, "Python locator: %s\n", pythonPath)
-		}
 		if !bytes.Equal(original, changed) {
 			fmt.Fprint(out, unifiedInitialDiff(configPath, string(original), string(changed)))
 		}
 		if scaffold != nil {
 			fmt.Fprintf(out, "Create %s:\n%s", profilePath, scaffold)
 		}
-		if pythonChange {
-			fmt.Fprint(out, unifiedInitialDiff(pythonFile, string(pythonOld), string(pythonContent)))
-		}
 		if !exists(handoff) {
 			fmt.Fprintf(out, "Create %s:\n%s", handoff, handoffTemplate)
 		}
-		if bytes.Equal(original, changed) && scaffold == nil && !pythonChange && exists(handoff) {
+		if bytes.Equal(original, changed) && scaffold == nil && exists(handoff) {
 			fmt.Fprintln(out, "No changes.")
 		}
 		return 0
@@ -824,14 +811,6 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	}
 	if scaffold != nil {
 		if e = atomicWrite(profilePath, scaffold, true); e != nil && !os.IsExist(e) {
-			return printError(errOut, e)
-		}
-	}
-	if pythonChange {
-		if now, _ := os.ReadFile(pythonFile); !bytes.Equal(now, pythonOld) {
-			return printError(errOut, errors.New("Python locator path changed during setup; run the plan again"))
-		}
-		if e = atomicWrite(pythonFile, pythonContent, false); e != nil {
 			return printError(errOut, e)
 		}
 	}
@@ -860,7 +839,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	if o.jsonOutput {
 		return writeIndented(out, map[string]any{"status": "applied", "handoff": handoff, "concise_style_offer_due": offerDue})
 	}
-	if !bytes.Equal(original, changed) || scaffold != nil || pythonChange || handoffCreated {
+	if !bytes.Equal(original, changed) || scaffold != nil || handoffCreated {
 		fmt.Fprintln(out, "Applied.")
 	} else {
 		fmt.Fprintln(out, "No changes.")
@@ -922,73 +901,6 @@ func stateRootPath() string {
 			return filepath.Clean(absolute)
 		}
 	}
-}
-func pythonExecutable() string {
-	for _, name := range []string{"python", "python3"} {
-		if p := executable(name); p != "" {
-			abs, e := filepath.Abs(p)
-			if e == nil {
-				abs = filepath.Clean(abs)
-				if usablePython(abs) {
-					if base := pythonBaseFromVenv(abs); base != "" && usablePython(base) {
-						return base
-					}
-					return abs
-				}
-			}
-		}
-	}
-	return ""
-}
-func usablePython(path string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "--version")
-	proc.ConfigureNoWindow(cmd)
-	raw, e := cmd.CombinedOutput()
-	if e != nil {
-		return false
-	}
-	match := regexp.MustCompile(`Python\s+(\d+)\.(\d+)`).FindStringSubmatch(string(raw))
-	if len(match) != 3 {
-		return false
-	}
-	major, _ := strconv.Atoi(match[1])
-	minor, _ := strconv.Atoi(match[2])
-	return major > 3 || major == 3 && minor >= 11
-}
-func pythonBaseFromVenv(active string) string {
-	base := filepath.Dir(filepath.Dir(active))
-	config, e := os.ReadFile(filepath.Join(base, "pyvenv.cfg"))
-	if e != nil {
-		return ""
-	}
-	home := ""
-	for _, line := range strings.Split(string(config), "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if ok && strings.EqualFold(strings.TrimSpace(key), "home") {
-			home = strings.TrimSpace(value)
-			break
-		}
-	}
-	if home == "" {
-		return ""
-	}
-	candidates := []string{}
-	if runtime.GOOS == "windows" {
-		candidates = append(candidates, filepath.Join(home, "python.exe"))
-	} else {
-		candidates = append(candidates, filepath.Join(home, "bin", "python3"), filepath.Join(home, "bin", "python"))
-	}
-	for _, candidate := range candidates {
-		if info, e := os.Stat(candidate); e == nil && !info.IsDir() {
-			if resolved, e := filepath.EvalSymlinks(candidate); e == nil {
-				return resolved
-			}
-			return candidate
-		}
-	}
-	return ""
 }
 func unifiedInitialDiff(path, before, after string) string {
 	if before == after {
