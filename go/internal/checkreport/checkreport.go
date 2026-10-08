@@ -58,8 +58,7 @@ func run(projectRoot, pluginRoot, home string) Report {
 	p := profile.LoadProfile(projectRoot, filepath.Join(home, ".orchestrator", "config.toml"))
 	checks := []Row{
 		runRow("Runtime", func() Row {
-			version := pluginVersion(pluginRoot)
-			return row("Runtime", "OK", "purser-hook "+version+" ("+runtimeGOOS+"/"+runtimeGOARCH+")", "")
+			return row("Runtime", "OK", RuntimeDetail(pluginRoot), "")
 		}),
 		runRow("Hook registration", func() Row { return checkRegistration(home) }),
 		runRow("Codex MCP", func() Row { return mcpCheck(home, pluginRoot) }),
@@ -507,3 +506,8 @@ func WriteJSON(writer io.Writer, report Report) error {
 
 // RuntimeTarget is supplied by the standard library and used for the Runtime row.
 var runtimeGOOS, runtimeGOARCH = runtime.GOOS, runtime.GOARCH
+
+// RuntimeDetail returns the detail shown by the Runtime row.
+func RuntimeDetail(pluginRoot string) string {
+	return "purser-hook " + pluginVersion(pluginRoot) + " (" + runtimeGOOS + "/" + runtimeGOARCH + ")"
+}

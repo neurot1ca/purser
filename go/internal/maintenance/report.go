@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/checkreport"
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 )
@@ -303,7 +304,7 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	if output, gitErr := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output(); gitErr == nil {
 		commit = strings.TrimSpace(string(output))
 	}
-	versions := []string{pythonVersion(), gitVersion(root)}
+	versions := []string{"Runtime: " + checkreport.RuntimeDetail(maintenancePluginRoot()), gitVersion(root)}
 	limitations := "Coverage availability and result are reported by the worker."
 	if reportType == "cleanup" {
 		versions = append(versions, vultureVersion())
@@ -484,13 +485,15 @@ func gitVersion(root string) string {
 	return "Git: unavailable"
 }
 
-func pythonVersion() string {
-	for _, name := range []string{"python", "python3"} {
-		if out, err := exec.Command(name, "--version").CombinedOutput(); err == nil {
-			return "Python: " + strings.TrimPrefix(strings.TrimSpace(string(out)), "Python ")
-		}
+func maintenancePluginRoot() string {
+	if root := os.Getenv("CLAUDE_PLUGIN_ROOT"); root != "" {
+		return root
 	}
-	return "Python: unknown"
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(filepath.Dir(executable))
 }
 
 func vultureVersion() string {

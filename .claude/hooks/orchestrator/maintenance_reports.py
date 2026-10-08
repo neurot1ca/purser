@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -34,6 +35,18 @@ CLEANUP_HANDOFF_COMMIT_RULE = (
     "a single `git revert` must undo it."
 )
 _REPORT_TYPES = ("cleanup", "test-gaps")
+
+
+def _runtime_version() -> str:
+    plugin_root = Path(__file__).resolve().parents[3]
+    try:
+        version = json.loads((plugin_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version") or "unknown"
+    except (OSError, ValueError):
+        version = "unknown"
+    goos = {"Windows": "windows", "Linux": "linux", "Darwin": "darwin"}.get(platform.system(), platform.system().lower())
+    machine = platform.machine().lower()
+    goarch = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(machine, machine)
+    return f"Runtime: purser-hook {version} ({goos}/{goarch})"
 
 
 def _emit_telemetry(event_type: str, root: Path, state: Path, **payload) -> None:
@@ -594,7 +607,7 @@ def run_report(repo: str | os.PathLike[str], *, report_type: str, state: Path | 
         else:
             limitations = "Coverage availability and result are reported by the worker."
             tool_versions = []
-        versions = [f"Python: {sys.version.split()[0]}", "Git: " + subprocess.run(
+        versions = [_runtime_version(), "Git: " + subprocess.run(
             ["git", "--version"], cwd=root, capture_output=True, text=True, timeout=10,
             check=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0).stdout.strip(),

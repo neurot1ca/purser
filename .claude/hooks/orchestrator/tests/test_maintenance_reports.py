@@ -140,7 +140,10 @@ def test_report_is_atomically_persisted_with_source_and_tool_header(project, mon
     content = report.read_text(encoding="utf-8")
     assert report.parent.name == "cleanup" and report.suffix == ".md"
     assert "Source commit:" in content and "Run time (UTC):" in content
-    assert "Python:" in content and "Git:" in content and "vulture: unavailable" in content
+    manifest = json.loads((Path(__file__).parents[4] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    runtime_line = next(line for line in content.splitlines() if line.startswith("- Tool versions:"))
+    assert f"Runtime: purser-hook {manifest['version']} (" in runtime_line
+    assert "Git:" in content and "vulture: unavailable" in content
     assert "grep-based search only" in content and "## Candidates" in content
     assert server.args["jobPhase"] == "operation" and server.args["sandbox"] == "read-only"
     prompt = server.args["prompt"].lower()
