@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.88 — 2026-10-08
+
+- **Added:** After a main turn at 250k context tokens Purser compacts the conversation itself, so you no longer type `/compact` (`PURSER_AUTO_COMPACT_TOKENS` sets the threshold, `0` turns it off).
+
 ## 0.1.87 — 2026-10-08
 
 - **Added:** Claude can be the primary coder and planner; each tier (Haiku, Sonnet, Opus) always runs its newest model, and `/purser:init` sets it up.
