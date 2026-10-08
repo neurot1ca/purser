@@ -161,8 +161,10 @@ func Stop(event map[string]any, started time.Time) []byte {
 		}
 	}
 	if notice, ok := state["notice_pending"].(map[string]any); ok && validNoticePending(notice) && notice["blocked"] != true {
-		notice["blocked"] = true
-		add("compaction", "End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n"+stopBlockquote(notice))
+		if !autoCompactModActive() {
+			notice["blocked"] = true
+			add("compaction", "End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n"+stopBlockquote(notice))
+		}
 	}
 	if pending, ok := state["maintenance_pending"].(map[string]any); ok && pending["blocked"] != true {
 		pending["blocked"] = true
@@ -231,6 +233,22 @@ func stopBlockquote(n map[string]any) string {
 	context := number(n["context"])
 	percentage := number(n["percentage"])
 	return fmt.Sprintf("> ⚓ **Context passed %dK. Purser prepared your handoff.**\n> *Type `/compact` now to save **~%d%%** on every later message!*\n> *The ship stays dry: decisions and the next step will be read from the handoff Purser prepared. Nothing is lost.*\n> *Handoff: `%s`*", context/1000, percentage, str(n["handoff"]))
+}
+
+func autoCompactModActive() bool {
+	if value := strings.ToLower(os.Getenv("PURSER_AUTO_COMPACT_TOKENS")); value == "0" || value == "off" {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(home, ".claude", "purser", "auto-compact.log"))
+	if err != nil {
+		return false
+	}
+	age := time.Since(info.ModTime())
+	return age >= 0 && age <= 30*time.Minute
 }
 
 func fallbackGuidance(p map[string]any) string {

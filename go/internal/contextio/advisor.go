@@ -215,8 +215,12 @@ func recordAdviceWritten(path, session string) {
 func compactionNoticeAdvice(notice map[string]any, triggers []string) string {
 	context, _ := exactInteger(notice["context"])
 	handoff := str(notice["handoff"])
-	return fmt.Sprintf("Purser: %s context tokens; trigger(s): %s. Handoff: %s. After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total). End each State and Decisions line with its source (commit or job). Keep the first Goal line `User language: <language>` set to the language the user writes in. Link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction. End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n%s\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself.",
-		formatThousands(context), strings.Join(triggers, ", "), handoff, compactionBlockquote(notice, false))
+	advice := fmt.Sprintf("Purser: %s context tokens; trigger(s): %s. Handoff: %s. After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total). End each State and Decisions line with its source (commit or job). Keep the first Goal line `User language: <language>` set to the language the user writes in. Link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction.",
+		formatThousands(context), strings.Join(triggers, ", "), handoff)
+	if autoCompactModActive() {
+		return advice + " Do not compact or clear context yourself."
+	}
+	return advice + fmt.Sprintf(" End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n%s\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself.", compactionBlockquote(notice, false))
 }
 
 func compactionBlockquote(notice map[string]any, bold bool) string {
