@@ -39,9 +39,10 @@ func TestGearAdviceUpBoundaries(t *testing.T) {
 		plan   string
 		want   GearAdvice
 	}{
-		{"5h inclusive 50 and strict under 3h", 50, 3*time.Hour - time.Nanosecond, 35, 7 * 24 * time.Hour, "", GearAdviceUp},
+		{"5h used 40 and 100m remaining", 40, 100 * time.Minute, 35, 7 * 24 * time.Hour, "", GearAdviceNone},
+		{"5h used 40 and strict under 90m", 40, 80 * time.Minute, 35, 7 * 24 * time.Hour, "", GearAdviceUp},
+		{"5h inclusive 50 and exactly 90m", 50, 90 * time.Minute, 35, 7 * 24 * time.Hour, "", GearAdviceNone},
 		{"5h above 50", 50.0001, 2 * time.Hour, 35, 7 * 24 * time.Hour, "", GearAdviceNone},
-		{"5h exactly 3h", 50, 3 * time.Hour, 35, 7 * 24 * time.Hour, "", GearAdviceNone},
 		{"weekly inclusive 35 and strict under 3.5d", -1, 0, 35, 84*time.Hour - time.Nanosecond, "weekly-only", GearAdviceUp},
 		{"weekly exactly 3.5d", -1, 0, 35, 84 * time.Hour, "weekly-only", GearAdviceNone},
 		{"weekly above 35", -1, 0, 35.0001, 24 * time.Hour, "weekly-only", GearAdviceNone},
@@ -65,6 +66,21 @@ func TestGearAdviceUpBoundaries(t *testing.T) {
 	}
 }
 
+func TestGearAdviceInstructionUsesCodexDoneLineFormat(t *testing.T) {
+	for _, tt := range []struct {
+		advice GearAdvice
+		master string
+	}{
+		{GearAdviceUp, gearUpMaster},
+		{GearAdviceDown, gearDownMaster},
+	} {
+		want := "On your next reply, render exactly one line in the user's language as `> ⚓ **...**`, translating from the English text and keeping model names and commands unchanged:\n" + tt.master
+		if got := GearAdviceInstruction(tt.advice); got != want {
+			t.Fatalf("instruction=%q, want %q", got, want)
+		}
+	}
+}
+
 func TestGearAdviceWeeklySuppressionAndDownBoundaries(t *testing.T) {
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -76,8 +92,8 @@ func TestGearAdviceWeeklySuppressionAndDownBoundaries(t *testing.T) {
 		reset7 time.Duration
 		want   GearAdvice
 	}{
-		{"weekly 80 suppressed with over one day", false, 50, 2 * time.Hour, 80, 24*time.Hour + time.Nanosecond, GearAdviceNone},
-		{"weekly 80 allowed at one day", false, 50, 2 * time.Hour, 80, 24 * time.Hour, GearAdviceUp},
+		{"weekly 80 suppressed with over one day", false, 50, 80 * time.Minute, 80, 24*time.Hour + time.Nanosecond, GearAdviceNone},
+		{"weekly 80 allowed at one day", false, 50, 80 * time.Minute, 80, 24 * time.Hour, GearAdviceUp},
 		{"5h down inclusive 85 and strict over one hour", true, 85, time.Hour + time.Nanosecond, 20, 2 * 24 * time.Hour, GearAdviceDown},
 		{"5h down exactly one hour", true, 85, time.Hour, 20, 2 * 24 * time.Hour, GearAdviceNone},
 		{"weekly down inclusive 90 and strict over one day", true, 20, time.Hour, 90, 24*time.Hour + time.Nanosecond, GearAdviceDown},
@@ -122,7 +138,7 @@ func TestGearAdviceRejectsStaleMissingAndUncertainPlan(t *testing.T) {
 
 func TestGearAdviceRequiresPriorP90EvidenceAndExcludesCompletedJob(t *testing.T) {
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
-	in := gearInput(now, gearQuota(now, 40, 2*time.Hour, 20, 4*24*time.Hour))
+	in := gearInput(now, gearQuota(now, 40, 80*time.Minute, 20, 4*24*time.Hour))
 	in.DurationMS = 9000
 	in.Samples = gearSamples()
 	in.Samples = append(in.Samples, DurationSample{DurationMS: 100000, Implementer: "codex-main", JobID: "completed"})

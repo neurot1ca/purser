@@ -96,7 +96,7 @@ func EvaluateGearAdvice(input GearAdviceInput) GearAdviceResult {
 	if weeklyOnly {
 		up = week.used <= 35 && week.reset.Sub(input.Now) < 84*time.Hour
 	} else {
-		up = fiveHour.used <= 50 && fiveHour.reset.Sub(input.Now) < 3*time.Hour
+		up = fiveHour.used <= 50 && fiveHour.reset.Sub(input.Now) < 90*time.Minute
 	}
 	if !up {
 		return none

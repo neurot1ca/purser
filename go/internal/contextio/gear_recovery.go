@@ -105,7 +105,7 @@ func gearAdviceInstruction(advice GearAdvice) string {
 	if advice == GearAdviceDown {
 		master = gearDownMaster
 	}
-	return "On your next reply, render exactly one line in the user's language, translating from the English text and keeping model names and commands unchanged:\n" + master
+	return "On your next reply, render exactly one line in the user's language as `> ⚓ **...**`, translating from the English text and keeping model names and commands unchanged:\n" + master
 }
 
 // GearAdviceInstruction formats the approved master with translation guidance.
