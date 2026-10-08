@@ -54,6 +54,7 @@ async function resume($, before: number) {
   try {
     let after: number | undefined
     try { after = (await $.session.usage()).context.tokens } catch { /* message without the saving */ }
+    await trace($, `submitting resume (${after ?? 'unknown'} tokens)`)
     await $.prompt.submit({ text: resumeMessage(before, after) })
     await trace($, `resumed after compact (${after ?? 'unknown'} tokens)`)
   } catch (error) {
@@ -72,7 +73,10 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
       await log($, result?.skip ? `skipped at ${tokens} tokens: ${result.skip}` : `compacted at ${tokens} tokens`)
       inFlight = false
     } catch (error) {
-      await log($, `attempt ${attempt + 1} failed at ${tokens} tokens: ${String(error)}`)
+      // The headless refusal is the expected path on an SDK host, not a failure
+      // to show the person; only the trace keeps it.
+      const text = `attempt ${attempt + 1} failed at ${tokens} tokens: ${String(error)}`
+      await (needsCompactPrompt(error) ? trace($, text) : log($, text))
       // An SDK host (the desktop Code tab, -p) compacts only through the /compact
       // command, so queue it (it runs once the session is idle) instead of
       // retrying a call that cannot succeed.
