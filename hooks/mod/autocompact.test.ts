@@ -89,8 +89,8 @@ test('recognises the SDK-host refusal that needs a /compact prompt', () => {
 
 test('resume message reports the measured saving and asks the model to continue', () => {
   const text = resumeMessage(415_943, 83_000)
-  expect(text).toContain('Context passed 415K. Purser compacted the conversation.')
-  expect(text).toContain('**~80%** cheaper')
+  expect(text).toContain('**⚓ Purser · Context passed 415K, so the conversation was compacted. Every later message is now ~80% cheaper.**')
+  expect(text).not.toContain('>')
   expect(text).toContain('Continue the task in progress')
   expect(resumeMessage(415_943, undefined)).not.toContain('cheaper')
 })
