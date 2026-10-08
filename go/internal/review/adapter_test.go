@@ -110,6 +110,16 @@ func TestClaudeReviewerLaunchCarriesModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestClaudeReviewerAcceptsTierAlias(t *testing.T) {
+	adapter, err := ReviewerAdapter("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.ValidateModel("opus"); err != nil {
+		t.Fatalf("Claude tier alias rejected: %v", err)
+	}
+}
+
 func TestClaudeReviewerEffortSurvivesBridgeArgumentValidation(t *testing.T) {
 	args := nativeArgs(t.TempDir(), "", "")
 	args["reviewer_agent"], args["reviewer_model"], args["reviewer_effort"] = "claude", "claude-sonnet-4-5", "high"

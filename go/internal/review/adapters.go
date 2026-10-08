@@ -179,7 +179,7 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 	return nil, fmt.Errorf("unknown reviewer adapter %q", a.provider)
 }
 
-var claudeReviewerModel = regexp.MustCompile(`^claude-[A-Za-z0-9._-]+$`)
+var claudeReviewerModel = regexp.MustCompile(`^(claude-[A-Za-z0-9._-]+|haiku|sonnet|opus)$`)
 var claudeReviewerEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
 func (a reviewerAdapter) Environment(command []string) map[string]string {

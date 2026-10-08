@@ -66,8 +66,8 @@ func TestRunPostReviewerSameFamilyAndDeadline(t *testing.T) {
 func TestClaudeFallbackCannotPassClaudeReviewer(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	bundle := map[string]any{"findings": []any{}}
-	pending := map[string]any{"agent": "claude", "model": "claude-sonnet-4-5", "fallback_family": "anthropic"}
-	candidate := profile.ReviewerCandidate{Agent: "claude", Model: "claude-opus-4-1", Effort: "high"}
+	pending := map[string]any{"agent": "claude", "model": "sonnet", "fallback_family": "anthropic"}
+	candidate := profile.ReviewerCandidate{Agent: "claude", Model: "opus", Effort: "high"}
 	outcome, err := runPostReviewer("", "", pending, bundle, postProfile{ReviewerCandidates: []profile.ReviewerCandidate{candidate}}, map[string]any{}, nil, nil, time.Now(), time.Second)
 	if err != nil || outcome.Outcome != "unavailable" || bundle["reviewer1_skipped_reason"] != "REVIEWER_VENDOR_CONFLICT" {
 		t.Fatalf("same-family Claude review=%#v err=%v bundle=%#v", outcome, err, bundle)

@@ -126,21 +126,38 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 			return nil, errors.New("Claude model is invalid")
 		}
 		effort := ""
+		effortSet := false
 		for _, arg := range in.ConfigArgs {
 			const key = "model_reasoning_effort="
-			if !strings.HasPrefix(arg, key) || effort != "" {
+			if !strings.HasPrefix(arg, key) || effortSet {
 				return nil, errors.New("unsupported Claude config")
 			}
+			effortSet = true
 			if err := json.Unmarshal([]byte(strings.TrimPrefix(arg, key)), &effort); err != nil {
 				return nil, errors.New("Claude effort is invalid")
 			}
 		}
-		if !claudeEfforts[effort] || in.Sandbox != nil {
+		if effort != "" && effort != "none" && !claudeEfforts[effort] {
+			return nil, errors.New("Claude effort is required and sandbox is unsupported")
+		}
+		readOnly := in.Sandbox != nil && *in.Sandbox == "read-only"
+		if in.Sandbox != nil && !readOnly {
 			return nil, errors.New("Claude effort is required and sandbox is unsupported")
 		}
 		command := append([]string{}, in.Prefix...)
-		command = append(command, "--setting-sources", "", "--restricted", "--permission-mode", "acceptEdits", "--print", "--output-format", "json", "--model", in.Model, "--effort", effort,
-			"--tools", "Read,Edit,Write,Glob,Grep")
+		command = append(command, "--setting-sources", "", "--restricted")
+		if !readOnly {
+			command = append(command, "--permission-mode", "bypassPermissions")
+		}
+		command = append(command, "--print", "--output-format", "json", "--model", in.Model)
+		if effort != "" && effort != "none" {
+			command = append(command, "--effort", effort)
+		}
+		tools := "Read,Glob,Grep"
+		if !readOnly {
+			tools = "Read,Edit,Write,Glob,Grep,Bash"
+		}
+		command = append(command, "--tools", tools)
 		if in.Tool == "codex-reply" {
 			if in.ThreadID == "" {
 				return nil, errors.New("Claude reply requires a thread ID")
@@ -184,7 +201,7 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 	}
 }
 
-var claudeModel = regexp.MustCompile(`^claude-[A-Za-z0-9._-]+$`)
+var claudeModel = regexp.MustCompile(`^(claude-[A-Za-z0-9._-]+|haiku|sonnet|opus)$`)
 var claudeEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
 // ValidateAgentResume rejects cross-agent threads and, for AGY, a resumed

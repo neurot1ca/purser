@@ -171,6 +171,8 @@ func modelFamily(model string) string {
 		return "gpt"
 	case strings.HasPrefix(name, "claude-"):
 		return "claude"
+	case name == "haiku" || name == "sonnet" || name == "opus":
+		return "claude"
 	case strings.HasPrefix(name, "deepseek-"):
 		return "deepseek"
 	case strings.HasPrefix(name, "qwen-") || regexp.MustCompile(`^qwen[0-9]`).MatchString(name):

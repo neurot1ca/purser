@@ -84,15 +84,52 @@ func TestClaudeWorkerCarriesEffortAndSuppressesNestedHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"claude", "--setting-sources", "", "--restricted", "--permission-mode", "acceptEdits", "--print", "--output-format", "json", "--model", "claude-sonnet-4-5", "--effort", "high", "--tools", "Read,Edit,Write,Glob,Grep", "work"}
+	want := []string{"claude", "--setting-sources", "", "--restricted", "--permission-mode", "bypassPermissions", "--print", "--output-format", "json", "--model", "claude-sonnet-4-5", "--effort", "high", "--tools", "Read,Edit,Write,Glob,Grep,Bash", "work"}
 	if !reflect.DeepEqual(command, want) {
 		t.Fatalf("Claude command argv mismatch\n got: %#v\nwant: %#v", command, want)
 	}
-	if _, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "claude-sonnet-4-5", Prompt: "work"}); err == nil {
-		t.Fatal("Claude launch accepted a missing effort")
+	withoutEffort, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "claude-sonnet-4-5", Prompt: "work"})
+	if err != nil {
+		t.Fatalf("Claude launch rejected omitted effort: %v", err)
+	}
+	for _, arg := range withoutEffort {
+		if arg == "--effort" {
+			t.Fatalf("omitted Claude effort emitted --effort: %#v", withoutEffort)
+		}
 	}
 	if _, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "unsupported", ConfigArgs: []string{`model_reasoning_effort="high"`}, Prompt: "work"}); err == nil {
 		t.Fatal("Claude launch accepted an unsupported model")
+	}
+}
+
+func TestClaudePlanIsReadOnlyAndAliasNoneOmitsEffort(t *testing.T) {
+	command, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "opus",
+		Sandbox: stringPointer("read-only"), Prompt: "plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"claude", "--setting-sources", "", "--restricted", "--print", "--output-format", "json", "--model", "opus", "--tools", "Read,Glob,Grep", "plan"}
+	if !reflect.DeepEqual(command, want) {
+		t.Fatalf("Claude plan argv mismatch\n got: %#v\nwant: %#v", command, want)
+	}
+	command, err = BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "haiku",
+		ConfigArgs: []string{`model_reasoning_effort="none"`}, Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range command {
+		if arg == "--effort" {
+			t.Fatalf("Claude none effort must omit --effort: %#v", command)
+		}
+	}
+}
+
+func TestValidateStartAcceptsClaudePlanJob(t *testing.T) {
+	t.Setenv("PURSER_AGENT", "")
+	args := map[string]any{"call": "00000000-0000-0000-0000-000000000001", "prompt": "plan", "cwd": t.TempDir(), "model": "opus", "sandbox": "read-only"}
+	request, failure := ValidateStart(args, StartValidationOptions{Agent: "claude", FixedAgent: true})
+	if failure != nil || request.Agent != "claude" {
+		t.Fatalf("Claude plan start failed validation: request=%#v failure=%#v", request, failure)
 	}
 }
 

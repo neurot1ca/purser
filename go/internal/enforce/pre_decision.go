@@ -288,7 +288,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if outputLimit := config["tool_output_token_limit"]; selection.Agent == "codex" && outputLimit != nil {
 			updatedConfig["tool_output_token_limit"] = outputLimit
 		}
-		if pointerValue(parsed.Phase) == "plan" && selection.Agent == "codex" {
+		if pointerValue(parsed.Phase) == "plan" && (selection.Agent == "codex" || selection.Agent == "claude") {
 			updated["sandbox"], updated["approval-policy"] = "read-only", "never"
 		}
 		updated["config"] = updatedConfig
