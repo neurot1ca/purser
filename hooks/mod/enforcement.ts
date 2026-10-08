@@ -168,12 +168,14 @@ export function register(on) {
       helperSessionId = sessionId
       const cwd = await $.session.cwd()
       helperCwd = cwd
-      const { tool, tool_use_id, agentId: _agentId, ...tool_input } = e
+      const { tool, tool_use_id, agentId, ...tool_input } = e
       const result = await $.process.run([helperBinary], {
         cwd,
         stdin: JSON.stringify({
           session_id: sessionId, cwd, hook_event_name: 'PreToolUse',
           tool_name: tool, tool_use_id, tool_input,
+          // A subagent's call: codex_apply then needs main Claude's acceptance.
+          ...(agentId ? { agent_id: agentId } : {}),
         }),
         timeoutMs: 60000,
       })

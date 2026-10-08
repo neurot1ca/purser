@@ -192,7 +192,8 @@ TOOL_SCHEMAS += [
         "type": "object", "properties": {"jobId": {"type": "string"},
             "resolved": {"type": "boolean", "description": "Record a hand-resolved conflict after verifying the repository."},
             "reviewer1Valid": {"type": "integer", "minimum": 0},
-            "reviewer1False": {"type": "integer", "minimum": 0}},
+            "reviewer1False": {"type": "integer", "minimum": 0},
+            "acceptOnly": {"type": "boolean"}, "sessionId": {"type": "string"}, "revision": {"type": "string"}},
         "required": ["jobId"]}},
 ]
 

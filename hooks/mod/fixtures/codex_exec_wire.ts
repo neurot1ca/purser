@@ -49,7 +49,7 @@ export const CODEX_EXEC_WIRE_FIXTURES = [
       "function": "schema",
       "tool": "codex_apply"
     },
-    "expected_text": "{\"name\": \"codex_apply\", \"description\": \"Apply a job worktree patch.\", \"inputSchema\": {\"type\": \"object\", \"properties\": {\"jobId\": {\"type\": \"string\"}, \"resolved\": {\"type\": \"boolean\", \"description\": \"Record a hand-resolved conflict after verifying the repository.\"}, \"reviewer1Valid\": {\"type\": \"integer\", \"minimum\": 0}, \"reviewer1False\": {\"type\": \"integer\", \"minimum\": 0}}, \"required\": [\"jobId\"]}}"
+    "expected_text": "{\"name\": \"codex_apply\", \"description\": \"Apply a job worktree patch.\", \"inputSchema\": {\"type\": \"object\", \"properties\": {\"jobId\": {\"type\": \"string\"}, \"resolved\": {\"type\": \"boolean\", \"description\": \"Record a hand-resolved conflict after verifying the repository.\"}, \"reviewer1Valid\": {\"type\": \"integer\", \"minimum\": 0}, \"reviewer1False\": {\"type\": \"integer\", \"minimum\": 0}, \"acceptOnly\": {\"type\": \"boolean\"}, \"sessionId\": {\"type\": \"string\"}, \"revision\": {\"type\": \"string\"}}, \"required\": [\"jobId\"]}}"
   },
   {
     "name": "schema_codex_cancel",

@@ -131,6 +131,72 @@ func TestApplyPythonOracle(t *testing.T) {
 	}
 }
 
+func acceptanceJob(t *testing.T, state, id string) (string, string, string, string) {
+	t.Helper()
+	base := t.TempDir()
+	repo, worktree := filepath.Join(base, "repo"), filepath.Join(base, "worktree")
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "-q")
+	write(t, filepath.Join(repo, "tracked.txt"), "base\n")
+	git(t, repo, "add", "--all")
+	git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "base")
+	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	snapshot := strings.TrimSpace(string(gitOutput(t, worktree, "rev-parse", "HEAD^{tree}")))
+	write(t, filepath.Join(worktree, "tracked.txt"), "changed\n")
+	jobDir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	job := map[string]any{"jobId": id, "state": "SUCCEEDED", "repoRoot": repo, "worktreePath": worktree,
+		"snapshot": snapshot, "reviewedSnapshot": snapshot}
+	encoded, _ := json.Marshal(job)
+	write(t, filepath.Join(jobDir, id+".json"), string(encoded))
+	return state, repo, worktree, snapshot
+}
+
+func TestApplyAcceptanceAndForegroundPaths(t *testing.T) {
+	t.Run("main acceptance then apply", func(t *testing.T) {
+		id := strings.Repeat("a", 64)
+		state, _, worktree, snapshot := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+		revision, err := changedPathsDigest(worktree, snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted := Apply(state, map[string]any{"jobId": id, "acceptOnly": true, "sessionId": "session-main", "revision": revision})
+		if accepted["structuredContent"].(map[string]any)["accepted"] != true {
+			t.Fatalf("acceptance failed: %#v", accepted)
+		}
+		applied := Apply(state, map[string]any{"jobId": id})
+		if applied["structuredContent"].(map[string]any)["applied"] != true {
+			t.Fatalf("apply after acceptance failed: %#v", applied)
+		}
+	})
+	t.Run("acceptance revision stale after worktree drift", func(t *testing.T) {
+		id := strings.Repeat("b", 64)
+		state, _, worktree, snapshot := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+		revision, err := changedPathsDigest(worktree, snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		Apply(state, map[string]any{"jobId": id, "acceptOnly": true, "sessionId": "session-main", "revision": revision})
+		write(t, filepath.Join(worktree, "new.txt"), "drift\n")
+		got := Apply(state, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+		if got["reason"] != "main Claude has not accepted this revision" {
+			t.Fatalf("stale acceptance was not rejected: %#v", got)
+		}
+	})
+	t.Run("foreground apply without acceptance", func(t *testing.T) {
+		id := strings.Repeat("c", 64)
+		state, _, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+		got := Apply(state, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+		if got["applied"] != true {
+			t.Fatalf("foreground apply unexpectedly gated: %#v", got)
+		}
+	})
+}
+
 func TestApplyCachedRepeatRecordsDecisionAndReleasesLease(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "repo")

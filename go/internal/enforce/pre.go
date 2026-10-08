@@ -23,6 +23,7 @@ var codexTools = map[string]bool{
 	"mcp__codex-main__codex_start": true, "mcp__codex-main__codex_result": true,
 	"mcp__codex-main__codex_cancel": true, "mcp__plugin_purser_codex-main__codex_start": true,
 	"mcp__plugin_purser_codex-main__codex_result": true, "mcp__plugin_purser_codex-main__codex_cancel": true,
+	"mcp__codex-main__codex_apply": true, "mcp__plugin_purser_codex-main__codex_apply": true,
 }
 
 var runPreDecision = preDecision
@@ -44,6 +45,9 @@ func Pre(event map[string]any, root string) (response map[string]any, failure er
 	// Contract process tests require building the hook with -tags contracttest.
 	internal := contractFault()
 	tool := stringValue(event["tool_name"])
+	if strings.HasSuffix(tool, "__codex_apply") {
+		return preApply(event, root), nil
+	}
 	if strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
 		if internal != nil {
 			return syncBypass(event, root, internal, metadata), internal
@@ -58,6 +62,95 @@ func Pre(event map[string]any, root string) (response map[string]any, failure er
 		internal = err
 	}
 	return preFailure(event, root, internal, metadata), internal
+}
+
+func preApply(event map[string]any, runtimeRoot string) map[string]any {
+	input, ok := event["tool_input"].(map[string]any)
+	if !ok {
+		return denyPre("MALFORMED_TOOL_INPUT", "tool_input must be an object")
+	}
+	jobID := stringValue(input["jobId"])
+	if jobID == "" {
+		return denyPre("INVALID_JOB_ID", "jobId is required")
+	}
+	stateRoot := defaultPreStateRoot(runtimeRoot)
+	_, subagent := event["agent_id"]
+	if agent, valid := event["agent_id"].(string); valid && agent == "" {
+		subagent = false
+	}
+	if input["acceptOnly"] == true {
+		if subagent {
+			return denyPre("SUBAGENT_ACCEPTANCE_DENIED", "only main Claude can accept a revision")
+		}
+		sessionID := stringValue(event["session_id"])
+		revision := stringValue(input["revision"])
+		current, valid := applyRevision(stateRoot, jobID, "")
+		if sessionID == "" || !valid || revision == "" || revision != current {
+			return denyPre("ACCEPTANCE_REVISION_UNAVAILABLE", "reviewed revision is unavailable")
+		}
+		updated := make(map[string]any, len(input)+2)
+		for key, value := range input {
+			updated[key] = value
+		}
+		updated["sessionId"] = sessionID
+		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}}
+	}
+	if subagent {
+		if _, valid := applyRevision(stateRoot, jobID, stringValue(event["session_id"])); !valid {
+			return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse",
+				"permissionDecision": "deny", "permissionDecisionReason": "main Claude has not accepted this revision"}}
+		}
+	}
+	return map[string]any{}
+}
+
+func applyRevision(stateRoot, jobID, sessionID string) (string, bool) {
+	jobPath := filepath.Join(stateRoot, "codex_exec_mcp", "jobs", jobID+".json")
+	read := func() map[string]any {
+		data, err := os.ReadFile(jobPath)
+		if err != nil {
+			return nil
+		}
+		var job map[string]any
+		if json.Unmarshal(data, &job) != nil || job == nil {
+			return nil
+		}
+		return job
+	}
+	job := read()
+	if job == nil {
+		return "", false
+	}
+	repo, _ := job["repoRoot"].(string)
+	root, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		return "", false
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(root))
+	unlock, err := lease.Lock(filepath.Join(filepath.Dir(filepath.Dir(jobPath)), "apply", hex.EncodeToString(sum[:])+".lock"))
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = unlock() }()
+	job = read()
+	if job == nil {
+		return "", false
+	}
+	worktree, _ := job["worktreePath"].(string)
+	snapshot, _ := job["snapshot"].(string)
+	digest, err := ledger.JobChangedPathsSHA256(worktree, snapshot)
+	if err != nil {
+		return "", false
+	}
+	if sessionID == "" {
+		return digest, true
+	}
+	acceptance, _ := job["acceptance"].(map[string]any)
+	return digest, acceptance != nil && acceptance["sessionId"] == sessionID && acceptance["revision"] == digest
 }
 
 func asyncPreFollowup(event map[string]any, root string) map[string]any {

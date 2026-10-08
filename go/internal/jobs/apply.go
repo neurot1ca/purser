@@ -78,6 +78,33 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	job.Get("worktreePath", &worktree)
 	job.Get("repoRoot", &repo)
 	job.Get("snapshot", &snapshot)
+	if args["acceptOnly"] == true {
+		sessionID, _ := args["sessionId"].(string)
+		revision, _ := args["revision"].(string)
+		var reviewedSnapshot string
+		job.Get("reviewedSnapshot", &reviewedSnapshot)
+		current, digestErr := changedPathsDigest(worktree, snapshot)
+		if sessionID == "" || reviewedSnapshot == "" || digestErr != nil || revision == "" || revision != current {
+			return result(map[string]any{"accepted": false, "reason": "reviewed revision is unavailable or stale"})
+		}
+		acceptance := map[string]any{"revision": current, "sessionId": sessionID, "acceptedAt": time.Now().UTC().Format(time.RFC3339Nano)}
+		if err := job.Set("acceptance", acceptance); err != nil {
+			return result(map[string]any{"accepted": false, "reason": "acceptance could not be recorded"})
+		}
+		if err := Write(filepath.Join(dir, jobID+".json"), job); err != nil {
+			return result(map[string]any{"accepted": false, "reason": "acceptance could not be recorded"})
+		}
+		return result(map[string]any{"accepted": true, "revision": current})
+	}
+	var acceptance map[string]any
+	if job.Get("acceptance", &acceptance) && acceptance != nil {
+		current, digestErr := changedPathsDigest(worktree, snapshot)
+		if digestErr != nil || acceptance["revision"] != current {
+			job.Delete("acceptance")
+			_ = Write(filepath.Join(dir, jobID+".json"), job)
+			return result(map[string]any{"applied": false, "reason": "main Claude has not accepted this revision"})
+		}
+	}
 	var saved map[string]any
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
@@ -124,6 +151,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 			return result(map[string]any{"state": "FAILED", "errorCode": "SNAPSHOT_UNAVAILABLE", "message": e.Error()})
 		}
 		if len(drift) != 0 {
+			job.Delete("acceptance")
 			var revision int64
 			job.Get("snapshotRevision", &revision)
 			_ = job.Set("snapshotRevision", revision+1)
@@ -187,6 +215,10 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	}
 	return result(value)
+}
+
+func changedPathsDigest(worktree, snapshot string) (string, error) {
+	return ledger.JobChangedPathsSHA256(worktree, snapshot)
 }
 
 func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]any, args map[string]any, opt ApplyOptions) map[string]any {
