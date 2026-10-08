@@ -3,7 +3,7 @@
     "codex-main": {
       "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/bin/python-locator.js",
+        "${CLAUDE_PLUGIN_ROOT}/bin/purser-launcher.js",
         "go-mcp"
       ]
     }
