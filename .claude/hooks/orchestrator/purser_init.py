@@ -727,44 +727,6 @@ def _enable_concise_style(project: Path) -> bool:
     return project_override
 
 
-def _python_to_store() -> tuple[Path, bool]:
-    """Return the usable Python 3.11+ path and whether the active Python is a venv."""
-    active = Path(sys.executable).resolve()
-    in_venv = sys.prefix != sys.base_prefix
-    if not in_venv:
-        return active, False
-
-    candidates = []
-    base = Path(sys.base_prefix)
-    if sys.platform == "win32":
-        candidates.append(base / "python.exe")
-    else:
-        candidates.extend((base / "bin" / "python3", base / "bin" / "python"))
-    base_executable = getattr(sys, "_base_executable", None)
-    if base_executable:
-        candidates.append(Path(base_executable))
-
-    seen = set()
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-            key = os.path.normcase(str(resolved))
-            if key in seen or not resolved.is_file():
-                continue
-            seen.add(key)
-            result = subprocess.run([str(resolved), "--version"], capture_output=True,
-                                    text=True, timeout=5, check=False,
-                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-                                    if os.name == "nt" else 0)
-            version = (result.stdout or result.stderr).strip()
-            match = re.search(r"Python\s+(\d+)\.(\d+)", version)
-            if result.returncode == 0 and match and (int(match.group(1)), int(match.group(2))) >= (3, 11):
-                return resolved, True
-        except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError):
-            continue
-    return active, True
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
@@ -846,7 +808,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--model requires --coder opencode or agy")
     project = Path.cwd().resolve()
     config = Path.home() / ".orchestrator" / "config.toml"
-    python_file = config.with_name("python")
     profile = project / ".orchestrator" / "profile.toml"
     try:
         if args.detect:
@@ -909,10 +870,6 @@ def main(argv: list[str] | None = None) -> int:
                              args.reviewer_model, reviewer_executable, args.opencode_mechanical, fallback)
         scaffold = _profile(project) if args.scaffold_profile and not profile.exists() else None
         handoff_missing = not handoff.exists()
-        python_original = python_file.read_bytes() if python_file.exists() else None
-        python_path, in_venv = _python_to_store()
-        python_changed = (str(python_path) + "\n").encode("utf-8") if sys.version_info >= (3, 11) else None
-        python_update = python_changed is not None and python_original != python_changed
         if args.plan:
             planned_routes = routes
             if planned_routes is None and args.coder in ("opencode", "agy"):
@@ -926,19 +883,13 @@ def main(argv: list[str] | None = None) -> int:
             if args.maintenance is not None:
                 print("Maintenance reports: " + ("enabled for this project" if args.maintenance
                                                    else "disabled for this project"))
-            if python_changed is not None:
-                print(f"Python locator: {python_path}")
-            if in_venv and python_path == Path(sys.executable).resolve():
-                print(f"Note: this Python is inside a virtual environment ({sys.executable}); if it is removed, Purser hooks stop working.")
             if changed != original:
                 print("".join(difflib.unified_diff((original or b"").decode("utf-8").splitlines(keepends=True), changed.decode("utf-8").splitlines(keepends=True), fromfile=str(config), tofile=str(config))), end="")
             if scaffold is not None:
                 print(f"Create {profile}:\n{scaffold.decode('utf-8')}", end="")
-            if python_update:
-                print("".join(difflib.unified_diff((python_original or b"").decode("utf-8").splitlines(keepends=True), python_changed.decode("utf-8").splitlines(keepends=True), fromfile=str(python_file), tofile=str(python_file))), end="")
             if handoff_missing:
                 print(f"Create {handoff}:\n{compaction_advisor.HANDOFF_TEMPLATE}", end="")
-            if changed == original and scaffold is None and not python_update and not handoff_missing:
+            if changed == original and scaffold is None and not handoff_missing:
                 print("No changes.")
             return 0
         if changed != original:
@@ -964,10 +915,6 @@ def main(argv: list[str] | None = None) -> int:
                 handoff_created = True
             except FileExistsError:
                 pass
-        if python_update:
-            if (python_file.read_bytes() if python_file.exists() else None) != python_original:
-                raise ValueError("Python locator path changed during setup; run the plan again")
-            _atomic(python_file, python_changed)
         if args.maintenance is True:
             maintenance_reports.opt_in(project)
         elif args.maintenance is False:
@@ -977,7 +924,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"status": "applied", "handoff": str(handoff),
                               "concise_style_offer_due": offer_due}, indent=2))
         else:
-            print("Applied." if changed != original or scaffold is not None or python_update or handoff_created else "No changes.")
+            print("Applied." if changed != original or scaffold is not None or handoff_created else "No changes.")
             print(f"Handoff: {handoff}")
             if offer_due:
                 print("Concise reply style offer due.")

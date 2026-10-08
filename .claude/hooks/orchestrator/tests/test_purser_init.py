@@ -145,7 +145,7 @@ def test_second_apply_noop(site):
     before = config.read_bytes()
     assert run(*args) == 0
     assert config.read_bytes() == before
-    assert (home / ".orchestrator" / "python").read_text(encoding="utf-8") == str(Path(sys.executable).resolve()) + "\n"
+    assert not (home / ".orchestrator" / "python").exists()
     assert len(list(config.parent.glob("config.toml.bak-*"))) == 0
 
 
@@ -198,7 +198,7 @@ def test_failed_apply_does_not_consume_concise_offer(site, monkeypatch):
     def fail():
         raise ValueError("setup failure")
 
-    monkeypatch.setattr(purser_init, "_python_to_store", fail)
+    monkeypatch.setattr(purser_init, "_candidate", lambda *_args, **_kwargs: fail())
     assert run("--apply", "--coder", "claude", "--reviewer", "none") == 1
     assert not (home / ".orchestrator" / "reply-style-suggestion-shown").exists()
 
@@ -222,15 +222,15 @@ def test_enable_concise_style_preserves_settings_and_reports_project_override(si
     assert json.loads(settings.read_text(encoding="utf-8")) == {"outputStyle": "Concise"}
 
 
-def test_python_path_is_planned_and_second_apply_is_noop(site, capsys):
+def test_python_path_is_not_planned_or_written(site, capsys):
     home, _ = site
     args = ("--coder", "codex", "--reviewer", "none")
     assert run("--plan", *args) == 0
     plan = capsys.readouterr().out
-    assert str(home / ".orchestrator" / "python") in plan
-    assert str(Path(sys.executable).resolve()) in plan
+    assert "Python locator:" not in plan
     assert run("--apply", *args) == 0
     capsys.readouterr()
+    assert not (home / ".orchestrator" / "python").exists()
     assert run("--apply", *args) == 0
     assert capsys.readouterr().out.startswith("No changes.\nHandoff: ")
 
@@ -279,57 +279,10 @@ def test_coder_config_rejects_invalid_fallback_values(site):
         coder_config.load(Path(__file__).parents[1] / "config.json")
 
 
-def test_existing_different_python_path_appears_in_plan(site, capsys):
-    home, _ = site
-    locator = home / ".orchestrator" / "python"
-    locator.parent.mkdir()
-    locator.write_bytes(b"C:/old/python.exe\n")
-    assert run("--plan", "--coder", "codex", "--reviewer", "none") == 0
-    plan = capsys.readouterr().out
-    assert "-C:/old/python.exe" in plan
-    assert str(Path(sys.executable).resolve()) in plan
-    assert locator.read_bytes() == b"C:/old/python.exe\n"
-
-
-def test_venv_uses_existing_python311_base_interpreter_in_plan_and_apply(site, monkeypatch, capsys):
-    home, project = site
-    base = project / "base-python"
-    base.mkdir()
-    base_python = base / "bin" / "python3"
-    base_python.parent.mkdir()
-    base_python.write_text("mock interpreter", encoding="utf-8")
-    monkeypatch.setattr(purser_init.sys, "prefix", str(project / "venv"))
-    monkeypatch.setattr(purser_init.sys, "base_prefix", str(base))
-    monkeypatch.setattr(purser_init.sys, "_base_executable", str(base / "missing-python"), raising=False)
-    monkeypatch.setattr(purser_init.sys, "platform", "linux")
-    monkeypatch.setattr(purser_init.subprocess, "run", lambda *a, **k: type("Result", (), {
-        "returncode": 0, "stdout": "Python 3.12.2", "stderr": ""})())
-    args = ("--coder", "codex", "--reviewer", "none")
-    assert run("--plan", *args) == 0
-    plan = capsys.readouterr().out
-    assert f"Python locator: {base_python.resolve()}" in plan
-    assert str(Path(sys.executable).resolve()) not in plan
-    assert run("--apply", *args) == 0
-    assert (home / ".orchestrator" / "python").read_text(encoding="utf-8") == f"{base_python.resolve()}\n"
-
-
-def test_venv_with_unusable_base_keeps_active_python_and_flags_plan(site, monkeypatch, capsys):
-    _, project = site
-    monkeypatch.setattr(purser_init.sys, "prefix", str(project / "venv"))
-    monkeypatch.setattr(purser_init.sys, "base_prefix", str(project / "missing-base"))
-    monkeypatch.setattr(purser_init.sys, "_base_executable", str(project / "missing-python"), raising=False)
-    monkeypatch.setattr(purser_init.sys, "platform", "linux")
-    assert run("--plan", "--coder", "codex", "--reviewer", "none") == 0
-    plan = capsys.readouterr().out
-    assert f"Python locator: {Path(sys.executable).resolve()}" in plan
-    assert f"Note: this Python is inside a virtual environment ({sys.executable}); if it is removed, Purser hooks stop working." in plan
-
-
 def test_already_trusted_literal_array_is_untouched(site, capsys):
     home, project = site
     config = home / ".orchestrator" / "config.toml"
     config.parent.mkdir()
-    (config.parent / "python").write_bytes((str(Path(sys.executable).resolve()) + "\n").encode("utf-8"))
     equivalent = project / ".." / project.name
     original = (
         'schema_version = 1\n[roles]\norchestrator = "claude-code"\n'
