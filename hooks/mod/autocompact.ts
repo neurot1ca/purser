@@ -43,7 +43,7 @@ async function log($, text: string) {
 export function resumeMessage(before: number, after: number | undefined): string {
   const saving = after !== undefined && after < before ? Math.round((1 - after / before) * 100) : undefined
   return [
-    `**⚓ Purser · Context passed ${Math.floor(before / 1000)}K, so the conversation was compacted.${saving !== undefined ? ` Every later message is now ~${saving}% cheaper.` : ''}**`,
+    `**⚓ Purser · Context passed ${Math.floor(before / 1000)}K, so Purser ran \`/compact\`.${saving !== undefined ? ` Every later message is now ~${saving}% cheaper.` : ''}**`,
     '**Decisions and the next step were carried over from the handoff Purser prepared. Nothing is lost.**',
     '**Continue the task in progress; if nothing was in progress, reply with one line.**',
   ].join('\n')
