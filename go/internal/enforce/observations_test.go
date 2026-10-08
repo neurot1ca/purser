@@ -27,6 +27,7 @@ func TestObservationEventTypesMatchPythonSchema(t *testing.T) {
 		"CODEX_RESULT_UNFETCHED", "CLAUDE_DECISION_RECORDED", "WORKER_REPLAY_CONFLICT",
 		"MECHANICAL_EDIT_OBSERVED", "MAINTENANCE_REPORT_FINISHED", "MAINTENANCE_REPORT_ACTED",
 		"READINESS_CHECK_OUTCOME",
+		"PLAN_REDIRECT",
 	}
 	if len(observationEventTypes) != len(want) {
 		t.Fatalf("Go event type count = %d, Python EVENT_TYPES count = %d", len(observationEventTypes), len(want))

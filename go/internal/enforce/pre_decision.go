@@ -92,6 +92,27 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 		return denyPre(route.Code, route.Message), nil
 	}
+	if !reply && pointerValue(parsed.Phase) == "implementation" && (parsed.Reason == nil || *parsed.Reason == "new_task") &&
+		*parsed.Route != "mechanical" && *parsed.Route != "operation" &&
+		!hasCompletedPlan(defaultPreStateRoot(runtimeRoot), pointerValue(parsed.TaskID)) {
+		nonTestCount := nonTestScopeCount(parsed.Scope)
+		why := ""
+		if nonTestCount >= 5 {
+			why = fmt.Sprintf("%d non-test scope paths", nonTestCount)
+		} else if *parsed.Route == "consequential" || *parsed.Route == "escalated" {
+			why = "route=" + *parsed.Route
+		}
+		if why != "" {
+			project := projectKey(root)
+			preEmit(runtimeRoot, event, root, pointerValue(parsed.TaskID), project, "PLAN_REDIRECT", map[string]any{
+				"route": *parsed.Route, "non_test_scope_count": nonTestCount,
+			})
+			message := fmt.Sprintf("Purser: this is a large new task (%s). Run /purser:plan with the same goal and scope first, then implement its milestones as <plan-task>-m<N>of<T>. If the user explicitly asked to skip planning, resend with reason=user_override.", why)
+			return map[string]any{"hookSpecificOutput": map[string]any{
+				"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": message,
+			}}, nil
+		}
+	}
 	if !reply {
 		*route.Model = models.ResolveLatest(stringValue(config["coder_agent"]), *route.Model)
 	} else if liveModel := stringValue(live["model"]); models.SameFamily(*route.Model, liveModel) {
@@ -611,13 +632,55 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	pendingWritten = false
 	leased = false
 	hook := map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}
-	if !reply && phase == "implementation" && repository != nil {
-		if line := contextio.ImplementationPlanOffer(defaultPreStateRoot(runtimeRoot), project, stringValue(event["session_id"]), taskID, routeName, parsed.Scope); line != "" {
-			hook["additionalContext"] = line
-		}
-	}
 	return map[string]any{"hookSpecificOutput": hook,
 		"systemMessage": fmt.Sprintf("Purser: route=%s -> %s / %s", fallbackValue(routeName), fallbackValue(selection.Model), fallbackValue(selection.Effort))}, nil
+}
+
+func nonTestScopeCount(scope []string) int {
+	count := 0
+	for _, entry := range scope {
+		clean := strings.ReplaceAll(entry, "\\", "/")
+		base := strings.ToLower(clean[strings.LastIndex(clean, "/")+1:])
+		isTest := strings.HasSuffix(base, "_test.go") || strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py")
+		if !isTest {
+			for _, segment := range strings.Split(strings.ToLower(clean), "/") {
+				if segment == "tests" || segment == "testdata" {
+					isTest = true
+					break
+				}
+			}
+		}
+		if !isTest {
+			count++
+		}
+	}
+	return count
+}
+
+func hasCompletedPlan(stateRoot, taskID string) bool {
+	entries, err := os.ReadDir(filepath.Join(stateRoot, "plans"))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".md")
+		planID := name
+		if dash := strings.LastIndex(name, "-"); dash >= 0 {
+			key := name[dash+1:]
+			if len(key) == 64 {
+				if _, err := hex.DecodeString(key); err == nil {
+					planID = name[:dash]
+				}
+			}
+		}
+		if planID != "" && (taskID == planID || strings.HasPrefix(taskID, planID+"-")) {
+			return true
+		}
+	}
+	return false
 }
 
 func inputLabel(event map[string]any) any {

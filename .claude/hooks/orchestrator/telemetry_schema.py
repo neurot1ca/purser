@@ -41,6 +41,7 @@ EVENT_TYPES = frozenset(
         "MAINTENANCE_REPORT_FINISHED",
         "MAINTENANCE_REPORT_ACTED",
         "READINESS_CHECK_OUTCOME",
+        "PLAN_REDIRECT",
     }
 )
 
@@ -331,6 +332,7 @@ _PAYLOAD_FIELDS = {
     }),
     "MAINTENANCE_REPORT_ACTED": frozenset({"report_id", "findings_marked_done", "findings_listed"}),
     "READINESS_CHECK_OUTCOME": frozenset({"verdict", "agent", "duration_ms"}),
+    "PLAN_REDIRECT": frozenset({"route", "non_test_scope_count"}),
 }
 
 
@@ -496,6 +498,7 @@ def _payload_value(name: str, value: Any) -> Any:
         "reviewer1_false_count",
         "worker_prompt_chars",
         "scope_path_count",
+        "non_test_scope_count",
         "changed_file_count",
         "hunk_count",
         "old_rank",

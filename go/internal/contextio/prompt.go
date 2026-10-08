@@ -144,21 +144,6 @@ func recordPromptTurn(event map[string]any, processStart time.Time) {
 	markContention(contention)
 }
 
-// ImplementationPlanOffer uses the same session counter as prompt-triggered offers.
-func ImplementationPlanOffer(root, project, session, task, route string, scope []string) string {
-	// Four declared paths or a consequential/escalated route warrants an offer.
-	// Accepted plan milestones use <plan-task>-m<N>of<T>, as in commands/plan.md.
-	if session == "" || planTask.MatchString(task) || (len(scope) < 4 && route != "consequential" && route != "escalated") {
-		return ""
-	}
-	path := filepath.Join(root, "projects", project, "telemetry", "compaction_advisor.json")
-	_, offer := contextInjections(path, session, "", true, false)
-	if offer {
-		return "This task looks large enough for a plan; offer /purser:plan once in this session if you have not already."
-	}
-	return ""
-}
-
 func contextInjections(statePath, session, language string, planning, promptTurn bool) (string, bool) {
 	if os.MkdirAll(filepath.Dir(statePath), 0700) != nil {
 		return "", false

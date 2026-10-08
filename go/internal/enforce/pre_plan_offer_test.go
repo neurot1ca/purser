@@ -1,34 +1,38 @@
 package enforce
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
-
-	"purser-hook/internal/contextio"
 )
 
-func TestPrePlanOffer(t *testing.T) {
-	for _, tc := range []struct {
-		name, tool, phase, route, task, scope string
-		priorPrompt                           bool
-		want                                  bool
+func TestPrePlanRedirect(t *testing.T) {
+	tests := []struct {
+		name, task, phase, route, reason string
+		scope                            []string
+		reply, completedPlan, wantDeny   bool
 	}{
-		{"large", "codex", "implementation", "normal", "large", "a,b,c,d", false, true},
-		{"consequential", "codex_start", "implementation", "consequential", "risk", "a", false, true},
-		{"escalated", "codex", "implementation", "escalated", "retry", "a", false, true},
-		{"small", "codex", "implementation", "subtle", "small", "a,b,c", false, false},
-		{"plan", "codex_start", "plan", "plan_standard", "planning", "a,b,c,d", false, false},
-		{"reply", "codex-reply", "implementation", "subtle", "task-recorded", "a,b,c,d", false, false},
-		{"async-reply", "codex_start", "implementation", "subtle", "task-recorded", "a,b,c,d", false, false},
-		{"accepted-milestone", "codex", "implementation", "consequential", "planning-m1of2", "a,b,c,d", false, false},
-		{"prompt-already-offered", "codex", "implementation", "normal", "large", "a,b,c,d", true, false},
-	} {
+		{name: "five non-test paths deny", task: "subtle", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a.go", "b.go", "c.go", "d.go", "e.go"}, wantDeny: true},
+		{name: "five non-test paths deny without reason", task: "subtle-no-reason", phase: "implementation", route: "subtle", scope: []string{"a.go", "b.go", "c.go", "d.go", "e.go"}, wantDeny: true},
+		{name: "four paths plus tests allow", task: "four-plus-tests", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a.go", "b.go", "c.go", "d.go", "tests/test_a.py", "test_unit.py", "x_test.go"}},
+		{name: "consequential one path deny", task: "consequential", phase: "implementation", route: "consequential", reason: "new_task", scope: []string{"a.go"}, wantDeny: true},
+		{name: "mechanical ten paths allow", task: "mechanical", phase: "implementation", route: "mechanical", reason: "new_task", scope: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}},
+		{name: "operation route allows", task: "operation-route", phase: "implementation", route: "operation", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}},
+		{name: "fix allows", task: "fix-task", phase: "implementation", route: "normal", reason: "fix", scope: []string{"a", "b", "c", "d", "e"}},
+		{name: "continue allows", task: "continue-task", phase: "implementation", route: "normal", reason: "continue", scope: []string{"a", "b", "c", "d", "e"}},
+		{name: "route change allows", task: "route-change-task", phase: "implementation", route: "normal", reason: "route_change", scope: []string{"a", "b", "c", "d", "e"}},
+		{name: "reanchor allows", task: "reanchor-task", phase: "implementation", route: "normal", reason: "reanchor", scope: []string{"a", "b", "c", "d", "e"}},
+		{name: "user override allows", task: "override-task", phase: "implementation", route: "normal", reason: "user_override", scope: []string{"a", "b", "c", "d", "e"}},
+		{name: "reply allows", task: "task-recorded", phase: "implementation", route: "subtle", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}, reply: true},
+		{name: "planned milestone naming exempt", task: "foo-m2of3", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}, completedPlan: true},
+		{name: "planned arbitrary child exempt", task: "foo-anything", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}, completedPlan: true},
+		{name: "milestone name without plan denied", task: "bar-m2of3", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}, wantDeny: true},
+	}
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			scratch := preTempDir(t)
 			repo, state, home := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state"), filepath.Join(scratch, "home")
@@ -46,86 +50,71 @@ func TestPrePlanOffer(t *testing.T) {
 			t.Setenv("PURSER_STATE_DIR", state)
 			t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
 			t.Setenv("CODEX_HOME", filepath.Join(scratch, "codex"))
-			if tc.priorPrompt {
-				contextio.UserPromptSubmit(map[string]any{"cwd": repo, "session_id": "offer-session", "prompt": "We need planning"}, time.Now())
+			if tc.completedPlan {
+				if err := os.MkdirAll(filepath.Join(state, "plans"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(state, "plans", "foo-"+strings.Repeat("a", 64)+".md"), []byte("plan"), 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
-			reply := tc.tool == "codex-reply" || tc.name == "async-reply"
-			if reply {
+			tool := "mcp__codex-main__codex"
+			input := map[string]any{}
+			if tc.reply {
 				seedPreThread(t, repo, state)
+				tool = "mcp__codex-main__codex-reply"
+				input["threadId"], input["mode"] = "thread-p63", "reply"
 			}
-			for call := 0; call < 2; call++ {
-				task := tc.task
-				if call > 0 {
-					task += "-second"
-				}
-				scope := tc.scope
-				if call > 0 {
-					scope = "second/" + strings.ReplaceAll(scope, ",", ",second/")
-				}
-				prompt := fmt.Sprintf("ORCH|task=%s|phase=%s|route=%s|reason=new_task|basis=choose the design|scope=%s\nImplement.", task, tc.phase, tc.route, scope)
-				input := map[string]any{"prompt": prompt, "label": "offer test"}
-				if reply {
-					input["threadId"] = "thread-p63"
-					input["mode"] = "reply"
-				}
-				event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__" + tc.tool, "tool_use_id": fmt.Sprint(call), "session_id": "offer-session", "cwd": repo, "tool_input": input}
-				got, err := Pre(event, state)
-				hook := mapValue(got["hookSpecificOutput"])
-				if err != nil || hook["permissionDecision"] != nil || hook["updatedInput"] == nil {
-					t.Fatalf("call not allowed: %#v %v", got, err)
-				}
-				line := stringValue(hook["additionalContext"])
-				want := tc.want && call == 0
-				if strings.Contains(line, "offer /purser:plan") != want {
-					t.Fatalf("offer=%q want %v", line, want)
-				}
-				if want && line != "This task looks large enough for a plan; offer /purser:plan once in this session if you have not already." {
-					t.Fatalf("unexpected offer: %q", line)
-				}
-				if strings.Contains(stringValue(mapValue(hook["updatedInput"])["prompt"]), "offer /purser:plan") {
-					t.Fatal("offer grew the worker prompt")
-				}
-				if reply || tc.name == "accepted-milestone" {
-					break
-				}
+			reason := ""
+			if tc.reason != "" {
+				reason = "|reason=" + tc.reason
 			}
-			if tc.want {
-				output := contextio.UserPromptSubmit(map[string]any{"cwd": repo, "session_id": "offer-session", "prompt": "We need planning"}, time.Now())
-				if strings.Contains(string(output), "offer /purser:plan") {
-					t.Fatal("prompt repeated the pre-hook offer")
+			prompt := fmt.Sprintf("ORCH|task=%s|phase=%s|route=%s%s|basis=bounded implementation|scope=%s\nImplement.", tc.task, tc.phase, tc.route, reason, strings.Join(tc.scope, ","))
+			input["prompt"] = prompt
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": "plan-redirect-call", "session_id": "plan-redirect-session", "cwd": repo, "tool_input": input}
+			got, err := Pre(event, state)
+			if err != nil {
+				t.Fatalf("Pre: %v", err)
+			}
+			hook := mapValue(got["hookSpecificOutput"])
+			denied := hook["permissionDecision"] == "deny"
+			if denied != tc.wantDeny {
+				t.Fatalf("denied=%v want %v; output=%#v", denied, tc.wantDeny, got)
+			}
+			if tc.wantDeny {
+				reason := stringValue(hook["permissionDecisionReason"])
+				why := fmt.Sprintf("%d non-test scope paths", nonTestScopeCount(tc.scope))
+				if tc.route == "consequential" || tc.route == "escalated" {
+					if nonTestScopeCount(tc.scope) < 5 {
+						why = "route=" + tc.route
+					}
+				}
+				wantReason := fmt.Sprintf("Purser: this is a large new task (%s). Run /purser:plan with the same goal and scope first, then implement its milestones as <plan-task>-m<N>of<T>. If the user explicitly asked to skip planning, resend with reason=user_override.", why)
+				if reason != wantReason {
+					t.Fatalf("redirect reason=%q", reason)
+				}
+				if matches, _ := filepath.Glob(filepath.Join(state, "pending", "*.json")); len(matches) != 0 {
+					t.Fatalf("pending files created: %v", matches)
+				}
+				if matches, _ := filepath.Glob(filepath.Join(state, "projects", "*", "scope_leases.json")); len(matches) != 0 {
+					t.Fatalf("lease files created: %v", matches)
+				}
+				telemetry, err := os.ReadFile(filepath.Join(state, "telemetry", "events", "by_task", tc.task+".jsonl"))
+				if err != nil {
+					t.Fatalf("PLAN_REDIRECT telemetry missing: %v", err)
+				}
+				if lines := strings.Count(string(telemetry), "\n"); lines != 1 {
+					t.Fatalf("PLAN_REDIRECT event count=%d want 1", lines)
+				}
+				var event map[string]any
+				if err := json.Unmarshal(telemetry, &event); err != nil {
+					t.Fatalf("invalid telemetry: %v", err)
+				}
+				payload := mapValue(event["payload"])
+				if event["event_type"] != "PLAN_REDIRECT" || event["task_id"] != tc.task || payload["route"] != tc.route || payload["non_test_scope_count"] != float64(nonTestScopeCount(tc.scope)) {
+					t.Fatalf("unexpected redirect telemetry: %#v", event)
 				}
 			}
 		})
-	}
-}
-
-func TestPlanOfferConcurrentAndUnavailableState(t *testing.T) {
-	root := preTempDir(t)
-	var workers sync.WaitGroup
-	offers := make(chan string, 8)
-	for i := 0; i < cap(offers); i++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			offers <- contextio.ImplementationPlanOffer(root, "project", "session", "task", "consequential", nil)
-		}()
-	}
-	workers.Wait()
-	close(offers)
-	count := 0
-	for offer := range offers {
-		if offer != "" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatalf("concurrent offers=%d", count)
-	}
-	blocked := filepath.Join(root, "blocked")
-	if err := os.WriteFile(blocked, []byte("file"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if offer := contextio.ImplementationPlanOffer(blocked, "project", "session", "task", "consequential", nil); offer != "" {
-		t.Fatalf("unpersisted offer: %q", offer)
 	}
 }
