@@ -30,7 +30,12 @@ type codeMapNativeEntry struct {
 }
 
 func refreshCodeMapNative(repo, stateRoot string, budget time.Duration, extractors map[string]codeMapSymbolExtractor, write func(string, []byte) error) (string, string) {
-	registered := map[string]codeMapSymbolExtractor{"go": extractCodeMapGo}
+	registered := map[string]codeMapSymbolExtractor{
+		"go": extractCodeMapGo, "python": extractPythonSymbols,
+		"javascript": func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "javascript") },
+		"typescript": func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "typescript") },
+		"tsx":        func(source []byte) ([]codeMapSymbol, error) { return extractTreeSitterSymbols(source, "tsx") },
+	}
 	for language, extract := range extractors {
 		registered[language] = extract
 	}
@@ -240,7 +245,7 @@ func renderCodeMapNative(entries map[string]codeMapNativeEntry) ([]byte, error) 
 	if len(covered) == 0 {
 		covered = []string{"none"}
 	}
-	lines := []string{fmt.Sprintf("# Code map v%d", codeMapVersion), "Parser: Python ast; other languages: unavailable", "Covered languages: " + strings.Join(covered, ", "), ""}
+	lines := []string{fmt.Sprintf("# Code map v%d", codeMapVersion), "Parser: native Go/Python/tree-sitter", "Covered languages: " + strings.Join(covered, ", "), ""}
 	paths := make([]string, 0, len(entries))
 	for path := range entries {
 		paths = append(paths, path)
@@ -251,8 +256,8 @@ func renderCodeMapNative(entries map[string]codeMapNativeEntry) ([]byte, error) 
 		lines = append(lines, path)
 		if entry.Coverage == "pending" {
 			lines = append(lines, "  symbols: pending")
-		} else if entry.Coverage == "unavailable" && entry.Language != "unknown" && entry.Language != "python" {
-			lines = append(lines, "  symbols: unavailable (install tree-sitter-language-pack)")
+		} else if entry.Coverage == "unavailable" && entry.Language != "unknown" {
+			lines = append(lines, "  symbols: unavailable (no parser for this language)")
 		}
 		for _, symbol := range entry.Symbols {
 			if len(symbol) != 4 {

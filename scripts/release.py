@@ -28,7 +28,7 @@ GO_HOOK_TARGETS = (
     ("linux", "amd64"), ("linux", "arm64"),
     ("darwin", "amd64"), ("darwin", "arm64"),
 )
-MOD_SOURCE_FILES = ("hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts", "hooks/mod/board.ts", "hooks/mod/usage.ts", "hooks/mod/enforcement.ts")
+MOD_SOURCE_FILES = ("hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts", "hooks/mod/board.ts", "hooks/mod/usage.ts", "hooks/mod/enforcement.ts", "hooks/mod/autocompact.ts")
 
 
 class ReleaseError(Exception):
@@ -128,7 +128,7 @@ def _build_go_hook(staged_tree):
         env.update(CGO_ENABLED="0", GOOS=goos, GOARCH=goarch)
         try:
             result = subprocess.run(
-                [go, "build", "-trimpath", "-ldflags", "-s -w", "-o", str(output), "./cmd/purser-hook"],
+                [go, "build", "-tags", _go_grammar_tags(staged_tree), "-trimpath", "-ldflags", "-s -w", "-o", str(output), "./cmd/purser-hook"],
                 cwd=staged_tree / "go", env=env, text=True, encoding="utf-8",
                 errors="replace", capture_output=True, check=False,
             )
@@ -141,6 +141,18 @@ def _build_go_hook(staged_tree):
             raise ReleaseError(f"Go build produced no binary for {goos}/{goarch}")
         if goos != "windows":
             os.chmod(output, 0o755)
+
+
+def _go_grammar_tags(staged_tree):
+    source = staged_tree / "go" / "internal" / "enforce" / "code_map_grammar_tags.go"
+    try:
+        content = source.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ReleaseError(f"cannot read Go grammar tags: {exc}")
+    match = re.search(r'(?m)^const codeMapGrammarTags = "([^"]+)"$', content)
+    if not match:
+        raise ReleaseError("Go grammar tags are missing or malformed")
+    return ",".join(match.group(1).split())
 
 
 def export_marketplace(commit, marketplace_dir):

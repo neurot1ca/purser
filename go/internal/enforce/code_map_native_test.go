@@ -71,18 +71,37 @@ func TestCodeMapNativeDeadlineBetweenFilesKeepsCompletedEntries(t *testing.T) {
 	}
 }
 
-func TestCodeMapNativeOracleUnavailable(t *testing.T) {
-	w := nativeMapFixture(t, "p43_oracle_unavailable")
-	r, s := nativeMapRepo(t, map[string]string{"sample.js": "function hello() {}\n"})
+func TestCodeMapNativeDefaultExtractors(t *testing.T) {
+	r, s := nativeMapRepo(t, map[string]string{
+		"sample.py":  "class Box:\n    def open(self):\n        pass\n",
+		"sample.js":  "export default () => {};\nexport const run = () => {};\nclass Box { open() {} }\n",
+		"sample.ts":  "export default () => {};\nexport const run = () => {};\nclass Box { open() {} }\n",
+		"sample.tsx": "export default () => {};\nexport const run = () => {};\nclass Box { open() {} }\n",
+		"sample.rs":  "fn unavailable() {}\n",
+	})
 	p, status := refreshCodeMapNative(r, s, time.Second, nil, nil)
 	got, err := os.ReadFile(p)
-	if err != nil || status != "FRESH" || string(got) != w {
+	text := string(got)
+	if err != nil || status != "FRESH" {
 		t.Fatalf("status=%s err=%v\n%s", status, err, got)
+	}
+	for _, want := range []string{
+		"Parser: native Go/Python/tree-sitter", "sample.py\n  1 class Box\n  2 method Box.open",
+		"sample.js\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
+		"sample.ts\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
+		"sample.tsx\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
+		"sample.rs\n  symbols: unavailable (no parser for this language)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in map:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "tree-sitter-language-pack") || strings.Contains(text, "Python ast;") {
+		t.Fatalf("obsolete parser guidance remains:\n%s", text)
 	}
 }
 
 func TestCodeMapNativeOracleOrderingAndTruncation(t *testing.T) {
-	w := nativeMapFixture(t, "p43_oracle_render")
 	r, s := nativeMapRepo(t, map[string]string{"z_last.py": "z", "m_middle.py": "m", "a_first.py": "a"})
 	e := map[string]codeMapSymbolExtractor{"python": func(src []byte) ([]codeMapSymbol, error) {
 		if string(src) == "a" {
@@ -99,7 +118,11 @@ func TestCodeMapNativeOracleOrderingAndTruncation(t *testing.T) {
 	}}
 	p, status := refreshCodeMapNative(r, s, time.Second, e, nil)
 	got, err := os.ReadFile(p)
-	if err != nil || status != "FRESH" || string(got) != w {
+	text := string(got)
+	if err != nil || status != "FRESH" || !strings.HasPrefix(text, "# Code map v5\nParser: native Go/Python/tree-sitter\n") ||
+		!strings.Contains(text, "a_first.py\n  1 function first(argument_0: str='value'") ||
+		!strings.Contains(text, "m_middle.py\n  1 class Zebra\n  3 class Alpha") ||
+		!strings.Contains(text, "z_last.py\n  1 function zed()") {
 		t.Fatalf("status=%s err=%v\n%s", status, err, got)
 	}
 }

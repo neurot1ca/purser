@@ -88,6 +88,9 @@ def repo(tmp_path):
     (path / "base.txt").write_text("base\n", encoding="utf-8")
     (path / "scripts").mkdir()
     shutil.copy2(RELEASE, path / "scripts" / "release.py")
+    grammar_source = path / "go" / "internal" / "enforce" / "code_map_grammar_tags.go"
+    grammar_source.parent.mkdir(parents=True)
+    shutil.copy2(ROOT / "go" / "internal" / "enforce" / "code_map_grammar_tags.go", grammar_source)
     (path / "go" / "cmd" / "purser-hook").mkdir(parents=True)
     (path / "go" / "go.mod").write_text("module test-hook\n\ngo 1.27\n", encoding="utf-8")
     (path / "go" / "cmd" / "purser-hook" / "main.go").write_text(
@@ -350,7 +353,7 @@ def test_export_builds_six_go_binaries_in_staged_plugin(tmp_path):
     assert {line.split()[0] for line in builds} == {
         "windows/amd64", "windows/arm64", "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64",
     }
-    assert all("build -trimpath -ldflags -s -w -o " in line and "./cmd/purser-hook" in line for line in builds)
+    assert all("build -tags grammar_subset,grammar_subset_python,grammar_subset_javascript,grammar_subset_typescript,grammar_subset_tsx -trimpath -ldflags -s -w -o " in line and "./cmd/purser-hook" in line for line in builds)
 
 
 def test_staged_export_requires_mod_sources_and_all_six_binaries(tmp_path):
@@ -433,10 +436,16 @@ def test_go_hook_build_chmods_four_unix_targets(tmp_path, monkeypatch):
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     staged_tree = tmp_path / "staged"
+    grammar_source = staged_tree / "go" / "internal" / "enforce" / "code_map_grammar_tags.go"
+    grammar_source.parent.mkdir(parents=True)
+    shutil.copy2(ROOT / "go" / "internal" / "enforce" / "code_map_grammar_tags.go", grammar_source)
     outputs = []
     chmods = []
 
+    builds = []
+
     def build(command, **_kwargs):
+        builds.append(command)
         output = Path(command[command.index("-o") + 1])
         output.write_bytes(b"fake binary")
         outputs.append(output.name)
@@ -446,6 +455,8 @@ def test_go_hook_build_chmods_four_unix_targets(tmp_path, monkeypatch):
     monkeypatch.setattr(module.subprocess, "run", build)
     monkeypatch.setattr(module.os, "chmod", lambda path, mode: chmods.append((Path(path).name, mode)))
     module._build_go_hook(staged_tree)
+
+    assert all(command[command.index("-tags") + 1] == module._go_grammar_tags(staged_tree) for command in builds)
 
     expected = {"purser-hook-linux-amd64", "purser-hook-linux-arm64", "purser-hook-darwin-amd64", "purser-hook-darwin-arm64"}
     assert set(outputs) == expected | {"purser-hook-windows-amd64.exe", "purser-hook-windows-arm64.exe"}
