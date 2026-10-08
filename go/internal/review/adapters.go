@@ -179,7 +179,7 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 			return nil, err
 		}
 		return []string{executable, "--setting-sources", "", "--restricted", "--print", "--output-format", "json", "--json-schema", string(encoded),
-			"--model", model.(string), "--effort", effort, "--tools", "Read,Glob,Grep", prompt}, nil
+			"--model", model.(string), "--effort", effort, prompt, "--tools", "Read,Glob,Grep"}, nil
 	}
 	return nil, fmt.Errorf("unknown reviewer adapter %q", a.provider)
 }

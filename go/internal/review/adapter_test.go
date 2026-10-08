@@ -142,6 +142,32 @@ func TestClaudeReviewerLaunchCarriesModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestClaudePromptPrecedesVariadicTools(t *testing.T) {
+	adapter, err := ReviewerAdapter("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	config := map[string]any{"reviewer1_executable": filepath.Join(cwd, "claude"), "reviewer1_model_requested": "claude-haiku-5-5", "reviewer1_effort": "high"}
+	prompt := "review packet prompt"
+	command, err := adapter.BuildCommand(prompt, map[string]any{"type": "object"}, config, CommandOptions{WorkingDirectory: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptIndex, toolsIndex := -1, -1
+	for i, arg := range command {
+		if arg == prompt {
+			promptIndex = i
+		}
+		if arg == "--tools" {
+			toolsIndex = i
+		}
+	}
+	if promptIndex < 0 || toolsIndex < 0 || promptIndex > toolsIndex {
+		t.Fatalf("Claude prompt must precede variadic --tools arguments: %#v", command)
+	}
+}
+
 func TestClaudeReviewerAcceptsTierAlias(t *testing.T) {
 	adapter, err := ReviewerAdapter("claude")
 	if err != nil {
