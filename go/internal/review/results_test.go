@@ -83,6 +83,24 @@ func TestResultMappingsGolden(t *testing.T) {
 	}
 }
 
+func TestAgyUsageSurvivesBridgeOutcome(t *testing.T) {
+	parsed, err := ParseAgyEnvelope([]byte(`{"conversation_id":"agy-1","status":"SUCCESS","response":"ignored prose","duration_seconds":1.25,"num_turns":2,"usage":{"input_tokens":30000,"thinking_tokens":22000},"structured_output":{"result":"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","validation":"PASS","findings":[]}}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := bridgeOutcome(CompletedReview{
+		Result: NoMaterialFinding, Validation: "PASS", ConversationID: parsed.ConversationID,
+		Usage: parsed.Usage, DurationSeconds: parsed.DurationSeconds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage, ok := outcome.Attributes["usage"].(map[string]any)
+	if !ok || usage["input_tokens"] != json.Number("30000") || usage["thinking_tokens"] != json.Number("22000") {
+		t.Fatalf("bridge usage = %#v", outcome.Attributes["usage"])
+	}
+}
+
 func TestStderrTail(t *testing.T) {
 	if StderrTail(nil) != nil || StderrTail("") != nil {
 		t.Fatal("empty stderr should be absent")

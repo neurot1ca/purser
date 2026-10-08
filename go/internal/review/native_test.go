@@ -219,6 +219,9 @@ func TestNativeRunBridgeDifferential(t *testing.T) {
 	}
 	actual := map[string]any{"outcome": got.Outcome}
 	for key, value := range got.Attributes {
+		if key == "usage" {
+			continue // Go carries reviewer telemetry separately from Python's public mapping.
+		}
 		actual[key] = value
 	}
 	actualJSON, _ := json.Marshal(actual)

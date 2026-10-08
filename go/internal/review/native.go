@@ -155,7 +155,9 @@ func sortStrings(values []string) {
 func bridgeOutcome(value any) (BridgeOutcome, error) {
 	switch result := value.(type) {
 	case CompletedReview:
-		return BridgeOutcome{Outcome: "completed", Attributes: result.Map()}, nil
+		attributes := result.Map()
+		attributes["usage"] = result.Usage
+		return BridgeOutcome{Outcome: "completed", Attributes: attributes}, nil
 	case UnavailableReview:
 		return BridgeOutcome{Outcome: "unavailable", Attributes: result.Map(), Diagnostics: result.Diagnostics}, nil
 	case IncompleteReview:
