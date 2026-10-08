@@ -82,6 +82,19 @@ prompts. Resolved consequential implementation may use `subtle` only with the
 accepted map and every invariant explicit; Claude still reviews it as
 consequential. `gpt-6-luna` + `xhigh` is invalid; unresolved work uses `gpt-6.1-sol`.
 
+### Phase A pilot: Purser dispatcher
+
+The foreground workflow remains the default. Use `purser:dispatcher` only for
+the Phase A pilot, after main Claude fixes the design, route, scope, authority,
+and acceptance criteria. Pass the exact worker prompt, including its `ORCH`
+line, and the exact tool arguments. Keep dispatcher instructions outside the
+worker prompt. Run one dispatcher lifecycle at a time per session and project.
+
+Main Claude keeps routing, semantic review, disagreement resolution,
+acceptance, and commits. Accept only in one explicit main message that names
+the job, reviewed revision, contract, and evidence. The dispatcher then applies
+that accepted revision and reports its receipt.
+
 Runtime configuration owns capability; never pass `sandbox` or
 `approval-policy`. Fail over on typed quota/credit exhaustion, never route
 proactively by quota. After each call, report bundle model and effort plus
