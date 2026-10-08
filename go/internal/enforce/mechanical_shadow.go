@@ -20,6 +20,11 @@ import (
 const mechanicalShadowTimeout = 45 * time.Second
 const mechanicalShadowLockMaxAge = mechanicalShadowTimeout + 600*time.Second
 
+// RunMechanicalShadowJob executes one detached mechanical shadow job.
+func RunMechanicalShadowJob(jobPath string) bool {
+	return runMechanicalShadowJob(context.Background(), jobPath, "", mechanicalShadowTimeout)
+}
+
 type mechanicalShadowRecord struct {
 	Model          string `json:"model"`
 	Prompt         string `json:"prompt"`

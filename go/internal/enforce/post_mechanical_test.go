@@ -2,11 +2,13 @@ package enforce
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
+
+	"purser-hook/internal/proc"
 )
 
 func TestPostMechanicalPythonFixture(t *testing.T) {
@@ -48,14 +50,17 @@ func TestPostMechanicalPythonFixture(t *testing.T) {
 	}
 	assertMechanicalFiles(t, root, caseByName["sample_recorded_ranking_updated_launch_spec"])
 
-	python, script, job := "__PYTHON__", filepath.Join("__ORCH__", "mechanical_learning.py"), "__JOB__"
-	spec := shadowSpec(python, script, job)
+	executable, job := "__EXECUTABLE__", filepath.Join("opencode_shadows", "__JOB__")
+	spec := shadowSpec(executable, job)
 	want := caseByName["sample_recorded_ranking_updated_launch_spec"].Launch
 	gotArgv := make([]any, len(spec.Argv))
 	for i, arg := range spec.Argv {
-		gotArgv[i] = strings.ReplaceAll(arg, filepath.Join("__ORCH__", "mechanical_learning.py"), "__SCRIPT__")
+		if arg == job {
+			arg = "__JOB__"
+		}
+		gotArgv[i] = arg
 	}
-	got := map[string]any{"argv": gotArgv, "env": nil, "cwd": strings.ReplaceAll(spec.Cwd, ".", "__ORCH__")}
+	got := map[string]any{"argv": gotArgv, "env": nil, "cwd": filepath.Base(spec.Cwd)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch spec = %#v, want %#v", got, want)
 	}
@@ -70,6 +75,8 @@ func TestPostMechanicalPythonFixture(t *testing.T) {
 	t.Run("launch failure is swallowed", func(t *testing.T) {
 		state := t.TempDir()
 		writeMechanicalInventory(t, state)
+		startMechanicalShadowDetached = func([]string, []string, string) error { return errors.New("launch failed") }
+		t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
 		PostMechanicalLearning(map[string]any{}, state, filepath.Join(t.TempDir(), "missing"), "project", mechanicalPending(), mechanicalBundle())
 		if _, err := os.Stat(filepath.Join(state, "opencode", "leader.json")); err != nil {
 			t.Fatal(err)
@@ -86,16 +93,62 @@ func TestPostMechanicalPythonFixture(t *testing.T) {
 }
 
 func TestStartMechanicalShadowLaunchFailureRemovesLock(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
 	root := t.TempDir()
 	writeMechanicalInventory(t, root)
-	err := startMechanicalShadow(root, t.TempDir(), "project", "repo", "prompt", "report", "served")
+	startMechanicalShadowDetached = func([]string, []string, string) error { return os.ErrNotExist }
+	t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
+	err := startMechanicalShadow(root, "project", "repo", "prompt", "report", "served")
 	if err == nil {
-		t.Fatal("startMechanicalShadow() error = nil, want missing Python error")
+		t.Fatal("startMechanicalShadow() error = nil, want launch error")
 	}
 	lock := filepath.Join(root, "projects", "project", "opencode_shadows", "running.lock")
 	if _, err := os.Stat(lock); !os.IsNotExist(err) {
 		t.Fatalf("running.lock stat error = %v, want file removed after launch failure", err)
+	}
+}
+
+func TestStartMechanicalShadowLaunchesBundledCommand(t *testing.T) {
+	root := t.TempDir()
+	writeMechanicalInventory(t, root)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var launched []string
+	var launchedDir string
+	startMechanicalShadowDetached = func(argv, _ []string, dir string) error {
+		launched, launchedDir = argv, dir
+		return nil
+	}
+	t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
+	rejected := mechanicalBundle()
+	rejected["validation"] = "FAIL"
+	PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", mechanicalPending(), rejected)
+	if len(launched) != 0 {
+		t.Fatalf("rejected result launched shadow: %#v", launched)
+	}
+	PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", mechanicalPending(), mechanicalBundle())
+	if len(launched) != 3 || launched[0] != executable || launched[1] != "mechanical-shadow" {
+		t.Fatalf("launch argv = %#v, want current executable mechanical-shadow <job>", launched)
+	}
+	if launchedDir != filepath.Dir(launched[2]) {
+		t.Fatalf("launch cwd = %q, want job directory %q", launchedDir, filepath.Dir(launched[2]))
+	}
+	var job map[string]any
+	data, err := os.ReadFile(launched[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(data, &job); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"model": "shadow", "prompt": "prompt", "repository": "repo", "accepted_report": "accepted", "project_key": "project", "state_root": root} {
+		if job[key] != want {
+			t.Errorf("job[%q] = %#v, want %q", key, job[key], want)
+		}
+	}
+	if scratch, ok := job["scratch"].(string); !ok || filepath.Dir(scratch) != launchedDir {
+		t.Errorf("job scratch = %#v, want path under %q", job["scratch"], launchedDir)
 	}
 }
 

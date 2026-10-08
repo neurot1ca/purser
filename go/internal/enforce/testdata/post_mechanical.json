@@ -43,13 +43,12 @@
         },
         "launch": {
           "argv": [
-            "__PYTHON__",
-            "__SCRIPT__",
-            "--shadow",
+            "__EXECUTABLE__",
+            "mechanical-shadow",
             "__JOB__"
           ],
           "env": null,
-          "cwd": "__ORCH__"
+          "cwd": "opencode_shadows"
         },
         "job": {
           "model": "shadow",

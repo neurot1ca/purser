@@ -1,13 +1,11 @@
 package enforce
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"time"
@@ -58,7 +56,7 @@ func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey 
 	if pending["agent"] == "opencode" {
 		served = fmt.Sprint(pending["model"])
 	}
-	_ = startMechanicalShadow(root, pluginRoot, projectKey, fmt.Sprint(repository), fmt.Sprint(pending["shadow_prompt"]), fmt.Sprint(bundle["implementer_report"]), served)
+	_ = startMechanicalShadow(root, projectKey, fmt.Sprint(repository), fmt.Sprint(pending["shadow_prompt"]), fmt.Sprint(bundle["implementer_report"]), served)
 }
 
 func recordMechanicalSample(root, model string, success bool) error {
@@ -210,11 +208,13 @@ type mechanicalShadowSpec struct {
 	Cwd  string   `json:"cwd"`
 }
 
-func shadowSpec(python, script, job string) mechanicalShadowSpec {
-	return mechanicalShadowSpec{[]string{python, script, "--shadow", job}, nil, filepath.Dir(script)}
+func shadowSpec(executable, job string) mechanicalShadowSpec {
+	return mechanicalShadowSpec{[]string{executable, "mechanical-shadow", job}, nil, filepath.Dir(job)}
 }
 
-func startMechanicalShadow(root, pluginRoot, projectKey, repository, prompt, report, served string) error {
+var startMechanicalShadowDetached = proc.StartDetached
+
+func startMechanicalShadow(root, projectKey, repository, prompt, report, served string) error {
 	data, err := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
 	if err != nil {
 		return err
@@ -277,36 +277,18 @@ func startMechanicalShadow(root, pluginRoot, projectKey, repository, prompt, rep
 		_ = os.Remove(lock)
 		return err
 	}
-	script, err := filepath.Abs(filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "mechanical_learning.py"))
+	executable, err := os.Executable()
 	if err != nil {
 		_ = os.Remove(job)
 		_ = os.Remove(lock)
 		return err
 	}
-	python := proc.ResolvePython(context.Background(), pluginRoot)
-	if python == "" {
-		_ = os.Remove(job)
-		_ = os.Remove(lock)
-		return fmt.Errorf("python executable unavailable")
-	}
-	spec := shadowSpec(python, script, job)
-	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
-	cmd.Dir, cmd.Env = spec.Cwd, spec.Env
-	null, err := os.Open(os.DevNull)
-	if err != nil {
+	spec := shadowSpec(executable, job)
+	if err = startMechanicalShadowDetached(spec.Argv, spec.Env, spec.Cwd); err != nil {
 		_ = os.Remove(job)
 		_ = os.Remove(lock)
 		return err
 	}
-	defer null.Close()
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = null, null, null
-	proc.ConfigureProcessTreeKill(cmd)
-	if err = cmd.Start(); err != nil {
-		_ = os.Remove(job)
-		_ = os.Remove(lock)
-		return err
-	}
-	_ = os.WriteFile(lock, []byte(fmt.Sprint(cmd.Process.Pid)), 0600)
 	return nil
 }
 
