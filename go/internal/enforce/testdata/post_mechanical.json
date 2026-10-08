@@ -182,5 +182,179 @@
         "job": null
       }
     }
+  ],
+  "shadow_cases": [
+    {
+      "name": "run_shadow_success",
+      "result": {
+        "result": true,
+        "inventory": {
+          "candidates": [
+            {
+              "id": "shadow",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            {
+              "id": "served",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                false,
+                false
+              ]
+            }
+          ]
+        },
+        "artifacts_removed": {
+          "job": true,
+          "scratch": true,
+          "lock": true
+        },
+        "repository_unchanged": true,
+        "telemetry": [
+          {
+            "event": "MECHANICAL_MODEL_RANK_CHANGED",
+            "state_root": "__STATE__",
+            "project_key": "fixture-project",
+            "served_model": "shadow",
+            "old_rank": 2,
+            "new_rank": 1
+          },
+          {
+            "event": "SHADOW_FINISHED",
+            "state_root": "__STATE__",
+            "project_key": "fixture-project",
+            "candidate": "shadow",
+            "status": "completed",
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "total_tokens": 14,
+            "agreement": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "run_shadow_failure",
+      "result": {
+        "result": false,
+        "inventory": {
+          "candidates": [
+            {
+              "id": "shadow",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                true,
+                false
+              ]
+            },
+            {
+              "id": "served",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                false,
+                false
+              ]
+            }
+          ]
+        },
+        "artifacts_removed": {
+          "job": true,
+          "scratch": true,
+          "lock": true
+        },
+        "repository_unchanged": true,
+        "telemetry": [
+          {
+            "event": "MECHANICAL_MODEL_RANK_CHANGED",
+            "state_root": "__STATE__",
+            "project_key": "fixture-project",
+            "served_model": "shadow",
+            "old_rank": 2,
+            "new_rank": 1
+          },
+          {
+            "event": "SHADOW_FINISHED",
+            "state_root": "__STATE__",
+            "project_key": "fixture-project",
+            "candidate": "shadow",
+            "status": "failed",
+            "input_tokens": 3,
+            "output_tokens": 2,
+            "total_tokens": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "run_shadow_timeout",
+      "result": {
+        "result": false,
+        "inventory": {
+          "candidates": [
+            {
+              "id": "shadow",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                true,
+                false
+              ]
+            },
+            {
+              "id": "served",
+              "status": "measured",
+              "mechanical_samples": [
+                true,
+                true,
+                true,
+                false,
+                false
+              ]
+            }
+          ]
+        },
+        "artifacts_removed": {
+          "job": true,
+          "scratch": true,
+          "lock": true
+        },
+        "repository_unchanged": true,
+        "telemetry": [
+          {
+            "event": "MECHANICAL_MODEL_RANK_CHANGED",
+            "state_root": "__STATE__",
+            "project_key": "fixture-project",
+            "served_model": "shadow",
+            "old_rank": 2,
+            "new_rank": 1
+          },
+          {
+            "event": "SHADOW_FINISHED",
+            "state_root": "__STATE__",
+            "project_key": "fixture-project",
+            "candidate": "shadow",
+            "status": "failed"
+          }
+        ]
+      }
+    }
   ]
 }

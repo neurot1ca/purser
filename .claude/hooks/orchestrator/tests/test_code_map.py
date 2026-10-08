@@ -82,6 +82,13 @@ def test_unsupported_language_without_parser_is_listed(tmp_path, monkeypatch):
     assert "Covered languages: none" in data
 
 
+def test_p43_python_symbols_match_frozen_oracle():
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "go_policy" / "code_map.json").read_text(encoding="utf-8"))
+    case = next(case for case in fixture["cases"] if case["name"] == "p43_oracle_symbols")
+    source = case["sources"]["nested.py"].encode("utf-8")
+    assert code_map._python_symbols(source) == case["expected_symbols"]["nested.py"]
+
+
 def test_tree_sitter_when_installed(tmp_path, monkeypatch):
     name, backend = code_map._backend()
     if backend is None or not hasattr(backend, "get_tags_query"):

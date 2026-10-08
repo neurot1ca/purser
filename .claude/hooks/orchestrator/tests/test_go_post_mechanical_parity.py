@@ -1,7 +1,9 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
+import uuid
 
 ROOT = Path(__file__).resolve().parents[4]
 ORCH = ROOT / ".claude" / "hooks" / "orchestrator"
@@ -9,6 +11,8 @@ FIXTURE = ROOT / "go" / "internal" / "enforce" / "testdata" / "post_mechanical.j
 sys.path.insert(0, str(ORCH))
 import mechanical_learning
 import model_listing
+import coder_config
+import telemetry
 
 
 def _inventory():
@@ -70,6 +74,67 @@ def _run_case(name, tmp_path, monkeypatch):
             "job": job_data}
 
 
+def _run_shadow_case(name, tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    candidates = state / "opencode" / "candidates.json"
+    candidates.parent.mkdir(parents=True)
+    candidates.write_text(json.dumps({"candidates": [
+        {"id": "served", "status": "measured", "mechanical_samples": [True, True, True, False, False]},
+        {"id": "shadow", "status": "available", "mechanical_samples": [True] * 4},
+    ]}), encoding="utf-8")
+    source = tmp_path / "repository"
+    source.mkdir()
+    (source / "original.txt").write_text("unchanged", encoding="utf-8")
+    shadow_dir = state / "projects" / "fixture-project" / "opencode_shadows"
+    shadow_dir.mkdir(parents=True)
+    scratch = shadow_dir / "run-fixture"
+    job = shadow_dir / "fixture.json"
+    job.write_text(json.dumps({"model": "shadow", "repository": str(source),
+        "prompt": name, "accepted_report": "Changed parser to retain valid free candidates.",
+        "scratch": str(scratch), "project_key": "fixture-project", "state_root": str(state)}),
+        encoding="utf-8")
+    lock = shadow_dir / "running.lock"
+    lock.write_text("1234", encoding="utf-8")
+
+    fake = tmp_path / "fake_opencode.py"
+    fake.write_text(
+        "import json, sys, time\n"
+        "scenario = sys.argv[-1]\n"
+        "if scenario == 'timeout': time.sleep(2)\n"
+        "if scenario == 'success':\n"
+        " print(json.dumps({'type':'text','part':{'text':'Changed parser to retain valid free candidates.'}}))\n"
+        " print(json.dumps({'type':'step_finish','part':{'reason':'stop','tokens':{'input':10,'output':4,'total':14}}}))\n"
+        "elif scenario == 'failure':\n"
+        " print(json.dumps({'type':'step_finish','part':{'reason':'error','tokens':{'input_tokens':3,'output_tokens':2,'total_tokens':5}}}))\n"
+        " sys.exit(1)\n", encoding="utf-8")
+    if os.name == "nt":
+        executable = tmp_path / "fake_opencode.cmd"
+        executable.write_text(f'@echo off\n"{sys.executable}" "{fake}" %*\n', encoding="utf-8")
+    else:
+        executable = tmp_path / "fake_opencode"
+        executable.write_text(f"#!{sys.executable}\n" + fake.read_text(encoding="utf-8"), encoding="utf-8")
+        executable.chmod(0o755)
+    monkeypatch.setattr(coder_config, "opencode_binary", lambda: str(executable))
+    if name == "timeout":
+        monkeypatch.setattr(mechanical_learning, "SHADOW_TIMEOUT_SECONDS", 0.2)
+    events = []
+    monkeypatch.setattr(telemetry, "emit", lambda event, **payload: events.append({"event": event, **payload}))
+    result = mechanical_learning.run_shadow(job)
+    inventory = json.loads(candidates.read_text(encoding="utf-8"))
+    clean_events = []
+    for event in events:
+        event.pop("elapsed_ms", None)
+        if "state_root" in event:
+            event["state_root"] = "__STATE__"
+        clean_events.append(event)
+    return {"result": result, "inventory": inventory,
+            "artifacts_removed": {"job": not job.exists(), "scratch": not scratch.exists(),
+                                  "lock": not lock.exists()},
+            "repository_unchanged": (source / "original.txt").read_text(encoding="utf-8") == "unchanged"
+                                    and len(list(source.iterdir())) == 1,
+            "telemetry": clean_events}
+
+
 def test_python_post_mechanical_oracle_fixture(tmp_path, monkeypatch):
     names = ("sample_recorded_ranking_updated_launch_spec", "sample_write_failure",
              "launch_failure", "feature_disabled_by_config")
@@ -79,10 +144,27 @@ def test_python_post_mechanical_oracle_fixture(tmp_path, monkeypatch):
         case.mkdir()
         actual.append({"name": name, "result": _run_case(name, case, monkeypatch)})
         monkeypatch.undo()
+    shadow_cases = []
+    scratch_root = ROOT / ".tmp"
+    scratch_root.mkdir(exist_ok=True)
+    for name in ("success", "failure", "timeout"):
+        repeated = []
+        for index in range(2):
+            case = scratch_root / f"post-mechanical-{uuid.uuid4().hex}"
+            case.mkdir()
+            try:
+                repeated.append(_run_shadow_case(name, case, monkeypatch))
+            finally:
+                monkeypatch.undo()
+                shutil.rmtree(case, ignore_errors=True)
+        assert repeated[0] == repeated[1]
+        shadow_cases.append({"name": f"run_shadow_{name}", "result": repeated[0]})
     if os.environ.get("POST_MECHANICAL_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
         FIXTURE.write_text(json.dumps({"oracle": "mechanical_learning.record_sample+start_shadow",
-                                       "cases": actual}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                                       "cases": actual, "shadow_cases": shadow_cases},
+                          ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture["oracle"] == "mechanical_learning.record_sample+start_shadow"
     assert actual == fixture["cases"]
+    assert shadow_cases == fixture["shadow_cases"]
