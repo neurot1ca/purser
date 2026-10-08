@@ -1,6 +1,6 @@
 import json
 import json
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import os
 from pathlib import Path
@@ -352,7 +352,8 @@ def _maintenance_oracle(scratch):
 
         monkeypatch.setattr(codex_exec_mcp.Server, "_start_job", guarded_job_start)
 
-        def guarded_run_report(root, *, report_type, state, _require_idle=False):
+        def guarded_run_report(root, *, report_type, state=None, _require_idle=False):
+            state = state or maintenance_reports.state_root.default_state_root()
             guarded_run_report_calls.append({"root": root, "report_type": report_type,
                                              "require_idle": _require_idle})
             server = codex_exec_mcp.Server(job_dir=state / "codex_exec_mcp" / "jobs", agent="codex")
@@ -372,9 +373,11 @@ def _maintenance_oracle(scratch):
 
         monkeypatch.setattr(maintenance_reports, "run_report", guarded_run_report)
         stdout = StringIO()
+        stderr = StringIO()
         try:
-            with redirect_stdout(stdout):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
                 exit_code = maintenance_reports.main([*argv, "--repo", str(repo)])
+            assert stderr.getvalue() == "", f"{name}: unexpected stderr {stderr.getvalue()!r}"
             assert not real_job_start_calls, f"{name}: a real Codex job-start function was called"
             result = {
                 "command": name,
@@ -395,6 +398,8 @@ def _maintenance_oracle(scratch):
     invoke("opt-out", ["opt-out"], lambda repo, state: maintenance_reports.opt_in(repo, state=state))
     invoke("consent-accept", ["consent", "yes"])
     invoke("consent-decline", ["consent", "no"])
+    invoke("run-cleanup", ["run", "cleanup"],
+           lambda repo, state: maintenance_reports.opt_in(repo, state=state))
 
     def notice_setup(repo, state, pending=True):
         maintenance_reports.opt_in(repo, state=state)
@@ -449,8 +454,10 @@ def _maintenance_oracle(scratch):
                 repo.resolve(), maintenance_reports.state_root.default_state_root()) / "reports" / "cleanup"
             assert notice.resolve().parent == expected_dir.resolve()
             stdout = StringIO()
-            with redirect_stdout(stdout):
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
                 code = maintenance_reports.main([command, "--repo", str(repo), "--report", str(notice)])
+            assert stderr.getvalue() == "", f"{name}: unexpected stderr {stderr.getvalue()!r}"
             cases.append({"command": name, "stdout": stdout.getvalue().strip(),
                           "exit_code": code, "state": snapshot(state, repo)})
         finally:

@@ -1,30 +1,31 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
+
+	"purser-hook/internal/contextio"
 )
 
 func saveSessionMaintenanceHooks(t *testing.T) {
 	t.Helper()
 	oldDiscover, oldCleanup := discoverSessionModelVersion, cleanupSessionJobs
-	oldResolve, oldStart, oldStderr := resolveSessionPython, startSessionMaintenance, sessionMaintenanceStderr
+	oldStart := startSessionMaintenance
 	oldContext, oldWrite := contextSessionStart, writeSessionOutput
 	t.Cleanup(func() {
 		discoverSessionModelVersion, cleanupSessionJobs = oldDiscover, oldCleanup
-		resolveSessionPython, startSessionMaintenance, sessionMaintenanceStderr = oldResolve, oldStart, oldStderr
+		startSessionMaintenance = oldStart
 		contextSessionStart, writeSessionOutput = oldContext, oldWrite
 	})
 }
 
 func writeMaintenanceOptIn(t *testing.T, state, root string) {
 	t.Helper()
-	dir := filepath.Join(state, "projects", maintenanceProjectKey(root), "maintenance")
+	dir := filepath.Join(state, "projects", contextio.ProjectKey(root), "maintenance")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -40,60 +41,36 @@ func quoteJSON(value string) string {
 
 func TestMaintenanceReportWakeRequiresMatchingOptIn(t *testing.T) {
 	saveSessionMaintenanceHooks(t)
-	state, root, plugin := t.TempDir(), t.TempDir(), t.TempDir()
+	state, root := t.TempDir(), t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", state)
-	t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
+	if output, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writes, resolves, starts := 0, 0, 0
-	resolveSessionPython = func(context.Context, string) string { resolves++; return "python" }
+	starts := 0
 	startSessionMaintenance = func(args, env []string, _ string) error {
 		starts++
-		if len(args) != 5 || args[0] != "python" || args[1] != filepath.Join(plugin, ".claude", "hooks", "orchestrator", "maintenance_reports.py") || args[2] != "check" || args[3] != "--repo" || args[4] != resolved {
+		if len(args) != 5 || args[0] == "" || args[1] != "maintenance" || args[2] != "check" || args[3] != "--repo" || args[4] != resolved {
 			t.Fatalf("spawn args = %#v", args)
 		}
-		foundUTF8 := false
 		for _, value := range env {
 			if value == "PYTHONUTF8=1" {
-				foundUTF8 = true
+				t.Fatal("Go maintenance launch must not set Python environment")
 			}
-		}
-		if !foundUTF8 {
-			t.Fatal("spawn environment lacks PYTHONUTF8=1")
 		}
 		return nil
 	}
-	sessionMaintenanceStderr = func(string) { writes++ }
 	wakeMaintenanceReport(root)
-	if resolves != 0 || starts != 0 || writes != 0 {
-		t.Fatalf("without opt-in: resolves=%d starts=%d stderr=%d", resolves, starts, writes)
+	if starts != 0 {
+		t.Fatalf("without opt-in: starts=%d", starts)
 	}
 	writeMaintenanceOptIn(t, state, resolved)
 	wakeMaintenanceReport(root)
-	if resolves != 1 || starts != 1 || writes != 0 {
-		t.Fatalf("with opt-in: resolves=%d starts=%d stderr=%d", resolves, starts, writes)
-	}
-}
-
-func TestMaintenanceReportPythonMissingWritesSkipLine(t *testing.T) {
-	saveSessionMaintenanceHooks(t)
-	state, root := t.TempDir(), t.TempDir()
-	t.Setenv("PURSER_STATE_DIR", state)
-	resolved, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeMaintenanceOptIn(t, state, resolved)
-	resolveSessionPython = func(context.Context, string) string { return "" }
-	starts := 0
-	startSessionMaintenance = func([]string, []string, string) error { starts++; return nil }
-	var lines []string
-	sessionMaintenanceStderr = func(line string) { lines = append(lines, line) }
-	wakeMaintenanceReport(root)
-	if starts != 0 || !reflect.DeepEqual(lines, []string{"Purser: maintenance reports need Python; skipped"}) {
-		t.Fatalf("starts=%d stderr=%q", starts, lines)
+	if starts != 1 {
+		t.Fatalf("with opt-in: starts=%d", starts)
 	}
 }
 

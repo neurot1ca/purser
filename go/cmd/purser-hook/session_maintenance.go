@@ -1,30 +1,22 @@
 package main
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"time"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/jobs"
+	"purser-hook/internal/maintenance"
 	"purser-hook/internal/models"
-	"purser-hook/internal/obsidian"
 	"purser-hook/internal/proc"
 )
 
 var (
 	discoverSessionModelVersion = models.DiscoverModelVersion
 	cleanupSessionJobs          = jobs.CleanupJobs
-	resolveSessionPython        = proc.ResolvePython
 	startSessionMaintenance     = proc.StartDetached
-	sessionMaintenanceStderr    = func(line string) { _, _ = fmt.Fprintln(os.Stderr, line) }
 	contextSessionStart         = contextio.SessionStart
 	writeSessionOutput          = func(output []byte) { _, _ = os.Stdout.Write(output) }
 )
@@ -52,15 +44,11 @@ func safeSessionMaintenanceStep(step func()) {
 }
 
 func wakeMaintenanceReport(repository string) {
-	root, err := filepath.Abs(repository)
+	root, err := maintenance.CanonicalRepository(repository)
 	if err != nil {
 		return
 	}
-	if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
-		root = filepath.Clean(resolved)
-	}
-	projectKey := maintenanceProjectKey(root)
-	markerPath := filepath.Join(stateRoot(), "projects", projectKey, "maintenance", "opt-in.json")
+	markerPath := filepath.Join(maintenance.MaintenanceDirectory(stateRoot(), root), "opt-in.json")
 	markerData, err := os.ReadFile(markerPath)
 	if err != nil {
 		return
@@ -72,24 +60,11 @@ func wakeMaintenanceReport(repository string) {
 	if json.Unmarshal(markerData, &marker) != nil || !marker.Enabled || marker.ProjectRoot != root {
 		return
 	}
-	pluginRoot := obsidian.PluginRoot()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	python := resolveSessionPython(ctx, pluginRoot)
-	cancel()
-	if python == "" {
-		sessionMaintenanceStderr("Purser: maintenance reports need Python; skipped")
+	executable, err := os.Executable()
+	if err != nil {
 		return
 	}
-	env := append(os.Environ(), "PYTHONUTF8=1")
-	args := []string{python, filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "maintenance_reports.py"), "check", "--repo", root}
+	env := os.Environ()
+	args := []string{executable, "maintenance", "check", "--repo", root}
 	_ = startSessionMaintenance(args, env, "")
-}
-
-func maintenanceProjectKey(canonicalRoot string) string {
-	keyPath := canonicalRoot
-	if runtime.GOOS == "windows" {
-		keyPath = strings.ToLower(filepath.Clean(keyPath))
-	}
-	hash := sha256.Sum256([]byte(keyPath))
-	return hex.EncodeToString(hash[:])[:16]
 }

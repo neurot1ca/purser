@@ -50,6 +50,32 @@
       }
     },
     {
+      "command": "run-cleanup",
+      "stdout": "None",
+      "exit_code": 0,
+      "guarded_run_report_calls": 1,
+      "guarded_job_start_calls": 1,
+      "real_job_start_calls": 0,
+      "state": {
+        "codex_exec_mcp/jobs/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.json": {
+          "jobId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "state": "SUCCEEDED",
+          "jobPhase": "operation",
+          "report_type": "cleanup",
+          "fake": true
+        },
+        "projects/<PROJECT_KEY>/maintenance/consent.json": {
+          "project_root": "<REPO>",
+          "decision": "yes",
+          "source": "manual-opt-in"
+        },
+        "projects/<PROJECT_KEY>/maintenance/opt-in.json": {
+          "project_root": "<REPO>",
+          "enabled": true
+        }
+      }
+    },
+    {
       "command": "skip-second-show",
       "stdout": "",
       "exit_code": 0,
