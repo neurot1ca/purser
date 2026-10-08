@@ -42,3 +42,38 @@ func TestMaintenanceNoticeCoverageTargetAndFindingOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestMaintenanceNoticeWhyColumnsAndLegacyFindings(t *testing.T) {
+	master := `> *Say "turn off maintenance" to stop these reports, or run one any time with /purser:optimize.*`
+	for _, test := range []struct {
+		reportType string
+		header     string
+	}{
+		{"cleanup", "> | Finding | Why clean it | Evidence |"},
+		{"test-gaps", "> | Gap | Why it matters | Evidence |"},
+	} {
+		t.Run(test.reportType+" legacy", func(t *testing.T) {
+			text := formatMaintenanceNotice(map[string]any{
+				"report_type":   test.reportType,
+				"finding_count": 1,
+				"findings":      []any{map[string]any{"path_line": "a.py:1", "symbol": "a", "evidence": "e", "confidence": "high"}},
+			})
+			if !strings.Contains(text, test.header) || !strings.Contains(text, "| a.py:1 a | — | e |") || !strings.Contains(text, master) {
+				t.Fatalf("legacy notice missing reason column or master instruction: %s", text)
+			}
+		})
+		t.Run(test.reportType+" why truncation", func(t *testing.T) {
+			why := strings.Repeat("界", 70)
+			evidence := strings.Repeat("e", 60)
+			text := formatMaintenanceNotice(map[string]any{
+				"report_type":   test.reportType,
+				"finding_count": 1,
+				"findings":      []any{map[string]any{"path_line": "a.py:1", "symbol": "a", "why": why, "evidence": evidence, "confidence": "high"}},
+			})
+			row := "| a.py:1 a | " + strings.Repeat("界", 64) + " | " + strings.Repeat("e", 48) + " |"
+			if !strings.Contains(text, row) {
+				t.Fatalf("notice did not apply rune limits: %s", text)
+			}
+		})
+	}
+}

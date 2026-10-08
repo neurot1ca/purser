@@ -264,15 +264,15 @@ func formatMaintenanceNotice(notice map[string]any) string {
 		if !findingsOK {
 			lines = append(lines, "> *The findings could not be parsed; report: `"+path+"`.*")
 		} else {
-			lines = append(lines, "> *The table below shows each gap and its evidence; the full report is at `"+path+"`.*", "> | Gap | Evidence |", "> | --- | --- |")
+			lines = append(lines, "> *The table below shows each gap, why it matters, and its evidence; the full report is at `"+path+"`.*", "> | Gap | Why it matters | Evidence |", "> | --- | --- | --- |")
 			for _, item := range rankMaintenanceFindings(findings, 5, true) {
-				lines = append(lines, fmt.Sprintf("> | %s | %s |", truncateRunes(maintenanceCandidate(item), 48), truncateRunes(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)))
+				lines = append(lines, fmt.Sprintf("> | %s | %s | %s |", truncateRunes(maintenanceCandidate(item), 48), maintenanceWhy(item), truncateRunes(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)))
 			}
 		}
 		if notice["pending_cycle"] != nil && notice["pending_cycle"] != "no-window" && number(notice["pending_show"]) == 1 && notice["pending_skip_second"] != true {
 			lines = append(lines, "> *Skip showing this again in this cycle?*")
 		}
-		lines = append(lines, "> *You can turn the module off at any time, or run it any time with /purser:optimize.*")
+		lines = append(lines, "> *Say \"turn off maintenance\" to stop these reports, or run one any time with /purser:optimize.*")
 		return strings.Join(lines, "\n")
 	}
 	intro := "⚓ **While you worked, Purser scanned your project in the background with its proactive cleanup module: the number of findings is unknown.**"
@@ -283,20 +283,20 @@ func formatMaintenanceNotice(notice map[string]any) string {
 		return "> " + intro + "\n> *The findings could not be parsed; report: `" + path + "`.*"
 	}
 	ranked := rankMaintenanceFindings(findings, 5, false)
-	instruction := "The table below lists each finding and its evidence. Just say \"clean up\" to have them cleaned."
+	instruction := "The table below lists each finding, why to clean it, and its evidence. Just say \"clean up\" to have them cleaned."
 	if len(findings) > 5 {
-		instruction = "The table below lists the top 5 findings and their evidence. Just say \"clean up\" to have them cleaned. The other findings are in this file to save tokens: `" + path + "`"
+		instruction = "The table below lists the top 5 findings, why to clean them, and their evidence. Just say \"clean up\" to have them cleaned. The other findings are in this file to save tokens: `" + path + "`"
 	}
-	lines := []string{"> " + intro, "> *" + instruction + "*", "> | Finding | Evidence |", "> | --- | --- |"}
+	lines := []string{"> " + intro, "> *" + instruction + "*", "> | Finding | Why clean it | Evidence |", "> | --- | --- | --- |"}
 	for _, item := range ranked {
 		candidate := truncateRunes(maintenanceCandidate(item), 48)
 		evidence := truncateRunes(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)
-		lines = append(lines, fmt.Sprintf("> | %s | %s |", candidate, evidence))
+		lines = append(lines, fmt.Sprintf("> | %s | %s | %s |", candidate, maintenanceWhy(item), evidence))
 	}
 	if notice["pending_cycle"] != nil && notice["pending_cycle"] != "no-window" && number(notice["pending_show"]) == 1 && notice["pending_skip_second"] != true {
 		lines = append(lines, "> *Skip showing this again in this cycle?*")
 	}
-	lines = append(lines, "> *You can turn the module off at any time, or run it any time with /purser:optimize.*")
+	lines = append(lines, "> *Say \"turn off maintenance\" to stop these reports, or run one any time with /purser:optimize.*")
 	return strings.Join(lines, "\n")
 }
 
@@ -347,6 +347,15 @@ func maintenanceCandidate(item map[string]any) string {
 	}
 	return path + " " + symbol
 }
+
+func maintenanceWhy(item map[string]any) string {
+	why := strings.Join(strings.Fields(str(item["why"])), " ")
+	if why == "" {
+		return "—"
+	}
+	return truncateRunes(why, 64)
+}
+
 func truncateRunes(value string, limit int) string {
 	runes := []rune(value)
 	if len(runes) > limit {

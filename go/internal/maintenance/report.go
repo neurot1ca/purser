@@ -47,11 +47,13 @@ func BuildReportPrompt(repository, reportType string, coverageTargetPct float64)
 			"output or search evidence, repository path and symbol, and checks against entry points,\n"+
 			"hooks, and dynamic/reflection use before calling it unused. Include commands/searches\n"+
 			"and distinguish uncertain candidates from confirmed facts.\n"+
+			"For each finding include why removing it benefits the repository or reduces a risk,\n"+
+			"in one short sentence of at most 80 characters.\n"+
 			"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n"+
 			"continue consuming resources once it needs the machine. End your report with this\n"+
 			"machine-readable list, using one object per finding and an empty list for no findings:\n"+
 			"```purser-findings-json\n"+
-			"[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"evidence\":\"short evidence\",\"confidence\":\"high|medium|low\"}]\n"+
+			"[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason to remove it\",\"evidence\":\"short evidence\",\"confidence\":\"high|medium|low\"}]\n"+
 			"```\n", repository), nil
 	case "test-gaps":
 		return fmt.Sprintf("Produce a test-gaps report for the repository at %s.\n"+
@@ -67,6 +69,8 @@ func BuildReportPrompt(repository, reportType string, coverageTargetPct float64)
 			"level. Include a compact contract evidence section covering documented requirements,\n"+
 			"invariants, boundaries, and affected callers, cite each item to a source path:line,\n"+
 			"and write \"unknown\" where evidence is absent.\n"+
+			"For each finding include why the missing test matters in one short sentence\n"+
+			"of at most 80 characters.\n"+
 			"Measure each language with existing local tools/data: Go existing coverprofile or\n"+
 			"`go test -cover` (statement coverage); TS/JS configured jest, vitest, or c8 coverage;\n"+
 			"Rust installed cargo llvm-cov or tarpaulin; Python existing data via `python -m\n"+
@@ -82,7 +86,7 @@ func BuildReportPrompt(repository, reportType string, coverageTargetPct float64)
 			"this machine-readable block. Findings use the cleanup shape; line_coverage_pct must\n"+
 			"be the overall percentage or null:\n"+
 			"```purser-findings-json\n"+
-			"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n"+
+			"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n"+
 			"```\n", repository, coverageTargetPct), nil
 	default:
 		return "", fmt.Errorf("unsupported maintenance report type: %s", reportType)
@@ -110,13 +114,22 @@ func ParseFindings(body string, reportTypes ...string) []map[string]any {
 	result := make([]map[string]any, 0, len(list))
 	for _, raw := range list {
 		item, ok := raw.(map[string]any)
-		if !ok || len(item) != 4 {
+		if !ok || (len(item) != 4 && len(item) != 5) {
 			return nil
 		}
 		pathLine, pathOK := item["path_line"].(string)
 		symbol, symbolOK := item["symbol"].(string)
 		evidence, evidenceOK := item["evidence"].(string)
 		confidence, confidenceOK := item["confidence"].(string)
+		why, hasWhy := item["why"]
+		if len(item) == 5 && !hasWhy {
+			return nil
+		}
+		if hasWhy {
+			if _, ok := why.(string); !ok {
+				return nil
+			}
+		}
 		if !pathOK || findingPathLine.FindStringSubmatch(pathLine) == nil || !symbolOK || strings.TrimSpace(symbol) == "" || !evidenceOK || strings.TrimSpace(evidence) == "" || !confidenceOK || strings.TrimSpace(confidence) == "" {
 			return nil
 		}
@@ -124,7 +137,11 @@ func ParseFindings(body string, reportTypes ...string) []map[string]any {
 		if rank == 0 {
 			return nil
 		}
-		result = append(result, map[string]any{"path_line": pathLine, "symbol": symbol, "evidence": evidence, "confidence": confidence, "confidence_rank": rank})
+		finding := map[string]any{"path_line": pathLine, "symbol": symbol, "evidence": evidence, "confidence": confidence, "confidence_rank": rank}
+		if hasWhy {
+			finding["why"] = why
+		}
+		result = append(result, finding)
 	}
 	if len(reportTypes) == 0 || reportTypes[0] != "test-gaps" {
 		// Stable sort preserves worker order for equal confidence, as Python does.

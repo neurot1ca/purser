@@ -34,11 +34,13 @@ func TestReportPromptBytes(t *testing.T) {
 		"output or search evidence, repository path and symbol, and checks against entry points,\n" +
 		"hooks, and dynamic/reflection use before calling it unused. Include commands/searches\n" +
 		"and distinguish uncertain candidates from confirmed facts.\n" +
+		"For each finding include why removing it benefits the repository or reduces a risk,\n" +
+		"in one short sentence of at most 80 characters.\n" +
 		"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n" +
 		"continue consuming resources once it needs the machine. End your report with this\n" +
 		"machine-readable list, using one object per finding and an empty list for no findings:\n" +
 		"```purser-findings-json\n" +
-		"[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"evidence\":\"short evidence\",\"confidence\":\"high|medium|low\"}]\n```\n"
+		"[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason to remove it\",\"evidence\":\"short evidence\",\"confidence\":\"high|medium|low\"}]\n```\n"
 	if cleanup != wantCleanup {
 		t.Fatalf("cleanup prompt mismatch\n got: %q\nwant: %q", cleanup, wantCleanup)
 	}
@@ -59,6 +61,8 @@ func TestReportPromptBytes(t *testing.T) {
 		"level. Include a compact contract evidence section covering documented requirements,\n" +
 		"invariants, boundaries, and affected callers, cite each item to a source path:line,\n" +
 		"and write \"unknown\" where evidence is absent.\n" +
+		"For each finding include why the missing test matters in one short sentence\n" +
+		"of at most 80 characters.\n" +
 		"Measure each language with existing local tools/data: Go existing coverprofile or\n" +
 		"`go test -cover` (statement coverage); TS/JS configured jest, vitest, or c8 coverage;\n" +
 		"Rust installed cargo llvm-cov or tarpaulin; Python existing data via `python -m\n" +
@@ -73,7 +77,7 @@ func TestReportPromptBytes(t *testing.T) {
 		"continue consuming resources once it needs the machine. End with one JSON object in\n" +
 		"this machine-readable block. Findings use the cleanup shape; line_coverage_pct must\n" +
 		"be the overall percentage or null:\n```purser-findings-json\n" +
-		"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n```\n"
+		"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n```\n"
 	if testGaps != wantTestGaps {
 		t.Fatalf("test-gaps prompt mismatch\n got: %q\nwant: %q", testGaps, wantTestGaps)
 	}
@@ -129,6 +133,13 @@ func TestFindingsParsingOracle(t *testing.T) {
 	}
 	if got := ParseFindings(body, "cleanup"); got[0]["symbol"] != "b" {
 		t.Fatalf("cleanup confidence order = %#v", got)
+	}
+}
+
+func TestFindingsWhyMustBeString(t *testing.T) {
+	body := "```purser-findings-json\n[{\"path_line\":\"a.py:1\",\"symbol\":\"a\",\"evidence\":\"e\",\"confidence\":\"high\",\"why\":7}]\n```"
+	if got := ParseFindings(body); got != nil {
+		t.Fatalf("non-string why parsed as %#v", got)
 	}
 }
 
