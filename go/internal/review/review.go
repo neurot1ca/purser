@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"purser-hook/internal/models"
 )
 
 const pinnedModel = "gemini-3.8-flash-high"
@@ -160,9 +162,10 @@ func Review(request Request) Outcome {
 }
 
 func buildCommand(request Request) ([]string, error) {
-	if request.Model != pinnedModel {
-		return nil, errors.New("agy requires its pinned model")
+	if err := (reviewerAdapter{"agy"}).ValidateModel(request.Model); err != nil {
+		return nil, err
 	}
+	request.Model = models.ResolveLatest("agy", request.Model)
 	executable := request.Executable
 	if !filepath.IsAbs(executable) {
 		var err error

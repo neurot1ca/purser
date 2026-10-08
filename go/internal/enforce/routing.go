@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/models"
 	"purser-hook/internal/policy"
 )
 
@@ -105,6 +106,9 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 		if reason, ok := liveThread["reason"].(string); ok {
 			selection.Reason = reason
 		}
+	}
+	if newCall && !replyCall {
+		selection.Model = models.ResolveLatest(selection.Agent, selection.Model)
 	}
 	return selection
 }

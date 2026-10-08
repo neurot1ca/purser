@@ -16,6 +16,7 @@ import (
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/models"
 	"purser-hook/internal/policy"
 	"purser-hook/internal/profile"
 )
@@ -90,6 +91,11 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			return nil, errors.New(route.Message)
 		}
 		return denyPre(route.Code, route.Message), nil
+	}
+	if !reply {
+		*route.Model = models.ResolveLatest(stringValue(config["coder_agent"]), *route.Model)
+	} else if liveModel := stringValue(live["model"]); models.SameFamily(*route.Model, liveModel) {
+		*route.Model = liveModel
 	}
 	bypassMetadata["task_id"], bypassMetadata["phase"], bypassMetadata["route"] = *parsed.TaskID, *parsed.Phase, *parsed.Route
 	bypassMetadata["model"], bypassMetadata["effort"], bypassMetadata["scope"] = *route.Model, *route.Effort, stringSliceAny(parsed.Scope)

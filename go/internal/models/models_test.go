@@ -69,6 +69,102 @@ func TestDiscoverModelVersionNotDueDoesNotList(t *testing.T) {
 	}
 }
 
+func TestResolveLatestCachesWithoutProcess(t *testing.T) {
+	root := setupDiscovery(t, nil, func(string, map[string]map[string]json.RawMessage) listingResult {
+		t.Fatal("dispatch launched a listing process")
+		return listingResult{}
+	})
+	t.Setenv("CODEX_HOME", root)
+	oldRun := runListingCommand
+	runListingCommand = func(*exec.Cmd) ([]byte, error) { t.Fatal("dispatch launched a process"); return nil, nil }
+	t.Cleanup(func() { runListingCommand = oldRun })
+	if err := os.WriteFile(filepath.Join(root, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-6.2-sol","visibility":"list"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveLatest("codex", "gpt-6.1-sol"); got != "gpt-6.2-sol" {
+		t.Fatalf("resolved %q", got)
+	}
+	cache := resolutionCache{CheckedOn: nowDate(), Agents: map[string][]string{"agy": {"gemini-3.9-flash-high"}, "opencode": {"google/gemini-3.9-flash-high"}}}
+	if err := atomicJSON(filepath.Join(root, "model-resolution.json"), cache); err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []string{"agy", "opencode"} {
+		prefix := ""
+		if agent == "opencode" {
+			prefix = "google/"
+		}
+		if got := ResolveLatest(agent, prefix+"gemini-3.8-flash-high"); got != prefix+"gemini-3.9-flash-high" {
+			t.Fatalf("%s resolved %q", agent, got)
+		}
+	}
+	if got := ResolveLatest("claude", "opus"); got != "opus" {
+		t.Fatalf("Claude alias resolved %q", got)
+	}
+}
+
+func TestResolveLatestUnavailableCache(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CODEX_HOME", root)
+	t.Setenv("PURSER_STATE_DIR", root)
+	for _, content := range []string{"", "{broken"} {
+		if content != "" {
+			for _, name := range []string{"models_cache.json", "model-resolution.json"} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for _, agent := range []string{"codex", "agy", "opencode"} {
+			if got := ResolveLatest(agent, "gpt-6.1-sol"); got != "gpt-6.1-sol" {
+				t.Fatalf("%s resolved %q", agent, got)
+			}
+		}
+	}
+	if err := atomicJSON(filepath.Join(root, "model-resolution.json"), resolutionCache{CheckedOn: "2000-01-01", Agents: map[string][]string{"agy": {"gemini-3.9-flash-high"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveLatest("agy", "gemini-3.8-flash-high"); got != "gemini-3.8-flash-high" {
+		t.Fatalf("stale cache resolved %q", got)
+	}
+}
+
+func TestDiscoveryCachesAllAgentsBeforeNotice(t *testing.T) {
+	for _, agent := range []string{"agy", "opencode"} {
+		t.Run(agent, func(t *testing.T) {
+			floor, latest := "gemini-3.8-flash-high", "gemini-3.9-flash-high"
+			if agent == "opencode" {
+				floor, latest = "google/"+floor, "google/"+latest
+			}
+			calls := map[string]int{}
+			root := setupDiscovery(t, map[string]any{"coder_agent": agent, "routes": map[string]any{"normal": floor}, "reviewer1_model_requested": "gemini-3.8-flash-high"}, func(a string, _ map[string]map[string]json.RawMessage) listingResult {
+				calls[a]++
+				output := latest + "\n"
+				if a == "agy" {
+					output = "gemini-3.9-flash-high\tFlash\n"
+				}
+				ids, err := parseListing(a, output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return listingResult{available: true, ids: ids}
+			})
+			DiscoverModelVersion(root)
+			if got := ResolveLatest(agent, floor); got != latest {
+				t.Fatalf("resolved %q", got)
+			}
+			if got := ResolveLatest("agy", "gemini-3.8-flash-high"); got != "gemini-3.9-flash-high" {
+				t.Fatalf("reviewer resolved %q", got)
+			}
+			DiscoverModelVersion(root)
+			for a, count := range calls {
+				if count != 1 {
+					t.Fatalf("%s listed %d times", a, count)
+				}
+			}
+		})
+	}
+}
+
 func TestDiscoverNewerWritesPendingAndDailyCheck(t *testing.T) {
 	root := setupDiscovery(t, map[string]any{"coder_agent": "codex", "routes": map[string]any{
 		"normal": map[string]any{"model": "gpt-6-luna"}, "mechanical": "gpt-6-luna",
@@ -305,7 +401,7 @@ func TestParseMockListings(t *testing.T) {
 	}{
 		{"codex", `{"models":[{"slug":"gpt-6.1-luna","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]},{"slug":"hidden","visibility":"hide","supported_reasoning_levels":[]}]}`, []string{"gpt-6.1-luna"}},
 		{"opencode", "openai/gpt-6.1-luna\ninvalid\n", []string{"openai/gpt-6.1-luna"}},
-		{"agy", "gemini-3.9-flash-high\tFlash\ngemini-3.9-flash-low\tFlash\n", []string{"gemini-3.9-flash"}},
+		{"agy", "gemini-3.9-flash-high\tFlash\ngemini-3.9-flash-low\tFlash\n", []string{"gemini-3.9-flash-high", "gemini-3.9-flash", "gemini-3.9-flash-low"}},
 	}
 	for _, test := range cases {
 		got, err := parseListing(test.agent, test.output)

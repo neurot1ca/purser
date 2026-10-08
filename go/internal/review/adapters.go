@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	"purser-hook/internal/models"
 )
 
 var reviewerCommands = map[string]string{"agy": "agy", "opencode": "opencode", "codex": "codex", "claude": "claude"}
@@ -88,7 +90,7 @@ func (a reviewerAdapter) Family(model string) string {
 func (a reviewerAdapter) ValidateModel(model any) error {
 	switch a.provider {
 	case "agy":
-		if model != pinnedModel {
+		if value, ok := model.(string); !ok || !models.AtLeast(pinnedModel, value) {
 			return fmt.Errorf("reviewer1_model_requested must equal the pinned id %s", pinnedModel)
 		}
 	case "opencode":
@@ -120,6 +122,9 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 	model := config["reviewer1_model_requested"]
 	if err := a.ValidateModel(model); err != nil {
 		return nil, err
+	}
+	if value, ok := model.(string); ok {
+		model = models.ResolveLatest(a.provider, value)
 	}
 	switch a.provider {
 	case "agy":

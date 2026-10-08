@@ -152,6 +152,75 @@ func TestPreTelemetryScopePathCount(t *testing.T) {
 	t.Fatal("TASK_ROUTE_SELECTED observation missing")
 }
 
+func TestPreLatestModelDispatchAndReplies(t *testing.T) {
+	for _, liveModel := range []string{"", "gpt-6.1-sol", "gpt-6.3-sol", "gpt-6.2-luna"} {
+		t.Run("live="+liveModel, func(t *testing.T) {
+			root := preTempDir(t)
+			repo, state := filepath.Join(root, "repo"), filepath.Join(root, "state")
+			if err := os.MkdirAll(repo, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v %s", err, out)
+			}
+			t.Setenv("HOME", root)
+			t.Setenv("USERPROFILE", root)
+			t.Setenv("PURSER_STATE_DIR", state)
+			t.Setenv("CODEX_HOME", root)
+			t.Setenv("CLAUDE_PLUGIN_ROOT", root)
+			data, err := os.ReadFile("../../../.claude/hooks/orchestrator/config.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config map[string]any
+			if err := json.Unmarshal(data, &config); err != nil {
+				t.Fatal(err)
+			}
+			floor := "gpt-6.1-sol"
+			if liveModel != "" {
+				floor = "gpt-6.2-sol"
+			}
+			mapValue(mapValue(config["routes"])["normal"])["model"] = floor
+			data, _ = json.Marshal(config)
+			path := filepath.Join(root, ".claude", "hooks", "orchestrator", "config.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-6.2-sol","visibility":"list"}]}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			tool := "mcp__codex-main__codex"
+			input := map[string]any{"prompt": "ORCH|task=task-recorded|phase=implementation|route=normal|reason=new_task|basis=model resolution|scope=src/a.go\nImplement.", "label": "latest model", "cwd": repo}
+			want := "gpt-6.2-sol"
+			if liveModel != "" {
+				seedPreThread(t, repo, state)
+				thread := "thread-p63"
+				record := ledger.BuildSessionRecord("task-recorded", &thread, "normal", liveModel, "medium", map[string]any{"phase": "implementation", "scope": []any{"src/a.go"}, "label": "latest model"})
+				if saved := ledger.Save(filepath.Join(state, "projects", projectKey(&repo)), record); saved.Status != ledger.OK {
+					t.Fatal(saved)
+				}
+				tool, input["threadId"], want = "mcp__codex-main__codex-reply", thread, liveModel
+			}
+			got, err := Pre(map[string]any{"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input, "cwd": repo, "session_id": "latest", "tool_use_id": "latest"}, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := mapValue(got["hookSpecificOutput"])
+			if liveModel == "gpt-6.2-luna" {
+				if !strings.HasPrefix(stringValue(output["permissionDecisionReason"]), "MODEL_MISMATCH:") {
+					t.Fatalf("different family admitted: %#v", got)
+				}
+			} else if output["permissionDecision"] == "deny" || !strings.Contains(stringValue(got["systemMessage"]), "-> "+want+" / ") ||
+				(liveModel == "" && mapValue(output["updatedInput"])["model"] != want) {
+				t.Fatalf("wanted model %s, got %#v", want, got)
+			}
+		})
+	}
+}
+
 func TestPreCodexStartRejectsFinishedTaskID(t *testing.T) {
 	scratch := preTempDir(t)
 	repo, runtimeRoot := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")

@@ -39,8 +39,8 @@ func ValidateConfig(config map[string]any) error {
 	}
 	agent, hasAgent := config["reviewer1_agent"]
 	if !hasAgent || agent == "agy" {
-		if model != pinnedModel {
-			return fmt.Errorf("reviewer1_model_requested must equal the pinned id %s", pinnedModel)
+		if err := (reviewerAdapter{"agy"}).ValidateModel(model); err != nil {
+			return err
 		}
 	}
 	timeout, ok := config["reviewer1_timeout_seconds"].(float64)

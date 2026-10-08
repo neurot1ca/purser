@@ -24,6 +24,47 @@ import (
 
 const maxCatalogBytes = 16 << 20
 
+// ResolveLatest reads local caches only; configured IDs are family floors.
+func ResolveLatest(agent, model string) string {
+	var ids []string
+	switch agent {
+	case "codex":
+		var err error
+		ids, err = cachedCodexModels()
+		if err != nil {
+			return model
+		}
+	case "agy", "opencode":
+		data, err := os.ReadFile(filepath.Join(stateRoot(), "model-resolution.json"))
+		var cache resolutionCache
+		if err != nil || json.Unmarshal(data, &cache) != nil || cache.CheckedOn != time.Now().UTC().Format("2006-01-02") {
+			return model
+		}
+		ids = cache.Agents[agent]
+	default:
+		return model
+	}
+	if newer := newerVersion(model, ids); newer != "" {
+		return newer
+	}
+	return model
+}
+
+// SameFamily uses the same version boundary as discovery, in either direction.
+func SameFamily(a, b string) bool {
+	return a == b || newerVersion(a, []string{b}) != "" || newerVersion(b, []string{a}) != ""
+}
+
+// AtLeast accepts the floor or a newer ID in its family.
+func AtLeast(floor, model string) bool {
+	return model == floor || newerVersion(floor, []string{model}) != ""
+}
+
+type resolutionCache struct {
+	CheckedOn string              `json:"checked_on"`
+	Agents    map[string][]string `json:"agents"`
+}
+
 var versionPattern = regexp.MustCompile(`^(.+?)(\d+(?:\.\d+)*)([^0-9]*)$`)
 var listingID = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 var opencodeID = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
@@ -124,12 +165,23 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 		checks = append(checks, modelCheck{agent: "agy", model: reviewer})
 	}
 	listed := map[string]listingResult{}
+	resolution := resolutionCache{CheckedOn: time.Now().UTC().Format("2006-01-02"), Agents: map[string][]string{}}
 	for _, check := range checks {
-		result, exists := listed[check.agent]
-		if !exists {
-			result = listModels(check.agent, cached.Providers)
+		if _, exists := listed[check.agent]; !exists {
+			result := listModels(check.agent, cached.Providers)
 			listed[check.agent] = result
+			if result.available && (check.agent == "agy" || check.agent == "opencode") {
+				resolution.Agents[check.agent] = result.ids
+			}
 		}
+	}
+	cachePath := filepath.Join(stateRoot(), "model-resolution.json")
+	if unlock, err := contextio.LockFile(cachePath + ".lock"); err == nil {
+		_ = atomicJSON(cachePath, resolution)
+		unlock()
+	}
+	for _, check := range checks {
+		result := listed[check.agent]
 		if !result.available {
 			continue
 		}
@@ -473,6 +525,7 @@ func parseListing(agent, output string) ([]string, error) {
 			if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" || !listingID.MatchString(parts[0]) {
 				continue
 			}
+			ids = appendUnique(ids, parts[0])
 			id := parts[0]
 			index := strings.LastIndexByte(id, '-')
 			if index >= 0 {
