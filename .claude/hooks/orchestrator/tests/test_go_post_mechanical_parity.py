@@ -161,10 +161,23 @@ def test_python_post_mechanical_oracle_fixture(tmp_path, monkeypatch):
         shadow_cases.append({"name": f"run_shadow_{name}", "result": repeated[0]})
     if os.environ.get("POST_MECHANICAL_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        if FIXTURE.is_file():
+            existing = json.loads(FIXTURE.read_text(encoding="utf-8"))
+            launches_by_name = {case["name"]: case["result"]["launch"]
+                                for case in existing["cases"]}
+            for case in actual:
+                if case["name"] in launches_by_name:
+                    case["result"]["launch"] = launches_by_name[case["name"]]
         FIXTURE.write_text(json.dumps({"oracle": "mechanical_learning.record_sample+start_shadow",
                                        "cases": actual, "shadow_cases": shadow_cases},
                           ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture["oracle"] == "mechanical_learning.record_sample+start_shadow"
-    assert actual == fixture["cases"]
+    assert [case["result"]["launch"] is None for case in actual] == [
+        case["result"]["launch"] is None for case in fixture["cases"]]
+    actual_without_launch = [{**case, "result": {key: value for key, value in case["result"].items()
+                                                   if key != "launch"}} for case in actual]
+    fixture_without_launch = [{**case, "result": {key: value for key, value in case["result"].items()
+                                                    if key != "launch"}} for case in fixture["cases"]]
+    assert actual_without_launch == fixture_without_launch
     assert shadow_cases == fixture["shadow_cases"]
