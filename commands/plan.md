@@ -16,14 +16,7 @@ Include `scope=` only for verified, bounded repository-relative paths that are r
 - **Goal:** the user's requested outcome.
 - **Verified context:** only observed repository facts, with relevant paths and symbols; label assumptions explicitly. The pre-hook adds exactly one `CODE_MAP=<path> STATUS=<FRESH|STALE|UNAVAILABLE>` line automatically. Do not run the generator or add the line by hand. The map is navigation only, so open relevant sections on demand and verify current source; a stale or unavailable map does not block planning.
 - **Constraints and exclusions:** applicable repository instructions, requested boundaries, and explicit exclusions.
-- **Required plan shape:** Markdown with these sections and limits:
-  - A leading `Summary:` section. Keep it concise; do not omit content to satisfy a transport limit.
-  - `Goal and boundaries`.
-  - `Current evidence` with paths and symbols, clearly separating observed facts from assumptions.
-  - `Decision` with one recommended approach and brief alternatives.
-  - `Milestones`: no more than five; each must state bounded scope, observable acceptance, validation, dependency, proposed touched files/dirs, and a parallel group (milestones in the same group touch disjoint paths and may run together).
-  - `Risks/open decisions`: no more than five, each with an owner or a question that stops progress.
-  - `Implementation handoff`: the first task's bounded repository paths and acceptance criteria.
+- Purser appends the required plan shape automatically.
 
 Require an evidence-based plan: no code edits, invented paths or symbols, or generic checklists. The worker must inspect the repository and distinguish observed facts from assumptions. Do not turn plan output into implementation work in this call.
 

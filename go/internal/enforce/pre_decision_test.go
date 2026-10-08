@@ -79,6 +79,19 @@ func TestAppendPreCodeMapFallsBackToPointer(t *testing.T) {
 	}
 }
 
+func TestAppendPrePlanShapeIsPlanOnlyAndIdempotent(t *testing.T) {
+	block := appendPrePlanShape("task", "plan")
+	if strings.Count(block, prePlanShapeMarker) != 1 || !strings.Contains(block, "Summary:") || !strings.Contains(block, "Milestones") {
+		t.Fatalf("plan shape block missing or duplicated:\n%s", block)
+	}
+	if got := appendPrePlanShape(block, "plan"); got != block {
+		t.Fatalf("existing plan shape block changed or duplicated:\n%s", got)
+	}
+	if got := appendPrePlanShape("implementation", "implementation"); strings.Contains(got, prePlanShapeMarker) {
+		t.Fatalf("implementation prompt received plan shape:\n%s", got)
+	}
+}
+
 func TestPreDecisionsP63Fixture(t *testing.T) {
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/pre_decisions.json")
 	if err != nil {

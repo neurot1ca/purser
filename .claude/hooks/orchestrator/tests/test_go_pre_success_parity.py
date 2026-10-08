@@ -14,6 +14,25 @@ import ledger
 import project_root
 
 
+_PLAN_SHAPE_BLOCK = (
+    "Required plan shape (Purser):\n"
+    "Write Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, "
+    "Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and "
+    "brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, "
+    "dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at "
+    "most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). "
+    "Read-only: no code edits."
+)
+
+
+def _add_go_plan_shape_prompt(case):
+    """Account for the Go-only plan prompt block in the retired Python oracle."""
+    if case["name"] == "p64_plan_start_read_only":
+        for container in (case["pending"]["async_updated_input"], case["response"]["updatedInput"]):
+            container["prompt"] = container["prompt"].rstrip() + "\n\n" + _PLAN_SHAPE_BLOCK
+    return case
+
+
 CASES = [
     {"name": "p64_implementation_start_admitted", "task_id": "p64-impl", "tool": "mcp__codex-main__codex_start",
      "input": {"mode": "new", "label": "P64 implementation", "timeoutSeconds": 90,
@@ -139,7 +158,7 @@ def _capture(case, tmp_path, monkeypatch):
 
 
 def test_p64_python_pre_tool_use_golden_fixture(tmp_path, monkeypatch):
-    actual = [_capture(case, tmp_path, monkeypatch) for case in CASES]
+    actual = [_add_go_plan_shape_prompt(_capture(case, tmp_path, monkeypatch)) for case in CASES]
     if os.environ.get("P64_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
         FIXTURE.write_text(json.dumps({"oracle": "codex.pre_tool_use durable success path", "cases": actual},

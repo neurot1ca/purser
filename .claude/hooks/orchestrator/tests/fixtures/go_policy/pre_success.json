@@ -489,7 +489,7 @@
           "jobPhase": "plan",
           "mode": "new",
           "model": "gpt-6.1-sol",
-          "prompt": "Plan the change.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "prompt": "Plan the change.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH\n\nRequired plan shape (Purser):\nWrite Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.",
           "route": "plan_standard",
           "sandbox": "read-only",
           "taskId": "p64-plan"
@@ -601,7 +601,7 @@
           "jobPhase": "plan",
           "mode": "new",
           "model": "gpt-6.1-sol",
-          "prompt": "Plan the change.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "prompt": "Plan the change.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH\n\nRequired plan shape (Purser):\nWrite Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.",
           "route": "plan_standard",
           "sandbox": "read-only",
           "taskId": "p64-plan"

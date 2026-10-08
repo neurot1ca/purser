@@ -33,11 +33,19 @@ func storePostPlan(root string, event map[string]any, taskID any, report string,
 	if strings.TrimSpace(report) == "" {
 		bundle["findings"] = appendFinding(bundle["findings"], "PLAN_OUTPUT_EMPTY", "Plan output is empty.")
 	}
+	if !planHasHeading(report, "Summary:") || !planHasHeading(report, "Milestones") {
+		bundle["findings"] = appendFinding(bundle["findings"], "PLAN_SHAPE_MISSING", "Plan lacks the required Summary/Milestones sections.")
+	}
 	if err := atomicWrite(path, []byte(content)); err != nil {
 		return "", err
 	}
 	bundle["plan_path"], bundle["plan_summary"] = path, postPlanSummary(content)
 	return path, nil
+}
+
+func planHasHeading(report, heading string) bool {
+	pattern := regexp.MustCompile(`(?im)^#{0,6}\s*` + regexp.QuoteMeta(heading) + `(?:\s|:|$)`)
+	return pattern.MatchString(report)
 }
 
 func appendFinding(value any, code, message string) []any {

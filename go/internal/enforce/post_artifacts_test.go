@@ -100,3 +100,34 @@ func TestCompactBundleUsesPlanArtifactWhenMultibyteSummaryExceedsByteBudget(t *t
 		t.Fatalf("compact bytes=%d cap=%d err=%v", size, cap, sizeErr)
 	}
 }
+
+func TestStorePostPlanShapeFinding(t *testing.T) {
+	for _, test := range []struct {
+		name, report string
+		wantFinding  bool
+	}{
+		{name: "missing headings", report: "# Goal and boundaries\nSome plan", wantFinding: true},
+		{name: "well formed", report: "# Summary: Plan\n# Milestones\n- One", wantFinding: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bundle := map[string]any{"findings": []any{}}
+			path, err := storePostPlan(t.TempDir(), map[string]any{"session_id": "s", "tool_use_id": "u"}, "task", test.report, bundle)
+			if err != nil || path == "" {
+				t.Fatalf("storePostPlan path=%q err=%v", path, err)
+			}
+			findings := bundle["findings"].([]any)
+			found := false
+			for _, raw := range findings {
+				if mapValue(raw)["code"] == "PLAN_SHAPE_MISSING" {
+					found = true
+				}
+			}
+			if found != test.wantFinding {
+				t.Fatalf("PLAN_SHAPE_MISSING=%v want %v; findings=%#v", found, test.wantFinding, findings)
+			}
+			if got := bundle["plan_summary"]; got != postPlanSummary(test.report) {
+				t.Fatalf("plan summary fallback changed: got %#v", got)
+			}
+		})
+	}
+}

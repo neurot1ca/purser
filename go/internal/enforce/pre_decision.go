@@ -293,6 +293,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	} else if root == nil && (pointerValue(parsed.Phase) == "implementation" || pointerValue(parsed.Phase) == "plan") {
 		updated["prompt"] = appendPreCodeMap(stringValue(updated["prompt"]), filepath.Join(defaultPreStateRoot(runtimeRoot), "projects", "unresolved", "code-map", "map.txt"), "UNAVAILABLE")
 	}
+	updated["prompt"] = appendPrePlanShape(stringValue(updated["prompt"]), pointerValue(parsed.Phase))
 	if !reply {
 		updated["model"] = selection.Model
 		if fallback := mapValue(config["fallback"]); fallback != nil && active != nil && active["active_coder"] == "fallback" && selection.Agent == stringValue(fallback["agent"]) {
@@ -1027,6 +1028,20 @@ func pointerValue(value *string) string {
 }
 
 const preCodeMapExcerptMaxBytes = 6000
+
+const prePlanShapeMarker = "Required plan shape (Purser):"
+
+func appendPrePlanShape(prompt, phase string) string {
+	if phase != "plan" {
+		return prompt
+	}
+	if strings.Contains(prompt, prePlanShapeMarker) {
+		return prompt
+	}
+	block := `Required plan shape (Purser):
+Write Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.`
+	return strings.TrimRight(prompt, " \t\r\n") + "\n\n" + block
+}
 
 func appendPreCodeMap(prompt, path, status string, scope ...[]string) string {
 	if strings.Contains(prompt, "CODE_MAP=") {
