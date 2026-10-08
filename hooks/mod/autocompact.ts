@@ -41,16 +41,15 @@ async function log($, text: string) {
   try { await $.ui.log(`Purser auto-compact: ${text}`) } catch { /* as above */ }
 }
 
-// Bold lines without a quote marker: the host already frames it as Purser's
-// message. English, because the mod cannot know the user's language.
-export function resumeMessage(before: number, after: number | undefined): string {
+// The person's notice: a transcript line from Purser itself, never sent to the
+// model. English, because the mod cannot know the user's language.
+export function compactNotice(before: number, after: number | undefined): string {
   const saving = after !== undefined && after < before ? Math.round((1 - after / before) * 100) : undefined
-  return [
-    `**⚓ Purser · Context passed ${Math.floor(before / 1000)}K, so Purser ran \`/compact\`.${saving !== undefined ? ` Every later message is now ~${saving}% cheaper.` : ''}**`,
-    '**Decisions and the next step were carried over from the handoff Purser prepared. Nothing is lost.**',
-    '**Continue the task in progress; if nothing was in progress, reply with one line.**',
-  ].join('\n')
+  return `⚓ Purser · Context passed ${Math.floor(before / 1000)}K, so Purser ran /compact.${saving !== undefined ? ` Every later message is now ~${saving}% cheaper.` : ''} Decisions and the next step were carried over from the handoff Purser prepared. Nothing is lost.`
 }
+
+// The wake prompt stays short: the notice above already told the person.
+export const RESUME_PROMPT = 'Purser compacted the conversation. Continue the task in progress; if nothing was in progress, reply with one line.'
 
 // /compact leaves the session idle, so wake it: the next turn carries on with
 // the work that was running.
@@ -62,7 +61,8 @@ async function resume($, before: number) {
       try { after = (await $.session.usage()).context.tokens } catch { /* message without the saving */ }
     }
     await trace($, `submitting resume (${after ?? 'unknown'} tokens)`)
-    await $.prompt.submit({ text: resumeMessage(before, after) })
+    $.ui.log(compactNotice(before, after))
+    await $.prompt.submit({ text: RESUME_PROMPT })
     await trace($, `resumed after compact (${after ?? 'unknown'} tokens)`)
   } catch (error) {
     await log($, `resume failed: ${String(error)}`)

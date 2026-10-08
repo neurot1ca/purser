@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { DEFAULT_THRESHOLD, needsCompactPrompt, resumeMessage, thresholdFrom } from './autocompact.js'
+import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, RESUME_PROMPT, thresholdFrom } from './autocompact.js'
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 
@@ -87,10 +87,11 @@ test('recognises the SDK-host refusal that needs a /compact prompt', () => {
   expect(needsCompactPrompt(new Error('a turn is running'))).toBe(false)
 })
 
-test('resume message reports the measured saving and asks the model to continue', () => {
-  const text = resumeMessage(415_943, 83_000)
-  expect(text).toContain('**⚓ Purser · Context passed 415K, so Purser ran `/compact`. Every later message is now ~80% cheaper.**')
-  expect(text).not.toContain('>')
-  expect(text).toContain('Continue the task in progress')
-  expect(resumeMessage(415_943, undefined)).not.toContain('cheaper')
+test('compact notice reports the measured saving; the wake prompt stays short', () => {
+  const text = compactNotice(415_943, 83_000)
+  expect(text).toContain('⚓ Purser · Context passed 415K, so Purser ran /compact. Every later message is now ~80% cheaper.')
+  expect(text).toContain('Nothing is lost.')
+  expect(compactNotice(415_943, undefined)).not.toContain('cheaper')
+  expect(RESUME_PROMPT).toContain('Continue the task in progress')
+  expect(RESUME_PROMPT).not.toContain('cheaper')
 })
