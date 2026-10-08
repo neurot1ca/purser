@@ -959,6 +959,7 @@ func gitProjectRoot(root string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	proc.Hide(cmd)
 	cmd.Dir = root
 	out, e := cmd.Output()
 	if e != nil {

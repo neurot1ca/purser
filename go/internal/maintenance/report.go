@@ -18,6 +18,7 @@ import (
 	"purser-hook/internal/checkreport"
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/proc"
 )
 
 const findingsStart = "```purser-findings-json"
@@ -301,7 +302,8 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	quotaBefore := latestMaintenanceQuota(time.Now())
 	jobsBefore := maintenanceJobIDs(state)
 	commit := "unknown"
-	if output, gitErr := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output(); gitErr == nil {
+	command := proc.Hide(exec.Command("git", "-C", root, "rev-parse", "HEAD"))
+	if output, gitErr := command.Output(); gitErr == nil {
 		commit = strings.TrimSpace(string(output))
 	}
 	versions := []string{"Runtime: " + checkreport.RuntimeDetail(maintenancePluginRoot()), gitVersion(root)}
@@ -479,7 +481,8 @@ func recordReportFailure(state, root, reportType, timestamp string, result map[s
 func roundSeconds(d time.Duration) float64 { return float64(int64(d.Seconds()*1000+0.5)) / 1000 }
 
 func gitVersion(root string) string {
-	if out, err := exec.Command("git", "-C", root, "--version").Output(); err == nil {
+	command := proc.Hide(exec.Command("git", "-C", root, "--version"))
+	if out, err := command.Output(); err == nil {
 		return "Git: " + strings.TrimSpace(string(out))
 	}
 	return "Git: unavailable"
@@ -501,7 +504,8 @@ func vultureVersion() string {
 	if err != nil {
 		return "vulture: unavailable"
 	}
-	out, err := exec.Command(path, "--version").CombinedOutput()
+	command := proc.Hide(exec.Command(path, "--version"))
+	out, err := command.CombinedOutput()
 	if err != nil {
 		return "vulture: version unavailable"
 	}

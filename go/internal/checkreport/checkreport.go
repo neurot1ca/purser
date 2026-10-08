@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 )
 
@@ -251,6 +252,7 @@ var runCodex = func(executable string) (string, string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, "--version")
+	proc.Hide(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

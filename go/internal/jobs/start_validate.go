@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"purser-hook/internal/proc"
 )
 
 const startDefaultTimeout = 86400
@@ -120,6 +122,7 @@ func resolveRepositoryRoot() (string, error) {
 		return "", err
 	}
 	command := exec.Command("git", "-C", workingDir, "rev-parse", "--show-toplevel")
+	proc.Hide(command)
 	root, err := command.Output()
 	if err != nil || strings.TrimSpace(string(root)) == "" {
 		return "", strconv.ErrSyntax
