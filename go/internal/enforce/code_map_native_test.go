@@ -28,6 +28,67 @@ func TestCodeMapGoExtractor(t *testing.T) {
 	}
 }
 
+func TestCodeMapPass3dOracleSymbols(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "code_map.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name            string             `json:"name"`
+			Sources         map[string]string  `json:"sources"`
+			ExpectedSymbols map[string][][]any `json:"expected_symbols"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	languages := map[string]string{
+		"p3d_oracle_rust": "rust", "p3d_oracle_java": "java", "p3d_oracle_c": "c",
+		"p3d_oracle_cpp": "cpp", "p3d_oracle_c_sharp": "c_sharp", "p3d_oracle_ruby": "ruby",
+	}
+	for _, item := range fixture.Cases {
+		language, ok := languages[item.Name]
+		if !ok {
+			continue
+		}
+		t.Run(language, func(t *testing.T) {
+			if len(item.Sources) != 1 {
+				t.Fatalf("oracle case must contain one source: %#v", item.Sources)
+			}
+			for path, source := range item.Sources {
+				got, err := extractTreeSitterSymbols([]byte(source), language)
+				if language == "c_sharp" {
+					if err == nil || len(item.ExpectedSymbols[path]) != 0 {
+						t.Fatalf("unavailable oracle language became supported: symbols=%#v err=%v", got, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want []codeMapSymbol
+				for _, symbol := range item.ExpectedSymbols[path] {
+					if len(symbol) != 4 {
+						t.Fatalf("invalid oracle symbol: %#v", symbol)
+					}
+					line, ok := symbol[0].(float64)
+					if !ok {
+						t.Fatalf("invalid oracle line: %#v", symbol[0])
+					}
+					kind, _ := symbol[1].(string)
+					name, _ := symbol[2].(string)
+					signature, _ := symbol[3].(string)
+					want = append(want, codeMapSymbol{Line: int(line), Kind: kind, Name: name, Signature: signature})
+				}
+				if fmt.Sprint(got) != fmt.Sprint(want) {
+					t.Fatalf("symbols=%#v want oracle=%#v", got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestCodeMapNativeResumesPendingExtraction(t *testing.T) {
 	r, s := nativeMapRepo(t, map[string]string{"a.js": "a", "b.js": "b", "c.js": "c"})
 	calls := map[string]int{}
@@ -90,7 +151,7 @@ func TestCodeMapNativeDefaultExtractors(t *testing.T) {
 		"sample.js\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
 		"sample.ts\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
 		"sample.tsx\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
-		"sample.rs\n  symbols: unavailable (no parser for this language)",
+		"sample.rs\n  1 function unavailable",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in map:\n%s", want, text)

@@ -209,6 +209,203 @@
       "sources": {
         "sample.js": "function hello() {}\n"
       }
+    },
+    {
+      "name": "p3d_oracle_rust",
+      "op": "oracle",
+      "sources": {
+        "sample.rs": "struct Boxed { value: i32 }\nenum Color { Red }\ntype Alias = i32;\ntrait Draw {}\nfn build() {}\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: rust\n\nsample.rs\n  1 class Boxed\n  2 class Color\n  3 class Alias\n  4 interface Draw\n  5 function build\n",
+      "expected_symbols": {
+        "sample.rs": [
+          [
+            1,
+            "class",
+            "Boxed",
+            ""
+          ],
+          [
+            2,
+            "class",
+            "Color",
+            ""
+          ],
+          [
+            3,
+            "class",
+            "Alias",
+            ""
+          ],
+          [
+            4,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            5,
+            "function",
+            "build",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3d_oracle_java",
+      "op": "oracle",
+      "sources": {
+        "sample.java": "class Box { Box() {} int get() { return 1; } }\ninterface Draw { void draw(); }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: java\n\nsample.java\n  1 class Box\n  1 method Box.Box\n  1 method Box.get\n  2 interface Draw\n  2 method Draw.draw\n",
+      "expected_symbols": {
+        "sample.java": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            1,
+            "method",
+            "Box.Box",
+            ""
+          ],
+          [
+            1,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            2,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Draw.draw",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3d_oracle_c",
+      "op": "oracle",
+      "sources": {
+        "sample.c": "struct Box { int value; };\nunion Value { int i; } value;\ntypedef int Count;\nenum Color { RED };\nint add(int a, int b) { return a + b; }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: c\n\nsample.c\n  1 class Box\n  2 class Value\n  3 type Count\n  4 type Color\n  5 function add\n",
+      "expected_symbols": {
+        "sample.c": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "class",
+            "Value",
+            ""
+          ],
+          [
+            3,
+            "type",
+            "Count",
+            ""
+          ],
+          [
+            4,
+            "type",
+            "Color",
+            ""
+          ],
+          [
+            5,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3d_oracle_cpp",
+      "op": "oracle",
+      "sources": {
+        "sample.cpp": "class Box { int get() { return 1; } };\nstruct Point {};\nint add(int a, int b) { return a + b; }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: cpp\n\nsample.cpp\n  1 class Box\n  3 function add\n",
+      "expected_symbols": {
+        "sample.cpp": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            3,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3d_oracle_c_sharp",
+      "op": "oracle",
+      "sources": {
+        "sample.cs": "class Box { int Get() { return 1; } }\ninterface Draw { void Draw(); }\nstruct Point { int X; }\nenum Color { Red }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: none\n\nsample.cs\n  symbols: unavailable (parser failed: DownloadError)\n",
+      "expected_symbols": {
+        "sample.cs": []
+      }
+    },
+    {
+      "name": "p3d_oracle_ruby",
+      "op": "oracle",
+      "sources": {
+        "sample.rb": "class Box\n  def get(value)\n    value\n  end\nend\nclass Outer::Inner\n  def self.build\n  end\nend\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: ruby\n\nsample.rb\n  1 class Box\n  2 method Box.get\n  6 class Outer::Inner\n  7 method Outer::Inner.build\n",
+      "expected_symbols": {
+        "sample.rb": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            6,
+            "class",
+            "Outer::Inner",
+            ""
+          ],
+          [
+            7,
+            "method",
+            "Outer::Inner.build",
+            ""
+          ]
+        ]
+      }
     }
   ]
 }

@@ -50,6 +50,8 @@ def test_p43_python_oracle_inventory_cache_and_bounds(tmp_path, monkeypatch):
     }
     monkeypatch.setattr(code_map, "_backend", lambda: ("unavailable", None))
     for case in fixture["cases"]:
+        if "p43" not in case["name"]:
+            continue
         assert "p43" in case["name"]
         if case["op"] == "inventory":
             repo = _repo(tmp_path / case["name"])
@@ -165,3 +167,25 @@ def test_p43_python_oracle_inventory_cache_and_bounds(tmp_path, monkeypatch):
             entries = json.loads(path.with_name("manifest.json").read_text(encoding="utf-8"))["entries"]
             for relative, symbols in case["expected_symbols"].items():
                 assert entries[relative]["symbols"] == symbols, case["name"]
+
+
+def test_p3d_oracle_fixture_cases_match_python(tmp_path):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    _, backend = code_map._backend()
+    if backend is not None and hasattr(backend, "init") and hasattr(backend, "PackConfig"):
+        backend.init(backend.PackConfig(cache_dir=str(tmp_path / "tree-sitter-cache")))
+    cases = [case for case in fixture["cases"] if case["name"].startswith("p3d_oracle_")]
+    assert len(cases) == 6
+    for case in cases:
+        repo = _repo(tmp_path / case["name"])
+        for relative, source in case["sources"].items():
+            path = repo / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+        subprocess.run(["git", "add", "--", *case["sources"]], cwd=repo, check=True)
+        path, status = code_map.refresh(repo, tmp_path / f"{case['name']}-state")
+        assert status == "FRESH", case["name"]
+        assert path.read_text(encoding="utf-8") == case["expected_map"], case["name"]
+        entries = json.loads(path.with_name("manifest.json").read_text(encoding="utf-8"))["entries"]
+        for relative, symbols in case["expected_symbols"].items():
+            assert entries[relative]["symbols"] == symbols, case["name"]
