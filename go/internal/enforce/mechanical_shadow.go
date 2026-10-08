@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,17 @@ import (
 )
 
 const mechanicalShadowTimeout = 45 * time.Second
+const mechanicalShadowLockMaxAge = mechanicalShadowTimeout + 600*time.Second
+
+type mechanicalShadowRecord struct {
+	Model          string `json:"model"`
+	Prompt         string `json:"prompt"`
+	Repository     string `json:"repository"`
+	Scratch        string `json:"scratch"`
+	AcceptedReport string `json:"accepted_report"`
+	ProjectKey     string `json:"project_key"`
+	StateRoot      string `json:"state_root"`
+}
 
 type mechanicalShadowJob struct {
 	Model      string
@@ -28,6 +41,200 @@ type mechanicalShadowOutcome struct {
 	Stdout   string
 	ExitCode int
 	TimedOut bool
+}
+
+var mechanicalShadowWord = regexp.MustCompile(`[a-z0-9]+`)
+
+func runMechanicalShadowJob(ctx context.Context, jobPath, executable string, timeout time.Duration) bool {
+	var job mechanicalShadowRecord
+	data, err := os.ReadFile(jobPath)
+	if err != nil || json.Unmarshal(data, &job) != nil {
+		return false
+	}
+	started := time.Now()
+	lock := filepath.Join(filepath.Dir(jobPath), "running.lock")
+	_ = os.WriteFile(lock, []byte(strconv.Itoa(os.Getpid())), 0600)
+	outcome, err := runMechanicalShadow(ctx, mechanicalShadowJob{Model: job.Model, Prompt: job.Prompt, Repository: job.Repository, Scratch: job.Scratch}, executable, timeout)
+	tokens := mechanicalShadowTokens(outcome.Stdout)
+	completed, success := false, false
+	if err == nil && outcome.ExitCode == 0 && !outcome.TimedOut {
+		if report, e := mechanicalShadowReport(outcome.Stdout); e == nil {
+			completed, success = true, mechanicalReportsAgree(report, job.AcceptedReport)
+		}
+	}
+	positions, sampleErr := mechanicalShadowRecordSample(job.StateRoot, job.Model, success)
+	if sampleErr == nil && positions[0] >= 0 && positions[1] >= 0 && positions[0] != positions[1] {
+		preEmit(job.StateRoot, map[string]any{}, nil, "shadow-job", job.ProjectKey, "MECHANICAL_MODEL_RANK_CHANGED", map[string]any{"served_model": job.Model, "old_rank": positions[0] + 1, "new_rank": positions[1] + 1})
+	}
+	payload := map[string]any{"candidate": job.Model, "status": "failed", "elapsed_ms": float64(time.Since(started).Microseconds()) / 1000}
+	if completed {
+		payload["status"], payload["agreement"] = "completed", success
+	}
+	for key, value := range tokens {
+		payload[key] = value
+	}
+	preEmit(job.StateRoot, map[string]any{}, nil, "shadow-job", job.ProjectKey, "SHADOW_FINISHED", payload)
+	_ = os.RemoveAll(job.Scratch)
+	_ = os.Remove(jobPath)
+	_ = os.Remove(lock)
+	return success
+}
+
+func mechanicalShadowRecordSample(root, model string, success bool) ([2]int, error) {
+	rank := func() (int, error) {
+		data, err := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+		if err != nil {
+			return -1, err
+		}
+		var value struct {
+			Candidates []map[string]any `json:"candidates"`
+		}
+		if err = json.Unmarshal(data, &value); err != nil {
+			return -1, err
+		}
+		for i, candidate := range value.Candidates {
+			if candidate["id"] == model {
+				return i, nil
+			}
+		}
+		return -1, nil
+	}
+	before, err := rank()
+	if err != nil {
+		return [2]int{-1, -1}, err
+	}
+	if err = recordMechanicalSample(root, model, success); err != nil {
+		return [2]int{-1, -1}, err
+	}
+	after, err := rank()
+	return [2]int{before, after}, err
+}
+
+func mechanicalShadowReport(stdout string) (string, error) {
+	var texts []string
+	completed := false
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			return "", err
+		}
+		if event["type"] == "error" {
+			return "", fmt.Errorf("OpenCode reported an error")
+		}
+		part, _ := event["part"].(map[string]any)
+		if event["type"] == "text" && part != nil {
+			if text, ok := part["text"].(string); ok {
+				texts = append(texts, text)
+			}
+		}
+		if event["type"] == "step_finish" && part != nil && part["reason"] == "stop" {
+			completed = true
+		}
+	}
+	report := strings.TrimSpace(strings.Join(texts, ""))
+	if !completed || report == "" {
+		return "", fmt.Errorf("OpenCode returned no completed report")
+	}
+	return report, nil
+}
+
+func mechanicalReportsAgree(candidate, accepted string) bool {
+	left, right := map[string]bool{}, map[string]bool{}
+	for _, word := range mechanicalShadowWord.FindAllString(strings.ToLower(candidate), -1) {
+		left[word] = true
+	}
+	for _, word := range mechanicalShadowWord.FindAllString(strings.ToLower(accepted), -1) {
+		right[word] = true
+	}
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	intersection, union := 0, 0
+	for word := range left {
+		union++
+		if right[word] {
+			intersection++
+		}
+		if _, err := strconv.Atoi(word); err == nil && !right[word] {
+			return false
+		}
+	}
+	for word := range right {
+		if !left[word] {
+			union++
+		}
+		if _, err := strconv.Atoi(word); err == nil && !left[word] {
+			return false
+		}
+	}
+	return float64(intersection)/float64(union) >= .5
+}
+
+func mechanicalShadowTokens(stdout string) map[string]any {
+	totals := map[string]any{}
+	keys := map[string][2]string{"input_tokens": {"input", "input_tokens"}, "output_tokens": {"output", "output_tokens"}, "total_tokens": {"total", "total_tokens"}}
+	for _, line := range strings.Split(stdout, "\n") {
+		var event struct {
+			Type string `json:"type"`
+			Part struct {
+				Tokens map[string]json.RawMessage `json:"tokens"`
+			} `json:"part"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil || event.Type != "step_finish" {
+			continue
+		}
+		for target, sources := range keys {
+			for _, source := range sources {
+				raw, ok := event.Part.Tokens[source]
+				if !ok {
+					continue
+				}
+				var value int
+				if json.Unmarshal(raw, &value) != nil || value < 0 {
+					break
+				}
+				previous, _ := totals[target].(int)
+				totals[target] = previous + value
+				break
+			}
+		}
+	}
+	return totals
+}
+
+func recoverStaleMechanicalShadow(shadows string, now time.Time) (bool, error) {
+	lock := filepath.Join(shadows, "running.lock")
+	info, err := os.Stat(lock)
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	stale := now.Sub(info.ModTime()) > mechanicalShadowLockMaxAge
+	if !stale {
+		return false, nil
+	}
+	for _, pattern := range []string{"*.json", "run-*"} {
+		matches, _ := filepath.Glob(filepath.Join(shadows, pattern))
+		for _, path := range matches {
+			_ = os.RemoveAll(path)
+		}
+	}
+	return true, os.Remove(lock)
+}
+
+func init() {
+	observationFields["MECHANICAL_MODEL_RANK_CHANGED"] = fields("served_model old_rank new_rank")
+	observationFields["SHADOW_FINISHED"] = fields("candidate status elapsed_ms input_tokens output_tokens total_tokens agreement")
+	setObservationRule("id", "served_model candidate")
+	setObservationRule("int", "old_rank new_rank input_tokens output_tokens total_tokens")
+	setObservationRule("number", "elapsed_ms")
+	setObservationRule("enum:completed failed", "status")
+	setObservationRule("bool", "agreement")
 }
 
 func runMechanicalShadow(ctx context.Context, job mechanicalShadowJob, executable string, timeout time.Duration) (mechanicalShadowOutcome, error) {
