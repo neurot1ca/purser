@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.92 — 2026-10-08
+
+- **Fixed:** Auto-compact runs the `/compact` command where the host refuses plugin compaction.
+- **Changed:** `/purser:init` no longer looks for Python or stores its path.
+
 ## 0.1.91 — 2026-10-08
 
 - **Fixed:** Auto-compact works where the host refuses plugin compaction (such as the desktop Code tab) by submitting a `/compact` prompt instead.
