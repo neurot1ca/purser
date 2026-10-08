@@ -88,10 +88,14 @@ func parseCodeMapLine(output []byte) (string, string, error) {
 		return "", "", errors.New("malformed code map output")
 	}
 	parts := strings.SplitN(strings.TrimPrefix(line, "CODE_MAP="), " STATUS=", 2)
-	if len(parts) != 2 || parts[0] == "" || (parts[1] != "FRESH" && parts[1] != "STALE" && parts[1] != "UNAVAILABLE") {
+	if len(parts) != 2 || parts[0] == "" {
 		return "", "", errors.New("malformed code map output")
 	}
-	return parts[0], parts[1], nil
+	status, suffix, hasSuffix := strings.Cut(parts[1], " ")
+	if (status != "FRESH" && status != "STALE" && status != "UNAVAILABLE") || (hasSuffix && suffix != "(scoped excerpt below)") {
+		return "", "", errors.New("malformed code map output")
+	}
+	return parts[0], status, nil
 }
 
 type codeMapFile struct {

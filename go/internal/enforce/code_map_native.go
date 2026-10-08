@@ -324,6 +324,9 @@ func renderCodeMapNativePaths(entries map[string]codeMapNativeEntry, paths []str
 			}
 			line := fmt.Sprint(symbol[0])
 			kind, name, signature := fmt.Sprint(symbol[1]), fmt.Sprint(symbol[2]), fmt.Sprint(symbol[3])
+			if entry.Language == "go" {
+				signature = goCodeMapDisplaySignature(kind, name, signature)
+			}
 			rendered := fmt.Sprintf("  %s %s %s%s", line, kind, name, signature)
 			if signature != "" && utf8.RuneCountInString(rendered) > 120 {
 				runes := []rune(rendered)
@@ -336,4 +339,26 @@ func renderCodeMapNativePaths(entries map[string]codeMapNativeEntry, paths []str
 		lines = append(lines, fmt.Sprintf("  files omitted: %d (map size limit)", omitted))
 	}
 	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func goCodeMapDisplaySignature(kind, name, signature string) string {
+	if kind == "type" && strings.HasPrefix(signature, "type "+name) {
+		return strings.TrimPrefix(signature, "type "+name)
+	}
+	if !strings.HasPrefix(signature, "func ") {
+		return signature
+	}
+	declaration := strings.TrimPrefix(signature, "func ")
+	if kind == "method" {
+		if receiverEnd := strings.Index(declaration, ") "); receiverEnd >= 0 {
+			declaration = strings.TrimSpace(declaration[receiverEnd+2:])
+		}
+		if dot := strings.LastIndex(name, "."); dot >= 0 {
+			name = name[dot+1:]
+		}
+	}
+	if strings.HasPrefix(declaration, name) {
+		return strings.TrimPrefix(declaration, name)
+	}
+	return signature
 }

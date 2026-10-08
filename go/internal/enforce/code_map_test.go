@@ -68,6 +68,12 @@ func TestCodeMapNativePreBoundaryAndCompletion(t *testing.T) {
 			}
 		}
 	})
+	t.Run("scoped excerpt header remains parseable", func(t *testing.T) {
+		path, status, err := parseCodeMapLine([]byte("CODE_MAP=map.txt STATUS=FRESH (scoped excerpt below)\n"))
+		if err != nil || path != "map.txt" || status != "FRESH" {
+			t.Fatalf("parsed scoped header path=%q status=%q err=%v", path, status, err)
+		}
+	})
 	t.Run("pending starts one detached completion", func(t *testing.T) {
 		r, s := nativeMapRepo(t, map[string]string{"a.js": "a", "b.js": "b", "c.js": "c"})
 		calls := 0

@@ -15,6 +15,70 @@ import (
 	"purser-hook/internal/ledger"
 )
 
+func TestAppendPreCodeMapScopedExcerpt(t *testing.T) {
+	mapPath := filepath.Join(t.TempDir(), "map.txt")
+	content := "# Code map v5\nParser: native\nCovered languages: go\n\n" +
+		"pkg/a.go\n  1 function A()\n\n" +
+		"pkg/nested/b.go\n  2 function B()\n\n" +
+		"pkg-other/c.go\n  3 function C()\n"
+	if err := os.WriteFile(mapPath, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, scope, want, notWant string
+	}{
+		{name: "directory", scope: "pkg", want: "pkg/nested/b.go", notWant: "pkg-other/c.go"},
+		{name: "file", scope: "pkg/a.go", want: "pkg/a.go", notWant: "pkg/nested/b.go"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := appendPreCodeMap("task", mapPath, "FRESH", []string{test.scope})
+			if !strings.Contains(got, "CODE_MAP="+mapPath+" STATUS=FRESH (scoped excerpt below)\n") || !strings.Contains(got, test.want) || strings.Contains(got, test.notWant) {
+				t.Fatalf("unexpected scoped prompt:\n%s", got)
+			}
+		})
+	}
+}
+
+func TestAppendPreCodeMapExcerptCapKeepsWholeSections(t *testing.T) {
+	mapPath := filepath.Join(t.TempDir(), "map.txt")
+	large := strings.Repeat("x", 3200)
+	content := "# Code map v5\nParser: native\nCovered languages: go\n\na.go\n  " + large +
+		"\n\nb.go\n  " + large + "\n\nc.go\n  " + large + "\n"
+	if err := os.WriteFile(mapPath, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := appendPreCodeMap("task", mapPath, "STALE", []string{"."})
+	if len([]byte(got[strings.Index(got, "CODE_MAP="):])) > preCodeMapExcerptMaxBytes {
+		t.Fatalf("excerpt exceeds %d bytes", preCodeMapExcerptMaxBytes)
+	}
+	if !strings.Contains(got, "a.go\n  "+large+"\n... (2 more files in "+mapPath+")") || strings.Contains(got, "b.go") {
+		t.Fatalf("excerpt did not retain whole sections and report omitted files:\n%s", got)
+	}
+}
+
+func TestAppendPreCodeMapFallsBackToPointer(t *testing.T) {
+	mapPath := filepath.Join(t.TempDir(), "map.txt")
+	if err := os.WriteFile(mapPath, []byte("# Code map\n\nother.go\n  1 function Other\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, status string
+		scope        []string
+	}{
+		{name: "no scope", status: "FRESH"},
+		{name: "no matching sections", status: "FRESH", scope: []string{"missing"}},
+		{name: "unavailable", status: "UNAVAILABLE", scope: []string{"."}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := appendPreCodeMap("task", mapPath, test.status, test.scope)
+			want := "task\nCODE_MAP=" + mapPath + " STATUS=" + test.status
+			if got != want {
+				t.Fatalf("got %q want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestPreDecisionsP63Fixture(t *testing.T) {
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/pre_decisions.json")
 	if err != nil {

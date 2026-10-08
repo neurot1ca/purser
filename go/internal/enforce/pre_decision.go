@@ -289,7 +289,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			path = filepath.Join(defaultPreStateRoot(runtimeRoot), "projects", projectKey(root), "code-map", "map.txt")
 			status = "UNAVAILABLE"
 		}
-		updated["prompt"] = appendPreCodeMap(stringValue(updated["prompt"]), path, status)
+		updated["prompt"] = appendPreCodeMap(stringValue(updated["prompt"]), path, status, parsed.Scope)
 	} else if root == nil && (pointerValue(parsed.Phase) == "implementation" || pointerValue(parsed.Phase) == "plan") {
 		updated["prompt"] = appendPreCodeMap(stringValue(updated["prompt"]), filepath.Join(defaultPreStateRoot(runtimeRoot), "projects", "unresolved", "code-map", "map.txt"), "UNAVAILABLE")
 	}
@@ -1025,9 +1025,71 @@ func pointerValue(value *string) string {
 	}
 	return *value
 }
-func appendPreCodeMap(prompt, path, status string) string {
+
+const preCodeMapExcerptMaxBytes = 6000
+
+func appendPreCodeMap(prompt, path, status string, scope ...[]string) string {
 	if strings.Contains(prompt, "CODE_MAP=") {
 		return prompt
 	}
-	return strings.TrimRight(prompt, " \t\r\n") + "\nCODE_MAP=" + path + " STATUS=" + status
+	line := "CODE_MAP=" + path + " STATUS=" + status
+	if status == "FRESH" || status == "STALE" {
+		if len(scope) > 0 && len(scope[0]) > 0 {
+			if data, err := os.ReadFile(path); err == nil {
+				if excerpt := scopedCodeMapExcerpt(data, scope[0], line+" (scoped excerpt below)\n", path); excerpt != "" {
+					line = strings.TrimSuffix(excerpt, "\n")
+				}
+			}
+		}
+	}
+	return strings.TrimRight(prompt, " \t\r\n") + "\n" + line
+}
+
+func scopedCodeMapExcerpt(data []byte, scope []string, header, path string) string {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	var sections []string
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "Parser:") || strings.HasPrefix(line, "Covered languages:") || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			i++
+			continue
+		}
+		start := i
+		i++
+		for i < len(lines) && (strings.HasPrefix(lines[i], " ") || strings.HasPrefix(lines[i], "\t")) {
+			i++
+		}
+		if codeMapPathInScope(line, scope) {
+			sections = append(sections, strings.Join(lines[start:i], "\n"))
+		}
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+
+	for keep := len(sections); keep >= 0; keep-- {
+		body := strings.Join(sections[:keep], "\n")
+		if body != "" {
+			body += "\n"
+		}
+		if keep < len(sections) {
+			body += fmt.Sprintf("... (%d more files in %s)\n", len(sections)-keep, path)
+		}
+		candidate := header + body
+		if len(candidate) <= preCodeMapExcerptMaxBytes {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func codeMapPathInScope(file string, scope []string) bool {
+	file = filepath.ToSlash(filepath.Clean(file))
+	for _, entry := range scope {
+		entry = filepath.ToSlash(filepath.Clean(strings.TrimSpace(entry)))
+		if entry == "." || file == entry || strings.HasPrefix(file, strings.TrimSuffix(entry, "/")+"/") {
+			return true
+		}
+	}
+	return false
 }

@@ -28,6 +28,18 @@ func TestCodeMapGoExtractor(t *testing.T) {
 	}
 }
 
+func TestCodeMapGoRenderedFunctionSeparatesNameAndSignature(t *testing.T) {
+	data, err := renderCodeMapNative(map[string]codeMapNativeEntry{
+		"hide.go": {Language: "go", Coverage: "native", Symbols: [][]any{{12, "function", "Hide", "func Hide(command *exec.Cmd) *exec.Cmd"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "  12 function Hide(command *exec.Cmd) *exec.Cmd") {
+		t.Fatalf("rendered map does not separate function name and signature:\n%s", data)
+	}
+}
+
 func TestCodeMapPass3dOracleSymbols(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "code_map.json"))
 	if err != nil {
