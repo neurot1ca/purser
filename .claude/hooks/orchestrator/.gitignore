@@ -9,3 +9,4 @@ __pycache__/
 .reviewer-test-*/
 .reviewer1-*/
 .reviewer1-packet-*
+.coverage
