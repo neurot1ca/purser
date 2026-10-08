@@ -141,6 +141,32 @@ func TestProfileResolutionPythonFixture(t *testing.T) {
 	}
 }
 
+func TestReviewerCandidatesDefaultAndConfiguredOrder(t *testing.T) {
+	user := Tier{Status: "ok", Values: map[string]any{}}
+	got := ResolveProfile(t.TempDir(), user, Tier{Status: "missing", Values: map[string]any{}})
+	want := []ReviewerCandidate{
+		{Agent: "agy", Model: "gemini-3.8-flash-high"},
+		{Agent: "claude", Model: "claude-haiku-5-5"},
+		{Agent: "codex", Model: "gpt-6-luna", Effort: "low"},
+	}
+	if !reflect.DeepEqual(got.ReviewerCandidates, want) {
+		t.Fatalf("default reviewer candidates=%#v, want %#v", got.ReviewerCandidates, want)
+	}
+
+	user.Values = map[string]any{
+		"reviewer.selected":     map[string]any{"agent": "codex", "model": "gpt-custom", "effort": "medium"},
+		"reviewer.alternatives": []any{map[string]any{"agent": "claude", "model": "claude-custom"}},
+	}
+	got = ResolveProfile(t.TempDir(), user, Tier{Status: "missing", Values: map[string]any{}})
+	want = []ReviewerCandidate{
+		{Agent: "codex", Model: "gpt-custom", Effort: "medium"},
+		{Agent: "claude", Model: "claude-custom"},
+	}
+	if !reflect.DeepEqual(got.ReviewerCandidates, want) {
+		t.Fatalf("configured reviewer candidates=%#v, want unchanged %#v", got.ReviewerCandidates, want)
+	}
+}
+
 func TestIsProtectedPythonFixture(t *testing.T) {
 	for _, test := range readResolveFixture(t).Protected {
 		if got := IsProtected(test.Path, test.Patterns); got != test.Output {

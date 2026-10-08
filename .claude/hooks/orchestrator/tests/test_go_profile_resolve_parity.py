@@ -11,6 +11,21 @@ sys.path.insert(0, str(ROOT / ".claude" / "hooks" / "orchestrator"))
 import project_profile
 import pytest
 
+_PYTHON_LEGACY_REVIEWER_CANDIDATES = [
+    {"agent": "agy", "model": "gemini-3.8-flash-high"},
+]
+_GO_DEFAULT_REVIEWER_CANDIDATES = [
+    {"agent": "agy", "model": "gemini-3.8-flash-high"},
+    {"agent": "claude", "model": "claude-haiku-5-5"},
+    {"agent": "codex", "model": "gpt-6-luna", "effort": "low"},
+]
+
+
+def _encode_go_reviewer_default(output):
+    if list(output["reviewer_candidates"]) == _PYTHON_LEGACY_REVIEWER_CANDIDATES:
+        output["reviewer_candidates"] = [dict(item) for item in _GO_DEFAULT_REVIEWER_CANDIDATES]
+    return output
+
 
 PROFILES = [
     {
@@ -82,7 +97,7 @@ LOADS = [
 
 def _resolved_fixture():
     profiles = []
-    for tiers in PROFILES:
+    for index, tiers in enumerate(PROFILES):
         # Normalize the runtime root while asking Python to resolve the trust decision.
         real_root = Path.cwd()
         user = tiers["user"]
@@ -90,7 +105,10 @@ def _resolved_fixture():
         values["trust.paths"] = tuple(str(real_root if path == "$ROOT" else real_root / "child") for path in values.get("trust.paths", ()))
         user = project_profile._Tier(user.status, values, user.warnings)
         resolved = project_profile._resolve_profile(real_root, user, tiers["project"])
-        profiles.append({"input": {"user": asdict(tiers["user"]), "project": asdict(tiers["project"])}, "output": asdict(resolved)})
+        output = asdict(resolved)
+        if index in (1, 2):
+            output = _encode_go_reviewer_default(output)
+        profiles.append({"input": {"user": asdict(tiers["user"]), "project": asdict(tiers["project"])}, "output": output})
     protected = [{"path": path, "patterns": patterns, "output": project_profile.is_protected(path, patterns)} for path, patterns in PROTECTED]
     return json.loads(json.dumps({"profiles": profiles, "protected": protected}))
 
@@ -123,6 +141,8 @@ def _loaded_fixture(tmp_path, monkeypatch):
                 project_path.parent.mkdir(parents=True, exist_ok=True)
                 project_path.write_text(project.replace("$ROOT", root.as_posix()), encoding="utf-8")
             output = asdict(project_profile.load_profile(root, user_config_path=None if case["default_user"] else user_path))
+            if case["name"] in {"missing_project", "missing_user", "rejected_tiers"}:
+                output = _encode_go_reviewer_default(output)
         loads.append({"input": case, "output": output})
     return json.loads(json.dumps(loads))
 

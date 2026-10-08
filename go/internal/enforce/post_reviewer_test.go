@@ -74,6 +74,97 @@ func TestClaudeFallbackCannotPassClaudeReviewer(t *testing.T) {
 	}
 }
 
+func TestReviewerCandidateEffortReachesBridge(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	var gotEffort any
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		gotEffort = args["reviewer_effort"]
+		return review.BridgeOutcome{Outcome: "completed"}, nil
+	}
+	pendingProfile := map[string]any{
+		"protected_paths": []any{}, "force_full_review": false, "skip_max_lines": float64(50),
+		"skip_max_files": float64(2), "configured": true, "user_status": "ok", "project_status": "ok",
+		"reviewer_candidates": []any{map[string]any{"agent": "codex", "model": "gpt-6-luna", "effort": "low"}},
+	}
+	_, err := runPostReviewer("", "", map[string]any{"fallback_family": "google", "model": "gemini-3.8-flash-high"},
+		map[string]any{"findings": []any{}},
+		postProfileFromPending(pendingProfile, map[string]any{}),
+		map[string]any{"reviewer1_timeout_seconds": float64(1)}, nil, nil, time.Now(), time.Second)
+	if err != nil || gotEffort != "low" {
+		t.Fatalf("bridge effort=%v err=%v, want low", gotEffort, err)
+	}
+}
+
+func TestDefaultReviewerFallsBackWithinReservedBudget(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	var agents []string
+	var budgets []time.Duration
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, timeout time.Duration) (review.BridgeOutcome, error) {
+		agents = append(agents, args["reviewer_agent"].(string))
+		budgets = append(budgets, timeout)
+		if len(agents) == 1 {
+			time.Sleep(timeout)
+			return review.BridgeOutcome{Outcome: "unavailable"}, nil
+		}
+		return review.BridgeOutcome{Outcome: "completed", Attributes: map[string]any{"result": "fallback-used"}}, nil
+	}
+	loaded := map[string]any{"reviewer1_model_requested": "gemini-3.8-flash-high", "reviewer1_timeout_seconds": float64(2)}
+	bundle := map[string]any{"findings": []any{}}
+	outcome, err := runPostReviewer("", "", map[string]any{"model": "gpt-6-luna", "fallback_family": "openai"}, bundle,
+		postProfile{}, loaded, nil, nil, time.Now(), 2*time.Second)
+	if err != nil || outcome.Attributes["result"] != "fallback-used" {
+		t.Fatalf("fallback outcome=%#v err=%v", outcome, err)
+	}
+	if len(agents) != 2 || agents[0] != "agy" || agents[1] != "claude" {
+		t.Fatalf("reviewer calls=%v, want [agy claude]", agents)
+	}
+	if budgets[0] > 1300*time.Millisecond || budgets[1] < 500*time.Millisecond {
+		t.Fatalf("budgets=%v, want first capped near 60%% and fallback reserved", budgets)
+	}
+	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
+	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || attempts[1].Outcome != "COMPLETED" {
+		t.Fatalf("attempts=%#v", bundle["reviewer1_attempts"])
+	}
+}
+
+func TestDefaultReviewerSkipsImplementerVendorFallback(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	postReviewerBridge = func(_ context.Context, _ string, _ map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		return review.BridgeOutcome{Outcome: "unavailable"}, nil
+	}
+	loaded := map[string]any{"reviewer1_model_requested": "gemini-3.8-flash-high", "reviewer1_timeout_seconds": float64(1)}
+	for _, tc := range []struct {
+		family string
+		vendor string
+	}{
+		{family: "openai", vendor: "openai"},
+		{family: "anthropic", vendor: "anthropic"},
+	} {
+		bundle := map[string]any{"findings": []any{}}
+		_, err := runPostReviewer("", "", map[string]any{"fallback_family": tc.family}, bundle,
+			postProfile{}, loaded, nil, nil, time.Now(), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
+		if !ok {
+			t.Fatalf("family %s attempts missing: %#v", tc.family, bundle)
+		}
+		found := false
+		for _, attempt := range attempts {
+			if attempt.Agent == map[string]string{"openai": "codex", "anthropic": "claude"}[tc.vendor] {
+				found = attempt.Outcome == "SKIPPED_SAME_VENDOR"
+			}
+		}
+		if !found {
+			t.Fatalf("family %s did not skip its vendor candidate: %#v", tc.family, attempts)
+		}
+	}
+}
+
 func TestRunPostReviewerUsesConfiguredJSONNumberTimeout(t *testing.T) {
 	pluginRoot := t.TempDir()
 	configDir := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator")

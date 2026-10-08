@@ -133,6 +133,15 @@
           {
             "agent": "agy",
             "model": "gemini-3.8-flash-high"
+          },
+          {
+            "agent": "claude",
+            "model": "claude-haiku-5-5"
+          },
+          {
+            "agent": "codex",
+            "model": "gpt-6-luna",
+            "effort": "low"
           }
         ],
         "reviewer_executable": null,
@@ -342,6 +351,15 @@
           {
             "agent": "agy",
             "model": "gemini-3.8-flash-high"
+          },
+          {
+            "agent": "claude",
+            "model": "claude-haiku-5-5"
+          },
+          {
+            "agent": "codex",
+            "model": "gpt-6-luna",
+            "effort": "low"
           }
         ],
         "reviewer_executable": null,
@@ -566,6 +584,15 @@
           {
             "agent": "agy",
             "model": "gemini-3.8-flash-high"
+          },
+          {
+            "agent": "claude",
+            "model": "claude-haiku-5-5"
+          },
+          {
+            "agent": "codex",
+            "model": "gpt-6-luna",
+            "effort": "low"
           }
         ],
         "reviewer_executable": null,
@@ -714,6 +741,15 @@
           {
             "agent": "agy",
             "model": "gemini-3.8-flash-high"
+          },
+          {
+            "agent": "claude",
+            "model": "claude-haiku-5-5"
+          },
+          {
+            "agent": "codex",
+            "model": "gpt-6-luna",
+            "effort": "low"
           }
         ],
         "reviewer_executable": null,
@@ -851,6 +887,15 @@
           {
             "agent": "agy",
             "model": "gemini-3.8-flash-high"
+          },
+          {
+            "agent": "claude",
+            "model": "claude-haiku-5-5"
+          },
+          {
+            "agent": "codex",
+            "model": "gpt-6-luna",
+            "effort": "low"
           }
         ],
         "reviewer_executable": null,

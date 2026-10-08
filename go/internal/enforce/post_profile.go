@@ -82,7 +82,8 @@ func postReviewerCandidates(value any) ([]profile.ReviewerCandidate, bool) {
 		if !agentOK || !modelOK {
 			return nil, false
 		}
-		result = append(result, profile.ReviewerCandidate{Agent: agent, Model: model})
+		effort, _ := candidate["effort"].(string)
+		result = append(result, profile.ReviewerCandidate{Agent: agent, Model: model, Effort: effort})
 	}
 	return result, true
 }

@@ -25,7 +25,11 @@ type postReviewerAttempt struct {
 func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, resolved postProfile, loaded map[string]any, delta, classification map[string]any, started time.Time, hookBudget time.Duration) (review.BridgeOutcome, error) {
 	candidates := resolved.ReviewerCandidates
 	if len(candidates) == 0 {
-		candidates = []profile.ReviewerCandidate{{Agent: "agy", Model: stringValue(loaded["reviewer1_model_requested"])}}
+		candidates = []profile.ReviewerCandidate{
+			{Agent: "agy", Model: stringValue(loaded["reviewer1_model_requested"])},
+			{Agent: "claude", Model: "claude-haiku-5-5"},
+			{Agent: "codex", Model: "gpt-6-luna", Effort: "low"},
+		}
 	}
 	implementer := vendorFamily(stringValue(pending["fallback_family"]))
 	modelsPresent := false
@@ -83,7 +87,7 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	attempts := []postReviewerAttempt{}
 	var last review.BridgeOutcome
 	invoked := false
-	for _, candidate := range candidates {
+	for index, candidate := range candidates {
 		vendor := vendorFamily(modelFamily(candidate.Model))
 		if implementer != "" && vendor != "" && implementer == vendor {
 			attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, "SKIPPED_SAME_VENDOR"})
@@ -97,6 +101,13 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		if budget <= 0 {
 			attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, "UNAVAILABLE_BUDGET_EXHAUSTED"})
 			continue
+		}
+		for _, later := range candidates[index+1:] {
+			laterVendor := vendorFamily(modelFamily(later.Model))
+			if postReviewerAdapters[later.Agent] && (implementer == "" || laterVendor == "" || implementer != laterVendor) {
+				budget = budget * 60 / 100
+				break
+			}
 		}
 		candidateArgs := clonePostMap(args)
 		candidateArgs["reviewer_agent"], candidateArgs["reviewer_model"] = candidate.Agent, candidate.Model

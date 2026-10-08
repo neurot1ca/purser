@@ -140,19 +140,28 @@ func ResolveProfile(projectRoot string, user, project Tier) ResolvedProfile {
 	orchestrator := profileString(userValues, "roles.orchestrator", "claude-code")
 	coder := profileString(userValues, "roles.coder", "codex")
 	roles := Roles{Orchestrator: orchestrator, Coder: coder, Reviewer: reviewer}
-	selected, ok := userValues["reviewer.selected"].(map[string]any)
-	if !ok {
-		selected = map[string]any{"agent": reviewer, "model": "gemini-3.8-flash-high"}
+	selected, selectedOK := userValues["reviewer.selected"].(map[string]any)
+	alternatives, alternativesOK := userValues["reviewer.alternatives"].([]any)
+	candidates := []ReviewerCandidate{}
+	if selectedOK {
+		candidates = append(candidates, ReviewerCandidate{Agent: selected["agent"].(string), Model: selected["model"].(string), Effort: profileString(selected, "effort", "")})
+	} else {
+		candidates = append(candidates, ReviewerCandidate{Agent: reviewer, Model: "gemini-3.8-flash-high"})
 		if reviewer == "none" {
-			selected["agent"] = "agy"
+			candidates[0].Agent = "agy"
 		}
 	}
-	candidates := []ReviewerCandidate{{Agent: selected["agent"].(string), Model: selected["model"].(string), Effort: profileString(selected, "effort", "")}}
-	if alternatives, ok := userValues["reviewer.alternatives"].([]any); ok {
+	if alternativesOK {
 		for _, item := range alternatives {
 			candidate := item.(map[string]any)
 			candidates = append(candidates, ReviewerCandidate{Agent: candidate["agent"].(string), Model: candidate["model"].(string), Effort: profileString(candidate, "effort", "")})
 		}
+	}
+	if !selectedOK && !alternativesOK {
+		candidates = append(candidates,
+			ReviewerCandidate{Agent: "claude", Model: "claude-haiku-5-5"},
+			ReviewerCandidate{Agent: "codex", Model: "gpt-6-luna", Effort: "low"},
+		)
 	}
 	worktree := WorktreeSetup{Copy: []string{}, SetupTimeoutSeconds: 600}
 	if trusted {

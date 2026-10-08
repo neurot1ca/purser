@@ -23,13 +23,20 @@ _PLAN_SHAPE_BLOCK = (
     "most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). "
     "Read-only: no code edits."
 )
+_GO_DEFAULT_REVIEWER_CANDIDATES = [
+    {"agent": "agy", "model": "gemini-3.8-flash-high"},
+    {"agent": "claude", "model": "claude-haiku-5-5"},
+    {"agent": "codex", "model": "gpt-6-luna", "effort": "low"},
+]
 
 
 def _add_go_plan_shape_prompt(case):
-    """Account for the Go-only plan prompt block in the retired Python oracle."""
+    """Account for Go-only prompt and reviewer-default changes in the Python oracle."""
     if case["name"] == "p64_plan_start_read_only":
         for container in (case["pending"]["async_updated_input"], case["response"]["updatedInput"]):
             container["prompt"] = container["prompt"].rstrip() + "\n\n" + _PLAN_SHAPE_BLOCK
+    if case.get("pending") is not None:
+        case["pending"]["reviewer_candidates"] = [dict(item) for item in _GO_DEFAULT_REVIEWER_CANDIDATES]
     return case
 
 

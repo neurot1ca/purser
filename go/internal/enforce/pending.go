@@ -92,7 +92,11 @@ func BuildPendingCall(in PendingCallInput) (map[string]any, map[string]any) {
 		}
 		candidates := make([]map[string]any, 0, len(p.ReviewerCandidates))
 		for _, candidate := range p.ReviewerCandidates {
-			candidates = append(candidates, map[string]any{"agent": candidate.Agent, "model": candidate.Model})
+			serialized := map[string]any{"agent": candidate.Agent, "model": candidate.Model}
+			if candidate.Effort != "" {
+				serialized["effort"] = candidate.Effort
+			}
+			candidates = append(candidates, serialized)
 		}
 		sources := make([]map[string]any, 0, len(p.AuthoritySources))
 		for _, source := range p.AuthoritySources {

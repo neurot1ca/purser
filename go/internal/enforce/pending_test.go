@@ -112,6 +112,17 @@ func TestPendingCallPythonFixture(t *testing.T) {
 	}
 }
 
+func TestBuildPendingCallSerializesReviewerEffort(t *testing.T) {
+	_, pending := BuildPendingCall(PendingCallInput{Profile: &profile.ResolvedProfile{
+		Roles:              profile.Roles{Reviewer: "agy"},
+		ReviewerCandidates: []profile.ReviewerCandidate{{Agent: "codex", Model: "gpt-6-luna", Effort: "low"}},
+	}})
+	candidates, ok := pending["reviewer_candidates"].([]map[string]any)
+	if !ok || len(candidates) != 1 || candidates[0]["effort"] != "low" {
+		t.Fatalf("reviewer candidates=%#v, want codex low effort", pending["reviewer_candidates"])
+	}
+}
+
 func pendingRepo(t *testing.T, content string) string {
 	t.Helper()
 	root := t.TempDir()
