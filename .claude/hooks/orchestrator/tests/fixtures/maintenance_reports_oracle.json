@@ -159,6 +159,13 @@
       }
     }
    ],
+  "lifecycle_cases": [
+    {"name":"success","results":[{"state":"SUCCEEDED","content":"raw report"}],"user_job":false,"cancel_state":"","want_error":"","want_result_state":"SUCCEEDED","want_cancel_calls":0,"want_slot_retained":false,"want_active_removed":true,"want_marker_job_id":true,"result_calls":1,"cancel_calls":0,"slot_retained":false,"error":"","result_state":"SUCCEEDED"},
+    {"name":"failure","results":[{"state":"FAILED","errorCode":"CODEX_FAILED","message":"worker failed"}],"user_job":false,"cancel_state":"","want_error":"Codex job FAILED: CODEX_FAILED worker failed","want_result_state":"","want_cancel_calls":0,"want_slot_retained":false,"want_active_removed":true,"want_marker_job_id":true,"result_calls":1,"cancel_calls":0,"slot_retained":false,"error":"Codex job FAILED: CODEX_FAILED worker failed","result_state":""},
+    {"name":"user-job-preemption-confirmed","results":[{"state":"RUNNING"}],"user_job":true,"cancel_state":"CANCELLED","want_error":"maintenance yielded to a user Codex job","want_result_state":"","want_cancel_calls":1,"want_slot_retained":false,"want_active_removed":true,"want_marker_job_id":true,"result_calls":0,"cancel_calls":1,"slot_retained":false,"error":"maintenance yielded to a user Codex job","result_state":""},
+    {"name":"unconfirmed-cancel-keeps-slot","results":[{"state":"RUNNING"}],"user_job":true,"cancel_state":"UNKNOWN_OR_IN_PROGRESS","want_error":"maintenance cancellation was unconfirmed; global slot retained by job timeout","want_result_state":"","want_cancel_calls":1,"want_slot_retained":true,"want_active_removed":true,"want_marker_job_id":true,"result_calls":1,"cancel_calls":1,"slot_retained":true,"error":"maintenance cancellation was unconfirmed; global slot retained by job timeout","result_state":""},
+    {"name":"timeout","results":[{"state":"TIMED_OUT","errorCode":"DEADLINE_EXCEEDED","message":"Codex job deadline exceeded"}],"user_job":false,"cancel_state":"","want_error":"Codex job TIMED_OUT: DEADLINE_EXCEEDED Codex job deadline exceeded","want_result_state":"","want_cancel_calls":0,"want_slot_retained":false,"want_active_removed":true,"want_marker_job_id":true,"result_calls":1,"cancel_calls":0,"slot_retained":false,"error":"Codex job TIMED_OUT: DEADLINE_EXCEEDED Codex job deadline exceeded","result_state":""}
+  ],
   "ownership_cases": [
   {
     "name": "free-slot",

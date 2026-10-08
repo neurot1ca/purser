@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import contextlib
 import json
 import os
 from pathlib import Path
@@ -228,29 +227,46 @@ def _global_slot(state: Path):
     return _exclusive_file(slot, stale_check=_global_slot_is_stale)
 
 
-@contextlib.contextmanager
-def _exclusive_file(path: Path, *, stale_check=None):
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    try:
-        descriptor = os.open(path, flags, 0o600)
-    except FileExistsError:
-        if stale_check is None or not stale_check(path):
-            raise
-        stale_path = path.with_name("." + uuid.uuid4().hex + ".stale")
+class _ExclusiveFile:
+    def __init__(self, path: Path, stale_check=None):
+        self.path = path
+        self.stale_check = stale_check
+        self.descriptor = None
+
+    def __enter__(self):
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         try:
-            os.replace(path, stale_path)
-        except FileNotFoundError:
-            pass
-        else:
-            stale_path.unlink(missing_ok=True)
-        descriptor = os.open(path, flags, 0o600)
-    try:
-        os.write(descriptor, json.dumps({"pid": os.getpid(), "started_at": time.time()}).encode("utf-8"))
-        os.fsync(descriptor)
-        yield
-    finally:
-        os.close(descriptor)
-        path.unlink(missing_ok=True)
+            self.descriptor = os.open(self.path, flags, 0o600)
+        except FileExistsError:
+            if self.stale_check is None or not self.stale_check(self.path):
+                raise
+            stale_path = self.path.with_name("." + uuid.uuid4().hex + ".stale")
+            try:
+                os.replace(self.path, stale_path)
+            except FileNotFoundError:
+                pass
+            else:
+                stale_path.unlink(missing_ok=True)
+            self.descriptor = os.open(self.path, flags, 0o600)
+        try:
+            os.write(self.descriptor, json.dumps({"pid": os.getpid(), "started_at": time.time()}).encode("utf-8"))
+            os.fsync(self.descriptor)
+        except Exception:
+            os.close(self.descriptor)
+            self.descriptor = None
+            self.path.unlink(missing_ok=True)
+            raise
+        return self
+
+    def __exit__(self, *_exc):
+        if self.descriptor is not None:
+            os.close(self.descriptor)
+            self.descriptor = None
+        self.path.unlink(missing_ok=True)
+
+
+def _exclusive_file(path: Path, *, stale_check=None):
+    return _ExclusiveFile(path, stale_check)
 
 
 def _pid_alive(pid: int) -> bool:

@@ -430,7 +430,7 @@ def test_maintenance_commands_and_check_match_oracle(tmp_path):
     actual = _maintenance_oracle(tmp_path / "oracle")
     expected = json.loads((Path(__file__).parent / "fixtures" / "maintenance_reports_oracle.json")
                           .read_text(encoding="utf-8"))
-    assert actual == expected
+    assert actual == {key: value for key, value in expected.items() if key != "lifecycle_cases"}
 
 
 def test_eligible_check_uses_only_fake_job_start_guard(tmp_path):
@@ -840,6 +840,87 @@ def test_user_job_starting_during_maintenance_is_not_cancelled_or_waited_on(proj
     assert json.loads((server.job_dir / (user_job["jobId"] + ".json")).read_text(encoding="utf-8"))["state"] == "RUNNING"
     assert (events[0][1]["outcome"], events[0][1]["reason_code"]) == ("yielded", "USER_JOB_PREEMPTED")
 
+
+def test_maintenance_lifecycle_oracle(project, monkeypatch):
+    import time
+    real_monotonic = time.monotonic
+    state = _state(project)
+    cases = []
+    scenarios = [
+        ("success", [{"state": "SUCCEEDED", "content": "raw report"}], False, "", "", "SUCCEEDED", 0, False),
+        ("failure", [{"state": "FAILED", "errorCode": "CODEX_FAILED", "message": "worker failed"}], False, "", "Codex job FAILED: CODEX_FAILED worker failed", "", 0, False),
+        ("user-job-preemption-confirmed", [{"state": "RUNNING"}], True, "CANCELLED", "maintenance yielded to a user Codex job", "", 1, False),
+        ("unconfirmed-cancel-keeps-slot", [{"state": "RUNNING"}], True, "UNKNOWN_OR_IN_PROGRESS", "maintenance cancellation was unconfirmed; global slot retained by job timeout", "", 1, True),
+        ("timeout", [{"state": "TIMED_OUT", "errorCode": "DEADLINE_EXCEEDED", "message": "Codex job deadline exceeded"}], False, "", "Codex job TIMED_OUT: DEADLINE_EXCEEDED Codex job deadline exceeded", "", 0, False),
+    ]
+    def forbidden_start(_server, _args):
+        raise AssertionError("maintenance lifecycle oracle reached a real job start")
+    monkeypatch.setattr(codex_exec_mcp.Server, "_start_job", forbidden_start)
+    monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: None)
+    monkeypatch.setattr(maintenance_reports, "_tool_info", lambda: ("unavailable", "oracle"))
+    monkeypatch.setattr(maintenance_reports.time, "sleep", lambda _seconds: None)
+    for name, results, user_job, cancel_state, want_error, want_result, cancel_calls, retain_slot in scenarios:
+        case_state = state / name
+        maintenance_reports.opt_in(project, state=case_state)
+        server = FakeServer(case_state, {})
+        calls = {"result": 0, "cancel": 0, "marker_job_id": False}
+        job_id = "a" * 64
+        def start(args, *, _server=server, _user=user_job):
+            _server.args = args
+            _server.records[job_id] = {"jobId": job_id, "state": "RUNNING"}
+            _server.job_dir.mkdir(parents=True, exist_ok=True)
+            (_server.job_dir / (job_id + ".json")).write_text(json.dumps(_server.records[job_id]), encoding="utf-8")
+            if _user:
+                path = _server.job_dir / ("b" * 64 + ".json")
+                path.write_text(json.dumps({"jobId": "b" * 64, "state": "RUNNING"}), encoding="utf-8")
+            return {"structuredContent": {"jobId": job_id, "state": "RUNNING"}}
+        def result(_args, *, _results=results, _server=server, _calls=calls, _state=case_state):
+            _calls["result"] += 1
+            active = _state / "projects" / maintenance_reports.project_root.project_key(project.resolve()) / "maintenance" / "cleanup-active.json"
+            if active.exists():
+                _calls["marker_job_id"] = json.loads(active.read_text(encoding="utf-8")).get("job_id") == job_id
+            item = _results[min(_calls["result"] - 1, len(_results) - 1)]
+            return {"structuredContent": item}
+        def cancel(_args, *, _calls=calls, _state=case_state):
+            _calls["cancel"] += 1
+            active = _state / "projects" / maintenance_reports.project_root.project_key(project.resolve()) / "maintenance" / "cleanup-active.json"
+            if active.exists():
+                _calls["marker_job_id"] = json.loads(active.read_text(encoding="utf-8")).get("job_id") == job_id
+            return {"structuredContent": {"state": cancel_state}}
+        server._start_job = start
+        server._result_job = result
+        server._cancel_job = cancel
+        if name == "unconfirmed-cancel-keeps-slot":
+            monkeypatch.setattr(maintenance_reports, "JOB_TIMEOUT_SECONDS", 2)
+            ticks = iter(range(100))
+            monkeypatch.setattr(maintenance_reports.time, "monotonic", lambda: float(next(ticks)))
+        else:
+            monkeypatch.setattr(maintenance_reports, "JOB_TIMEOUT_SECONDS", 2700)
+            monkeypatch.setattr(maintenance_reports.time, "monotonic", real_monotonic)
+        error = ""
+        result_value = ""
+        try:
+            report = maintenance_reports.run_report(project, report_type="cleanup", state=case_state, server=server, poll_seconds=1)
+            result_value = "SUCCEEDED" if report else ""
+        except RuntimeError as exc:
+            error = str(exc)
+        slot = case_state / "maintenance" / "active.json"
+        marker = case_state / "projects" / maintenance_reports.project_root.project_key(project.resolve()) / "maintenance" / "cleanup-active.json"
+        cases.append({"name": name, "results": results, "user_job": user_job, "cancel_state": cancel_state,
+                      "want_error": want_error, "want_result_state": want_result,
+                      "want_cancel_calls": cancel_calls, "want_slot_retained": retain_slot,
+                      "want_active_removed": not marker.exists(), "want_marker_job_id": calls["marker_job_id"],
+                      "result_calls": calls["result"], "cancel_calls": calls["cancel"],
+                      "slot_retained": slot.exists(), "error": error, "result_state": result_value})
+        assert error == want_error
+        assert result_value == want_result
+        assert slot.exists() is retain_slot, (name, error, calls, slot)
+        assert not marker.exists()
+        assert calls["cancel"] == cancel_calls
+        assert calls["marker_job_id"], (name, calls, marker, marker.read_text(encoding="utf-8") if marker.exists() else None)
+    expected = json.loads((Path(__file__).parent / "fixtures" / "maintenance_reports_oracle.json").read_text(encoding="utf-8"))
+    assert cases == expected.get("lifecycle_cases", [])
+
 def _maintenance_ownership_oracle(scratch):
     """Capture Python slot and active-marker ownership semantics without jobs."""
     import time
@@ -909,6 +990,3 @@ def _maintenance_ownership_oracle(scratch):
     cases.append({"name": "malformed-timestamp-active-marker",
                   "stale": maintenance_reports._active_is_stale(malformed, bridge), "readable": True})
     return cases
-
-
-
