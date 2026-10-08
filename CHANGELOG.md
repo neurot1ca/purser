@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.93 — 2026-10-08
+
+- **Changed:** Purser no longer needs Python: `/purser:check` runs in Go with a Runtime row, the MCP launcher only starts the Go binary, maintenance reports show the Runtime line, and released plugins ship no Python files.
+- **Added:** Auto-compact wakes the session after `/compact` with the measured saving so the task in progress continues.
+- **Fixed:** A rejected `codex_start` names the underlying launch error.
+
 ## 0.1.92 — 2026-10-08
 
 - **Fixed:** Auto-compact runs the `/compact` command where the host refuses plugin compaction.
