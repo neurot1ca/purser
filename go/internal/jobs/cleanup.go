@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,20 +40,28 @@ type worktreeListing struct {
 }
 
 // CleanupJobs performs MCP startup maintenance without requiring Python.
-func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) {
-	defer func() { _ = recover() }()
+func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			cleanupErr = fmt.Errorf("panic: %v", recovered)
+		}
+		if cleanupErr != nil {
+			message := strings.NewReplacer("\r", " ", "\n", " ").Replace(cleanupErr.Error())
+			fmt.Fprintf(os.Stderr, "Purser: job cleanup aborted: %s\n", message)
+		}
+	}()
 	recovered, err := RecoverPending(stateRoot, now)
 	if err != nil {
-		return
+		return fmt.Errorf("recover pending jobs: %w", err)
 	}
 	root, err := filepath.Abs(stateRoot)
 	if err != nil {
-		return
+		return fmt.Errorf("resolve state root: %w", err)
 	}
 	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
 	entries, err := os.ReadDir(jobsDir)
 	if err != nil && !os.IsNotExist(err) {
-		return
+		return fmt.Errorf("read jobs directory: %w", err)
 	}
 	current := float64(now.UnixNano()) / 1e9
 	loaded := make([]cleanupRecord, 0)
@@ -88,6 +97,8 @@ func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) {
 			protected[k] = true
 		}
 	}
+	// The hard byte ceiling may reclaim old terminal artifacts, including latest-thread
+	// artifacts; nonterminal and recent unapplied jobs remain protected.
 	type removal struct {
 		cleanupRecord
 		expired  bool
@@ -298,6 +309,7 @@ func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) {
 		cancel()
 	}
 	retention.PruneState(root, current, checkCeiling)
+	return nil
 }
 
 func cleanupMayRemove(j map[string]any, state string) bool {
@@ -663,13 +675,13 @@ func enforceArtifactSizeLimit(root string, now float64, records []cleanupRecord,
 		if cleanupConflictProtected(root, job, state, now, record.path) {
 			continue
 		}
-		wt, _ := job["worktreePath"].(string)
-		key := worktreeKey(wt)
-		if key != "" && (protected[key] || seenWT[key]) {
+		if job["applyState"] != "applied" && stamp > 0 && now-stamp < (24*time.Hour).Seconds() {
 			continue
 		}
+		wt, _ := job["worktreePath"].(string)
+		key := worktreeKey(wt)
 		worktreeSize, prepSize := int64(0), int64(0)
-		if wt != "" && key != "" {
+		if wt != "" && key != "" && !seenWT[key] {
 			worktreeSize = cleanupTreeBytes(wt)
 			seenWT[key] = true
 		}

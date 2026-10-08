@@ -414,8 +414,8 @@ func TestCleanupArtifactByteBoundEvictsOldestTerminalFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldID, newID := strings.Repeat("6", 64), strings.Repeat("7", 64)
-	cleanupJob(t, root, oldID, "SUCCEEDED", map[string]any{"worktreePath": oldWT, "repoRoot": repo, "finishedAt": float64(cleanupNow().Unix()) - 60})
-	cleanupJob(t, root, newID, "SUCCEEDED", map[string]any{"worktreePath": newWT, "repoRoot": repo, "finishedAt": float64(cleanupNow().Unix())})
+	cleanupJob(t, root, oldID, "SUCCEEDED", map[string]any{"worktreePath": oldWT, "repoRoot": repo, "finishedAt": float64(cleanupNow().Unix()) - 2*86400})
+	cleanupJob(t, root, newID, "SUCCEEDED", map[string]any{"worktreePath": newWT, "repoRoot": repo, "finishedAt": float64(cleanupNow().Unix()) - 86400})
 	previous := maxArtifactBytes
 	newSize := cleanupTreeBytes(newWT) + cleanupTreeBytes(filepath.Join(root, "preparations"))
 	maxArtifactBytes = newSize
@@ -426,6 +426,96 @@ func TestCleanupArtifactByteBoundEvictsOldestTerminalFirst(t *testing.T) {
 	}
 	if _, err := os.Stat(newWT); err != nil {
 		t.Fatalf("newer terminal worktree was evicted first: %v", err)
+	}
+}
+
+func TestCleanupArtifactByteBoundCanEvictLatestAppliedWorktree(t *testing.T) {
+	root := t.TempDir()
+	repo := cleanupRepo(t, root)
+	wt := cleanupWT(t, root, repo, "latest-applied")
+	if err := os.WriteFile(filepath.Join(wt, "payload"), make([]byte, 1024), 0600); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("c", 64)
+	prepID := strings.Repeat("d", 64)
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{
+		"worktreePath": wt, "repoRoot": repo, "applyState": "applied", "threadId": "thread",
+		"finishedAt": float64(cleanupNow().Unix()),
+	})
+	prep := filepath.Join(root, "preparations", prepID)
+	if err := os.MkdirAll(prep, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prep, "payload"), make([]byte, 1024), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cleanupJob(t, root, prepID, "SUCCEEDED", map[string]any{
+		"worktreePath": wt, "repoRoot": repo, "applyState": "applied", "threadId": "thread-2",
+		"finishedAt": float64(cleanupNow().Unix()),
+	})
+	previous := maxArtifactBytes
+	maxArtifactBytes = 0
+	t.Cleanup(func() { maxArtifactBytes = previous })
+	if err := CleanupJobs(root, cleanupNow(), false); err != nil {
+		t.Fatalf("CleanupJobs() error = %v", err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Fatalf("latest applied worktree remains above byte bound: %v", err)
+	}
+	if _, err := os.Stat(prep); !os.IsNotExist(err) {
+		t.Fatalf("preparation sharing a worktree candidate was skipped: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")); err != nil {
+		t.Fatalf("latest job record was removed with its worktree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "codex_exec_mcp", "jobs", prepID+".json")); err != nil {
+		t.Fatalf("latest job record was removed with its preparation: %v", err)
+	}
+}
+
+func TestCleanupArtifactByteBoundKeepsRecentConflictWorktree(t *testing.T) {
+	root := t.TempDir()
+	repo := cleanupRepo(t, root)
+	wt := cleanupWT(t, root, repo, "recent-conflict")
+	if err := os.WriteFile(filepath.Join(wt, "payload"), make([]byte, 1024), 0600); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("e", 64)
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{
+		"worktreePath": wt, "repoRoot": repo, "applyState": "CONFLICT",
+		"finishedAt": float64(cleanupNow().Unix()),
+	})
+	previous := maxArtifactBytes
+	maxArtifactBytes = 0
+	t.Cleanup(func() { maxArtifactBytes = previous })
+	if err := CleanupJobs(root, cleanupNow(), false); err != nil {
+		t.Fatalf("CleanupJobs() error = %v", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("recent conflict worktree removed over byte bound: %v", err)
+	}
+}
+
+func TestCleanupArtifactByteBoundKeepsRecentUnappliedThreadWorktree(t *testing.T) {
+	root := t.TempDir()
+	repo := cleanupRepo(t, root)
+	wt := cleanupWT(t, root, repo, "recent-thread")
+	if err := os.WriteFile(filepath.Join(wt, "payload"), make([]byte, 1024), 0600); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("f", 64)
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{
+		"worktreePath": wt, "repoRoot": repo, "threadId": "recent-thread",
+		"finishedAt": float64(cleanupNow().Unix()),
+	})
+	previous := maxArtifactBytes
+	maxArtifactBytes = 0
+	t.Cleanup(func() { maxArtifactBytes = previous })
+	if err := CleanupJobs(root, cleanupNow(), false); err != nil {
+		t.Fatalf("CleanupJobs() error = %v", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("recent unapplied thread worktree removed over byte bound: %v", err)
 	}
 }
 
