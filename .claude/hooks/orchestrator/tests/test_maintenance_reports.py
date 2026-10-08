@@ -1,5 +1,7 @@
 import json
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 import os
 from pathlib import Path
 import subprocess
@@ -12,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import maintenance_reports
+import codex_exec_mcp
 import telemetry
 import telemetry_schema
 
@@ -234,6 +237,208 @@ def _report_notice(project, state, *, shown=False, findings=None):
 
 def _quota(label, used, cycle):
     return {f"{label}_used_pct": used, f"{label}_resets_at": cycle}
+
+
+def _maintenance_oracle(scratch):
+    """Capture the maintenance CLI's M3 controls and check outcomes."""
+    scratch.mkdir(parents=True, exist_ok=True)
+    scratch = scratch.resolve()
+    cases = []
+    def snapshot(state, repo):
+        files = {}
+        project_key = maintenance_reports.project_root.project_key(repo.resolve())
+        for path in sorted(state.rglob("*")):
+            if path.is_file():
+                value = json.loads(path.read_text(encoding="utf-8"))
+                def normalize(item, key=None):
+                    if isinstance(item, dict):
+                        return {name: normalize(child, name) for name, child in item.items()}
+                    if isinstance(item, list):
+                        return [normalize(child) for child in item]
+                    if key == "event_id":
+                        return "<EVENT_ID>"
+                    if key == "ts_utc":
+                        return "<TIME>"
+                    if isinstance(item, str):
+                        return (item.replace(str(repo.resolve()), "<REPO>")
+                                .replace(str(state.resolve()), "<STATE_ROOT>")
+                                .replace(project_key, "<PROJECT_KEY>"))
+                    if key in {"at", "completed_at", "started_at"} and isinstance(item, (int, float)):
+                        return "<TIME>"
+                    return item
+                relative = path.relative_to(state).as_posix().replace(project_key, "<PROJECT_KEY>")
+                files[relative] = normalize(value)
+        return files
+
+    def invoke(name, argv, setup=None, quota=True):
+        area = scratch / name
+        repo = area / "repo"
+        state = area / "state"
+        repo.mkdir(parents=True)
+        state.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "module.py").write_text("def unused(): pass\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "module.py"], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.email=oracle@example.invalid",
+                        "-c", "user.name=Oracle", "commit", "-qm", "initial"], check=True)
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+        monkeypatch.setattr(maintenance_reports.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(maintenance_reports, "_fresh_quota", lambda _now=None: (
+            {"5h_used_pct": 1, "5h_resets_at": "cycle-a"} if quota else None))
+        if setup:
+            setup(repo, state)
+        guarded_run_report_calls = []
+        guarded_job_start_calls = []
+        real_job_start_calls = []
+
+        def forbidden_job_start(_server, args):
+            real_job_start_calls.append(args)
+            raise AssertionError(f"real Codex job start reached in {name}")
+
+        # Leave a tripwire underneath the test guard so removing the guard is a
+        # safe, deterministic test failure rather than a real Codex launch.
+        monkeypatch.setattr(codex_exec_mcp.Server, "_start_job", forbidden_job_start)
+
+        def guarded_job_start(_server, args):
+            guarded_job_start_calls.append(args)
+            return {"structuredContent": {"jobId": "e" * 64, "state": "SUCCEEDED"}}
+
+        monkeypatch.setattr(codex_exec_mcp.Server, "_start_job", guarded_job_start)
+
+        def guarded_run_report(root, *, report_type, state, _require_idle=False):
+            guarded_run_report_calls.append({"root": root, "report_type": report_type,
+                                             "require_idle": _require_idle})
+            server = codex_exec_mcp.Server(job_dir=state / "codex_exec_mcp" / "jobs", agent="codex")
+            started = server._start_job({
+                "call": "00000000-0000-4000-8000-000000000001",
+                "mode": "new", "prompt": "deterministic maintenance oracle",
+                "cwd": str(root), "sandbox": "read-only", "jobPhase": "operation", "agent": "codex",
+            })
+            job_id = started["structuredContent"]["jobId"]
+            jobs = state / "codex_exec_mcp" / "jobs"
+            jobs.mkdir(parents=True, exist_ok=True)
+            (jobs / (job_id + ".json")).write_text(json.dumps({
+                "jobId": job_id, "state": "SUCCEEDED", "jobPhase": "operation",
+                "report_type": report_type, "fake": True,
+            }), encoding="utf-8")
+            return None
+
+        monkeypatch.setattr(maintenance_reports, "run_report", guarded_run_report)
+        stdout = StringIO()
+        try:
+            with redirect_stdout(stdout):
+                exit_code = maintenance_reports.main([*argv, "--repo", str(repo)])
+            assert not real_job_start_calls, f"{name}: a real Codex job-start function was called"
+            result = {
+                "command": name,
+                "stdout": (stdout.getvalue().replace(str(state.resolve()), "<STATE_ROOT>")
+                           .replace(str(repo.resolve()), "<REPO>")
+                           .replace(maintenance_reports.project_root.project_key(repo.resolve()), "<PROJECT_KEY>").strip()),
+                "exit_code": exit_code,
+                "guarded_run_report_calls": len(guarded_run_report_calls),
+                "guarded_job_start_calls": len(guarded_job_start_calls),
+                "real_job_start_calls": len(real_job_start_calls),
+                "state": snapshot(state, repo),
+            }
+            cases.append(result)
+        finally:
+            monkeypatch.undo()
+
+    invoke("opt-in", ["opt-in"])
+    invoke("opt-out", ["opt-out"], lambda repo, state: maintenance_reports.opt_in(repo, state=state))
+    invoke("consent-accept", ["consent", "yes"])
+    invoke("consent-decline", ["consent", "no"])
+
+    def notice_setup(repo, state, pending=True):
+        maintenance_reports.opt_in(repo, state=state)
+        directory = state / "projects" / maintenance_reports.project_root.project_key(repo.resolve()) / "maintenance" / "reports" / "cleanup"
+        directory.mkdir(parents=True)
+        notice = directory / "report.notice.json"
+        notice.write_text(json.dumps({"project_root": str(repo.resolve()), "report_path": str(directory / "report.md"),
+                                      "pending_cycle": "cycle-a" if pending else None,
+                                      "pending_show": 1 if pending else None, "pending": pending,
+                                      "cycles": {"cycle-a": {"shows": 1}}}), encoding="utf-8")
+        return notice
+
+    def skip_setup(repo, state):
+        return notice_setup(repo, state)
+
+    def maintenance_setup(repo, state, activity_age, run_age=None, active_job=False):
+        maintenance_reports.opt_in(repo, state=state)
+        directory = state / "projects" / maintenance_reports.project_root.project_key(repo.resolve()) / "maintenance"
+        directory.mkdir(parents=True, exist_ok=True)
+        now = __import__("time").time()
+        (directory / "last-activity.json").write_text(json.dumps({"at": now - activity_age}), encoding="utf-8")
+        if run_age is not None:
+            (directory / "last-run.json").write_text(json.dumps({"completed_at": now - run_age}), encoding="utf-8")
+            gaps = directory / "reports" / "test-gaps"
+            gaps.mkdir(parents=True, exist_ok=True)
+            (gaps / "last-run.json").write_text(json.dumps({"completed_at": now - run_age}), encoding="utf-8")
+        if active_job:
+            jobs = state / "codex_exec_mcp" / "jobs"
+            jobs.mkdir(parents=True)
+            (jobs / ("f" * 64 + ".json")).write_text(json.dumps({"state": "RUNNING"}), encoding="utf-8")
+
+    def mark_setup(repo, state):
+        notice = notice_setup(repo, state, pending=False)
+        value = json.loads(notice.read_text(encoding="utf-8"))
+        value.update({"pending_cycle": None, "pending_show": None, "findings": [{"path_line": "module.py:1"}]})
+        notice.write_text(json.dumps(value), encoding="utf-8")
+        return notice
+
+    # Recreate the skip and mark commands with concrete paths and capture their results.
+    def invoke_report_control(name, command, setup):
+        area = scratch / name
+        repo, state = area / "repo", area / "state"
+        repo.mkdir(parents=True); state.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "module.py").write_text("def unused(): pass\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "module.py"], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.email=oracle@example.invalid", "-c", "user.name=Oracle", "commit", "-qm", "initial"], check=True)
+        monkeypatch = pytest.MonkeyPatch(); monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+        try:
+            notice = setup(repo, state)
+            expected_dir = maintenance_reports._maintenance_dir(
+                repo.resolve(), maintenance_reports.state_root.default_state_root()) / "reports" / "cleanup"
+            assert notice.resolve().parent == expected_dir.resolve()
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = maintenance_reports.main([command, "--repo", str(repo), "--report", str(notice)])
+            cases.append({"command": name, "stdout": stdout.getvalue().strip(),
+                          "exit_code": code, "state": snapshot(state, repo)})
+        finally:
+            monkeypatch.undo()
+
+    invoke_report_control("skip-second-show", "skip-second-show", skip_setup)
+    invoke_report_control("mark-done", "mark-done", mark_setup)
+
+    quiet = maintenance_reports.QUIET_PERIOD_SECONDS
+    cadence = maintenance_reports.MAINTENANCE_CADENCE_SECONDS
+    invoke("check-not-opted-in", ["check"])
+    invoke("check-quiet-period", ["check"], lambda r, s: maintenance_setup(r, s, 0, cadence + 1))
+    invoke("check-cadence", ["check"], lambda r, s: maintenance_setup(r, s, quiet + 1, 0))
+    invoke("check-stale-quota", ["check"], lambda r, s: maintenance_setup(r, s, quiet + 1, cadence + 1),
+           quota=False)
+    invoke("check-active-user-job", ["check"],
+           lambda r, s: maintenance_setup(r, s, quiet + 1, cadence + 1, True))
+    invoke("check-eligible", ["check"], lambda r, s: maintenance_setup(r, s, quiet + 1, cadence + 1))
+    return {"source": "unchanged maintenance_reports.py", "cases": cases}
+
+
+def test_maintenance_commands_and_check_match_oracle(tmp_path):
+    actual = _maintenance_oracle(tmp_path / "oracle")
+    expected = json.loads((Path(__file__).parent / "fixtures" / "maintenance_reports_oracle.json")
+                          .read_text(encoding="utf-8"))
+    assert actual == expected
+
+
+def test_eligible_check_uses_only_fake_job_start_guard(tmp_path):
+    actual = _maintenance_oracle(tmp_path / "oracle")
+    eligible = next(case for case in actual["cases"] if case["command"] == "check-eligible")
+    assert eligible["guarded_run_report_calls"] == 1
+    assert eligible["guarded_job_start_calls"] == 1
+    assert eligible["real_job_start_calls"] == 0
 
 
 def test_global_slot_race_admits_exactly_one_project(project):
