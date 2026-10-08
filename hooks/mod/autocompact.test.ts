@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { DEFAULT_THRESHOLD, thresholdFrom } from './autocompact.js'
+import { DEFAULT_THRESHOLD, needsCompactPrompt, thresholdFrom } from './autocompact.js'
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 
@@ -80,4 +80,9 @@ test('writes each main turn decision to the auto-compact log', async ($, on) => 
   const log = Object.entries(writes).find(([path]) => path.endsWith('auto-compact.log'))?.[1]
   expect(log).toContain('260000 tokens, threshold 250000, compacting')
   expect(log).toContain('at 260000 tokens')
+})
+
+test('recognises the SDK-host refusal that needs a /compact prompt', () => {
+  expect(needsCompactPrompt(new Error('HooksError: purser: $.session.compact: not available in a headless (-p / SDK) session yet'))).toBe(true)
+  expect(needsCompactPrompt(new Error('a turn is running'))).toBe(false)
 })

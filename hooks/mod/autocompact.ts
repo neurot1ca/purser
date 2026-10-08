@@ -28,6 +28,11 @@ async function trace($, text: string) {
   } catch { /* logging must not affect the turn */ }
 }
 
+// The engine's refusal when the host can only compact through a typed /compact.
+export function needsCompactPrompt(error: unknown): boolean {
+  return String(error).includes('headless')
+}
+
 async function log($, text: string) {
   await trace($, text)
   try { await $.ui.log(`Purser auto-compact: ${text}`) } catch { /* as above */ }
@@ -45,7 +50,17 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
       inFlight = false
     } catch (error) {
       await log($, `attempt ${attempt + 1} failed at ${tokens} tokens: ${String(error)}`)
-      if (attempt + 1 < RETRY_DELAYS_MS.length) compactWhenIdle($, tokens, attempt + 1)
+      // An SDK host (the desktop Code tab, -p) compacts only through a /compact
+      // prompt, so submit one instead of retrying a call that cannot succeed.
+      if (needsCompactPrompt(error)) {
+        try {
+          await $.prompt.submit({ text: '/compact' })
+          await log($, `submitted /compact at ${tokens} tokens`)
+        } catch (submitError) {
+          await log($, `/compact submit failed at ${tokens} tokens: ${String(submitError)}`)
+        }
+        inFlight = false
+      } else if (attempt + 1 < RETRY_DELAYS_MS.length) compactWhenIdle($, tokens, attempt + 1)
       else inFlight = false
     }
   })
