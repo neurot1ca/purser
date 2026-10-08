@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.97 — 2026-10-08
+
+- **Fixed:** The Claude Haiku reviewer returns a valid review: the prompt is no longer swallowed by the `--tools` flag.
+- **Fixed:** Cleanup now actually reclaims old job worktrees past the size cap, while keeping running, conflicted and recently finished unapplied jobs.
+- **Fixed:** After auto-compact, the notice arrives as Purser's own message in the desktop app, where transcript lines were not shown.
+- **Added:** Purser keeps only the running and previous plugin versions in the plugin cache, freeing about 150 MB per old version.
+- **Added:** A background dispatcher agent can apply a Codex job only after main Claude accepts that exact revision (pilot groundwork).
+
 ## 0.1.96 — 2026-10-08
 
 - **Fixed:** Reviewer-1 no longer comes back unavailable when Gemini stalls: Claude Haiku, then Codex, review in its place.
