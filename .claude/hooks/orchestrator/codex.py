@@ -194,7 +194,7 @@ def _parse_task_contract(
                 if lower.startswith(label)
             )
             val = line_str[len(label):].strip()
-            if not val and i + 1 < len(lines) and not lines[i + 1].strip().lower().startswith(("acceptance criteria:", "acceptance:")):
+            if not val and i + 1 < len(lines) and not lines[i + 1].strip().lower().startswith(("acceptance criteria:", "acceptance:", "requirements:")):
                 val = lines[i + 1].strip()
             if "acceptance criteria:" in val.lower():
                 c_idx = val.lower().find("acceptance criteria:")
@@ -204,9 +204,12 @@ def _parse_task_contract(
                 val = val[:c_idx].strip(". ")
             if val and found_obj is None:
                 found_obj = val
-        elif lower.startswith(("acceptance criteria:", "acceptance:")):
+        elif lower.startswith(("acceptance criteria:", "acceptance:", "requirements:")):
             collecting_criteria = True
-            label = "acceptance criteria:" if lower.startswith("acceptance criteria:") else "acceptance:"
+            label = next(
+                label for label in ("acceptance criteria:", "acceptance:", "requirements:")
+                if lower.startswith(label)
+            )
             val = line_str[len(label):].strip()
             if val:
                 criteria_lines.append(val)
@@ -214,7 +217,7 @@ def _parse_task_contract(
             if (
                 line_str.startswith(("ORCH|", "TASK_CONTRACT:", "```"))
                 or re.match(
-                    r"^(?:task objective|objective|goal|acceptance criteria|acceptance|verified context|report):",
+                    r"^(?:task objective|objective|goal|acceptance criteria|acceptance|requirements|validation|verified context|report):",
                     lower,
                 )
             ):

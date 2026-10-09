@@ -9,7 +9,7 @@ import (
 
 var (
 	contractBullet    = regexp.MustCompile(`^([-*+]|\d+[.)])\s+`)
-	contractStop      = regexp.MustCompile(`^(task objective|objective|goal|acceptance criteria|acceptance|verified context|report):`)
+	contractStop      = regexp.MustCompile(`^(task objective|objective|goal|acceptance criteria|acceptance|requirements|validation|verified context|report):`)
 	contractHead      = regexp.MustCompile(`^(#{1,3})[ \t]+(.+?)\s*$`)
 	contractCount     = regexp.MustCompile(`\b(count|counting|number of|how many)\b`)
 	contractRunbook   = regexp.MustCompile(`\b(established|documented) runbook\b`)
@@ -81,7 +81,7 @@ func parseTaskContract(prompt, taskID, phase string, scope []string) (string, st
 			value := strings.TrimSpace(line[len(label):])
 			if value == "" && i+1 < len(lines) {
 				next := strings.ToLower(strings.TrimSpace(lines[i+1]))
-				if !strings.HasPrefix(next, "acceptance criteria:") && !strings.HasPrefix(next, "acceptance:") {
+				if !strings.HasPrefix(next, "acceptance criteria:") && !strings.HasPrefix(next, "acceptance:") && !strings.HasPrefix(next, "requirements:") {
 					value = strings.TrimSpace(lines[i+1])
 				}
 			}
@@ -95,11 +95,13 @@ func parseTaskContract(prompt, taskID, phase string, scope []string) (string, st
 			if objective == "" && value != "" {
 				objective = value
 			}
-		case strings.HasPrefix(lower, "acceptance criteria:") || strings.HasPrefix(lower, "acceptance:"):
+		case strings.HasPrefix(lower, "acceptance criteria:") || strings.HasPrefix(lower, "acceptance:") || strings.HasPrefix(lower, "requirements:"):
 			collecting = true
 			label := "acceptance:"
 			if strings.HasPrefix(lower, "acceptance criteria:") {
 				label = "acceptance criteria:"
+			} else if strings.HasPrefix(lower, "requirements:") {
+				label = "requirements:"
 			}
 			if value := strings.TrimSpace(line[len(label):]); value != "" {
 				criteriaLines = append(criteriaLines, value)

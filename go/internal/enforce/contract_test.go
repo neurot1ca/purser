@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestTaskContractRequirementsLabelAndMissingCriteria(t *testing.T) {
+	tests := []struct {
+		name       string
+		prompt     string
+		wantCrit   string
+		wantGround bool
+	}{
+		{
+			name:       "requirements label stops before validation",
+			prompt:     "Goal: Update parser\nRequirements:\n- a\n- b\nValidation: run focused tests",
+			wantCrit:   "a; b",
+			wantGround: true,
+		},
+		{
+			name:       "without criteria label stays ungrounded",
+			prompt:     "Goal: Update parser\n- a\n- b\nValidation: run focused tests",
+			wantCrit:   "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+			wantGround: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, criteria, grounded := parseTaskContract(test.prompt, "requirements", "implementation", nil)
+			if criteria != test.wantCrit || grounded != test.wantGround {
+				t.Fatalf("got (%q, %t), want (%q, %t)", criteria, grounded, test.wantCrit, test.wantGround)
+			}
+		})
+	}
+}
+
 func TestTaskContractMatchesPythonFixture(t *testing.T) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "task_contract.json")
 	data, err := os.ReadFile(path)

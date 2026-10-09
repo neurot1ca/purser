@@ -7055,6 +7055,21 @@ def test_goal_and_acceptance_key_value_headers_ground_task_contract():
     assert crit == "Preserve contract validation"
 
 
+def test_requirements_key_value_header_and_missing_criteria_label():
+    prompt = "Goal: Update parser\nRequirements:\n- a\n- b\nValidation: run focused tests"
+    _, crit, grounded = codex._parse_task_contract(prompt, "requirements", "implementation", [])
+    assert grounded is True
+    assert crit == "a; b"
+
+    _, _, grounded = codex._parse_task_contract(
+        "Goal: Update parser\n- a\n- b\nValidation: run focused tests",
+        "no-criteria",
+        "implementation",
+        [],
+    )
+    assert grounded is False
+
+
 def test_goal_only_key_value_header_is_not_grounded():
     obj, _, grounded = codex._parse_task_contract(
         "Goal: Update the parser", "goal-only", "implementation", []

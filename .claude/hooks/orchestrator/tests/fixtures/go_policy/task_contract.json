@@ -233,6 +233,32 @@
         "grounded": true,
         "task_type": "unknown"
       }
+    },
+    {
+      "name": "requirements_label_stops_before_validation",
+      "prompt": "Goal: Update parser\nRequirements:\n- a\n- b\nValidation: run focused tests",
+      "task_id": "p28-requirements",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Update parser",
+        "criteria": "a; b",
+        "grounded": true,
+        "task_type": "unknown"
+      }
+    },
+    {
+      "name": "unlabeled_bullets_do_not_ground_contract",
+      "prompt": "Goal: Update parser\n- a\n- b\nValidation: run focused tests",
+      "task_id": "p28-no-criteria",
+      "phase": "implementation",
+      "scope": [],
+      "expected": {
+        "objective": "Update parser",
+        "criteria": "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+        "grounded": false,
+        "task_type": "unknown"
+      }
     }
   ]
 }
