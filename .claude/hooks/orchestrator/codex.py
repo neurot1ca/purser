@@ -3363,6 +3363,17 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             response = _append_worktree_apply_context(response, index["jobId"])
         index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
         _atomic_json_write(path, index)
+        if success and worktree_path:
+            try:
+                finalized = json.loads(artifact.read_text(encoding="utf-8"))
+                count = finalized.get("changed_path_count")
+                delta_files = finalized.get("delta_files")
+                if ((type(count) is int and count == 0)
+                        or (type(delta_files) is int and delta_files == 0)):
+                    import codex_exec_mcp
+                    codex_exec_mcp._dispatch_worktree_retirement(root, index["jobId"])
+            except (OSError, ValueError, TypeError) as error:
+                _record_diagnostic(root, event, "PostToolUse", error)
         if not (success and worktree_path):
             _release_async_lease(root, index, pending)
         try:

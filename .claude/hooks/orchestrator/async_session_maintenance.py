@@ -444,6 +444,205 @@ def _remove_state_tree(path: Path, state_root: Path) -> bool:
         return False
 
 
+def _zero_delta_finalized(root: Path, job_id: str) -> bool:
+    index = _read_json(root / "async_jobs" / f"{job_id}.json")
+    if not index or index.get("stage") != "CONSUMED" or not isinstance(index.get("call_key"), str):
+        return False
+    artifact = _read_json(root / "bundle_artifacts" / f"{index['call_key']}.json")
+    return bool(artifact and (
+        type(artifact.get("changed_path_count")) is int and artifact["changed_path_count"] == 0
+        or type(artifact.get("delta_files")) is int and artifact["delta_files"] == 0))
+
+
+def _retirement_eligible(root: Path, job: dict[str, Any], path: Path, now: float) -> bool:
+    state = job.get("state")
+    if (state not in TERMINAL - {"UNKNOWN_OR_IN_PROGRESS"}
+            or job.get("applyState") in {"conflict", "CONFLICT", "BLOCKED", "RESOLVING"}
+            or job.get("applyConflictReason") == "worker_replay"):
+        return False
+    if (job.get("applyState") == "applied" or job.get("discarded") is True
+            or state == "CANCELLED" or _zero_delta_finalized(root, str(job.get("jobId", "")))):
+        return True
+    finished = job.get("finishedAt")
+    if isinstance(finished, bool) or not isinstance(finished, (int, float)) or finished <= 0:
+        try:
+            finished = path.stat().st_mtime
+        except OSError:
+            return False
+    return now - finished >= RETENTION_SECONDS
+
+
+def _clear_worktree_config(record: dict[str, Any], worktree: Path, repo: str) -> bool:
+    changed = False
+    bound = record.get("worktreePath")
+    if isinstance(bound, str) and _worktree_key(bound) == _worktree_key(worktree):
+        for key in ("worktreePath", "snapshot", "baselineSnapshot", "head", "sandbox"):
+            changed = record.pop(key, None) is not None or changed
+        record["cwd"] = repo
+        changed = True
+    config = record.get("threadConfig")
+    if isinstance(config, dict):
+        nested = config.get("worktreePath")
+        if isinstance(nested, str) and _worktree_key(nested) == _worktree_key(worktree):
+            for key in ("worktreePath", "snapshot", "baselineSnapshot", "head", "sandbox"):
+                changed = config.pop(key, None) is not None or changed
+            config["cwd"] = config.get("repoRoot") or repo
+            changed = True
+    args = record.get("config_args")
+    if isinstance(args, list):
+        filtered = [arg for arg in args if not (isinstance(arg, str) and arg.startswith("sandbox_mode="))]
+        if len(filtered) != len(args):
+            record["config_args"] = filtered
+            changed = True
+    if isinstance(config, dict) and isinstance(config.get("config_args"), list):
+        nested_args = config["config_args"]
+        filtered = [arg for arg in nested_args
+                    if not (isinstance(arg, str) and arg.startswith("sandbox_mode="))]
+        if len(filtered) != len(nested_args):
+            config["config_args"] = filtered
+            changed = True
+    return changed
+
+
+def retire_worktree(state_root: str | Path, job_id: str, generation: int | None = None) -> None:
+    supplied_root = Path(state_root)
+    if _is_reparse_path(supplied_root) or not supplied_root.is_dir():
+        raise ValueError("state root must be an existing directory")
+    root = supplied_root.resolve()
+    if not _JOB_ID.fullmatch(job_id):
+        raise ValueError("invalid retirement job id")
+    job = _read_json(root / "codex_exec_mcp" / "jobs" / f"{job_id}.json")
+    worktree = job.get("worktreePath") if job else None
+    if not isinstance(worktree, str):
+        for candidate in (root / "worktree_ownership").glob("*.json"):
+            record = _read_json(candidate)
+            if record and record.get("retiring") is True and job_id in record.get("jobs", []):
+                worktree = record.get("worktreePath")
+                break
+    if not isinstance(worktree, str):
+        if job:
+            return
+        raise ValueError("retirement job not found")
+    _, key = codex_exec_mcp._worktree_ownership_path(root, worktree)
+    with codex_exec_mcp._ownership_lock(root / "worktree_ownership" / "retirement", key):
+        _retire_worktree_locked(root, job_id, generation)
+
+
+def _retire_worktree_locked(state_root: str | Path, job_id: str, generation: int | None = None) -> None:
+    """Revalidate a claimed retirement, clear matching references, then remove owned trees."""
+    supplied_root = Path(state_root)
+    if _is_reparse_path(supplied_root) or not supplied_root.is_dir():
+        raise ValueError("state root must be an existing directory")
+    root = supplied_root.resolve()
+    if not _JOB_ID.fullmatch(job_id):
+        raise ValueError("invalid retirement job id")
+    jobs_dir = root / "codex_exec_mcp" / "jobs"
+    job_path = jobs_dir / f"{job_id}.json"
+    job = _read_json(job_path)
+    if not job or job.get("jobId") != job_id:
+        raise ValueError("retirement job not found")
+    current_generation = job.get("generation")
+    if isinstance(current_generation, int) and not isinstance(current_generation, bool) and current_generation > 0:
+        if generation != current_generation:
+            raise ValueError("stale retirement generation")
+    elif generation is not None:
+        raise ValueError("job has no retirement generation")
+    worktree_value = job.get("worktreePath")
+    if not isinstance(worktree_value, str):
+        for candidate in (root / "worktree_ownership").glob("*.json"):
+            record = _read_json(candidate)
+            if record and record.get("retiring") is True and job_id in record.get("jobs", []):
+                worktree_value = record.get("worktreePath")
+                break
+    if not isinstance(worktree_value, str):
+        raise ValueError("retirement job has no worktree")
+    worktree = Path(worktree_value).resolve()
+    wt_root = (root / "wt").resolve()
+    worktree.relative_to(wt_root)
+    if worktree == wt_root:
+        raise ValueError("invalid worktree path")
+    owner_path, key = codex_exec_mcp._worktree_ownership_path(root, str(worktree))
+    with codex_exec_mcp._ownership_lock(root / "worktree_ownership", key):
+        owner = _read_json(owner_path)
+        if (not owner or owner.get("retiring") is not True or owner.get("retirementClaimed") is not True
+                or owner.get("worktreePath") != worktree_value or job_id not in owner.get("jobs", [])):
+            raise ValueError("retirement ownership or claim is invalid")
+    attached_ids = owner.get("jobs", [])
+    if not isinstance(attached_ids, list) or not attached_ids:
+        raise ValueError("retirement ownership has no jobs")
+    attached: dict[str, dict[str, Any]] = {}
+    now = time.time()
+    for attached_id in attached_ids:
+        if not isinstance(attached_id, str) or not _JOB_ID.fullmatch(attached_id):
+            raise ValueError("retirement ownership contains an invalid job id")
+        path = jobs_dir / f"{attached_id}.json"
+        record = _read_json(path)
+        if not record or record.get("jobId") != attached_id or not _retirement_eligible(root, record, path, now):
+            raise ValueError(f"attached job {attached_id} is not terminal and eligible")
+        attached[attached_id] = record
+    repo = job.get("repoRoot")
+    if not isinstance(repo, str) or not repo:
+        raise ValueError("retirement job has no repository root")
+    for path in jobs_dir.glob("*.json"):
+        record = _read_json(path)
+        if not record or not _clear_worktree_config(record, worktree, repo):
+            continue
+        if not _retirement_eligible(root, record, path, now):
+            raise ValueError(f"job {record.get('jobId')} still references an ineligible worktree")
+        codex_exec_mcp._atomic_json(path, record)
+    threads = root / "codex_exec_mcp" / "threads"
+    for path in threads.glob("*.json"):
+        record = _read_json(path)
+        if record and _clear_worktree_config(record, worktree, record.get("repoRoot") or repo):
+            codex_exec_mcp._atomic_json(path, record)
+    listings: dict[str, tuple[Path, list[Path]] | None] = {}
+    prune_repos: dict[str, Path] = {}
+    if not owner.get("worktreeRemoved"):
+        if worktree.exists() and not _remove_worktree(root, Path(repo), worktree, listings, prune_repos):
+            raise OSError("worktree removal failed")
+        owner["worktreeRemoved"] = True
+        codex_exec_mcp._atomic_json(owner_path, owner)
+    if not owner.get("preparationsRemoved"):
+        for attached_id in attached_ids:
+            preparation = root / "preparations" / attached_id
+            if preparation.exists() and not _remove_state_tree(preparation, root / "preparations"):
+                raise OSError(f"preparation removal failed for {attached_id}")
+        owner["preparationsRemoved"] = True
+        codex_exec_mcp._atomic_json(owner_path, owner)
+    owner_path.unlink(missing_ok=True)
+
+
+def _recover_retiring_worktrees(root: Path) -> None:
+    for owner_path in (root / "worktree_ownership").glob("*.json"):
+        owner = _read_json(owner_path)
+        if not owner or owner.get("retiring") is not True or not owner.get("jobs"):
+            continue
+        job_id = owner["jobs"][0]
+        job = _read_json(root / "codex_exec_mcp" / "jobs" / f"{job_id}.json")
+        if not job:
+            continue
+        try:
+            with codex_exec_mcp._ownership_lock(root / "worktree_ownership", owner_path.stem):
+                current = _read_json(owner_path)
+                if not current or current.get("retiring") is not True:
+                    continue
+                current["retirementClaimed"] = True
+                current.pop("retirementError", None)
+                codex_exec_mcp._atomic_json(owner_path, current)
+            generation = job.get("generation")
+            retire_worktree(root, job_id, generation if type(generation) is int else None)
+        except Exception as exc:
+            try:
+                owner = _read_json(owner_path)
+                if owner:
+                    owner["retirementClaimed"] = False
+                    owner["retirementError"] = str(exc)[:300]
+                    codex_exec_mcp._atomic_json(owner_path, owner)
+            except Exception:
+                pass
+            continue
+
+
 def _preparation_generations(root: Path) -> list[tuple[Path, Path]]:
     """Yield (job directory, generation) without traversing links or worker trees."""
     base = root / "preparations"
@@ -674,6 +873,7 @@ def cleanup_jobs(state_root: str | Path, *, now: float | None = None,
     """Reconcile dead hosts and remove expired evidence with its ownership records."""
     try:
         root = Path(state_root)
+        _recover_retiring_worktrees(root)
         jobs = root / "codex_exec_mcp" / "jobs"
         bridge = codex_exec_mcp.Server(job_dir=jobs)
         current = time.time() if now is None else now

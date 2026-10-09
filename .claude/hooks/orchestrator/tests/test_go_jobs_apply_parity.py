@@ -78,3 +78,39 @@ def test_python_oracle_jobs_apply_fixture(tmp_path, monkeypatch):
         JOBS_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
         JOBS_FIXTURE.write_text(json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assert json.loads(JOBS_FIXTURE.read_text(encoding="utf-8")) == fixture
+
+
+def test_applied_repeat_uses_saved_result_after_retirement(tmp_path, monkeypatch):
+    import async_session_maintenance
+    import codex_exec_mcp
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "--all")
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=fixture", "-c",
+                    "user.email=fixture@example.invalid", "commit", "-qm", "base"], check=True)
+    state = tmp_path / "state"
+    worktree = state / "wt" / "owned"
+    worktree.parent.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(worktree), "HEAD"], check=True)
+    snapshot = ledger.checkout_snapshot(worktree)
+    (worktree / "tracked.txt").write_text("worker\n", encoding="utf-8")
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    job_id = hashlib.sha256(b"retired-repeat").hexdigest()
+    server = codex_exec_mcp.Server(job_dir=state / "codex_exec_mcp" / "jobs")
+    server._write_job({"jobId": job_id, "state": "SUCCEEDED", "repoRoot": str(repo.resolve()),
+                       "worktreePath": str(worktree.resolve()), "snapshot": snapshot,
+                       "applyState": "pending", "generation": 2})
+    codex_exec_mcp._worktree_ownership(state, str(worktree.resolve()), job_id=job_id)
+    monkeypatch.setattr(codex_exec_mcp, "_launch_retirement",
+                        lambda root, jid, generation: async_session_maintenance.retire_worktree(root, jid, generation))
+
+    first = server._apply_job({"jobId": job_id})["structuredContent"]
+    record = server._read_job(job_id)
+    repeat = server._apply_job({"jobId": job_id})["structuredContent"]
+
+    assert first["applied"] is True
+    assert "worktreePath" not in record
+    assert repeat == first

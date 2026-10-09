@@ -1022,3 +1022,87 @@ def test_failed_thread_resume_never_starts_a_fresh_thread(tmp_path, monkeypatch)
     assert calls == ["codex-reply"]
     assert result["state"] == "UNKNOWN_OR_IN_PROGRESS"
     assert result["errorCode"] == "RECOVERY_RESUME_FAILED"
+
+
+def test_retirement_clears_owned_job_and_thread_references_before_removal(tmp_path):
+    state = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "--all"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=fixture", "-c",
+                    "user.email=fixture@example.invalid", "commit", "-qm", "base"], check=True)
+    worktree = state / "wt" / "generation"
+    worktree.parent.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(worktree), "HEAD"], check=True)
+    job_id, reply_id, thread_id = "1" * 64, "2" * 64, "thread-retire"
+    jobs = state / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    common = {"state": "SUCCEEDED", "repoRoot": str(repo.resolve()),
+              "worktreePath": str(worktree.resolve()), "snapshot": "tree",
+              "baselineSnapshot": "base-tree", "head": "head", "sandbox": "sandbox"}
+    first = {"jobId": job_id, **common, "applyState": "applied", "threadId": thread_id}
+    reply = {"jobId": reply_id, "state": "SUCCEEDED", "repoRoot": str(repo.resolve()),
+             "discarded": True, "threadId": thread_id,
+             "threadConfig": {**common, "config_args": ["sandbox_mode=workspace-write", "model=x"]}}
+    (jobs / f"{job_id}.json").write_text(json.dumps(first), encoding="utf-8")
+    (jobs / f"{reply_id}.json").write_text(json.dumps(reply), encoding="utf-8")
+    threads = state / "codex_exec_mcp" / "threads"
+    threads.mkdir(parents=True)
+    codex_exec_mcp._save_record(threads, {"thread_id": thread_id, "repoRoot": str(repo.resolve()),
+        "cwd": str(worktree), "worktreePath": str(worktree), "snapshot": "tree", "head": "head",
+        "config_args": ["sandbox_mode=workspace-write", "model=x"], "other": "keep"})
+    for owner_id in (job_id, reply_id):
+        codex_exec_mcp._worktree_ownership(state, str(worktree), job_id=owner_id, thread_id=thread_id)
+    codex_exec_mcp._worktree_ownership(state, str(worktree), retire=True)
+    owner_path, key = codex_exec_mcp._worktree_ownership_path(state, str(worktree))
+    with codex_exec_mcp._ownership_lock(state / "worktree_ownership", key):
+        owner = json.loads(owner_path.read_text(encoding="utf-8"))
+        owner["retirementClaimed"] = True
+        codex_exec_mcp._atomic_json(owner_path, owner)
+    preparation = state / "preparations" / job_id
+    preparation.mkdir(parents=True)
+    (preparation / "state.json").write_text("{}", encoding="utf-8")
+
+    maintenance.retire_worktree(state, job_id)
+
+    first_after = json.loads((jobs / f"{job_id}.json").read_text(encoding="utf-8"))
+    reply_after = json.loads((jobs / f"{reply_id}.json").read_text(encoding="utf-8"))
+    thread_after = json.loads(codex_exec_mcp._record_path(threads, thread_id).read_text(encoding="utf-8"))
+    assert not worktree.exists() and not preparation.exists() and not owner_path.exists()
+    assert "worktreePath" not in first_after and first_after["cwd"] == str(repo.resolve())
+    assert "worktreePath" not in reply_after["threadConfig"]
+    assert reply_after["threadConfig"]["config_args"] == ["model=x"]
+    assert thread_after["thread_id"] == thread_id and thread_after["other"] == "keep"
+    assert "worktreePath" not in thread_after and thread_after["cwd"] == str(repo.resolve())
+
+
+def test_retirement_refuses_active_shared_job_and_keeps_intent(tmp_path):
+    state = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = state / "wt" / "active"
+    worktree.mkdir(parents=True)
+    applied_id, active_id = "3" * 64, "4" * 64
+    jobs = state / "codex_exec_mcp" / "jobs"
+    jobs.mkdir(parents=True)
+    shared = {"repoRoot": str(repo.resolve()), "worktreePath": str(worktree.resolve())}
+    (jobs / f"{applied_id}.json").write_text(json.dumps(
+        {"jobId": applied_id, "state": "SUCCEEDED", "applyState": "applied", **shared}), encoding="utf-8")
+    (jobs / f"{active_id}.json").write_text(json.dumps(
+        {"jobId": active_id, "state": "RUNNING", **shared}), encoding="utf-8")
+    for owner_id in (applied_id, active_id):
+        codex_exec_mcp._worktree_ownership(state, str(worktree.resolve()), job_id=owner_id)
+    codex_exec_mcp._worktree_ownership(state, str(worktree.resolve()), retire=True)
+    owner_path, key = codex_exec_mcp._worktree_ownership_path(state, str(worktree.resolve()))
+    with codex_exec_mcp._ownership_lock(state / "worktree_ownership", key):
+        owner = json.loads(owner_path.read_text(encoding="utf-8"))
+        owner["retirementClaimed"] = True
+        codex_exec_mcp._atomic_json(owner_path, owner)
+
+    with pytest.raises(ValueError, match="not terminal and eligible"):
+        maintenance.retire_worktree(state, applied_id)
+
+    assert worktree.is_dir()
+    assert json.loads(owner_path.read_text(encoding="utf-8"))["retiring"] is True

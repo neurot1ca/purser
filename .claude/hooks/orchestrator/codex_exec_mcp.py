@@ -162,6 +162,47 @@ def _worktree_is_retiring(state_root: Path, worktree: str) -> bool:
         return isinstance(record, dict) and record.get("retiring") is True
 
 
+def _dispatch_worktree_retirement(state_root: Path, job_id: str) -> None:
+    """Persist retirement intent and launch one private child; failures stay recoverable."""
+    job_path = state_root / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
+    worktree = ""
+    try:
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        worktree = job.get("worktreePath")
+        if job.get("jobId") != job_id or not isinstance(worktree, str) or not worktree:
+            return
+        owner_path, key = _worktree_ownership_path(state_root, worktree)
+        with _ownership_lock(state_root / "worktree_ownership", key):
+            record = json.loads(owner_path.read_text(encoding="utf-8"))
+            if job_id not in record.get("jobs", []):
+                return
+            record["retiring"] = True
+            if record.get("retirementClaimed"):
+                _atomic_json(owner_path, record)
+                return
+            record["retirementClaimed"] = True
+            record.pop("retirementError", None)
+            _atomic_json(owner_path, record)
+        _launch_retirement(state_root, job_id, job.get("generation"))
+    except Exception as exc:
+        try:
+            owner_path, key = _worktree_ownership_path(state_root, worktree)
+            with _ownership_lock(state_root / "worktree_ownership", key):
+                record = json.loads(owner_path.read_text(encoding="utf-8"))
+                record["retirementClaimed"] = False
+                record["retirementError"] = str(exc)[:300]
+                _atomic_json(owner_path, record)
+        except Exception:
+            pass
+        print(f"Worktree retirement dispatch failed for job {job_id}: {exc}", file=sys.stderr, flush=True)
+
+
+def _launch_retirement(state_root: Path, job_id: str, generation: Any = None) -> None:
+    parsed_generation = (generation if isinstance(generation, int) and not isinstance(generation, bool)
+                         and generation > 0 else 0)
+    _launch_host(state_root, job_id, parsed_generation, retirement=True)
+
+
 def _same_worktree_content(worktree: Path, repo_root: Path, path: str) -> bool:
     worktree_file = worktree / path
     repo_file = repo_root / path
@@ -261,10 +302,16 @@ def _process_creation_options(*, windows: bool | None = None) -> dict[str, Any]:
 
 
 def _launch_host(job_dir: Path, job_id: str, generation: int = 1,
-                 ownership_token: str = "") -> None:
-    command = [sys.executable, str(Path(__file__).resolve()), "--host-job", job_id,
-               "--host-job-dir", str(job_dir), "--generation", str(generation),
-               "--ownership-token", ownership_token]
+                 ownership_token: str = "", *, retirement: bool = False) -> None:
+    if retirement:
+        command = [sys.executable, str(Path(__file__).resolve()), "--retire-worktree",
+                   str(job_dir), job_id]
+        if generation > 0:
+            command.extend(("--retirement-generation", str(generation)))
+    else:
+        command = [sys.executable, str(Path(__file__).resolve()), "--host-job", job_id,
+                   "--host-job-dir", str(job_dir), "--generation", str(generation),
+                   "--ownership-token", ownership_token]
     if os.name != "nt":
         subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, creationflags=0,
@@ -1846,6 +1893,13 @@ class Server:
         if job.get("discarded") is True:
             return _job_result({"jobId": job["jobId"], "errorCode": "DISCARDED",
                                 "message": "This job was discarded and cannot be applied."})
+        if job.get("applyState") == "applied" and isinstance(job.get("applyResult"), dict):
+            _record_claude_decision(job, "accepted", "apply", job["jobId"],
+                                    args.get("reviewer1Valid"), args.get("reviewer1False"))
+            if job.get("worktreePath"):
+                self._release_applied_job_lease(job)
+                _dispatch_worktree_retirement(self.job_dir.parent.parent, job["jobId"])
+            return _job_result(job["applyResult"])
         if not job.get("worktreePath"):
             return _job_result({"state": "FAILED", "errorCode": "NOT_WORKTREE_JOB", "message": "Job has no worktree"})
         hand_resolvable_replay_failure = (
@@ -1865,6 +1919,7 @@ class Server:
                 _record_claude_decision(job, "accepted", "apply", job["jobId"],
                                         args.get("reviewer1Valid"), args.get("reviewer1False"))
                 self._release_applied_job_lease(job)
+                _dispatch_worktree_retirement(self.job_dir.parent.parent, job["jobId"])
                 return _job_result(job["applyResult"])
             if args.get("resolved") is True:
                 if (job.get("applyState") != "conflict"
@@ -1903,6 +1958,7 @@ class Server:
                 _record_claude_decision(job, "accepted", "apply", job["jobId"],
                                         args.get("reviewer1Valid"), args.get("reviewer1False"))
                 self._release_applied_job_lease(job)
+                _dispatch_worktree_retirement(self.job_dir.parent.parent, job["jobId"])
                 return _job_result(value)
             if "applyResult" in job:
                 return _job_result(job["applyResult"])
@@ -1925,6 +1981,7 @@ class Server:
                 _record_claude_decision(job, "accepted", "apply", job["jobId"],
                                         args.get("reviewer1Valid"), args.get("reviewer1False"))
                 self._release_applied_job_lease(job)
+                _dispatch_worktree_retirement(self.job_dir.parent.parent, job["jobId"])
                 return _job_result(value)
             reviewed = job.get("reviewedSnapshot")
             if isinstance(reviewed, str):
@@ -1971,6 +2028,7 @@ class Server:
                 _record_claude_decision(job, "accepted", "apply", job["jobId"],
                                         args.get("reviewer1Valid"), args.get("reviewer1False"))
                 self._release_applied_job_lease(job)
+                _dispatch_worktree_retirement(self.job_dir.parent.parent, job["jobId"])
             return _job_result(value)
 
     @staticmethod
@@ -2010,6 +2068,7 @@ class Server:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
         if job.get("discarded") is True:
+            _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
             return _job_result({"jobId": job_id, "state": job["state"], "discarded": True})
         if job["state"] in TERMINAL and job.get("worktreePath") and job.get("applyState") != "applied":
             with _ownership_lock(self.job_dir, job_id):
@@ -2024,6 +2083,7 @@ class Server:
                         current["decisionRecorded"] = True
                     self._write_job(current)
             self._release_job_scope_lease(purser_state_root.default_state_root(), job_id)
+            _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
             return _job_result({"jobId": job_id, "state": job["state"], "discarded": True})
         if job.get("leaseQueued") and job["state"] == "QUEUED":
             with _ownership_lock(self.job_dir, job_id):
@@ -2031,9 +2091,12 @@ class Server:
                 if current is not None and current["state"] == "QUEUED":
                     self._finish_job(job_id, "CANCELLED", "CANCELLED")
                     _record_scope_conflict_outcome(current, "discarded")
+                    _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
                     return self._result_job({"jobId": job_id})
         if self.listener is None:
             if job["state"] in TERMINAL:
+                if job["state"] == "CANCELLED":
+                    _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
                 return self._result_job({"jobId": job_id})
             try:
                 with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=5) as connection:
@@ -2043,6 +2106,8 @@ class Server:
                 if confirmed:
                     result = self._result_job({"jobId": job_id})
                     if result.get("structuredContent", {}).get("state") in TERMINAL:
+                        if result["structuredContent"].get("state") == "CANCELLED":
+                            _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
                         return result
                     # Go acknowledges CANCEL before its durable terminal write.
                     with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=7) as connection:
@@ -2056,6 +2121,7 @@ class Server:
                                     "errorCode": "PROCESS_UNCONFIRMED", "message": "Process termination unconfirmed"})
             result = self._result_job({"jobId": job_id})
             if result.get("structuredContent", {}).get("state") == "CANCELLED":
+                _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
                 return result
             return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
                                 "errorCode": "PROCESS_UNCONFIRMED", "message": "Process termination unconfirmed"})
@@ -2073,6 +2139,7 @@ class Server:
                 self._finish_job(job_id, "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED")
                 return self._result_job({"jobId": job_id})
         self._finish_job(job_id, "CANCELLED", "CANCELLED")
+        _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
         return self._result_job({"jobId": job_id})
 
     def send(self, message: dict[str, Any]) -> None:
@@ -2713,7 +2780,35 @@ def main() -> None:
     parser.add_argument("--host-job-dir", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--generation", type=int, default=1, help=argparse.SUPPRESS)
     parser.add_argument("--ownership-token", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--retire-worktree", nargs=2, metavar=("STATE_ROOT", "JOB_ID"), help=argparse.SUPPRESS)
+    parser.add_argument("--retirement-generation", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.retire_worktree:
+        import async_session_maintenance
+        try:
+            async_session_maintenance.retire_worktree(*args.retire_worktree, generation=args.retirement_generation)
+        except Exception as exc:
+            print(f"Worktree retirement failed: {exc}", file=sys.stderr, flush=True)
+            try:
+                root, job_id = Path(args.retire_worktree[0]), args.retire_worktree[1]
+                job = json.loads((root / "codex_exec_mcp" / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+                worktree = job.get("worktreePath")
+                if not isinstance(worktree, str):
+                    for candidate in (root / "worktree_ownership").glob("*.json"):
+                        owner = json.loads(candidate.read_text(encoding="utf-8"))
+                        if owner.get("retiring") is True and job_id in owner.get("jobs", []):
+                            worktree = owner.get("worktreePath")
+                            break
+                if isinstance(worktree, str):
+                    owner_path, key = _worktree_ownership_path(root, worktree)
+                    with _ownership_lock(root / "worktree_ownership", key):
+                        owner = json.loads(owner_path.read_text(encoding="utf-8"))
+                        owner["retirementClaimed"] = False
+                        owner["retirementError"] = str(exc)[:300]
+                        _atomic_json(owner_path, owner)
+            except Exception:
+                pass
+        return
     if args.host_job:
         _host_main(args.host_job, args.host_job_dir, args.generation, args.ownership_token)
         return

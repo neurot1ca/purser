@@ -857,6 +857,27 @@ def test_python_cancel_skips_terminal_wait_after_local_host_finishes(area, monke
         host.listener.close()
 
 
+def test_worktree_retirement_dispatch_persists_claim_before_launch(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    job_id = "f" * 64
+    worktree = state / "wt" / job_id[:12]
+    worktree.mkdir(parents=True)
+    server = codex_exec_mcp.Server(job_dir=state / "codex_exec_mcp" / "jobs")
+    server._write_job({"jobId": job_id, "state": "SUCCEEDED", "repoRoot": str(tmp_path),
+                       "worktreePath": str(worktree), "applyState": "applied", "generation": 3})
+    codex_exec_mcp._worktree_ownership(state, str(worktree), job_id=job_id)
+    launches = []
+    monkeypatch.setattr(codex_exec_mcp, "_launch_retirement",
+                        lambda root, jid, generation: launches.append((root, jid, generation)))
+
+    codex_exec_mcp._dispatch_worktree_retirement(state, job_id)
+
+    ownership = json.loads(codex_exec_mcp._worktree_ownership_path(state, str(worktree))[0].read_text())
+    assert ownership["retiring"] is True
+    assert ownership["retirementClaimed"] is True
+    assert launches == [(state, job_id, 3)]
+
+
 def test_stream_activity_updates_and_checkpoints_are_throttled(tmp_path, monkeypatch):
     job_id = "e" * 64
     server = codex_exec_mcp.Server(job_dir=tmp_path)
@@ -1326,32 +1347,34 @@ def test_reply_resets_thread_worktree_after_earlier_change_was_applied(area):
         subprocess.run(["git", "-C", str(repo), "add", "tracked.txt", "advance.txt"], check=True)
         subprocess.run(["git", "-C", str(repo), "commit", "-qm", "advance main"], check=True)
         (repo / "main-local.txt").write_text("must stay in main\n", encoding="utf-8")
-        expected = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"],
-                                  capture_output=True, check=True, text=True).stdout.strip()
-
         next_reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
                                                        "threadId": "thread-123", "prompt": "continue"})
         finish(client, next_reply["jobId"], "SUCCEEDED")
         job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
                               (next_reply["jobId"] + ".json"))
 
-        assert job["snapshot"] == expected
-        assert job["baselineSnapshot"] == expected
-        assert subprocess.run(["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        fresh_worktree = Path(job["worktreePath"])
+        assert fresh_worktree != worktree
+        expected_head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                       capture_output=True, check=True, text=True).stdout.strip()
+        assert job["head"] == expected_head
+        assert job["snapshot"] == job["baselineSnapshot"]
+        assert subprocess.run(["git", "-C", str(fresh_worktree), "rev-parse", "HEAD"],
                               capture_output=True, check=True, text=True).stdout.strip() == \
             subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
                            capture_output=True, check=True, text=True).stdout.strip()
-        assert subprocess.run(["git", "-C", str(worktree), "status", "--porcelain"],
-                              capture_output=True, check=True, text=True).stdout == ""
-        assert not (worktree / "main-local.txt").exists()
-        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == tracked.read_text(encoding="utf-8")
+        status = subprocess.run(["git", "-C", str(fresh_worktree), "status", "--porcelain"],
+                                capture_output=True, check=True, text=True).stdout
+        assert "A  main-local.txt" in status
+        assert (fresh_worktree / "main-local.txt").read_text(encoding="utf-8") == "must stay in main\n"
+        assert (fresh_worktree / "tracked.txt").read_text(encoding="utf-8") == tracked.read_text(encoding="utf-8")
 
-        (worktree / "reply-only.txt").write_text("reply delta\n", encoding="utf-8")
+        (fresh_worktree / "reply-only.txt").write_text("reply delta\n", encoding="utf-8")
         (repo / "later-main-only.txt").write_text("later main commit\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(repo), "add", "later-main-only.txt"], check=True)
         subprocess.run(["git", "-C", str(repo), "commit", "-qm", "later unrelated commit"], check=True)
         replay = ledger.prepare_job_replay(
-            repo, worktree, job["snapshot"], area / "applied-reply-check"
+            repo, fresh_worktree, job["snapshot"], area / "applied-reply-check"
         )
         assert replay["status"] == "prepared"
         assert replay["paths"] == ["reply-only.txt"]
@@ -2267,17 +2290,21 @@ def test_reply_after_applied_and_committed_job_rebases_worktree(area):
         finish(client, reply["jobId"], "SUCCEEDED")
         reply_job_path = area / "root" / "codex_exec_mcp" / "jobs" / (reply["jobId"] + ".json")
         reply_job = read_job_record(reply_job_path)
-        assert reply_job["worktreePath"] == first_job["worktreePath"]
-        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "A first\nsecond\n"
+        reply_worktree = Path(reply_job["worktreePath"])
+        assert reply_job["worktreePath"] != first_job["worktreePath"]
+        assert reply_worktree.is_dir()
+        assert reply_job["head"] == subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                                   capture_output=True, check=True, text=True).stdout.strip()
+        assert (reply_worktree / "tracked.txt").read_text(encoding="utf-8") == "A first\nsecond\n"
 
-        (worktree / "tracked.txt").write_text("A first\nB second\n", encoding="utf-8")
-        (worktree / "new-b.txt").write_text("B addition\n", encoding="utf-8")
+        (reply_worktree / "tracked.txt").write_text("A first\nB second\n", encoding="utf-8")
+        (reply_worktree / "new-b.txt").write_text("B addition\n", encoding="utf-8")
         (repo / "notes.txt").write_text("unrelated checkout edit\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(repo), "add", "notes.txt"], check=True)
         subprocess.run(["git", "-C", str(repo), "commit", "-qm", "unrelated checkout edit"], check=True)
 
         prepared = ledger.prepare_job_replay(
-            repo, worktree, reply_job["snapshot"], area / "reply-after-apply-preparation")
+            repo, reply_worktree, reply_job["snapshot"], area / "reply-after-apply-preparation")
 
         assert prepared["status"] == "prepared"
         reply_job["snapshot"] = prepared["snapshot"]

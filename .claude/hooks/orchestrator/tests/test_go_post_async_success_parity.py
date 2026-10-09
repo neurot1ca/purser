@@ -19,7 +19,7 @@ def _git(repo, *args):
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
-def _success(root):
+def _success(root, *, with_worktree=False):
     state, repo = root / "state", root / "repo"
     state.mkdir()
     (repo / "src").mkdir(parents=True)
@@ -54,8 +54,17 @@ def _success(root):
     (state / "async_jobs" / f"{job_id}.json").write_text(json.dumps(index), encoding="utf-8")
     job = {"jobId": job_id, "call": call, "state": "SUCCEEDED", "threadId": "async-thread",
            "repoRoot": str(repo.resolve()), "finishedAt": 1700000000}
+    if with_worktree:
+        worktree = state / "wt" / job_id[:12]
+        worktree.parent.mkdir(parents=True)
+        _git(repo, "worktree", "add", "--detach", str(worktree), "HEAD")
+        job.update(worktreePath=str(worktree.resolve()), snapshot=ledger.checkout_snapshot(worktree))
     (state / "codex_exec_mcp" / "jobs").mkdir(parents=True)
     (state / "codex_exec_mcp" / "jobs" / f"{job_id}.json").write_text(json.dumps(job), encoding="utf-8")
+    if with_worktree:
+        import codex_exec_mcp
+        codex_exec_mcp._worktree_ownership(state, job["worktreePath"], job_id=job_id,
+                                           thread_id=job["threadId"])
     event = {"tool_name": "mcp__codex-main__codex_result", "tool_use_id": "result-call", "session_id": session,
              "tool_input": {"jobId": job_id}, "tool_response": {"structuredContent": {
                  "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
@@ -147,6 +156,23 @@ def test_post_async_success_python_fixture(tmp_path, monkeypatch):
     cases["unapplied_worktree_lease_retained"] = {"pending_retained": retained_pending.exists(),
                                                   "lease_retention_after": lease_owner.get("retention_after"),
                                                   "stage": json.loads((retained_state / "async_jobs" / f"{retained_index['jobId']}.json").read_text())["stage"]}
+    zero_root = tmp_path / "zero_delta_retirement"
+    zero_root.mkdir()
+    zero_state, zero_repo, zero_event, zero_index, _ = _success(zero_root, with_worktree=True)
+    launches = []
+    import codex_exec_mcp
+    monkeypatch.setattr(codex_exec_mcp, "_launch_retirement",
+                        lambda root, job_id, generation: launches.append((job_id, generation)))
+    codex._async_post_followup(zero_event, config=config, state_root=zero_state, repo_root=zero_repo)
+    owned_path, _ = codex_exec_mcp._worktree_ownership_path(
+        zero_state, json.loads((zero_state / "codex_exec_mcp" / "jobs" / f"{zero_index['jobId']}.json").read_text())["worktreePath"])
+    ownership = json.loads(owned_path.read_text(encoding="utf-8"))
+    finalized_bundle = json.loads((zero_state / "bundle_artifacts" / f"{zero_index['call_key']}.json").read_text(encoding="utf-8"))
+    cases["zero_delta_retirement"] = {"stage": json.loads((zero_state / "async_jobs" / f"{zero_index['jobId']}.json").read_text())["stage"],
+                                      "delta_files": finalized_bundle.get("delta_files"),
+                                      "retiring": ownership.get("retiring"),
+                                      "claimed": ownership.get("retirementClaimed"),
+                                      "launches": [[job_id, generation] for job_id, generation in launches]}
     expected = {"oracle": "codex._async_post_followup successful codex_result branch", "cases": cases}
     if os.environ.get("POST_ASYNC_SUCCESS_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)

@@ -76,3 +76,29 @@ def test_go_cancel_matches_python_oracle(tmp_path, monkeypatch):
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
         FIXTURE.write_text(json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture
+
+
+def test_discard_dispatches_retirement_and_apply_stays_discarded(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    worktree = state / "wt" / "owned"
+    worktree.mkdir(parents=True)
+    job_id = "e" * 64
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    server = bridge.Server(agent="codex")
+    server._write_job({"jobId": job_id, "state": "SUCCEEDED", "repoRoot": str(tmp_path),
+                       "worktreePath": str(worktree), "applyState": "pending"})
+    bridge._worktree_ownership(state, str(worktree), job_id=job_id)
+    launches = []
+    monkeypatch.setattr(bridge, "_launch_retirement",
+                        lambda root, jid, generation: launches.append((jid, generation)))
+    server._release_job_scope_lease = lambda *_: True
+
+    result = server._cancel_job({"jobId": job_id})["structuredContent"]
+    applied = server._apply_job({"jobId": job_id})["structuredContent"]
+    owner_path, _ = bridge._worktree_ownership_path(state, str(worktree))
+    owner = json.loads(owner_path.read_text(encoding="utf-8"))
+
+    assert result["discarded"] is True
+    assert applied["errorCode"] == "DISCARDED"
+    assert owner["retiring"] is True and owner["retirementClaimed"] is True
+    assert launches == [(job_id, None)]
