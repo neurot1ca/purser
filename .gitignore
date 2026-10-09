@@ -16,3 +16,4 @@ docs/ORCHESTRATOR_PROFILE_PLAN.md
 profiles/polymarket-btc5m-lab.toml
 CLAUDE.md
 .orchestrator/profile.toml
+docs/local/

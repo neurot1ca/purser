@@ -82,25 +82,24 @@ prompts. Resolved consequential implementation may use `subtle` only with the
 accepted map and every invariant explicit; Claude still reviews it as
 consequential. `gpt-6-luna` + `xhigh` is invalid; unresolved work uses `gpt-6.1-sol`.
 
-### Phase A pilot: Purser dispatcher
+### Dispatch through `purser:dispatcher`
 
-The foreground workflow remains the default. Use `purser:dispatcher` only for
-the Phase A pilot, after main Claude fixes the design, route, scope, authority,
-and acceptance criteria. Pass the exact worker prompt, including its `ORCH`
-line, and the exact tool arguments. Keep dispatcher instructions outside the
-worker prompt. Run one dispatcher lifecycle at a time per session and project.
+Every implementation and operation job runs through a `purser:dispatcher`
+agent: start one fresh dispatcher (a new Agent call) per job, after main
+Claude fixes the design, route, scope, authority, and acceptance criteria.
+Pass the exact worker prompt, including its `ORCH` line, and the exact tool
+arguments. Keep dispatcher instructions outside the worker prompt. The
+dispatcher runs in the background; keep talking with the user meanwhile.
 
 Main Claude keeps routing, semantic review, disagreement resolution,
-acceptance, and commits. To accept, call `codex_apply` with `jobId`,
-`acceptOnly: true` and `revision` set to the receipt's `revision` (the
-bundle's `changed_paths_sha256`); Purser records it only from the main thread.
-Then send the dispatcher one message naming the job and revision; it applies
-that revision and reports its receipt. A subagent apply without a matching
-acceptance, or after the worktree drifted, is refused.
-
-Start a fresh dispatcher (a new Agent call, not a continued one) before the
-next job once it has finished 10 jobs or sat idle 60 minutes. A repair belongs
-to its original job; never replace a dispatcher mid-lifecycle.
+acceptance, and commits. Review from the receipt and the bundle files it
+names. To accept, call `codex_apply` with `jobId`, `acceptOnly: true` and
+`revision` set to the receipt's `revision` (the bundle's
+`changed_paths_sha256`); Purser records it only from the main thread. Then
+send the dispatcher one message naming the job and revision; it applies that
+revision and reports its receipt. A subagent apply without a matching
+acceptance, or after the worktree drifted, is refused. A repair belongs to its
+original job's dispatcher; never replace a dispatcher mid-lifecycle.
 
 Runtime configuration owns capability; never pass `sandbox` or
 `approval-policy`. Fail over on typed quota/credit exhaustion, never route
@@ -136,7 +135,7 @@ Put estimated duration in `eta` beside the recorded actual duration.
 ### Async by default
 
 Treat plan paths as estimates. Claude may start several accepted, disjoint
-milestones as separate async `codex_start` calls only when the longest job plus
+milestones as separate dispatchers only when the longest job plus
 fan-in review is clearly shorter than serial work. Include shared generated
 files and validation inputs when judging disjointness. For worktree jobs,
 dispatch overlapping paths immediately: Purser queues hot-path conflicts as
@@ -146,16 +145,13 @@ such as a milestone needing the previous milestone's accepted result; a reply
 on a conflicting scope is still denied. Review each result on its own delta;
 otherwise run disjoint work sequentially.
 
-Use the SessionStart duration hint for `eta` when present. Dispatch every call
-with `codex_start`; for continuation use `mode=reply`, `threadId`, the same ORCH
-`task`, and no `cwd`. Use `codex`/`codex-reply` only if `codex_start` is
-unavailable. Run the exact command returned by start with the shell background
-option (use the PowerShell tool on Windows), end the turn, and keep talking with the user. Once the waiter finishes,
-call `codex_result` once with `jobId` and review as synchronous output. Never
-call it before the waiter finishes; use `codex_cancel` only at user request. After
-`codex_apply` reports a replay conflict, resolve and commit the files by hand,
-then call `codex_apply` with the same `jobId` and `resolved: true`. This records
-the hand-applied job as accepted and releases its scope lease.
+Use the SessionStart duration hint for `eta` when present. The dispatcher
+starts every job with `codex_start`; for continuation pass `mode=reply`,
+`threadId`, the same ORCH `task`, and no `cwd`. Use `codex_cancel` only at user
+request. After `codex_apply` reports a replay conflict, main Claude resolves and
+commits the files by hand, then calls `codex_apply` with the same `jobId` and
+`resolved: true`. This records the hand-applied job as accepted and releases
+its scope lease.
 
 When an accepted part of an approved multi-part task finishes, start the next
 part in the same turn without asking. Stop only for approval-gated actions,
