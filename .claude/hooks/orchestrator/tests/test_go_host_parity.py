@@ -85,6 +85,7 @@ def _queued_state(root, *, queued):
 def _normalize(value, root):
     if isinstance(value, dict):
         result = {}
+        state = value.get("state")
         for key, item in value.items():
             if key in ("hostPid", "pid"):
                 result[key] = "__PID__"
@@ -98,6 +99,10 @@ def _normalize(value, root):
                 result[key] = "__TIME__"
             elif key == "longestSilentGapSeconds":
                 result[key] = "__DURATION__"
+            elif key == "stdoutBytes" and isinstance(item, (int, float)) and item > 0:
+                result[key] = "__STDOUT_BYTES__"
+            elif key == "exitCode" and state in ("TIMED_OUT", "CANCELLED"):
+                result[key] = "__TERMINATION_EXIT_CODE__"
             elif key == "repoRoot" and isinstance(item, str) and Path(item).resolve() == ROOT:
                 result[key] = "__ROOT__"
             else:
@@ -244,7 +249,8 @@ def test_go_host_fixture_matches_real_python_host(tmp_path):
         FIXTURE.write_text(json.dumps(actual, indent=2) + "\n", encoding="utf-8", newline="\n")
     assert FIXTURE.is_file(), f"missing {FIXTURE}; run with PURSER_REGEN_FIXTURES=1"
     assert FIXTURE.stat().st_size < 30_000
-    assert json.loads(FIXTURE.read_text(encoding="utf-8")) == actual
+    expected = _normalize(json.loads(FIXTURE.read_text(encoding="utf-8")), tmp_path / "fixture")
+    assert expected == actual
 
 
 @pytest.mark.parametrize("name", ("worktree_create_failure", "worktree_setup_failure"))

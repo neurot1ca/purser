@@ -46,6 +46,7 @@ def test_python_failure_oracle_fixture(tmp_path, monkeypatch):
         if bypass:
             pending["kind"] = "pretool_bypass"
         root = tmp_path / name; root.mkdir()
+        monkeypatch.setenv("PURSER_STATE_DIR", str(root))
         path = codex._bypass_path(root, event) if bypass else codex._pending_path(root, event)
         path.parent.mkdir(parents=True)
         if name == "malformed_pending": path.write_text("{", encoding="utf-8")
@@ -64,7 +65,10 @@ def test_python_failure_oracle_fixture(tmp_path, monkeypatch):
         evidence = json.loads(evidence_path.read_text(encoding="utf-8")) if evidence_path.exists() else None
         saved = ledger.SessionLedger(root / "projects" / pending["project_key"]).load(pending["task_id"])
         session = saved.get("record") if saved.get("status") == ledger.OK else None
-        if session: session["last_outcome"]["evidence_path"] = session["last_outcome"]["evidence_path"].replace(str(root).replace("\\", "\\\\"), "__ROOT__").replace(str(root), "__ROOT__")
+        if session:
+            evidence_path = session["last_outcome"]["evidence_path"]
+            evidence_path = evidence_path.replace(str(root).replace("\\", "\\\\"), "__ROOT__").replace(str(root), "__ROOT__")
+            session["last_outcome"]["evidence_path"] = evidence_path.replace("\\", "/") if "__ROOT__" in evidence_path else evidence_path
         obs = root / "telemetry/events/by_task" / f"{pending['task_id']}.jsonl"
         observation = json.loads(obs.read_text(encoding="utf-8").splitlines()[-1]) if obs.exists() else None
         payload = {k: v for k, v in observation["payload"].items() if not k.endswith("_at")} if observation else None

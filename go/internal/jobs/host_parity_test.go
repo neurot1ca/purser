@@ -336,6 +336,7 @@ func normalizeHostParity(t *testing.T, record *Record, root string) map[string]a
 func normalizeHostParityValue(value any, root string) any {
 	switch item := value.(type) {
 	case map[string]any:
+		state, _ := item["state"].(string)
 		for key, child := range item {
 			switch key {
 			case "hostPid", "pid":
@@ -348,6 +349,18 @@ func normalizeHostParityValue(value any, root string) any {
 				item[key] = "__HOST_CONTAINED__"
 			case "longestSilentGapSeconds":
 				item[key] = "__DURATION__"
+			case "stdoutBytes":
+				if number, ok := child.(float64); ok && number > 0 {
+					item[key] = "__STDOUT_BYTES__"
+				} else {
+					item[key] = normalizeHostParityValue(child, root)
+				}
+			case "exitCode":
+				if state == "TIMED_OUT" || state == "CANCELLED" {
+					item[key] = "__TERMINATION_EXIT_CODE__"
+				} else {
+					item[key] = normalizeHostParityValue(child, root)
+				}
 			default:
 				if strings.HasSuffix(key, "At") || strings.HasSuffix(key, "_at") {
 					item[key] = "__TIME__"

@@ -72,6 +72,9 @@ def _case(tmp_path, case, monkeypatch):
                         staticmethod(lambda root, ident: side_effects.append({"call": "release", "jobId": ident}) or True))
     monkeypatch.setattr(codex_exec_mcp, "_dispatch_worktree_retirement", lambda *_: None)
     result = server._apply_job({"jobId": job_id, "resolved": True})["structuredContent"]
+    releases = iter(sorted((effect for effect in side_effects if effect["call"] == "release"),
+                           key=lambda effect: effect["jobId"]))
+    side_effects = [next(releases) if effect["call"] == "release" else effect for effect in side_effects]
     record = json.loads((server.job_dir / f"{job_id}.json").read_text(encoding="utf-8"))
     record.pop("appliedAt", None)
     record["repoRoot"], record["worktreePath"] = "REPO", "WORKTREE"

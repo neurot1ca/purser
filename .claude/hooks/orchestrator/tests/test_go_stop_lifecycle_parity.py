@@ -75,6 +75,7 @@ def test_p132_python_stop_lifecycle_fixture(tmp_path, monkeypatch):
     projects.mkdir(parents=True)
     monkeypatch.setenv("USERPROFILE", str(user))
     monkeypatch.setenv("HOME", str(user))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(ROOT))
     denial = _records(
         {"type": "user", "message": {"content": "Try Codex."}},
@@ -85,6 +86,7 @@ def test_p132_python_stop_lifecycle_fixture(tmp_path, monkeypatch):
 
     def exercise(name, events, transcript, *, consume_retry=False):
         state = tmp_path / "state" / name
+        monkeypatch.setenv("PURSER_STATE_DIR", str(state))
         session = "p132-" + name
         transcript_path = projects / f"{session}.jsonl"
         if transcript is not None:
@@ -99,8 +101,7 @@ def test_p132_python_stop_lifecycle_fixture(tmp_path, monkeypatch):
                      "tool_use_id": "p132-task-tool", "session_id": session, "cwd": str(repo),
                      "transcript_path": str(transcript_path), "tool_input": {"mode": "new", "label": "P132 task",
                      "timeoutSeconds": 60, "prompt": "ORCH|task=p132-task|phase=implementation|route=subtle|scope=README.md\nImplement the scoped change."}}
-            for key, value in {"PURSER_STATE_DIR": str(state), "CODEX_HOME": str(tmp_path / "codex")}.items():
-                monkeypatch.setenv(key, value)
+            monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
             pre = run_contract_hook("PreToolUse", event, state, entrypoint="enforcement")
             assert pre.returncode == 0, pre.stderr.decode("utf-8", errors="replace")
             active_path = state / "active_tasks" / f"{session}.json"

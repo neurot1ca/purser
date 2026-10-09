@@ -55,6 +55,8 @@ func TestP132StopLifecyclePythonParity(t *testing.T) {
 			}
 			t.Setenv("PURSER_STATE_DIR", root)
 			t.Setenv("USERPROFILE", home)
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 			var transcript string
 			if tc.Transcript != nil {
 				transcript = filepath.Join(projects, tc.Session+".jsonl")
