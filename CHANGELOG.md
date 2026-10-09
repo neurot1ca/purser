@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.108 — 2026-10-09
+
+- **Fixed:** Hooks find the plugin root from the installed binary, so `codex_start` works outside the Purser repository (found testing on Linux).
+- **Fixed:** A result call after a stale-apply refusal re-prepares the job, so the refreshed revision can be accepted and applied.
+- **Fixed:** An OpenCode tool error, including a denied permission, is recorded as a job note instead of failing the whole job.
+
 ## 0.1.107 — 2026-10-09
 
 - **Fixed:** A Reviewer-1 fallback runs its own CLI instead of the primary reviewer's configured executable.
