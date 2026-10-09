@@ -2032,10 +2032,19 @@ def _secret_violation(value: Any, *, _location: tuple[str, ...] = ()) -> tuple[s
         path_keyed = _location in _PATH_KEYED_RECORD_LOCATIONS
         for item_key, item in value.items():
             key = str(item_key)
+            path_key = (
+                "/" in key
+                or "\\" in key
+                or re.search(r"\.[A-Za-z0-9]+$", key) is not None
+            )
             if any(pattern.search(key) for pattern in _SECRET_VALUE_PATTERNS):
                 return (".".join(_location) or "record", "SECRET_PATTERN_IN_FIELD_NAME")
             normalized_key = key.casefold().replace("-", "_")
-            if not path_keyed and any(part in normalized_key for part in _SECRET_KEY_PARTS):
+            if (
+                not path_keyed
+                and not path_key
+                and any(part in normalized_key for part in _SECRET_KEY_PARTS)
+            ):
                 return (".".join((*_location, key)), "SECRET_FIELD_NAME")
             nested = _secret_violation(item, _location=(*_location, key))
             if nested:

@@ -29,6 +29,7 @@ type Result struct {
 }
 
 var secretValue = regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}\b|\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bAKIA[A-Z0-9]{16}\b|\bBearer\s+[A-Za-z0-9._~+/-]{12,}`)
+var fileExtension = regexp.MustCompile(`\.[A-Za-z0-9]+$`)
 
 var replaceFile = os.Rename
 
@@ -466,10 +467,11 @@ func secretAt(value any, location []string) bool {
 		pathKeyed := equalStrings(location, []string{"pending_call_baseline", "tracked_snapshots"}) || equalStrings(location, []string{"live_thread", "origin_baseline", "tracked_snapshots"}) || equalStrings(location, []string{"live_thread", "post_state", "tracked_snapshots"})
 		for key, child := range item {
 			normalized := strings.NewReplacer("-", "_").Replace(strings.ToLower(key))
+			pathKey := strings.ContainsAny(key, `/\\`) || fileExtension.MatchString(key)
 			if secretValue.MatchString(key) {
 				return true
 			}
-			if !pathKeyed {
+			if !pathKeyed && !pathKey {
 				for _, part := range []string{"api_key", "apikey", "credential", "password", "private_key", "secret", "token", "wallet"} {
 					if strings.Contains(normalized, part) {
 						return true

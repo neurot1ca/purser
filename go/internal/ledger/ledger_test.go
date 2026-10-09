@@ -277,6 +277,30 @@ func TestSaveRejectsInvalidRecord(t *testing.T) {
 	}
 }
 
+func TestLastOutcomePathKeyWithTokenRoundTrips(t *testing.T) {
+	root := t.TempDir()
+	record := testRecord("path-key-token")
+	record["last_outcome"] = map[string]any{"scripts/codex_token_report.py": 221}
+	if got := Save(root, record); got.Status != OK {
+		t.Fatalf("save: %#v", got)
+	}
+	path, err := PathForTask(root, "path-key-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Load(path, "path-key-token"); got.Status != OK || got.Record["last_outcome"].(map[string]any)["scripts/codex_token_report.py"] != float64(221) {
+		t.Fatalf("load: %#v", got)
+	}
+}
+
+func TestLastOutcomePlainAPIKeyIsRejected(t *testing.T) {
+	record := testRecord("plain-api-key")
+	record["last_outcome"] = map[string]any{"api_key": "not-a-pattern-matched-value"}
+	if got := Save(t.TempDir(), record); got.Status != "UNKNOWN" || got.Code != "LEDGER_RECORD_INVALID" {
+		t.Fatalf("save: %#v", got)
+	}
+}
+
 func TestGoSaveLoadsInPython(t *testing.T) {
 	root := t.TempDir()
 	if got := Save(root, testRecord("go-to-python")); got.Status != OK {
