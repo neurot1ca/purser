@@ -368,6 +368,48 @@ func TestStartReplyUsesRecordedThreadWorktreeRepository(t *testing.T) {
 	}
 }
 
+func TestStartReplyUsesFreshWorktreeWhenThreadWorktreeIsMissingWithoutOwnership(t *testing.T) {
+	repo := t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	gitStart(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base")
+	missingWorktree := filepath.Join(t.TempDir(), "missing-worktree")
+	state := t.TempDir()
+	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	priorID := strings.Repeat("a", 64)
+	writeHostTestJSON(t, filepath.Join(dir, priorID+".json"), map[string]any{
+		"jobId": priorID, "state": "SUCCEEDED", "threadId": "reply-thread", "repoRoot": repo,
+		"worktreePath": missingWorktree, "finishedAt": float64(time.Now().UnixNano()) / 1e9,
+	})
+	if err := SaveRecord(filepath.Join(state, "codex_exec_mcp", "threads"), map[string]any{
+		"thread_id": "reply-thread", "cwd": missingWorktree, "config_args": []any{},
+		"worktreePath": missingWorktree, "repoRoot": repo,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var launched bool
+	opt := StartOptions{StateRoot: state, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true},
+		Launch: func(id string, _ int64, _ string) error {
+			launched = true
+			job := readJob(dir, id)
+			if _, ok := recordMap(job)["worktreePath"]; ok {
+				t.Fatalf("reply inherited missing worktree: %s", mustRecordJSON(t, job))
+			}
+			return nil
+		}, Await: func(id string, _ *Record) map[string]any {
+			return jobResult(map[string]any{"jobId": id, "state": "QUEUED"})
+		}}
+	_, _, err := Start(state, map[string]any{"call": "00000000-0000-0000-0000-000000000001", "prompt": "continue", "mode": "reply", "threadId": "reply-thread"}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !launched {
+		t.Fatal("reply host was not launched")
+	}
+}
+
 func TestRunHostGenerationWritesValidFailureRecord(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "codex_exec_mcp", "jobs")

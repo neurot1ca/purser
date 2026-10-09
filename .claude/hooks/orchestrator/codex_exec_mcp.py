@@ -106,7 +106,8 @@ def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | Non
                 continue
             if (isinstance(job, dict) and job.get("threadId") == thread_id
                     and job.get("state") == "SUCCEEDED" and job.get("applyState") != "applied"
-                    and job.get("worktreePath")):
+                    and job.get("worktreePath")
+                    and not _worktree_is_retiring(job_dir.parent.parent, job["worktreePath"])):
                 timestamp = job.get("finishedAt")
                 if timestamp is None:
                     timestamp = job.get("acceptedAt", 0)
@@ -118,6 +119,47 @@ def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | Non
     except OSError:
         pass
     return latest
+
+
+def _worktree_ownership_path(state_root: Path, worktree: str) -> tuple[Path, str]:
+    normalized = os.path.normcase(os.path.abspath(worktree))
+    key = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return state_root / "worktree_ownership" / f"{key}.json", key
+
+
+def _worktree_ownership(state_root: Path, worktree: str, *, job_id: str = "",
+                        thread_id: str = "", retire: bool = False) -> dict[str, Any]:
+    path, key = _worktree_ownership_path(state_root, worktree)
+    with _ownership_lock(state_root / "worktree_ownership", key):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(record, dict):
+                raise ValueError("invalid worktree ownership record")
+        except FileNotFoundError:
+            record = {"worktreePath": worktree, "jobs": [], "threads": []}
+        if retire:
+            record["retiring"] = True
+        elif record.get("retiring"):
+            return record
+        else:
+            for field, value in (("jobs", job_id), ("threads", thread_id)):
+                if value and value not in record.setdefault(field, []):
+                    record[field].append(value)
+                    record[field].sort()
+        _atomic_json(path, record)
+        return record
+
+
+def _worktree_is_retiring(state_root: Path, worktree: str) -> bool:
+    path, key = _worktree_ownership_path(state_root, worktree)
+    with _ownership_lock(state_root / "worktree_ownership", key):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return False
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return True
+        return isinstance(record, dict) and record.get("retiring") is True
 
 
 def _same_worktree_content(worktree: Path, repo_root: Path, path: str) -> bool:
@@ -201,7 +243,7 @@ TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROG
 CONTINUATION_PROMPT = ("The previous execution was interrupted. Inspect the working tree and the task "
                        "in this thread, avoid repeating completed steps, finish the remaining work, "
                        "run the required focused validation, and report the final result.")
-RETENTION_SECONDS = 7 * 24 * 60 * 60
+RETENTION_SECONDS = 3 * 24 * 60 * 60
 # Allow codex exec to exit normally after its terminal stdout event before stopping a hung tree.
 CODEX_TERMINAL_GRACE_SECONDS = 20
 RESPONSIVENESS_ATTEMPTS = (0, 30, 60, 120, 240)
@@ -1518,7 +1560,23 @@ class Server:
                     reply_record = _load_record(self.state_dir, args["threadId"])
                     if reply_record is None:
                         return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
-                    send_back_from = _unapplied_thread_job(self.job_dir, args["threadId"])
+                    retired = bool(reply_record.get("worktreePath") and
+                                   (not Path(reply_record["worktreePath"]).is_dir() or
+                                    _worktree_is_retiring(self.job_dir.parent.parent, reply_record["worktreePath"])))
+                    send_back_from = None if retired else _unapplied_thread_job(self.job_dir, args["threadId"])
+                    if (not retired and send_back_from is not None and send_back_from.get("worktreePath")
+                            and (not Path(send_back_from["worktreePath"]).is_dir() or
+                                 _worktree_is_retiring(self.job_dir.parent.parent, send_back_from["worktreePath"]))):
+                        retired = True
+                        send_back_from = None
+                    if retired:
+                        for key in ("worktreePath", "snapshot", "baselineSnapshot", "head"):
+                            reply_record.pop(key, None)
+                        if reply_record.get("repoRoot"):
+                            reply_record["cwd"] = reply_record["repoRoot"]
+                            args["cwd"] = reply_record["cwd"]
+                        args["worktree"] = True
+                        _save_record(self.state_dir, reply_record)
                     if send_back_from is not None:
                         for key in ("worktreePath", "repoRoot"):
                             if not isinstance(reply_record.get(key), str) or not reply_record[key]:
@@ -1579,6 +1637,11 @@ class Server:
                                 ("worktreePath", "snapshot", "head", "repoRoot",
                                  "baselineSnapshot") if key in reply_record})
                     if job.get("worktreePath"):
+                        ownership = _worktree_ownership(self.job_dir.parent.parent, job["worktreePath"],
+                                                        job_id=job_id, thread_id=args.get("threadId", ""))
+                        if ownership.get("retiring"):
+                            return _job_result({"state": "FAILED", "errorCode": "WORKTREE_RETIRING",
+                                                "message": "Thread worktree is being retired"})
                         job["baselineSnapshot"] = job.get("baselineSnapshot", job["snapshot"])
                         job["snapshot"] = job["baselineSnapshot"]
                 if args.get("leaseQueued") is True:
@@ -2288,6 +2351,10 @@ class Server:
                             if current is not None and current["state"] not in TERMINAL:
                                 current.update(threadId=started_id, threadConfig=thread_config)
                                 self._write_job(current)
+                        if thread_config.get("worktreePath"):
+                            _worktree_ownership(self.job_dir.parent.parent,
+                                                thread_config["worktreePath"],
+                                                job_id=request_id, thread_id=started_id)
                         if name == "codex":
                             _save_record(self.state_dir, {"thread_id": started_id, **thread_config})
 
@@ -2597,6 +2664,11 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                 job.update(worktreePath=snapshot["path"], snapshot=snapshot["snapshot"],
                            baselineSnapshot=snapshot["snapshot"],
                            head=snapshot["head"], repoRoot=os.fspath(repo_root))
+                ownership = _worktree_ownership(job_dir.parent.parent, snapshot["path"],
+                                                job_id=job_id, thread_id=job.get("threadId", ""))
+                if ownership.get("retiring"):
+                    server._finish_job(job_id, "FAILED", "WORKTREE_RETIRING")
+                    return
                 server._write_job(job)
                 launch["args"] = {**launch["args"], "cwd": os.fspath(Path(snapshot["path"]) / relative_cwd)}
                 worktree_path = Path(snapshot["path"])

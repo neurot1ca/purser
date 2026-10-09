@@ -35,11 +35,13 @@ def _clean(value, root=None, git_values=None):
     return value
 
 
-def _start_case(name, calls, tmp_path, monkeypatch, seed=None, thread=None, git_values=None):
+def _start_case(name, calls, tmp_path, monkeypatch, seed=None, thread=None, git_values=None, retiring=False):
     root=tmp_path/name; server = _server(monkeypatch,root); launches=[]
     decisions=[]
     for record in seed or []: server._write_job(record)
     if thread: bridge._save_record(server.state_dir, thread)
+    if retiring and thread and thread.get("worktreePath"):
+        bridge._worktree_ownership(root, thread["worktreePath"], retire=True)
     monkeypatch.setattr(bridge,"_launch_host",lambda _dir,jid,gen,token:launches.append({"jobId":jid,"generation":gen,"token":"TOKEN"}))
     monkeypatch.setattr(bridge,"_record_claude_decision",lambda job,decision,kind,source:decisions.append({"jobId":job["jobId"],"decision":decision,"kind":kind,"sourceJobId":source}))
     server._await_host = lambda jid: bridge._job_result({"jobId":jid,"state":"QUEUED","acceptedAt":10,"deadlineAt":20})
@@ -48,7 +50,9 @@ def _start_case(name, calls, tmp_path, monkeypatch, seed=None, thread=None, git_
     files={}
     if server.job_dir.exists():
         for p in sorted(server.job_dir.iterdir()): files[p.name]=True if p.is_dir() or p.name.endswith(".owner-lock") else _clean(json.loads(p.read_text(encoding="utf-8")),root,git_values)
-    return {"name":name,"calls":_clean(calls,root,git_values),"seed":_clean(seed,root,git_values),"thread":_clean(thread,root,git_values),"gitCase":git_values is not None,"result":_clean(result,root,git_values),"files":files or None,"launches":launches,"decisions":decisions}
+    case={"name":name,"calls":_clean(calls,root,git_values),"seed":_clean(seed,root,git_values),"thread":_clean(thread,root,git_values),"gitCase":git_values is not None,"result":_clean(result,root,git_values),"files":files or None,"launches":launches,"decisions":decisions}
+    if retiring: case["retiring"]=True
+    return case
 
 
 def _git(root, *args):
@@ -106,14 +110,19 @@ def test_go_start_validation_matches_python_oracle(tmp_path, monkeypatch):
     server._await_host = lambda _: bridge._job_result({"jobId":job_id,"state":"QUEUED","acceptedAt":10,"deadlineAt":20})
     duplicate_args = {"call":CALL,"prompt":"p","timeoutSeconds":False,"mode":"invalid"}
     cases.append({"name":"duplicate_before_validation","args":duplicate_args,"existing":True,"result":server._start_job(duplicate_args)})
+    reply_worktree = tmp_path/"reply_unapplied"/"old-worktree"
+    reply_worktree.mkdir(parents=True)
     cases.extend([
         _start_case("unknown_thread",[{"call":CALL,"prompt":"p","mode":"reply","threadId":"missing"}],tmp_path,monkeypatch),
         _start_case("valid_new",[{"call":CALL,"prompt":"p","cwd":"C:/repo","taskId":"task-1","jobModel":"model-x"}],tmp_path,monkeypatch),
         _start_case("duplicate_same",[{"call":CALL,"prompt":"p","cwd":"C:/repo"}]*2,tmp_path,monkeypatch),
         _start_case("duplicate_different",[{"call":CALL,"prompt":"p","cwd":"C:/repo"},{"call":CALL,"prompt":"changed","timeoutSeconds":0}],tmp_path,monkeypatch),
         _start_case("reply_unapplied",[{"call":CALL,"prompt":"reply","mode":"reply","threadId":"thread-1"}],tmp_path,monkeypatch,
-            [{"jobId":"a"*64,"threadId":"thread-1","state":"SUCCEEDED","applyState":"pending","worktreePath":"C:/old-worktree","snapshot":"tree-1","taskId":"task-old","acceptedAt":1}],
+            [{"jobId":"a"*64,"threadId":"thread-1","state":"SUCCEEDED","applyState":"pending","worktreePath":str(reply_worktree),"snapshot":"tree-1","taskId":"task-old","acceptedAt":1}],
             {"thread_id":"thread-1","cwd":"C:/repo","config_args":[],"snapshot":"tree-0","baselineSnapshot":"tree-0"}),
+        _start_case("reply_retired",[{"call":CALL,"prompt":"reply","mode":"reply","threadId":"thread-retired"}],tmp_path,monkeypatch,
+            [{"jobId":"f"*64,"threadId":"thread-retired","state":"SUCCEEDED","applyState":"pending","worktreePath":str(tmp_path/"reply_retired"/"old-worktree"),"snapshot":"tree-old","repoRoot":str(tmp_path/"reply_retired"/"repo"),"acceptedAt":1}],
+            {"thread_id":"thread-retired","cwd":str(tmp_path/"reply_retired"/"old-worktree"),"config_args":[],"worktreePath":str(tmp_path/"reply_retired"/"old-worktree"),"snapshot":"tree-old","repoRoot":str(tmp_path/"reply_retired"/"repo")},retiring=True),
         _start_case("redispatch_reject_and_skip",[{"call":CALL,"prompt":"new","mode":"new","taskId":"task-x"}],tmp_path,monkeypatch,
             [{"jobId":"b"*64,"state":"SUCCEEDED","taskId":"task-x","worktreePath":"C:/wt-a","applyState":"pending","acceptedAt":1},
              {"jobId":"c"*64,"state":"SUCCEEDED","taskId":"task-x","worktreePath":"C:/wt-b","applyState":"applied","acceptedAt":2},

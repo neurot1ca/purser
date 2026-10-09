@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
+	"purser-hook/internal/retention"
 )
 
 const hostUnavailableCode = "GO_HOST_EXECUTION_UNAVAILABLE"
@@ -237,6 +239,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
 			}
 			worktreePath = snapshot["path"]
+			threadID := ""
+			_ = job.Get("threadId", &threadID)
+			attached, attachErr := retention.AttachWorktree(stateRoot, worktreePath, jobID, threadID)
+			if attachErr != nil || !attached {
+				return finishHostError(path, jobID, generation, token, "WORKTREE_RETIRING", "Thread worktree is being retired")
+			}
 			job, err = Read(path)
 			if err != nil {
 				return nil, err
@@ -669,6 +677,12 @@ func saveHostThread(dir, id string, generation int64, token, threadID string, co
 	}
 	if err != nil || !owned || !saveRecord {
 		return err
+	}
+	if worktree := nonemptyString(config["worktreePath"]); worktree != "" {
+		attached, attachErr := retention.AttachWorktree(filepath.Dir(filepath.Dir(dir)), worktree, id, threadID)
+		if attachErr != nil || !attached {
+			return fmt.Errorf("thread worktree attachment was rejected")
+		}
 	}
 	record := map[string]any{"thread_id": threadID}
 	for key, value := range config {

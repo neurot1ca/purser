@@ -60,6 +60,12 @@ func cleanupJob(t *testing.T, state, id, status string, extra map[string]any) {
 }
 func cleanupNow() time.Time { return time.Unix(2_000_000_000, 0) }
 
+func TestCleanupRetentionIsThreeDays(t *testing.T) {
+	if cleanupRetention != 3*24*time.Hour {
+		t.Fatalf("cleanup retention = %s, want 72h", cleanupRetention)
+	}
+}
+
 func TestCleanupKeepsUnappliedAndSharedWorktree(t *testing.T) {
 	root := t.TempDir()
 	repo := cleanupRepo(t, root)

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/retention"
 )
 
 type startCase struct {
@@ -25,6 +26,7 @@ type startCase struct {
 	Files     map[string]any   `json:"files"`
 	Launches  []map[string]any `json:"launches"`
 	Decisions []map[string]any `json:"decisions"`
+	Retiring  bool             `json:"retiring,omitempty"`
 }
 
 func TestStartValidationPythonParity(t *testing.T) {
@@ -218,6 +220,11 @@ func replayStart(t *testing.T, c startCase) {
 	state := t.TempDir()
 	expand := map[string]string{"<ROOT>": state}
 	normalize := map[string]string{state: "<ROOT>"}
+	if c.Name == "reply_unapplied" {
+		if e := os.MkdirAll(filepath.Join(state, "old-worktree"), 0700); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if c.GitCase {
 		repo := filepath.Join(state, "repo")
 		wt := filepath.Join(state, "worktree")
@@ -266,6 +273,11 @@ func replayStart(t *testing.T, c startCase) {
 		thread := replaceStart(c.Thread, expand).(map[string]any)
 		if e := SaveRecord(filepath.Join(state, "codex_exec_mcp", "threads"), thread); e != nil {
 			t.Fatal(e)
+		}
+		if c.Retiring {
+			if _, e := retention.MarkWorktreeRetiring(state, thread["worktreePath"].(string)); e != nil {
+				t.Fatal(e)
+			}
 		}
 	}
 	launched := []map[string]any{}

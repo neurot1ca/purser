@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	cleanupRetention = 7 * 24 * time.Hour
+	cleanupRetention = 3 * 24 * time.Hour
 	maxWorktrees     = 128
 )
 

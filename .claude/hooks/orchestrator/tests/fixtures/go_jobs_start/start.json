@@ -594,7 +594,7 @@
           "threadId": "thread-1",
           "state": "SUCCEEDED",
           "applyState": "pending",
-          "worktreePath": "C:/old-worktree",
+          "worktreePath": "<ROOT>\\old-worktree",
           "snapshot": "tree-1",
           "taskId": "task-old",
           "acceptedAt": "TIME"
@@ -633,7 +633,7 @@
           "signalToken": "TOKEN",
           "generation": 1,
           "ownershipToken": "TOKEN",
-          "worktreePath": "C:/old-worktree",
+          "worktreePath": "<ROOT>\\old-worktree",
           "snapshot": "tree-1",
           "baselineSnapshot": "tree-1"
         },
@@ -654,7 +654,7 @@
           "threadId": "thread-1",
           "state": "SUCCEEDED",
           "applyState": "pending",
-          "worktreePath": "C:/old-worktree",
+          "worktreePath": "<ROOT>\\old-worktree",
           "snapshot": "tree-1",
           "taskId": "task-old",
           "acceptedAt": "TIME",
@@ -677,6 +677,101 @@
           "sourceJobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1"
         }
       ]
+    },
+    {
+      "name": "reply_retired",
+      "calls": [
+        {
+          "call": "00000000-0000-4000-8000-000000000001",
+          "prompt": "reply",
+          "mode": "reply",
+          "threadId": "thread-retired",
+          "cwd": "<ROOT>\\repo",
+          "worktree": true
+        }
+      ],
+      "seed": [
+        {
+          "jobId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "threadId": "thread-retired",
+          "state": "SUCCEEDED",
+          "applyState": "pending",
+          "worktreePath": "<ROOT>\\old-worktree",
+          "snapshot": "tree-old",
+          "repoRoot": "<ROOT>\\repo",
+          "acceptedAt": "TIME"
+        }
+      ],
+      "thread": {
+        "thread_id": "thread-retired",
+        "cwd": "<ROOT>\\old-worktree",
+        "config_args": [],
+        "worktreePath": "<ROOT>\\old-worktree",
+        "snapshot": "tree-old",
+        "repoRoot": "<ROOT>\\repo"
+      },
+      "gitCase": false,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"jobId\": \"11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1\", \"state\": \"QUEUED\", \"acceptedAt\": 10, \"deadlineAt\": 20}"
+          }
+        ],
+        "structuredContent": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE"
+        },
+        "isError": false
+      },
+      "files": {
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.json": {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "call": "00000000-0000-4000-8000-000000000001",
+          "state": "QUEUED",
+          "acceptedAt": "TIME",
+          "deadlineAt": "DEADLINE",
+          "signalToken": "TOKEN",
+          "generation": 1,
+          "ownershipToken": "TOKEN",
+          "repoRoot": "<ROOT>\\repo"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
+          "name": "codex-reply",
+          "args": {
+            "call": "00000000-0000-4000-8000-000000000001",
+            "prompt": "reply",
+            "mode": "reply",
+            "threadId": "thread-retired",
+            "cwd": "<ROOT>\\repo",
+            "worktree": true
+          },
+          "codexBin": null,
+          "agent": "codex"
+        },
+        "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.lock": true,
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.json": {
+          "jobId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "threadId": "thread-retired",
+          "state": "SUCCEEDED",
+          "applyState": "pending",
+          "worktreePath": "<ROOT>\\old-worktree",
+          "snapshot": "tree-old",
+          "repoRoot": "<ROOT>\\repo",
+          "acceptedAt": "TIME"
+        }
+      },
+      "launches": [
+        {
+          "jobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1",
+          "generation": 1,
+          "token": "TOKEN"
+        }
+      ],
+      "decisions": [],
+      "retiring": true
     },
     {
       "name": "redispatch_reject_and_skip",

@@ -16,6 +16,7 @@ import (
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/retention"
 )
 
 type StartOptions struct {
@@ -68,7 +69,42 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 		if thread == nil {
 			return startFailure("UNKNOWN_THREAD", "Thread is unknown to this server"), nil, nil
 		}
+		retired := false
+		if worktree := nonemptyString(thread["worktreePath"]); worktree != "" {
+			isRetiring, retirementErr := retention.IsWorktreeRetiring(stateRoot, worktree)
+			info, worktreeErr := os.Stat(worktree)
+			retired = worktreeErr != nil || !info.IsDir() || retirementErr != nil || isRetiring
+		}
 		sendBackFrom = unappliedThreadJob(dir, id)
+		var retiredRepo string
+		if sendBackFrom != nil && !retired {
+			prior := recordMap(sendBackFrom)
+			if worktree := nonemptyString(prior["worktreePath"]); worktree != "" {
+				isRetiring, retirementErr := retention.IsWorktreeRetiring(stateRoot, worktree)
+				info, worktreeErr := os.Stat(worktree)
+				retired = worktreeErr != nil || !info.IsDir() || retirementErr != nil || isRetiring
+				if retired {
+					retiredRepo = nonemptyString(prior["repoRoot"])
+				}
+			}
+		}
+		if retired {
+			sendBackFrom = nil
+			if nonemptyString(thread["repoRoot"]) == "" && retiredRepo != "" {
+				thread["repoRoot"] = retiredRepo
+			}
+			for _, key := range []string{"worktreePath", "snapshot", "baselineSnapshot", "head"} {
+				delete(thread, key)
+			}
+			if repo := nonemptyString(thread["repoRoot"]); repo != "" {
+				thread["cwd"] = repo
+			}
+			if err := SaveRecord(filepath.Join(stateRoot, "codex_exec_mcp", "threads"), thread); err != nil {
+				return nil, nil, err
+			}
+			args["worktree"] = true
+			args["cwd"] = thread["cwd"]
+		}
 		if sendBackFrom != nil {
 			prior := recordMap(sendBackFrom)
 			for _, key := range []string{"worktreePath", "repoRoot"} {
@@ -161,6 +197,11 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 			}
 		}
 		if p, ok := job["worktreePath"].(string); ok && p != "" {
+			threadID, _ := args["threadId"].(string)
+			attached, attachErr := retention.AttachWorktree(stateRoot, p, req.JobID, threadID)
+			if attachErr != nil || !attached {
+				return startFailure("WORKTREE_RETIRING", "Thread worktree is being retired"), nil, nil
+			}
 			if job["baselineSnapshot"] == nil {
 				job["baselineSnapshot"] = job["snapshot"]
 			}
@@ -299,6 +340,9 @@ func unappliedThreadJob(dir, thread string) *Record {
 		}
 		m := recordMap(r)
 		if m["threadId"] != thread || m["state"] != "SUCCEEDED" || m["applyState"] == "applied" || nonemptyString(m["worktreePath"]) == "" {
+			continue
+		}
+		if retired, e := retention.IsWorktreeRetiring(filepath.Dir(filepath.Dir(dir)), nonemptyString(m["worktreePath"])); e != nil || retired {
 			continue
 		}
 		stamp, ok := m["finishedAt"].(float64)

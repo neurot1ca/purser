@@ -1046,6 +1046,7 @@ def test_worktree_job_records_snapshot_and_reply_reuses_it(area):
         thread = codex_exec_mcp._load_record(area / "state", "thread-123")
         assert {key: thread[key] for key in ("worktreePath", "snapshot", "head", "repoRoot")} == {
             key: job[key] for key in ("worktreePath", "snapshot", "head", "repoRoot")}
+        Path(worktree).mkdir(parents=True, exist_ok=True)
         reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
                                                   "threadId": "thread-123", "prompt": "again"})
         assert finish(client, reply["jobId"], "SUCCEEDED")["worktreePath"] == worktree
@@ -1054,10 +1055,73 @@ def test_worktree_job_records_snapshot_and_reply_reuses_it(area):
         shutil.rmtree(worktree)
         missing = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
                                                     "threadId": "thread-123", "prompt": "missing"})
-        assert finish(client, missing["jobId"], "FAILED")["errorCode"] == "WORKTREE_MISSING"
-        assert len((area / "calls.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+        replacement = finish(client, missing["jobId"], "SUCCEEDED")
+        assert replacement["threadId"] == "thread-123"
+        assert replacement["worktreePath"] != worktree and Path(replacement["worktreePath"]).is_dir()
+        assert len((area / "calls.jsonl").read_text(encoding="utf-8").splitlines()) == 3
     finally:
         client.close()
+
+
+def test_reply_uses_fresh_worktree_when_thread_worktree_is_retiring(area):
+    repo = _git_repo(area)
+    client = Client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        first = finish(client, started["jobId"], "SUCCEEDED")
+        old_worktree = first["worktreePath"]
+        ownership = codex_exec_mcp._worktree_ownership(area / "root", old_worktree, retire=True)
+        assert ownership["retiring"] is True
+
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                  "threadId": "thread-123", "prompt": "again"})
+        second = finish(client, reply["jobId"], "SUCCEEDED")
+        assert second["threadId"] == "thread-123"
+        assert second["worktreePath"] != old_worktree
+        assert subprocess.check_output(
+            ["git", "-C", second["worktreePath"], "rev-parse", "HEAD"], text=True).strip() == subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        calls = [json.loads(line) for line in (area / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert calls[0]["cwd"] == old_worktree and calls[1]["cwd"] != old_worktree
+        assert subprocess.check_output(
+            ["git", "-C", calls[1]["cwd"], "rev-parse", "HEAD"], text=True).strip() == subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        old = codex_exec_mcp._worktree_ownership_path(area / "root", old_worktree)[0]
+        ownership_records = [json.loads(path.read_text(encoding="utf-8"))
+                             for path in (area / "root" / "worktree_ownership").glob("*.json")]
+        new_owners = next(record for record in ownership_records
+                          if reply["jobId"] in record.get("jobs", []))
+        assert reply["jobId"] in new_owners["jobs"] and "thread-123" in new_owners["threads"]
+        assert json.loads(old.read_text(encoding="utf-8"))["retiring"] is True
+    finally:
+        client.close()
+
+
+def test_reply_uses_fresh_worktree_when_thread_worktree_is_missing_without_ownership(area):
+    repo = _git_repo(area)
+    client = Client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": True})
+        first = finish(client, started["jobId"], "SUCCEEDED")
+        old_worktree = first["worktreePath"]
+        ownership_path = codex_exec_mcp._worktree_ownership_path(area / "root", old_worktree)[0]
+        shutil.rmtree(old_worktree)
+        ownership_path.unlink()
+
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                  "threadId": "thread-123", "prompt": "again"})
+        second = finish(client, reply["jobId"], "SUCCEEDED")
+        assert second["threadId"] == "thread-123"
+        assert second["worktreePath"] != old_worktree
+        assert Path(second["worktreePath"]).is_dir()
+    finally:
+        client.close()
+
+
+def test_job_fallback_retention_is_three_days():
+    assert codex_exec_mcp.RETENTION_SECONDS == 3 * 24 * 60 * 60
 
 
 def test_grounded_readiness_criteria_are_durable_job_metadata(area):
