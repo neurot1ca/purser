@@ -1665,6 +1665,12 @@ class Server:
                                     send_back_from = None
                             except (OSError, ledger._InspectionError):
                                 pass
+                    if (not args.get("cwd") and not reply_record.get("worktreePath")):
+                        repo_root = reply_record.get("repoRoot")
+                        if not isinstance(repo_root, str) or not repo_root:
+                            return _job_result({"state": "FAILED", "errorCode": "WORKTREE_SNAPSHOT_FAILED",
+                                                "message": "Repository root could not be resolved for Codex launch"})
+                        args["cwd"] = repo_root
                     if send_back_from is None and reply_record.get("worktreePath"):
                         import ledger
                         repo_root = Path(reply_record["repoRoot"]).resolve()
@@ -2767,6 +2773,19 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                     "writable_roots": [os.fspath(worktree_path.resolve())]}
                 args["config"] = config
                 launch["args"] = args
+        elif launch["name"] in ("codex", "codex-reply"):
+            import ledger
+            requested_cwd = Path(launch["args"].get("cwd", os.getcwd())).resolve()
+            try:
+                repo_root = Path(os.fsdecode(ledger._run_git(
+                    requested_cwd, ["rev-parse", "--show-toplevel"], 30.0,
+                    "resolving job repository root")).strip()).resolve()
+            except (OSError, ValueError, ledger._InspectionError):
+                repo_root = None
+            if repo_root is not None:
+                job = server._read_job(job_id)
+                job["repoRoot"] = os.fspath(repo_root)
+                server._write_job(job)
         server.codex_bin = launch["codexBin"]
         server.agent = launch.get("agent", "codex")
         server.claim_generation = generation

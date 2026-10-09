@@ -368,6 +368,90 @@ func TestStartReplyUsesRecordedThreadWorktreeRepository(t *testing.T) {
 	}
 }
 
+func TestStartReplyUsesRecordedRepositoryForNonWorktreeThread(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	gitStart(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base")
+	if err = os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	state := t.TempDir()
+	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	var launched []string
+	opt := StartOptions{StateRoot: state, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true},
+		Launch: func(id string, generation int64, token string) error {
+			job := readJob(dir, id)
+			launch, readErr := os.ReadFile(filepath.Join(dir, id+".launch"))
+			if readErr != nil {
+				return readErr
+			}
+			var value struct {
+				Args map[string]any `json:"args"`
+			}
+			if readErr = json.Unmarshal(launch, &value); readErr != nil {
+				return readErr
+			}
+			cwd, _ := value.Args["cwd"].(string)
+			launched = append(launched, cwd)
+			_, hostErr := RunHostGeneration(dir, id, generation, token, HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+				if filepath.Clean(args.Cwd) != filepath.Clean(repo) {
+					t.Errorf("host cwd = %q, want repository root %q", args.Cwd, repo)
+				}
+				if _, exists := recordMap(job)["worktreePath"]; exists {
+					t.Errorf("non-worktree job unexpectedly has worktreePath: %s", mustRecordJSON(t, job))
+				}
+				executable, executableErr := os.Executable()
+				if executableErr != nil {
+					return nil, executableErr
+				}
+				return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+			}})
+			return hostErr
+		},
+	}
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "")
+	_, first, err := Start(state, map[string]any{"call": "00000000-0000-4000-8000-000000000011", "prompt": "start", "cwd": repo, "worktree": false}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstMap := recordMap(readJob(dir, nonemptyString(recordMap(first)["jobId"])))
+	if filepath.Clean(nonemptyString(firstMap["repoRoot"])) != filepath.Clean(repo) {
+		t.Fatalf("first job repoRoot = %#v, want %q", firstMap["repoRoot"], repo)
+	}
+	thread := LoadRecord(filepath.Join(state, "codex_exec_mcp", "threads"), "fake-thread")
+	if thread == nil || filepath.Clean(nonemptyString(thread["repoRoot"])) != filepath.Clean(repo) {
+		t.Fatalf("thread did not record repository root: %#v", thread)
+	}
+	_, reply, err := Start(state, map[string]any{"call": "00000000-0000-4000-8000-000000000012", "prompt": "continue", "mode": "reply", "threadId": "fake-thread"}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recordMap(reply)["worktreePath"] != nil || len(launched) != 2 || filepath.Clean(launched[1]) != filepath.Clean(repo) {
+		t.Fatalf("reply did not stay non-worktree at recorded root; launches=%#v job=%s", launched, mustRecordJSON(t, reply))
+	}
+
+	oldState := t.TempDir()
+	if err = SaveRecord(filepath.Join(oldState, "codex_exec_mcp", "threads"), map[string]any{
+		"thread_id": "old-thread", "cwd": repo, "config_args": []any{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, _, err := Start(oldState, map[string]any{"call": "00000000-0000-4000-8000-000000000013", "prompt": "continue", "mode": "reply", "threadId": "old-thread"}, StartOptions{StateRoot: oldState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure, _ := result["structuredContent"].(map[string]any)
+	if failure["errorCode"] != "WORKTREE_SNAPSHOT_FAILED" || failure["message"] != "Repository root could not be resolved for Codex launch" {
+		t.Fatalf("rootless old thread error = %#v", result)
+	}
+}
+
 func TestStartReplyUsesFreshWorktreeWhenThreadWorktreeIsMissingWithoutOwnership(t *testing.T) {
 	repo := t.TempDir()
 	gitStart(t, repo, "init", "-q")

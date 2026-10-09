@@ -162,6 +162,13 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 				}
 			}
 		}
+		if nonemptyString(args["cwd"]) == "" && nonemptyString(thread["worktreePath"]) == "" {
+			repo := nonemptyString(thread["repoRoot"])
+			if repo == "" {
+				return startFailure("WORKTREE_SNAPSHOT_FAILED", "Repository root could not be resolved for Codex launch"), nil, nil
+			}
+			args["cwd"] = repo
+		}
 	}
 	var signal, owner [16]byte
 	if _, err := rand.Read(signal[:]); err != nil {

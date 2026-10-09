@@ -1084,6 +1084,41 @@ def test_worktree_job_records_snapshot_and_reply_reuses_it(area):
         client.close()
 
 
+def test_non_worktree_job_records_repository_for_reply_and_legacy_thread_fails(area):
+    repo = _git_repo(area)
+    client = Client(area)
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
+                                                    "cwd": str(repo), "worktree": False})
+        finish(client, started["jobId"], "SUCCEEDED")
+        first_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
+        thread = codex_exec_mcp._load_record(area / "state", "thread-123")
+        assert first_job["repoRoot"] == str(repo.resolve())
+        assert "worktreePath" not in first_job
+        assert thread["repoRoot"] == str(repo.resolve())
+        assert "worktreePath" not in thread
+
+        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                   "threadId": "thread-123", "prompt": "again"})
+        second = finish(client, reply["jobId"], "SUCCEEDED")
+        second_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (reply["jobId"] + ".json"))
+        calls = [json.loads(line) for line in (area / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert calls[0]["cwd"] == calls[1]["cwd"] == str(repo.resolve())
+        assert second_job["repoRoot"] == str(repo.resolve())
+        assert "worktreePath" not in second_job and "worktreePath" not in second
+
+        codex_exec_mcp._save_record(area / "state", {
+            "thread_id": "legacy-thread", "cwd": str(repo.resolve()), "config_args": [],
+        })
+        legacy = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
+                                                    "threadId": "legacy-thread", "prompt": "again"})
+        assert legacy["state"] == "FAILED"
+        assert legacy["errorCode"] == "WORKTREE_SNAPSHOT_FAILED"
+        assert legacy["message"] == "Repository root could not be resolved for Codex launch"
+    finally:
+        client.close()
+
+
 def test_reply_uses_fresh_worktree_when_thread_worktree_is_retiring(area):
     repo = _git_repo(area)
     client = Client(area)

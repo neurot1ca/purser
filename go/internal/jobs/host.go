@@ -299,6 +299,20 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			config["sandbox_workspace_write"] = map[string]any{"writable_roots": []any{worktreePath}}
 			args.Config = config
 		}
+	} else if launch.Name == "codex" || launch.Name == "codex-reply" {
+		requested, absErr := filepath.Abs(args.Cwd)
+		if absErr == nil {
+			if repoRoot, gitErr := ledger.GitTopLevel(requested); gitErr == nil {
+				if repoRoot != "" {
+					if err = job.Set("repoRoot", repoRoot); err == nil {
+						err = Write(path, job)
+					}
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
 	}
 	if launch.CodexBin != nil {
 		encoded, _ := json.Marshal(launch.CodexBin)
