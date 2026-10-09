@@ -3,6 +3,7 @@
 
 import argparse
 import datetime as _datetime
+import hashlib
 import io
 import json
 import ntpath
@@ -13,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 
@@ -178,14 +180,6 @@ def export_marketplace(commit, marketplace_dir):
     phase = "prepare"
     try:
         target.mkdir(parents=True, exist_ok=True)
-        archive_result = subprocess.run(
-            ["git", "archive", "--format=tar", str(commit)], cwd=ROOT,
-            capture_output=True, check=False,
-        )
-        if archive_result.returncode:
-            detail = archive_result.stderr.decode("utf-8", errors="replace").strip()
-            raise ReleaseError("git archive failed" + (f": {detail}" if detail else ""))
-
         for _ in range(10):
             stage = target / f"purser-export-{secrets.token_hex(6)}"
             try:
@@ -197,14 +191,8 @@ def export_marketplace(commit, marketplace_dir):
             raise ReleaseError("cannot allocate marketplace export staging directory")
         staged_tree = stage
         phase = "extract archive"
-        with tarfile.open(fileobj=io.BytesIO(archive_result.stdout), mode="r:") as archive:
-            members = _safe_archive_members(archive, staged_tree)
-            _extract_archive(archive, staged_tree, members)
-        _filter_python_sources(staged_tree)
-        _verify_staged_mod_assets(staged_tree, include_binaries=False)
         phase = "build Go hook binaries"
-        _build_go_hook(staged_tree)
-        _verify_staged_mod_assets(staged_tree, include_binaries=True)
+        _stage_committed_tree(commit, staged_tree)
         manifest = {
             "name": "purser-local",
             "description": "Local marketplace for the Purser plugin.",
@@ -260,6 +248,100 @@ def export_marketplace(commit, marketplace_dir):
             shutil.rmtree(staged_path, ignore_errors=True)
         if "stage" in locals() and stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
+
+
+def _stage_committed_tree(commit, staged_tree):
+    archive_result = subprocess.run(
+        ["git", "archive", "--format=tar", str(commit)], cwd=ROOT,
+        capture_output=True, check=False,
+    )
+    if archive_result.returncode:
+        detail = archive_result.stderr.decode("utf-8", errors="replace").strip()
+        raise ReleaseError("git archive failed" + (f": {detail}" if detail else ""))
+    with tarfile.open(fileobj=io.BytesIO(archive_result.stdout), mode="r:") as archive:
+        members = _safe_archive_members(archive, staged_tree)
+        _extract_archive(archive, staged_tree, members)
+    _filter_python_sources(staged_tree)
+    _verify_staged_mod_assets(staged_tree, include_binaries=False)
+    _build_go_hook(staged_tree)
+    _verify_staged_mod_assets(staged_tree, include_binaries=True)
+
+
+def package_release(commit, output_dir):
+    """Build a versioned plugin ZIP and its release metadata from a committed tree."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    staged_tree = output_dir / f"purser-release-stage-{secrets.token_hex(6)}"
+    staged_tree.mkdir()
+    archive_path = None
+    try:
+        _stage_committed_tree(commit, staged_tree)
+        plugin = json.loads((staged_tree / PLUGIN).read_text(encoding="utf-8"))
+        version = plugin["version"]
+        version_tuple(version)
+        go = shutil.which("go")
+        if not go:
+            raise ReleaseError("Go is required to record the release toolchain")
+        toolchain = subprocess.run(
+            [go, "version"], cwd=staged_tree / "go", capture_output=True,
+            text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        if toolchain.returncode:
+            raise ReleaseError("cannot determine Go toolchain version")
+        build_tags = _go_grammar_tags(staged_tree)
+        binary_paths = [
+            f"bin/purser-hook-{goos}-{goarch}" + (".exe" if goos == "windows" else "")
+            for goos, goarch in GO_HOOK_TARGETS
+        ]
+        binary_digests = {
+            name: hashlib.sha256((staged_tree / name).read_bytes()).hexdigest()
+            for name in binary_paths
+        }
+        archive_path = output_dir / f"purser-{version}.zip"
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(item for item in staged_tree.rglob("*") if item.is_file()):
+                name = path.relative_to(staged_tree).as_posix()
+                mode = path.stat().st_mode & 0o777
+                if name in binary_paths and "windows" not in name:
+                    mode = 0o755
+                info = zipfile.ZipInfo(name)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = ((0o100000 | mode) << 16)
+                archive.writestr(info, path.read_bytes())
+
+        with zipfile.ZipFile(archive_path) as archive:
+            for name, expected_digest in binary_digests.items():
+                info = archive.getinfo(name)
+                if hashlib.sha256(archive.read(name)).hexdigest() != expected_digest:
+                    raise ReleaseError(f"release archive binary digest mismatch: {name}")
+                if "windows" not in name and not (info.external_attr >> 16) & 0o111:
+                    raise ReleaseError(f"release archive lost Unix execute bit: {name}")
+        manifest = {
+            "plugin_version": version,
+            "source_commit": str(commit),
+            "go_toolchain": toolchain.stdout.strip(),
+            "build_tags": build_tags,
+            "build_flags": ["-trimpath", "-ldflags", "-s -w"],
+            "targets": [
+                {"goos": goos, "goarch": goarch, "binary": name}
+                for (goos, goarch), name in zip(GO_HOOK_TARGETS, binary_paths)
+            ],
+            "binary_digests": binary_digests,
+        }
+        archive_digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        sums = [f"{archive_digest}  {archive_path.name}"]
+        sums.extend(f"{binary_digests[name]}  {name}" for name in binary_paths)
+        (output_dir / "SHA256SUMS").write_text("\n".join(sums) + "\n", encoding="utf-8")
+        (output_dir / "release-manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return archive_path
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile, tarfile.TarError) as exc:
+        if isinstance(exc, ReleaseError):
+            raise
+        raise ReleaseError(f"release packaging failed: {exc}")
+    finally:
+        shutil.rmtree(staged_tree, ignore_errors=True)
 
 
 def _verify_staged_mod_assets(staged_tree, *, include_binaries):

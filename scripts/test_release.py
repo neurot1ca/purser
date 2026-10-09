@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import uuid
 import importlib.util
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,10 +49,11 @@ def run(cmd, cwd, *, env=None, check=True):
 def fake_go(tmp_path):
     source = tmp_path / "fake-go.go"
     source.write_text(
-        'package main\nimport ("os"; "strings")\nfunc main() {\n'
+        'package main\nimport ("fmt"; "os"; "strings")\nfunc main() {\n'
         'args := os.Args[1:]; if log := os.Getenv("FAKE_GO_LOG"); log != "" { '
         'f, _ := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); '
         '_, _ = f.WriteString(os.Getenv("GOOS")+"/"+os.Getenv("GOARCH")+" "+strings.Join(args, " ")+"\\n"); _ = f.Close() }\n'
+        'if len(args) > 0 && args[0] == "version" { fmt.Println("go version go1.27.1 windows/amd64"); return }; '
         'if os.Getenv("FAKE_GO_FAIL_GOOS") == os.Getenv("GOOS") { os.Exit(9) }; '
         'for i, arg := range args { if arg == "-o" && i+1 < len(args) { _ = os.WriteFile(args[i+1], []byte("fake binary"), 0700); return } }; os.Exit(2) }\n',
         encoding="utf-8",
@@ -374,6 +377,105 @@ def test_export_builds_six_go_binaries_in_staged_plugin(tmp_path):
     for line in builds:
         assert f"build -tags {tags} -trimpath -ldflags -s -w -o " in line
         assert line.endswith(" ./cmd/purser-hook")
+
+
+def release_module(path=RELEASE):
+    module_spec = importlib.util.spec_from_file_location("release_under_test", path)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return module
+
+
+def test_release_package_contains_runtime_assets_and_matching_digests(tmp_path, monkeypatch):
+    path, env = repo(tmp_path)
+    monkeypatch.setenv("PATH", env["PATH"])
+    module = release_module(path / "scripts" / "release.py")
+    output = tmp_path / "dist"
+    commit = run(["git", "rev-parse", "HEAD"], path).stdout.strip()
+    module.package_release(commit, output)
+
+    archive_path = output / "purser-0.1.12.zip"
+    manifest = json.loads((output / "release-manifest.json").read_text(encoding="utf-8"))
+    checksums = dict(
+        (name, digest)
+        for line in (output / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+        for digest, name in [line.split("  ", 1)]
+    )
+    binaries = {
+        "bin/purser-hook-windows-amd64.exe", "bin/purser-hook-windows-arm64.exe",
+        "bin/purser-hook-linux-amd64", "bin/purser-hook-linux-arm64",
+        "bin/purser-hook-darwin-amd64", "bin/purser-hook-darwin-arm64",
+    }
+    with zipfile.ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+        assert binaries <= names
+        assert set(module.PLUGIN_RUNTIME_FILES) <= names
+        assert set(module.COMMAND_FILES) <= names
+        assert not any(Path(name).name == "__pycache__" or name.endswith((".py", ".pyc")) for name in names)
+        for name in binaries:
+            assert manifest["binary_digests"][name] == hashlib.sha256(archive.read(name)).hexdigest()
+            assert checksums[name] == manifest["binary_digests"][name]
+            mode = archive.getinfo(name).external_attr >> 16
+            if "windows" not in name:
+                assert mode & 0o111
+    assert manifest["plugin_version"] == "0.1.12"
+    assert manifest["source_commit"] == commit
+    assert manifest["go_toolchain"].startswith("go version ")
+    assert manifest["build_tags"]
+    assert manifest["build_flags"]
+    assert len(manifest["targets"]) == 6
+    assert checksums[archive_path.name] == hashlib.sha256(archive_path.read_bytes()).hexdigest()
+
+
+def test_release_package_fails_when_a_binary_is_missing(tmp_path, monkeypatch):
+    path, env = repo(tmp_path)
+    monkeypatch.setenv("PATH", env["PATH"])
+    module = release_module(path / "scripts" / "release.py")
+    original_build = module._build_go_hook
+
+    def missing_binary(staged_tree):
+        original_build(staged_tree)
+        (staged_tree / "bin" / "purser-hook-linux-amd64").unlink()
+
+    monkeypatch.setattr(module, "_build_go_hook", missing_binary)
+    commit = run(["git", "rev-parse", "HEAD"], path).stdout.strip()
+    with pytest.raises(module.ReleaseError, match="purser-hook-linux-amd64"):
+        module.package_release(commit, tmp_path / "dist")
+
+
+def test_release_package_fails_when_archive_binary_digest_differs(tmp_path, monkeypatch):
+    path, env = repo(tmp_path)
+    monkeypatch.setenv("PATH", env["PATH"])
+    module = release_module(path / "scripts" / "release.py")
+    original_writestr = zipfile.ZipFile.writestr
+
+    def corrupt_binary(self, zinfo_or_arcname, data, *args, **kwargs):
+        name = zinfo_or_arcname.filename if isinstance(zinfo_or_arcname, zipfile.ZipInfo) else zinfo_or_arcname
+        if name == "bin/purser-hook-linux-amd64":
+            data = b"corrupt binary"
+        return original_writestr(self, zinfo_or_arcname, data, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "writestr", corrupt_binary)
+    commit = run(["git", "rev-parse", "HEAD"], path).stdout.strip()
+    with pytest.raises(module.ReleaseError, match="digest mismatch"):
+        module.package_release(commit, tmp_path / "dist")
+
+
+def test_release_package_fails_when_unix_execute_bit_is_lost(tmp_path, monkeypatch):
+    path, env = repo(tmp_path)
+    monkeypatch.setenv("PATH", env["PATH"])
+    module = release_module(path / "scripts" / "release.py")
+    original_writestr = zipfile.ZipFile.writestr
+
+    def strip_execute_bit(self, zinfo_or_arcname, data, *args, **kwargs):
+        if isinstance(zinfo_or_arcname, zipfile.ZipInfo) and zinfo_or_arcname.filename == "bin/purser-hook-linux-amd64":
+            zinfo_or_arcname.external_attr = (0o100644 << 16) | 0x10
+        return original_writestr(self, zinfo_or_arcname, data, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "writestr", strip_execute_bit)
+    commit = run(["git", "rev-parse", "HEAD"], path).stdout.strip()
+    with pytest.raises(module.ReleaseError, match="execute bit"):
+        module.package_release(commit, tmp_path / "dist")
 
 
 def test_staged_export_requires_mod_sources_and_all_six_binaries(tmp_path):
