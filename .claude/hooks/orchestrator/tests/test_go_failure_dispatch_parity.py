@@ -34,6 +34,9 @@ def _snapshot(root):
         # coordination machinery, not durable state to compare for parity.
         if path.name == ".append.lock":
             continue
+        # Hook activity is a Go-host diagnostic timestamp, not parity state.
+        if path.name == "hook-activity.json":
+            continue
         raw = path.read_text(encoding="utf-8")
         raw = raw.replace(str(root), "__STATE__").replace(str(ROOT), "__REPO__")
         try:

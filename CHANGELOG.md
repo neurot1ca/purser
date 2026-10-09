@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.105 — 2026-10-09
+
+- **Added:** `/purser:check` shows a Hook activity row: when each hook event last ran, recorded at most hourly.
+- **Changed:** Implementation and operation jobs run through a fresh `purser:dispatcher` agent by default; main Claude keeps review, acceptance, and commits.
+
 ## 0.1.104 — 2026-10-09
 
 - **Fixed:** Reviewer-1's claude fallback gets a valid effort, so a failed agy attempt no longer ends every review as unavailable; each unavailable attempt keeps its reason.
