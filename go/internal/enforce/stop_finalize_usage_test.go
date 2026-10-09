@@ -3,8 +3,10 @@ package enforce
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -207,7 +209,7 @@ func TestStopFinalizeP130PythonFiles(t *testing.T) {
 					event["event_id"], event["ts_utc"] = "00000000-0000-0000-0000-000000000001", "2026-10-05T12:00:00Z"
 					events = append(events, event)
 				}
-			} else if !os.IsNotExist(err) {
+			} else if !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
 				t.Fatal(err)
 			}
 			projectionPath := filepath.Join(root, "projects", "0123456789abcdef", "telemetry", "tasks", taskID+".json")

@@ -46,6 +46,8 @@ func TestP131StopCompositionFixture(t *testing.T) {
 			}
 			t.Setenv("PURSER_STATE_DIR", root)
 			t.Setenv("USERPROFILE", home)
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 			session := "p131-" + test.Name
 			transcript := filepath.Join(projects, session+".jsonl")
 			records := []byte(composeTranscript(test.Name))

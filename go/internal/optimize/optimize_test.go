@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"runtime"
 	"strings"
 	"testing"
@@ -156,7 +157,7 @@ func TestRunMatchesLegacyPythonReportOnFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := filepath.Join(workspaceRoot, ".claude", "hooks", "orchestrator", "purser_optimize.py")
-	cmd := exec.Command("python", script, "--projects-root", projects, "--days", "30")
+	cmd := exec.Command(testutil.Python(t), script, "--projects-root", projects, "--days", "30")
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "HOMEDRIVE=", "HOMEPATH=")
 	pyOut, err := cmd.Output()

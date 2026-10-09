@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"purser-hook/internal/profile"
@@ -41,10 +43,12 @@ func TestRunWorktreeSetup(t *testing.T) {
 	if fixture.Oracle != "Python ledger._run_worktree_setup" {
 		t.Fatalf("unexpected oracle: %q", fixture.Oracle)
 	}
+	python := testutil.Python(t)
 	for _, test := range fixture.Cases {
 		t.Run(test.Name, func(t *testing.T) {
+			command := strings.Replace(test.Command, "python", `"`+python+`"`, 1)
 			result := RunWorktreeSetup(t.TempDir(), profile.WorktreeSetup{
-				Setup: &test.Command, SetupTimeoutSeconds: test.TimeoutSeconds,
+				Setup: &command, SetupTimeoutSeconds: test.TimeoutSeconds,
 			})
 			if test.Name == "missing_command" && test.Expected.SetupError != nil && test.Expected.SetupError.Output == "<nonempty-shell-error>" {
 				if result.Failure == nil || result.Failure.Output == "" {

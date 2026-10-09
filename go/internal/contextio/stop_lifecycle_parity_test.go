@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/testutil"
 	"reflect"
 	"runtime"
 	"strings"
@@ -202,10 +203,10 @@ func TestP132GoWrittenActiveRecordPythonFinalization(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entrypoint := range []string{"hook.py", "context_io_hook.py"} {
-		cmd := exec.Command("python", filepath.Join(pluginRoot, entrypoint))
+		cmd := exec.Command(testutil.Python(t), filepath.Join(pluginRoot, entrypoint))
 		cmd.Dir = repo
 		cmd.Stdin = bytes.NewReader(event)
-		cmd.Env = append(os.Environ(), "PURSER_STATE_DIR="+root, "USERPROFILE="+home, "HOME="+home)
+		cmd.Env = append(os.Environ(), "PURSER_STATE_DIR="+root, "USERPROFILE="+home, "HOME="+home, "CLAUDE_CONFIG_DIR="+filepath.Join(home, ".claude"))
 		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("Python %s: %v: %s", entrypoint, err, output)
 		}
