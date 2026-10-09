@@ -453,6 +453,7 @@ func failAsyncFinalization(root string, index map[string]any, outputField string
 		return nil, err
 	}
 	index["stage"], index["errorCode"], index["claude_review_mode"], index["response"] = "FAILED", "INTERNAL_POST_ERROR", review.Full, response
+	delete(index, "review_refresh_required")
 	if err = atomicAdmissionJSON(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index); err != nil {
 		return nil, err
 	}

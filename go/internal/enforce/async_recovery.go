@@ -25,6 +25,9 @@ func recoverAsyncFinalizing(root string, event, index, pending map[string]any, c
 	if index["stage"] != "FINALIZING" {
 		return nil, false, nil
 	}
+	if index["review_refresh_required"] == true {
+		return nil, false, nil
+	}
 	key := stringValue(index["call_key"])
 	if key == "" {
 		return nil, false, errors.New("async finalizing call key is missing")
@@ -75,6 +78,7 @@ func recoverAsyncFinalizing(root string, event, index, pending map[string]any, c
 	if bundle["apply"] == "codex_apply" && job != nil {
 		appendPostApplyGuidance(response, stringValue(index["jobId"]))
 	}
+	delete(index, "review_refresh_required")
 	index["stage"], index["bundle_path"], index["response"] = "CONSUMED", path, response
 	encoded, err := canonicalJSON(index)
 	if err != nil {

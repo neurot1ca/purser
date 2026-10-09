@@ -388,6 +388,34 @@ func TestFailedAsyncFinalizationIsTerminalAndReturnsCachedError(t *testing.T) {
 	_ = repo
 }
 
+func TestAsyncReviewRefreshFinishFailureIsTerminal(t *testing.T) {
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("USERPROFILE", t.TempDir())
+	state, repo, event, index, pending, original, _, _, _ := newAsyncSuccessCase(t, "refresh_finish_failure")
+	index["stage"] = "REVIEW_REFRESH"
+	pending["scope"] = "malformed"
+	if err = writeAsyncObject(pendingPathForAsync(state, original), pending); err != nil {
+		t.Fatal(err)
+	}
+	response, err := postAsyncDispatch(event, state)
+	if err != nil || response == nil {
+		t.Fatalf("failed refresh response=%#v err=%v", response, err)
+	}
+	stored, err := readAsyncObject(filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json"))
+	if err != nil || stored["stage"] != "FAILED" || stored["review_refresh_required"] != nil {
+		t.Fatalf("refresh failure left nonterminal claim: index=%#v err=%v", stored, err)
+	}
+	repeated, err := postAsyncDispatch(event, state)
+	if err != nil || !reflect.DeepEqual(repeated, response) {
+		t.Fatalf("next result did not return terminal response: %#v err=%v", repeated, err)
+	}
+	_ = repo
+}
+
 func mustPendingPath(t *testing.T, root string, event map[string]any) string {
 	t.Helper()
 	path, err := pendingPath(root, event)

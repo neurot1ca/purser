@@ -44,6 +44,9 @@ func claimAsyncResult(root string, event map[string]any, repoRoot string) (*os.F
 	if index["stage"] == "CONSUMED" || index["stage"] == "FAILED" {
 		return lock, index, pending, original, index["response"], nil
 	}
+	if index["stage"] == "REVIEW_REFRESH" {
+		index["review_refresh_required"] = true
+	}
 	index["stage"] = "FINALIZING"
 	if err = atomicAdmissionJSON(path, index); err != nil {
 		return release(err)
@@ -52,6 +55,7 @@ func claimAsyncResult(root string, event map[string]any, repoRoot string) (*os.F
 }
 
 func consumeAsyncResult(path string, index map[string]any, bundlePath string, response any) error {
+	delete(index, "review_refresh_required")
 	index["stage"], index["bundle_path"], index["response"] = "CONSUMED", bundlePath, response
 	return atomicAdmissionJSON(path, index)
 }
