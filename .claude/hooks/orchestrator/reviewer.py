@@ -730,10 +730,14 @@ def _canonical_json(value: Any) -> bytes:
 
 
 def _reviewer_executable(config: Mapping[str, Any], provider: str) -> str:
+    command = _REVIEWER_COMMANDS[provider]
     executable = config.get("reviewer1_executable")
     if isinstance(executable, str) and os.path.isabs(executable):
-        return executable
-    command = _REVIEWER_COMMANDS[provider]
+        name = Path(executable).name.lower()
+        if name.endswith(".exe"):
+            name = name[:-4]
+        if name == command:
+            return executable
     resolved = shutil.which(command)
     if resolved:
         resolved = str(Path(resolved).resolve())

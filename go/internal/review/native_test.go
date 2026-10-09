@@ -244,6 +244,11 @@ func TestNativeRunBridgeRejectsOversizedReviewerResponse(t *testing.T) {
 
 func TestNativeReviewerDiagnosticRecordsParseFailure(t *testing.T) {
 	root, bin := nativeFixture(t)
+	claude := filepath.Join(root, "claude"+filepath.Ext(bin))
+	if err := os.Rename(bin, claude); err != nil {
+		t.Fatal(err)
+	}
+	bin = claude
 	state := filepath.Join(root, "state")
 	t.Setenv("PURSER_STATE_DIR", state)
 	stdout := "invalid-reviewer-response"
@@ -276,6 +281,11 @@ func TestNativeReviewerDiagnosticRecordsParseFailure(t *testing.T) {
 
 func TestNativeReviewerDiagnosticRecordsFailedLaunchDetails(t *testing.T) {
 	root, bin := nativeFixture(t)
+	claude := filepath.Join(root, "claude"+filepath.Ext(bin))
+	if err := os.Rename(bin, claude); err != nil {
+		t.Fatal(err)
+	}
+	bin = claude
 	state := filepath.Join(root, "state")
 	t.Setenv("PURSER_STATE_DIR", state)
 	t.Setenv("MOCK_EXIT_CODE", "2")
@@ -331,6 +341,11 @@ func TestNativeReviewerDiagnosticRecordsFailedLaunchDetails(t *testing.T) {
 
 func TestNativeReviewerDiagnosticKeepsNewestTwenty(t *testing.T) {
 	root, bin := nativeFixture(t)
+	claude := filepath.Join(root, "claude"+filepath.Ext(bin))
+	if err := os.Rename(bin, claude); err != nil {
+		t.Fatal(err)
+	}
+	bin = claude
 	state := filepath.Join(root, "state")
 	t.Setenv("PURSER_STATE_DIR", state)
 	t.Setenv("MOCK_OUTPUT", "invalid")

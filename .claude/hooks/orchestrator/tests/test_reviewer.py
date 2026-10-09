@@ -468,6 +468,17 @@ def test_reviewer_executable_resolution_prefers_config_path(config, monkeypatch)
     assert command[0] == configured
 
 
+def test_reviewer_executable_resolution_uses_provider_path_for_other_provider(
+    config, monkeypatch, tmp_path
+):
+    claude = tmp_path / "claude.exe"
+    claude.write_text("fake executable", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    config["reviewer1_agent"] = "claude"
+
+    assert reviewer._reviewer_executable(config, "claude") == str(claude.resolve())
+
+
 @pytest.mark.parametrize(
     ("provider", "command_name"),
     (("agy", "agy"), ("opencode", "opencode"), ("codex", "codex")),

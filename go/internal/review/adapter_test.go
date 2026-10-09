@@ -31,7 +31,7 @@ func TestAdapterGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			model := map[string]string{"agy": "gemini-3.8-flash-high", "opencode": "google/gemini-3.8-flash-high", "codex": "gpt-5"}[name]
-			executable, err := filepath.Abs(filepath.Join("tools", "agent.exe"))
+			executable, err := filepath.Abs(filepath.Join("tools", name+".exe"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,6 +79,38 @@ func TestAdapterGoldens(t *testing.T) {
 				t.Fatalf("confinement file = %q, %q; Python adapters do not write a separate file", configName, configData)
 			}
 		})
+	}
+}
+
+func TestReviewerExecutableUsesConfiguredPathOnlyForMatchingProvider(t *testing.T) {
+	configured := filepath.Join(t.TempDir(), "agy.exe")
+	got, err := reviewerExecutable(map[string]any{"reviewer1_executable": configured}, "agy")
+	if err != nil || got != configured {
+		t.Fatalf("agy executable = %q, %v; want %q", got, err, configured)
+	}
+
+	pathDir := t.TempDir()
+	claude := filepath.Join(pathDir, "claude.exe")
+	if err := os.WriteFile(claude, []byte("fake claude"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir)
+	got, err = reviewerExecutable(map[string]any{
+		"reviewer1_executable": configured,
+		"reviewer1_agent":      "claude",
+	}, "claude")
+	if err != nil {
+		t.Fatalf("claude executable lookup: %v", err)
+	}
+	want, err := filepath.Abs(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical, err := filepath.EvalSymlinks(want); err == nil {
+		want = canonical
+	}
+	if got != want {
+		t.Fatalf("claude executable = %q, want PATH result %q", got, want)
 	}
 }
 

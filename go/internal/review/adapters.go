@@ -217,12 +217,16 @@ func (a reviewerAdapter) ParseEnvelope(stdout string) (map[string]any, error) {
 }
 
 func reviewerExecutable(config map[string]any, provider string) (string, error) {
-	if executable, ok := config["reviewer1_executable"].(string); ok && filepath.IsAbs(executable) {
-		return executable, nil
-	}
 	command, ok := reviewerCommands[provider]
 	if !ok {
 		return "", fmt.Errorf("unknown reviewer provider %q", provider)
+	}
+	if executable, ok := config["reviewer1_executable"].(string); ok && filepath.IsAbs(executable) {
+		name := strings.ToLower(filepath.Base(executable))
+		name = strings.TrimSuffix(name, ".exe")
+		if name == command {
+			return executable, nil
+		}
 	}
 	resolved, err := exec.LookPath(command)
 	if err == nil {
