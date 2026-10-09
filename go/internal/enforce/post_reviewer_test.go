@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +128,99 @@ func TestDefaultReviewerFallsBackWithinReservedBudget(t *testing.T) {
 	}
 	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
 	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || attempts[1].Outcome != "COMPLETED" {
+		t.Fatalf("attempts=%#v", bundle["reviewer1_attempts"])
+	}
+}
+
+func TestPostReviewerClaudeFallbackEffortAndReason(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	var claudeEffort any
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		if args["reviewer_agent"] == "agy" {
+			return review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{
+				"error_code": "AGY_DOWN", "findings": []any{map[string]any{"code": "AGY_DOWN", "message": "provider unavailable"}},
+			}}, nil
+		}
+		claudeEffort = args["reviewer_effort"]
+		return review.BridgeOutcome{Outcome: "completed"}, nil
+	}
+	candidates := []profile.ReviewerCandidate{
+		{Agent: "agy", Model: "gemini-3.8-flash-high"},
+		{Agent: "claude", Model: "claude-haiku-5-5"},
+	}
+	bundle := map[string]any{"findings": []any{}}
+	_, err := runPostReviewer("", "", map[string]any{"model": "gpt-6-luna", "fallback_family": "openai"}, bundle,
+		postProfile{ReviewerCandidates: candidates}, map[string]any{"reviewer1_effort": "high"}, nil, nil, time.Now(), 2*time.Second)
+	if err != nil || claudeEffort != "high" {
+		t.Fatalf("Claude fallback effort=%v err=%v, want configured high", claudeEffort, err)
+	}
+	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
+	if !ok || len(attempts) != 2 || attempts[0].Reason != "AGY_DOWN: provider unavailable" {
+		t.Fatalf("attempts=%#v, want bounded unavailable reason", bundle["reviewer1_attempts"])
+	}
+}
+
+func TestPostReviewerClaudeFallbackRunsWithDefaultEffortFakeExecutable(t *testing.T) {
+	pluginRoot := t.TempDir()
+	repo := filepath.Join(pluginRoot, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	postReviewRepo(t, repo, map[string]any{"changed_paths": []any{"change.txt"}})
+	if err := os.WriteFile(filepath.Join(repo, "change.txt"), []byte("changed after baseline\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := `package main
+import ("fmt"; "os")
+func main() {
+  effort := ""
+  for i, arg := range os.Args { if arg == "--effort" && i+1 < len(os.Args) { effort = os.Args[i+1] } }
+  if effort == "medium" { fmt.Print("{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"fake-claude\",\"structured_output\":{\"result\":\"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\",\"validation\":\"PASS\",\"findings\":[]}}") } else { fmt.Print("invalid") }
+}`
+	sourcePath := filepath.Join(pluginRoot, "fake_claude.go")
+	if err := os.WriteFile(sourcePath, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(pluginRoot, "fake-claude")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	if err := exec.Command("go", "build", "-o", executable, sourcePath).Run(); err != nil {
+		t.Fatal(err)
+	}
+	configDir := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"reviewer1_model_requested":"gemini-3.8-flash-high","reviewer1_timeout_seconds":20,"reviewer1_packet_max_bytes":200000}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	candidates := []profile.ReviewerCandidate{
+		{Agent: "agy", Model: "gemini-3.8-flash-high"},
+		{Agent: "claude", Model: "claude-haiku-5-5"},
+	}
+	bundle := map[string]any{"findings": []any{}}
+	outcome, err := runPostReviewer(pluginRoot, "", map[string]any{
+		"task_id": "fake-executable-test", "phase": "implementation", "route": "normal",
+		"model": "gpt-6-luna", "effort": "medium", "fallback_family": "openai", "repo_root": repo,
+		"delta": map[string]any{"changed_paths": []any{"change.txt"}, "baseline_head": strings.TrimSpace(string(baseline)),
+			"ambiguous_paths": []any{}, "changed_file_count": 1, "changed_line_count": 1,
+			"sources": map[string]any{"scoped_manifest": map[string]any{"paths": []any{}}}},
+	}, bundle, postProfile{ReviewerExecutable: executable, ReviewerCandidates: candidates},
+		map[string]any{"reviewer1_model_requested": "gemini-3.8-flash-high", "reviewer1_timeout_seconds": 20.0},
+		map[string]any{"changed_paths": []any{"change.txt"}, "baseline_head": strings.TrimSpace(string(baseline)),
+			"ambiguous_paths": []any{}, "changed_file_count": 1, "changed_line_count": 1,
+			"sources": map[string]any{"scoped_manifest": map[string]any{"paths": []any{}}}}, nil, time.Now(), 20*time.Second)
+	if err != nil || outcome.Outcome != "completed" {
+		t.Fatalf("fallback outcome=%#v err=%v", outcome, err)
+	}
+	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
+	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || !strings.HasPrefix(attempts[0].Reason, review.ResponseInvalid+": ") || attempts[1].Outcome != "COMPLETED" {
 		t.Fatalf("attempts=%#v", bundle["reviewer1_attempts"])
 	}
 }

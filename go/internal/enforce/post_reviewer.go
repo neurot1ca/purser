@@ -17,6 +17,7 @@ type postReviewerAttempt struct {
 	Agent   string `json:"agent"`
 	Model   string `json:"model"`
 	Outcome string `json:"outcome"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // runPostReviewer selects candidates in Python's configured order and invokes
@@ -90,16 +91,16 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	for index, candidate := range candidates {
 		vendor := vendorFamily(modelFamily(candidate.Model))
 		if implementer != "" && vendor != "" && implementer == vendor {
-			attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, "SKIPPED_SAME_VENDOR"})
+			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_SAME_VENDOR"})
 			continue
 		}
 		if !postReviewerAdapters[candidate.Agent] {
-			attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, "SKIPPED_ADAPTER_UNREGISTERED"})
+			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_ADAPTER_UNREGISTERED"})
 			continue
 		}
 		budget := time.Until(deadline)
 		if budget <= 0 {
-			attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, "UNAVAILABLE_BUDGET_EXHAUSTED"})
+			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "UNAVAILABLE_BUDGET_EXHAUSTED"})
 			continue
 		}
 		for _, later := range candidates[index+1:] {
@@ -111,7 +112,16 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		}
 		candidateArgs := clonePostMap(args)
 		candidateArgs["reviewer_agent"], candidateArgs["reviewer_model"] = candidate.Agent, candidate.Model
-		if candidate.Effort != "" {
+		if candidate.Agent == "claude" {
+			effort := candidate.Effort
+			if !reviewerEfforts[effort] {
+				effort = stringValue(loaded["reviewer1_effort"])
+			}
+			if !reviewerEfforts[effort] {
+				effort = "medium"
+			}
+			candidateArgs["reviewer_effort"] = effort
+		} else if candidate.Effort != "" {
 			candidateArgs["reviewer_effort"] = candidate.Effort
 		}
 		candidateArgs["reviewer_timeout_seconds"] = budget.Seconds()
@@ -128,7 +138,11 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		if last.Outcome == "unavailable" {
 			outcome = "UNAVAILABLE"
 		}
-		attempts = append(attempts, postReviewerAttempt{candidate.Agent, candidate.Model, outcome})
+		attempt := postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: outcome}
+		if outcome == "UNAVAILABLE" {
+			attempt.Reason = postReviewerReason(last.Attributes)
+		}
+		attempts = append(attempts, attempt)
 		if outcome != "UNAVAILABLE" {
 			break
 		}
@@ -156,6 +170,44 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		}}
 	}
 	return last, nil
+}
+
+var reviewerEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+
+func postReviewerReason(attributes map[string]any) string {
+	code := stringValue(attributes["error_code"])
+	message := ""
+	switch findings := attributes["findings"].(type) {
+	case []any:
+		if len(findings) > 0 {
+			if finding, ok := findings[0].(map[string]any); ok {
+				message, code = stringValue(finding["message"]), firstNonempty(code, stringValue(finding["code"]))
+			} else if finding, ok := findings[0].(map[string]string); ok {
+				message, code = finding["message"], firstNonempty(code, finding["code"])
+			}
+		}
+	case []map[string]string:
+		if len(findings) > 0 {
+			message, code = findings[0]["message"], firstNonempty(code, findings[0]["code"])
+		}
+	}
+	message = prefixRunes(message, 200)
+	if code == "" {
+		code = "REVIEWER1_UNAVAILABLE"
+	}
+	if message == "" {
+		return code
+	}
+	return code + ": " + message
+}
+
+func firstNonempty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 var postReviewerAdapters = map[string]bool{"agy": true, "opencode": true, "codex": true, "claude": true}

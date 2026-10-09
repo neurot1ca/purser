@@ -24,7 +24,7 @@ import telemetry
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _CONFIG_PATH = _PACKAGE_ROOT / "config.json"
-_REVIEWER_COMMANDS = {"agy": "agy", "opencode": "opencode", "codex": "codex"}
+_REVIEWER_COMMANDS = {"agy": "agy", "opencode": "opencode", "codex": "codex", "claude": "claude"}
 _PACKET_FIELDS = (
     "objective",
     "acceptance_criteria",
@@ -416,12 +416,77 @@ class _CodexAdapter:
         return _parse_event_stream(stdout, self.provider)
 
 
+class _ClaudeAdapter:
+    provider = "claude"
+
+    def validate_model(self, model: Any) -> None:
+        if not isinstance(model, str) or not re.fullmatch(r"(?:claude-[A-Za-z0-9._-]+|haiku|sonnet|opus)", model):
+            raise ValueError("Claude reviewer model is invalid")
+
+    def build_command(
+        self,
+        prompt: str,
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+        *,
+        cwd: Path,
+    ) -> list[str]:
+        executable = _reviewer_executable(config, self.provider)
+        model = config.get("reviewer1_model_requested")
+        effort = config.get("reviewer1_effort")
+        self.validate_model(model)
+        if effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise ValueError("reviewer1_effort must be low, medium, high, xhigh or max")
+        return [
+            executable, "--setting-sources", "", "--restricted", "--print", "--output-format", "json",
+            "--json-schema", _canonical_json(schema).decode("utf-8"), "--model", model,
+            "--effort", effort, prompt, "--tools", "Read,Glob,Grep",
+        ]
+
+    def invoke(
+        self,
+        command: Sequence[str],
+        *,
+        runner: Callable[..., subprocess.CompletedProcess[str]],
+        cwd: Path,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        kwargs: dict[str, Any] = {
+            "cwd": cwd, "capture_output": True, "text": True, "encoding": "utf-8",
+            "errors": "replace", "timeout": timeout, "check": False,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000
+        return runner(command, **kwargs)
+
+    def parse(
+        self, stdout: str, *, include_metadata: bool = False,
+    ) -> tuple[str, dict[str, Any], float, dict[str, int | float], str]:
+        envelope = json.loads(stdout)
+        if (not isinstance(envelope, Mapping) or envelope.get("type") != "result"
+                or envelope.get("subtype") != "success" or envelope.get("is_error") is True
+                or not isinstance(envelope.get("session_id"), str)
+                or not isinstance(envelope.get("structured_output"), Mapping)):
+            raise ValueError("Claude envelope has an unexpected shape")
+        response = _validate_response(envelope["structured_output"])
+        duration_ms = envelope.get("duration_ms", 0)
+        duration = duration_ms / 1000 if isinstance(duration_ms, (int, float)) and not isinstance(duration_ms, bool) else 0.0
+        usage = envelope.get("usage") if isinstance(envelope.get("usage"), Mapping) else {}
+        return envelope["session_id"], response, duration, {
+            key: value for key, value in usage.items()
+            if key in _USAGE_TOKEN_FIELDS and isinstance(value, (int, float))
+            and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+        }, "UNAVAILABLE"
+
+
 OPENCODE_ADAPTER = _OpenCodeAdapter()
 CODEX_ADAPTER = _CodexAdapter()
+CLAUDE_ADAPTER = _ClaudeAdapter()
 REVIEWER_ADAPTERS: dict[str, Any] = {
     AGY_ADAPTER.provider: AGY_ADAPTER,
     OPENCODE_ADAPTER.provider: OPENCODE_ADAPTER,
     CODEX_ADAPTER.provider: CODEX_ADAPTER,
+    CLAUDE_ADAPTER.provider: CLAUDE_ADAPTER,
 }
 
 
@@ -1434,6 +1499,7 @@ def review_materials(
     repo_root: str | os.PathLike[str] | None = None,
     reviewer_agent: str = "agy",
     reviewer_model: str | None = None,
+    reviewer_effort: str | None = None,
     reviewer_timeout_seconds: float | None = None,
 ) -> ReviewOutcome:
     try:
@@ -1446,10 +1512,12 @@ def review_materials(
             fallback,
             provider=reviewer_agent,
         )
-    if reviewer_model is not None or reviewer_timeout_seconds is not None:
+    if reviewer_model is not None or reviewer_effort is not None or reviewer_timeout_seconds is not None:
         loaded = dict(loaded)
         if reviewer_model is not None:
             loaded["reviewer1_model_requested"] = reviewer_model
+        if reviewer_effort is not None:
+            loaded["reviewer1_effort"] = reviewer_effort
         if reviewer_timeout_seconds is not None:
             loaded["reviewer1_timeout_seconds"] = reviewer_timeout_seconds
     if isinstance(loaded, dict):

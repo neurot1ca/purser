@@ -497,22 +497,33 @@ def test_unavailable_primary_falls_back_and_records_attempts(workspace, config, 
         if kwargs["reviewer_agent"] == "agy":
             return {"review_status": "UNAVAILABLE", "provider": "agy",
                     "reviewer1_model_requested": kwargs["reviewer_model"],
-                    "result": policy.REVIEWER1_UNAVAILABLE, "validation": "UNKNOWN", "findings": []}
-        return {"review_status": "COMPLETED", "provider": "codex",
+                    "result": policy.REVIEWER1_UNAVAILABLE, "validation": "UNKNOWN",
+                    "error_code": "AGY_DOWN", "findings": [{"code": "AGY_DOWN", "message": "provider unavailable"}]}
+        command = reviewer_module.CLAUDE_ADAPTER.build_command(
+            "review", reviewer_module.REVIEW_SCHEMA,
+            {"reviewer1_executable": str(Path.cwd() / "fake-claude"),
+             "reviewer1_model_requested": kwargs["reviewer_model"],
+             "reviewer1_effort": kwargs["reviewer_effort"]},
+            cwd=Path.cwd(),
+        )
+        assert command[command.index("--effort") + 1] == "medium"
+        return {"review_status": "COMPLETED", "provider": "claude",
                 "reviewer1_model_requested": kwargs["reviewer_model"],
                 "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
                 "validation": "PASS", "findings": []}
     bundle = _post_with_reviewer_candidates(
         workspace, config,
         [{"agent": "agy", "model": "gemini-3.8-flash-high"},
-         {"agent": "codex", "model": "gpt-6-sol"}], reviewer, monkeypatch,
+         {"agent": "claude", "model": "claude-haiku-5-5"}], reviewer, monkeypatch,
     )
-    assert [call["reviewer_agent"] for call in calls] == ["agy", "codex"]
-    assert bundle["reviewer1_provider"] == "codex"
-    assert bundle["reviewer1_model_requested"] == "gpt-6-sol"
+    assert [call["reviewer_agent"] for call in calls] == ["agy", "claude"]
+    assert calls[1]["reviewer_effort"] == "medium"
+    assert bundle["reviewer1_provider"] == "claude"
+    assert bundle["reviewer1_model_requested"] == "claude-haiku-5-5"
     assert bundle["reviewer1_attempts"] == [
-        {"agent": "agy", "model": "gemini-3.8-flash-high", "outcome": "UNAVAILABLE"},
-        {"agent": "codex", "model": "gpt-6-sol", "outcome": "COMPLETED"},
+        {"agent": "agy", "model": "gemini-3.8-flash-high", "outcome": "UNAVAILABLE",
+         "reason": "AGY_DOWN: provider unavailable"},
+        {"agent": "claude", "model": "claude-haiku-5-5", "outcome": "COMPLETED"},
     ]
 
 

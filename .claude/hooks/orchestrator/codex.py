@@ -4749,6 +4749,12 @@ def post_tool_use(
                         candidate_kwargs["reviewer_agent"] = candidate_agent
                     if accepts_kwargs or "reviewer_model" in params:
                         candidate_kwargs["reviewer_model"] = candidate_model
+                    if candidate_agent == "claude" and (accepts_kwargs or "reviewer_effort" in params):
+                        effort = candidate.get("effort")
+                        if not isinstance(effort, str) or effort not in {"low", "medium", "high", "xhigh", "max"}:
+                            configured_effort = loaded_config.get("reviewer1_effort")
+                            effort = configured_effort if configured_effort in {"low", "medium", "high", "xhigh", "max"} else "medium"
+                        candidate_kwargs["reviewer_effort"] = effort
                     if accepts_kwargs or "reviewer_timeout_seconds" in params:
                         candidate_kwargs["reviewer_timeout_seconds"] = remaining_budget
                     _observe(
@@ -4771,10 +4777,23 @@ def post_tool_use(
                             or attempted_report.get("result") == policy.REVIEWER1_UNAVAILABLE
                         )
                     )
-                    reviewer_attempts.append({
+                    attempt = {
                         "agent": candidate_agent, "model": candidate_model,
                         "outcome": "UNAVAILABLE" if unavailable else "COMPLETED",
-                    })
+                    }
+                    if unavailable:
+                        error_code = attempted_report.get("error_code") if isinstance(attempted_report, Mapping) else None
+                        findings = attempted_report.get("findings", []) if isinstance(attempted_report, Mapping) else []
+                        message = ""
+                        if isinstance(findings, list) and findings and isinstance(findings[0], Mapping):
+                            message = findings[0].get("message", "")
+                            error_code = error_code or findings[0].get("code")
+                        if not isinstance(error_code, str) or not error_code:
+                            error_code = "REVIEWER1_UNAVAILABLE"
+                        if not isinstance(message, str):
+                            message = ""
+                        attempt["reason"] = error_code + (f": {message[:200]}" if message else "")
+                    reviewer_attempts.append(attempt)
                     reviewer_report = attempted_report
                     if not unavailable:
                         break

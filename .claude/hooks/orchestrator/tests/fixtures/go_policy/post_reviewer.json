@@ -58,7 +58,8 @@
         {
           "agent": "agy",
           "model": "gemini-3.8-flash-high",
-          "outcome": "UNAVAILABLE"
+          "outcome": "UNAVAILABLE",
+          "reason": "REVIEWER1_UNAVAILABLE"
         },
         {
           "agent": "opencode",
@@ -165,7 +166,8 @@
         {
           "agent": "agy",
           "model": "gemini-3.8-flash-high",
-          "outcome": "UNAVAILABLE"
+          "outcome": "UNAVAILABLE",
+          "reason": "REVIEWER1_UNAVAILABLE"
         },
         {
           "agent": "opencode",
