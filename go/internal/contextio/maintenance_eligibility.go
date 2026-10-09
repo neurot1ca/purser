@@ -99,6 +99,9 @@ func MaintenanceEligible(repository, state string, now time.Time, quota map[stri
 			return result
 		}
 		if stateName == "RUNNING" || stateName == "QUEUED" {
+			if deadlineAt, hasDeadline := maintenanceNumber(job["deadlineAt"]); hasDeadline && deadlineAt < float64(now.UnixNano())/float64(time.Second) {
+				continue
+			}
 			result.Reason = "active_user_job"
 			return result
 		}

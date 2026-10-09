@@ -113,6 +113,45 @@ func TestMaintenanceEligibilityPythonOracle(t *testing.T) {
 	}
 }
 
+func TestMaintenanceEligibilityJobDeadlines(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	repo, state := t.TempDir(), t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	root, err := canonicalMaintenanceRoot(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance := filepath.Join(state, "projects", ProjectKey(root), "maintenance")
+	writeMaintenanceFixture(t, filepath.Join(maintenance, "opt-in.json"), map[string]any{"project_root": root, "enabled": true})
+	writeMaintenanceFixture(t, filepath.Join(maintenance, "last-activity.json"), map[string]any{"at": float64(now.Unix() - int64(maintenanceQuietPeriod.Seconds()) - 1)})
+	quota := map[string]any{"snapshot_at": now.Format(time.RFC3339Nano), "5h_used_pct": float64(1), "5h_resets_at": "cycle-a"}
+	jobs := filepath.Join(state, "codex_exec_mcp", "jobs")
+
+	for _, tc := range []struct {
+		name       string
+		job        map[string]any
+		eligible   bool
+		wantReason string
+	}{
+		{name: "running past deadline", job: map[string]any{"state": "RUNNING", "deadlineAt": float64(now.Unix() - 1)}, eligible: true, wantReason: "eligible"},
+		{name: "queued future deadline", job: map[string]any{"state": "QUEUED", "deadlineAt": float64(now.Unix() + 1)}, wantReason: "active_user_job"},
+		{name: "running without deadline", job: map[string]any{"state": "RUNNING"}, wantReason: "active_user_job"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.RemoveAll(jobs); err != nil {
+				t.Fatal(err)
+			}
+			writeMaintenanceFixture(t, filepath.Join(jobs, "job.json"), tc.job)
+			result := MaintenanceEligible(root, state, now, quota, "cleanup")
+			if result.Eligible != tc.eligible || result.Reason != tc.wantReason {
+				t.Fatalf("eligibility = (%v, %q), want (%v, %q)", result.Eligible, result.Reason, tc.eligible, tc.wantReason)
+			}
+		})
+	}
+}
+
 func TestMaintenanceEligibilityNonNumericCompletionIsNotDue(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	repo, state := t.TempDir(), t.TempDir()
