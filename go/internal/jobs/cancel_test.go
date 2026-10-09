@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -11,6 +12,85 @@ import (
 
 	"purser-hook/internal/lease"
 )
+
+func TestCancelHostProcessHelper(t *testing.T) {
+	marker := os.Getenv("PURSER_CANCEL_HOST_MARKER")
+	if marker == "" {
+		return
+	}
+	created, ok := hostProcessIdentity()
+	if !ok {
+		t.Fatal("host process identity unavailable")
+	}
+	data, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "created": created})
+	if err := os.WriteFile(marker, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		time.Sleep(time.Second)
+	}
+}
+
+func TestCancelQueuedStopsOnlyMatchingHostProcess(t *testing.T) {
+	for _, mismatch := range []bool{false, true} {
+		t.Run(map[bool]string{false: "matching_identity", true: "identity_mismatch"}[mismatch], func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "host.json")
+			command := exec.Command(os.Args[0], "-test.run=^TestCancelHostProcessHelper$")
+			command.Env = append(os.Environ(), "PURSER_CANCEL_HOST_MARKER="+marker)
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
+			var child struct {
+				PID     int   `json:"pid"`
+				Created int64 `json:"created"`
+			}
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+				data, err := os.ReadFile(marker)
+				if err == nil {
+					if err = json.Unmarshal(data, &child); err != nil {
+						t.Fatal(err)
+					}
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if child.PID == 0 {
+				t.Fatal("fake host did not publish its process identity")
+			}
+			pid, created := child.PID, child.Created
+			if mismatch {
+				created++
+			}
+			root := scratch(t)
+			jobID := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+			if err := os.MkdirAll(filepath.Join(root, "codex_exec_mcp", "jobs"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			writeHostTestJSON(t, filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"), map[string]any{
+				"jobId": jobID, "state": "QUEUED", "leaseQueued": true, "hostPid": pid, "hostCreatedAt": created,
+			})
+			got := Cancel(root, map[string]any{"jobId": jobID})
+			result := got["structuredContent"].(map[string]any)
+			if result["state"] != "CANCELLED" {
+				t.Fatalf("cancel state = %v", result["state"])
+			}
+			alive := IdentityMatches(pid, child.Created)
+			if !mismatch {
+				for deadline := time.Now().Add(2 * time.Second); alive && time.Now().Before(deadline); {
+					time.Sleep(10 * time.Millisecond)
+					alive = IdentityMatches(pid, child.Created)
+				}
+			}
+			if mismatch && !alive {
+				t.Fatal("cancel stopped a host whose recorded identity did not match")
+			}
+			if !mismatch && alive {
+				t.Fatal("cancel left the queued host process running")
+			}
+		})
+	}
+}
 
 func TestCancelMatchesPythonOracle(t *testing.T) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_jobs_cancel", "cancel.json")

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -116,6 +117,7 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 		_ = lock.Release()
 		if state == "CANCELLED" {
+			stopRecordedHost(current)
 			dispatchWorktreeRetirement(stateRoot, id)
 			return jobResult(map[string]any{"jobId": id, "state": state, "errorCode": "CANCELLED", "message": cancelMessage})
 		}
@@ -163,6 +165,23 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 	}
 	return processUnconfirmed(id)
+}
+
+func stopRecordedHost(record *Record) bool {
+	if record == nil {
+		return false
+	}
+	pidValue, pidOK := recoveryInteger(record, "hostPid")
+	created, createdOK := recoveryInteger(record, "hostCreatedAt")
+	pid := int(pidValue)
+	if !pidOK || !createdOK || pidValue <= 0 || int64(pid) != pidValue || created <= 0 || !IdentityMatches(pid, created) {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return process.Kill() == nil
 }
 
 func finishCancelled(record *Record) {

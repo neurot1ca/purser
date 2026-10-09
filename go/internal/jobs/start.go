@@ -263,6 +263,14 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	if err = Write(filepath.Join(dir, req.JobID+".json"), r); err != nil {
 		return nil, nil, err
 	}
+	if sendBackFrom != nil {
+		prior := recordMap(sendBackFrom)
+		if terminalJobState(nonemptyString(prior["state"])) && prior["applyState"] != "applied" {
+			if oldID := nonemptyString(prior["jobId"]); oldID != "" {
+				lease.ReleaseJobScopeLease(stateRoot, oldID)
+			}
+		}
+	}
 	if planRepository != "" {
 		taskID := nonemptyString(job["taskId"])
 		_, _, _ = contextio.BindPlanJob(stateRoot, planRepository, taskID, req.JobID)
