@@ -151,7 +151,11 @@ starts every job with `codex_start`; for continuation pass `mode=reply`,
 request. After `codex_apply` reports a replay conflict, main Claude resolves and
 commits the files by hand, then calls `codex_apply` with the same `jobId` and
 `resolved: true`. This records the hand-applied job as accepted and releases
-its scope lease.
+its scope lease. When main Claude applies an accepted job by hand for any other
+reason (stale apply, failed finalization), it calls `codex_apply` with that
+`jobId` after committing: the files already match the worktree, so the job is
+recorded as applied and its lease is released. Never `codex_cancel` a job
+that was applied; cancelling discards it.
 
 When an accepted part of an approved multi-part task finishes, start the next
 part in the same turn without asking. Stop only for approval-gated actions,
