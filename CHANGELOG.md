@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.101 — 2026-10-09
+
+- **Fixed:** The plan Stop hook no longer asks to dispatch while a `purser:dispatcher` agent runs the pass.
+- **Fixed:** Recording an acceptance no longer reports "invalid helper output" from the Post hook.
+- **Added:** `purser-hook pilot-report --job <id>` reports a job's per-arm usage, timing, prompt response times and optional API-equivalent cost.
+- **Added:** A failed Reviewer-1 attempt keeps its raw output in `diagnostics/reviewer` (newest 20) so the failure can be diagnosed.
+
 ## 0.1.100 — 2026-10-09
 
 - **Fixed:** The acceptance gate now sees which subagent called `codex_apply`, so a dispatcher can no longer apply a job main Claude has not accepted.
