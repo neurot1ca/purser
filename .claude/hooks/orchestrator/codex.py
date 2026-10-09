@@ -1981,7 +1981,9 @@ def pre_tool_use(
             stored_effort = live_thread.get("effort")
             if isinstance(stored_effort, str):
                 requested["effort"] = effort = stored_effort
-        elif new_call and parsed.route == "mechanical":
+        elif (new_call and parsed.route == "mechanical"
+              and not (isinstance(tool_input.get("model"), str)
+                       and coder_config.CODEX_MODEL.fullmatch(tool_input["model"]))):
             candidates = (coder_config.opencode_candidates()
                          if loaded_config.get("mechanical_opencode_enabled", True) else [])
             if candidates:

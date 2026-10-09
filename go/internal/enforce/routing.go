@@ -36,6 +36,8 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 	fallback, _ := config["fallback"].(map[string]any)
 	fallbackActive := newCall && fallback != nil && active != nil && active["active_coder"] == "fallback"
 	mechanicalCandidate := false
+	explicitModel, _ := toolInput["model"].(string)
+	hasExplicitModel := codexModelPattern.MatchString(explicitModel)
 
 	if replyCall && liveThread != nil {
 		threadAgent, ok := liveThread["agent"].(string)
@@ -59,7 +61,7 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 		if effort, ok := liveThread["effort"].(string); ok {
 			selection.Effort = effort
 		}
-	} else if newCall && !replyCall && route == "mechanical" && config["mechanical_opencode_enabled"] != false {
+	} else if newCall && !replyCall && route == "mechanical" && config["mechanical_opencode_enabled"] != false && !hasExplicitModel {
 		if model := firstOpenCodeCandidate(candidates); model != "" {
 			selection.Agent, selection.Model = "opencode", model
 			mechanicalCandidate = true
@@ -81,8 +83,8 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 		selection.ModelSource = "route"
 		mechanicalCandidate = false
 	} else if newCall && !replyCall && !mechanicalCandidate && selection.Agent == agent {
-		if model, ok := toolInput["model"].(string); ok && codexModelPattern.MatchString(model) {
-			selection.Model = model
+		if hasExplicitModel {
+			selection.Model = explicitModel
 			selection.ModelSource = "override"
 			if values, ok := toolInput["config"].(map[string]any); ok {
 				if effort, ok := values["model_reasoning_effort"].(string); ok &&
