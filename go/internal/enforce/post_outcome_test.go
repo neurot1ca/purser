@@ -48,3 +48,17 @@ func TestPostReviewerOutcomePythonFixture(t *testing.T) {
 		})
 	}
 }
+
+func TestPostReviewerOutcomeKeepsStringMapFindings(t *testing.T) {
+	bundle := map[string]any{"findings": []any{}}
+	applyPostReviewerOutcome(t.TempDir(), map[string]any{"session_id": "fixture", "tool_use_id": "typed-findings"},
+		map[string]any{}, bundle, map[string]any{}, map[string]any{},
+		review.BridgeOutcome{Outcome: "completed", Attributes: map[string]any{
+			"result": "CHANGES_REQUIRED", "review_status": "COMPLETED", "validation": "FAIL",
+			"findings": []map[string]string{{"code": "REVIEWER_FINDING", "message": "Keep this finding."}},
+		}}, true, false)
+	findings, ok := bundle["findings"].([]any)
+	if !ok || len(findings) != 1 || mapValue(findings[0])["code"] != "REVIEWER_FINDING" || mapValue(findings[0])["message"] != "Keep this finding." {
+		t.Fatalf("findings=%#v", bundle["findings"])
+	}
+}

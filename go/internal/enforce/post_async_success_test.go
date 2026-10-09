@@ -1,6 +1,7 @@
 package enforce
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -17,6 +18,35 @@ import (
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
+
+func TestFinishAsyncSuccessKeepsStringMapFindings(t *testing.T) {
+	state, repo, event, index, pending, original, _, resolved, loaded := newAsyncSuccessCase(t, "success_delta_audit")
+	if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// worker delta\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	resolved.ReviewerCandidates = []profile.ReviewerCandidate{{Agent: "agy", Model: "gemini-3.8-flash-high"}}
+	previousBridge := postReviewerBridge
+	postReviewerBridge = func(context.Context, string, map[string]any, time.Duration) (review.BridgeOutcome, error) {
+		return review.BridgeOutcome{Outcome: "completed", Attributes: map[string]any{
+			"result": "CHANGES_REQUIRED", "review_status": "COMPLETED", "validation": "FAIL",
+			"findings": []map[string]string{{"code": "ASYNC_REVIEW_FINDING", "message": "Keep this async finding."}},
+		}}, nil
+	}
+	t.Cleanup(func() { postReviewerBridge = previousBridge })
+	response, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := responseBundle(t, response)["findings"].([]any)
+	for _, raw := range findings {
+		finding := mapValue(raw)
+		if finding["code"] == "ASYNC_REVIEW_FINDING" && finding["message"] == "Keep this async finding." {
+			return
+		}
+	}
+	t.Fatalf("async finding missing from bundle: %#v", findings)
+}
 
 func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "durable_review_finalization.json"))

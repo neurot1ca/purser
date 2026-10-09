@@ -150,12 +150,8 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 				}
 			}
 			bundle["reviewer1_result"] = attrs["result"]
-			if findings, ok := attrs["findings"].([]any); ok && len(findings) > 0 {
-				current, ok := bundle["findings"].([]any)
-				if !ok {
-					current = []any{}
-				}
-				bundle["findings"] = append(current, findings...)
+			for _, finding := range postReviewerFindings(attrs["findings"]) {
+				bundle["findings"] = appendPostFinding(bundle["findings"], stringValue(finding["code"]), stringValue(finding["message"]))
 			}
 			mode := review.ReviewMode(true, routeInList(gateConfig["always_full_routes"], stringValue(pending["route"])), "", stringValue(attrs["result"]))
 			if resolved.ForceFullReview || bundle["force_full_review"] == true || pending["task_contract_grounded"] != true {

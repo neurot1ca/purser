@@ -46,7 +46,7 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 	if code := stringValue(attrs["error_code"]); code == "REVIEWER_RESPONSE_INVALID" {
 		message := "Reviewer-1 response was invalid."
 		if values := postReviewerFindings(attrs["findings"]); len(values) > 0 {
-			message = values[0]["message"].(string)
+			message = stringValue(values[0]["message"])
 		}
 		if raw := attrs["raw_stdout"]; raw != nil {
 			if path, err := persistRawOutputAs(root, reviewerOutputName(event), raw); err == nil {
@@ -61,7 +61,7 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 		findings = []map[string]any{{"code": code, "message": message}}
 	}
 	for _, finding := range findings {
-		bundle["findings"] = appendPostFinding(bundle["findings"], finding["code"].(string), finding["message"].(string))
+		bundle["findings"] = appendPostFinding(bundle["findings"], stringValue(finding["code"]), stringValue(finding["message"]))
 	}
 
 	jobPaths, ok := postStringList(mapValue(bundle["whole_tree_delta"])["changed_paths"])
@@ -126,8 +126,19 @@ func runePreview(value string, limit int) string {
 }
 
 func postReviewerFindings(value any) []map[string]any {
-	items, ok := value.([]any)
-	if !ok {
+	var items []any
+	switch findings := value.(type) {
+	case []any:
+		items = findings
+	case []map[string]any:
+		for _, finding := range findings {
+			items = append(items, finding)
+		}
+	case []map[string]string:
+		for _, finding := range findings {
+			items = append(items, map[string]any{"code": finding["code"], "message": finding["message"]})
+		}
+	default:
 		return nil
 	}
 	result := make([]map[string]any, 0, min(len(items), 20))
