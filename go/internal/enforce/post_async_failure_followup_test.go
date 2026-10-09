@@ -93,7 +93,14 @@ func TestPostAsyncFailureFollowupPythonFixture(t *testing.T) {
 func replaceFailureState(value any, root string) any {
 	switch item := value.(type) {
 	case string:
-		return strings.ReplaceAll(item, root, "__STATE__")
+		escapedRoot := strings.ReplaceAll(root, `\`, `\\`)
+		item = strings.ReplaceAll(item, escapedRoot, "__STATE__")
+		item = strings.ReplaceAll(item, root, "__STATE__")
+		if strings.Contains(item, "__STATE__") {
+			item = strings.ReplaceAll(item, `\\`, "/")
+			item = strings.ReplaceAll(item, `\`, "/")
+		}
+		return item
 	case []any:
 		out := make([]any, len(item))
 		for i, child := range item {

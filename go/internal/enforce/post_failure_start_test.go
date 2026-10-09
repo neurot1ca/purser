@@ -123,7 +123,11 @@ func TestPostFailureStartPythonFixture(t *testing.T) {
 			pendingPath := filepath.Join(root, "pending", key+".json")
 			saved, pendingExists := readOptionalObject(pendingPath)
 			ctx := stringValue(mapValue(response["hookSpecificOutput"])["additionalContext"])
+			ctx = strings.ReplaceAll(ctx, strings.ReplaceAll(root, `\`, `\\`), "__ROOT__")
 			ctx = strings.ReplaceAll(ctx, root, "__ROOT__")
+			if strings.Contains(ctx, "__ROOT__") {
+				ctx = strings.ReplaceAll(ctx, `\`, "/")
+			}
 			foreignExists := any(nil)
 			if item.Name == "foreign_project_index" {
 				_, err := os.Stat(foreignPath)

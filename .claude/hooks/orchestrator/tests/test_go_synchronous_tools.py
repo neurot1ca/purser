@@ -109,7 +109,9 @@ def _capture(tmp_path):
         if isinstance(value, list):
             return [normalize(item) for item in value]
         if isinstance(value, str):
-            return value.replace(str(tmp_path), "__ROOT__")
+            value = value.replace(str(sys.executable), "__PYTHON__").replace(
+                str(tmp_path).replace("\\", "\\\\"), "__ROOT__").replace(str(tmp_path), "__ROOT__")
+            return value.replace("\\", "/") if "__ROOT__" in value else value
         return value
 
     return normalize({"oracle": "codex_exec_mcp.Server._worker->_run_tool_once", "python": sys.executable,
@@ -122,6 +124,6 @@ def test_go_synchronous_python_fixture(tmp_path):
     assert len(encoded.encode("utf-8")) < 30_000
     if os.environ.get("PURSER_REGEN_FIXTURES") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(encoded, encoding="utf-8")
+        FIXTURE.write_text(encoded, encoding="utf-8", newline="\n")
     assert FIXTURE.exists(), f"missing fixture: {FIXTURE} (set PURSER_REGEN_FIXTURES=1 to capture)"
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture

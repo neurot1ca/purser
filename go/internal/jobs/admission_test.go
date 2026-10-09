@@ -128,7 +128,14 @@ func setupAdmission(t *testing.T, root, name string) {
 func normalizeAdmissionPaths(v any, root string) any {
 	switch x := v.(type) {
 	case string:
-		return strings.ReplaceAll(x, root, "__ROOT__")
+		escapedRoot := strings.ReplaceAll(root, `\`, `\\`)
+		x = strings.ReplaceAll(x, escapedRoot, "__ROOT__")
+		x = strings.ReplaceAll(x, root, "__ROOT__")
+		if strings.Contains(x, "__ROOT__") {
+			x = strings.ReplaceAll(x, `\\`, "/")
+			x = strings.ReplaceAll(x, `\`, "/")
+		}
+		return x
 	case map[string]any:
 		for key, child := range x {
 			x[key] = normalizeAdmissionPaths(child, root)

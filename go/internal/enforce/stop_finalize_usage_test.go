@@ -142,7 +142,7 @@ func TestStopFinalizeP130PythonFiles(t *testing.T) {
 			transcript := filepath.Join(projects, session+".jsonl")
 			row := map[string]any{"type": "assistant", "requestId": "req-anchor", "message": map[string]any{"id": "anchor", "content": []any{map[string]any{"type": "tool_use", "id": toolID}}, "usage": map[string]any{"input_tokens": 7, "output_tokens": 3, "cache_creation_input_tokens": 1, "cache_read_input_tokens": 2}}}
 			encoded, _ := json.Marshal(row)
-			if err := os.WriteFile(transcript, append(encoded, ' ', '\n'), 0600); err != nil {
+			if err := os.WriteFile(transcript, append(encoded, '\n'), 0600); err != nil {
 				t.Fatal(err)
 			}
 			identity, reason := snapshotTranscript(transcript)

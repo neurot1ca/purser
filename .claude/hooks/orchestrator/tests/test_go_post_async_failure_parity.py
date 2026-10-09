@@ -23,7 +23,19 @@ def _write(path, value):
 
 def _normalize(value, root):
     if isinstance(value, str):
-        return value.replace(str(root), "__ROOT__")
+        if value[:1] in "[{":
+            try:
+                nested = json.loads(value)
+            except ValueError:
+                pass
+            else:
+                if isinstance(nested, (dict, list)):
+                    normalized = _normalize(nested, root)
+                    if normalized != nested:
+                        return json.dumps(normalized)
+                    return value
+        value = value.replace(str(root).replace("\\", "\\\\"), "__ROOT__").replace(str(root), "__ROOT__")
+        return value.replace("\\", "/") if "__ROOT__" in value else value
     if isinstance(value, list):
         return [_normalize(item, root) for item in value]
     if isinstance(value, dict):
@@ -128,7 +140,7 @@ def test_python_post_async_failure_oracle(tmp_path, monkeypatch):
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
         FIXTURE.write_text(json.dumps({"oracle": "codex._async_post_followup terminal failure",
                                       "cases": actual},
-                                     sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+                                         sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture == {"oracle": "codex._async_post_followup terminal failure",
                        "cases": actual}

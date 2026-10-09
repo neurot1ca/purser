@@ -13,6 +13,11 @@ import (
 )
 
 func TestApplyResolvedPythonOracle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_jobs_resolve", "oracle.json")
 	b, err := os.ReadFile(path)
 	if err != nil {

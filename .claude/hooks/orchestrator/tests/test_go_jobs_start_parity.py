@@ -31,7 +31,9 @@ def _clean(value, root=None, git_values=None):
     if isinstance(value,str):
         for original, normalized in (git_values or {}).items():
             if value == original: return normalized
-        if root and value.startswith(str(root)): return "<ROOT>" + value[len(str(root)):]
+        if root:
+            value = value.replace(str(root).replace("\\", "\\\\"), "<ROOT>").replace(str(root), "<ROOT>")
+            return value.replace("\\", "/") if "<ROOT>" in value else value
     return value
 
 
@@ -132,5 +134,5 @@ def test_go_start_validation_matches_python_oracle(tmp_path, monkeypatch):
     fixture = {"oracle": "real Server._start_job before jobs_lock", "cases": cases}
     if os.environ.get("PURSER_REGEN_GO_JOBS_START") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture

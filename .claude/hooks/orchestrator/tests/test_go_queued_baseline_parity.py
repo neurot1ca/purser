@@ -85,12 +85,14 @@ def _read(path):
 
 def _normalize(value, root):
     if isinstance(value, dict):
-        return {key: "__TIME__" if key.endswith("_at") else _normalize(item, root)
+        return {key: (int(item) if key == "retention_after" and isinstance(item, (int, float))
+                      and float(item).is_integer() else "__TIME__" if key.endswith("_at") else _normalize(item, root))
                 for key, item in value.items()}
     if isinstance(value, list):
         return [_normalize(item, root) for item in value]
     if isinstance(value, str):
-        return value.replace(str(root), "__ROOT__")
+        value = value.replace(str(root).replace("\\", "\\\\"), "__ROOT__").replace(str(root), "__ROOT__")
+        return value.replace("\\", "/") if "__ROOT__" in value else value
     return value
 
 
@@ -110,6 +112,6 @@ def test_go_queued_baseline_fixture_matches_python_oracle(monkeypatch, tmp_path)
     actual = [_oracle_case(tmp_path / name, name, monkeypatch) for name in CASES]
     if os.environ.get("PURSER_REGEN_GO_QUEUED_BASELINE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(actual, indent=2) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(actual, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     assert FIXTURE.is_file(), f"missing {FIXTURE}; run with PURSER_REGEN_GO_QUEUED_BASELINE=1"
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == actual

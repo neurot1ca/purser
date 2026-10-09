@@ -10,11 +10,12 @@ sys.path.insert(0, str(ORCH))
 import compaction_advisor as advisor
 
 
-def _oracle(monkeypatch):
+def _oracle(monkeypatch, tmp_path):
     monkeypatch.setenv("PURSER_STATE_DIR", str(ROOT / ".tmp" / "post-receipts-state"))
     cases = []
     for name in ("queue", "delivered", "guidance", "absent", "corrupt"):
-        repo = Path(f"C:/post-receipts/{name}")
+        repo = tmp_path / name
+        repo.mkdir()
         event = {"session_id": "post-receipts-session"}
         path = advisor._state_directory(repo) / "compaction_advisor.json"
         state = advisor._read_state(path, event["session_id"])
@@ -46,15 +47,15 @@ def _oracle(monkeypatch):
             expected = {"guidance": advisor.pending_guidance(event, repo)}
         else:
             expected = {"guidance": advisor.pending_guidance(event, repo)}
-        cases.append({"name": name, "repository": str(repo), "initial": state, "bundle": bundle, "expected": expected})
+        cases.append({"name": name, "repository": f"__REPO__/{name}", "initial": state, "bundle": bundle, "expected": expected})
     return {"oracle": "compaction_advisor receipt queue, delivery and pending guidance", "cases": cases}
 
 
-def test_post_receipts_match_python_fixture(monkeypatch):
-    fixture = _oracle(monkeypatch)
+def test_post_receipts_match_python_fixture(monkeypatch, tmp_path):
+    fixture = _oracle(monkeypatch, tmp_path)
     if os.environ.get("POST_RECEIPTS_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(fixture, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(fixture, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture
     import subprocess
     cache = ROOT / ".tmp" / "go-cache"

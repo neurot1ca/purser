@@ -14,7 +14,17 @@ PENDING = {"project_key": "0123456789abcdef", "route": "operation", "model": "gp
            "previous_route": "normal", "new_route": "operation", "prior_thread_id": "prior-thread",
            "label": "P94 failure"}
 
-def test_python_failure_oracle_fixture(tmp_path):
+def test_python_failure_oracle_fixture(tmp_path, monkeypatch):
+    isolated_home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("HOMEDRIVE", "")
+    monkeypatch.setenv("HOMEPATH", "")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     actual = []
     for name in CASES:
         replay, invalid = name == "reply_replay_failure", name in {"missing_pending", "malformed_pending"}
@@ -48,12 +58,13 @@ def test_python_failure_oracle_fixture(tmp_path):
              patch.object(codex, "_cancel_start_job", return_value=False) if start else patch.object(codex, "_cancel_start_job", wraps=codex._cancel_start_job), \
              patch.object(codex, "_start_job_terminal_or_absent", return_value=True) if start else patch.object(codex, "_start_job_terminal_or_absent", wraps=codex._start_job_terminal_or_absent):
             response = codex.post_tool_use_failure(event, state_root=root)
-        output = response.get("hookSpecificOutput", {}).get("additionalContext", "").replace(str(root), "__ROOT__")
+        output = response.get("hookSpecificOutput", {}).get("additionalContext", "").replace(str(root).replace("\\", "\\\\"), "__ROOT__").replace(str(root), "__ROOT__")
+        output = output.replace("\\", "/") if "__ROOT__" in output else output
         evidence_path = root / "raw_tool_outputs" / f"{codex._call_key(event)}-failure.json"
         evidence = json.loads(evidence_path.read_text(encoding="utf-8")) if evidence_path.exists() else None
         saved = ledger.SessionLedger(root / "projects" / pending["project_key"]).load(pending["task_id"])
         session = saved.get("record") if saved.get("status") == ledger.OK else None
-        if session: session["last_outcome"]["evidence_path"] = session["last_outcome"]["evidence_path"].replace(str(root), "__ROOT__")
+        if session: session["last_outcome"]["evidence_path"] = session["last_outcome"]["evidence_path"].replace(str(root).replace("\\", "\\\\"), "__ROOT__").replace(str(root), "__ROOT__")
         obs = root / "telemetry/events/by_task" / f"{pending['task_id']}.jsonl"
         observation = json.loads(obs.read_text(encoding="utf-8").splitlines()[-1]) if obs.exists() else None
         payload = {k: v for k, v in observation["payload"].items() if not k.endswith("_at")} if observation else None
@@ -64,6 +75,6 @@ def test_python_failure_oracle_fixture(tmp_path):
                        "async_job_exists": job_path.exists() if start else None})
     if os.getenv("P94_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps({"cases": actual}, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps({"cases": actual}, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert [c["name"] for c in fixture["cases"]] == list(CASES) and actual == fixture["cases"]

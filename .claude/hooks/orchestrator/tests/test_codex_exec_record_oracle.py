@@ -92,7 +92,9 @@ def _capture(root, state, monkeypatch):
         before_recovery = {}
         for path in sorted(root.rglob("*")):
             if path.is_file() and path != executable:
-                before_recovery[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+                rel = path.relative_to(root).as_posix()
+                before_recovery[rel] = ("__LOCK_MARKER__" if rel.endswith(".lock")
+                                        else path.read_text(encoding="utf-8"))
         monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
         monkeypatch.setattr(bridge, "_posix_process_group_stopped", lambda _pid: True)
         assert server.recover_job(job_id, now=1700000002.0) == "RECOVERED"
@@ -106,7 +108,10 @@ def _capture(root, state, monkeypatch):
     for path in sorted(root.rglob("*")):
         if path.is_file() and path != executable:
             rel = path.relative_to(root).as_posix()
-            artifacts[rel] = path.read_text(encoding="utf-8")
+            # Lock files are platform markers; keep presence/path asserted while
+            # avoiding the OS-specific byte used to initialize the lock.
+            artifacts[rel] = ("__LOCK_MARKER__" if rel.endswith(".lock")
+                              else path.read_text(encoding="utf-8"))
     return {"files": _normalize(artifacts, root, executable),
             "recoveryInputs": _normalize(before_recovery, root, executable)}
 
@@ -118,6 +123,6 @@ def test_python_record_fixture(tmp_path, monkeypatch, state):
     if os.environ.get("PURSER_REGEN_RECORD_FIXTURES") == "1":
         fixture.parent.mkdir(parents=True, exist_ok=True)
         fixture.write_text(json.dumps(actual, sort_keys=True, separators=(",", ":")) + "\n",
-                           encoding="utf-8")
+                           encoding="utf-8", newline="\n")
     assert fixture.exists(), f"missing fixture: {fixture} (set PURSER_REGEN_RECORD_FIXTURES=1 to capture)"
     assert json.loads(fixture.read_text(encoding="utf-8")) == actual

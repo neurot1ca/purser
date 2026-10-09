@@ -69,7 +69,7 @@ def test_post_board_python_fixture(tmp_path, monkeypatch):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
         board, ids = codex._project_job_board_details(state, "fixture")
-        case["board"], case["ids"] = board, ids
+        case["board"], case["ids"] = board, sorted(ids)
 
     clock = datetime(2027, 1, 15, tzinfo=timezone.utc)
     base_receipt = {"model": "gpt-test", "effort": "high", "5h_used_pct": 31,
@@ -108,5 +108,5 @@ def test_post_board_python_fixture(tmp_path, monkeypatch):
                "guidance": codex._append_worktree_apply_context({}, "0123")["systemMessage"]}
     if os.environ.get("POST_BOARD_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(fixture, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(fixture, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture

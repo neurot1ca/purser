@@ -70,7 +70,7 @@ def test_p128_python_oracle_stop_finalize(tmp_path, monkeypatch):
         else:
             assert expected == case["expected"], case["name"]
     if os.environ.get("STOP_FINALIZE_WRITE_FIXTURE") == "1":
-        FIXTURE.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 def _write_case(root, name):
@@ -82,7 +82,7 @@ def _write_case(root, name):
         "id": "anchor", "content": [{"type": "tool_use", "id": tool_id}],
         "usage": {"input_tokens": 7, "output_tokens": 3,
                   "cache_creation_input_tokens": 1, "cache_read_input_tokens": 2}}}
-    transcript.write_text(json.dumps(row, separators=(",", ":")) + "\n", encoding="utf-8")
+    transcript.write_text(json.dumps(row, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     stat = transcript.stat()
     record = {"task_id": task_id, "tool_use_id": tool_id, "project_key": "0123456789abcdef",
               "canonical_transcript_path": os.path.normcase(os.path.realpath(transcript)), "transcript_dev": stat.st_dev,
@@ -156,4 +156,4 @@ def test_p130_python_oracle_stop_finalize_writes(tmp_path, monkeypatch):
             expected = next(item["expected"] for item in fixture["cases"] if item["name"] == name)
             assert observed == expected, name
     if writing:
-        fixture_path.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8")
+        fixture_path.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8", newline="\n")

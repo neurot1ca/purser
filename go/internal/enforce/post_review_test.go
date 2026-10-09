@@ -45,7 +45,7 @@ func TestSchedulePostReviewPythonFixture(t *testing.T) {
 	for i := range fixture.Cases {
 		for j := range fixture.Cases[i].Checks {
 			argv := fixture.Cases[i].Checks[j].Argv
-			if len(argv) > 0 && strings.EqualFold(filepath.Base(strings.ReplaceAll(argv[0], "\\", "/")), "python.exe") {
+			if len(argv) > 0 && (argv[0] == "__PYTHON__" || strings.EqualFold(filepath.Base(strings.ReplaceAll(argv[0], "\\", "/")), "python.exe")) {
 				argv[0] = python
 			}
 		}

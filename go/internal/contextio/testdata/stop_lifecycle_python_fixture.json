@@ -79,7 +79,7 @@
     {
       "name": "active-stop",
       "session": "p132-active-stop",
-      "transcript": "{\"type\":\"user\",\"message\":{\"content\":\"Continue.\"}}\r\n{\"type\":\"assistant\",\"requestId\":\"p132-task-request\",\"message\":{\"id\":\"p132-task-message\",\"content\":[{\"type\":\"tool_use\",\"id\":\"p132-task-tool\"}],\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":2}}}\r\n",
+      "transcript": "{\"type\":\"user\",\"message\":{\"content\":\"Continue.\"}}\n{\"type\":\"assistant\",\"requestId\":\"p132-task-request\",\"message\":{\"id\":\"p132-task-message\",\"content\":[{\"type\":\"tool_use\",\"id\":\"p132-task-tool\"}],\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":2}}}\n",
       "events": [
         {
           "hook_event_name": "Stop",
@@ -115,11 +115,11 @@
           ],
           "anchor_byte_offset": null,
           "anchor_deferred": true,
-          "anchor_search_start_offset": 51,
+          "anchor_search_start_offset": 50,
           "canonical_transcript_path": "<TRANSCRIPT>",
           "completed": true,
           "created_at": "<CREATED_AT>",
-          "initial_size": 51,
+          "initial_size": 50,
           "invalidated": false,
           "invalidated_reason": null,
           "project_key": "<PROJECT_KEY>",
@@ -138,11 +138,11 @@
         ],
         "anchor_byte_offset": null,
         "anchor_deferred": true,
-        "anchor_search_start_offset": 51,
+        "anchor_search_start_offset": 50,
         "canonical_transcript_path": "<TRANSCRIPT>",
         "completed": false,
         "created_at": "<CREATED_AT>",
-        "initial_size": 51,
+        "initial_size": 50,
         "invalidated": false,
         "invalidated_reason": null,
         "project_key": "<PROJECT_KEY>",
@@ -155,7 +155,7 @@
     {
       "name": "retry-three-stops",
       "session": "p132-retry-three-stops",
-      "transcript": "{\"type\":\"user\",\"message\":{\"content\":\"Try Codex.\"}}\r\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"call-1\",\"name\":\"mcp__plugin_purser_codex-main__codex_start\",\"input\":{}}]}}\r\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call-1\",\"is_error\":true,\"content\":\"classifier denied permission\"}]}}\r\n",
+      "transcript": "{\"type\":\"user\",\"message\":{\"content\":\"Try Codex.\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"call-1\",\"name\":\"mcp__plugin_purser_codex-main__codex_start\",\"input\":{}}]}}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call-1\",\"is_error\":true,\"content\":\"classifier denied permission\"}]}}\n",
       "events": [
         {
           "hook_event_name": "Stop",

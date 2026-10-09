@@ -486,7 +486,7 @@
         {
           "name": "fail",
           "argv": [
-            "C:\\Users\\ugur\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+            "__PYTHON__",
             "-c",
             "raise SystemExit(7)"
           ],
@@ -564,7 +564,7 @@
         {
           "name": "mutate",
           "argv": [
-            "C:\\Users\\ugur\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+            "__PYTHON__",
             "-c",
             "from pathlib import Path; Path('scope/file-0.txt').write_text('changed by check\\n')"
           ],

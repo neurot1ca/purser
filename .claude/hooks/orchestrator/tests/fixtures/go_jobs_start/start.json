@@ -594,7 +594,7 @@
           "threadId": "thread-1",
           "state": "SUCCEEDED",
           "applyState": "pending",
-          "worktreePath": "<ROOT>\\old-worktree",
+          "worktreePath": "<ROOT>/old-worktree",
           "snapshot": "tree-1",
           "taskId": "task-old",
           "acceptedAt": "TIME"
@@ -633,7 +633,7 @@
           "signalToken": "TOKEN",
           "generation": 1,
           "ownershipToken": "TOKEN",
-          "worktreePath": "<ROOT>\\old-worktree",
+          "worktreePath": "<ROOT>/old-worktree",
           "snapshot": "tree-1",
           "baselineSnapshot": "tree-1"
         },
@@ -654,7 +654,7 @@
           "threadId": "thread-1",
           "state": "SUCCEEDED",
           "applyState": "pending",
-          "worktreePath": "<ROOT>\\old-worktree",
+          "worktreePath": "<ROOT>/old-worktree",
           "snapshot": "tree-1",
           "taskId": "task-old",
           "acceptedAt": "TIME",
@@ -686,7 +686,7 @@
           "prompt": "reply",
           "mode": "reply",
           "threadId": "thread-retired",
-          "cwd": "<ROOT>\\repo",
+          "cwd": "<ROOT>/repo",
           "worktree": true
         }
       ],
@@ -696,19 +696,19 @@
           "threadId": "thread-retired",
           "state": "SUCCEEDED",
           "applyState": "pending",
-          "worktreePath": "<ROOT>\\old-worktree",
+          "worktreePath": "<ROOT>/old-worktree",
           "snapshot": "tree-old",
-          "repoRoot": "<ROOT>\\repo",
+          "repoRoot": "<ROOT>/repo",
           "acceptedAt": "TIME"
         }
       ],
       "thread": {
         "thread_id": "thread-retired",
-        "cwd": "<ROOT>\\old-worktree",
+        "cwd": "<ROOT>/old-worktree",
         "config_args": [],
-        "worktreePath": "<ROOT>\\old-worktree",
+        "worktreePath": "<ROOT>/old-worktree",
         "snapshot": "tree-old",
-        "repoRoot": "<ROOT>\\repo"
+        "repoRoot": "<ROOT>/repo"
       },
       "gitCase": false,
       "result": {
@@ -736,7 +736,7 @@
           "signalToken": "TOKEN",
           "generation": 1,
           "ownershipToken": "TOKEN",
-          "repoRoot": "<ROOT>\\repo"
+          "repoRoot": "<ROOT>/repo"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
           "name": "codex-reply",
@@ -745,7 +745,7 @@
             "prompt": "reply",
             "mode": "reply",
             "threadId": "thread-retired",
-            "cwd": "<ROOT>\\repo",
+            "cwd": "<ROOT>/repo",
             "worktree": true
           },
           "codexBin": null,
@@ -757,9 +757,9 @@
           "threadId": "thread-retired",
           "state": "SUCCEEDED",
           "applyState": "pending",
-          "worktreePath": "<ROOT>\\old-worktree",
+          "worktreePath": "<ROOT>/old-worktree",
           "snapshot": "tree-old",
-          "repoRoot": "<ROOT>\\repo",
+          "repoRoot": "<ROOT>/repo",
           "acceptedAt": "TIME"
         }
       },
@@ -915,24 +915,24 @@
           "threadId": "thread-rebase",
           "state": "SUCCEEDED",
           "applyState": "pending",
-          "worktreePath": "<ROOT>\\worktree",
+          "worktreePath": "<ROOT>/worktree",
           "snapshot": "<OLD_TREE>",
           "baselineSnapshot": "<OLD_TREE>",
           "head": "<OLD_HEAD>",
-          "repoRoot": "<ROOT>\\repo",
+          "repoRoot": "<ROOT>/repo",
           "taskId": "task-rebase",
           "acceptedAt": "TIME"
         }
       ],
       "thread": {
         "thread_id": "thread-rebase",
-        "cwd": "<ROOT>\\worktree",
+        "cwd": "<ROOT>/worktree",
         "config_args": [],
-        "worktreePath": "<ROOT>\\worktree",
+        "worktreePath": "<ROOT>/worktree",
         "snapshot": "<OLD_TREE>",
         "baselineSnapshot": "<OLD_TREE>",
         "head": "<OLD_HEAD>",
-        "repoRoot": "<ROOT>\\repo"
+        "repoRoot": "<ROOT>/repo"
       },
       "gitCase": true,
       "result": {
@@ -960,10 +960,10 @@
           "signalToken": "TOKEN",
           "generation": 1,
           "ownershipToken": "TOKEN",
-          "worktreePath": "<ROOT>\\worktree",
+          "worktreePath": "<ROOT>/worktree",
           "snapshot": "<TREE>",
           "head": "<HEAD>",
-          "repoRoot": "<ROOT>\\repo",
+          "repoRoot": "<ROOT>/repo",
           "baselineSnapshot": "<TREE>"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
@@ -983,11 +983,11 @@
           "threadId": "thread-rebase",
           "state": "SUCCEEDED",
           "applyState": "pending",
-          "worktreePath": "<ROOT>\\worktree",
+          "worktreePath": "<ROOT>/worktree",
           "snapshot": "<OLD_TREE>",
           "baselineSnapshot": "<OLD_TREE>",
           "head": "<OLD_HEAD>",
-          "repoRoot": "<ROOT>\\repo",
+          "repoRoot": "<ROOT>/repo",
           "taskId": "task-rebase",
           "acceptedAt": "TIME"
         }

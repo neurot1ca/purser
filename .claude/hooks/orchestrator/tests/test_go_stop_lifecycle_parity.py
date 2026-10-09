@@ -38,12 +38,23 @@ def _snapshot(state, repo, session):
     if event_path and event_path.exists():
         task_event_count = sum(json.loads(line).get("event_type") == "CLAUDE_TASK_USAGE_RECORDED"
                                for line in event_path.read_text(encoding="utf-8").splitlines())
+    def canonical(value):
+        if isinstance(value, dict):
+            return {key: ("<PROJECT_KEY>" if key == "project_key" else canonical(child))
+                    for key, child in value.items()}
+        if isinstance(value, list):
+            return [canonical(child) for child in value]
+        if isinstance(value, str):
+            value = value.replace(str(repo).replace("\\", "\\\\"), "<REPO>").replace(str(repo), "<REPO>")
+            return value.replace("\\", "/") if "<REPO>" in value else value
+        return value
+
     return {"retry_count": advisor.get("codex_retry_count", 0),
             "retry_pending": advisor.get("codex_retry_pending", False),
             "active_completed": active.get("completed") if active else None,
             "active_invalidated": active.get("invalidated") if active else None,
             "active_reason": active.get("invalidated_reason") if active else None,
-            "advisor_state": advisor, "active_state": active_snapshot,
+            "advisor_state": canonical(advisor), "active_state": active_snapshot,
             "task_event_count": task_event_count}
 
 
@@ -53,7 +64,7 @@ def test_p132_python_stop_lifecycle_fixture(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=10)
-    (repo / "README.md").write_text("p132 fixture baseline\n", encoding="utf-8")
+    (repo / "README.md").write_text("p132 fixture baseline\n", encoding="utf-8", newline="\n")
     subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, timeout=10)
     git_env = {**os.environ, "GIT_AUTHOR_NAME": "Purser Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
                "GIT_COMMITTER_NAME": "Purser Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
@@ -77,13 +88,13 @@ def test_p132_python_stop_lifecycle_fixture(tmp_path, monkeypatch):
         session = "p132-" + name
         transcript_path = projects / f"{session}.jsonl"
         if transcript is not None:
-            transcript_path.write_text(transcript, encoding="utf-8")
+            transcript_path.write_text(transcript, encoding="utf-8", newline="\n")
         payloads = []
         outputs = []
         active_seed = None
         if name == "active-stop":
             state.mkdir(parents=True)
-            transcript_path.write_text(_records({"type": "user", "message": {"content": "Continue."}}), encoding="utf-8")
+            transcript_path.write_text(_records({"type": "user", "message": {"content": "Continue."}}), encoding="utf-8", newline="\n")
             event = {"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start",
                      "tool_use_id": "p132-task-tool", "session_id": session, "cwd": str(repo),
                      "transcript_path": str(transcript_path), "tool_input": {"mode": "new", "label": "P132 task",
@@ -94,7 +105,7 @@ def test_p132_python_stop_lifecycle_fixture(tmp_path, monkeypatch):
             assert pre.returncode == 0, pre.stderr.decode("utf-8", errors="replace")
             active_path = state / "active_tasks" / f"{session}.json"
             active_seed = json.loads(active_path.read_text(encoding="utf-8"))
-            transcript_path.write_text(transcript or "", encoding="utf-8")
+            transcript_path.write_text(transcript or "", encoding="utf-8", newline="\n")
             active_seed["canonical_transcript_path"] = "<TRANSCRIPT>"
             active_seed["created_at"] = "<CREATED_AT>"
             active_seed["project_key"] = "<PROJECT_KEY>"
@@ -149,7 +160,7 @@ def test_p132_python_stop_lifecycle_fixture(tmp_path, monkeypatch):
 
     if writing:
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8", newline="\n")
     saved = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture == saved
     env = os.environ.copy()

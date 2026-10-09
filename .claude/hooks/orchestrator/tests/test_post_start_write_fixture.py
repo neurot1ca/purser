@@ -14,7 +14,18 @@ FIXTURE = Path(__file__).parent / "fixtures" / "go_policy" / "post_start.json"
 
 def _replace(value, root, project):
     if isinstance(value, str):
-        return value.replace(str(root), "__ROOT__").replace(str(project), "__PROJECT_KEY__")
+        try:
+            nested = json.loads(value)
+        except (TypeError, ValueError):
+            nested = None
+        if isinstance(nested, (dict, list)):
+            normalized = _replace(nested, root, project)
+            if normalized != nested:
+                return json.dumps(normalized, separators=(",", ":"), ensure_ascii=False)
+            return value
+        value = (value.replace(str(root).replace("\\", "\\\\"), "__ROOT__")
+                 .replace(str(root), "__ROOT__").replace(str(project), "__PROJECT_KEY__"))
+        return value.replace("\\", "/") if "__ROOT__" in value else value
     if isinstance(value, list):
         return [_replace(item, root, project) for item in value]
     if isinstance(value, dict):
@@ -81,6 +92,6 @@ def test_post_start_write_fixture(tmp_path):
     fixture = {"oracle": "codex._post_start+post_tool_use_failure", "cases": cases}
     if os.environ.get("POST_START_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(fixture, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(fixture, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     assert FIXTURE.exists(), f"missing fixture: {FIXTURE} (set POST_START_WRITE_FIXTURE=1 to capture)"
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture

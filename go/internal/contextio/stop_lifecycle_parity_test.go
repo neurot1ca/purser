@@ -112,7 +112,7 @@ func TestP132StopLifecyclePythonParity(t *testing.T) {
 			if finalizeCalls != expectedFinalizeCalls {
 				t.Fatalf("Stop finalizer calls = %d, want %d", finalizeCalls, expectedFinalizeCalls)
 			}
-			gotSnapshot := p132Snapshot(t, root, repo, tc.Session)
+			gotSnapshot := normalizeP132Snapshot(p132Snapshot(t, root, repo, tc.Session), repo)
 			if !reflect.DeepEqual(gotSnapshot, tc.Snapshot) {
 				t.Fatalf("state = %#v, want %#v", gotSnapshot, tc.Snapshot)
 			}
@@ -122,7 +122,7 @@ func TestP132StopLifecyclePythonParity(t *testing.T) {
 				if !reflect.DeepEqual(got, tc.PromptOutput) {
 					t.Fatalf("prompt output = %#v, want %#v", got, tc.PromptOutput)
 				}
-				gotSnapshot = p132Snapshot(t, root, repo, tc.Session)
+				gotSnapshot = normalizeP132Snapshot(p132Snapshot(t, root, repo, tc.Session), repo)
 				if !reflect.DeepEqual(gotSnapshot, tc.AfterPrompt) {
 					t.Fatalf("post-prompt state = %#v, want %#v", gotSnapshot, tc.AfterPrompt)
 				}
@@ -291,6 +291,41 @@ func p132Snapshot(t *testing.T, root, repo, session string) map[string]any {
 	return map[string]any{"retry_count": count, "retry_pending": pending, "active_completed": completed,
 		"active_invalidated": invalidated, "active_reason": reason, "advisor_state": advisor, "active_state": activeSnapshot,
 		"task_event_count": float64(taskEventCount)}
+}
+
+func normalizeP132Snapshot(value any, repo string) map[string]any {
+	return normalizeP132Value(value, repo).(map[string]any)
+}
+
+func normalizeP132Value(value any, repo string) any {
+	switch item := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(item))
+		for key, child := range item {
+			if key == "project_key" {
+				out[key] = "<PROJECT_KEY>"
+			} else {
+				out[key] = normalizeP132Value(child, repo)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(item))
+		for i, child := range item {
+			out[i] = normalizeP132Value(child, repo)
+		}
+		return out
+	case string:
+		escapedRepo := strings.ReplaceAll(repo, `\`, `\\`)
+		item = strings.ReplaceAll(item, escapedRepo, "<REPO>")
+		item = strings.ReplaceAll(item, repo, "<REPO>")
+		if strings.Contains(item, "<REPO>") {
+			item = strings.ReplaceAll(item, `\`, "/")
+		}
+		return item
+	default:
+		return value
+	}
 }
 
 func p132ProjectKey(repo string) string {

@@ -3,7 +3,7 @@
   "cases": [
     {
       "name": "queue",
-      "repository": "C:\\post-receipts\\queue",
+      "repository": "__REPO__/queue",
       "initial": {
         "last_suggested_context": 0,
         "reminder_messages": 0,
@@ -58,7 +58,7 @@
     },
     {
       "name": "delivered",
-      "repository": "C:\\post-receipts\\delivered",
+      "repository": "__REPO__/delivered",
       "initial": {
         "last_suggested_context": 0,
         "reminder_messages": 0,
@@ -93,7 +93,7 @@
     },
     {
       "name": "guidance",
-      "repository": "C:\\post-receipts\\guidance",
+      "repository": "__REPO__/guidance",
       "initial": {
         "last_suggested_context": 0,
         "reminder_messages": 0,
@@ -135,7 +135,7 @@
     },
     {
       "name": "absent",
-      "repository": "C:\\post-receipts\\absent",
+      "repository": "__REPO__/absent",
       "initial": {
         "last_suggested_context": 0,
         "reminder_messages": 0,
@@ -166,7 +166,7 @@
     },
     {
       "name": "corrupt",
-      "repository": "C:\\post-receipts\\corrupt",
+      "repository": "__REPO__/corrupt",
       "initial": {
         "last_suggested_context": 0,
         "reminder_messages": 0,

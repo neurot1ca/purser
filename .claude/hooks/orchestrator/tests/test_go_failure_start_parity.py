@@ -74,7 +74,9 @@ def _case(root, name, bridge=False, foreign_index=False, release_failure=False):
         listener.close()
         assert not thread.is_alive()
     saved_pending = root / "pending" / f"{key}.json"
-    context = response["hookSpecificOutput"]["additionalContext"].replace(str(root), "__ROOT__")
+    context = response["hookSpecificOutput"]["additionalContext"].replace(
+        str(root).replace("\\", "\\\\"), "__ROOT__").replace(str(root), "__ROOT__")
+    context = context.replace("\\", "/") if "__ROOT__" in context else context
     result = {"response_context": context, "pending_exists": saved_pending.exists(),
               "pending_start_rejected": (json.loads(saved_pending.read_text()).get("start_rejected", False)
                                           if saved_pending.exists() else False),
@@ -100,7 +102,7 @@ def test_failure_start_python_fixture_and_go_parity(tmp_path):
     actual = {"oracle": "codex.post_tool_use_failure codex_start branch", "cases": cases}
     if os.getenv("FAILURE_START_WRITE_FIXTURE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(actual, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(actual, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == actual
     env = os.environ.copy()
     env["GOCACHE"] = str(ROOT / ".tmp" / "go-build-cache")

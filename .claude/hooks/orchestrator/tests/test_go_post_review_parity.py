@@ -47,6 +47,8 @@ def _oracle(case, root):
     subprocess.run(["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], cwd=root, env=env, check=True)
     state = root.parent / (root.name + "-state")
     config = json.loads((ORCH / "config.json").read_text(encoding="utf-8"))
+    # Pin Reviewer-1 selection independently of user configuration.
+    config["readiness_check"] = {"agent": "agy", "model": "gemini-3.8-flash-high"}
     prompt = f"ORCH|task=fixture-task|phase={case['phase']}|route={'plan_standard' if case['phase'] == 'plan' else 'normal'}|reason=new_task|basis=fixture|scope=scope\nObjective: inspect this fixture. Acceptance criteria: preserve the declared scope."
     event = {"session_id": "post-review-fixture", "hook_event_name": "PreToolUse", "tool_name": codex.CODEX_TOOL,
              "tool_use_id": "call-" + case["name"], "tool_input": {"prompt": prompt, "label": "fixture"}}
@@ -55,6 +57,8 @@ def _oracle(case, root):
     pending_path = codex._pending_path(state, event)
     pending = json.loads(pending_path.read_text(encoding="utf-8"))
     checks = [{**check, "when": check.get("when")} for check in case["checks"]]
+    fixture_checks = [{**check, "argv": ["__PYTHON__", *check["argv"][1:]]}
+                      for check in case["checks"]]
     pending.update({"task_contract_grounded": case.get("grounded", True), "force_full_review": case.get("protected", False),
                     "profile_checks": checks, "skip_max_lines": 50, "skip_max_files": 2})
     if case.get("protected"):
@@ -94,7 +98,7 @@ def _oracle(case, root):
     return {"name": case["name"], "phase": pending["phase"], "route": pending["route"], "delta": delta,
         "pending": serialized_pending, "profile": {"stored": True, "force_full_review": pending["force_full_review"], "protected_paths": pending["protected_paths"],
             "skip_max_lines": pending["skip_max_lines"], "skip_max_files": pending["skip_max_files"], "reviewer": pending.get("reviewer", "agy")},
-        "checks": case["checks"], "bundle_force_full": case.get("outside", False),
+        "checks": fixture_checks, "bundle_force_full": case.get("outside", False),
         "gate_config": {**config["reviewer_gate"], "always_full_routes": config["always_full_routes"]},
         "route_known": pending["route"] in config["routes"], "reviewer_available": True, "expected": expected}
 
@@ -110,7 +114,7 @@ def test_go_post_review_python_fixture_and_parity(tmp_path):
             fixture["cases"].append(_oracle(case, root))
         if os.environ.get("POST_CHECKS_WRITE_FIXTURE") == "1":
             FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-            FIXTURE.write_text(json.dumps(fixture, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            FIXTURE.write_text(json.dumps(fixture, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
         assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture
     finally:
         shutil.rmtree(scratch, ignore_errors=True)

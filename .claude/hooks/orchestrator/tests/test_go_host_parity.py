@@ -57,7 +57,7 @@ def _write(path, value):
 def _queued_state(root, *, queued):
     repo = root / "repo"
     (repo / "src").mkdir(parents=True)
-    (repo / "src" / "file").write_text("baseline\n", encoding="utf-8")
+    (repo / "src" / "file").write_text("baseline\n", encoding="utf-8", newline="\n")
     env = os.environ.copy()
     env.update({"GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
                 "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
@@ -92,6 +92,8 @@ def _normalize(value, root):
                 result[key] = "__TOKEN__"
             elif key in ("hostCreatedAt", "signalPort"):
                 result[key] = "__HOST_IDENTITY__"
+            elif key == "hostContained":
+                result[key] = "__HOST_CONTAINED__"
             elif key.endswith("At") or key.endswith("_at"):
                 result[key] = "__TIME__"
             elif key == "longestSilentGapSeconds":
@@ -105,7 +107,10 @@ def _normalize(value, root):
         return [_normalize(item, root) for item in value]
     if isinstance(value, str):
         escaped_root = str(root).replace("\\", "\\\\")
-        return value.replace(escaped_root, "__ROOT__").replace(str(root), "__ROOT__")
+        value = value.replace(escaped_root, "__ROOT__").replace(str(root), "__ROOT__")
+        if "__ROOT__" in value:
+            return value.replace("\\\\", "/").replace("\\", "/")
+        return value
     return value
 
 
@@ -153,7 +158,7 @@ def _case(tmp_path, name):
     if name in ("worktree_success", "worktree_setup_failure"):
         repo = root / "repo"
         (repo / "src").mkdir(parents=True)
-        (repo / "src" / "file").write_text("baseline\n", encoding="utf-8")
+        (repo / "src" / "file").write_text("baseline\n", encoding="utf-8", newline="\n")
         if name == "worktree_setup_failure":
             (repo / ".orchestrator").mkdir()
             (repo / ".orchestrator" / "profile.toml").write_text(
@@ -180,10 +185,22 @@ def _case(tmp_path, name):
         "args": launch_args,
     })
     prior_env = {key: os.environ.get(key) for key in ("PURSER_HOST_ORACLE_MODE", "PURSER_HOST_ORACLE_AGENT",
-                                                        "PURSER_STATE_DIR", "HOME", "USERPROFILE")}
+                                                        "PURSER_STATE_DIR", "HOME", "USERPROFILE", "HOMEDRIVE",
+                                                        "HOMEPATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+                                                        "XDG_CONFIG_HOME", "APPDATA", "LOCALAPPDATA")}
     os.environ["PURSER_HOST_ORACLE_MODE"] = name
     os.environ["PURSER_HOST_ORACLE_AGENT"] = agent
     os.environ["PURSER_STATE_DIR"] = str(root)
+    isolated_home = root / "home"
+    os.environ["HOME"] = str(isolated_home)
+    os.environ["USERPROFILE"] = str(isolated_home)
+    os.environ["HOMEDRIVE"] = ""
+    os.environ["HOMEPATH"] = ""
+    os.environ["CODEX_HOME"] = str(root / "codex")
+    os.environ["CLAUDE_CONFIG_DIR"] = str(root / "claude-config")
+    os.environ["XDG_CONFIG_HOME"] = str(root / "xdg-config")
+    os.environ["APPDATA"] = str(root / "appdata")
+    os.environ["LOCALAPPDATA"] = str(root / "localappdata")
     if name == "worktree_setup_failure":
         os.environ["HOME"] = str(root / "home")
         os.environ["USERPROFILE"] = str(root / "home")
@@ -224,7 +241,7 @@ def test_go_host_fixture_matches_real_python_host(tmp_path):
     actual = [_case(tmp_path, name) for name in CASES]
     if os.environ.get("PURSER_REGEN_FIXTURES") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(actual, indent=2) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(actual, indent=2) + "\n", encoding="utf-8", newline="\n")
     assert FIXTURE.is_file(), f"missing {FIXTURE}; run with PURSER_REGEN_FIXTURES=1"
     assert FIXTURE.stat().st_size < 30_000
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == actual

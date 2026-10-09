@@ -28,13 +28,13 @@ def _case(tmp_path, case, monkeypatch):
     repo, state, worktree = base / "repo", base / "state", base / "worktree"
     repo.mkdir(parents=True)
     _git(repo, "init", "-q")
-    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8", newline="\n")
     _git(repo, "add", "--all")
     _git(repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "base")
     branch = _git(repo, "branch", "--show-current").decode().strip()
     _git(repo, "worktree", "add", "--detach", str(worktree), "HEAD")
     snapshot = ledger.checkout_snapshot(worktree)
-    (worktree / "tracked.txt").write_text("worker change\n", encoding="utf-8")
+    (worktree / "tracked.txt").write_text("worker change\n", encoding="utf-8", newline="\n")
     if case.get("merge"):
         _git(repo, "checkout", "-b", "side")
         (repo / "tracked.txt").write_text("side change\n", encoding="utf-8")
@@ -44,9 +44,13 @@ def _case(tmp_path, case, monkeypatch):
         (repo / "tracked.txt").write_text("main change\n", encoding="utf-8")
         _git(repo, "add", "tracked.txt")
         _git(repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "main")
-        subprocess.run(["git", "merge", "side"], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        merge_env = os.environ.copy()
+        merge_env.update({"GIT_AUTHOR_NAME": "fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                          "GIT_COMMITTER_NAME": "fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"})
+        subprocess.run(["git", "merge", "side"], cwd=repo, env=merge_env,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     elif "repo" in case:
-        (repo / "tracked.txt").write_text(case["repo"], encoding="utf-8")
+        (repo / "tracked.txt").write_text(case["repo"], encoding="utf-8", newline="\n")
     monkeypatch.setenv("PURSER_STATE_DIR", str(state))
     server = codex_exec_mcp.Server(agent="codex")
     job_id = "0" * 64
@@ -66,21 +70,42 @@ def _case(tmp_path, case, monkeypatch):
                         lambda record, decision, kind, source, *a: side_effects.append({"call": "decision", "jobId": record["jobId"], "decision": decision, "kind": kind, "sourceJobId": source}))
     monkeypatch.setattr(codex_exec_mcp.Server, "_release_job_scope_lease",
                         staticmethod(lambda root, ident: side_effects.append({"call": "release", "jobId": ident}) or True))
+    monkeypatch.setattr(codex_exec_mcp, "_dispatch_worktree_retirement", lambda *_: None)
     result = server._apply_job({"jobId": job_id, "resolved": True})["structuredContent"]
     record = json.loads((server.job_dir / f"{job_id}.json").read_text(encoding="utf-8"))
     record.pop("appliedAt", None)
     record["repoRoot"], record["worktreePath"] = "REPO", "WORKTREE"
     if isinstance(record.get("applyResult"), dict) and "worktreePath" in record["applyResult"]:
         record["applyResult"]["worktreePath"] = "WORKTREE"
+    def normalize(value):
+        if isinstance(value, dict):
+            return {key: normalize(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if isinstance(value, str):
+            value = value.replace(str(base).replace("\\", "\\\\"), "__ROOT__").replace(str(base), "__ROOT__")
+            return value.replace("\\", "/") if "__ROOT__" in value else value
+        return value
+
     return {"name": case["name"], "setup": case, "jobId": job_id, "siblingJobId": sibling_id if case.get("shared") else None,
-            "snapshot": snapshot, "result": result, "record": record,
+            "snapshot": snapshot, "result": normalize(result), "record": record,
             "checkout": (repo / "tracked.txt").read_text(encoding="utf-8"), "sideEffects": side_effects}
 
 
 def test_python_oracle_jobs_resolve_fixture(tmp_path, monkeypatch):
+    isolated_home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("HOMEDRIVE", "")
+    monkeypatch.setenv("HOMEPATH", "")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     cases = [_case(tmp_path / "oracle", case, monkeypatch) for case in CASES]
     fixture = {"oracle": "real Server._apply_job(resolved=True) with temporary git repositories", "cases": cases}
     if os.environ.get("PURSER_REGEN_GO_JOBS_RESOLVE") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-        FIXTURE.write_text(json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == fixture

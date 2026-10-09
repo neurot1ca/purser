@@ -309,9 +309,12 @@ def _maintenance_oracle(scratch):
                     if key == "ts_utc":
                         return "<TIME>"
                     if isinstance(item, str):
-                        return (item.replace(str(repo.resolve()), "<REPO>")
+                        item = (item.replace(str(repo.resolve()).replace("\\", "\\\\"), "<REPO>")
+                                .replace(str(repo.resolve()), "<REPO>")
+                                .replace(str(state.resolve()).replace("\\", "\\\\"), "<STATE_ROOT>")
                                 .replace(str(state.resolve()), "<STATE_ROOT>")
                                 .replace(project_key, "<PROJECT_KEY>"))
+                        return item.replace("\\", "/") if "<REPO>" in item or "<STATE_ROOT>" in item else item
                     if key in {"at", "completed_at", "started_at"} and isinstance(item, (int, float)):
                         return "<TIME>"
                     return item
@@ -382,11 +385,15 @@ def _maintenance_oracle(scratch):
                 exit_code = maintenance_reports.main([*argv, "--repo", str(repo)])
             assert stderr.getvalue() == "", f"{name}: unexpected stderr {stderr.getvalue()!r}"
             assert not real_job_start_calls, f"{name}: a real Codex job-start function was called"
+            report_path = (stdout.getvalue().replace(str(state.resolve()).replace("\\", "\\\\"), "<STATE_ROOT>")
+                           .replace(str(state.resolve()), "<STATE_ROOT>")
+                           .replace(str(repo.resolve()), "<REPO>")
+                           .replace(maintenance_reports.project_root.project_key(repo.resolve()), "<PROJECT_KEY>").strip())
+            if "<STATE_ROOT>" in report_path or "<REPO>" in report_path:
+                report_path = report_path.replace("\\", "/")
             result = {
                 "command": name,
-                "stdout": (stdout.getvalue().replace(str(state.resolve()), "<STATE_ROOT>")
-                           .replace(str(repo.resolve()), "<REPO>")
-                           .replace(maintenance_reports.project_root.project_key(repo.resolve()), "<PROJECT_KEY>").strip()),
+                "stdout": report_path,
                 "exit_code": exit_code,
                 "guarded_run_report_calls": len(guarded_run_report_calls),
                 "guarded_job_start_calls": len(guarded_job_start_calls),

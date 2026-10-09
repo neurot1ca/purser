@@ -257,14 +257,30 @@ def _async_failure_state(state, repo, name, tool, *, stage="FINISHED", job_state
 
 def _normalize(value, state, repo):
     if isinstance(value, str):
+        if value[:1] in "[{":
+            try:
+                nested = json.loads(value)
+            except ValueError:
+                pass
+            else:
+                if isinstance(nested, (dict, list)):
+                    normalized = _normalize(nested, state, repo)
+                    if normalized != nested:
+                        return json.dumps(normalized)
+                    return value
         if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):
             return "__UUID__"
-        value = value.replace(str(state), "__STATE__").replace(str(repo), "__REPO__")
+        value = (value.replace(str(state).replace("\\", "\\\\"), "__STATE__")
+                 .replace(str(state), "__STATE__").replace(str(repo).replace("\\", "\\\\"), "__REPO__")
+                 .replace(str(repo), "__REPO__"))
+        if "__STATE__" in value or "__REPO__" in value:
+            value = value.replace("\\", "/")
         return re.sub(r"(projects[\\/])[0-9a-f]{16}([\\/]code-map)", r"\1__PROJECT_KEY__\2", value)
     if isinstance(value, list):
         return [_normalize(item, state, repo) for item in value]
     if isinstance(value, dict):
-        return {key: ("__PROJECT_KEY__" if key == "project_key" else
+        return {key: ("__REVIEWER__" if key == "reviewer_executable" else
+                      "__PROJECT_KEY__" if key == "project_key" else
                       "__HEAD__" if key == "head" else
                       "__ASYNC_INPUT_HASH__" if key == "async_input_hash" else _normalize(item, state, repo))
                 for key, item in value.items()}
@@ -287,7 +303,17 @@ def _case_view(name, result, state, repo, job_id=None):
             "async_job_exists": (state / "codex_exec_mcp" / "jobs" / f"{job_id}.json").exists() if job_id else None}, state, repo)
 
 
-def test_python_failure_process_oracles(repo, tmp_path):
+def test_python_failure_process_oracles(repo, tmp_path, monkeypatch):
+    isolated_home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("HOMEDRIVE", "")
+    monkeypatch.setenv("HOMEPATH", "")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     import codex
     shared = json.loads(SHARED_FIXTURE.read_text(encoding="utf-8"))
     shared_names = {case["name"] for case in shared["cases"]}
@@ -406,7 +432,7 @@ def test_python_failure_process_oracles(repo, tmp_path):
                     "pending_removal_failure", "async_job_record_removal", "not_enforced_note"})}
     if (os.environ.get("FAILURE_PROCESS_WRITE_FIXTURE") == "1"
             or os.environ.get("FAILURE_FOLLOWUP_WRITE_FIXTURE") == "1"):
-        FIXTURE.write_text(json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     assert FIXTURE.exists(), f"missing fixture: {FIXTURE} (set FAILURE_PROCESS_WRITE_FIXTURE=1 to capture)"
     saved = json.loads(FIXTURE.read_text(encoding="utf-8"))
     if saved != expected:

@@ -39,6 +39,16 @@ func TestHostPythonOracleReplay(t *testing.T) {
 	for _, fixture := range want {
 		t.Run(fixture.Name, func(t *testing.T) {
 			root := t.TempDir()
+			home := filepath.Join(root, "home")
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("HOMEDRIVE", "")
+			t.Setenv("HOMEPATH", "")
+			t.Setenv("CODEX_HOME", filepath.Join(root, "codex"))
+			t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(root, "claude-config"))
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg-config"))
+			t.Setenv("APPDATA", filepath.Join(root, "appdata"))
+			t.Setenv("LOCALAPPDATA", filepath.Join(root, "localappdata"))
 			if fixture.Name != "worktree_success" && fixture.Name != "worktree_create_failure" && fixture.Name != "worktree_setup_failure" {
 				cmd := exec.Command("git", "init", "-q", root)
 				if output, err := cmd.CombinedOutput(); err != nil {
@@ -58,7 +68,6 @@ func TestHostPythonOracleReplay(t *testing.T) {
 				setupHostParityRepo(t, filepath.Join(root, "repo"), fixture.Name == "worktree_setup_failure")
 			}
 			if fixture.Name == "worktree_setup_failure" {
-				home := filepath.Join(root, "home")
 				config := filepath.Join(home, ".orchestrator", "config.toml")
 				if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
 					t.Fatal(err)
@@ -335,6 +344,8 @@ func normalizeHostParityValue(value any, root string) any {
 				item[key] = "__TOKEN__"
 			case "hostCreatedAt", "signalPort":
 				item[key] = "__HOST_IDENTITY__"
+			case "hostContained":
+				item[key] = "__HOST_CONTAINED__"
 			case "longestSilentGapSeconds":
 				item[key] = "__DURATION__"
 			default:
@@ -356,7 +367,12 @@ func normalizeHostParityValue(value any, root string) any {
 		if strings.HasPrefix(item, "__ROOT__/") {
 			item = "__ROOT__" + string(filepath.Separator) + filepath.FromSlash(strings.TrimPrefix(item, "__ROOT__/"))
 		}
-		return strings.ReplaceAll(strings.ReplaceAll(item, escapedRoot, "__ROOT__"), root, "__ROOT__")
+		item = strings.ReplaceAll(strings.ReplaceAll(item, escapedRoot, "__ROOT__"), root, "__ROOT__")
+		if strings.Contains(item, "__ROOT__") {
+			item = strings.ReplaceAll(item, `\\`, "/")
+			item = strings.ReplaceAll(item, `\`, "/")
+		}
+		return item
 	}
 	return value
 }

@@ -150,7 +150,13 @@ func assertAsyncFailureSession(t *testing.T, root string, pending map[string]any
 func replaceFailureRoot(value any, root string) any {
 	switch item := value.(type) {
 	case string:
-		return strings.ReplaceAll(item, root, "__ROOT__")
+		escapedRoot := strings.ReplaceAll(root, `\`, `\\`)
+		item = strings.ReplaceAll(item, escapedRoot, "__ROOT__")
+		item = strings.ReplaceAll(item, root, "__ROOT__")
+		if strings.Contains(item, "__ROOT__") {
+			item = strings.ReplaceAll(item, `\`, "/")
+		}
+		return item
 	case []any:
 		out := make([]any, len(item))
 		for i, child := range item {

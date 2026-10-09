@@ -219,9 +219,15 @@ func normalizePostStart(value any, root, repo, project string) any {
 				}
 			}
 		}
+		item = strings.ReplaceAll(item, strings.ReplaceAll(root, `\`, `\\`), "__ROOT__")
 		item = strings.ReplaceAll(item, root, "__ROOT__")
+		item = strings.ReplaceAll(item, strings.ReplaceAll(repo, `\`, `\\`), "__ROOT__/repo")
 		item = strings.ReplaceAll(item, repo, "__ROOT__/repo")
 		item = strings.ReplaceAll(item, project, "__PROJECT_KEY__")
+		if strings.Contains(item, "__ROOT__") {
+			item = strings.ReplaceAll(item, `\\`, "/")
+			item = strings.ReplaceAll(item, `\`, "/")
+		}
 		return item
 	case map[string]any:
 		out := make(map[string]any, len(item))

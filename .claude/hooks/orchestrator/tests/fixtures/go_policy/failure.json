@@ -46,7 +46,7 @@
         "reason": "continue",
         "reason_source": "explicit"
       },
-      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\99e8ea4083adb1e8af04f90960394dc08b6726f44e7cbb755f4d7d06ea69e603-failure.json.",
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__/raw_tool_outputs/99e8ea4083adb1e8af04f90960394dc08b6726f44e7cbb755f4d7d06ea69e603-failure.json.",
       "pending": {
         "agent": "codex",
         "effort": "high",
@@ -136,7 +136,7 @@
         "reason": "continue",
         "reason_source": "explicit"
       },
-      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\da66898ac277828ba956059085289a53655647881f2cf7132c491f2b65c3260e-failure.json.",
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__/raw_tool_outputs/da66898ac277828ba956059085289a53655647881f2cf7132c491f2b65c3260e-failure.json.",
       "pending": {
         "agent": "codex",
         "effort": "high",
@@ -228,7 +228,7 @@
         "reason": "continue",
         "reason_source": "explicit"
       },
-      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\85d3c2b142ddafdfa3e27bde2a50b0cd149529d262e5da3822a9650c05d2aa6e-failure.json.",
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__/raw_tool_outputs/85d3c2b142ddafdfa3e27bde2a50b0cd149529d262e5da3822a9650c05d2aa6e-failure.json.",
       "pending": {
         "agent": "codex",
         "effort": "high",
@@ -573,7 +573,7 @@
         "reason": "continue",
         "reason_source": "explicit"
       },
-      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\661d85fc57ad54a4c362fdad3a04a3cc3905fbdc8fdda77471956217cfcc0b30-failure.json.",
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__/raw_tool_outputs/661d85fc57ad54a4c362fdad3a04a3cc3905fbdc8fdda77471956217cfcc0b30-failure.json.",
       "pending": {
         "agent": "codex",
         "async_call": "async-call-p95",
@@ -669,7 +669,7 @@
         "reason": "continue",
         "reason_source": "explicit"
       },
-      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__\\raw_tool_outputs\\14297bb4fea711b5c4abb54d51c297c3fec24a761f6c675f42cb37a22ee28ef9-failure.json. Routing was NOT enforced by PreToolUse.",
+      "output": "Codex failed with an ambiguous outcome; work_performed is UNKNOWN, FULL Claude review is required, and evidence is at __ROOT__/raw_tool_outputs/14297bb4fea711b5c4abb54d51c297c3fec24a761f6c675f42cb37a22ee28ef9-failure.json. Routing was NOT enforced by PreToolUse.",
       "pending": {
         "agent": "codex",
         "effort": "high",
