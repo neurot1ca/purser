@@ -3522,7 +3522,7 @@ def _build_audit_receipt(bundle: Mapping[str, Any], task_id: str | None) -> dict
     changed_paths = bundle.get("changed_paths")
     if not isinstance(changed_paths, list) or not changed_paths:
         return None
-    files_str = " ".join(f'"{p}"' for p in changed_paths[:10])
+    files_str = " ".join(f'"{p}"' for p in changed_paths)
     task_label = task_id or "task"
     return {
         "verdict": "READY_FOR_ONE_TURN_ACCEPT",

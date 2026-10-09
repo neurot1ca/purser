@@ -5921,6 +5921,20 @@ def test_reviewer_agy_keeps_audit_receipt_behavior(workspace, config):
     assert "feat(task-1)" in bundle["audit_receipt"]["commit_command"]
 
 
+def test_audit_receipt_commit_command_includes_all_changed_paths():
+    changed_paths = [f"file{i}.py" for i in range(12)]
+
+    receipt = codex._build_audit_receipt(
+        {"claude_review_mode": policy.AUDIT, "changed_paths": changed_paths}, "task-1"
+    )
+
+    assert receipt is not None
+    assert receipt["commit_command"] == (
+        'git add ' + " ".join(f'"{path}"' for path in changed_paths)
+        + ' && git commit -m "feat(task-1): implement changes"'
+    )
+
+
 def test_reviewer_disabled_skips_reviewer_and_forces_full(workspace, config, monkeypatch):
     repo, state = workspace
     user_profile = Path.home() / ".orchestrator" / "config.toml"
