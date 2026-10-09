@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { applyGateFailure, preRequest } from './enforcement.js'
 
 const prompt = 'ORCH|task=t1|phase=implementation|route=normal'
 const success = JSON.stringify({
@@ -601,4 +602,31 @@ test('marker write failure preserves sync context and codex_start deny', options
     }
   }
   expect(markerWrites).toHaveLength(2)
+})
+
+test('a subagent call carries its agent id to Go; the main thread does not', () => {
+  const e = { tool: 'mcp__plugin_purser_codex-main__codex_apply', tool_use_id: 't1', jobId: 'j1' }
+  expect(preRequest({ ...e, agentId: 'dispatcher-1' }, 's1', 'C:/r')).toMatchObject({ agent_id: 'dispatcher-1', tool_input: { jobId: 'j1' } })
+  expect(preRequest(e, 's1', 'C:/r')).not.toHaveProperty('agent_id')
+})
+
+test('a failed apply gate refuses a subagent apply or an acceptance, not a main apply', () => {
+  expect(applyGateFailure({ jobId: 'j1', agentId: 'dispatcher-1' }, 'x')).toContain('APPLY_GATE_FAILED')
+  expect(applyGateFailure({ jobId: 'j1', acceptOnly: true }, 'x')).toContain('APPLY_GATE_FAILED')
+  expect(applyGateFailure({ jobId: 'j1' }, 'x')).toBe(undefined)
+})
+
+test('main-thread codex_apply reaches Go and a Go deny blocks it', options, async ($, on) => {
+  const calls: string[] = []
+  const toolCalls: unknown[] = []
+  const toasts: string[] = []
+  const deny = JSON.stringify({ hookSpecificOutput: {
+    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'reviewed revision is unavailable',
+  } })
+  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => ({ stdout: deny }))
+  stubToolCall(on, toolCalls)
+  const denied = await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_apply', jobId: 'j1', acceptOnly: true })
+  expect(JSON.parse(calls[0])).toMatchObject({ tool_name: 'mcp__plugin_purser_codex-main__codex_apply', tool_input: { jobId: 'j1', acceptOnly: true } })
+  expect(denied.isError).toBe(true)
+  expect(toolCalls).toEqual([])
 })

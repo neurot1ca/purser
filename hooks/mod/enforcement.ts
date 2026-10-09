@@ -10,6 +10,24 @@ const postToolUseTools = new Set([
   'mcp__plugin_purser_codex-main__codex_cancel', 'mcp__plugin_purser_codex-main__codex_apply',
 ])
 
+// The Go PreToolUse request. A subagent's call carries agent_id, so Go can gate
+// its codex_apply on main Claude's recorded acceptance.
+export function preRequest(e: Record<string, unknown>, sessionId: string, cwd: string) {
+  const { tool, tool_use_id, agentId, ...tool_input } = e
+  return {
+    session_id: sessionId, cwd, hook_event_name: 'PreToolUse',
+    tool_name: tool, tool_use_id, tool_input,
+    ...(agentId ? { agent_id: agentId } : {}),
+  }
+}
+
+// When the gate itself fails: a subagent apply or an acceptance is refused; a
+// main-thread apply proceeds as it did before the gate existed.
+export function applyGateFailure(e: Record<string, unknown>, reason: string): string | undefined {
+  if (!e.agentId && e.acceptOnly !== true) return undefined
+  return `APPLY_GATE_FAILED: Go PreToolUse failed: ${reason}. Main Claude must apply this job.`
+}
+
 function mapPostToolUse(event: PostEvent, stdout: string): {
   updatedToolOutput?: unknown
   additionalContext?: string[]
@@ -115,6 +133,8 @@ export function register(on) {
     'mcp__codex-main__codex_result', 'mcp__codex-main__codex_cancel',
     'mcp__plugin_purser_codex-main__codex_result', 'mcp__plugin_purser_codex-main__codex_cancel',
   ])
+  // Go gates a subagent's apply on main Claude's recorded acceptance.
+  const applyTools = new Set(['mcp__codex-main__codex_apply', 'mcp__plugin_purser_codex-main__codex_apply'])
   function mapPreToolUse(stdout: string): {
     deny?: string
     updatedInput?: Record<string, unknown>
@@ -156,7 +176,7 @@ export function register(on) {
   on('classic.PreToolUse', async ($, e, next) => {
     const prior = await next(e)
     if (prior.deny !== undefined) return prior
-    if (!syncTools.has(e.tool) && !startTools.has(e.tool) && !followupTools.has(e.tool)) return prior
+    if (!syncTools.has(e.tool) && !startTools.has(e.tool) && !followupTools.has(e.tool) && !applyTools.has(e.tool)) return prior
 
     let helperBinary = ''
     let helperCwd = ''
@@ -168,15 +188,9 @@ export function register(on) {
       helperSessionId = sessionId
       const cwd = await $.session.cwd()
       helperCwd = cwd
-      const { tool, tool_use_id, agentId, ...tool_input } = e
       const result = await $.process.run([helperBinary], {
         cwd,
-        stdin: JSON.stringify({
-          session_id: sessionId, cwd, hook_event_name: 'PreToolUse',
-          tool_name: tool, tool_use_id, tool_input,
-          // A subagent's call: codex_apply then needs main Claude's acceptance.
-          ...(agentId ? { agent_id: agentId } : {}),
-        }),
+        stdin: JSON.stringify(preRequest(e, sessionId, cwd)),
         timeoutMs: 60000,
       })
       if (result.exitCode !== 0) throw new Error(`Go PreToolUse helper exited ${result.exitCode}`)
@@ -191,6 +205,11 @@ export function register(on) {
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
+      if (applyTools.has(e.tool)) {
+        // Fail closed for a subagent or an acceptance; a main-thread apply proceeds as before.
+        const deny = applyGateFailure(e, reason)
+        return deny ? { ...prior, deny } : prior
+      }
       if (!followupTools.has(e.tool) && helperBinary && typeof e.tool_use_id === 'string') {
         try {
           await $.process.run([helperBinary], {
