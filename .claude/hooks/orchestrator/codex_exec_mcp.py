@@ -1570,14 +1570,14 @@ class Server:
             self._agent_prefix(job_agent)
             if mode == "new":
                 if "cwd" not in args or args["cwd"] == "":
+                    import ledger
                     try:
-                        root = subprocess.run(
-                            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-                            check=True, capture_output=True, text=True,
-                        ).stdout.strip()
+                        root = os.fsdecode(ledger._run_git(
+                            Path.cwd(), ["rev-parse", "--show-toplevel"], 30.0,
+                            "resolving missing cwd repository root")).strip()
                         if not root:
-                            raise subprocess.CalledProcessError(1, "git rev-parse")
-                    except (OSError, subprocess.CalledProcessError):
+                            raise ValueError("repository root is empty")
+                    except (OSError, ValueError, ledger._InspectionError):
                         return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT",
                                             "message": "cwd is missing and repository root could not be resolved for Codex launch"})
                     args["cwd"] = root

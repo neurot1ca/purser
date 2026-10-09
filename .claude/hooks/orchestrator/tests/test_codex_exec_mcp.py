@@ -2435,10 +2435,12 @@ def test_async_start_defaults_missing_cwd_to_repository_root(area, monkeypatch):
 
 def test_async_start_refuses_missing_cwd_outside_repository(area, monkeypatch):
     server = codex_exec_mcp.Server(json.dumps(["codex"]), job_dir=area / "jobs", agent="codex")
-    def no_repository(*args, **kwargs):
-        raise subprocess.CalledProcessError(128, args[0], stderr="not a repository")
+    import ledger
 
-    monkeypatch.setattr(codex_exec_mcp.subprocess, "run", no_repository)
+    def no_repository(*args, **kwargs):
+        raise OSError("not a repository")
+
+    monkeypatch.setattr(ledger, "_run_git", no_repository)
     result = server._start_job({"call": str(uuid.uuid4()), "prompt": "missing cwd"})["structuredContent"]
     assert result["state"] == "FAILED"
     assert result["errorCode"] == "INVALID_ARGUMENT"
