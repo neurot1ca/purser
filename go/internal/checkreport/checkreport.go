@@ -154,7 +154,7 @@ func errorText(value any) string {
 }
 
 func registrationCheck(home string) Row {
-	path := filepath.Join(contextio.ClaudeConfigDir(), "settings.json")
+	path := filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")
 	settings, err := readObject(path)
 	if err != nil {
 		return row("Hook registration", "WARN", "Could not read "+path+": "+err.Error(), "Check that ~/.claude/settings.json is readable JSON and contains the plugin or manual hook registration.")
@@ -207,7 +207,7 @@ func containsManualHook(value any) bool {
 
 func mcpCheck(home, pluginRoot string) Row {
 	userPath := filepath.Join(home, ".claude.json")
-	settingsPath := filepath.Join(contextio.ClaudeConfigDir(), "settings.json")
+	settingsPath := filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")
 	pluginPath := filepath.Join(pluginRoot, "plugin", "mcp.json")
 	user, err := readOptionalObject(userPath)
 	if err != nil {

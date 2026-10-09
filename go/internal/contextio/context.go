@@ -51,26 +51,35 @@ func repositoryProjectKey(repository string) string {
 	return hex.EncodeToString(h[:])[:16]
 }
 
-func stateRoot() string {
+// ClaudeConfigDir returns the active Claude configuration directory.
+func ClaudeConfigDir() string {
+	p := os.Getenv("CLAUDE_CONFIG_DIR")
+	if p == "" {
+		h, _ := os.UserHomeDir()
+		p = filepath.Join(h, ".claude")
+	}
+	return resolve(expand(p))
+}
+
+// ClaudeConfigDirFor returns CLAUDE_CONFIG_DIR when set, else home/.claude.
+func ClaudeConfigDirFor(home string) string {
+	if os.Getenv("CLAUDE_CONFIG_DIR") != "" {
+		return ClaudeConfigDir()
+	}
+	return filepath.Join(home, ".claude")
+}
+
+// StateRoot returns the active Purser state directory.
+func StateRoot() string {
 	if p := os.Getenv("PURSER_STATE_DIR"); p != "" {
 		return resolve(expand(p))
 	}
-	if p := os.Getenv("CLAUDE_CONFIG_DIR"); p != "" {
-		return resolve(expand(filepath.Join(p, "purser")))
-	}
-	h, _ := os.UserHomeDir()
-	return resolve(filepath.Join(h, ".claude", "purser"))
+	return resolve(filepath.Join(ClaudeConfigDir(), "purser"))
 }
 
-// ClaudeConfigDir returns the active Claude configuration directory.
-func ClaudeConfigDir() string {
-	if p := os.Getenv("CLAUDE_CONFIG_DIR"); p != "" {
-		return expand(p)
-	}
-	h, _ := os.UserHomeDir()
-	return filepath.Join(h, ".claude")
+func stateRoot() string {
+	return StateRoot()
 }
-
 func resolve(p string) string {
 	absolute, err := filepath.Abs(p)
 	if err != nil {

@@ -618,12 +618,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	started["implementer"] = selection.Agent
 	preEmit(runtimeRoot, event, repository, taskID, project, "IMPLEMENTER_STARTED", started)
 	if sessionID, _ := event["session_id"].(string); sessionID != "" {
-		home, _ := os.UserHomeDir()
-		if userProfile := os.Getenv("USERPROFILE"); userProfile != "" {
-			home = userProfile
-		}
-		projects := filepath.Join(home, ".claude", "projects")
-		started := startActiveTask(runtimeRoot, sessionID, taskID, project, stringValue(event["tool_use_id"]), stringValue(event["transcript_path"]), projects, time.Now().UTC())
+		started := startActiveTask(runtimeRoot, sessionID, taskID, project, stringValue(event["tool_use_id"]), stringValue(event["transcript_path"]), claudeProjectsRoot(), time.Now().UTC())
 		if started["status"] == "UNKNOWN" {
 			recordObservationHealth(runtimeRoot, "DEGRADED", "CLAUDE_TRANSCRIPT_PARSER_FAILED")
 		}

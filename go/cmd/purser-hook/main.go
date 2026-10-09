@@ -139,14 +139,7 @@ func main() {
 }
 
 func stateRoot() string {
-	if root := os.Getenv("PURSER_STATE_DIR"); root != "" {
-		return root
-	}
-	if config := os.Getenv("CLAUDE_CONFIG_DIR"); config != "" {
-		return config + string(os.PathSeparator) + "purser"
-	}
-	home, _ := os.UserHomeDir()
-	return home + string(os.PathSeparator) + ".claude" + string(os.PathSeparator) + "purser"
+	return contextio.StateRoot()
 }
 
 func writeJSON(value any) {

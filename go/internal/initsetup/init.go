@@ -1434,7 +1434,7 @@ func enableConcise(out, errOut io.Writer) int {
 	if e != nil {
 		return printError(errOut, e)
 	}
-	path := filepath.Join(contextio.ClaudeConfigDir(), "settings.json")
+	path := filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")
 	old, _ := os.ReadFile(path)
 	data := map[string]any{}
 	if len(old) > 0 {

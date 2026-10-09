@@ -250,11 +250,7 @@ func autoCompactModActive() bool {
 	if value := strings.ToLower(os.Getenv("PURSER_AUTO_COMPACT_TOKENS")); value == "0" || value == "off" {
 		return false
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return false
-	}
-	info, err := os.Stat(filepath.Join(home, ".claude", "purser", "auto-compact.log"))
+	info, err := os.Stat(filepath.Join(StateRoot(), "auto-compact.log"))
 	if err != nil {
 		return false
 	}

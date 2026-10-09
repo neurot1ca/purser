@@ -32,11 +32,11 @@ func FinalizeStopTask(root, session, transcriptPath string) {
 	if session == "" {
 		return
 	}
-	home := os.Getenv("USERPROFILE")
-	if home == "" {
-		home, _ = os.UserHomeDir()
-	}
-	_ = finalizeStopTask(root, session, transcriptPath, filepath.Join(home, ".claude", "projects"), taskUsageLockTimeout, time.Now().UTC())
+	_ = finalizeStopTask(root, session, transcriptPath, claudeProjectsRoot(), taskUsageLockTimeout, time.Now().UTC())
+}
+
+func claudeProjectsRoot() string {
+	return filepath.Join(contextio.ClaudeConfigDir(), "projects")
 }
 
 // finalizeStopTask composes the decision, aggregation, and Python finalization

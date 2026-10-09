@@ -52,6 +52,20 @@ func TestStopFinalizeP130Writes(t *testing.T) {
 	})
 }
 
+func TestClaudeProjectsRootUsesConfiguredAndDefaultConfigDirs(t *testing.T) {
+	home, config := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	if got, want := claudeProjectsRoot(), filepath.Join(config, "projects"); got != want {
+		t.Fatalf("configured Claude projects root = %q, want %q", got, want)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if got, want := claudeProjectsRoot(), filepath.Join(home, ".claude", "projects"); got != want {
+		t.Fatalf("default Claude projects root = %q, want %q", got, want)
+	}
+}
+
 func TestStopFinalizeKeepsSessionLockAcrossDecisionAndWrites(t *testing.T) {
 	root := t.TempDir()
 	session := "p131-lock-race"

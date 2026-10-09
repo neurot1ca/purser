@@ -32,7 +32,7 @@ func TestStopAutoCompactSuppressesOnlyCompactionReason(t *testing.T) {
 			t.Setenv("USERPROFILE", home)
 			t.Setenv("HOME", home)
 			t.Setenv("PURSER_AUTO_COMPACT_TOKENS", test.env)
-			logPath := filepath.Join(home, ".claude", "purser", "auto-compact.log")
+			logPath := filepath.Join(root, "auto-compact.log")
 			if err := os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -84,7 +84,8 @@ func TestCompactionNoticeAdviceOmitsBlockquoteWhenAutoCompactActive(t *testing.T
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("PURSER_AUTO_COMPACT_TOKENS", "")
+	t.Setenv("PURSER_STATE_DIR", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	logPath := filepath.Join(home, ".claude", "purser", "auto-compact.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
 		t.Fatal(err)
@@ -98,5 +99,34 @@ func TestCompactionNoticeAdviceOmitsBlockquoteWhenAutoCompactActive(t *testing.T
 	}
 	if !strings.Contains(got, "Handoff: handoff.md") || !strings.Contains(got, "update its Goal, State, Decisions, Next") {
 		t.Fatalf("handoff instructions were lost: %q", got)
+	}
+}
+
+func TestAutoCompactUsesResolvedStateRoot(t *testing.T) {
+	home, custom := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("PURSER_AUTO_COMPACT_TOKENS", "")
+	t.Setenv("PURSER_STATE_DIR", custom)
+	writeLog := func(root string) {
+		t.Helper()
+		path := filepath.Join(root, "auto-compact.log")
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("decision\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLog(custom)
+	if !autoCompactModActive() {
+		t.Fatal("custom PURSER_STATE_DIR log was not recognized")
+	}
+
+	t.Setenv("PURSER_STATE_DIR", "")
+	writeLog(filepath.Join(home, ".claude", "purser"))
+	if !autoCompactModActive() {
+		t.Fatal("default state root log was not recognized")
 	}
 }
