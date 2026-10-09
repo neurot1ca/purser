@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -57,8 +58,13 @@ func TestPlanProjectPathMismatch(t *testing.T) {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
+	before := append([]byte(nil), data...)
 	if _, err := UpdatePlan(root, repo, "plan-1", 1, "stop", ""); err == nil {
 		t.Fatal("mismatched project path was accepted")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("mismatched project was overwritten: %v", err)
 	}
 }
 
@@ -81,11 +87,20 @@ func TestPlanInterruptedReplacementPreservesPrevious(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	path := filepath.Join(root, "projects", before.ProjectKey, "active_plan.json")
+	originalBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	originalWriter := writePlanJSONAtomically
 	writePlanJSONAtomically = func(string, any) error { return errors.New("simulated interrupted replacement") }
 	t.Cleanup(func() { writePlanJSONAtomically = originalWriter })
 	if _, err := UpdatePlan(root, repo, "plan-1", before.Revision, "stop", ""); err == nil {
 		t.Fatal("interrupted update reported success")
+	}
+	afterBytes, err := os.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(originalBytes, afterBytes) {
+		t.Fatalf("failed replacement changed original bytes: %v", err)
 	}
 	after, err := ReadPlan(root, repo)
 	if err != nil {
@@ -120,8 +135,8 @@ func TestPlanAcceptStopResumeCompleteMilestone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := AcceptPlan(root, repo, "another-plan", artifact, []int{1}); err == nil {
-		t.Fatal("another plan replaced an unfinished plan")
+	if _, err := AcceptPlan(root, repo, "another-plan", artifact, []int{1}); err != nil {
+		t.Fatal(err)
 	}
 	state, err = UpdatePlan(root, repo, "plan-1", state.Revision, "stop", "")
 	if err != nil || !state.UserStopped {
@@ -138,6 +153,100 @@ func TestPlanAcceptStopResumeCompleteMilestone(t *testing.T) {
 	state, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", "")
 	if err != nil || state.CurrentMilestone != 0 {
 		t.Fatalf("final completion = %+v, %v", state, err)
+	}
+	state, err = ReadPlanForTask(root, repo, "plan-1")
+	if err != nil || state.PendingNextAction != "" {
+		t.Fatalf("completed plan selection/action = %+v, %v", state, err)
+	}
+}
+
+func TestPlanCollectionCoexistence(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	a, err := AcceptPlan(root, repo, "plan-a", artifact, []int{1, 2, 3, 4, 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err = UpdatePlan(root, repo, a.TaskID, a.Revision, "complete-milestone", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		a, err = UpdatePlan(root, repo, a.TaskID, a.Revision, "complete-milestone", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.CurrentMilestone != 4 {
+		t.Fatalf("A milestone = %d, want 4", a.CurrentMilestone)
+	}
+	path := filepath.Join(root, "projects", a.ProjectKey, "active_plan.json")
+	legacyBytes, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacyBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	readA, err := ReadPlan(root, repo)
+	if err != nil || readA.CurrentMilestone != 4 {
+		t.Fatalf("read legacy A: %+v %v", readA, err)
+	}
+	afterLegacyRead, err := os.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(legacyBytes, afterLegacyRead) {
+		t.Fatalf("legacy read migrated state: %v", err)
+	}
+	beforeA := *a
+	b, err := AcceptPlan(root, repo, "plan-b", artifact, []int{1, 2})
+	if err != nil {
+		t.Fatalf("accept B alongside A: %v", err)
+	}
+	b, matched, err := BindPlanJob(root, repo, "plan-b-m1of2-p1", "job-b-apply")
+	if err != nil || !matched {
+		t.Fatalf("bind B: %+v %v %v", b, matched, err)
+	}
+	if err := RecordPlanApply(root, repo, "plan-b-m1of2-p1", "job-b-apply"); err != nil {
+		t.Fatal(err)
+	}
+	b, matched, err = BindPlanJob(root, repo, "plan-b-m1of2-p2", "job-b-recovery")
+	if err != nil || !matched {
+		t.Fatalf("bind B recovery job: %+v %v %v", b, matched, err)
+	}
+	jobDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := json.Marshal(map[string]any{"jobId": "job-b-recovery", "taskId": "plan-b-m1of2-p2", "state": "SUCCEEDED", "applyState": "applied"})
+	if err := os.WriteFile(filepath.Join(jobDir, "job-b-recovery.json"), job, 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err = ReconcilePlanJob(root, repo)
+	if err != nil || b.TaskID != "plan-b" || b.CurrentMilestone != 1 {
+		t.Fatalf("recover B: %+v %v", b, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Plans []PlanState `json:"plans"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var afterA *PlanState
+	for i := range envelope.Plans {
+		if envelope.Plans[i].TaskID == "plan-a" {
+			afterA = &envelope.Plans[i]
+		}
+	}
+	if afterA == nil || !reflect.DeepEqual(beforeA, *afterA) {
+		t.Fatalf("A changed during B operations: before=%+v after=%+v", beforeA, afterA)
+	}
+	if b.PendingNextAction == "" {
+		t.Fatal("unfinished B has empty pending action")
+	}
+	if len(b.AppliedPasses) != 2 {
+		t.Fatalf("B apply/recovery records = %+v", b.AppliedPasses)
 	}
 }
 
@@ -324,13 +433,14 @@ func TestPlanReadsLegacyLinkedJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var record map[string]any
-	if err = json.Unmarshal(data, &record); err != nil {
+	var collection planCollection
+	if err = json.Unmarshal(data, &collection); err != nil || len(collection.Plans) != 1 {
 		t.Fatal(err)
 	}
-	record["linked_job"] = "legacy-job"
-	record["pending_next_action"] = "apply"
-	delete(record, "linked_jobs")
+	record := collection.Plans[0]
+	record.LinkedJob = "legacy-job"
+	record.LinkedJobs = nil
+	record.PendingNextAction = "apply"
 	data, err = json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
@@ -341,5 +451,124 @@ func TestPlanReadsLegacyLinkedJob(t *testing.T) {
 	state, err = ReadPlan(root, repo)
 	if err != nil || state.LinkedJob != "legacy-job" || len(state.LinkedJobs) != 1 || state.LinkedJobs[0] != "legacy-job" {
 		t.Fatalf("legacy link = %+v, %v", state, err)
+	}
+}
+
+func TestPlanAmbiguousImplicitSelectionDoesNotMutate(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	first, err := AcceptPlan(root, repo, "plan-a", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "plan-b", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "projects", first.ProjectKey, "active_plan.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPlan(root, repo); err == nil {
+		t.Fatal("ambiguous implicit read succeeded")
+	}
+	if _, err := UpdatePlan(root, repo, "", first.Revision, "stop", ""); err == nil {
+		t.Fatal("ambiguous implicit update succeeded")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("ambiguous selection mutated collection: %v", err)
+	}
+}
+
+func TestPlanAmbiguousOwnershipDoesNotMutate(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	first, err := AcceptPlan(root, repo, "x", artifact, []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "x-m1of1", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "projects", first.ProjectKey, "active_plan.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, matched, err := BindPlanJob(root, repo, "x-m1of1-m2of2", "job-ambiguous"); err == nil || matched {
+		t.Fatalf("ambiguous owner bind = matched %v err %v", matched, err)
+	}
+	if err := RecordPlanApply(root, repo, "x-m1of1-m2of2", "job-ambiguous"); err == nil {
+		t.Fatal("ambiguous owner apply succeeded")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("ambiguous ownership mutated collection: %v", err)
+	}
+}
+
+func TestPlanDuplicateIDRejectedWithoutOverwrite(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	first, err := AcceptPlan(root, repo, "plan-a", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "plan-b", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "projects", first.ProjectKey, "active_plan.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var collection planCollection
+	if err := json.Unmarshal(data, &collection); err != nil {
+		t.Fatal(err)
+	}
+	collection.Plans[1].TaskID = collection.Plans[0].TaskID
+	malformed, err := json.Marshal(collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, malformed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "plan-c", artifact, []int{1}); err == nil {
+		t.Fatal("duplicate IDs were accepted")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(malformed, after) {
+		t.Fatalf("duplicate rejection overwrote state: %v", err)
+	}
+}
+
+func TestPlanUnsupportedVersionRejectedWithoutOverwrite(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	state, err := AcceptPlan(root, repo, "plan-a", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "projects", state.ProjectKey, "active_plan.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var collection map[string]any
+	if err := json.Unmarshal(data, &collection); err != nil {
+		t.Fatal(err)
+	}
+	collection["version"] = float64(99)
+	unsupported, err := json.Marshal(collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, unsupported, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "plan-b", artifact, []int{1}); err == nil {
+		t.Fatal("unsupported version was accepted")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(unsupported, after) {
+		t.Fatalf("unsupported state was overwritten: %v", err)
 	}
 }

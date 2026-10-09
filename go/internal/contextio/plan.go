@@ -16,6 +16,7 @@ import (
 )
 
 const planSchemaVersion = 1
+const planCollectionVersion = 2
 
 type PlanState struct {
 	Version             int        `json:"version"`
@@ -67,50 +68,162 @@ func normalizePlanPath(path string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
-func readPlan(path string) (*PlanState, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var state PlanState
-	if err := json.Unmarshal(data, &state); err != nil || state.Version != planSchemaVersion || state.Revision < 1 || state.TaskID == "" || state.ProjectKey == "" || state.ProjectRoot == "" || state.ArtifactPath == "" || len(state.ArtifactDigest) != 64 || len(state.AcceptedMilestones) == 0 {
-		return nil, errors.New("active plan record is malformed")
+type planCollection struct {
+	Version int         `json:"version"`
+	Plans   []PlanState `json:"plans"`
+}
+
+func validatePlanRecord(state *PlanState) error {
+	if state.Version != planSchemaVersion || state.Revision < 1 || state.TaskID == "" || state.ProjectKey == "" || state.ProjectRoot == "" || state.ArtifactPath == "" || len(state.ArtifactDigest) != 64 || len(state.AcceptedMilestones) == 0 {
+		return errors.New("active plan record is malformed")
 	}
 	if state.LinkedJob != "" && !containsPlanString(state.LinkedJobs, state.LinkedJob) {
 		state.LinkedJobs = append(state.LinkedJobs, state.LinkedJob)
 	}
-	if len(state.LinkedJobs) != 0 {
+	if state.CurrentMilestone == 0 {
+		state.PendingNextAction = ""
+	} else if len(state.LinkedJobs) != 0 {
 		state.PendingNextAction = "apply"
+	} else {
+		state.PendingNextAction = "dispatch"
 	}
 	if _, err := hex.DecodeString(state.ArtifactDigest); err != nil {
-		return nil, errors.New("active plan record is malformed")
+		return errors.New("active plan record is malformed")
 	}
 	seen := make(map[int]bool, len(state.AcceptedMilestones))
 	for _, milestone := range state.AcceptedMilestones {
 		if milestone < 1 || seen[milestone] {
-			return nil, errors.New("active plan record is malformed")
+			return errors.New("active plan record is malformed")
 		}
 		seen[milestone] = true
 	}
 	completed := make(map[int]bool, len(state.CompletedMilestones))
 	for _, milestone := range state.CompletedMilestones {
 		if !seen[milestone] || completed[milestone] {
-			return nil, errors.New("active plan record is malformed")
+			return errors.New("active plan record is malformed")
 		}
 		completed[milestone] = true
 	}
 	if state.CurrentMilestone != 0 && (!seen[state.CurrentMilestone] || completed[state.CurrentMilestone]) {
-		return nil, errors.New("active plan record is malformed")
+		return errors.New("active plan record is malformed")
 	}
+	linked := make(map[string]bool, len(state.LinkedJobs))
+	for _, jobID := range state.LinkedJobs {
+		if jobID == "" || linked[jobID] {
+			return errors.New("active plan record is malformed")
+		}
+		linked[jobID] = true
+	}
+	applied := make(map[string]bool, len(state.AppliedPasses))
+	for _, pass := range state.AppliedPasses {
+		milestone, matches := planTaskMilestone(state.TaskID, pass.TaskID)
+		if pass.JobID == "" || pass.TaskID == "" || applied[pass.JobID] || !matches || milestone != pass.Milestone || !seen[milestone] {
+			return errors.New("active plan record is malformed")
+		}
+		applied[pass.JobID] = true
+	}
+	return nil
+}
+
+func validatePlanArtifact(state *PlanState) error {
 	artifact, err := os.ReadFile(state.ArtifactPath)
 	if err != nil {
-		return nil, fmt.Errorf("active plan artifact is unavailable: %w", err)
+		return fmt.Errorf("active plan artifact is unavailable: %w", err)
 	}
 	digest := sha256.Sum256(artifact)
 	if hex.EncodeToString(digest[:]) != state.ArtifactDigest {
-		return nil, errors.New("active plan artifact digest does not match")
+		return errors.New("active plan artifact digest does not match")
 	}
-	return &state, nil
+	return nil
+}
+
+func readPlans(path string) ([]*PlanState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return nil, errors.New("active plan record is malformed")
+	}
+	var plans []PlanState
+	switch header.Version {
+	case planSchemaVersion:
+		var legacy PlanState
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return nil, errors.New("active plan record is malformed")
+		}
+		plans = []PlanState{legacy}
+	case planCollectionVersion:
+		var collection planCollection
+		if err := json.Unmarshal(data, &collection); err != nil || collection.Version != planCollectionVersion || collection.Plans == nil {
+			return nil, errors.New("active plan collection is malformed")
+		}
+		plans = collection.Plans
+	default:
+		return nil, fmt.Errorf("unsupported active plan version %d", header.Version)
+	}
+	states := make([]*PlanState, 0, len(plans))
+	ids := make(map[string]bool, len(plans))
+	for i := range plans {
+		state := &plans[i]
+		if err := validatePlanRecord(state); err != nil {
+			return nil, err
+		}
+		if ids[state.TaskID] {
+			return nil, fmt.Errorf("duplicate active plan task id %q", state.TaskID)
+		}
+		ids[state.TaskID] = true
+		states = append(states, state)
+	}
+	if len(states) == 0 {
+		return nil, errors.New("active plan collection is empty")
+	}
+	return states, nil
+}
+
+func selectPlan(states []*PlanState, taskID string) (*PlanState, error) {
+	if taskID != "" {
+		for _, state := range states {
+			if state.TaskID == taskID {
+				return state, nil
+			}
+		}
+		return nil, fmt.Errorf("active plan task id %q was not found", taskID)
+	}
+	var selected *PlanState
+	for _, state := range states {
+		if state.CurrentMilestone == 0 {
+			continue
+		}
+		if selected != nil {
+			return nil, errors.New("multiple unfinished plans; specify a plan task id")
+		}
+		selected = state
+	}
+	if selected == nil {
+		return nil, errors.New("no unfinished plan; specify a plan task id")
+	}
+	return selected, nil
+}
+
+func checkPlanProjects(states []*PlanState, canonical string) error {
+	for _, state := range states {
+		if state.ProjectKey != ProjectKey(canonical) || !samePlanPath(state.ProjectRoot, canonical) {
+			return errors.New("active plan belongs to a different project path")
+		}
+	}
+	return nil
+}
+
+func writePlans(path string, states []*PlanState) error {
+	collection := planCollection{Version: planCollectionVersion, Plans: make([]PlanState, 0, len(states))}
+	for _, state := range states {
+		collection.Plans = append(collection.Plans, *state)
+	}
+	return writePlanJSONAtomically(path, collection)
 }
 
 func ReadPlan(root, repository string) (*PlanState, error) {
@@ -123,12 +236,47 @@ func ReadPlan(root, repository string) (*PlanState, error) {
 		return nil, err
 	}
 	defer unlock()
-	state, err := readPlan(path)
+	states, err := readPlans(path)
 	if err != nil {
 		return nil, err
 	}
-	if state.ProjectKey != ProjectKey(canonical) || !samePlanPath(state.ProjectRoot, canonical) {
-		return nil, errors.New("active plan belongs to a different project path")
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return nil, err
+	}
+	state, err := selectPlan(states, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePlanArtifact(state); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+// ReadPlanForTask returns one exact plan record, including stopped or completed plans.
+func ReadPlanForTask(root, repository, taskID string) (*PlanState, error) {
+	path, canonical, err := planPath(root, repository)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := LockFile(path + ".lock")
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	states, err := readPlans(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return nil, err
+	}
+	state, err := selectPlan(states, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePlanArtifact(state); err != nil {
+		return nil, err
 	}
 	return state, nil
 }
@@ -162,18 +310,24 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*P
 		return nil, err
 	}
 	defer unlock()
-	if existing, err := readPlan(path); err == nil {
-		if existing.ProjectKey != ProjectKey(canonical) || !samePlanPath(existing.ProjectRoot, canonical) {
-			return nil, errors.New("active plan belongs to a different project path")
+	states, err := readPlans(path)
+	if err == nil {
+		if err := checkPlanProjects(states, canonical); err != nil {
+			return nil, err
 		}
-		if existing.CurrentMilestone != 0 {
-			return nil, errors.New("an unfinished plan is already active for this project")
+		for _, existing := range states {
+			if existing.TaskID == taskID {
+				return nil, fmt.Errorf("active plan task id %q already exists", taskID)
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
+	} else {
+		states = nil
 	}
 	state := &PlanState{Version: planSchemaVersion, Revision: 1, ProjectKey: ProjectKey(canonical), ProjectRoot: canonical, TaskID: taskID, ArtifactPath: artifactPath, ArtifactDigest: hex.EncodeToString(digest[:]), AcceptedMilestones: accepted, CurrentMilestone: accepted[0], PendingNextAction: "dispatch"}
-	if err := writePlanJSONAtomically(path, state); err != nil {
+	states = append(states, state)
+	if err := writePlans(path, states); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -189,15 +343,19 @@ func UpdatePlan(root, repository, taskID string, expectedRevision int, operation
 		return nil, err
 	}
 	defer unlock()
-	state, err := readPlan(path)
+	states, err := readPlans(path)
 	if err != nil {
 		return nil, err
 	}
-	if state.ProjectKey != ProjectKey(canonical) || !samePlanPath(state.ProjectRoot, canonical) {
-		return nil, errors.New("active plan belongs to a different project path")
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return nil, err
 	}
-	if taskID != "" && state.TaskID != taskID {
-		return nil, errors.New("plan task id does not match active plan")
+	state, err := selectPlan(states, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePlanArtifact(state); err != nil {
+		return nil, err
 	}
 	if expectedRevision != state.Revision {
 		return nil, fmt.Errorf("stale plan update: current revision is %d", state.Revision)
@@ -232,7 +390,7 @@ func UpdatePlan(root, repository, taskID string, expectedRevision int, operation
 		return nil, errors.New("unsupported plan operation")
 	}
 	state.Revision++
-	if err := writePlanJSONAtomically(path, state); err != nil {
+	if err := writePlans(path, states); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -254,19 +412,25 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 		return nil, false, err
 	}
 	defer unlock()
-	state, err := readPlan(path)
+	states, err := readPlans(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	if state.ProjectKey != ProjectKey(canonical) || !samePlanPath(state.ProjectRoot, canonical) {
-		return nil, false, errors.New("active plan belongs to a different project path")
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return nil, false, err
 	}
-	milestone, matches := planTaskMilestone(state.TaskID, taskID)
+	state, milestone, matches, err := resolvePlanOwner(states, taskID)
+	if err != nil {
+		return nil, false, err
+	}
 	if !matches {
-		return state, false, nil
+		return nil, false, nil
+	}
+	if err := validatePlanArtifact(state); err != nil {
+		return nil, true, err
 	}
 	if !containsMilestone(state.AcceptedMilestones, milestone) || containsMilestone(state.CompletedMilestones, milestone) || state.UserStopped || state.Gate != "" {
 		return nil, true, errors.New("active plan is not ready for this dispatch")
@@ -278,7 +442,7 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 	setLinkedJobs(state, linked)
 	state.PendingNextAction = "apply"
 	state.Revision++
-	if err := writePlanJSONAtomically(path, state); err != nil {
+	if err := writePlans(path, states); err != nil {
 		return nil, true, err
 	}
 	return state, true, nil
@@ -296,19 +460,25 @@ func RecordPlanApply(root, repository, taskID, jobID string) error {
 		return err
 	}
 	defer unlock()
-	state, err := readPlan(path)
+	states, err := readPlans(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if state.ProjectKey != ProjectKey(canonical) || !samePlanPath(state.ProjectRoot, canonical) {
-		return errors.New("active plan belongs to a different project path")
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return err
 	}
-	milestone, matches := planTaskMilestone(state.TaskID, taskID)
+	state, milestone, matches, err := resolvePlanOwner(states, taskID)
+	if err != nil {
+		return err
+	}
 	if !matches {
 		return nil
+	}
+	if err := validatePlanArtifact(state); err != nil {
+		return err
 	}
 	for _, pass := range state.AppliedPasses {
 		if pass.JobID == jobID {
@@ -324,7 +494,7 @@ func RecordPlanApply(root, repository, taskID, jobID string) error {
 	setLinkedJobs(state, linked)
 	state.PendingNextAction = pendingAction(state)
 	state.Revision++
-	return writePlanJSONAtomically(path, state)
+	return writePlans(path, states)
 }
 
 // ReconcilePlanJob clears a missing or failed link and recovers an applied pass
@@ -339,18 +509,38 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 		return nil, err
 	}
 	defer unlock()
-	state, err := readPlan(path)
+	states, err := readPlans(path)
 	if err != nil {
 		return nil, err
 	}
-	if state.ProjectKey != ProjectKey(canonical) || !samePlanPath(state.ProjectRoot, canonical) {
-		return nil, errors.New("active plan belongs to a different project path")
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return nil, err
 	}
-	linked := linkedJobs(state)
-	if len(linked) == 0 {
-		state.PendingNextAction = "dispatch"
+	var state *PlanState
+	for _, candidate := range states {
+		if len(linkedJobs(candidate)) == 0 {
+			continue
+		}
+		if state != nil {
+			return nil, errors.New("multiple plans have jobs to reconcile; select a plan task id")
+		}
+		state = candidate
+	}
+	if state == nil {
+		var selectErr error
+		state, selectErr = selectPlan(states, "")
+		if selectErr != nil {
+			return nil, selectErr
+		}
+		if err := validatePlanArtifact(state); err != nil {
+			return nil, err
+		}
 		return state, nil
 	}
+	if err := validatePlanArtifact(state); err != nil {
+		return nil, err
+	}
+	linked := linkedJobs(state)
 	changed := false
 	remaining := make([]string, 0, len(linked))
 	for _, jobID := range linked {
@@ -364,10 +554,16 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 			changed = true
 			continue
 		}
+		taskID, _ := job["taskId"].(string)
+		owner, milestone, matches, ownerErr := resolvePlanOwner(states, taskID)
+		if ownerErr != nil {
+			return nil, ownerErr
+		}
+		if taskID != "" && (!matches || owner != state) {
+			return nil, fmt.Errorf("linked job %q does not belong uniquely to plan %q", jobID, state.TaskID)
+		}
 		if job["applyState"] == "applied" {
-			taskID, _ := job["taskId"].(string)
-			milestone, matches := planTaskMilestone(state.TaskID, taskID)
-			if matches && containsMilestone(state.AcceptedMilestones, milestone) && !hasAppliedJob(state, jobID) {
+			if matches && owner == state && containsMilestone(state.AcceptedMilestones, milestone) && !hasAppliedJob(state, jobID) {
 				state.AppliedPasses = append(state.AppliedPasses, PlanPass{Milestone: milestone, TaskID: taskID, JobID: jobID})
 			}
 			changed = true
@@ -389,10 +585,26 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 		return state, nil
 	}
 	state.Revision++
-	if err := writePlanJSONAtomically(path, state); err != nil {
+	if err := writePlans(path, states); err != nil {
 		return nil, err
 	}
 	return state, nil
+}
+
+func resolvePlanOwner(states []*PlanState, taskID string) (*PlanState, int, bool, error) {
+	var owner *PlanState
+	milestone := 0
+	for _, state := range states {
+		candidate, matches := planTaskMilestone(state.TaskID, taskID)
+		if !matches {
+			continue
+		}
+		if owner != nil {
+			return nil, 0, false, fmt.Errorf("task id %q matches multiple plans", taskID)
+		}
+		owner, milestone = state, candidate
+	}
+	return owner, milestone, owner != nil, nil
 }
 
 func planTaskMilestone(planID, taskID string) (int, bool) {
@@ -440,6 +652,9 @@ func setLinkedJobs(state *PlanState, jobs []string) {
 }
 
 func pendingAction(state *PlanState) string {
+	if state.CurrentMilestone == 0 {
+		return ""
+	}
 	if len(linkedJobs(state)) != 0 {
 		return "apply"
 	}
