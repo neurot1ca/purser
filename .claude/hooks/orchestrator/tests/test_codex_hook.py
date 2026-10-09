@@ -725,7 +725,7 @@ def test_plan_file_and_summary_caps(workspace):
     codex._store_plan(state, event(), "long-plan", report, bundle)
     assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == report
     assert bundle["plan_summary"] == "x" * 16000
-    assert bundle["findings"] == []
+    assert [finding["code"] for finding in bundle["findings"]] == ["PLAN_SHAPE_MISSING"]
 
 
 @pytest.mark.parametrize("name", ("codex_result", "codex_cancel"))

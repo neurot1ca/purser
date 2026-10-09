@@ -181,7 +181,7 @@ class ScopeLeases:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
                                              prefix="scope_leases.", suffix=".tmp", delete=False) as handle:
                 temporary = Path(handle.name)
-                handle.write(json_transport.dumps(value, sort_keys=True, separators=(",", ":")))
+                handle.write(json_transport.dumps(value, separators=(",", ":")))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)

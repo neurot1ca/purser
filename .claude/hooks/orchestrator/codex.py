@@ -3576,6 +3576,14 @@ def _store_plan(runtime_root: Path, event: Mapping[str, Any], task_id: Any,
     path = (runtime_root / "plans" / f"{safe_task}-{_call_key(event)}.md").resolve()
     if not report.strip():
         bundle["findings"].append(_finding("PLAN_OUTPUT_EMPTY", "Plan output is empty."))
+    missing = [heading for heading in (
+        "Summary:", "Goal and boundaries", "Current evidence", "Decision",
+        "Milestones", "Risks/open decisions", "Implementation handoff",
+    ) if not re.search(r"(?im)^#{0,6}\s*" + re.escape(heading) + r"(?:\s|:|$)", report)]
+    if missing:
+        bundle["findings"].append(_finding(
+            "PLAN_SHAPE_MISSING", "Plan lacks the required sections: " + ", ".join(missing) + "."
+        ))
     content = report
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")

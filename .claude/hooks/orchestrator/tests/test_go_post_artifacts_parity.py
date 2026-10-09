@@ -1,7 +1,6 @@
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -11,23 +10,6 @@ FIXTURE = ORCH / "tests" / "fixtures" / "go_policy" / "post_artifacts.json"
 import sys
 sys.path.insert(0, str(ORCH))
 import codex
-
-
-_PLAN_SHAPE_FINDING = {
-    "code": "PLAN_SHAPE_MISSING",
-    "message": "Plan lacks the required Summary/Milestones sections.",
-}
-
-
-def _add_go_plan_shape_findings(fixture):
-    """Account for the Go-only plan-shape check in the retired Python oracle."""
-    for plan in fixture["plans"]:
-        report = plan["report"]
-        has_summary = re.search(r"(?im)^#{0,6}\s*Summary:(?:\s|:|$)", report)
-        has_milestones = re.search(r"(?im)^#{0,6}\s*Milestones(?:\s|:|$)", report)
-        if not has_summary or not has_milestones:
-            plan["findings"].append(dict(_PLAN_SHAPE_FINDING))
-    return fixture
 
 
 def _oracle():
@@ -92,12 +74,15 @@ def _oracle():
 
 
 def test_post_artifacts_match_python_fixture():
-    fixture = _add_go_plan_shape_findings(_oracle())
+    fixture = _oracle()
     over_plan = next(plan for plan in fixture["plans"] if plan["name"] == "over")
     long_summary = next(plan for plan in fixture["plans"] if plan["name"] == "long-summary")
     nested_summary = next(plan for plan in fixture["plans"] if plan["name"] == "nested-summary")
     assert over_plan["content"].endswith("## Final milestone\nRisks\nHandoff\nAppendix")
-    assert over_plan["findings"] == [_PLAN_SHAPE_FINDING]
+    assert over_plan["findings"] == [{
+        "code": "PLAN_SHAPE_MISSING",
+        "message": "Plan lacks the required sections: Summary:, Goal and boundaries, Current evidence, Decision, Milestones, Risks/open decisions, Implementation handoff.",
+    }]
     assert long_summary["summary"] == "s" * 5001
     assert nested_summary["summary"] == "Overview\n## Nested detail\nIncluded in summary"
     if os.environ.get("POST_ARTIFACTS_WRITE_FIXTURE") == "1":
