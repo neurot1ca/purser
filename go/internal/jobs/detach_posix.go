@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package jobs
 
@@ -8,7 +8,7 @@ import (
 	"os/exec"
 )
 
-// LaunchDetached starts argv in its own session and returns its Linux start time.
+// LaunchDetached starts argv in its own session and returns its process start time.
 func LaunchDetached(argv, env []string, dir string) (pid int, identity int64, err error) {
 	if len(argv) == 0 || argv[0] == "" {
 		return 0, 0, errors.New("detached command is empty")
@@ -33,7 +33,7 @@ func LaunchDetached(argv, env []string, dir string) (pid int, identity int64, er
 	return pid, int64(*created), nil
 }
 
-// IdentityMatches compares a PID with the Linux /proc start-time identity.
+// IdentityMatches compares a PID with its platform process start-time identity.
 func IdentityMatches(pid int, identity int64) bool {
 	if pid <= 0 || identity <= 0 {
 		return false

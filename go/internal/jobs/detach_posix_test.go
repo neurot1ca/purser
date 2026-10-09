@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package jobs
 
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestLaunchDetachedLinux(t *testing.T) {
+func TestLaunchDetachedPosix(t *testing.T) {
 	if marker := os.Getenv("PURSER_DETACHED_TEST_MARKER"); marker != "" {
 		cwd, _ := os.Getwd()
 		data, _ := json.Marshal(map[string]string{
@@ -29,7 +29,7 @@ func TestLaunchDetachedLinux(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "child.json")
 	env := append(os.Environ(), "PURSER_DETACHED_TEST_MARKER="+marker, "PURSER_DETACHED_TEST_VALUE=passed")
-	pid, identity, err := LaunchDetached([]string{executable, "-test.run=^TestLaunchDetachedLinux$"}, env, dir)
+	pid, identity, err := LaunchDetached([]string{executable, "-test.run=^TestLaunchDetachedPosix$"}, env, dir)
 	if err != nil {
 		t.Fatalf("LaunchDetached: %v", err)
 	}
