@@ -3,6 +3,15 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.103 — 2026-10-09
+
+- **Added:** A job's worktree and preparation are removed in the background right after apply, discard, cancellation or a no-change finish; a later reply starts on a fresh worktree.
+- **Added:** Several plans can be active in one project; plan commands take `--task-id`, and Stop names every plan that needs its next step.
+- **Changed:** Automatic /compact is off unless `/purser:init` records a yes.
+- **Changed:** Leftover worktrees and job records are cleaned after 3 days instead of 7.
+- **Changed:** The dispatcher waits in the foreground until its job finishes and reads only what it is given.
+- **Fixed:** pilot-report charges a warm dispatcher only for its own job's requests.
+
 ## 0.1.102 — 2026-10-09
 
 - **Fixed:** Maintenance no longer treats RUNNING/QUEUED jobs past their deadline as live work.
