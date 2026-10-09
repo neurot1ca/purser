@@ -1,0 +1,520 @@
+package pilotreport
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+type Report struct {
+	IDs                     IDs        `json:"ids"`
+	Models                  Models     `json:"models"`
+	Route                   any        `json:"route"`
+	Boundaries              Boundaries `json:"boundaries"`
+	Usage                   Usage      `json:"usage"`
+	LifecycleBlockedSeconds *float64   `json:"lifecycle_blocked_seconds"`
+	Incomplete              []string   `json:"incomplete"`
+}
+
+type IDs struct {
+	Job             string  `json:"job"`
+	Task            *string `json:"task"`
+	Session         *string `json:"session"`
+	DispatcherAgent *string `json:"dispatcher_agent_id"`
+}
+type Models struct {
+	Worker     any      `json:"worker"`
+	Effort     any      `json:"effort"`
+	Main       []string `json:"claude_main"`
+	Dispatcher []string `json:"claude_dispatcher"`
+}
+type Boundaries struct {
+	Started                 *string  `json:"started"`
+	Finished                *string  `json:"finished"`
+	Reviewer1Started        *string  `json:"reviewer1_started"`
+	Reviewer1Finished       *string  `json:"reviewer1_finished"`
+	Acceptance              *string  `json:"acceptance"`
+	Applied                 *string  `json:"applied"`
+	FinalizedLatencySeconds *float64 `json:"finalized_latency_seconds"`
+}
+type Usage struct {
+	Main              *Tokens `json:"main"`
+	Dispatcher        *Tokens `json:"dispatcher"`
+	CoordinationTurns *int    `json:"coordination_turns"`
+}
+type Tokens struct {
+	Input         *int64         `json:"input_tokens"`
+	Output        *int64         `json:"output_tokens"`
+	CacheCreation *CacheCreation `json:"cache_creation"`
+	CacheRead     *int64         `json:"cache_read"`
+}
+type CacheCreation struct {
+	Ephemeral5m *int64 `json:"ephemeral_5m"`
+	Ephemeral1h *int64 `json:"ephemeral_1h"`
+}
+
+// Build reads only the supplied state and Claude projects roots, making the report deterministic and testable.
+func Build(stateRoot, projectsRoot, jobID string) Report {
+	r := Report{IDs: IDs{Job: jobID}, Models: Models{Main: []string{}, Dispatcher: []string{}}, Incomplete: []string{}}
+	jobPath := filepath.Join(stateRoot, "codex_exec_mcp", "jobs", jobID+".json")
+	job, err := readObject(jobPath)
+	if err != nil {
+		r.Incomplete = append(r.Incomplete, "job_record: "+err.Error())
+		return r
+	}
+	task := stringValue(job["taskId"])
+	r.IDs.Task = optionalString(task)
+	r.Models.Worker, r.Models.Effort, r.Route = job["model"], job["effort"], job["route"]
+	r.Boundaries.Started = timestamp(job["startedAt"])
+	r.Boundaries.Finished = timestamp(job["finishedAt"])
+	applyState := stringValue(job["applyState"])
+	if applyState == "applied" {
+		r.Boundaries.Applied = timestamp(job["appliedAt"])
+	}
+	if acceptance, ok := job["acceptance"].(map[string]any); ok {
+		r.Boundaries.Acceptance = timestamp(acceptance["acceptedAt"])
+	}
+	if task == "" {
+		r.Incomplete = append(r.Incomplete, "job_task_id_missing")
+	}
+	if r.Boundaries.Started == nil {
+		r.Incomplete = append(r.Incomplete, "job_started_at_missing")
+	}
+
+	if task != "" {
+		path := filepath.Join(stateRoot, "telemetry", "events", "by_task", task+".jsonl")
+		events, readErr := readLines(path)
+		if readErr != nil {
+			r.Incomplete = append(r.Incomplete, "telemetry: "+readErr.Error())
+		} else {
+			for _, event := range events {
+				switch stringValue(event["event_type"]) {
+				case "IMPLEMENTER_STARTED":
+					if r.Boundaries.Started == nil {
+						r.Boundaries.Started = timestamp(event["ts_utc"])
+					}
+				case "IMPLEMENTER_FINISHED":
+					r.Boundaries.Finished = firstTimestamp(r.Boundaries.Finished, event["ts_utc"])
+				case "REVIEWER1_STARTED":
+					r.Boundaries.Reviewer1Started = firstTimestamp(r.Boundaries.Reviewer1Started, event["ts_utc"])
+				case "REVIEWER1_FINISHED":
+					r.Boundaries.Reviewer1Finished = firstTimestamp(r.Boundaries.Reviewer1Finished, event["ts_utc"])
+				case "CLAUDE_DECISION_RECORDED":
+					r.Boundaries.Acceptance = firstTimestamp(r.Boundaries.Acceptance, event["ts_utc"])
+				}
+				if r.IDs.DispatcherAgent == nil && stringValue(event["agent_id"]) != "" {
+					r.IDs.DispatcherAgent = optionalString(stringValue(event["agent_id"]))
+				}
+				if r.IDs.Session == nil && stringValue(event["session_id"]) != "" {
+					r.IDs.Session = optionalString(stringValue(event["session_id"]))
+				}
+			}
+		}
+	}
+	if r.IDs.Session == nil {
+		r.Incomplete = append(r.Incomplete, "telemetry_session_id_missing")
+	}
+	if r.Boundaries.Started == nil {
+		r.Incomplete = appendUnique(r.Incomplete, "job_started_at_missing")
+	}
+	finalized := r.Boundaries.Finished
+	if applyState == "applied" {
+		finalized = r.Boundaries.Applied
+	}
+	if r.Boundaries.Started != nil && finalized != nil {
+		start, e1 := time.Parse(time.RFC3339Nano, *r.Boundaries.Started)
+		end, e2 := time.Parse(time.RFC3339Nano, *finalized)
+		if e1 == nil && e2 == nil {
+			v := end.Sub(start).Seconds()
+			r.Boundaries.FinalizedLatencySeconds = &v
+		}
+	}
+
+	if r.IDs.Session != nil {
+		mainPath, locateErr := locateSession(projectsRoot, *r.IDs.Session)
+		if locateErr != nil {
+			r.Incomplete = append(r.Incomplete, "main_transcript: "+locateErr.Error())
+		} else {
+			records, readErr := readLines(mainPath)
+			if readErr != nil {
+				r.Incomplete = append(r.Incomplete, "main_transcript: "+readErr.Error())
+			} else {
+				usage, turns, models, blocked := analyzeMain(records, jobID, task)
+				r.Usage.Main, r.Usage.CoordinationTurns = usage, &turns
+				r.Models.Main = models
+				r.LifecycleBlockedSeconds = &blocked
+			}
+		}
+	} else {
+		r.Incomplete = append(r.Incomplete, "main_transcript_session_unavailable")
+	}
+	if r.IDs.Session != nil && r.IDs.DispatcherAgent != nil {
+		mainPath, locateErr := locateSession(projectsRoot, *r.IDs.Session)
+		var records []map[string]any
+		var readErr error
+		if locateErr == nil {
+			records, readErr = readLines(filepath.Join(filepath.Dir(mainPath), *r.IDs.Session, "subagents", "agent-"+*r.IDs.DispatcherAgent+".jsonl"))
+		}
+		if locateErr != nil || readErr != nil {
+			cause := readErr
+			if locateErr != nil {
+				cause = locateErr
+			}
+			r.Incomplete = append(r.Incomplete, "dispatcher_transcript: "+cause.Error())
+		} else {
+			usage, models := analyzeWhole(records)
+			r.Usage.Dispatcher, r.Models.Dispatcher = usage, models
+		}
+	} else {
+		r.Incomplete = append(r.Incomplete, "dispatcher_identity_unavailable")
+	}
+	sort.Strings(r.Models.Main)
+	sort.Strings(r.Models.Dispatcher)
+	return r
+}
+
+func locateSession(root, session string) (string, error) {
+	paths, err := filepath.Glob(filepath.Join(root, "*", session+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", fmt.Errorf("session transcript not found")
+	}
+	if len(paths) > 1 {
+		return "", fmt.Errorf("session transcript is ambiguous")
+	}
+	return paths[0], nil
+}
+func readObject(path string) (map[string]any, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var v map[string]any
+	if err = json.Unmarshal(b, &v); err != nil {
+		return nil, err
+	}
+	if v == nil {
+		return nil, fmt.Errorf("expected object")
+	}
+	return v, nil
+}
+func readLines(path string) ([]map[string]any, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []map[string]any
+	scan := bufio.NewScanner(f)
+	scan.Buffer(make([]byte, 4096), 16*1024*1024)
+	for scan.Scan() {
+		line := scan.Bytes()
+		if len(strings.TrimSpace(string(line))) == 0 {
+			continue
+		}
+		var value map[string]any
+		if err := json.Unmarshal(line, &value); err != nil {
+			return nil, err
+		}
+		if value == nil {
+			return nil, fmt.Errorf("expected JSON object line")
+		}
+		out = append(out, value)
+	}
+	if err := scan.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+func stringValue(v any) string { s, _ := v.(string); return s }
+func timestamp(v any) *string {
+	var t time.Time
+	switch x := v.(type) {
+	case string:
+		parsed, err := time.Parse(time.RFC3339Nano, x)
+		if err != nil {
+			return nil
+		}
+		t = parsed
+	case float64:
+		t = time.Unix(0, int64(x*float64(time.Second)))
+	case json.Number:
+		n, err := x.Float64()
+		if err != nil {
+			return nil
+		}
+		t = time.Unix(0, int64(n*float64(time.Second)))
+	default:
+		return nil
+	}
+	s := t.UTC().Format(time.RFC3339Nano)
+	return &s
+}
+func firstTimestamp(current *string, value any) *string {
+	if current != nil {
+		return current
+	}
+	return timestamp(value)
+}
+func appendUnique(items []string, item string) []string {
+	for _, existing := range items {
+		if existing == item {
+			return items
+		}
+	}
+	return append(items, item)
+}
+
+func assistant(record map[string]any) bool {
+	m, _ := record["message"].(map[string]any)
+	role := stringValue(m["role"])
+	if role == "" {
+		role = stringValue(record["type"])
+	}
+	return role == "assistant"
+}
+func content(record map[string]any) []any {
+	m, _ := record["message"].(map[string]any)
+	blocks, _ := m["content"].([]any)
+	return blocks
+}
+func toolIdentity(block map[string]any) string {
+	if id := stringValue(block["id"]); id != "" {
+		return id
+	}
+	return stringValue(block["tool_use_id"])
+}
+func matchesJob(value any, jobID, taskID string) bool {
+	switch x := value.(type) {
+	case string:
+		return strings.Contains(x, jobID) || taskID != "" && strings.Contains(x, taskID)
+	case map[string]any:
+		for _, v := range x {
+			if matchesJob(v, jobID, taskID) {
+				return true
+			}
+		}
+	case []any:
+		for _, v := range x {
+			if matchesJob(v, jobID, taskID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+func recordID(record map[string]any) string {
+	m, _ := record["message"].(map[string]any)
+	if id := stringValue(m["id"]); id != "" {
+		return id
+	}
+	return stringValue(record["requestId"])
+}
+func model(record map[string]any) string {
+	m, _ := record["message"].(map[string]any)
+	return stringValue(m["model"])
+}
+func analyzeMain(records []map[string]any, jobID, taskID string) (*Tokens, int, []string, float64) {
+	matchedTools := map[string]bool{}
+	matchedCalls := map[string]time.Time{}
+	names := map[string]string{}
+	assistantForTool := map[string]map[string]any{}
+	modelSet := map[string]bool{}
+	for i, rec := range records {
+		if !assistant(rec) {
+			continue
+		}
+		if m := model(rec); m != "" {
+			modelSet[m] = true
+		}
+		for _, raw := range content(rec) {
+			b, ok := raw.(map[string]any)
+			if !ok || b["type"] != "tool_use" {
+				continue
+			}
+			id := toolIdentity(b)
+			names[id] = strings.ToLower(stringValue(b["name"]))
+			if id == "" {
+				id = fmt.Sprintf("line:%d", i)
+			}
+			assistantForTool[id] = rec
+			if matchesJob(b["input"], jobID, taskID) {
+				matchedTools[id] = true
+			}
+		}
+	}
+	resultEnds := map[string]time.Time{}
+	for _, rec := range records {
+		if assistant(rec) {
+			continue
+		}
+		for _, raw := range content(rec) {
+			b, ok := raw.(map[string]any)
+			if !ok || b["type"] != "tool_result" {
+				continue
+			}
+			id := toolIdentity(b)
+			if matchesJob(b["content"], jobID, taskID) {
+				matchedTools[id] = true
+			}
+			if ts := timestamp(rec["timestamp"]); ts != nil {
+				end, _ := time.Parse(time.RFC3339Nano, *ts)
+				resultEnds[id] = end
+			}
+		}
+	}
+	matchedAssistant := map[string]map[string]any{}
+	for id := range matchedTools {
+		rec, ok := assistantForTool[id]
+		if !ok {
+			continue
+		}
+		key := recordID(rec)
+		if key == "" {
+			key = id
+		}
+		matchedAssistant[key] = rec
+		if strings.Contains(names[id], "codex") {
+			if ts := timestamp(rec["timestamp"]); ts != nil {
+				start, _ := time.Parse(time.RFC3339Nano, *ts)
+				if end, exists := resultEnds[id]; exists && end.After(start) {
+					matchedCalls[id] = start
+				}
+			}
+		}
+	}
+	// Tool results occur on user records; collect durations by pairing their IDs with matched Purser calls.
+	var blocked float64
+	for _, rec := range records {
+		if assistant(rec) {
+			continue
+		}
+		for _, raw := range content(rec) {
+			b, ok := raw.(map[string]any)
+			if !ok || b["type"] != "tool_result" {
+				continue
+			}
+			id := toolIdentity(b)
+			if start, ok := matchedCalls[id]; ok && matchesJob(b["content"], jobID, taskID) {
+				if ts := timestamp(rec["timestamp"]); ts != nil {
+					end, _ := time.Parse(time.RFC3339Nano, *ts)
+					if end.After(start) {
+						blocked += end.Sub(start).Seconds()
+					}
+				}
+			}
+		}
+	}
+	usage := sumUsage(values(matchedAssistant))
+	turns := len(matchedAssistant)
+	return usage, turns, keys(modelSet), blocked
+}
+func analyzeWhole(records []map[string]any) (*Tokens, []string) {
+	selected := []map[string]any{}
+	ids := map[string]bool{}
+	models := map[string]bool{}
+	for i, rec := range records {
+		if !assistant(rec) {
+			continue
+		}
+		if m := model(rec); m != "" {
+			models[m] = true
+		}
+		id := recordID(rec)
+		if id == "" {
+			id = fmt.Sprintf("line:%d", i)
+		}
+		if !ids[id] {
+			ids[id] = true
+			selected = append(selected, rec)
+		}
+	}
+	return sumUsage(selected), keys(models)
+}
+func values(m map[string]map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(m))
+	for _, rec := range m {
+		out = append(out, rec)
+	}
+	return out
+}
+func keys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+func sumUsage(records []map[string]any) *Tokens {
+	if len(records) == 0 {
+		return nil
+	}
+	result := &Tokens{}
+	var in, out, read, c5, c1 int64
+	hasIn, hasOut, hasRead, has5, has1 := false, false, false, false, false
+	for _, rec := range records {
+		m, _ := rec["message"].(map[string]any)
+		usage, _ := m["usage"].(map[string]any)
+		in += token(usage, "input_tokens", &hasIn)
+		out += token(usage, "output_tokens", &hasOut)
+		read += token(usage, "cache_read_input_tokens", &hasRead)
+		if ttl, ok := usage["cache_creation"].(map[string]any); ok {
+			c5 += token(ttl, "ephemeral_5m_input_tokens", &has5)
+			c1 += token(ttl, "ephemeral_1h_input_tokens", &has1)
+		} else {
+			c5 += token(usage, "ephemeral_5m_input_tokens", &has5)
+			c1 += token(usage, "ephemeral_1h_input_tokens", &has1)
+		}
+	}
+	if hasIn {
+		result.Input = &in
+	}
+	if hasOut {
+		result.Output = &out
+	}
+	if hasRead {
+		result.CacheRead = &read
+	}
+	if has5 || has1 {
+		result.CacheCreation = &CacheCreation{}
+		if has5 {
+			result.CacheCreation.Ephemeral5m = &c5
+		}
+		if has1 {
+			result.CacheCreation.Ephemeral1h = &c1
+		}
+	}
+	return result
+}
+func token(m map[string]any, key string, present *bool) int64 {
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		*present = true
+		return int64(n)
+	case json.Number:
+		value, err := n.Int64()
+		if err == nil {
+			*present = true
+			return value
+		}
+	}
+	return 0
+}
