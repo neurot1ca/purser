@@ -16,6 +16,17 @@ import (
 	"purser-hook/internal/review"
 )
 
+type asyncReplayPreparationError struct {
+	status string
+	err    error
+}
+
+func (e *asyncReplayPreparationError) Error() string {
+	return "worker replay preparation failed (status=" + e.status + "): " + e.err.Error()
+}
+
+func (e *asyncReplayPreparationError) Unwrap() error { return e.err }
+
 // WorktreeRetirementDispatcher is installed by jobs to keep enforce independent
 // of the package that owns retirement dispatch.
 var WorktreeRetirementDispatcher func(stateRoot, jobID string) error
@@ -94,8 +105,11 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		}
 		prepared, prepErr := ledger.PrepareJobReplay(stringValue(job["repoRoot"]), worktree, stringValue(job["snapshot"]),
 			recoveryPath)
-		if prepErr != nil || prepared["status"] == "conflict" || prepared["status"] != "prepared" && prepared["status"] != "unchanged" {
-			return nil, fmt.Errorf("worker replay preparation failed")
+		if prepErr != nil {
+			return nil, &asyncReplayPreparationError{status: "error", err: prepErr}
+		}
+		if prepared["status"] == "conflict" || prepared["status"] != "prepared" && prepared["status"] != "unchanged" {
+			return nil, fmt.Errorf("worker replay preparation returned status=%s", stringValue(prepared["status"]))
 		}
 		if prepared["status"] == "prepared" {
 			job["snapshot"] = prepared["snapshot"]

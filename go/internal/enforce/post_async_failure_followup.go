@@ -78,7 +78,7 @@ func asyncFailureCleanupConsumed(root string, index, pending map[string]any, eve
 	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") && job != nil && job["discarded"] == true {
 		return
 	}
-	if job != nil && stringValue(job["worktreePath"]) != "" && job["applyState"] != "applied" {
+	if index["terminal_failure"] != true && index["stage"] != "FAILED" && job != nil && stringValue(job["worktreePath"]) != "" && job["applyState"] != "applied" {
 		return
 	}
 	key := stringValue(index["call_key"])

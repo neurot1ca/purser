@@ -360,7 +360,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	if cached != nil {
 		response, _ := cached.(map[string]any)
 		job := asyncJob(root, index)
-		if !(job != nil && stringValue(job["worktreePath"]) != "" && job["applyState"] != "applied") {
+		if index["stage"] == "FAILED" || index["terminal_failure"] == true || !(job != nil && stringValue(job["worktreePath"]) != "" && job["applyState"] != "applied") {
 			key, project := stringValue(index["call_key"]), stringValue(index["project_key"])
 			if asyncHash.MatchString(key) {
 				result := lease.New(filepath.Join(root, "projects", project)).Release(key, float64(time.Now().UnixNano())/1e9)
@@ -425,8 +425,14 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			}
 			return failed, failErr
 		}
-		_ = writePostDiagnostic(root, event, err)
-		response, failure := failAsyncFinalization(root, index, stringValue(loaded["post_tool_output_field"]))
+		var replayErr *asyncReplayPreparationError
+		if errors.As(err, &replayErr) {
+			_ = writePostDiagnostic(root, event, errors.New(boundedAsyncFinalizationDiagnostic(err)))
+			response, failure := retryAsyncFinalization(root, index, replayErr, stringValue(loaded["post_tool_output_field"]))
+			return response, failure
+		}
+		_ = writePostDiagnostic(root, event, errors.New(boundedAsyncFinalizationDiagnostic(err)))
+		response, failure := failAsyncFinalization(root, index, pending, stringValue(loaded["post_tool_output_field"]), err)
 		return response, failure
 	}
 	if bundle := postResponseBundle(response, loaded); bundle != nil {
@@ -443,21 +449,67 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	return response, err
 }
 
-func failAsyncFinalization(root string, index map[string]any, outputField string) (map[string]any, error) {
+func retryAsyncFinalization(root string, index map[string]any, cause error, outputField string) (map[string]any, error) {
 	if outputField == "" {
 		outputField = "updatedToolOutput"
 	}
-	response, err := replacement(map[string]any{"status": "FAILED", "errorCode": "INTERNAL_POST_ERROR",
-		"message": "async result could not be finalized", "ambiguous_outcome": true, "claude_review_mode": review.Full}, outputField)
+	message := boundedAsyncFinalizationDiagnostic(cause)
+	response, err := replacement(map[string]any{"jobId": index["jobId"], "state": "RETRYABLE",
+		"errorCode": "JOB_REPLAY_PREPARATION_FAILED", "message": message,
+		"ambiguous_outcome": true, "claude_review_mode": review.Full}, outputField)
 	if err != nil {
 		return nil, err
 	}
-	index["stage"], index["errorCode"], index["claude_review_mode"], index["response"] = "FAILED", "INTERNAL_POST_ERROR", review.Full, response
+	index["stage"], index["errorCode"], index["claude_review_mode"], index["response"] = "RETRYABLE", "JOB_REPLAY_PREPARATION_FAILED", review.Full, response
+	index["diagnostic"] = message
 	delete(index, "review_refresh_required")
 	if err = atomicAdmissionJSON(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index); err != nil {
 		return nil, err
 	}
 	return response, nil
+}
+
+func failAsyncFinalization(root string, index, pending map[string]any, outputField string, cause error) (map[string]any, error) {
+	if outputField == "" {
+		outputField = "updatedToolOutput"
+	}
+	diagnostic := boundedAsyncFinalizationDiagnostic(cause)
+	response, err := replacement(map[string]any{"jobId": index["jobId"], "status": "FAILED", "errorCode": "INTERNAL_POST_ERROR",
+		"message": diagnostic, "ambiguous_outcome": true, "claude_review_mode": review.Full}, outputField)
+	if err != nil {
+		return nil, err
+	}
+	index["stage"], index["errorCode"], index["claude_review_mode"], index["response"] = "FAILED", "INTERNAL_POST_ERROR", review.Full, response
+	index["diagnostic"] = diagnostic
+	delete(index, "review_refresh_required")
+	if err = atomicAdmissionJSON(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index); err != nil {
+		return nil, err
+	}
+	project, owner := stringValue(index["project_key"]), stringValue(pending["lease_owner"])
+	if project == "" {
+		project = stringValue(pending["project_key"])
+	}
+	if owner == "" {
+		owner = stringValue(index["call_key"])
+	}
+	if project != "" && owner != "" {
+		if err = leaseRelease(root, project, owner); err != nil && err.Error() != "LEASE_OWNER_MISSING" {
+			return response, fmt.Errorf("scope lease cleanup failed: %w", err)
+		}
+	}
+	return response, nil
+}
+
+func boundedAsyncFinalizationDiagnostic(err error) string {
+	if err == nil {
+		return "async result could not be finalized"
+	}
+	const maxBytes = 512
+	message := err.Error()
+	if len(message) > maxBytes {
+		message = message[:maxBytes]
+	}
+	return message
 }
 
 func postResponseBundle(response, loaded map[string]any) map[string]any {

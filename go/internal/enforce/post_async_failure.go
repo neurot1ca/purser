@@ -129,6 +129,7 @@ func finalizeAsyncFailure(root string, event, index, pending map[string]any) (ma
 	failureObservation(root, failureEvent, pending)
 	response := failureSuccessOutput(path, routingEnforced)
 	indexPath := filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json")
+	index["terminal_failure"] = true
 	if err = consumeAsyncResult(indexPath, index, path, response); err != nil {
 		return failureErrorOutput(failureErrorText(err)), true, err
 	}

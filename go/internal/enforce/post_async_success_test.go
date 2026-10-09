@@ -347,13 +347,113 @@ func TestUnfinalizableAsyncResultIsTerminal(t *testing.T) {
 	root := t.TempDir()
 	id := jobHash("unfinalizable async result")
 	index := map[string]any{"jobId": id, "stage": "FINALIZING"}
-	response, err := failAsyncFinalization(root, index, "updatedToolOutput")
+	response, err := failAsyncFinalization(root, index, nil, "updatedToolOutput", errors.New("finalize failed"))
 	if err != nil || response == nil {
 		t.Fatalf("failure finalization response=%#v err=%v", response, err)
 	}
 	stored, err := readAsyncObject(filepath.Join(root, "async_jobs", id+".json"))
 	if err != nil || stored["stage"] != "FAILED" {
 		t.Fatalf("async result did not reach terminal FAILED state: %#v err=%v", stored, err)
+	}
+}
+
+func TestNonRetryableAsyncFinalizationReleasesAndPromotesLease(t *testing.T) {
+	root := t.TempDir()
+	project, queued := "project-finalize", "queued-owner"
+	owner := jobHash("terminal finalize owner")
+	store := lease.New(filepath.Join(root, "projects", project))
+	if got := store.Acquire(owner, "failed-task", []string{"README.md"}, lease.AcquireOptions{}, 100); got.Status != "OK" {
+		t.Fatalf("seed owner: %#v", got)
+	}
+	queuedJob := jobHash("queued job")
+	if got := store.Acquire(queued, "queued-task", []string{"README.md"}, lease.AcquireOptions{JobID: &queuedJob, QueueConflict: true}, 101); got.Code != "LEASE_QUEUED" {
+		t.Fatalf("seed queued owner: %#v", got)
+	}
+	call := "terminal finalize failure"
+	id := jobHash(call)
+	index := map[string]any{"jobId": id, "call": call, "call_key": owner, "project_key": project,
+		"session_id": "failure-session", "stage": "FINALIZING"}
+	pending := map[string]any{"lease_owner": owner, "project_key": project}
+	response, err := failAsyncFinalization(root, index, pending, "updatedToolOutput", errors.New("bundle write failed"))
+	if err != nil || response == nil {
+		t.Fatalf("failure finalization response=%#v err=%v", response, err)
+	}
+	stored, err := readAsyncObject(filepath.Join(root, "async_jobs", id+".json"))
+	if err != nil || stored["stage"] != "FAILED" {
+		t.Fatalf("async result did not reach terminal FAILED state: %#v err=%v", stored, err)
+	}
+	leases, err := readAsyncObject(filepath.Join(root, "projects", project, "scope_leases.json"))
+	owners := mapValue(leases["owners"])
+	if err != nil || mapValue(owners[owner])["state"] != "RELEASED" || mapValue(owners[queued])["state"] != "ACTIVE" {
+		t.Fatalf("terminal cleanup did not promote queued owner: %#v err=%v", owners, err)
+	}
+	lock, claimed, _, _, cached, err := claimAsyncResult(root, map[string]any{"session_id": "failure-session",
+		"tool_name": "mcp__codex-main__codex_result", "tool_input": map[string]any{"jobId": id}}, "")
+	if err != nil || claimed["stage"] != "FAILED" || !reflect.DeepEqual(cached, response) {
+		t.Fatalf("cached terminal response=%#v index=%#v err=%v", cached, claimed, err)
+	}
+	releaseTaskUsageLock(lock)
+}
+
+func TestReplayPreparationFailureIsRetryableAndCanSucceed(t *testing.T) {
+	state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, "retry_replay_prepare")
+	worktree := repo
+	head, headErr := testutil.Hide(exec.Command("git", "-C", repo, "rev-parse", "HEAD")).Output()
+	if headErr != nil {
+		t.Fatal(headErr)
+	}
+	snapshot := strings.TrimSpace(string(head))
+	job["worktreePath"], job["repoRoot"], job["snapshot"], job["snapshotRevision"] = worktree, repo, snapshot, 1
+	recovery := filepath.Join(state, "preparations", stringValue(index["jobId"]), "revision-1")
+	if err := os.MkdirAll(filepath.Join(recovery, "worker-tree"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recovery, "state.json"), []byte(`{"state":"PREPARING","snapshot":"`+snapshot+`","target":"`+snapshot+`"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recovery, "worker.patch"), []byte("not a git patch\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	_, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "status=error") {
+		t.Fatalf("replay preparation failure lost cause: %v", err)
+	}
+	preparing, readErr := readAsyncObject(filepath.Join(recovery, "state.json"))
+	if readErr != nil || preparing["state"] != "PREPARING" {
+		t.Fatalf("PREPARING recovery state not retained: %#v, %v", preparing, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(recovery, "worker.patch")); statErr != nil {
+		t.Fatalf("worker patch not retained: %v", statErr)
+	}
+	response, err := retryAsyncFinalization(state, index, err, stringValue(loaded["post_tool_output_field"]))
+	if err != nil || response == nil || index["stage"] != "RETRYABLE" {
+		t.Fatalf("replay preparation was not left retryable: stage=%v response=%#v err=%v", index["stage"], response, err)
+	}
+	leases, err := readAsyncObject(filepath.Join(state, "projects", stringValue(index["project_key"]), "scope_leases.json"))
+	owner := mapValue(mapValue(leases["owners"])[stringValue(pending["lease_owner"])])
+	if err != nil || owner["state"] != "ACTIVE" || !strings.Contains(stringValue(mapValue(mapValue(response["hookSpecificOutput"])["updatedToolOutput"].([]any)[0])["text"]), "status=error") {
+		t.Fatalf("retryable response/lease lost cause or owner: response=%#v owner=%#v err=%v", response, owner, err)
+	}
+	if err = os.WriteFile(filepath.Join(recovery, "worker.patch"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	event["tool_input"] = map[string]any{"jobId": index["jobId"]}
+	if err = writeAsyncObject(filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json"), index); err != nil {
+		t.Fatal(err)
+	}
+	lock, retryIndex, retryPending, retryOriginal, _, claimErr := claimAsyncResult(state, event, repo)
+	if claimErr != nil {
+		t.Fatal(claimErr)
+	}
+	defer func() { releaseTaskUsageLock(lock); _ = lock.Close() }()
+	_, err = finishAsyncSuccess(state, event, retryIndex, retryPending, retryOriginal, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err != nil {
+		t.Fatalf("later result did not resume successfully: %v", err)
 	}
 }
 

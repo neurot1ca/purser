@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -52,8 +53,22 @@ func TestPostAsyncFailurePythonFixture(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if item["name"] == "replay_preparation_failure" {
+				response, retryErr := retryAsyncFinalization(root, index, errors.New(stringValue(want["diagnostic"])), "updatedToolOutput")
+				if retryErr != nil || !reflect.DeepEqual(replaceFailureRoot(response, root), want["response"]) {
+					t.Fatalf("retryable replay response = %#v, %v; want %#v", response, retryErr, want["response"])
+				}
+				stored, readErr := readAsyncObject(filepath.Join(root, "async_jobs", id+".json"))
+				if readErr != nil || stored["stage"] != "RETRYABLE" || stored["diagnostic"] != want["diagnostic"] {
+					t.Fatalf("retryable replay index = %#v, %v", stored, readErr)
+				}
+				if _, statErr := os.Stat(filepath.Join(root, "pending", key+".json")); statErr != nil {
+					t.Fatalf("retryable replay removed pending data: %v", statErr)
+				}
+				return
+			}
 			response, handled, err := finalizeAsyncFailure(root, event, index, pending)
-			assertAsyncFailureSession(t, root, pending, key, item["name"] == "replay_preparation_failure")
+			assertAsyncFailureSession(t, root, pending, key, false)
 			if item["name"] == "lease_release_failure" {
 				if err == nil || !handled {
 					t.Fatalf("lease failure = %v, handled=%v", err, handled)

@@ -3197,7 +3197,7 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                     and job is not None and job.get("discarded") is True):
                 _release_async_lease(root, index, pending)
                 return _replacement({"jobId": index["jobId"], "discarded": True}, _load_config(config))
-            if not (job and job.get("worktreePath") and job.get("applyState") != "applied"):
+            if index.get("terminal_failure") is True or not (job and job.get("worktreePath") and job.get("applyState") != "applied"):
                 _release_async_lease(root, index, pending)
                 (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
             return index.get("response") or interrupted()
@@ -3273,6 +3273,7 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             _atomic_json_write(_pending_path(root, original), pending)
         synthetic = dict(original, duration_ms=duration)
         preparation_error = None
+        retryable_preparation_error = False
         if success and worktree_path:
             resolver = None
             if pending.get("agent", "codex") == "codex":
@@ -3319,7 +3320,9 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                 elif prepared["status"] != "unchanged":
                     preparation_error = "Worker replay state is uncertain; FULL review required."
             except Exception as error:
-                preparation_error = f"Worker replay preparation failed ({type(error).__name__}); FULL review required."
+                message = f"Worker replay preparation failed (status=error, {type(error).__name__}): {error}; FULL review required."
+                preparation_error = message[:512]
+                retryable_preparation_error = True
         if preparation_error:
             success = False
             value = {"errorCode": "JOB_REPLAY_PREPARATION_FAILED"}
@@ -3345,6 +3348,15 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
                 response = _async_rejected_response(root, original, artifact, rejection,
                                                     _load_config(config), success=True)
         else:
+            if retryable_preparation_error:
+                response = _replacement({"jobId": index["jobId"], "state": "RETRYABLE",
+                                         "errorCode": "JOB_REPLAY_PREPARATION_FAILED",
+                                         "message": preparation_error, "ambiguous_outcome": True,
+                                         "claude_review_mode": policy.FULL}, _load_config(config))
+                index.update(stage="RETRYABLE", errorCode="JOB_REPLAY_PREPARATION_FAILED",
+                             diagnostic=preparation_error, claude_review_mode=policy.FULL, response=response)
+                _atomic_json_write(path, index)
+                return response
             synthetic.update(hook_event_name="PostToolUseFailure",
                              error=preparation_error or event.get("error")
                              or value.get("errorCode") or "ASYNC_TERMINAL_FAILURE")
@@ -3366,7 +3378,8 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             response = _append_project_job_status(response, root, index["project_key"], event)
         if success and worktree_path:
             response = _append_worktree_apply_context(response, index["jobId"])
-        index.update(stage="CONSUMED", bundle_path=str(artifact), response=response)
+        index.update(stage="CONSUMED", bundle_path=str(artifact), response=response,
+                     terminal_failure=not success)
         _atomic_json_write(path, index)
         if success and worktree_path:
             try:

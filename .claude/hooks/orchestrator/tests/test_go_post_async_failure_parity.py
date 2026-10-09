@@ -98,15 +98,11 @@ def test_python_post_async_failure_oracle(tmp_path, monkeypatch):
     with patch.object(codex.ledger, "prepare_job_replay", side_effect=OSError("fixture replay failure")):
         response = codex._async_post_followup(event, config=None, state_root=root, repo_root=repo)
     consumed = json.loads((root / "async_jobs" / f"{index['jobId']}.json").read_text())
-    evidence = json.loads((root / "raw_tool_outputs" / f"{index['call_key']}-failure.json").read_text())
-    pending = evidence["pending_call"]
-    replay_event = dict(event, error="Worker replay preparation failed (OSError); FULL review required.",
-                        error_code="JOB_REPLAY_PREPARATION_FAILED", replay_thread_id="thread-fixture",
-                        duration_ms=1234)
-    actual.append(_normalize({"name": "replay_preparation_failure", "event": replay_event, "index": index,
+    actual.append(_normalize({"name": "replay_preparation_failure", "event": event, "index": index,
                               "pending": pending, "job": job,
-                              "expected": {"response": response, "evidence": evidence, "stage": consumed["stage"],
-                                           "pending_exists": False}}, root))
+                              "expected": {"response": response, "stage": consumed["stage"],
+                                           "diagnostic": consumed.get("diagnostic"), "pending_exists":
+                                           (root / "pending" / f"{index['call_key']}.json").exists()}}, root))
 
     # Recreate the pre-consume crash point using evidence from the real Python failure path.
     crash_root = tmp_path / "crash-recovery"
