@@ -382,6 +382,48 @@ func TestDiscoverCachedCodexVersionIgnoresUnavailableOrHiddenCache(t *testing.T)
 	}
 }
 
+func TestDiscoverCodexCLIVersionReportsNewerClientVersionOnce(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", root)
+	writeCodexCache(t, `{"client_version":"0.161.0","models":[]}`)
+	writeCodexCLIState(t, root, "0.160.0", nil)
+	for attempt := 0; attempt < 2; attempt++ {
+		installed, available, ok := DiscoverCodexCLIVersion()
+		if attempt == 0 && (!ok || installed != "0.160.0" || available != "0.161.0") {
+			t.Fatalf("got %q -> %q, available = %v", installed, available, ok)
+		}
+		if attempt == 1 && ok {
+			t.Fatal("repeated Codex CLI notice")
+		}
+	}
+}
+
+func TestDiscoverCodexCLIVersionIgnoresEqualOrOlderClientVersion(t *testing.T) {
+	for _, clientVersion := range []string{"0.160.0", "0.159.0"} {
+		t.Run(clientVersion, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("PURSER_STATE_DIR", root)
+			writeCodexCache(t, `{"client_version":"`+clientVersion+`","models":[]}`)
+			writeCodexCLIState(t, root, "0.160.0", nil)
+			if _, _, ok := DiscoverCodexCLIVersion(); ok {
+				t.Fatal("unexpected Codex CLI notice")
+			}
+		})
+	}
+}
+
+func writeCodexCLIState(t *testing.T, root, installed string, asked []string) {
+	t.Helper()
+	today := time.Now().UTC().Format("2006-01-02")
+	data, err := json.Marshal(map[string]any{"checked_on": today, "installed_version": installed, "asked": asked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "codex-cli-version.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func stringPointer(value string) *string { return &value }
 
 func TestDiscoverChecksAgyReviewerAfterCoderModels(t *testing.T) {

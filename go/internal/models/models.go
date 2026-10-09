@@ -300,6 +300,106 @@ func DiscoverCachedCodexVersion() (current, newer string, ok bool) {
 	return "", "", false
 }
 
+// DiscoverCodexCLIVersion compares the installed CLI with models_cache.json's
+// client_version and records each offered client version once.
+func DiscoverCodexCLIVersion() (installed, available string, ok bool) {
+	available, err := cachedCodexClientVersion()
+	if err != nil || !cliVersionPattern.MatchString(available) {
+		return "", "", false
+	}
+	statePath := filepath.Join(stateRoot(), "codex-cli-version.json")
+	unlock, err := contextio.LockFile(statePath + ".lock")
+	if err != nil {
+		return "", "", false
+	}
+	defer unlock()
+
+	var state struct {
+		CheckedOn        string   `json:"checked_on"`
+		InstalledVersion *string  `json:"installed_version"`
+		Asked            []string `json:"asked"`
+	}
+	if data, readErr := os.ReadFile(statePath); readErr == nil {
+		_ = json.Unmarshal(data, &state)
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if state.CheckedOn != today {
+		state.CheckedOn = today
+		state.InstalledVersion = installedCodexVersion()
+		if state.Asked == nil {
+			state.Asked = []string{}
+		}
+		if atomicJSON(statePath, state) != nil {
+			return "", "", false
+		}
+	}
+	if state.InstalledVersion == nil || !cliVersionPattern.MatchString(*state.InstalledVersion) ||
+		compareVersionNumbers(available, *state.InstalledVersion) <= 0 || has(state.Asked, available) {
+		return "", "", false
+	}
+	state.Asked = appendUnique(state.Asked, available)
+	if atomicJSON(statePath, state) != nil {
+		return "", "", false
+	}
+	return *state.InstalledVersion, available, true
+}
+
+var cliVersionPattern = regexp.MustCompile(`^\d+(?:\.\d+){1,2}$`)
+var cliVersionOutputPattern = regexp.MustCompile(`(?:^|[^\d])(\d+\.\d+(?:\.\d+)?)`)
+
+func cachedCodexClientVersion() (string, error) {
+	home := os.Getenv("CODEX_HOME")
+	if strings.TrimSpace(home) == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		home = filepath.Join(home, ".codex")
+	}
+	data, err := os.ReadFile(filepath.Join(expandHome(home), "models_cache.json"))
+	if err != nil {
+		return "", err
+	}
+	var cache struct {
+		ClientVersion string          `json:"client_version"`
+		Models        json.RawMessage `json:"models"`
+	}
+	if json.Unmarshal(data, &cache) != nil {
+		return "", errors.New("invalid Codex models cache")
+	}
+	var models []json.RawMessage
+	if json.Unmarshal(cache.Models, &models) != nil || models == nil {
+		return "", errors.New("invalid Codex models cache")
+	}
+	return cache.ClientVersion, nil
+}
+
+func installedCodexVersion() *string {
+	executable, err := exec.LookPath("codex")
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	command := exec.CommandContext(ctx, executable, "--version")
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if command.Run() != nil {
+		return nil
+	}
+	result := stdout.Bytes()
+	if len(result) == 0 {
+		result = stderr.Bytes()
+	}
+	match := cliVersionOutputPattern.FindSubmatch(result)
+	if len(match) < 2 {
+		return nil
+	}
+	version := string(match[1])
+	return &version
+}
+
 func cachedCodexModels() ([]string, error) {
 	home := os.Getenv("CODEX_HOME")
 	if strings.TrimSpace(home) == "" {

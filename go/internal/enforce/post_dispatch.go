@@ -509,6 +509,12 @@ func appendPostDispatchReceipt(response map[string]any, root string, event, pend
 			}
 			context += report
 		}
+		if installed, available, ok := models.DiscoverCodexCLIVersion(); ok {
+			if context != "" {
+				context += "\n"
+			}
+			context += fmt.Sprintf("> ⚓ **Codex CLI %s is available (installed: %s). Update it? (1/yes)**", available, installed)
+		}
 	}
 	if context == "" {
 		return response
