@@ -419,16 +419,22 @@ func TestPlanCompleteMilestoneRefusesOpenLinkedJob(t *testing.T) {
 	}
 	if _, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", ""); err == nil {
 		t.Fatal("completion accepted while a linked job was open")
+	} else if err.Error() != "milestone 1 has a running linked job job-open" {
+		t.Fatalf("completion error = %q", err)
 	}
 }
 
-func TestPlanCompleteMilestoneClosesSucceededJobWithNoDelta(t *testing.T) {
+func TestPlanCompleteMilestoneClearsSupersededAndMissingJobs(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-no-delta")
+	state, _, err = BindPlanJob(root, repo, "plan-1-m1of2-p1c", "job-superseded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err = BindPlanJob(root, repo, "plan-1-m1of2-p2c", "job-missing")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,65 +443,20 @@ func TestPlanCompleteMilestoneClosesSucceededJobWithNoDelta(t *testing.T) {
 		t.Fatal(err)
 	}
 	job, _ := json.Marshal(map[string]any{
-		"jobId": "job-no-delta", "taskId": "plan-1-m1of1-p1c", "state": "SUCCEEDED",
-		"reviewedSnapshot": "snapshot-1", "baselineSnapshot": "snapshot-1",
+		"jobId": "job-superseded", "taskId": "plan-1-m1of2-p1c", "state": "SUCCEEDED",
 	})
-	if err := os.WriteFile(filepath.Join(jobDir, "job-no-delta.json"), job, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(jobDir, "job-superseded.json"), job, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", ""); err != nil {
-		t.Fatalf("completion rejected for collected job with no delta: %v", err)
-	}
-}
-
-func TestPlanCompleteMilestoneClosesDiscardedJob(t *testing.T) {
-	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	updated, err := UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", "")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("completion rejected for terminal and missing linked jobs: %v", err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-discarded")
-	if err != nil {
-		t.Fatal(err)
+	if updated.CurrentMilestone != 2 || len(updated.CompletedMilestones) != 1 || updated.CompletedMilestones[0] != 1 {
+		t.Fatalf("milestone progress = completed %v, current %d", updated.CompletedMilestones, updated.CurrentMilestone)
 	}
-	jobDir := filepath.Join(root, "codex_exec_mcp", "jobs")
-	if err := os.MkdirAll(jobDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	job, _ := json.Marshal(map[string]any{
-		"jobId": "job-discarded", "taskId": "plan-1-m1of1-p1c", "state": "SUCCEEDED", "discarded": true,
-	})
-	if err := os.WriteFile(filepath.Join(jobDir, "job-discarded.json"), job, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", ""); err != nil {
-		t.Fatalf("completion rejected for discarded job: %v", err)
-	}
-}
-
-func TestPlanCompleteMilestoneKeepsSucceededJobWithDeltaOpen(t *testing.T) {
-	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-with-delta")
-	if err != nil {
-		t.Fatal(err)
-	}
-	jobDir := filepath.Join(root, "codex_exec_mcp", "jobs")
-	if err := os.MkdirAll(jobDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	job, _ := json.Marshal(map[string]any{
-		"jobId": "job-with-delta", "taskId": "plan-1-m1of1-p1c", "state": "SUCCEEDED",
-		"reviewedSnapshot": "snapshot-after", "baselineSnapshot": "snapshot-before",
-	})
-	if err := os.WriteFile(filepath.Join(jobDir, "job-with-delta.json"), job, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", ""); err == nil {
-		t.Fatal("completion accepted while a succeeded job with a delta remained unapplied")
+	if got := linkedJobs(updated); len(got) != 0 || updated.PendingNextAction != "dispatch" {
+		t.Fatalf("linked jobs = %v, pending action = %q", got, updated.PendingNextAction)
 	}
 }
 

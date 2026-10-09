@@ -368,12 +368,16 @@ func UpdatePlan(root, repository, taskID string, expectedRevision int, operation
 	case "gate":
 		state.Gate = value
 	case "complete-milestone":
-		if state.CurrentMilestone == 0 || hasOpenLinkedJob(root, state, state.CurrentMilestone) {
+		if state.CurrentMilestone == 0 {
 			return nil, errors.New("plan has no current milestone")
+		}
+		if jobID := runningLinkedJob(root, state, state.CurrentMilestone); jobID != "" {
+			return nil, fmt.Errorf("milestone %d has a running linked job %s", state.CurrentMilestone, jobID)
 		}
 		if !containsMilestone(state.CompletedMilestones, state.CurrentMilestone) {
 			state.CompletedMilestones = append(state.CompletedMilestones, state.CurrentMilestone)
 		}
+		setLinkedJobs(state, nil)
 		state.CurrentMilestone = 0
 		for _, milestone := range state.AcceptedMilestones {
 			if !containsMilestone(state.CompletedMilestones, milestone) {
@@ -777,6 +781,32 @@ func hasOpenLinkedJob(root string, state *PlanState, milestone int) bool {
 		}
 	}
 	return false
+}
+
+func runningLinkedJob(root string, state *PlanState, milestone int) string {
+	for _, jobID := range linkedJobs(state) {
+		data, err := os.ReadFile(filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"))
+		if err != nil {
+			continue
+		}
+		var job map[string]any
+		if json.Unmarshal(data, &job) != nil || job["jobId"] != jobID {
+			continue
+		}
+		if discarded, _ := job["discarded"].(bool); discarded {
+			continue
+		}
+		taskID, _ := job["taskId"].(string)
+		jobMilestone, matches := planTaskMilestone(state.TaskID, taskID)
+		if !matches || jobMilestone != milestone {
+			continue
+		}
+		stateText, _ := job["state"].(string)
+		if stateText == "QUEUED" || stateText == "RUNNING" {
+			return jobID
+		}
+	}
+	return ""
 }
 
 func hasOpenPlanTaskJob(root string, state *PlanState) bool {
