@@ -18,12 +18,10 @@ EVENT_TYPES = frozenset(
         "IMPLEMENTER_STARTED",
         "IMPLEMENTER_FINISHED",
         "IMPLEMENTER_FAILED",
-        "MECHANICAL_MODEL_RANK_CHANGED",
         "REVIEWER1_STARTED",
         "REVIEWER1_FINISHED",
         "COMPACTION_ADVICE_OUTCOME",
         "STOP_BLOCKED",
-        "SHADOW_FINISHED",
         "SCOPE_CONFLICT_OUTCOME",
         "REVIEWER1_SKIPPED",
         "REVIEWER1_FAILED",
@@ -267,7 +265,6 @@ _PAYLOAD_FIELDS = {
         | _CALL_CONTEXT_FIELDS
         | CLAUDE_USAGE_PAYLOAD_FIELDS
     ),
-    "MECHANICAL_MODEL_RANK_CHANGED": frozenset({"served_model", "old_rank", "new_rank"}),
     "REVIEWER1_STARTED": frozenset({"reviewer1_provider", "reviewer1_model_requested"}),
     "REVIEWER1_FINISHED": frozenset(
         {
@@ -291,9 +288,6 @@ _PAYLOAD_FIELDS = {
         "post_context_tokens", "elapsed_turns",
     }),
     "STOP_BLOCKED": frozenset({"reason_kinds", "reason_count"}),
-    "SHADOW_FINISHED": frozenset({
-        "candidate", "status", "agreement", "elapsed_ms", "input_tokens", "output_tokens", "total_tokens",
-    }),
     "SCOPE_CONFLICT_OUTCOME": frozenset({"action", "job_id", "queue_wait_ms"}),
     "REVIEWER1_FAILED": frozenset(
         {

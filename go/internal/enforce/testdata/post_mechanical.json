@@ -219,27 +219,7 @@
           "lock": true
         },
         "repository_unchanged": true,
-        "telemetry": [
-          {
-            "event": "MECHANICAL_MODEL_RANK_CHANGED",
-            "state_root": "__STATE__",
-            "project_key": "fixture-project",
-            "served_model": "shadow",
-            "old_rank": 2,
-            "new_rank": 1
-          },
-          {
-            "event": "SHADOW_FINISHED",
-            "state_root": "__STATE__",
-            "project_key": "fixture-project",
-            "candidate": "shadow",
-            "status": "completed",
-            "input_tokens": 10,
-            "output_tokens": 4,
-            "total_tokens": 14,
-            "agreement": true
-          }
-        ]
+        "telemetry": []
       }
     },
     {
@@ -278,26 +258,7 @@
           "lock": true
         },
         "repository_unchanged": true,
-        "telemetry": [
-          {
-            "event": "MECHANICAL_MODEL_RANK_CHANGED",
-            "state_root": "__STATE__",
-            "project_key": "fixture-project",
-            "served_model": "shadow",
-            "old_rank": 2,
-            "new_rank": 1
-          },
-          {
-            "event": "SHADOW_FINISHED",
-            "state_root": "__STATE__",
-            "project_key": "fixture-project",
-            "candidate": "shadow",
-            "status": "failed",
-            "input_tokens": 3,
-            "output_tokens": 2,
-            "total_tokens": 5
-          }
-        ]
+        "telemetry": []
       }
     },
     {
@@ -336,23 +297,7 @@
           "lock": true
         },
         "repository_unchanged": true,
-        "telemetry": [
-          {
-            "event": "MECHANICAL_MODEL_RANK_CHANGED",
-            "state_root": "__STATE__",
-            "project_key": "fixture-project",
-            "served_model": "shadow",
-            "old_rank": 2,
-            "new_rank": 1
-          },
-          {
-            "event": "SHADOW_FINISHED",
-            "state_root": "__STATE__",
-            "project_key": "fixture-project",
-            "candidate": "shadow",
-            "status": "failed"
-          }
-        ]
+        "telemetry": []
       }
     }
   ]

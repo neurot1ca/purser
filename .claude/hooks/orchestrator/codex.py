@@ -4080,20 +4080,10 @@ def _post_observations(
                 if isinstance(attempted_models, list):
                     for missing_model in attempted_models:
                         if isinstance(missing_model, str) and missing_model != pending.get("model"):
-                            missed_positions = mechanical_learning.record_sample(
-                                missing_model, False, root=runtime_root
-                            )
-                            if missed_positions and missed_positions[0] != missed_positions[1]:
-                                _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
-                                         project_key=project_namespace, served_model=missing_model,
-                                         old_rank=missed_positions[0], new_rank=missed_positions[1])
-                positions = mechanical_learning.record_sample(
+                            mechanical_learning.record_sample(missing_model, False, root=runtime_root)
+                mechanical_learning.record_sample(
                     str(pending.get("model")), accepted, root=runtime_root
                 )
-                if positions and positions[0] != positions[1]:
-                    _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
-                             project_key=project_namespace, served_model=pending.get("model"),
-                             old_rank=positions[0], new_rank=positions[1])
             if accepted:
                 mechanical_learning.start_shadow(
                     project_key=str(project_namespace),
@@ -5351,13 +5341,9 @@ def post_tool_use_failure(
         if pending.get("mechanical_opencode") is True and pending.get("agent") == "opencode":
             try:
                 import mechanical_learning
-                positions = mechanical_learning.record_sample(
+                mechanical_learning.record_sample(
                     str(pending.get("model")), False, root=runtime_root
                 )
-                if positions and positions[0] != positions[1]:
-                    _observe("emit", "MECHANICAL_MODEL_RANK_CHANGED", state_root=runtime_root,
-                             project_key=project_namespace, served_model=pending.get("model"),
-                             old_rank=positions[0], new_rank=positions[1])
             except BaseException:
                 pass
         if undelivered is not None:

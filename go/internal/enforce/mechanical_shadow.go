@@ -56,29 +56,16 @@ func runMechanicalShadowJob(ctx context.Context, jobPath, executable string, tim
 	if err != nil || json.Unmarshal(data, &job) != nil {
 		return false
 	}
-	started := time.Now()
 	lock := filepath.Join(filepath.Dir(jobPath), "running.lock")
 	_ = os.WriteFile(lock, []byte(strconv.Itoa(os.Getpid())), 0600)
 	outcome, err := runMechanicalShadow(ctx, mechanicalShadowJob{Model: job.Model, Prompt: job.Prompt, Repository: job.Repository, Scratch: job.Scratch}, executable, timeout)
-	tokens := mechanicalShadowTokens(outcome.Stdout)
-	completed, success := false, false
+	success := false
 	if err == nil && outcome.ExitCode == 0 && !outcome.TimedOut {
 		if report, e := mechanicalShadowReport(outcome.Stdout); e == nil {
-			completed, success = true, mechanicalReportsAgree(report, job.AcceptedReport)
+			success = mechanicalReportsAgree(report, job.AcceptedReport)
 		}
 	}
-	positions, sampleErr := mechanicalShadowRecordSample(job.StateRoot, job.Model, success)
-	if sampleErr == nil && positions[0] >= 0 && positions[1] >= 0 && positions[0] != positions[1] {
-		preEmit(job.StateRoot, map[string]any{}, nil, "shadow-job", job.ProjectKey, "MECHANICAL_MODEL_RANK_CHANGED", map[string]any{"served_model": job.Model, "old_rank": positions[0] + 1, "new_rank": positions[1] + 1})
-	}
-	payload := map[string]any{"candidate": job.Model, "status": "failed", "elapsed_ms": float64(time.Since(started).Microseconds()) / 1000}
-	if completed {
-		payload["status"], payload["agreement"] = "completed", success
-	}
-	for key, value := range tokens {
-		payload[key] = value
-	}
-	preEmit(job.StateRoot, map[string]any{}, nil, "shadow-job", job.ProjectKey, "SHADOW_FINISHED", payload)
+	_, _ = mechanicalShadowRecordSample(job.StateRoot, job.Model, success)
 	_ = os.RemoveAll(job.Scratch)
 	_ = os.Remove(jobPath)
 	_ = os.Remove(lock)
@@ -230,16 +217,6 @@ func recoverStaleMechanicalShadow(shadows string, now time.Time) (bool, error) {
 		}
 	}
 	return true, os.Remove(lock)
-}
-
-func init() {
-	observationFields["MECHANICAL_MODEL_RANK_CHANGED"] = fields("served_model old_rank new_rank")
-	observationFields["SHADOW_FINISHED"] = fields("candidate status elapsed_ms input_tokens output_tokens total_tokens agreement")
-	setObservationRule("id", "served_model candidate")
-	setObservationRule("int", "old_rank new_rank input_tokens output_tokens total_tokens")
-	setObservationRule("number", "elapsed_ms")
-	setObservationRule("enum:completed failed", "status")
-	setObservationRule("bool", "agreement")
 }
 
 func runMechanicalShadow(ctx context.Context, job mechanicalShadowJob, executable string, timeout time.Duration) (mechanicalShadowOutcome, error) {

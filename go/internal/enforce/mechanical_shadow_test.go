@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"purser-hook/internal/testutil"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -88,14 +87,13 @@ func TestMechanicalShadowWorker(t *testing.T) {
 func TestMechanicalShadowCompletionOracle(t *testing.T) {
 	fake := buildFakeOpenCode(t)
 	cases := []struct {
-		name, stdout, exit, status string
-		timeout                    time.Duration
-		ok                         bool
-		in, out, total             int
+		name, stdout, exit string
+		timeout            time.Duration
+		ok                 bool
 	}{
-		{"success", "{\"type\":\"text\",\"part\":{\"text\":\"Changed parser to retain valid free candidates.\"}}\n{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\",\"tokens\":{\"input\":10,\"output\":4,\"total\":14}}}\n", "", "completed", time.Second, true, 10, 4, 14},
-		{"worker failure", "{\"type\":\"step_finish\",\"part\":{\"reason\":\"error\",\"tokens\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n", "7", "failed", time.Second, false, 3, 2, 5},
-		{"timeout", "", "", "failed", 100 * time.Millisecond, false, 0, 0, 0},
+		{"success", "{\"type\":\"text\",\"part\":{\"text\":\"Changed parser to retain valid free candidates.\"}}\n{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\",\"tokens\":{\"input\":10,\"output\":4,\"total\":14}}}\n", "", time.Second, true},
+		{"worker failure", "{\"type\":\"step_finish\",\"part\":{\"reason\":\"error\",\"tokens\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n", "7", time.Second, false},
+		{"timeout", "", "", 100 * time.Millisecond, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -134,21 +132,8 @@ func TestMechanicalShadowCompletionOracle(t *testing.T) {
 			if !strings.Contains(string(data), sample) {
 				t.Fatalf("samples: %s", data)
 			}
-			data, e := os.ReadFile(filepath.Join(root, "telemetry", "events", "by_task", "shadow-job.jsonl"))
-			if e != nil {
-				t.Fatal(e)
-			}
-			events := string(data)
-			if !strings.Contains(events, "MECHANICAL_MODEL_RANK_CHANGED") || !strings.Contains(events, "SHADOW_FINISHED") || !strings.Contains(events, `"status":"`+tc.status+`"`) {
-				t.Fatalf("telemetry: %s", events)
-			}
-			for key, want := range map[string]int{"input_tokens": tc.in, "output_tokens": tc.out, "total_tokens": tc.total} {
-				if want > 0 && !strings.Contains(events, `"`+key+`":`+strconv.Itoa(want)) {
-					t.Fatalf("missing %s: %s", key, events)
-				}
-			}
-			if tc.ok && !strings.Contains(events, `"agreement":true`) {
-				t.Fatalf("missing agreement: %s", events)
+			if _, e := os.Stat(filepath.Join(root, "telemetry", "events", "by_task", "shadow-job.jsonl")); !os.IsNotExist(e) {
+				t.Fatalf("unexpected telemetry file, stat error = %v", e)
 			}
 		})
 	}

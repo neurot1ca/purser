@@ -202,17 +202,7 @@ def test_shadow_scoring_failures_and_matching_report(tmp_path, monkeypatch):
             "project_key": "0123456789abcdef", "state_root": str(tmp_path)}), encoding="utf-8")
         assert mechanical_learning.run_shadow(job) is (idx == 3)
     assert values == [False, False, False, True]
-    shadow_events = [payload for event_type, payload in events if event_type == "SHADOW_FINISHED"]
-    assert shadow_events[0]["status"] == "failed"
-    assert "agreement" not in shadow_events[0]
-    assert "input_tokens" not in shadow_events[0]
-    assert shadow_events[2]["status"] == "failed"
-    assert "agreement" not in shadow_events[2]
-    assert shadow_events[3]["status"] == "completed"
-    assert shadow_events[3]["agreement"] is True
-    assert shadow_events[3]["input_tokens"] == 10
-    assert shadow_events[3]["output_tokens"] == 4
-    assert shadow_events[3]["total_tokens"] == 14
+    assert events == []
 
 
 def _next(outcomes):
@@ -279,10 +269,9 @@ def test_served_mechanical_telemetry_feeds_rank_samples(tmp_path, monkeypatch):
     assert candidate["mechanical_samples"] == [True] * mechanical_learning.MIN_SAMPLES
 
 
-def test_rank_change_telemetry_schema_is_valid():
-    event = telemetry_schema.build_event("MECHANICAL_MODEL_RANK_CHANGED", project_key="0123456789abcdef",
-        payload={"served_model": "vendor/model-free", "old_rank": 2, "new_rank": 1})
-    assert telemetry_schema.valid_event(event)
+def test_unused_mechanical_events_are_not_in_telemetry_schema():
+    assert "MECHANICAL_MODEL_RANK_CHANGED" not in telemetry_schema.EVENT_TYPES
+    assert "SHADOW_FINISHED" not in telemetry_schema.EVENT_TYPES
 
 
 def _benchmark_fake_runner(chore_prompts, *, fail=None, timeout=None, paths=None):

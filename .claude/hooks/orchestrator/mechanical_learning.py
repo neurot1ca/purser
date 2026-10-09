@@ -591,17 +591,14 @@ def run_shadow(job_path: Path) -> bool:
     job = json.loads(job_path.read_text(encoding="utf-8"))
     scratch = Path(job["scratch"])
     lock = job_path.parent / "running.lock"
-    started = time.monotonic()
     success = False
     completed = False
     agreement = None
-    tokens: dict[str, int] = {}
     try:
         lock.write_text(str(os.getpid()), encoding="utf-8")
         source = Path(job["repository"]).resolve()
         _copy_scratch(source, scratch)
         result = _run_opencode(job["model"], job["prompt"], scratch, SHADOW_TIMEOUT_SECONDS)
-        tokens = _opencode_tokens(result.stdout or "")
         if result.returncode == 0:
             report = _final_report(result.stdout)
             completed = True
@@ -611,25 +608,10 @@ def run_shadow(job_path: Path) -> bool:
         success = False
     try:
         root = Path(job["state_root"])
-        positions = record_sample(job["model"], success, root=root)
-        if positions and positions[0] != positions[1]:
-            import telemetry
-            telemetry.emit("MECHANICAL_MODEL_RANK_CHANGED", state_root=root,
-                           project_key=job["project_key"], served_model=job["model"],
-                           old_rank=positions[0], new_rank=positions[1])
+        record_sample(job["model"], success, root=root)
     except Exception:
         pass
     finally:
-        try:
-            import telemetry
-            payload = {"candidate": job["model"], "status": "completed" if completed else "failed",
-                       "elapsed_ms": (time.monotonic() - started) * 1000, **tokens}
-            if completed:
-                payload["agreement"] = agreement
-            telemetry.emit("SHADOW_FINISHED", state_root=job["state_root"],
-                           project_key=job["project_key"], **payload)
-        except Exception:
-            pass
         shutil.rmtree(scratch, ignore_errors=True)
         job_path.unlink(missing_ok=True)
         lock.unlink(missing_ok=True)

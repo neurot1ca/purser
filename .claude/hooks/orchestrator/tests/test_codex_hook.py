@@ -8460,8 +8460,6 @@ def test_reviewer_finding_count_stays_separate_from_task_decisions_and_schema_is
         "COMPACTION_ADVICE_OUTCOME": {"notice_id": "notice-1", "advice_written": True,
                                       "compaction_observed": True, "pre_context_tokens": 100,
                                       "post_context_tokens": 25, "elapsed_turns": 2},
-        "SHADOW_FINISHED": {"candidate": "model-a", "status": "completed", "agreement": True,
-                            "elapsed_ms": 10, "input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
         "SCOPE_CONFLICT_OUTCOME": {"action": "queued", "job_id": "job-1", "queue_wait_ms": 1},
     }
     for event_type, payload in valid_payloads.items():
@@ -8469,7 +8467,6 @@ def test_reviewer_finding_count_stays_separate_from_task_decisions_and_schema_is
     malformed = (
         ("REVIEWER1_FINISHED", {"reviewer1_initial_finding_count": True}),
         ("COMPACTION_ADVICE_OUTCOME", {"notice_id": "bad id"}),
-        ("SHADOW_FINISHED", {"candidate": "model-a", "status": "partial"}),
         ("SCOPE_CONFLICT_OUTCOME", {"action": "bogus"}),
     )
     for event_type, payload in malformed:
