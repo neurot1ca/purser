@@ -151,7 +151,7 @@ func Stop(event map[string]any, started time.Time) []byte {
 	if latestUser >= 0 {
 		if blocked, ok := exactInteger(state["plan_boundary_blocked_user"]); !ok || blocked != latestUser {
 			if plan, err := ReconcilePlanJob(stateRoot(), repository); err == nil && plan != nil && !plan.UserStopped && plan.Gate == "" && plan.CurrentMilestone != 0 &&
-				containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) && plan.PendingNextAction == "dispatch" && !hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) &&
+				containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) && plan.PendingNextAction == "dispatch" && !hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) && !hasOpenPlanTaskJob(stateRoot(), plan) &&
 				!planCodexDispatched(records, latestUser, plan.TaskID) {
 				if pointer := renderActivePlanPointer(repository); pointer != "" {
 					planReason = fmt.Sprintf("Continue accepted plan %s at milestone %d of %d: dispatch the next pass through normal Purser routing and review. %s", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones), pointer)

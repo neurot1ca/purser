@@ -137,6 +137,28 @@ func TestPlanStopFailureCasesFailOpen(t *testing.T) {
 			t.Fatalf("Stop blocked while linked job is running: %q", got)
 		}
 	})
+
+	t.Run("unlinked running reply job still running", func(t *testing.T) {
+		root, repo, artifact := planFixture(t)
+		t.Setenv("PURSER_STATE_DIR", root)
+		if _, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1}); err != nil {
+			t.Fatal(err)
+		}
+		jobID, taskID := strings.Repeat("b", 64), "plan-1-m1of1-p1c"
+		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+		if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+			t.Fatal(err)
+		}
+		job, _ := json.Marshal(map[string]any{"jobId": jobID, "taskId": taskID, "state": "RUNNING", "mode": "reply"})
+		if err := os.WriteFile(jobPath, job, 0600); err != nil {
+			t.Fatal(err)
+		}
+		transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+		appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Unrelated request."}})
+		if got := planStop(t, repo, transcript, false); got != "" {
+			t.Fatalf("Stop blocked while an unlinked reply job is running: %q", got)
+		}
+	})
 }
 
 func appendPlanStopRecord(t *testing.T, path string, record map[string]any) {

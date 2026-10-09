@@ -472,6 +472,31 @@ func hasOpenLinkedJob(root string, state *PlanState, milestone int) bool {
 	return false
 }
 
+func hasOpenPlanTaskJob(root string, state *PlanState) bool {
+	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	entries, err := os.ReadDir(jobsDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		job, ok := readSmallObject(filepath.Join(jobsDir, entry.Name()))
+		if !ok || job["jobId"] != strings.TrimSuffix(entry.Name(), ".json") {
+			continue
+		}
+		taskID, _ := job["taskId"].(string)
+		if taskID != state.TaskID && !PlanTaskMatches(state.TaskID, taskID) {
+			continue
+		}
+		if job["state"] == "QUEUED" || job["state"] == "RUNNING" {
+			return true
+		}
+	}
+	return false
+}
+
 func containsPlanString(values []string, value string) bool {
 	for _, candidate := range values {
 		if candidate == value {
