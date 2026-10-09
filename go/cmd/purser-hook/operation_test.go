@@ -226,7 +226,16 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	if output, buildErr := build.CombinedOutput(); buildErr != nil {
 		t.Fatalf("build fake worker: %v\n%s", buildErr, output)
 	}
+	agy := filepath.Join(fakeDir, "agy")
+	if runtime.GOOS == "windows" {
+		agy += ".exe"
+	}
+	agyBuild := testutil.Hide(exec.Command("go", "build", "-o", agy, fakeSource))
+	if output, buildErr := agyBuild.CombinedOutput(); buildErr != nil {
+		t.Fatalf("build fake agy: %v\n%s", buildErr, output)
+	}
 	t.Setenv("PURSER_CODEX_BIN", override)
+	t.Setenv("PATH", fakeDir)
 	args := map[string]any{"call": "123e4567-e89b-12d3-a456-426614174001", "prompt": "test", "cwd": t.TempDir(),
 		"model": "gemini-test", "config": map[string]any{"model_reasoning_effort": "high"}}
 	input, _ := json.Marshal(map[string]any{"args": args})

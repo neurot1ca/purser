@@ -83,15 +83,18 @@ func TestAdapterGoldens(t *testing.T) {
 }
 
 func TestReviewerExecutableUsesConfiguredPathOnlyForMatchingProvider(t *testing.T) {
-	configured := filepath.Join(t.TempDir(), "agy.exe")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	configured := filepath.Join(t.TempDir(), "agy"+executableSuffix())
 	got, err := reviewerExecutable(map[string]any{"reviewer1_executable": configured}, "agy")
 	if err != nil || got != configured {
 		t.Fatalf("agy executable = %q, %v; want %q", got, err, configured)
 	}
 
 	pathDir := t.TempDir()
-	claude := filepath.Join(pathDir, "claude.exe")
-	if err := os.WriteFile(claude, []byte("fake claude"), 0600); err != nil {
+	claude := filepath.Join(pathDir, "claude"+executableSuffix())
+	if err := os.WriteFile(claude, []byte("fake claude"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", pathDir)
@@ -112,6 +115,13 @@ func TestReviewerExecutableUsesConfiguredPathOnlyForMatchingProvider(t *testing.
 	if got != want {
 		t.Fatalf("claude executable = %q, want PATH result %q", got, want)
 	}
+}
+
+func executableSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
 }
 
 func TestAdapterEnvelopeParser(t *testing.T) {

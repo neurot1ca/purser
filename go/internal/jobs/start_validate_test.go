@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -138,6 +139,22 @@ func TestValidateStartRefusesMissingCWDOutsideRepository(t *testing.T) {
 
 func TestValidateStartAcceptsMechanicalOpenCodeArguments(t *testing.T) {
 	t.Setenv("PURSER_AGENT", "")
+	fakeDir := t.TempDir()
+	source := filepath.Join(fakeDir, "fake-opencode.go")
+	if err := os.WriteFile(source, []byte("package main\nfunc main() {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(fakeDir, "opencode")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	if output, err := exec.Command("go", "build", "-o", executable, source).CombinedOutput(); err != nil {
+		t.Fatalf("build fake OpenCode: %v: %s", err, output)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", fakeDir)
 	args := map[string]any{
 		"agent": "opencode", "call": "00000000-0000-4000-8000-000000000001", "config": map[string]any{},
 		"cwd": `C:\Projects\purser`, "etaMinutes": 3, "jobEffort": "high", "jobLabel": "mechanical task",

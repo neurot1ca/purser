@@ -28,6 +28,9 @@ func nativeArgs(root, executable, _ string) map[string]any {
 
 func isolateReviewerPath(t *testing.T) {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("PATH", t.TempDir())
 }
 
@@ -74,7 +77,7 @@ func main() { if d := os.Getenv("MOCK_SLEEP_MS"); d != "" { var n int; fmt.Sscan
 	if err := os.WriteFile(src, []byte(source), 0600); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(dir, "mock-reviewer")
+	bin := filepath.Join(dir, "agy")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
@@ -121,7 +124,11 @@ func TestNativeRunBridgeCompletedPassAndFindings(t *testing.T) {
 
 func TestNativeRunBridgeUnavailableAndDeadline(t *testing.T) {
 	root, bin := nativeFixture(t)
-	args := nativeArgs(root, filepath.Join(root, "missing"), NoMaterialFinding)
+	missing := filepath.Join(root, "missing", "agy")
+	if runtime.GOOS == "windows" {
+		missing += ".exe"
+	}
+	args := nativeArgs(root, missing, NoMaterialFinding)
 	isolateReviewerPath(t)
 	got, err := RunBridge(context.Background(), root, args, 30*time.Second)
 	if err != nil || got.Outcome != "unavailable" || got.Attributes["error_code"] != "REVIEWER_EXECUTABLE_MISSING" {
@@ -175,14 +182,14 @@ func TestNativeRunBridgeInvalidInputAndReviewerPanic(t *testing.T) {
 }
 
 func TestNativeRunBridgeDifferential(t *testing.T) {
-	python, err := exec.LookPath("python")
-	if err != nil {
-		python, err = exec.LookPath("python3")
-	}
+	python, err := activeNativePython(t)
 	if err != nil {
 		t.Skip("Python unavailable")
 	}
-	hostPath := os.Getenv("PATH")
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
 	root, bin := nativeFixture(t)
 	t.Setenv("TMP", root)
 	t.Setenv("TEMP", root)
@@ -202,7 +209,7 @@ func TestNativeRunBridgeDifferential(t *testing.T) {
 	defer cancel()
 	cmd := testutil.Hide(exec.CommandContext(ctx, python, "-c", pythonCode))
 	cmd.Stdin = strings.NewReader(string(payload))
-	cmd.Env = append(os.Environ(), "PATH="+hostPath, "PYTHONPATH="+filepath.Dir(script))
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(git), "HOME="+root, "USERPROFILE="+root, "PYTHONPATH="+filepath.Dir(script))
 	var pythonStderr bytes.Buffer
 	cmd.Stderr = &pythonStderr
 	pythonOutput, err := cmd.Output()
@@ -229,6 +236,17 @@ func TestNativeRunBridgeDifferential(t *testing.T) {
 	if string(actualJSON) != string(wantJSON) {
 		t.Fatalf("Go map %s differs from Python map %s; Python stderr=%s", actualJSON, wantJSON, pythonStderr.String())
 	}
+}
+
+func activeNativePython(t *testing.T) (string, error) {
+	t.Helper()
+	for _, name := range []string{"python", "python3"} {
+		if path, err := exec.LookPath(name); err == nil {
+			absolute, absErr := filepath.Abs(path)
+			return absolute, absErr
+		}
+	}
+	return "", exec.ErrNotFound
 }
 
 func TestNativeRunBridgeRejectsOversizedReviewerResponse(t *testing.T) {

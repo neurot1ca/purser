@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,11 @@ func TestReadinessHostSameFamilyIsUnavailable(t *testing.T) {
 func TestReadinessHostMissingCheckerIsUnknown(t *testing.T) {
 	fixture := newReadinessHostFixture(t, "gpt-5", "agy", true)
 	t.Setenv("PATH", fixture.gitDir)
-	if err := os.WriteFile(fixture.userConfig, []byte("[coding]\nreviewer1_executable = '/missing/readiness-checker'\n"), 0600); err != nil {
+	missing := filepath.Join(t.TempDir(), "agy")
+	if runtime.GOOS == "windows" {
+		missing += ".exe"
+	}
+	if err := os.WriteFile(fixture.userConfig, []byte("[coding]\nreviewer1_executable = '"+missing+"'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PURser_READINESS_MOCK", "")
@@ -99,10 +104,7 @@ func TestReadinessCheckerTimeoutIsUnknown(t *testing.T) {
 	t.Setenv("PURser_READINESS_SLEEP", "1")
 	marker := filepath.Join(t.TempDir(), "checker-called")
 	t.Setenv("PURser_READINESS_MARKER", marker)
-	checker, err := os.Executable()
-	if err != nil || !filepath.IsAbs(checker) {
-		t.Fatalf("mock checker must have absolute path: %q %v", checker, err)
-	}
+	checker := readinessCheckerExecutable(t)
 	got, err := review.RunReadiness(t.Context(), "", review.ReadinessRequest{
 		Grounded: true, Objective: "test", AcceptanceCriteria: "must work", AttributedDiff: "+++ b/a\n@@ -0,0 +1 @@\n+x\n",
 		Agent: "agy", Model: "gemini-2.5-pro", RepoRoot: t.TempDir(), Executable: checker,
@@ -158,7 +160,7 @@ func newReadinessHostFixture(t *testing.T, implementer, agent string, grounded b
 	if err := os.MkdirAll(filepath.Dir(userConfig), 0700); err != nil {
 		t.Fatal(err)
 	}
-	checker, _ := os.Executable()
+	checker := readinessCheckerExecutable(t)
 	if err := os.WriteFile(userConfig, []byte("[coding]\nreviewer1_executable = '"+checker+"'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -199,6 +201,27 @@ func newReadinessHostFixture(t *testing.T, implementer, agent string, grounded b
 	marker := filepath.Join(root, "checker-called")
 	t.Setenv("PURser_READINESS_MARKER", marker)
 	return readinessHostFixture{root: root, jobs: jobs, id: id, userConfig: userConfig, gitDir: filepath.Dir(git), marker: marker}
+}
+
+func readinessCheckerExecutable(t *testing.T) string {
+	t.Helper()
+	current, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "agy"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	checker := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(checker, data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return checker
 }
 
 func assertReadinessCheckerNotCalled(t *testing.T, marker string) {

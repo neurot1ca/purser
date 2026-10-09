@@ -52,6 +52,18 @@ func TestAwaitHostPythonAcknowledgementOutcomes(t *testing.T) {
 			t.Fatalf("live host process was not acknowledged: %#v", got)
 		}
 	})
+	if runtime.GOOS == "darwin" {
+		t.Run("Darwin PID-only host is unconfirmed", func(t *testing.T) {
+			stateRoot := t.TempDir()
+			writeAwaitRecord(t, stateRoot, map[string]any{"jobId": id, "state": "RUNNING",
+				"hostPid": os.Getpid(), "acceptedAt": 10, "deadlineAt": 20})
+			got := awaitHost(stateRoot, id, time.Millisecond)
+			value := got["structuredContent"].(map[string]any)
+			if value["errorCode"] != "PROCESS_UNCONFIRMED" || value["message"] != "Host ownership was not acknowledged" {
+				t.Fatalf("PID-only host was acknowledged: %#v", got)
+			}
+		})
+	}
 	t.Run("explicit unconfirmed state returns immediately", func(t *testing.T) {
 		stateRoot := t.TempDir()
 		writeAwaitRecord(t, stateRoot, map[string]any{"jobId": id, "state": "UNKNOWN_OR_IN_PROGRESS"})

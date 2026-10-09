@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"purser-hook/internal/testutil"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,11 @@ import (
 )
 
 func TestSchedulePostReviewPythonFixture(t *testing.T) {
+	python := activePostReviewPython(t)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "post_review.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -36,10 +42,22 @@ func TestSchedulePostReviewPythonFixture(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
+	for i := range fixture.Cases {
+		for j := range fixture.Cases[i].Checks {
+			argv := fixture.Cases[i].Checks[j].Argv
+			if len(argv) > 0 && strings.EqualFold(filepath.Base(strings.ReplaceAll(argv[0], "\\", "/")), "python.exe") {
+				argv[0] = python
+			}
+		}
+	}
 	for _, test := range fixture.Cases {
 		t.Run(test.Name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("PATH", filepath.Dir(git))
 			root := t.TempDir()
-			postReviewRepo(t, root, test.Delta)
+			postReviewRepo(t, git, root, test.Delta)
 			bundle := baseBundle("")
 			bundle["delta"], bundle["thread_id"], bundle["worker_validation"] = test.Delta, "fixture-thread", map[string]any{"status": "PASS", "summary": "fixture"}
 			if paths, ok := postStringList(test.Delta["changed_paths"]); ok {
@@ -80,6 +98,21 @@ func TestSchedulePostReviewPythonFixture(t *testing.T) {
 	}
 }
 
+func activePostReviewPython(t *testing.T) string {
+	t.Helper()
+	for _, name := range []string{"python", "python3"} {
+		if path, err := exec.LookPath(name); err == nil {
+			absolute, absErr := filepath.Abs(path)
+			if absErr != nil {
+				t.Fatal(absErr)
+			}
+			return absolute
+		}
+	}
+	t.Fatal("Python interpreter is unavailable on PATH")
+	return ""
+}
+
 func TestSchedulePostReviewOperationSkipsBeforeDeltaValidation(t *testing.T) {
 	bundle := baseBundle("")
 	schedulePostReview(t.TempDir(), map[string]any{"phase": "operation"}, bundle, postProfile{}, nil,
@@ -97,9 +130,9 @@ func anyList(values []string) []any {
 	return result
 }
 
-func postReviewRepo(t *testing.T, root string, delta map[string]any) {
+func postReviewRepo(t *testing.T, git, root string, delta map[string]any) {
 	t.Helper()
-	command := testutil.Hide(exec.Command("git", "init", "-q", root))
+	command := testutil.Hide(exec.Command(git, "init", "-q", root))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
@@ -116,11 +149,11 @@ func postReviewRepo(t *testing.T, root string, delta map[string]any) {
 			t.Fatal(err)
 		}
 	}
-	command = testutil.Hide(exec.Command("git", "-C", root, "add", "--all"))
+	command = testutil.Hide(exec.Command(git, "-C", root, "add", "--all"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git add: %v: %s", err, output)
 	}
-	command = testutil.Hide(exec.Command("git", "-C", root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"))
+	command = testutil.Hide(exec.Command(git, "-C", root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %v: %s", err, output)
 	}

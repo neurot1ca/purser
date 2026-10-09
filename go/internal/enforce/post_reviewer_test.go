@@ -162,12 +162,16 @@ func TestPostReviewerClaudeFallbackEffortAndReason(t *testing.T) {
 }
 
 func TestPostReviewerClaudeFallbackRunsWithDefaultEffortFakeExecutable(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
 	pluginRoot := t.TempDir()
 	repo := filepath.Join(pluginRoot, "repo")
 	if err := os.MkdirAll(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
-	postReviewRepo(t, repo, map[string]any{"changed_paths": []any{"change.txt"}})
+	postReviewRepo(t, git, repo, map[string]any{"changed_paths": []any{"change.txt"}})
 	if err := os.WriteFile(filepath.Join(repo, "change.txt"), []byte("changed after baseline\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -186,13 +190,17 @@ func main() {
 	if err := os.WriteFile(sourcePath, []byte(source), 0600); err != nil {
 		t.Fatal(err)
 	}
-	executable := filepath.Join(pluginRoot, "fake-claude")
+	executable := filepath.Join(pluginRoot, "claude")
 	if runtime.GOOS == "windows" {
 		executable += ".exe"
 	}
 	if err := exec.Command("go", "build", "-o", executable, sourcePath).Run(); err != nil {
 		t.Fatal(err)
 	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", t.TempDir())
 	configDir := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		t.Fatal(err)

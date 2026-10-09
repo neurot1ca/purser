@@ -18,6 +18,7 @@ import (
 )
 
 func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
+	python := activePythonInterpreter(t)
 	_, source, _, _ := runtime.Caller(0)
 	fixturePath := filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json")
 	data, err := os.ReadFile(fixturePath)
@@ -43,7 +44,9 @@ func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
 	if len(fixture.Cases) != 6 {
 		t.Fatalf("fixture cases=%d, want 6", len(fixture.Cases))
 	}
+	fixture.Python = python
 	binary := buildPurserHook(t)
+	isolateSynchronousEnvironment(t)
 	tempRoot := t.TempDir()
 	bin, err := json.Marshal([]string{fixture.Python, "-c", fixture.FakeCodex})
 	if err != nil {
@@ -128,6 +131,7 @@ func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
 }
 
 func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
+	python := activePythonInterpreter(t)
 	_, source, _, _ := runtime.Caller(0)
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json"))
 	if err != nil {
@@ -161,6 +165,8 @@ func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
 	if selected == nil {
 		t.Fatal("Python fixture has no new_success case")
 	}
+	fixture.Python = python
+	isolateSynchronousEnvironment(t)
 	root := t.TempDir()
 	args := replaceFixtureRoot(selected.Arguments, root)
 	cwd := args["cwd"].(string)
@@ -187,6 +193,7 @@ func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
 }
 
 func TestDispatchOperationContextCancellationStopsChild(t *testing.T) {
+	python := activePythonInterpreter(t)
 	_, source, _, _ := runtime.Caller(0)
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json"))
 	if err != nil {
@@ -199,6 +206,8 @@ func TestDispatchOperationContextCancellationStopsChild(t *testing.T) {
 	if err = json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
+	fixture.Python = python
+	isolateSynchronousEnvironment(t)
 	root := t.TempDir()
 	args := map[string]any{"prompt": "cancel", "cwd": root}
 	started := filepath.Join(root, "child-started")
@@ -237,6 +246,29 @@ func TestDispatchOperationContextCancellationStopsChild(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("dispatcher did not stop after context cancellation")
 	}
+}
+
+func activePythonInterpreter(t *testing.T) string {
+	t.Helper()
+	for _, name := range []string{"python", "python3"} {
+		if path, err := exec.LookPath(name); err == nil {
+			absolute, absErr := filepath.Abs(path)
+			if absErr != nil {
+				t.Fatal(absErr)
+			}
+			return absolute
+		}
+	}
+	t.Fatal("Python interpreter is unavailable on PATH")
+	return ""
+}
+
+func isolateSynchronousEnvironment(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", t.TempDir())
 }
 
 func TestPythonToolJSONUnicodeEscapeParity(t *testing.T) {
