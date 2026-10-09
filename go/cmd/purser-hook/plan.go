@@ -45,7 +45,11 @@ func planMain(args []string) int {
 			return planError(err)
 		}
 	} else if action == "status" {
-		state, err = contextio.ReadPlan(stateRoot(), repository)
+		if *taskID == "" {
+			state, err = contextio.ReadPlan(stateRoot(), repository)
+		} else {
+			state, err = contextio.ReadPlanForTask(stateRoot(), repository, *taskID)
+		}
 		if err != nil {
 			return planError(err)
 		}
@@ -78,6 +82,9 @@ func parseMilestones(raw string) ([]int, error) {
 }
 
 func planError(err error) int {
-	_, _ = fmt.Fprintf(os.Stderr, "Plan state could not be updated: %v\n", err)
+	message := err.Error()
+	message = strings.ReplaceAll(message, "multiple unfinished plans; specify a plan task id", "multiple unfinished plans; pass --task-id")
+	message = strings.ReplaceAll(message, "no unfinished plan; specify a plan task id", "no unfinished plan; pass --task-id")
+	_, _ = fmt.Fprintf(os.Stderr, "Plan state could not be updated: %s\n", message)
 	return 1
 }
