@@ -132,13 +132,13 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	if len(paths) != 0 {
 		allPresent := true
 		for _, path := range paths {
-			if !sameWorktreeContent(worktree, root, path) {
+			if !ledger.SameWorktreeContent(worktree, root, path) {
 				allPresent = false
 				break
 			}
 		}
 		if allPresent {
-			return persistApplied(stateRoot, dir, jobID, job, map[string]any{"applied": true, "paths": paths}, args, opt)
+			return persistApplied(stateRoot, dir, jobID, job, map[string]any{"applied": true, "paths": paths}, args, opt, "")
 		}
 	}
 	if _, ok := job.values["applyResult"]; ok {
@@ -223,11 +223,13 @@ func changedPathsDigest(worktree, snapshot string) (string, error) {
 	return ledger.JobChangedPathsSHA256(worktree, snapshot)
 }
 
-func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]any, args map[string]any, opt ApplyOptions) map[string]any {
+func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]any, args map[string]any, opt ApplyOptions, applyReason string) map[string]any {
 	_ = job.Set("applyState", "applied")
 	_ = job.Set("applyResult", value)
 	_ = job.Set("appliedAt", float64(time.Now().UnixNano())/1e9)
-	if task, _ := recordMap(job)["taskId"].(string); task != "" {
+	if applyReason != "" {
+		_ = job.Set("applyReason", applyReason)
+	} else if task, _ := recordMap(job)["taskId"].(string); task != "" {
 		_ = job.Set("decisionRecorded", true)
 	}
 	if err := Write(filepath.Join(dir, jobID+".json"), job); err != nil {
@@ -235,8 +237,10 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 	}
 	var worktree string
 	job.Get("worktreePath", &worktree)
-	recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
-	recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
+	if applyReason == "" {
+		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
+		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
+	}
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	dispatchWorktreeRetirement(stateRoot, jobID)
 	return applyToolResult(value)
@@ -253,26 +257,3 @@ func applyToolResult(value map[string]any) map[string]any {
 }
 
 func patchPaths(root, patch string) ([]string, error) { return ledger.JobPatchPaths(root, patch) }
-
-func sameWorktreeContent(worktree, repo, path string) bool {
-	a, b := filepath.Join(worktree, path), filepath.Join(repo, path)
-	ai, ae := os.Lstat(a)
-	bi, be := os.Lstat(b)
-	if ae != nil || be != nil {
-		return errors.Is(ae, os.ErrNotExist) && errors.Is(be, os.ErrNotExist)
-	}
-	if ai.Mode()&os.ModeSymlink != 0 || bi.Mode()&os.ModeSymlink != 0 {
-		if ai.Mode()&os.ModeSymlink == 0 || bi.Mode()&os.ModeSymlink == 0 {
-			return false
-		}
-		al, ae := os.Readlink(a)
-		bl, be := os.Readlink(b)
-		return ae == nil && be == nil && al == bl
-	}
-	if !ai.Mode().IsRegular() || !bi.Mode().IsRegular() {
-		return false
-	}
-	x, ae := os.ReadFile(a)
-	y, be := os.ReadFile(b)
-	return ae == nil && be == nil && string(x) == string(y)
-}

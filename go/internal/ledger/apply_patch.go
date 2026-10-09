@@ -1,10 +1,36 @@
 package ledger
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+// SameWorktreeContent reports whether one repository path matches its job worktree.
+func SameWorktreeContent(worktree, repo, path string) bool {
+	a, b := filepath.Join(worktree, path), filepath.Join(repo, path)
+	ai, ae := os.Lstat(a)
+	bi, be := os.Lstat(b)
+	if ae != nil || be != nil {
+		return errors.Is(ae, os.ErrNotExist) && errors.Is(be, os.ErrNotExist)
+	}
+	if ai.Mode()&os.ModeSymlink != 0 || bi.Mode()&os.ModeSymlink != 0 {
+		if ai.Mode()&os.ModeSymlink == 0 || bi.Mode()&os.ModeSymlink == 0 {
+			return false
+		}
+		al, ae := os.Readlink(a)
+		bl, be := os.Readlink(b)
+		return ae == nil && be == nil && al == bl
+	}
+	if !ai.Mode().IsRegular() || !bi.Mode().IsRegular() {
+		return false
+	}
+	x, ae := os.ReadFile(a)
+	y, be := os.ReadFile(b)
+	return ae == nil && be == nil && string(x) == string(y)
+}
 
 // SnapshotDriftPaths reports job paths changed since the reviewed tree.
 func SnapshotDriftPaths(repoRoot, snapshot string, paths []string) ([]string, error) {

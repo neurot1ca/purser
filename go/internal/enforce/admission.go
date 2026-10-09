@@ -40,6 +40,7 @@ var afterPreLease = func() error { return nil }
 var afterPrePending = func() error { return nil }
 var afterPreSession = func() error { return nil }
 var writeAsyncReady = atomicAdmissionJSON
+var ReleaseHandAppliedBlockers func(runtimeRoot, projectRoot string, scope []string)
 
 // AdmitPending mirrors Python's sync-reachable rejected-start reconciliation,
 // lease admission, then pending -> session -> thread-index writes.
@@ -61,6 +62,9 @@ func AdmitPending(in PendingAdmission) AdmissionResult {
 	}()
 	if in.Repository != nil && !in.SkipLease {
 		reconcileRejectedStarts(in.RuntimeRoot, projectRoot, in.ProjectKey, in.Now)
+		if ReleaseHandAppliedBlockers != nil {
+			ReleaseHandAppliedBlockers(in.RuntimeRoot, projectRoot, in.Scope)
+		}
 		admitted := lease.New(projectRoot).Acquire(in.OwnerKey, in.TaskID, in.Scope, lease.AcquireOptions{
 			JobID: in.JobID, TimeoutSeconds: in.TimeoutSeconds, ReadOnly: in.ReadOnly,
 			AllowOverlap: in.AllowOverlap, HotPathQueue: in.HotPathQueue,

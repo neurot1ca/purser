@@ -10,9 +10,127 @@ import (
 	"path/filepath"
 	"time"
 
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
+
+func init() {
+	enforce.ReleaseHandAppliedBlockers = ReleaseHandAppliedBlockers
+}
+
+// ReleaseHandAppliedBlockers marks succeeded jobs applied when their worktree
+// content is already present in the repository, then releases their lease.
+func ReleaseHandAppliedBlockers(stateRoot, projectRoot string, scope []string) {
+	if len(scope) == 0 {
+		return
+	}
+	owners := handAppliedOwners(projectRoot, scope)
+	for _, owner := range owners {
+		markHandAppliedJob(stateRoot, owner.JobID)
+	}
+}
+
+type handAppliedOwner struct {
+	State string `json:"state"`
+	Scope []any  `json:"scope"`
+	JobID string `json:"job_id"`
+}
+
+func handAppliedOwners(projectRoot string, scope []string) []handAppliedOwner {
+	unlock, err := lease.Lock(filepath.Join(projectRoot, "scope_leases.lock"))
+	if err != nil {
+		return nil
+	}
+	defer unlock()
+	raw, err := os.ReadFile(filepath.Join(projectRoot, "scope_leases.json"))
+	if err != nil || lease.Validate(raw) != nil {
+		return nil
+	}
+	var state struct {
+		Owners map[string]handAppliedOwner `json:"owners"`
+	}
+	if json.Unmarshal(raw, &state) != nil {
+		return nil
+	}
+	requested := make([]any, len(scope))
+	for i, path := range scope {
+		requested[i] = path
+	}
+	owners := make([]handAppliedOwner, 0, len(state.Owners))
+	for _, owner := range state.Owners {
+		if owner.State == "ACTIVE" && owner.JobID != "" && lease.ScopesOverlap(owner.Scope, requested) {
+			owners = append(owners, owner)
+		}
+	}
+	return owners
+}
+
+func markHandAppliedJob(stateRoot, jobID string) {
+	if len(jobID) != sha256.Size*2 {
+		return
+	}
+	if _, err := hex.DecodeString(jobID); err != nil {
+		return
+	}
+	dir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
+	path := filepath.Join(dir, jobID+".json")
+	prior := readJob(dir, jobID)
+	if prior == nil {
+		return
+	}
+	var repo string
+	prior.Get("repoRoot", &repo)
+	root, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		return
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return
+	}
+	digest := sha256.Sum256([]byte(root))
+	applyUnlock, err := lease.Lock(filepath.Join(filepath.Dir(dir), "apply", hex.EncodeToString(digest[:])+".lock"))
+	if err != nil {
+		return
+	}
+	defer applyUnlock()
+	jobLock, err := AcquireOwnership(dir, jobID)
+	if err != nil {
+		return
+	}
+	defer jobLock.Release()
+	job, err := Read(path)
+	if err != nil {
+		return
+	}
+	var state, applyState, worktree, currentRepo, snapshot string
+	job.Get("state", &state)
+	job.Get("applyState", &applyState)
+	job.Get("worktreePath", &worktree)
+	job.Get("repoRoot", &currentRepo)
+	job.Get("snapshot", &snapshot)
+	if state != "SUCCEEDED" || applyState == "applied" || currentRepo != repo || worktree == "" || snapshot == "" {
+		return
+	}
+	if info, statErr := os.Stat(worktree); statErr != nil || !info.IsDir() {
+		return
+	}
+	patch, err := ledger.JobPatch(worktree, snapshot)
+	if err != nil {
+		return
+	}
+	paths, err := ledger.JobPatchPaths(root, patch)
+	if err != nil || len(paths) == 0 {
+		return
+	}
+	for _, path := range paths {
+		if !ledger.SameWorktreeContent(worktree, root, path) {
+			return
+		}
+	}
+	persistApplied(stateRoot, dir, jobID, job, map[string]any{"applied": true, "paths": paths}, nil, ApplyOptions{}, "hand_applied_detected")
+}
 
 // BindQueuedBaseline binds fresh review evidence once the async index exists and
 // the queued scope lease has been promoted. A missing index or inactive lease
@@ -55,7 +173,12 @@ func BindQueuedBaseline(runtimeRoot, jobID string) (bool, error) {
 		!pendingProjectOK || pendingProject != projectKey || owner != callKey || pending["lease_queued"] != true {
 		return false, errors.New("queued job ownership is unavailable")
 	}
+	scope, scopeOK := stringSlice(pending["scope"])
+	if !scopeOK {
+		return false, errors.New("queued job ownership is unavailable")
+	}
 	projectRoot := filepath.Join(runtimeRoot, "projects", projectKey)
+	ReleaseHandAppliedBlockers(runtimeRoot, projectRoot, scope)
 	state, err := lease.New(projectRoot).OwnerState(owner, float64(time.Now().UnixNano())/1e9)
 	if err != nil {
 		return false, err
@@ -65,8 +188,7 @@ func BindQueuedBaseline(runtimeRoot, jobID string) (bool, error) {
 	}
 	repoRoot, repoOK := pending["repo_root"].(string)
 	taskID, taskOK := pending["task_id"].(string)
-	scope, scopeOK := stringSlice(pending["scope"])
-	if !repoOK || !taskOK || !scopeOK {
+	if !repoOK || !taskOK {
 		return false, errors.New("queued job ownership is unavailable")
 	}
 	baseline := ledger.CaptureBaseline(repoRoot, scope, 3)
