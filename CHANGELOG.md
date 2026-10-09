@@ -3,6 +3,17 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.109 — 2026-10-09
+
+- **Fixed:** Codex jobs launch on Linux and macOS instead of failing with PROCESS_UNCONFIRMED.
+- **Fixed:** The job waiter stops after about 9 minutes with STILL_WAITING and is rerun, so waiter processes no longer pile up.
+- **Fixed:** A failed async finalization releases the job's scope lease, and a replay-preparation failure is retryable with its cause instead of a terminal INTERNAL_POST_ERROR.
+- **Fixed:** plan complete-milestone is blocked only by a running linked job of that milestone and names it.
+- **Fixed:** check, init, optimize, the hooks and the auto-compact, board and usage mods honour CLAUDE_CONFIG_DIR and PURSER_STATE_DIR instead of a fixed ~/.claude.
+- **Fixed:** Cleanup, retirement and hand-resolved apply compare canonical paths, so short-name and symlinked temp roots work.
+- **Added:** Release packaging builds a six-target plugin ZIP with checksums, a tagged release workflow and a distribution smoke harness.
+- **Changed:** The test suites run on Linux and macOS CI as well as Windows.
+
 ## 0.1.108 — 2026-10-09
 
 - **Fixed:** Hooks find the plugin root from the installed binary, so `codex_start` works outside the Purser repository (found testing on Linux).
