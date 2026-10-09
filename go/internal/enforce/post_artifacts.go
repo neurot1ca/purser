@@ -33,8 +33,14 @@ func storePostPlan(root string, event map[string]any, taskID any, report string,
 	if strings.TrimSpace(report) == "" {
 		bundle["findings"] = appendFinding(bundle["findings"], "PLAN_OUTPUT_EMPTY", "Plan output is empty.")
 	}
-	if !planHasHeading(report, "Summary:") || !planHasHeading(report, "Milestones") {
-		bundle["findings"] = appendFinding(bundle["findings"], "PLAN_SHAPE_MISSING", "Plan lacks the required Summary/Milestones sections.")
+	missing := make([]string, 0, 7)
+	for _, heading := range []string{"Summary:", "Goal and boundaries", "Current evidence", "Decision", "Milestones", "Risks/open decisions", "Implementation handoff"} {
+		if !planHasHeading(report, heading) {
+			missing = append(missing, heading)
+		}
+	}
+	if len(missing) > 0 {
+		bundle["findings"] = appendFinding(bundle["findings"], "PLAN_SHAPE_MISSING", "Plan lacks the required sections: "+strings.Join(missing, ", ")+".")
 	}
 	if err := atomicWrite(path, []byte(content)); err != nil {
 		return "", err

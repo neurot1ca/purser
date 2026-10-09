@@ -102,12 +102,14 @@ func TestCompactBundleUsesPlanArtifactWhenMultibyteSummaryExceedsByteBudget(t *t
 }
 
 func TestStorePostPlanShapeFinding(t *testing.T) {
+	missingReport := "# Summary: Plan\n# Milestones\n- One"
+	completeReport := "# Summary: Plan\n# Goal and boundaries\n# Current evidence\n# Decision\n# Milestones\n# Risks/open decisions\n# Implementation handoff"
 	for _, test := range []struct {
 		name, report string
-		wantFinding  bool
+		wantMissing  []string
 	}{
-		{name: "missing headings", report: "# Goal and boundaries\nSome plan", wantFinding: true},
-		{name: "well formed", report: "# Summary: Plan\n# Milestones\n- One", wantFinding: false},
+		{name: "missing sections", report: missingReport, wantMissing: []string{"Goal and boundaries", "Current evidence", "Decision", "Risks/open decisions", "Implementation handoff"}},
+		{name: "complete plan", report: completeReport},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			bundle := map[string]any{"findings": []any{}}
@@ -116,14 +118,22 @@ func TestStorePostPlanShapeFinding(t *testing.T) {
 				t.Fatalf("storePostPlan path=%q err=%v", path, err)
 			}
 			findings := bundle["findings"].([]any)
-			found := false
+			var shapeMessage string
 			for _, raw := range findings {
-				if mapValue(raw)["code"] == "PLAN_SHAPE_MISSING" {
-					found = true
+				if finding := mapValue(raw); finding["code"] == "PLAN_SHAPE_MISSING" {
+					shapeMessage, _ = finding["message"].(string)
 				}
 			}
-			if found != test.wantFinding {
-				t.Fatalf("PLAN_SHAPE_MISSING=%v want %v; findings=%#v", found, test.wantFinding, findings)
+			if len(test.wantMissing) == 0 && shapeMessage != "" {
+				t.Fatalf("complete plan got PLAN_SHAPE_MISSING: %q", shapeMessage)
+			}
+			for _, heading := range test.wantMissing {
+				if !strings.Contains(shapeMessage, heading) {
+					t.Errorf("PLAN_SHAPE_MISSING message %q does not name %q", shapeMessage, heading)
+				}
+			}
+			if len(test.wantMissing) > 0 && shapeMessage == "" {
+				t.Fatalf("missing sections were not reported; findings=%#v", findings)
 			}
 			if got := bundle["plan_summary"]; got != postPlanSummary(test.report) {
 				t.Fatalf("plan summary fallback changed: got %#v", got)
