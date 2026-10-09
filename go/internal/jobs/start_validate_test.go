@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,28 +156,43 @@ func TestStartBindsRegisteredPlanBeforeLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	stateRoot := filepath.Join(base, "state")
-	if _, err := contextio.AcceptPlan(stateRoot, repo, "plan-1", artifact, []int{1}); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{"plan-a", "plan-b"} {
+		if _, err := contextio.AcceptPlan(stateRoot, repo, id, artifact, []int{1}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	args := map[string]any{"call": "00000000-0000-4000-8000-000000000001", "prompt": "pass", "cwd": repo, "taskId": "plan-1-m1of1-p1c"}
-	launched := false
-	_, _, err := Start(stateRoot, args, StartOptions{
-		StateRoot:  stateRoot,
-		Validation: StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }},
-		Launch: func(jobID string, _ int64, _ string) error {
-			launched = true
-			plan, e := contextio.ReadPlan(stateRoot, repo)
-			if e != nil || len(plan.LinkedJobs) != 1 || plan.LinkedJobs[0] != jobID || plan.PendingNextAction != "apply" {
-				t.Fatalf("plan was not bound before launch: %+v err=%v", plan, e)
-			}
-			return nil
-		},
-		Await: func(id string, _ *Record) map[string]any {
-			return jobResult(map[string]any{"jobId": id, "state": "QUEUED"})
-		},
-	})
-	if err != nil || !launched {
-		t.Fatalf("Start launched=%v err=%v", launched, err)
+	for i, planID := range []string{"plan-a", "plan-b"} {
+		taskID := planID + "-m1of1-p1c"
+		args := map[string]any{"call": fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1), "prompt": "pass", "cwd": repo, "taskId": taskID}
+		launched := false
+		_, _, err := Start(stateRoot, args, StartOptions{
+			StateRoot:  stateRoot,
+			Validation: StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }},
+			Launch: func(jobID string, _ int64, _ string) error {
+				launched = true
+				plan, e := contextio.ReadPlanForTask(stateRoot, repo, planID)
+				if e != nil || len(plan.LinkedJobs) != 1 || plan.LinkedJobs[0] != jobID || plan.PendingNextAction != "apply" {
+					t.Fatalf("owning plan %s was not bound before launch: %+v err=%v", planID, plan, e)
+				}
+				other, e := contextio.ReadPlanForTask(stateRoot, repo, map[bool]string{true: "plan-b", false: "plan-a"}[planID == "plan-a"])
+				otherHasJob := false
+				if other != nil {
+					for _, linkedJob := range other.LinkedJobs {
+						otherHasJob = otherHasJob || linkedJob == jobID
+					}
+				}
+				if e != nil || otherHasJob {
+					t.Fatalf("job for %s was linked to sibling plan: %+v err=%v", planID, other, e)
+				}
+				return nil
+			},
+			Await: func(id string, _ *Record) map[string]any {
+				return jobResult(map[string]any{"jobId": id, "state": "QUEUED"})
+			},
+		})
+		if err != nil || !launched {
+			t.Fatalf("Start for %s launched=%v err=%v", planID, launched, err)
+		}
 	}
 }
 

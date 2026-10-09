@@ -231,15 +231,7 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	if taskID := nonemptyString(job["taskId"]); req.Mode == "new" && taskID != "" {
 		repository := nonemptyString(args["cwd"])
 		if repository != "" && contextio.ProjectRoot(map[string]any{"cwd": repository}) != "" {
-			plan, e := contextio.ReadPlan(stateRoot, repository)
-			if e == nil {
-				if reconciled, reconcileErr := contextio.ReconcilePlanJob(stateRoot, repository); reconcileErr == nil {
-					plan = reconciled
-				}
-				if contextio.PlanTaskMatches(plan.TaskID, taskID) {
-					planRepository = repository
-				}
-			}
+			planRepository = repository
 		}
 	}
 	codexBin := opt.CodexBin

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
@@ -195,6 +196,72 @@ func TestApplyAcceptanceAndForegroundPaths(t *testing.T) {
 			t.Fatalf("foreground apply unexpectedly gated: %#v", got)
 		}
 	})
+}
+
+func TestApplyRecordsOnlyOwningPlan(t *testing.T) {
+	id := strings.Repeat("d", 64)
+	state, repo, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+	artifact := filepath.Join(t.TempDir(), "plan.md")
+	write(t, artifact, "accepted")
+	for _, planID := range []string{"plan-a", "plan-b"} {
+		if _, err := contextio.AcceptPlan(state, repo, planID, artifact, []int{1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	taskID := "plan-a-m1of1-p1c"
+	if _, matched, err := contextio.BindPlanJob(state, repo, taskID, id); err != nil || !matched {
+		t.Fatalf("bind owning plan: matched=%v err=%v", matched, err)
+	}
+	jobPath := filepath.Join(state, "codex_exec_mcp", "jobs", id+".json")
+	var job map[string]any
+	data, err := os.ReadFile(jobPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &job); err != nil {
+		t.Fatal(err)
+	}
+	job["taskId"] = taskID
+	data, err = json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, jobPath, string(data))
+	planBytes := func() []byte {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(state, "projects", contextio.ProjectKey(repo), "active_plan.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var collection struct {
+			Plans []json.RawMessage `json:"plans"`
+		}
+		if err := json.Unmarshal(data, &collection); err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range collection.Plans {
+			var plan struct {
+				TaskID string `json:"task_id"`
+			}
+			if err := json.Unmarshal(raw, &plan); err != nil {
+				t.Fatal(err)
+			}
+			if plan.TaskID == "plan-b" {
+				return raw
+			}
+		}
+		t.Fatal("plan B missing from collection")
+		return nil
+	}
+	beforeBBytes := planBytes()
+	result := Apply(state, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	if result["applied"] != true {
+		t.Fatalf("apply failed: %#v", result)
+	}
+	afterBBytes := planBytes()
+	if string(afterBBytes) != string(beforeBBytes) {
+		t.Fatalf("applying plan A changed plan B:\nbefore %s\nafter  %s", beforeBBytes, afterBBytes)
+	}
 }
 
 func TestApplyCachedRepeatRecordsDecisionAndReleasesLease(t *testing.T) {
