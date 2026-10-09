@@ -399,3 +399,26 @@ func mustPendingPath(t *testing.T, root string, event map[string]any) string {
 	}
 	return path
 }
+
+func TestPostNonReportCap(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		config   map[string]any
+		expected int
+	}{
+		{name: "missing config", config: nil, expected: 8192},
+		{name: "empty config", config: map[string]any{}, expected: 8192},
+		{name: "zero value", config: map[string]any{"bundle_non_report_max_bytes": 0}, expected: 8192},
+		{name: "negative value", config: map[string]any{"bundle_non_report_max_bytes": -100}, expected: 8192},
+		{name: "float64 9000", config: map[string]any{"bundle_non_report_max_bytes": 9000.0}, expected: 9000},
+		{name: "int 9000", config: map[string]any{"bundle_non_report_max_bytes": 9000}, expected: 9000},
+		{name: "json.Number 9000", config: map[string]any{"bundle_non_report_max_bytes": json.Number("9000")}, expected: 9000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := postNonReportCap(tc.config)
+			if got != tc.expected {
+				t.Fatalf("postNonReportCap(%#v) = %d, want %d", tc.config, got, tc.expected)
+			}
+		})
+	}
+}

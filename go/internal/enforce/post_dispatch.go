@@ -66,7 +66,7 @@ func postInternalOutput(event map[string]any, root string, cause error) map[stri
 			field = value
 		}
 		if root != "" {
-			if compact, _, finalizeErr := finalizePostArtifacts(root, event, bundle, 8000,
+			if compact, _, finalizeErr := finalizePostArtifacts(root, event, bundle, postNonReportCap(config),
 				postReportLimit(config, nil)); finalizeErr == nil {
 				bundle = compact
 			}
@@ -183,7 +183,7 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 	if pending["has_code_map"] == true && len(anyStringList(bundle["changed_paths"])) > 0 {
 		bundle["code_map"] = "STALE"
 	}
-	compact, _, err := finalizePostArtifacts(root, event, bundle, 8000, postReportLimit(loaded, pending["phase"]))
+	compact, _, err := finalizePostArtifacts(root, event, bundle, postNonReportCap(loaded), postReportLimit(loaded, pending["phase"]))
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +269,28 @@ func numberOr(value any, fallback float64) float64 {
 	default:
 	}
 	return fallback
+}
+
+func postNonReportCap(config map[string]any) int {
+	const defaultCap = 8192
+	if config == nil {
+		return defaultCap
+	}
+	switch value := config["bundle_non_report_max_bytes"].(type) {
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	case int:
+		if value > 0 {
+			return value
+		}
+	case json.Number:
+		if parsed, err := value.Float64(); err == nil && parsed > 0 {
+			return int(parsed)
+		}
+	}
+	return defaultCap
 }
 
 func finishPostReviewDelta(repoRoot, root string, event, pending, bundle map[string]any, resolved postProfile,
@@ -389,13 +411,13 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	if recovered, handled, recoveryErr := recoverAsyncFinalizing(root, event, index, pending, 8000,
+	if recovered, handled, recoveryErr := recoverAsyncFinalizing(root, event, index, pending, postNonReportCap(loaded),
 		postReportLimit(loaded, pending["phase"])); handled || recoveryErr != nil {
 		return recovered, recoveryErr
 	}
 	resolved := postProfileFromPending(pending, loaded)
 	response, err := finishAsyncSuccess(root, event, index, pending, original, stringValue(pending["repo_root"]), loaded,
-		resolved, nil, loaded, 8000, postReportLimit(loaded, pending["phase"]), 240*time.Second)
+		resolved, nil, loaded, postNonReportCap(loaded), postReportLimit(loaded, pending["phase"]), 240*time.Second)
 	if err != nil {
 		if failed, handled, failErr := finalizeAsyncFailure(root, event, index, pending); handled {
 			if failErr == nil && failed != nil {
