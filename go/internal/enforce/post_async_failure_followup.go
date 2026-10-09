@@ -60,6 +60,7 @@ func PostToolUseFailureAsyncFollowup(event map[string]any, root string) map[stri
 	if err != nil {
 		return failureErrorOutput(failureErrorText(err))
 	}
+	index["terminal_failure"] = true
 	if err := consumeAsyncResult(indexPath, index, evidencePath, response); err != nil {
 		return failureErrorOutput(failureErrorText(err))
 	}

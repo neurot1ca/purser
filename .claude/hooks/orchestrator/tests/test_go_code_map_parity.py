@@ -24,7 +24,7 @@ def _repo(path):
 @pytest.mark.parametrize("status", ["FRESH", "STALE", "UNAVAILABLE"])
 def test_p44_python_cli_preserves_pre_status_line(tmp_path, monkeypatch, capsys, status):
     repo = _repo(tmp_path / f"p44_{status.lower()}")
-    map_path = Path("C:/Users/test/code map/map.txt")
+    map_path = tmp_path / "code map" / "map.txt"
     calls = []
 
     def refresh(root, **kwargs):
@@ -172,6 +172,8 @@ def test_p43_python_oracle_inventory_cache_and_bounds(tmp_path, monkeypatch):
 def test_p3d_oracle_fixture_cases_match_python(tmp_path):
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     _, backend = code_map._backend()
+    if backend is None:
+        pytest.skip("tree-sitter parser backend is not installed")
     if backend is not None and hasattr(backend, "init") and hasattr(backend, "PackConfig"):
         backend.init(backend.PackConfig(cache_dir=str(tmp_path / "tree-sitter-cache")))
     cases = [case for case in fixture["cases"] if case["name"].startswith("p3d_oracle_")]
@@ -194,6 +196,8 @@ def test_p3d_oracle_fixture_cases_match_python(tmp_path):
 def test_p3e_oracle_fixture_cases_match_python(tmp_path):
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     _, backend = code_map._backend()
+    if backend is None:
+        pytest.skip("tree-sitter parser backend is not installed")
     if backend is not None and hasattr(backend, "init") and hasattr(backend, "PackConfig"):
         backend.init(backend.PackConfig(cache_dir=str(tmp_path / "tree-sitter-cache")))
     cases = [case for case in fixture["cases"] if case["name"].startswith("p3e_oracle_")]

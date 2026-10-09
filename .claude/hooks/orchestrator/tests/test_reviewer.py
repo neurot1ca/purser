@@ -471,8 +471,10 @@ def test_reviewer_executable_resolution_prefers_config_path(config, monkeypatch)
 def test_reviewer_executable_resolution_uses_provider_path_for_other_provider(
     config, monkeypatch, tmp_path
 ):
-    claude = tmp_path / "claude.exe"
+    claude = tmp_path / ("claude.exe" if os.name == "nt" else "claude")
     claude.write_text("fake executable", encoding="utf-8")
+    if os.name != "nt":
+        claude.chmod(0o700)
     monkeypatch.setenv("PATH", str(tmp_path))
     config["reviewer1_agent"] = "claude"
 

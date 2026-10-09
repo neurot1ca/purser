@@ -217,6 +217,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	if bundle["apply"] == "codex_apply" {
 		appendPostApplyGuidance(response, stringValue(index["jobId"]))
 	}
+	index["terminal_failure"] = false
 	if err = consumeAsyncResult(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index, artifact, response); err != nil {
 		return nil, err
 	}
