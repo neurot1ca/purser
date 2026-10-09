@@ -14,6 +14,7 @@ type EventResult struct {
 	Status   string         `json:"status"`
 	Failure  string         `json:"failure,omitempty"`
 	Final    string         `json:"final,omitempty"`
+	Notes    []string       `json:"notes,omitempty"`
 	Usage    map[string]any `json:"usage,omitempty"`
 }
 
@@ -79,7 +80,7 @@ func (s *EventStream) consume(line []byte) {
 			part, _ := event["part"].(map[string]any)
 			state, _ := part["state"].(map[string]any)
 			if state["status"] == "error" {
-				failure = firstString(state["error"], "OpenCode tool failed")
+				s.result.Notes = append(s.result.Notes, openCodeToolNote(part, state))
 			}
 		}
 		part, _ := event["part"].(map[string]any)
@@ -214,6 +215,24 @@ func eventMessage(event map[string]any) string {
 		return "{}"
 	}
 	return string(encoded)
+}
+
+func openCodeToolNote(part, state map[string]any) string {
+	tool := nonemptyString(part["tool"])
+	if tool == "" {
+		tool = "unknown"
+	}
+	error := ""
+	switch value := state["error"].(type) {
+	case string:
+		error = value
+	case map[string]any:
+		error = eventMessage(map[string]any{"error": value})
+	}
+	if error == "" {
+		error = "OpenCode tool failed"
+	}
+	return "OpenCode tool error: " + tool + ": " + error
 }
 
 func codexUsage(value any) map[string]any {

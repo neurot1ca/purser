@@ -1,12 +1,15 @@
 {
   "agent": "opencode",
-  "stdout": "{\"type\":\"tool_use\",\"sessionID\":\"oc-many\",\"part\":{\"state\":{\"status\":\"error\",\"error\":\"first failure\"}}}\n{\"type\":\"error\",\"sessionID\":\"oc-many\",\"error\":{\"message\":\"second failure\"}}\n{\"type\":\"step_finish\",\"sessionID\":\"oc-many\",\"part\":{\"reason\":\"stop\"}}\n",
+  "stdout": "{\"type\":\"tool_use\",\"sessionID\":\"oc-many\",\"part\":{\"tool\":\"write\",\"state\":{\"status\":\"error\",\"error\":\"first failure\"}}}\n{\"type\":\"error\",\"sessionID\":\"oc-many\",\"error\":{\"message\":\"second failure\"}}\n{\"type\":\"step_finish\",\"sessionID\":\"oc-many\",\"part\":{\"reason\":\"stop\"}}\n",
   "stderr": "",
   "exitCode": 1,
   "interrupted": false,
   "expected": {
     "status": "error",
     "threadId": "oc-many",
-    "failure": "first failure\nsecond failure"
+    "failure": "second failure",
+    "notes": [
+      "OpenCode tool error: write: first failure"
+    ]
   }
 }

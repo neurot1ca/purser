@@ -86,13 +86,13 @@ def _cases():
         },
         "opencode_failure_then_success": {
             "agent": "opencode", "stdout": "\n".join((
-                _line({"type": "tool_use", "sessionID": "oc-order", "part": {"state": {"status": "error", "error": "first tool failed"}}}),
+                _line({"type": "tool_use", "sessionID": "oc-order", "part": {"tool": "write", "state": {"status": "error", "error": "first tool failed"}}}),
                 _line({"type": "step_finish", "sessionID": "oc-order", "part": {"reason": "stop"}}))) + "\n",
             "stderr": "", "exitCode": 0, "interrupted": False,
         },
         "opencode_multiple_failures": {
             "agent": "opencode", "stdout": "\n".join((
-                _line({"type": "tool_use", "sessionID": "oc-many", "part": {"state": {"status": "error", "error": "first failure"}}}),
+                _line({"type": "tool_use", "sessionID": "oc-many", "part": {"tool": "write", "state": {"status": "error", "error": "first failure"}}}),
                 _line({"type": "error", "sessionID": "oc-many", "error": {"message": "second failure"}}),
                 _line({"type": "step_finish", "sessionID": "oc-many", "part": {"reason": "stop"}}))) + "\n",
             "stderr": "", "exitCode": 1, "interrupted": False,
@@ -144,6 +144,7 @@ def _expected(case):
     thread_id = ""
     failures = []
     final_parts = []
+    notes = []
     terminal = False
     success = False
     for event in events:
@@ -152,6 +153,9 @@ def _expected(case):
             thread_id = session
         if failure:
             failures.append(failure)
+        note = codex_exec_mcp._opencode_tool_note(event)
+        if note:
+            notes.append(note)
         if final is not None:
             final_parts.append(final)
         terminal |= marker
@@ -181,6 +185,8 @@ def _expected(case):
         result["failure"] = failure
     if final and status != "interrupted":
         result["final"] = final
+    if notes:
+        result["notes"] = notes
     if usage and status != "interrupted":
         result["usage"] = usage
     return result
@@ -208,3 +214,11 @@ def test_go_jobs_event_fixture_matches_python_oracle(name, case):
     fixture = json.loads(path.read_text(encoding="utf-8"))
     assert {key: fixture[key] for key in case} == case
     assert fixture["expected"] == _expected(case)
+
+
+def test_opencode_tool_error_note_does_not_mask_process_failure():
+    event = {"type": "tool_use", "sessionID": "oc-fail", "part":
+             {"tool": "write", "state": {"status": "error", "error": "Permission denied"}}}
+    session, terminal, failure, final = codex_exec_mcp._agent_event("opencode", event)
+    assert (session, terminal, failure, final) == ("oc-fail", False, None, None)
+    assert codex_exec_mcp._opencode_tool_note(event) == "OpenCode tool error: write: Permission denied"

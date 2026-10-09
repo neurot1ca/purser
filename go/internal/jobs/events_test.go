@@ -58,3 +58,31 @@ func TestEventStreamRecordsThreadBeforeTerminalFailure(t *testing.T) {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
+
+func TestOpenCodeToolErrorIsNoteBeforeSuccessfulCompletion(t *testing.T) {
+	stream := NewEventStream("opencode")
+	stream.Write([]byte("{" +
+		`"type":"tool_use","sessionID":"oc-note","part":{"tool":"write","state":{"status":"error","error":"Permission denied"}}` +
+		"}\n" +
+		`{"type":"text","sessionID":"oc-note","part":{"text":"done"}}` + "\n" +
+		`{"type":"step_finish","sessionID":"oc-note","part":{"reason":"stop"}}` + "\n"))
+	result := stream.Result(false, 0, "")
+	if result.Status != "success" || result.ThreadID != "oc-note" || result.Final != "done" {
+		t.Fatalf("unexpected successful result: %#v", result)
+	}
+	if !reflect.DeepEqual(result.Notes, []string{"OpenCode tool error: write: Permission denied"}) {
+		t.Fatalf("unexpected tool notes: %#v", result.Notes)
+	}
+}
+
+func TestOpenCodeToolErrorDoesNotMaskProcessFailure(t *testing.T) {
+	stream := NewEventStream("opencode")
+	stream.Write([]byte(`{"type":"tool_use","sessionID":"oc-fail","part":{"tool":"write","state":{"status":"error","error":"Permission denied"}}}` + "\n"))
+	result := stream.Result(false, 7, "worker failed")
+	if result.Status != "error" || result.Failure != "worker failed" {
+		t.Fatalf("unexpected process failure result: %#v", result)
+	}
+	if !reflect.DeepEqual(result.Notes, []string{"OpenCode tool error: write: Permission denied"}) {
+		t.Fatalf("unexpected tool notes: %#v", result.Notes)
+	}
+}

@@ -549,6 +549,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		jobResult := map[string]any{
 			"content": content, "threadId": result.ThreadID, "usage": result.Usage,
 		}
+		if len(result.Notes) > 0 {
+			jobResult["notes"] = result.Notes
+		}
 		checkReadinessBeforeSuccess(dir, jobID, jobResult)
 		finished = float64(time.Now().UnixNano()) / 1e9
 		err = finishJob(dir, jobID, "SUCCEEDED", "", jobResult, "", finished, hostFinishOptions(generation, token))

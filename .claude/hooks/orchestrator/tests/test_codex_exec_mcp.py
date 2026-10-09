@@ -133,6 +133,9 @@ if os.environ.get("FAKE_OC_DENIED") == "1":
     denied = json.loads(recorded[1])
     denied["part"]["state"] = {"status": "error", "error": "Permission denied"}
     print(json.dumps(denied), flush=True)
+    for line in recorded[2:-1]:
+        print(line, flush=True)
+    print(recorded[-1], flush=True)
     sys.exit(0)
 for line in recorded[1:-1]:
     print(line, flush=True)
@@ -2940,13 +2943,25 @@ def test_opencode_job_session_resume_and_command(area):
         client.close()
 
 
-@pytest.mark.parametrize("flag", ["FAKE_OC_ERROR", "FAKE_OC_DENIED", "FAKE_OC_NO_STOP"])
+@pytest.mark.parametrize("flag", ["FAKE_OC_ERROR", "FAKE_OC_NO_STOP"])
 def test_opencode_job_fails_on_event_or_missing_session(area, flag):
     client = _opencode_client(area, **{flag: "1"})
     try:
         started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
                                                    "cwd": str(area), "model": "opencode/test"})
         assert finish(client, started["jobId"], "FAILED", timeout=120)["errorCode"] == "CODEX_FAILED"
+    finally:
+        client.close()
+
+
+def test_opencode_tool_error_is_note_before_success(area):
+    client = _opencode_client(area, FAKE_OC_DENIED="1")
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "one",
+                                                   "cwd": str(area), "model": "opencode/test"})
+        result = finish(client, started["jobId"], "SUCCEEDED")
+        assert result["content"] == "DONE"
+        assert result["notes"] == ["OpenCode tool error: write: Permission denied"]
     finally:
         client.close()
 

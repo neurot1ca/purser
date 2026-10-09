@@ -668,8 +668,10 @@ def _binary_prefix(argument: str | None) -> list[str]:
 
 
 def _tool_result(thread_id: str | None, *, content: str | None = None, error: str | None = None,
-                 usage: dict[str, Any] | None = None) -> dict[str, Any]:
+                 usage: dict[str, Any] | None = None, notes: list[str] | None = None) -> dict[str, Any]:
     value = {"threadId": thread_id, "error": error} if error is not None else {"threadId": thread_id, "content": content}
+    if notes:
+        value["notes"] = notes
     if error is None and usage:
         value["usage"] = usage
     result: dict[str, Any] = {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}], "isError": error is not None}
@@ -702,6 +704,22 @@ def _event_message(event: dict[str, Any]) -> str:
                 if isinstance(value.get(key), str):
                     parts.append(value[key])
     return ": ".join(parts) if parts else json.dumps(event, ensure_ascii=False)
+
+
+def _opencode_tool_note(event: dict[str, Any]) -> str | None:
+    if event.get("type") != "tool_use":
+        return None
+    part = event.get("part")
+    state = part.get("state") if isinstance(part, dict) else None
+    if not isinstance(state, dict) or state.get("status") != "error":
+        return None
+    tool = part.get("tool") if isinstance(part.get("tool"), str) and part.get("tool") else "unknown"
+    error = state.get("error")
+    if isinstance(error, dict):
+        error = _event_message({"error": error})
+    if not isinstance(error, str) or not error:
+        error = "OpenCode tool failed"
+    return f"OpenCode tool error: {tool}: {error}"
 
 
 def _agent_command(agent: str, prefix: list[str], name: str, cwd: str,
@@ -775,8 +793,6 @@ def _agent_event(agent: str, event: dict[str, Any]) -> tuple[str | None, bool, s
         session = session if isinstance(session, str) and session else None
         part = event.get("part")
         failure = _event_message(event) if kind == "error" else None
-        if kind == "tool_use" and isinstance(part, dict) and part.get("state", {}).get("status") == "error":
-            failure = str(part["state"].get("error") or "OpenCode tool failed")
         final = part.get("text") if kind == "text" and isinstance(part, dict) else None
         stopped = kind == "step_finish" and isinstance(part, dict) and part.get("reason") == "stop"
         return session, stopped or bool(failure), failure, final if isinstance(final, str) else None
@@ -1515,6 +1531,8 @@ class Server:
                     usage = result.get("usage")
                     if isinstance(usage, dict):
                         job["usage"] = _codex_turn_usage([{"type": "turn.completed", "usage": usage}])
+                    if isinstance(result.get("notes"), list) and result["notes"]:
+                        job["notes"] = result["notes"]
                     if "attemptedModels" in result:
                         job.update(attemptedModels=result["attemptedModels"],
                                    servedAgent=result.get("servedAgent"),
@@ -1894,6 +1912,8 @@ class Server:
                 value.update(threadId=job["threadId"], content=(self.job_dir / job["outputFile"]).read_text(encoding="utf-8"))
                 if isinstance(job.get("usage"), dict) and job["usage"]:
                     value["usage"] = job["usage"]
+                if isinstance(job.get("notes"), list) and job["notes"]:
+                    value["notes"] = job["notes"]
             except (OSError, KeyError):
                 value.update(state="FAILED", errorCode="OUTPUT_UNAVAILABLE", message="Job output is unavailable")
         elif state in TERMINAL:
@@ -2539,6 +2559,7 @@ class Server:
                 parsed = [_agent_event(agent, event) for event in events]
                 started = next((session for session, _, _, _ in parsed if session), None)
                 failures = [failure for _, _, failure, _ in parsed if failure]
+                notes = [note for note in (_opencode_tool_note(event) for event in events) if note]
                 if agent == "agy" and name == "codex-reply" and started != thread_id:
                     failures.append("Antigravity did not resume the requested conversation; start a fresh call")
                 completed = any(event.get("type") == "step_finish" and isinstance(event.get("part"), dict)
@@ -2551,7 +2572,7 @@ class Server:
                     detail = ("\n".join(failures) if failures else
                               "turn completion event missing" if async_job and not completed else
                               stderr[-4000:] or f"exit code {process.returncode}")
-                    failed_result = _tool_result(started, error=detail)
+                    failed_result = _tool_result(started, error=detail, notes=notes)
                     failed_result["typedEvidence"] = _launch_failure_evidence(
                         agent, events, stderr=stderr,
                         stdout_had_output=bool(stdout_had_output),
@@ -2583,6 +2604,7 @@ class Server:
                 return _tool_result(
                     started, content=last_message,
                     usage=_codex_turn_usage(events) if agent == "codex" else None,
+                    notes=notes,
                 )
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)

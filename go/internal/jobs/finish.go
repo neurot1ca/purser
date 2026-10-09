@@ -102,6 +102,9 @@ func finishJob(dir, id, state, code string, result map[string]any, message strin
 					_ = r.Set("usage", normalized)
 				}
 			}
+			if notes, ok := result["notes"]; ok {
+				_ = r.Set("notes", notes)
+			}
 			if models, ok := result["attemptedModels"]; ok {
 				_ = r.Set("attemptedModels", models)
 				_ = r.Set("servedAgent", result["servedAgent"])
@@ -241,6 +244,10 @@ func resultJob(dir, id string, now float64, opt ResultOptions) map[string]any {
 			if usage, ok := m["usage"].(map[string]any); ok && len(usage) > 0 {
 				value["usage"] = usage
 				keys = append(keys, "usage")
+			}
+			if notes, ok := m["notes"]; ok {
+				value["notes"] = notes
+				keys = append(keys, "notes")
 			}
 		}
 	} else if terminalJobs[state] {
