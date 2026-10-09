@@ -422,6 +422,83 @@ func TestPlanCompleteMilestoneRefusesOpenLinkedJob(t *testing.T) {
 	}
 }
 
+func TestPlanCompleteMilestoneClosesSucceededJobWithNoDelta(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-no-delta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := json.Marshal(map[string]any{
+		"jobId": "job-no-delta", "taskId": "plan-1-m1of1-p1c", "state": "SUCCEEDED",
+		"reviewedSnapshot": "snapshot-1", "baselineSnapshot": "snapshot-1",
+	})
+	if err := os.WriteFile(filepath.Join(jobDir, "job-no-delta.json"), job, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", ""); err != nil {
+		t.Fatalf("completion rejected for collected job with no delta: %v", err)
+	}
+}
+
+func TestPlanCompleteMilestoneClosesDiscardedJob(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-discarded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := json.Marshal(map[string]any{
+		"jobId": "job-discarded", "taskId": "plan-1-m1of1-p1c", "state": "SUCCEEDED", "discarded": true,
+	})
+	if err := os.WriteFile(filepath.Join(jobDir, "job-discarded.json"), job, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", ""); err != nil {
+		t.Fatalf("completion rejected for discarded job: %v", err)
+	}
+}
+
+func TestPlanCompleteMilestoneKeepsSucceededJobWithDeltaOpen(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-with-delta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := json.Marshal(map[string]any{
+		"jobId": "job-with-delta", "taskId": "plan-1-m1of1-p1c", "state": "SUCCEEDED",
+		"reviewedSnapshot": "snapshot-after", "baselineSnapshot": "snapshot-before",
+	})
+	if err := os.WriteFile(filepath.Join(jobDir, "job-with-delta.json"), job, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", ""); err == nil {
+		t.Fatal("completion accepted while a succeeded job with a delta remained unapplied")
+	}
+}
+
 func TestPlanReadsLegacyLinkedJob(t *testing.T) {
 	root, repo, artifact := planFixture(t)
 	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})

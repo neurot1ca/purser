@@ -762,6 +762,16 @@ func hasOpenLinkedJob(root string, state *PlanState, milestone int) bool {
 			continue
 		}
 		stateText, _ := job["state"].(string)
+		if discarded, _ := job["discarded"].(bool); discarded {
+			continue
+		}
+		if stateText == "SUCCEEDED" {
+			reviewedSnapshot, _ := job["reviewedSnapshot"].(string)
+			baselineSnapshot, _ := job["baselineSnapshot"].(string)
+			if reviewedSnapshot != "" && reviewedSnapshot == baselineSnapshot {
+				continue
+			}
+		}
 		if stateText != "FAILED" && stateText != "CANCELLED" && stateText != "TIMED_OUT" {
 			return true
 		}
