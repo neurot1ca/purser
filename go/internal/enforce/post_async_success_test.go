@@ -267,8 +267,17 @@ func TestReplyAfterAppliedWorktreeFinalizesOnlyReplyDelta(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(worktree, "src", "reply.go"), []byte("package src\n// reply\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	job["worktreePath"], job["repoRoot"], job["snapshot"] = worktree, repo, snapshot
+	job["worktreePath"], job["repoRoot"], job["snapshot"], job["applyState"] = worktree, repo, snapshot, "applied"
 	job["finishedAt"] = float64(1700000000)
+	// An applied worktree must be diffed against its applied baseline directly;
+	// replay state from the earlier application cannot block reply finalization.
+	prep := filepath.Join(state, "preparations", stringValue(index["jobId"]))
+	if err = os.MkdirAll(prep, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(prep, "state.json"), []byte(`{"state":"CONFLICT","conflicts":["src/file.go"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err = atomicAdmissionJSON(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +289,20 @@ func TestReplyAfterAppliedWorktreeFinalizesOnlyReplyDelta(t *testing.T) {
 	bundle := responseBundle(t, response)
 	if !reflect.DeepEqual(bundle["changed_paths"], []any{"src/reply.go"}) {
 		t.Fatalf("reply delta includes applied changes or omits reply changes: bundle=%#v", bundle)
+	}
+}
+
+func TestUnfinalizableAsyncResultIsTerminal(t *testing.T) {
+	root := t.TempDir()
+	id := jobHash("unfinalizable async result")
+	index := map[string]any{"jobId": id, "stage": "FINALIZING"}
+	response, err := failAsyncFinalization(root, index, "updatedToolOutput")
+	if err != nil || response == nil {
+		t.Fatalf("failure finalization response=%#v err=%v", response, err)
+	}
+	stored, err := readAsyncObject(filepath.Join(root, "async_jobs", id+".json"))
+	if err != nil || stored["stage"] != "FAILED" {
+		t.Fatalf("async result did not reach terminal FAILED state: %#v err=%v", stored, err)
 	}
 }
 

@@ -82,7 +82,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		return nil, err
 	}
 	bundle["raw_output_path"] = rawPath
-	if worktree != "" {
+	if worktree != "" && job["applyState"] != "applied" {
 		recoveryPath := filepath.Join(root, "preparations", stringValue(index["jobId"]))
 		if revision := job["snapshotRevision"]; revision != nil && revision != "" && revision != 0 {
 			recoveryPath = filepath.Join(recoveryPath, fmt.Sprintf("revision-%v", revision))
