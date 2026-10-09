@@ -627,6 +627,18 @@ test('main-thread codex_apply reaches Go and a Go deny blocks it', options, asyn
   stubToolCall(on, toolCalls)
   const denied = await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_apply', jobId: 'j1', acceptOnly: true })
   expect(JSON.parse(calls[0])).toMatchObject({ tool_name: 'mcp__plugin_purser_codex-main__codex_apply', tool_input: { jobId: 'j1', acceptOnly: true } })
-  expect(denied.isError).toBe(true)
+  expect(denied.deny).toBe('reviewed revision is unavailable')
   expect(toolCalls).toEqual([])
+})
+
+test('an acceptance reaches the tool with the session id Go adds', options, async ($, on) => {
+  const calls: string[] = []
+  const toolCalls: any[] = []
+  const accept = JSON.stringify({ hookSpecificOutput: {
+    hookEventName: 'PreToolUse', updatedInput: { jobId: 'j1', acceptOnly: true, revision: 'r1', sessionId: 's1' },
+  } })
+  stubGo(on, success, calls, [], undefined, undefined, undefined, () => ({ stdout: accept }))
+  stubToolCall(on, toolCalls)
+  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_apply', jobId: 'j1', acceptOnly: true, revision: 'r1' })
+  expect(toolCalls[0]).toMatchObject({ jobId: 'j1', acceptOnly: true, revision: 'r1', sessionId: 's1' })
 })

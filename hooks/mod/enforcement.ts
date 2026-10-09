@@ -170,13 +170,37 @@ export function register(on) {
     }
   }
 
+  // classic.PreToolUse carries no agentId, so the apply gate runs on tool.call.
+  on('tool.call', async ($, e, next) => {
+    if (!applyTools.has(e.tool)) return next(e)
+    let mapped: ReturnType<typeof mapPreToolUse>
+    try {
+      const binary = await goBinary($)
+      const sessionId = await $.session.id()
+      const cwd = await $.session.cwd()
+      const result = await $.process.run([binary], {
+        cwd,
+        stdin: JSON.stringify(preRequest(e, sessionId, cwd)),
+        timeoutMs: 60000,
+      })
+      if (result.exitCode !== 0) throw new Error(`Go PreToolUse helper exited ${result.exitCode}`)
+      mapped = mapPreToolUse(result.stdout)
+    } catch (error) {
+      // Fail closed for a subagent or an acceptance; a main-thread apply proceeds as before.
+      const deny = applyGateFailure(e, error instanceof Error ? error.message : String(error))
+      return deny ? { deny } : next(e)
+    }
+    if (mapped.deny) return { deny: mapped.deny }
+    return next(mapped.updatedInput ? { ...e, ...mapped.updatedInput } : e)
+  })
+
   on("classic.PostToolUse", ($, e, next) => handlePostToolUse('PostToolUse', $, e, next))
   on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse('PostToolUseFailure', $, e, next))
 
   on('classic.PreToolUse', async ($, e, next) => {
     const prior = await next(e)
     if (prior.deny !== undefined) return prior
-    if (!syncTools.has(e.tool) && !startTools.has(e.tool) && !followupTools.has(e.tool) && !applyTools.has(e.tool)) return prior
+    if (!syncTools.has(e.tool) && !startTools.has(e.tool) && !followupTools.has(e.tool)) return prior
 
     let helperBinary = ''
     let helperCwd = ''
@@ -205,11 +229,6 @@ export function register(on) {
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
-      if (applyTools.has(e.tool)) {
-        // Fail closed for a subagent or an acceptance; a main-thread apply proceeds as before.
-        const deny = applyGateFailure(e, reason)
-        return deny ? { ...prior, deny } : prior
-      }
       if (!followupTools.has(e.tool) && helperBinary && typeof e.tool_use_id === 'string') {
         try {
           await $.process.run([helperBinary], {
