@@ -189,6 +189,36 @@ func TestHookActivityRowPopulatedFile(t *testing.T) {
 	}
 }
 
+func TestRegistrationUsesActiveClaudeConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, tc := range []struct {
+		name, configDir string
+	}{
+		{name: "explicit", configDir: filepath.Join(t.TempDir(), "claude-config")},
+		{name: "default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", tc.configDir)
+			dir := tc.configDir
+			if dir == "" {
+				dir = filepath.Join(home, ".claude")
+			}
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"enabledPlugins":{"purser@local":true}}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got := registrationCheck(home)
+			if got.Status != "OK" || !strings.Contains(got.Detail, "purser@local") {
+				t.Fatalf("registrationCheck = %#v", got)
+			}
+		})
+	}
+}
+
 func withoutRuntimeRows(report Report) Report {
 	checks := make([]Row, 0, len(report.Checks)-1)
 	for _, item := range report.Checks {

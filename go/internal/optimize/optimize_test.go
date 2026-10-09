@@ -13,6 +13,58 @@ import (
 	"time"
 )
 
+func TestClaudeUserFilesUseActiveConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, tc := range []struct {
+		name, configDir string
+	}{
+		{name: "explicit", configDir: filepath.Join(t.TempDir(), "claude-config")},
+		{name: "default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", tc.configDir)
+			dir := tc.configDir
+			if dir == "" {
+				dir = filepath.Join(home, ".claude")
+			}
+			if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"enabledPlugins":{"security-guidance@official":true}}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "plugins", "installed_plugins.json"), []byte(`{"plugins":{"security-guidance@official":[{}]}}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(dir, "skills", "security-review"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# Replies\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if state := pluginEnabled("security-guidance", home, ""); state == nil || !*state {
+				t.Fatalf("pluginEnabled = %v", state)
+			}
+			if got := installedMatches("please use security guidance review", home); len(got) != 1 || got[0] != "security-guidance@official" {
+				t.Fatalf("installedMatches = %v", got)
+			}
+			if got := localSources("security-review", home, ""); !got["user"] {
+				t.Fatalf("localSources = %v", got)
+			}
+			projects := t.TempDir()
+			report, err := Analyze(projects, home, "", 30)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := report["reply_rule_present"].(bool); !got {
+				t.Fatalf("reply_rule_present = %v", report["reply_rule_present"])
+			}
+		})
+	}
+}
+
 func putJSONL(t *testing.T, path string, records ...map[string]any) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {

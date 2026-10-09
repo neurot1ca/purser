@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"purser-hook/internal/contextio"
 )
 
 var weights = map[string]float64{"input_tokens": 1, "cache_creation_input_tokens": 1.25, "cache_read_input_tokens": .1, "output_tokens": 5}
@@ -705,7 +707,7 @@ func setting(paths []string, name string) (bool, bool) {
 	return state, found
 }
 func pluginEnabled(name, home, repo string) *bool {
-	paths := []string{filepath.Join(home, ".claude", "settings.json")}
+	paths := []string{filepath.Join(contextio.ClaudeConfigDir(), "settings.json")}
 	if repo != "" {
 		paths = append(paths, filepath.Join(repo, ".claude", "settings.json"), filepath.Join(repo, ".claude", "settings.local.json"))
 	}
@@ -736,7 +738,7 @@ func pluginPresent(name string, s session) bool {
 	return false
 }
 func installedMatches(prompt, home string) []string {
-	data, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
+	data, err := os.ReadFile(filepath.Join(contextio.ClaudeConfigDir(), "plugins", "installed_plugins.json"))
 	if err != nil {
 		return nil
 	}
@@ -822,7 +824,7 @@ func installedMatches(prompt, home string) []string {
 }
 func localSources(name, home, repo string) map[string]bool {
 	out := map[string]bool{}
-	if info, err := os.Stat(filepath.Join(home, ".claude", "skills", name)); err == nil && info.IsDir() {
+	if info, err := os.Stat(filepath.Join(contextio.ClaudeConfigDir(), "skills", name)); err == nil && info.IsDir() {
 		out["user"] = true
 	}
 	if repo != "" {
@@ -1251,7 +1253,7 @@ func Analyze(projects, home, repo string, days int) (map[string]any, error) {
 	}
 	medianReply := median(replies)
 	replyRule := false
-	if data, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(contextio.ClaudeConfigDir(), "CLAUDE.md")); err == nil {
 		replyRule = regexp.MustCompile(`(?m)^# Replies\s*$`).Match(data)
 	}
 	sequences := selectSequences(sequenceCandidates(sessions), 5)

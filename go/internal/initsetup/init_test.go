@@ -196,3 +196,35 @@ func TestAutoCompactInit(t *testing.T) {
 		}
 	}
 }
+
+func TestEnableConciseUsesActiveClaudeConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, tc := range []struct {
+		name, configDir string
+	}{
+		{name: "explicit", configDir: filepath.Join(t.TempDir(), "claude-config")},
+		{name: "default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", tc.configDir)
+			dir := tc.configDir
+			if dir == "" {
+				dir = filepath.Join(home, ".claude")
+			}
+			var out, errOut bytes.Buffer
+			if code := enableConcise(&out, &errOut); code != 0 {
+				t.Fatalf("enableConcise returned %d: %s", code, errOut.String())
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings map[string]any
+			if err := json.Unmarshal(data, &settings); err != nil || settings["outputStyle"] != "Concise" {
+				t.Fatalf("settings = %s, error = %v", data, err)
+			}
+		})
+	}
+}

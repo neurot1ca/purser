@@ -61,6 +61,16 @@ func stateRoot() string {
 	h, _ := os.UserHomeDir()
 	return resolve(filepath.Join(h, ".claude", "purser"))
 }
+
+// ClaudeConfigDir returns the active Claude configuration directory.
+func ClaudeConfigDir() string {
+	if p := os.Getenv("CLAUDE_CONFIG_DIR"); p != "" {
+		return expand(p)
+	}
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, ".claude")
+}
+
 func resolve(p string) string {
 	absolute, err := filepath.Abs(p)
 	if err != nil {
