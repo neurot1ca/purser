@@ -372,6 +372,10 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		unavailable := Unavailable(callErr, reviewerFailureMessage(callErr, retries, exitCode), config, provider)
 		unavailable.ElapsedSeconds = nativeFloatPtr(elapsed.Seconds())
 		unavailable.Diagnostics = reviewerDiagnostics(evidence, callErr, elapsed, exitCode, "")
+		stdoutTail, _ := evidence["_diagnostic_stdout_tail"].(string)
+		stderrHead, _ := evidence["_diagnostic_stderr_head"].(string)
+		stderrTail, _ := evidence["_diagnostic_stderr_tail"].(string)
+		_ = writeReviewerDiagnostic(provider, RequestedModel(config), callErr, exitCode, elapsed, retries, "", stdout, stdoutTail, stderrHead, stderrTail)
 		if stderr != "" {
 			unavailable.StderrTail = StderrTail(stderr)
 		}
@@ -388,6 +392,10 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		unavailable.DecoderDetail = &detail
 		unavailable.ElapsedSeconds = nativeFloatPtr(elapsed.Seconds())
 		unavailable.Diagnostics = reviewerDiagnostics(evidence, "", elapsed, 0, detail)
+		stdoutTail, _ := evidence["_diagnostic_stdout_tail"].(string)
+		stderrHead, _ := evidence["_diagnostic_stderr_head"].(string)
+		stderrTail, _ := evidence["_diagnostic_stderr_tail"].(string)
+		_ = writeReviewerDiagnostic(provider, RequestedModel(config), ResponseInvalid, 0, elapsed, retries, detail, stdout, stdoutTail, stderrHead, stderrTail)
 		return bridgeOutcome(unavailable)
 	}
 	response := parsed["response"].(map[string]any)
@@ -408,6 +416,9 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 func reviewerDiagnostics(evidence map[string]any, failure string, elapsed time.Duration, exitCode int, parseError string) map[string]any {
 	diagnostics := map[string]any{"reviewer_elapsed_seconds": elapsed.Seconds()}
 	for key, value := range evidence {
+		if strings.HasPrefix(key, "_diagnostic_") {
+			continue
+		}
 		diagnostics[key] = value
 	}
 	if failure == "REVIEWER_TIMEOUT" {
@@ -482,7 +493,13 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, cwd
 		cmd.Stderr = &stderr
 		err := cmd.Run()
 		elapsed := time.Since(started)
-		evidence := map[string]any{"reviewer_stdout": stdout.evidence(), "reviewer_stderr": stderr.evidence()}
+		stdoutHead, stdoutTail := stdout.diagnosticParts()
+		stderrHead, stderrTail := stderr.diagnosticParts()
+		evidence := map[string]any{
+			"reviewer_stdout": stdout.evidence(), "reviewer_stderr": stderr.evidence(),
+			"_diagnostic_stdout_head": stdoutHead, "_diagnostic_stdout_tail": stdoutTail,
+			"_diagnostic_stderr_head": stderrHead, "_diagnostic_stderr_tail": stderrTail,
+		}
 		timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err == nil {
@@ -512,16 +529,29 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, cwd
 
 type boundedBuffer struct {
 	bytes.Buffer
-	limit         int
-	tail          bool
-	overflowed    bool
-	evidenceHead  []byte
-	evidenceTail  []byte
-	evidenceBytes int
+	limit          int
+	tail           bool
+	overflowed     bool
+	evidenceHead   []byte
+	evidenceTail   []byte
+	evidenceBytes  int
+	diagnosticHead []byte
+	diagnosticTail []byte
 }
 
 func (b *boundedBuffer) Write(value []byte) (int, error) {
 	const evidenceLimit = 2048
+	if len(b.diagnosticHead) < reviewerDiagnosticBytes {
+		b.diagnosticHead = append(b.diagnosticHead, value[:min(len(value), reviewerDiagnosticBytes-len(b.diagnosticHead))]...)
+	}
+	if len(value) >= reviewerDiagnosticBytes {
+		b.diagnosticTail = append(b.diagnosticTail[:0], value[len(value)-reviewerDiagnosticBytes:]...)
+	} else {
+		if overflow := len(b.diagnosticTail) + len(value) - reviewerDiagnosticBytes; overflow > 0 {
+			b.diagnosticTail = b.diagnosticTail[overflow:]
+		}
+		b.diagnosticTail = append(b.diagnosticTail, value...)
+	}
 	if len(b.evidenceHead) < evidenceLimit {
 		b.evidenceHead = append(b.evidenceHead, value[:min(len(value), evidenceLimit-len(b.evidenceHead))]...)
 	}
@@ -557,6 +587,10 @@ func (b *boundedBuffer) Write(value []byte) (int, error) {
 	}
 	_, _ = b.Buffer.Write(keep)
 	return len(value), nil
+}
+
+func (b *boundedBuffer) diagnosticParts() (string, string) {
+	return strings.ToValidUTF8(string(b.diagnosticHead), "�"), strings.ToValidUTF8(string(b.diagnosticTail), "�")
 }
 
 func (b *boundedBuffer) evidence() string {

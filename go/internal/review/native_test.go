@@ -242,6 +242,59 @@ func TestNativeRunBridgeRejectsOversizedReviewerResponse(t *testing.T) {
 	}
 }
 
+func TestNativeReviewerDiagnosticRecordsParseFailure(t *testing.T) {
+	root, bin := nativeFixture(t)
+	state := filepath.Join(root, "state")
+	t.Setenv("PURSER_STATE_DIR", state)
+	stdout := "invalid-reviewer-response"
+	t.Setenv("MOCK_OUTPUT", stdout)
+	args := nativeArgs(root, bin, NoMaterialFinding)
+	args["reviewer_agent"] = "claude"
+	args["reviewer_model"] = "claude-sonnet-4-5"
+	args["reviewer_effort"] = "high"
+	isolateReviewerPath(t)
+	got, err := RunBridge(context.Background(), root, args, 30*time.Second)
+	if err != nil || got.Attributes["error_code"] != ResponseInvalid {
+		t.Fatalf("invalid response = %#v, %v", got, err)
+	}
+	files, err := filepath.Glob(filepath.Join(state, "diagnostics", "reviewer", "*-claude.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("diagnostic files = %v, %v; outcome = %#v", files, err, got)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic map[string]any
+	if err := json.Unmarshal(data, &diagnostic); err != nil {
+		t.Fatalf("decode diagnostic: %v", err)
+	}
+	if diagnostic["provider"] != "claude" || !strings.HasPrefix(diagnostic["stdout_head"].(string), stdout) {
+		t.Fatalf("diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestNativeReviewerDiagnosticKeepsNewestTwenty(t *testing.T) {
+	root, bin := nativeFixture(t)
+	state := filepath.Join(root, "state")
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("MOCK_OUTPUT", "invalid")
+	args := nativeArgs(root, bin, NoMaterialFinding)
+	args["reviewer_agent"] = "claude"
+	args["reviewer_model"] = "claude-sonnet-4-5"
+	args["reviewer_effort"] = "high"
+	isolateReviewerPath(t)
+	for i := 0; i < 21; i++ {
+		if _, err := RunBridge(context.Background(), root, args, 30*time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := filepath.Glob(filepath.Join(state, "diagnostics", "reviewer", "*.json"))
+	if err != nil || len(files) != 20 {
+		t.Fatalf("diagnostic file count = %d, %v; want 20", len(files), err)
+	}
+}
+
 type panicAdapter struct{ reviewerAdapter }
 
 func (a panicAdapter) BuildCommand(string, map[string]any, map[string]any, CommandOptions) ([]string, error) {
