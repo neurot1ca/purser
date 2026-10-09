@@ -184,6 +184,54 @@ func TestPostStartWaiterUsesExecutablePath(t *testing.T) {
 	}
 }
 
+func TestPostStartKeepsDeadUnconfirmedJobOwnedAndReleasesLease(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	project := "0123456789abcdef"
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_use_id": "dead-host", "session_id": "dead-host-session",
+		"post_tool_output_field": "updatedMCPToolOutput"}
+	owner, _ := callKey(event)
+	call := "dead-host-start-call"
+	jobID := jobHash(call)
+	pending := map[string]any{"async_call": call, "async_ready": true, "session_id": event["session_id"],
+		"tool_use_id": event["tool_use_id"], "project_key": project, "repo_root": repo, "lease_owner": owner,
+		"task_id": "retryable-task", "route": "normal", "model": "gpt-test", "effort": "medium"}
+	if err := writeFixtureJSON(filepath.Join(root, "pending", owner+".json"), pending); err != nil {
+		t.Fatal(err)
+	}
+	if got := lease.New(filepath.Join(root, "projects", project)).Acquire(owner, "retryable-task", []string{"src"}, lease.AcquireOptions{JobID: &jobID}, 1800000000); got.Status != "OK" {
+		t.Fatalf("lease setup: %+v", got)
+	}
+	event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "FAILED",
+		"errorCode": "HOST_LAUNCH_UNCONFIRMED", "message": "dead host"}}
+	got, err := postStart(event, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stringValue(mapValue(mapValue(got["hookSpecificOutput"])["updatedMCPToolOutput"].([]any)[0])["text"]) == "" {
+		t.Fatalf("missing start result: %#v", got)
+	}
+	if !fileExists(filepath.Join(root, "pending", owner+".json")) || !fileExists(filepath.Join(root, "async_jobs", jobID+".json")) {
+		t.Fatal("failed launch lost ownership records needed by codex_cancel")
+	}
+	leaseData, err := os.ReadFile(filepath.Join(root, "projects", project, "scope_leases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var leaseRecord map[string]any
+	if err = json.Unmarshal(leaseData, &leaseRecord); err != nil {
+		t.Fatal(err)
+	}
+	leaseOwner := mapValue(mapValue(leaseRecord["owners"])[owner])
+	if leaseOwner["state"] != "RELEASED" {
+		t.Fatalf("dead unconfirmed host lease state = %v", leaseOwner["state"])
+	}
+}
+
 func jobHash(call string) string {
 	sum := sha256.Sum256([]byte(call))
 	return hex.EncodeToString(sum[:])

@@ -293,6 +293,80 @@ def test_queued_job_with_host_pid_recovers(area, monkeypatch):
     assert len(launched) == 1 and launched[0][2:] == (2, job["ownershipToken"])
 
 
+@pytest.mark.parametrize(("host_state", "expected_state", "expected_code"), [
+    ("DEAD", "FAILED", "HOST_LAUNCH_UNCONFIRMED"),
+    ("ALIVE", "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED"),
+])
+def test_unacknowledged_queued_host_is_failed_only_when_dead(tmp_path, monkeypatch, host_state,
+                                                             expected_state, expected_code):
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    job_id = "a" * 64
+    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
+                       "hostPid": 123, "hostCreatedAt": 456, "hostContained": True,
+                       "acceptedAt": 1, "deadlineAt": 100})
+    monkeypatch.setattr(server, "_classify_host", lambda _job: host_state)
+    ticks = iter((0.0, 0.0, 0.0, 11.0))
+    monkeypatch.setattr(codex_exec_mcp.time, "monotonic", lambda: next(ticks, 11.0))
+    monkeypatch.setattr(codex_exec_mcp.time, "sleep", lambda _seconds: None)
+
+    result = server._await_host(job_id)["structuredContent"]
+    job = server._read_job(job_id)
+    assert (result["state"], result["errorCode"]) == (expected_state, expected_code)
+    if host_state == "DEAD":
+        assert (job["state"], job["errorCode"]) == ("FAILED", "HOST_LAUNCH_UNCONFIRMED")
+    else:
+        assert job["state"] == "QUEUED" and "errorCode" not in job
+
+
+def test_post_start_dead_host_preserves_cancel_ownership_and_releases_lease(tmp_path, monkeypatch):
+    import ledger
+
+    root = tmp_path / "state"
+    job_dir = root / "codex_exec_mcp" / "jobs"
+    event = {"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+             "session_id": "dead-host-session", "tool_use_id": "dead-host-call"}
+    call = str(uuid.uuid4())
+    job_id = __import__("hashlib").sha256(call.encode()).hexdigest()
+    server = codex_exec_mcp.Server(job_dir=job_dir)
+    server._write_job({"jobId": job_id, "state": "QUEUED", "hostPid": 123, "hostCreatedAt": 456,
+                       "hostContained": True, "acceptedAt": 1, "deadlineAt": 100})
+    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
+    ticks = iter((0.0, 0.0, 0.0, 11.0))
+    monkeypatch.setattr(codex_exec_mcp.time, "monotonic", lambda: next(ticks, 11.0))
+    monkeypatch.setattr(codex_exec_mcp.time, "sleep", lambda _seconds: None)
+    result = server._await_host(job_id)["structuredContent"]
+    assert (result["state"], result["errorCode"]) == ("FAILED", "HOST_LAUNCH_UNCONFIRMED")
+    assert "leaseQueued" not in server._read_job(job_id)
+    owner = codex._call_key(event)
+    project = "0123456789abcdef"
+    pending = {"async_call": call, "async_ready": True, "session_id": event["session_id"],
+               "tool_use_id": event["tool_use_id"], "project_key": project, "lease_owner": owner,
+               "task_id": "retryable-task", "route": "normal", "model": "gpt-test", "effort": "medium",
+               "baseline": {}}
+    codex._atomic_json_write(root / "pending" / f"{owner}.json", pending)
+    assert ledger.ScopeLeases(root / "projects" / project).acquire(owner, "retryable-task", ["src"],
+                                                                   job_id=job_id)["status"] == ledger.OK
+    event["tool_response"] = {"structuredContent": {"jobId": job_id, "state": "FAILED",
+        "errorCode": "HOST_LAUNCH_UNCONFIRMED", "message": "dead host"}}
+    monkeypatch.setattr(codex, "_load_config", lambda _config: {"post_tool_output_field": "updatedMCPToolOutput"})
+
+    response = codex._post_start(event, {"post_tool_output_field": "updatedMCPToolOutput"}, root)
+
+    assert (root / "pending" / f"{owner}.json").exists()
+    index = json.loads((root / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+    assert index["call_key"] == owner and index["project_key"] == project
+    assert ledger.ScopeLeases(root / "projects" / project).owner_state(owner) == "RELEASED"
+    job_dir = root / "codex_exec_mcp" / "jobs"
+    codex_exec_mcp.Server(job_dir=job_dir)._write_job({"jobId": job_id, "call": call, "state": "FAILED",
+        "errorCode": "HOST_LAUNCH_UNCONFIRMED"})
+    cancel_event = {**event, "tool_name": "mcp__codex-main__codex_cancel", "tool_input": {"jobId": job_id}}
+    assert codex._async_pre_followup(cancel_event, root, None) == {}
+    loaded = ledger.SessionLedger(root / "projects" / project).load("retryable-task")
+    assert (loaded.get("record") or {}).get("last_outcome") is None
+    assert response["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
+    assert "HOST_LAUNCH_UNCONFIRMED" in response["hookSpecificOutput"]["updatedMCPToolOutput"][0]["text"]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX child process groups")
 def test_live_posix_child_group_blocks_dead_host_recovery(tmp_path, monkeypatch):
     server = codex_exec_mcp.Server(job_dir=tmp_path)

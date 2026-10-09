@@ -46,7 +46,11 @@ func postStart(event map[string]any, root string) (map[string]any, error) {
 	sum := sha256.Sum256([]byte(call))
 	expected := hex.EncodeToString(sum[:])
 	state := stringValue(value["state"])
-	if jobID == "" || jobID != expected || (state != "QUEUED" && state != "RUNNING" && state != "SUCCEEDED") || codexResponseIsError(event["tool_response"]) {
+	hostLaunchUnconfirmed := state == "FAILED" && value["errorCode"] == "HOST_LAUNCH_UNCONFIRMED"
+	if configField, ok := event["post_tool_output_field"].(string); ok && (configField == "updatedToolOutput" || configField == "updatedMCPToolOutput") {
+		field = configField
+	}
+	if jobID == "" || jobID != expected || (state != "QUEUED" && state != "RUNNING" && state != "SUCCEEDED" && !hostLaunchUnconfirmed) || codexResponseIsError(event["tool_response"]) {
 		message := stringValue(value["errorCode"])
 		if message == "" {
 			message = "codex_start failed or returned a mismatched job"
@@ -68,8 +72,16 @@ func postStart(event map[string]any, root string) (map[string]any, error) {
 	if err != nil || atomicObservationJSON(filepath.Join(root, "async_jobs", jobID+".json"), encoded) != nil {
 		return postStartFailure(event, root, pending, "async job index write failed"), nil
 	}
-	if configField, ok := event["post_tool_output_field"].(string); ok && (configField == "updatedToolOutput" || configField == "updatedMCPToolOutput") {
-		field = configField
+	if hostLaunchUnconfirmed {
+		owner := stringValue(pending["lease_owner"])
+		project := stringValue(pending["project_key"])
+		if owner != "" && project != "" {
+			_ = lease.New(filepath.Join(root, "projects", project)).Release(owner, float64(time.Now().UnixNano())/1e9)
+		}
+		textValue, _ := canonicalJSON(map[string]any{"jobId": jobID, "state": state,
+			"errorCode": value["errorCode"], "message": value["message"]})
+		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse",
+			field: []any{map[string]any{"type": "text", "text": string(textValue)}}}}, nil
 	}
 	next := fmt.Sprintf("Run in the background (use the PowerShell tool on Windows): %s ; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.", waiter.Command(jobID))
 	textValue, _ := canonicalJSON(map[string]any{"jobId": jobID, "state": state, "next": next})

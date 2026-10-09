@@ -1477,6 +1477,14 @@ class Server:
                 return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
                                     "errorCode": "PROCESS_UNCONFIRMED", "message": "Host ownership or child state unconfirmed"})
             time.sleep(0.02)
+        job = self._read_job(job_id)
+        if (job is not None and job.get("state") == "QUEUED" and "startedAt" not in job
+                and self._classify_host(job) == "DEAD"):
+            self._finish_job(job_id, "FAILED", "HOST_LAUNCH_UNCONFIRMED")
+            failed = self._read_job(job_id)
+            if failed is not None and failed.get("state") == "FAILED" and failed.get("errorCode") == "HOST_LAUNCH_UNCONFIRMED":
+                return _job_result({"jobId": job_id, "state": "FAILED", "errorCode": "HOST_LAUNCH_UNCONFIRMED",
+                                    "message": failed["message"]})
         return _job_result({"jobId": job_id, "state": "UNKNOWN_OR_IN_PROGRESS",
                             "errorCode": "PROCESS_UNCONFIRMED", "message": "Host ownership was not acknowledged"})
 
@@ -1500,6 +1508,7 @@ class Server:
                 message = message or {
                     "CODEX_FAILED": "Codex failed", "DEADLINE_EXCEEDED": "Codex deadline exceeded",
                     "CANCELLED": "Codex cancelled", "PROCESS_UNCONFIRMED": "Process termination unconfirmed",
+                    "HOST_LAUNCH_UNCONFIRMED": "Host launch was not acknowledged and the recorded host is no longer alive",
                     "RECOVERY_RESUME_FAILED": "Interrupted Codex thread could not be resumed",
                     "ADMISSION_BASELINE_UNAVAILABLE": "Fresh admission baseline could not be bound; FULL review required",
                     "WORKTREE_SNAPSHOT_FAILED": "Worktree snapshot could not be created",
@@ -1540,7 +1549,8 @@ class Server:
             if job["state"] in TERMINAL:
                 job.setdefault("boardDisplayCount", 0)
             self._write_job(job)
-            if job.get("leaseQueued") and "startedAt" not in job and state in {"CANCELLED", "TIMED_OUT"}:
+            if job.get("leaseQueued") and "startedAt" not in job and (state in {"CANCELLED", "TIMED_OUT"}
+                                                                        or code == "HOST_LAUNCH_UNCONFIRMED"):
                 try:
                     import ledger
                     root = self.job_dir.parent.parent

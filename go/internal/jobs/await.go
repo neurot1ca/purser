@@ -52,7 +52,42 @@ func awaitHost(stateRoot, jobID string, timeout time.Duration) map[string]any {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	if finishUnconfirmedLaunch(stateRoot, jobID) {
+		return finishResult(map[string]any{"jobId": jobID, "state": "FAILED",
+			"errorCode": "HOST_LAUNCH_UNCONFIRMED", "message": "Host launch was not acknowledged and the recorded host is no longer alive"},
+			"jobId", "state", "errorCode", "message")
+	}
 	return finishResult(map[string]any{"jobId": jobID, "state": "UNKNOWN_OR_IN_PROGRESS",
 		"errorCode": "PROCESS_UNCONFIRMED", "message": "Host ownership was not acknowledged"},
 		"jobId", "state", "errorCode", "message")
+}
+
+func finishUnconfirmedLaunch(stateRoot, jobID string) bool {
+	dir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
+	record := readJob(dir, jobID)
+	if record == nil {
+		return false
+	}
+	values := recordMap(record)
+	if values["state"] != "QUEUED" {
+		return false
+	}
+	if _, started := values["startedAt"]; started {
+		return false
+	}
+	pidValue, pidOK := recoveryInteger(record, "hostPid")
+	created, createdOK := recoveryInteger(record, "hostCreatedAt")
+	pid := int(pidValue)
+	if !pidOK || !createdOK || pidValue <= 0 || int64(pid) != pidValue || created <= 0 ||
+		runtime.GOOS == "windows" && !truthy(values["hostContained"]) ||
+		IdentityMatches(pid, created) || recoveryProcessState(pid, uint64(created)) != "DEAD" {
+		return false
+	}
+	if err := finishJob(dir, jobID, "FAILED", "HOST_LAUNCH_UNCONFIRMED", nil,
+		"Host launch was not acknowledged and the recorded host is no longer alive",
+		float64(time.Now().UnixNano())/1e9, FinishOptions{}); err != nil {
+		return false
+	}
+	final := recordMap(readJob(dir, jobID))
+	return final["state"] == "FAILED" && final["errorCode"] == "HOST_LAUNCH_UNCONFIRMED"
 }

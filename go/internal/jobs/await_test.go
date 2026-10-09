@@ -82,6 +82,60 @@ func TestAwaitHostPythonAcknowledgementOutcomes(t *testing.T) {
 			t.Fatalf("timeout result differs from Python: %#v", got)
 		}
 	})
+	t.Run("dead recorded queued host fails launch", func(t *testing.T) {
+		stateRoot := t.TempDir()
+		created, ok := hostProcessIdentity()
+		if !ok {
+			t.Skip("current process identity is unavailable")
+		}
+		createdAt, ok := created.(int64)
+		if !ok {
+			t.Skip("current process identity has an unsupported type")
+		}
+		writeAwaitRecord(t, stateRoot, map[string]any{"jobId": id, "state": "QUEUED", "leaseQueued": true,
+			"hostPid": os.Getpid(), "hostCreatedAt": createdAt + 1, "hostContained": runtime.GOOS == "windows"})
+		got := awaitHost(stateRoot, id, time.Millisecond)["structuredContent"].(map[string]any)
+		if got["state"] != "FAILED" || got["errorCode"] != "HOST_LAUNCH_UNCONFIRMED" {
+			t.Fatalf("dead recorded host was not finalized: %#v", got)
+		}
+	})
+	t.Run("dead recorded queued host without queued lease fails launch", func(t *testing.T) {
+		stateRoot := t.TempDir()
+		created, ok := hostProcessIdentity()
+		if !ok {
+			t.Skip("current process identity is unavailable")
+		}
+		createdAt, ok := created.(int64)
+		if !ok {
+			t.Skip("current process identity has an unsupported type")
+		}
+		writeAwaitRecord(t, stateRoot, map[string]any{"jobId": id, "state": "QUEUED",
+			"hostPid": os.Getpid(), "hostCreatedAt": createdAt + 1, "hostContained": runtime.GOOS == "windows"})
+		got := awaitHost(stateRoot, id, time.Millisecond)["structuredContent"].(map[string]any)
+		if got["state"] != "FAILED" || got["errorCode"] != "HOST_LAUNCH_UNCONFIRMED" {
+			t.Fatalf("dead recorded host without queued lease was not finalized: %#v", got)
+		}
+	})
+	t.Run("live recorded queued host remains unconfirmed", func(t *testing.T) {
+		stateRoot := t.TempDir()
+		created, ok := hostProcessIdentity()
+		if !ok {
+			t.Skip("current process identity is unavailable")
+		}
+		createdAt, ok := created.(int64)
+		if !ok {
+			t.Skip("current process identity has an unsupported type")
+		}
+		writeAwaitRecord(t, stateRoot, map[string]any{"jobId": id, "state": "QUEUED", "leaseQueued": true,
+			"hostPid": os.Getpid(), "hostCreatedAt": createdAt, "hostContained": runtime.GOOS == "windows"})
+		got := awaitHost(stateRoot, id, time.Millisecond)["structuredContent"].(map[string]any)
+		if got["state"] != "UNKNOWN_OR_IN_PROGRESS" || got["errorCode"] != "PROCESS_UNCONFIRMED" {
+			t.Fatalf("live host state changed: %#v", got)
+		}
+		if record := readJob(filepath.Join(stateRoot, "codex_exec_mcp", "jobs"), id); recordMap(record)["state"] != "QUEUED" {
+			t.Fatalf("live host job record was modified: %#v", recordMap(record))
+		}
+	})
 }
 
 func writeAwaitRecord(t *testing.T, root string, record map[string]any) {

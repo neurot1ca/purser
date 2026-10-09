@@ -2977,11 +2977,15 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
         call_uuid = pending.get("async_call")
         if pending.get("async_ready") is not True or not isinstance(call_uuid, str):
             raise WiringError("codex_start has no enforced pending call")
+        loaded_config = _load_config(config)
         value = _start_value(event.get("tool_response"))
         job_id = value.get("jobId")
         expected = hashlib.sha256(call_uuid.encode("utf-8")).hexdigest()
+        host_launch_unconfirmed = (value.get("state") == "FAILED"
+                                   and value.get("errorCode") == "HOST_LAUNCH_UNCONFIRMED")
         if (not isinstance(job_id, str) or job_id != expected
-                or value.get("state") not in {"QUEUED", "RUNNING", "SUCCEEDED"}
+                or (value.get("state") not in {"QUEUED", "RUNNING", "SUCCEEDED"}
+                    and not host_launch_unconfirmed)
                 or _codex_response_is_error(event.get("tool_response"))):
             raise WiringError(value.get("errorCode", "codex_start failed or returned a mismatched job"))
         if pending.get("job_id") not in (None, job_id):
@@ -2993,11 +2997,18 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
             "jobId": job_id, "call": call_uuid, "call_key": _call_key(event),
             "session_id": pending.get("session_id"), "project_key": pending.get("project_key"),
         })
+        if host_launch_unconfirmed:
+            _release_scope_lease(root, pending)
+            return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                    loaded_config["post_tool_output_field"]: [{"type": "text", "text":
+                        json_transport.dumps({"jobId": job_id, "state": "FAILED",
+                                              "errorCode": "HOST_LAUNCH_UNCONFIRMED",
+                                              "message": value.get("message", "Host launch unconfirmed")})}]}}
         waiter = Path(__file__).resolve().parent / "purser_wait.py"
         command = (f'Run in the background (use the PowerShell tool on Windows): "{sys.executable}" "{waiter}" {job_id} '
                    "; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.")
         response = _replacement({"jobId": job_id, "state": value["state"], "next": command},
-                                _load_config(config))
+                                loaded_config)
         return _append_dispatch_receipt(response, pending, root, event)
     except Exception as error:
         failure = post_tool_use_failure({**event, "error": _safe_error(error)},
