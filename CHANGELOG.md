@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.107 — 2026-10-09
+
+- **Fixed:** A Reviewer-1 fallback runs its own CLI instead of the primary reviewer's configured executable.
+- **Fixed:** An explicit valid Codex model on a new mechanical call wins over the OpenCode candidate.
+- **Fixed:** A plain `Requirements:` line grounds the task contract like `Acceptance criteria:`.
+
 ## 0.1.106 — 2026-10-09
 
 - **Fixed:** A plan's complete-milestone is no longer blocked by a collected no-change or discarded job.
