@@ -2,6 +2,18 @@
 // the conversation instead of waiting for the user to type /compact. PreCompact
 // refreshes the handoff note as it does for a typed /compact.
 
+import { stateRoot } from './state-root.js'
+
+async function runtimeStateRoot($): Promise<string | undefined> {
+  const os = await $.env.get('OS')
+  const [purserState, claudeConfig, home] = await Promise.all([
+    $.env.get('PURSER_STATE_DIR'),
+    $.env.get('CLAUDE_CONFIG_DIR'),
+    os === 'Windows_NT' ? $.env.get('USERPROFILE') : $.env.get('HOME'),
+  ])
+  return stateRoot({ purserState, claudeConfig, home })
+}
+
 export const DEFAULT_THRESHOLD = 250_000
 const RETRY_DELAYS_MS = [1_000, 3_000, 10_000]
 
@@ -19,27 +31,24 @@ export function thresholdFrom(value: string | undefined): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_THRESHOLD
 }
 
-// The only durable trace: the last LOG_LINES decisions in ~/.claude/purser/auto-compact.log
+// The only durable trace: the last LOG_LINES decisions in the state root's auto-compact.log
 // (fs.write replaces the file), because $.ui.log shows nothing when a hook runs late.
 async function trace($, text: string) {
   try {
     const stamp = new Date(await $.clock.now()).toISOString()
     lines = [...lines, `${stamp} ${text}`].slice(-LOG_LINES)
-    const home = await homeDir($)
-    if (home) await $.fs.write(`${home}/.claude/purser/auto-compact.log`, `${lines.join('\n')}\n`)
+    const root = await runtimeStateRoot($)
+    if (root) {
+      await $.fs.write(`${root.replace(/[\\/]+$/, '')}/auto-compact.log`, `${lines.join('\n')}\n`)
+    }
   } catch { /* logging must not affect the turn */ }
 }
 
-async function homeDir($): Promise<string | undefined> {
-  const os = await $.env.get('OS')
-  return os === 'Windows_NT' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
-}
-
-// Off unless /purser:init recorded the user's yes in ~/.claude/purser/auto-compact.json.
+// Off unless /purser:init recorded the user's yes in the shared state root.
 export async function optedIn($): Promise<boolean> {
   try {
-    const home = await homeDir($)
-    return home !== undefined && JSON.parse(await $.fs.read(`${home}/.claude/purser/auto-compact.json`))?.enabled === true
+    const root = await runtimeStateRoot($)
+    return root !== undefined && JSON.parse(await $.fs.read(`${root.replace(/[\\/]+$/, '')}/auto-compact.json`))?.enabled === true
   } catch {
     return false
   }

@@ -2,13 +2,16 @@ import { expect, mock, test } from 'claude-code/testing'
 import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, RESUME_PROMPT, thresholdFrom } from './autocompact.js'
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
+const normalized = (path: string) => path.replace(/\\/g, '/').replace(/(^|:)[A-Za-z]:(?=\/)/g, '$1')
 
 function engine(on, tokens: number, env: Record<string, string> = {}, failures = 0, setting: string | null = '{"enabled": true}') {
   const calls = { compacts: 0 }
+  const reads: string[] = []
   const clock = mock.clock(on)
-  mock.env(on, { HOME: '/home', ...env })
+  mock.env(on, { OS: 'Linux', HOME: '/home', ...env })
   on('fs.read', async (_$, e) => {
     if (setting === null || !/auto-compact.json$/.test(e.path)) throw new Error('ENOENT')
+    reads.push(e.path)
     return { value: setting }
   })
   on('turn.complete', async () => ({ text: 'ok' }))
@@ -18,7 +21,7 @@ function engine(on, tokens: number, env: Record<string, string> = {}, failures =
     if (calls.compacts <= failures) throw new Error('a turn is running')
     return { messages: e.messages }
   })
-  return { calls, clock }
+  return { calls, clock, reads }
 }
 
 test('reads the threshold override and the off switch', () => {
@@ -56,6 +59,33 @@ test('stays off without a recorded choice', async ($, on) => {
   await $.turn.complete(TURN)
   await clock.advance(20_000)
   expect(calls.compacts).toBe(0)
+})
+
+test('uses CLAUDE_CONFIG_DIR for the opt-in and log', async ($, on) => {
+  const { clock, reads } = engine(on, 260_000, { CLAUDE_CONFIG_DIR: '/custom/claude' })
+  const writes: string[] = []
+  on('fs.write', async (_$, e) => { writes.push(e.path); return { value: undefined } })
+  await $.turn.complete(TURN)
+  await clock.advance(1_000)
+  expect(reads.map(normalized)).toContain('/custom/claude/purser/auto-compact.json')
+  expect(writes.map(normalized)).toContain('/custom/claude/purser/auto-compact.log')
+})
+
+test('PURSER_STATE_DIR takes precedence for the opt-in and log', async ($, on) => {
+  const { clock, reads } = engine(on, 260_000, { CLAUDE_CONFIG_DIR: '/custom/claude', PURSER_STATE_DIR: '/custom/state' })
+  const writes: string[] = []
+  on('fs.write', async (_$, e) => { writes.push(e.path); return { value: undefined } })
+  await $.turn.complete(TURN)
+  await clock.advance(1_000)
+  expect(reads.map(normalized)).toContain('/custom/state/auto-compact.json')
+  expect(writes.map(normalized)).toContain('/custom/state/auto-compact.log')
+})
+
+test('uses the default state root when neither state override is set', async ($, on) => {
+  const { clock, reads } = engine(on, 260_000)
+  await $.turn.complete(TURN)
+  await clock.advance(1_000)
+  expect(reads.map(normalized)).toContain('/home/.claude/purser/auto-compact.json')
 })
 
 test('stays off when init recorded no', async ($, on) => {
