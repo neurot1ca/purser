@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"purser-hook/internal/testutil"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -50,21 +51,27 @@ func TestPostAsyncClaimPythonFixture(t *testing.T) {
 			switch test["name"] {
 			case "claim_lock":
 				path := filepath.Join(state, "async_jobs", inputJobID(input)+".claim.lock")
-				blocker, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err = lockTaskUsageFile(blocker); err != nil {
-					t.Fatal(err)
-				}
-				_, _, _, _, _, blockedErr := claimAsyncResult(state, input, repo)
-				releaseTaskUsageLock(blocker)
-				if !errors.Is(blockedErr, errAsyncClaimed) || want["concurrent_blocked"] != true {
-					t.Fatalf("concurrent claim error = %v, blocked=%v", blockedErr, want["concurrent_blocked"])
-				}
 				lock, gotIndex, _, _, cached, err := claimAsyncResult(state, input, repo)
 				if err != nil {
 					t.Fatal(err)
+				}
+				wantSize := int64(0)
+				if runtime.GOOS == "windows" {
+					wantSize = 1
+				}
+				lockInfo, err := os.Stat(path)
+				if err != nil || lockInfo.Size() != wantSize {
+					t.Fatalf("fresh claim lock size = %v, err=%v; want %d", lockInfo, err, wantSize)
+				}
+				if runtime.GOOS == "windows" {
+					marker := []byte{0}
+					if n, readErr := lock.ReadAt(marker, 0); readErr != nil || n != 1 || marker[0] != '0' {
+						t.Fatalf("fresh Windows claim lock marker = %q, n=%d, err=%v; want %q", marker, n, readErr, "0")
+					}
+				}
+				_, _, _, _, _, blockedErr := claimAsyncResult(state, input, repo)
+				if !errors.Is(blockedErr, errAsyncClaimed) || want["concurrent_blocked"] != true {
+					t.Fatalf("concurrent claim error = %v, blocked=%v", blockedErr, want["concurrent_blocked"])
 				}
 				if cached != nil || gotIndex["stage"] != want["stage"] {
 					t.Fatalf("claim result stage=%v cached=%#v, want %v", gotIndex["stage"], cached, want["stage"])

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 var errAsyncClaimed = errors.New("async result is already being finalized")
@@ -23,11 +24,13 @@ func claimAsyncResult(root string, event map[string]any, repoRoot string) (*os.F
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	if info, statErr := lock.Stat(); statErr != nil {
-		_ = lock.Close()
-		return nil, nil, nil, nil, nil, statErr
-	} else if info.Size() == 0 {
-		_, _ = lock.WriteAt([]byte{'0'}, 0)
+	if runtime.GOOS == "windows" {
+		if info, statErr := lock.Stat(); statErr != nil {
+			_ = lock.Close()
+			return nil, nil, nil, nil, nil, statErr
+		} else if info.Size() == 0 {
+			_, _ = lock.WriteAt([]byte{'0'}, 0)
+		}
 	}
 	if err = lockTaskUsageFile(lock); err != nil {
 		_ = lock.Close()
