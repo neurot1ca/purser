@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.100 — 2026-10-09
+
+- **Fixed:** The acceptance gate now sees which subagent called `codex_apply`, so a dispatcher can no longer apply a job main Claude has not accepted.
+- **Fixed:** The Python audit receipt's commit command also lists every changed path.
+
 ## 0.1.99 — 2026-10-09
 
 - **Fixed:** The audit receipt's commit command lists every changed path instead of only the first 10.
