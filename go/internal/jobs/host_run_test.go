@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"purser-hook/internal/policy"
 )
 
 const hostTestID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -42,6 +44,46 @@ func TestHostFakeWorker(t *testing.T) {
 		os.Exit(7)
 	}
 	os.Exit(0)
+}
+
+func TestFinishedJobThreadRecordAdmitsReply(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	job := map[string]any{"jobId": hostTestID, "state": "QUEUED", "generation": 1,
+		"ownershipToken": "owner", "signalToken": "signal", "deadlineAt": float64(time.Now().Add(10*time.Second).UnixNano()) / 1e9,
+		"taskId": "task-finished", "route": "normal", "model": "gpt-test", "effort": "medium"}
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), job)
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "codex", "args": map[string]any{"cwd": root, "prompt": "hello"},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}}
+	if _, err = RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
+		t.Fatal(err)
+	}
+	thread := LoadRecord(filepath.Join(root, "codex_exec_mcp", "threads"), "fake-thread")
+	requested := map[string]any{"task_id": "task-finished", "route": "normal", "model": "gpt-test", "effort": "medium"}
+	if decision := policy.ThreadCompatibility(requested, thread); !decision.Compatible {
+		t.Fatalf("reply compatibility = %#v, want admitted thread record %#v", decision, thread)
+	}
+}
+
+func TestIncompleteFinishedJobThreadIdentityRefusesReply(t *testing.T) {
+	requested := map[string]any{"task_id": "task-finished", "route": "normal", "model": "gpt-test", "effort": "medium"}
+	recorded := map[string]any{"task_id": "task-finished", "model": "gpt-test"}
+	if decision := policy.ThreadCompatibility(requested, recorded); decision.Compatible || decision.Code != "INVALID_LIVE_THREAD" {
+		t.Fatalf("incomplete reply identity decision = %#v, want INVALID_LIVE_THREAD", decision)
+	}
 }
 
 func TestRunHostGenerationWorkerCases(t *testing.T) {

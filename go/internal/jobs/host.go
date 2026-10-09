@@ -489,6 +489,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 		threadConfig := map[string]any{"cwd": args.Cwd, "model": model, "config_args": configArgs,
 			"sandbox": sandbox, "agent": agent}
+		for source, target := range map[string]string{"taskId": "task_id", "route": "route", "model": "model", "effort": "effort"} {
+			var value any
+			if job.Get(source, &value) && value != nil {
+				threadConfig[target] = value
+			}
+		}
 		for _, key := range []string{"worktreePath", "snapshot", "baselineSnapshot", "head", "repoRoot"} {
 			var value any
 			if job.Get(key, &value) {
