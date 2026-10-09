@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"purser-hook/internal/pluginroot"
 )
 
 func TestJournalWriteRoundTrip(t *testing.T) {
@@ -411,12 +413,8 @@ func TestMaintenanceConsentUsesPluginRoot(t *testing.T) {
 		t.Fatalf("maintenance CLI used project command path %q: %s", projectCommand, got)
 	}
 	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fallback := filepath.Join(filepath.Dir(filepath.Dir(executable)), "bin", "purser-hook-"+runtime.GOOS+"-"+runtime.GOARCH+suffix)
-	if got := maintenanceCommandPath(); got != fallback {
+	fallback := filepath.Join(pluginroot.Root(), "bin", "purser-hook-"+runtime.GOOS+"-"+runtime.GOARCH+suffix)
+	if got := maintenanceCommandPath(); filepath.Clean(got) != filepath.Clean(fallback) {
 		t.Fatalf("maintenance command fallback = %q, want %q", got, fallback)
 	}
 }
