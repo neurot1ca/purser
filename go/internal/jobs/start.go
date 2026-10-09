@@ -71,6 +71,11 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 		sendBackFrom = unappliedThreadJob(dir, id)
 		if sendBackFrom != nil {
 			prior := recordMap(sendBackFrom)
+			for _, key := range []string{"worktreePath", "repoRoot"} {
+				if nonemptyString(thread[key]) == "" && nonemptyString(prior[key]) != "" {
+					thread[key] = prior[key]
+				}
+			}
 			if snapshot, ok := prior["snapshot"].(string); ok {
 				thread["snapshot"], thread["baselineSnapshot"] = snapshot, snapshot
 			}

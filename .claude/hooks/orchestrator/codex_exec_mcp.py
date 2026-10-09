@@ -1519,12 +1519,19 @@ class Server:
                     if reply_record is None:
                         return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
                     send_back_from = _unapplied_thread_job(self.job_dir, args["threadId"])
+                    if send_back_from is not None:
+                        for key in ("worktreePath", "repoRoot"):
+                            if not isinstance(reply_record.get(key), str) or not reply_record[key]:
+                                prior_value = send_back_from.get(key)
+                                if isinstance(prior_value, str) and prior_value:
+                                    reply_record[key] = prior_value
                     if send_back_from is not None and isinstance(send_back_from.get("snapshot"), str):
                         # Replay preparation advances the worker baseline, while the
                         # thread record may still describe the original worktree tree.
                         reply_record["snapshot"] = send_back_from["snapshot"]
                         reply_record["baselineSnapshot"] = send_back_from["snapshot"]
-                    if send_back_from is not None and reply_record.get("worktreePath"):
+                    if (send_back_from is not None and reply_record.get("worktreePath")
+                            and reply_record.get("repoRoot")):
                         import ledger
                         repo_root = Path(reply_record["repoRoot"]).resolve()
                         worktree = Path(reply_record["worktreePath"]).resolve()

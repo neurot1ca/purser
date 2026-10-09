@@ -249,6 +249,128 @@ func TestRunHostReplyUsesRecordedRepositoryAfterMainAdvances(t *testing.T) {
 	}
 }
 
+func TestStartReplyUsesRecordedThreadWorktreeRepository(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	gitStart(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base")
+	worktree := filepath.Join(t.TempDir(), "reply-worktree")
+	gitStart(t, repo, "worktree", "add", "-qb", "reply", worktree, "HEAD")
+	serverCWD := t.TempDir()
+	if err = os.Chdir(serverCWD); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	state := t.TempDir()
+	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	priorID := strings.Repeat("a", 64)
+	writeHostTestJSON(t, filepath.Join(dir, priorID+".json"), map[string]any{
+		"jobId": priorID, "state": "SUCCEEDED", "threadId": "reply-thread", "repoRoot": repo,
+		"worktreePath": worktree, "finishedAt": float64(time.Now().UnixNano()) / 1e9,
+	})
+	if err = SaveRecord(filepath.Join(state, "codex_exec_mcp", "threads"), map[string]any{
+		"thread_id": "reply-thread", "cwd": worktree, "config_args": []any{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var launched bool
+	opt := StartOptions{StateRoot: state, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true},
+		Launch: func(id string, generation int64, token string) error {
+			launched = true
+			_, hostErr := RunHostGeneration(dir, id, generation, token, HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+				if filepath.Clean(args.Cwd) != filepath.Clean(worktree) {
+					t.Errorf("reply cwd = %q, want recorded worktree %q", args.Cwd, worktree)
+				}
+				return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+			}})
+			return hostErr
+		}}
+	_, _, err = Start(state, map[string]any{"call": "00000000-0000-4000-8000-000000000001", "prompt": "continue", "mode": "reply", "threadId": "reply-thread"}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !launched {
+		t.Fatal("reply host was not launched")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replied *Record
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") && entry.Name() != priorID+".json" {
+			replied, err = Read(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if replied == nil {
+		t.Fatal("reply job record was not written")
+	}
+	var stateValue string
+	if !replied.Get("state", &stateValue) || stateValue != "SUCCEEDED" {
+		t.Fatalf("reply state = %q, want SUCCEEDED", stateValue)
+	}
+}
+
+func TestRunHostGenerationWritesValidFailureRecord(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex-reply", "agent": "codex", "args": map[string]any{"prompt": "continue", "threadId": "reply-thread"},
+	})
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	if _, err = RunHostGeneration(dir, hostTestID, 1, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	failure, err := Read(filepath.Join(dir, hostTestID+".json"))
+	if err != nil {
+		t.Fatalf("failure record could not be decoded: %v", err)
+	}
+	var stateValue, code, message string
+	if !failure.Get("state", &stateValue) || stateValue != "FAILED" ||
+		!failure.Get("errorCode", &code) || code != "WORKTREE_SNAPSHOT_FAILED" ||
+		!failure.Get("message", &message) || message != "Repository root could not be resolved for Codex launch" {
+		t.Fatalf("invalid launch failure record: %s", mustRecordJSON(t, failure))
+	}
+}
+
+func mustRecordJSON(t *testing.T, record *Record) string {
+	t.Helper()
+	data, err := record.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func TestHostReplacesDottedSandboxWorkspaceWriteKeys(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "codex_exec_mcp", "jobs")

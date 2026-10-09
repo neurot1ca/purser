@@ -633,6 +633,7 @@
           "signalToken": "TOKEN",
           "generation": 1,
           "ownershipToken": "TOKEN",
+          "worktreePath": "C:/old-worktree",
           "snapshot": "tree-1",
           "baselineSnapshot": "tree-1"
         },
