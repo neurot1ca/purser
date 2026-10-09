@@ -15,20 +15,24 @@ const reviewerDiagnosticBytes = 4 * 1024
 var reviewerDiagnosticMu sync.Mutex
 
 type reviewerDiagnostic struct {
-	Provider       string  `json:"provider"`
-	RequestedModel string  `json:"requested_model"`
-	ErrorCode      string  `json:"error_code"`
-	ExitCode       int     `json:"exit_code"`
-	ElapsedSeconds float64 `json:"elapsed_seconds"`
-	Retries        int     `json:"retries"`
-	DecoderDetail  string  `json:"decoder_detail"`
-	StdoutHead     string  `json:"stdout_head"`
-	StdoutTail     string  `json:"stdout_tail"`
-	StderrHead     string  `json:"stderr_head"`
-	StderrTail     string  `json:"stderr_tail"`
+	Provider       string   `json:"provider"`
+	RequestedModel string   `json:"requested_model"`
+	ErrorCode      string   `json:"error_code"`
+	ExitCode       int      `json:"exit_code"`
+	ElapsedSeconds float64  `json:"elapsed_seconds"`
+	Retries        int      `json:"retries"`
+	DecoderDetail  string   `json:"decoder_detail"`
+	StdoutHead     string   `json:"stdout_head"`
+	StdoutTail     string   `json:"stdout_tail"`
+	StderrHead     string   `json:"stderr_head"`
+	StderrTail     string   `json:"stderr_tail"`
+	ExecutablePath string   `json:"executable_path"`
+	ArgvFlags      []string `json:"argv_flags"`
+	Cwd            string   `json:"cwd"`
+	PathHead       string   `json:"path_head"`
 }
 
-func writeReviewerDiagnostic(provider, model, errorCode string, exitCode int, elapsed time.Duration, retries int, decoderDetail string, stdout []byte, stdoutTail, stderrHead, stderrTail string) error {
+func writeReviewerDiagnostic(provider, model, errorCode string, exitCode int, elapsed time.Duration, retries int, decoderDetail string, stdout []byte, stdoutTail, stderrHead, stderrTail, executablePath string, argvFlags []string, cwd, pathHead string) error {
 	reviewerDiagnosticMu.Lock()
 	defer reviewerDiagnosticMu.Unlock()
 
@@ -44,6 +48,7 @@ func writeReviewerDiagnostic(provider, model, errorCode string, exitCode int, el
 		Provider: provider, RequestedModel: model, ErrorCode: errorCode, ExitCode: exitCode,
 		ElapsedSeconds: elapsed.Seconds(), Retries: retries, DecoderDetail: decoderDetail,
 		StdoutHead: diagnosticPart(stdout, false), StdoutTail: diagnosticPart([]byte(stdoutTail), false), StderrHead: stderrHead, StderrTail: stderrTail,
+		ExecutablePath: executablePath, ArgvFlags: argvFlags, Cwd: cwd, PathHead: pathHead,
 	}
 	data, err := json.Marshal(diagnostic)
 	if err != nil {

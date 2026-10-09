@@ -69,7 +69,7 @@ func nativeFixture(t *testing.T) (string, string) {
 	}
 	source := `package main
 import ("fmt"; "os"; "strings"; "time")
-func main() { if d := os.Getenv("MOCK_SLEEP_MS"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); time.Sleep(time.Duration(n)*time.Millisecond) }; output := os.Getenv("MOCK_OUTPUT"); if d := os.Getenv("MOCK_OUTPUT_SIZE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); output = strings.Repeat("x", n) }; fmt.Print(output) }`
+func main() { if d := os.Getenv("MOCK_SLEEP_MS"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); time.Sleep(time.Duration(n)*time.Millisecond) }; output := os.Getenv("MOCK_OUTPUT"); if d := os.Getenv("MOCK_OUTPUT_SIZE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); output = strings.Repeat("x", n) }; fmt.Print(output); if d := os.Getenv("MOCK_EXIT_CODE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); os.Exit(n) } }`
 	src := filepath.Join(dir, "mock.go")
 	if err := os.WriteFile(src, []byte(source), 0600); err != nil {
 		t.Fatal(err)
@@ -271,6 +271,61 @@ func TestNativeReviewerDiagnosticRecordsParseFailure(t *testing.T) {
 	}
 	if diagnostic["provider"] != "claude" || !strings.HasPrefix(diagnostic["stdout_head"].(string), stdout) {
 		t.Fatalf("diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestNativeReviewerDiagnosticRecordsFailedLaunchDetails(t *testing.T) {
+	root, bin := nativeFixture(t)
+	state := filepath.Join(root, "state")
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("MOCK_EXIT_CODE", "2")
+	args := nativeArgs(root, bin, NoMaterialFinding)
+	args["reviewer_agent"] = "claude"
+	args["reviewer_model"] = "claude-sonnet-4-5"
+	args["reviewer_effort"] = "high"
+	path := t.TempDir()
+	t.Setenv("PATH", path)
+	got, err := RunBridge(context.Background(), root, args, 30*time.Second)
+	if err != nil || got.Attributes["error_code"] != "REVIEWER_PROCESS_FAILED" {
+		t.Fatalf("failed reviewer = %#v, %v", got, err)
+	}
+	files, err := filepath.Glob(filepath.Join(state, "diagnostics", "reviewer", "*-claude.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("diagnostic files = %v, %v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic map[string]any
+	if err := json.Unmarshal(data, &diagnostic); err != nil {
+		t.Fatalf("decode diagnostic: %v", err)
+	}
+	argv, ok := diagnostic["argv_flags"].([]any)
+	if !ok {
+		t.Fatalf("argv_flags = %#v", diagnostic["argv_flags"])
+	}
+	var promptOmitted, schemaOmitted bool
+	for i, value := range argv {
+		arg, ok := value.(string)
+		if !ok {
+			t.Fatalf("argv_flags[%d] = %#v", i, value)
+		}
+		if strings.Contains(arg, "You are Reviewer-1.") {
+			t.Fatalf("prompt leaked in argv_flags: %q", arg)
+		}
+		if strings.HasPrefix(arg, "<omitted ") {
+			promptOmitted = true
+			if i > 0 && argv[i-1] == "--json-schema" {
+				schemaOmitted = true
+			}
+		}
+	}
+	if !promptOmitted || !schemaOmitted {
+		t.Fatalf("prompt/schema omission missing: %#v", argv)
+	}
+	if diagnostic["executable_path"] != bin || diagnostic["cwd"] == "" || !filepath.IsAbs(diagnostic["cwd"].(string)) || diagnostic["path_head"] != path {
+		t.Fatalf("launch details = %#v", diagnostic)
 	}
 }
 

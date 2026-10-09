@@ -375,7 +375,10 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		stdoutTail, _ := evidence["_diagnostic_stdout_tail"].(string)
 		stderrHead, _ := evidence["_diagnostic_stderr_head"].(string)
 		stderrTail, _ := evidence["_diagnostic_stderr_tail"].(string)
-		_ = writeReviewerDiagnostic(provider, RequestedModel(config), callErr, exitCode, elapsed, retries, "", stdout, stdoutTail, stderrHead, stderrTail)
+		executablePath, _ := evidence["_diagnostic_executable_path"].(string)
+		argvFlags, _ := evidence["_diagnostic_argv_flags"].([]string)
+		pathHead, _ := evidence["_diagnostic_path_head"].(string)
+		_ = writeReviewerDiagnostic(provider, RequestedModel(config), callErr, exitCode, elapsed, retries, "", stdout, stdoutTail, stderrHead, stderrTail, executablePath, argvFlags, working, pathHead)
 		if stderr != "" {
 			unavailable.StderrTail = StderrTail(stderr)
 		}
@@ -395,7 +398,10 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		stdoutTail, _ := evidence["_diagnostic_stdout_tail"].(string)
 		stderrHead, _ := evidence["_diagnostic_stderr_head"].(string)
 		stderrTail, _ := evidence["_diagnostic_stderr_tail"].(string)
-		_ = writeReviewerDiagnostic(provider, RequestedModel(config), ResponseInvalid, 0, elapsed, retries, detail, stdout, stdoutTail, stderrHead, stderrTail)
+		executablePath, _ := evidence["_diagnostic_executable_path"].(string)
+		argvFlags, _ := evidence["_diagnostic_argv_flags"].([]string)
+		pathHead, _ := evidence["_diagnostic_path_head"].(string)
+		_ = writeReviewerDiagnostic(provider, RequestedModel(config), ResponseInvalid, 0, elapsed, retries, detail, stdout, stdoutTail, stderrHead, stderrTail, executablePath, argvFlags, working, pathHead)
 		return bridgeOutcome(unavailable)
 	}
 	response := parsed["response"].(map[string]any)
@@ -469,6 +475,19 @@ func reviewerFailureMessage(code string, retries, exitCode int) string {
 	}
 }
 
+func diagnosticReviewerArgv(command []string) []string {
+	argv := append([]string(nil), command...)
+	for i, arg := range argv {
+		if strings.Contains(arg, "You are Reviewer-1.") {
+			argv[i] = fmt.Sprintf("<omitted %d bytes>", len(arg))
+		}
+		if arg == "--json-schema" && i+1 < len(argv) {
+			argv[i+1] = fmt.Sprintf("<omitted %d bytes>", len(argv[i+1]))
+		}
+	}
+	return argv
+}
+
 func invokePacket(parent context.Context, adapter Adapter, command []string, cwd string, timeout time.Duration) ([]byte, string, time.Duration, int, string, int, map[string]any) {
 	started := time.Now()
 	retried := 0
@@ -483,6 +502,21 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, cwd
 		cmd.Env = os.Environ()
 		for key, value := range adapter.Environment(command) {
 			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+		pathValue := ""
+		for _, item := range cmd.Env {
+			key, value, ok := strings.Cut(item, "=")
+			if ok && strings.EqualFold(key, "PATH") {
+				pathValue = value
+			}
+		}
+		pathRunes := []rune(pathValue)
+		if len(pathRunes) > 600 {
+			pathRunes = pathRunes[:600]
+		}
+		executablePath := cmd.Path
+		if absolute, err := filepath.Abs(executablePath); err == nil {
+			executablePath = absolute
 		}
 		proc.ConfigureProcessTreeKill(cmd)
 		configureNativeLaunch(cmd, adapter.LaunchOptions())
@@ -499,6 +533,8 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, cwd
 			"reviewer_stdout": stdout.evidence(), "reviewer_stderr": stderr.evidence(),
 			"_diagnostic_stdout_head": stdoutHead, "_diagnostic_stdout_tail": stdoutTail,
 			"_diagnostic_stderr_head": stderrHead, "_diagnostic_stderr_tail": stderrTail,
+			"_diagnostic_executable_path": executablePath, "_diagnostic_argv_flags": diagnosticReviewerArgv(command),
+			"_diagnostic_path_head": string(pathRunes),
 		}
 		timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 		cancel()
