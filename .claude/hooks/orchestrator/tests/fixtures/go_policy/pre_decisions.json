@@ -99,8 +99,8 @@
         "hookSpecificOutput": {
           "hookEventName": "PreToolUse",
           "updatedInput": {
-            "cwd": "__TMP_ROOT__\\repo",
-            "prompt": "Please run no full suite; run focused tests.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "cwd": "__TMP_ROOT__/repo",
+            "prompt": "Please run no full suite; run focused tests.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__/state/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
             "model": "gpt-6-luna",
             "config": {
               "model_reasoning_effort": "high",
@@ -141,7 +141,7 @@
           "hookEventName": "PreToolUse",
           "updatedInput": {
             "threadId": "thread-p63",
-            "prompt": "Continue from the recorded thread.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH"
+            "prompt": "Continue from the recorded thread.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__/state/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH"
           }
         },
         "systemMessage": "Purser: route=subtle -> gpt-6-luna / high"
@@ -160,8 +160,8 @@
         "hookSpecificOutput": {
           "hookEventName": "PreToolUse",
           "updatedInput": {
-            "cwd": "__TMP_ROOT__\\repo",
-            "prompt": "Change the file carefully.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "cwd": "__TMP_ROOT__/repo",
+            "prompt": "Change the file carefully.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__/state/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
             "model": "gpt-6-luna",
             "config": {
               "model_reasoning_effort": "high",
@@ -186,8 +186,8 @@
         "hookSpecificOutput": {
           "hookEventName": "PreToolUse",
           "updatedInput": {
-            "cwd": "__TMP_ROOT__\\repo",
-            "prompt": "Rename a local variable.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "cwd": "__TMP_ROOT__/repo",
+            "prompt": "Rename a local variable.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__/state/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
             "model": "gpt-6-luna",
             "config": {
               "model_reasoning_effort": "high",
@@ -216,13 +216,13 @@
         "hookSpecificOutput": {
           "hookEventName": "PreToolUse",
           "updatedInput": {
-            "cwd": "__TMP_ROOT__\\repo",
+            "cwd": "__TMP_ROOT__/repo",
             "model": "gpt-6-test-override",
             "config": {
               "model_reasoning_effort": "medium",
               "tool_output_token_limit": 8000
             },
-            "prompt": "Make the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "prompt": "Make the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__/state/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
             "developer-instructions": "Codex must not blindly accept Claude's proposed solution. It should independently verify the relevant repository state and project rules, prefer the smallest correct implementation, and explicitly flag any instruction that would introduce a regression, unnecessary complexity, scope expansion, or conflict with existing contracts."
           }
         },
@@ -242,8 +242,8 @@
         "hookSpecificOutput": {
           "hookEventName": "PreToolUse",
           "updatedInput": {
-            "cwd": "__TMP_ROOT__\\repo",
-            "prompt": "Make the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "cwd": "__TMP_ROOT__/repo",
+            "prompt": "Make the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__/state/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
             "agent": "agy",
             "model": "gemini-3.8-flash-high",
             "config": {
@@ -267,8 +267,8 @@
         "hookSpecificOutput": {
           "hookEventName": "PreToolUse",
           "updatedInput": {
-            "cwd": "__TMP_ROOT__\\repo",
-            "prompt": "Read the code.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "cwd": "__TMP_ROOT__/repo",
+            "prompt": "Read the code.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__/state/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
             "model": "gpt-6-luna",
             "config": {
               "model_reasoning_effort": "high",
@@ -294,9 +294,9 @@
           "hookEventName": "PreToolUse",
           "updatedInput": {
             "mode": "new",
-            "prompt": "Work.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__\\state\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+            "prompt": "Work.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__TMP_ROOT__/state/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
             "worktree": true,
-            "cwd": "__TMP_ROOT__\\repo",
+            "cwd": "__TMP_ROOT__/repo",
             "model": "gpt-6-luna",
             "config": {
               "model_reasoning_effort": "high",

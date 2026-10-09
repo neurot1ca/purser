@@ -37,7 +37,7 @@ print(json.dumps(result, ensure_ascii=False))
 """
 
 
-def _oracle(kind, case):
+def _oracle(kind, case, tmp_path=None):
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
@@ -47,11 +47,14 @@ def _oracle(kind, case):
     return json.loads(result.stdout)
 
 
-def test_p38_python_oracle_golden_fixture():
+def test_p38_python_oracle_golden_fixture(tmp_path):
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     for command in fixture["commands"]:
-        case = {key: command[key] for key in ("prefix", "cwd", "model", "output")}
-        assert _oracle("command", case) == command["expected"]
+        case = {key: command[key] for key in ("prefix", "cwd", "model")}
+        case["output"] = str(tmp_path / Path(command["output"]).name)
+        actual = _oracle("command", case)
+        actual = [arg.replace(str(tmp_path), "__TMP__").replace("\\", "/") for arg in actual]
+        assert actual == command["expected"]
     for item in fixture["cases"]:
         case = {"stdout": item["stdout"], "stderr": item["stderr"], "output_data": item["output_data"], "started": item["started"], "returncode": item["returncode"], "timed_out": item["timed_out"]}
         assert _oracle("result", case) == item["expected"], item["name"]

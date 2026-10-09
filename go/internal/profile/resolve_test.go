@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -29,9 +30,10 @@ type resolveFixture struct {
 		Output ResolvedProfile `json:"output"`
 	} `json:"profiles"`
 	Protected []struct {
-		Path     string   `json:"path"`
-		Patterns []string `json:"patterns"`
-		Output   bool     `json:"output"`
+		Path        string   `json:"path"`
+		Patterns    []string `json:"patterns"`
+		Output      bool     `json:"output"`
+		LinuxOutput *bool    `json:"linux_output"`
 	} `json:"protected"`
 }
 
@@ -169,8 +171,12 @@ func TestReviewerCandidatesDefaultAndConfiguredOrder(t *testing.T) {
 
 func TestIsProtectedPythonFixture(t *testing.T) {
 	for _, test := range readResolveFixture(t).Protected {
-		if got := IsProtected(test.Path, test.Patterns); got != test.Output {
-			t.Errorf("IsProtected(%q, %#v) = %v, want %v", test.Path, test.Patterns, got, test.Output)
+		want := test.Output
+		if runtime.GOOS == "linux" && test.LinuxOutput != nil {
+			want = *test.LinuxOutput
+		}
+		if got := IsProtected(test.Path, test.Patterns); got != want {
+			t.Errorf("IsProtected(%q, %#v) = %v, want %v", test.Path, test.Patterns, got, want)
 		}
 	}
 }

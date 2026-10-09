@@ -63,8 +63,11 @@ CASES = [
 
 def _replace(value, repo, state, project_key):
     if isinstance(value, str):
-        return (value.replace(str(repo), "__REPO__").replace(str(state), "__STATE__")
-                .replace(project_key, "__PROJECT_KEY__")
+        value = (value.replace(str(repo), "__REPO__").replace(str(state), "__STATE__")
+                .replace(project_key, "__PROJECT_KEY__"))
+        if any(token in value for token in ("__REPO__", "__STATE__", "__PROJECT_KEY__")):
+            value = value.replace("\\", "/")
+        return (value
                 # Python's retired fallback emits its script path; the golden records the native CLI contract.
                 .replace("python .claude/hooks/orchestrator/purser_leases.py --release",
                          '"__EXECUTABLE__" leases --release'))

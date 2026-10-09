@@ -1,7 +1,7 @@
 {
   "oracle": "codex_exec_mcp.probe_api_primary reachable Codex command, event and launch evidence helpers", "commands": [
-    {"prefix":["codex"],"cwd":"C:/empty","model":"","output":"C:/empty/last-message.txt","expected":["codex","exec","--json","--skip-git-repo-check","-s","read-only","-C","C:/empty","-o","C:\\empty\\last-message.txt","-"]},
-    {"prefix":["bin","codex"],"cwd":"C:/tmp/probe","model":"gpt-5.5","output":"C:/tmp/probe/last-message.txt","expected":["bin","codex","exec","--json","--skip-git-repo-check","-m","gpt-5.5","-s","read-only","-C","C:/tmp/probe","-o","C:\\tmp\\probe\\last-message.txt","-"]}
+    {"prefix":["codex"],"cwd":"C:/empty","model":"","output":"__TMP__/last-message.txt","expected":["codex","exec","--json","--skip-git-repo-check","-s","read-only","-C","C:/empty","-o","__TMP__/last-message.txt","-"]},
+    {"prefix":["bin","codex"],"cwd":"C:/tmp/probe","model":"gpt-5.5","output":"__TMP__/probe-last-message.txt","expected":["bin","codex","exec","--json","--skip-git-repo-check","-m","gpt-5.5","-s","read-only","-C","C:/tmp/probe","-o","__TMP__/probe-last-message.txt","-"]}
   ], "cases": [
     {"name":"p38_completed","stdout":"{\"type\":\"turn.completed\"}\n","stderr":"","output_data":false,"started":true,"returncode":0,"timed_out":false,"expected":{"ok":true}},
     {"name":"p38_turn_failed","stdout":"{\"type\":\"turn.failed\",\"error\":{\"message\":\"stopped\",\"code\":\"E_FAIL\"}}\n","stderr":"","output_data":false,"started":true,"returncode":0,"timed_out":false,"expected":{"ok":false,"failure":{"type":"AMBIGUOUS","retryAfterSeconds":null,"noWorkProof":false}}},

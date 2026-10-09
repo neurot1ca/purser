@@ -73,8 +73,11 @@ def test_python_matches_security_golden_fixture():
 
 
 def test_go_profile_package():
+    env = os.environ.copy()
+    env["GOCACHE"] = str(ROOT / ".tmp" / "go-cache")
+    Path(env["GOCACHE"]).mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         ["go", "test", "./internal/profile/..."], cwd=ROOT / "go",
-        text=True, capture_output=True, check=False,
+        text=True, capture_output=True, check=False, env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr

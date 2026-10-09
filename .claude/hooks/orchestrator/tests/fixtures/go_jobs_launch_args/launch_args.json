@@ -22,7 +22,7 @@
           }
         },
         "sandbox": "workspace-write",
-        "output_path": "C:/tmp/last-message.txt",
+        "output_path": "__TMP__/last-message.txt",
         "developer_instructions": "follow these instructions",
         "base_instructions": "base rules",
         "compact_prompt": "compact this",
@@ -60,7 +60,7 @@
         "-C",
         "C:/work",
         "-o",
-        "C:\\tmp\\last-message.txt",
+        "__TMP__/last-message.txt",
         "-"
       ]
     },
@@ -86,7 +86,7 @@
           }
         },
         "thread_id": "thread-123",
-        "output_path": "C:/tmp/resume.txt",
+        "output_path": "__TMP__/resume.txt",
         "developer_instructions": "follow these instructions",
         "base_instructions": "base rules",
         "compact_prompt": "compact this",
@@ -121,7 +121,7 @@
         "-c",
         "approval_policy=\"never\"",
         "-o",
-        "C:\\tmp\\resume.txt",
+        "__TMP__/resume.txt",
         "thread-123",
         "-"
       ]
@@ -132,7 +132,7 @@
         "binary_override": "codex",
         "name": "codex",
         "cwd": "C:/work",
-        "output_path": "C:/tmp/empty.txt"
+        "output_path": "__TMP__/empty.txt"
       },
       "expected": [
         "codex",
@@ -142,7 +142,7 @@
         "-C",
         "C:/work",
         "-o",
-        "C:\\tmp\\empty.txt",
+        "__TMP__/empty.txt",
         "-"
       ]
     },
@@ -152,7 +152,7 @@
         "binary_override": "codex",
         "name": "codex-reply",
         "thread_id": "thread-empty",
-        "output_path": "C:/tmp/empty-resume.txt"
+        "output_path": "__TMP__/empty-resume.txt"
       },
       "expected": [
         "codex",
@@ -161,7 +161,7 @@
         "--json",
         "--skip-git-repo-check",
         "-o",
-        "C:\\tmp\\empty-resume.txt",
+        "__TMP__/empty-resume.txt",
         "thread-empty",
         "-"
       ]

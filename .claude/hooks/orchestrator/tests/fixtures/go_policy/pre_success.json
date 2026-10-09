@@ -53,7 +53,7 @@
           "jobPhase": "implementation",
           "mode": "new",
           "model": "gpt-6-luna",
-          "prompt": "Implement the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "prompt": "Implement the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
           "route": "subtle",
           "taskId": "p64-impl",
           "timeoutSeconds": 90,
@@ -140,8 +140,8 @@
           },
           {
             "agent": "codex",
-            "model": "gpt-6-luna",
-            "effort": "low"
+            "effort": "low",
+            "model": "gpt-6-luna"
           }
         ],
         "reviewer_executable": null,
@@ -179,7 +179,7 @@
           "jobPhase": "implementation",
           "mode": "new",
           "model": "gpt-6-luna",
-          "prompt": "Implement the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "prompt": "Implement the change.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
           "route": "subtle",
           "taskId": "p64-impl",
           "timeoutSeconds": 90,
@@ -280,7 +280,7 @@
           "leaseQueued": true,
           "mode": "new",
           "model": "gpt-6-luna",
-          "prompt": "Implement after the conflict clears.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "prompt": "Implement after the conflict clears.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
           "route": "subtle",
           "taskId": "p64-queued",
           "timeoutSeconds": 90,
@@ -358,8 +358,8 @@
           },
           {
             "agent": "codex",
-            "model": "gpt-6-luna",
-            "effort": "low"
+            "effort": "low",
+            "model": "gpt-6-luna"
           }
         ],
         "reviewer_executable": null,
@@ -398,7 +398,7 @@
           "leaseQueued": true,
           "mode": "new",
           "model": "gpt-6-luna",
-          "prompt": "Implement after the conflict clears.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH",
+          "prompt": "Implement after the conflict clears.\nWorker validation: End your final report with exactly one `VALIDATION:` JSON line. Use only these keys: `artifacts`, `commands`, `exit_codes`, `source`, `status`, `summary`. Set `source` to `WORKER_REPORTED`; set `status` to `PASS`, `FAIL`, or `UNKNOWN`; list the commands actually run in `commands` and matching integer `exit_codes`. List only final validation runs in `commands`; put any deliberate red check in the report prose, never in the `VALIDATION:` line. Do not emit another validation line. Run focused tests for what you changed; do not run the full test suite unless the task asks for it. Make the smallest change that meets the criteria; add no speculative helpers, abstractions, flags, or refactors. If an unrelated test hangs or runs far too long, stop it, report it as skipped, and continue.\nCODE_MAP=__STATE__/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH",
           "route": "subtle",
           "taskId": "p64-queued",
           "timeoutSeconds": 90,
@@ -507,7 +507,7 @@
           "jobPhase": "plan",
           "mode": "new",
           "model": "gpt-6.1-sol",
-          "prompt": "Plan the change.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH\n\nRequired plan shape (Purser):\nWrite Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.",
+          "prompt": "Plan the change.\nCODE_MAP=__STATE__/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH\n\nRequired plan shape (Purser):\nWrite Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.",
           "route": "plan_standard",
           "sandbox": "read-only",
           "taskId": "p64-plan"
@@ -591,8 +591,8 @@
           },
           {
             "agent": "codex",
-            "model": "gpt-6-luna",
-            "effort": "low"
+            "effort": "low",
+            "model": "gpt-6-luna"
           }
         ],
         "reviewer_executable": null,
@@ -628,7 +628,7 @@
           "jobPhase": "plan",
           "mode": "new",
           "model": "gpt-6.1-sol",
-          "prompt": "Plan the change.\nCODE_MAP=__STATE__\\projects\\__PROJECT_KEY__\\code-map\\map.txt STATUS=FRESH\n\nRequired plan shape (Purser):\nWrite Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.",
+          "prompt": "Plan the change.\nCODE_MAP=__STATE__/projects/__PROJECT_KEY__/code-map/map.txt STATUS=FRESH\n\nRequired plan shape (Purser):\nWrite Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.",
           "route": "plan_standard",
           "sandbox": "read-only",
           "taskId": "p64-plan"
@@ -748,8 +748,8 @@
           },
           {
             "agent": "codex",
-            "model": "gpt-6-luna",
-            "effort": "low"
+            "effort": "low",
+            "model": "gpt-6-luna"
           }
         ],
         "reviewer_executable": null,
@@ -894,8 +894,8 @@
           },
           {
             "agent": "codex",
-            "model": "gpt-6-luna",
-            "effort": "low"
+            "effort": "low",
+            "model": "gpt-6-luna"
           }
         ],
         "reviewer_executable": null,

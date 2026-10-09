@@ -51,8 +51,14 @@ func TestProbeP38PythonFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range fixture.Commands {
-		if got := ProbeCommand(item.Prefix, item.Cwd, item.Model, item.Output); !reflect.DeepEqual(got, item.Expected) {
-			t.Errorf("command p38 = %#v, want %#v", got, item.Expected)
+		tmp := t.TempDir()
+		output := materializeProbePath(item.Output, tmp)
+		want := make([]string, len(item.Expected))
+		for i, arg := range item.Expected {
+			want[i] = materializeProbePath(arg, tmp)
+		}
+		if got := ProbeCommand(item.Prefix, item.Cwd, item.Model, output); !reflect.DeepEqual(got, want) {
+			t.Errorf("command p38 = %#v, want %#v", got, want)
 		}
 	}
 	for _, item := range fixture.Cases {
@@ -101,6 +107,13 @@ func TestProbeP38PythonFixture(t *testing.T) {
 			}
 		})
 	}
+}
+
+func materializeProbePath(value, root string) string {
+	if !strings.HasPrefix(value, "__TMP__/") {
+		return value
+	}
+	return filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(value, "__TMP__/")))
 }
 
 func copyProbeFake(source, target string) error {

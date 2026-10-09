@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import policy
@@ -196,8 +197,12 @@ def _coder_oracle_results(tmp_path, monkeypatch, cases=None):
                 user = home / ".orchestrator" / "config.toml"
                 if case["user_toml"] is not None:
                     user.parent.mkdir(parents=True)
-                    user.write_text(case["user_toml"], encoding="utf-8")
+                    executable = (home / "reviewer").resolve()
+                    toml_executable = str(executable).replace("\\", "\\\\")
+                    user.write_text(case["user_toml"].replace("__REVIEWER_EXECUTABLE__", toml_executable), encoding="utf-8")
                 result = coder_config.load(CODER_CONFIG)
+                if case["name"] == "reviewer-settings":
+                    result["reviewer1_executable"] = "__REVIEWER_EXECUTABLE__"
             item.update(ok=True, error="", loaded=result)
         except (ValueError, AttributeError, codex.WiringError) as exc:
             item.update(ok=False, error=str(exc), loaded=None)
@@ -213,6 +218,16 @@ def test_python_coder_config_golden_fixture(tmp_path, monkeypatch):
             assert not case["ok"] and case["expected_error"] in case["error"], case["name"]
         else:
             assert case["ok"] and case["loaded"], case["name"]
+    if sys.platform.startswith("linux"):
+        home = tmp_path / "foreign-reviewer"
+        config = home / ".orchestrator" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('[coding]\nreviewer1_executable = "C:/Review/reviewer.exe"\n', encoding="utf-8")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        import coder_config
+        with pytest.raises(ValueError, match="absolute path"):
+            coder_config.load(CODER_CONFIG)
 
 
 def test_go_coder_config_golden_parity():

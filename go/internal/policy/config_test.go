@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,15 @@ func TestPythonConfigGoldenParity(t *testing.T) {
 
 func TestPythonCoderConfigGoldenParity(t *testing.T) {
 	testPythonCoderConfigGoldenParity(t, false)
+	if runtime.GOOS == "linux" {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte("[coding]\nreviewer1_executable = \"C:/Review/reviewer.exe\"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadCoderConfig(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json"), path); err == nil || !strings.Contains(err.Error(), "absolute path") {
+			t.Fatalf("foreign Windows executable accepted on Linux: %v", err)
+		}
+	}
 }
 
 func TestPythonCoderConfigGoldenParityP32(t *testing.T) {
@@ -178,6 +188,10 @@ func testPythonCoderConfigGoldenParity(t *testing.T, p32Only bool) {
 		testRootName = "m3-p32-go"
 	}
 	testRoot := filepath.Join("..", "..", "..", ".tmp", testRootName)
+	testRoot, err = filepath.Abs(testRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(testRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +212,9 @@ func testPythonCoderConfigGoldenParity(t *testing.T, p32Only bool) {
 				if err := os.MkdirAll(filepath.Dir(userPath), 0700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(userPath, []byte(*tc.UserTOML), 0600); err != nil {
+				executable := strings.ReplaceAll(filepath.Join(caseRoot, "reviewer"), `\`, `\\`)
+				content := strings.ReplaceAll(*tc.UserTOML, "__REVIEWER_EXECUTABLE__", executable)
+				if err := os.WriteFile(userPath, []byte(content), 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -215,8 +231,16 @@ func testPythonCoderConfigGoldenParity(t *testing.T, p32Only bool) {
 			if err != nil && err.Error() != tc.Error {
 				t.Fatalf("load error = %q, want %q", err, tc.Error)
 			}
-			if err == nil && !jsonEqual(loaded, tc.Loaded) {
-				t.Fatalf("loaded config differs:\n got %#v\nwant %#v", loaded, tc.Loaded)
+			want := tc.Loaded
+			if tc.Name == "reviewer-settings" {
+				want = make(map[string]any, len(tc.Loaded))
+				for key, value := range tc.Loaded {
+					want[key] = value
+				}
+				want["reviewer1_executable"] = filepath.Join(caseRoot, "reviewer")
+			}
+			if err == nil && !jsonEqual(loaded, want) {
+				t.Fatalf("loaded config differs:\n got %#v\nwant %#v", loaded, want)
 			}
 		})
 	}

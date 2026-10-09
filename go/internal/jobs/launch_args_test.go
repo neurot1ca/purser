@@ -145,6 +145,8 @@ func TestLaunchArgsPythonFixtures(t *testing.T) {
 	}
 	for _, test := range fixture.Cases {
 		t.Run(test.Name, func(t *testing.T) {
+			tmp := t.TempDir()
+			test.Input.OutputPath = materializeLaunchPath(test.Input.OutputPath, tmp)
 			got, err := BuildCodexCommand(test.Input)
 			if test.Error != "" {
 				if err == nil || !strings.Contains(err.Error(), test.Error) {
@@ -155,9 +157,20 @@ func TestLaunchArgsPythonFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, test.Expected) {
-				t.Fatalf("got %#v, want %#v", got, test.Expected)
+			want := make([]string, len(test.Expected))
+			for i, arg := range test.Expected {
+				want[i] = materializeLaunchPath(arg, tmp)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %#v, want %#v", got, want)
 			}
 		})
 	}
+}
+
+func materializeLaunchPath(value, root string) string {
+	if !strings.HasPrefix(value, "__TMP__/") {
+		return value
+	}
+	return filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(value, "__TMP__/")))
 }

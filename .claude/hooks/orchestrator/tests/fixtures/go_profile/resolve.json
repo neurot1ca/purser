@@ -347,84 +347,96 @@
       "patterns": [
         "src/**/file.go"
       ],
-      "output": true
+      "output": true,
+      "linux_output": true
     },
     {
       "path": "src/deep/file.go",
       "patterns": [
         "src/*.go"
       ],
-      "output": true
+      "output": true,
+      "linux_output": true
     },
     {
       "path": "src/file.go",
       "patterns": [
         "src/f[ai]le.go"
       ],
-      "output": true
+      "output": true,
+      "linux_output": true
     },
     {
       "path": "src/FILE.go",
       "patterns": [
         "src/file.go"
       ],
-      "output": true
+      "output": true,
+      "linux_output": false
     },
     {
       "path": "/src/file.go",
       "patterns": [
         "src/file.go"
       ],
-      "output": false
+      "output": false,
+      "linux_output": false
     },
     {
       "path": "src/file.go",
       "patterns": [
         "/src/file.go"
       ],
-      "output": false
+      "output": false,
+      "linux_output": false
     },
     {
       "path": ".\\SRC\\deep\\file.go",
       "patterns": [
         "src/**"
       ],
-      "output": true
+      "output": true,
+      "linux_output": false
     },
     {
       "path": ".orchestrator",
       "patterns": [
         ".orchestrator/**"
       ],
-      "output": true
+      "output": true,
+      "linux_output": true
     },
     {
       "path": "foobar/file.go",
       "patterns": [
         "foo/**"
       ],
-      "output": false
+      "output": false,
+      "linux_output": false
     },
     {
       "path": "nested/SECRET.PEM",
       "patterns": [
         "*.pem"
       ],
-      "output": true
+      "output": true,
+      "linux_output": true
     },
     {
       "path": "nested/a/file.go",
       "patterns": [
         "file.go"
       ],
-      "output": true
+      "output": true,
+      "linux_output": true
     },
     {
       "path": "./src//file.go",
       "patterns": [
         "src/file.go"
       ],
-      "output": false
+      "output": false,
+      "linux_output": false
     }
   ],
   "loads": [

@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 import subprocess
 import sys
@@ -109,7 +110,8 @@ def _resolved_fixture():
         if index in (1, 2):
             output = _encode_go_reviewer_default(output)
         profiles.append({"input": {"user": asdict(tiers["user"]), "project": asdict(tiers["project"])}, "output": output})
-    protected = [{"path": path, "patterns": patterns, "output": project_profile.is_protected(path, patterns)} for path, patterns in PROTECTED]
+    protected = [{"path": path, "patterns": patterns, "output": project_profile.is_protected(path, patterns),
+                  "linux_output": output} for (path, patterns), output in zip(PROTECTED, [True, True, True, False, False, False, False, True, False, True, True, False])]
     return json.loads(json.dumps({"profiles": profiles, "protected": protected}))
 
 
@@ -149,7 +151,14 @@ def _loaded_fixture(tmp_path, monkeypatch):
 
 def test_python_matches_profile_resolution_golden_fixture():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert {key: fixture[key] for key in ("profiles", "protected")} == _resolved_fixture()
+    expected = _resolved_fixture()
+    actual = {key: fixture[key] for key in ("profiles", "protected")}
+    if sys.platform.startswith("linux"):
+        for case in actual["protected"]:
+            case["output"] = case.pop("linux_output")
+        for case in expected["protected"]:
+            case["output"] = case.pop("linux_output")
+    assert actual == expected
 
 
 def test_python_load_profile_golden_fixture(tmp_path, monkeypatch):

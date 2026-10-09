@@ -29,7 +29,11 @@ func TestGitPythonFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, content := range map[string]string{"dir/file[1].txt": "literal", "dir/file1.txt": "wildcard match", "old.txt": "rename me\n"} {
-		if err = os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte(content), 0600); err != nil {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err = os.WriteFile(path, []byte(content), 0666); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.Chmod(path, 0666); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -38,7 +42,11 @@ func TestGitPythonFixture(t *testing.T) {
 	if err = os.Rename(filepath.Join(root, "old.txt"), filepath.Join(root, "renamed.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(root, "dir/file[1].txt"), []byte("changed"), 0600); err != nil {
+	changed := filepath.Join(root, "dir/file[1].txt")
+	if err = os.WriteFile(changed, []byte("changed"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(changed, 0666); err != nil {
 		t.Fatal(err)
 	}
 	git(t, root, "add", "-A")

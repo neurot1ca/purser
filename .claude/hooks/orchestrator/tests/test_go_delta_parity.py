@@ -89,6 +89,7 @@ def _compute_oracle(case, root):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content.encode("utf-8"))
+        path.chmod(0o666)
     _git(root, "add", "--all")
     env = os.environ.copy()
     env.update({"GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"})
@@ -147,6 +148,7 @@ def _out_of_scope_oracle(case, root):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content.encode("utf-8"))
+        path.chmod(0o666)
     _git(root, "add", "--all")
     env = os.environ.copy()
     env.update({"GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"})
@@ -154,6 +156,7 @@ def _out_of_scope_oracle(case, root):
     for change in case.get("pre_changes", []):
         path = root / change["path"]
         path.write_bytes(change["content"].encode("utf-8"))
+        path.chmod(0o666)
     if case.get("stage_before_baseline"):
         _git(root, "add", *case["stage_before_baseline"])
     baseline = ledger.capture_baseline(root, ["scope"])
@@ -163,6 +166,7 @@ def _out_of_scope_oracle(case, root):
         path = root / change["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(change["content"].encode("utf-8"))
+        path.chmod(0o666)
     if case.get("commit_changes"):
         _git(root, "add", "--all")
         _git(root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "after baseline", env=env)

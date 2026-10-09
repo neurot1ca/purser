@@ -38,6 +38,27 @@ func TestScopedManifestPythonFixture(t *testing.T) {
 	assertManifestJSON(t, expected["status"], statuses)
 	assertManifestJSON(t, expected["tracked_snapshots"], snapshots)
 	assertManifestJSON(t, expected["manifest"], manifest)
+	changed := filepath.Join(root, "scope", "untracked.txt")
+	before := snapshots["scope/untracked.txt"]["worktree"].(map[string]any)["mode"]
+	changedMode := os.FileMode(0644)
+	if runtime.GOOS == "windows" {
+		changedMode = 0444
+	}
+	if err := os.Chmod(changed, changedMode); err != nil {
+		t.Fatal(err)
+	}
+	changedStatuses, err := statusEntries(root, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedSnapshots, err := trackedSnapshots(root, changedStatuses, time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := changedSnapshots["scope/untracked.txt"]["worktree"].(map[string]any)["mode"]
+	if reflect.DeepEqual(after, before) {
+		t.Fatal("permission change disappeared from the baseline snapshot")
+	}
 }
 
 func TestScopedManifestBudgetFailures(t *testing.T) {
@@ -129,10 +150,10 @@ func manifestFixtureRepository(t *testing.T, root string) {
 	}
 	for name, content := range files {
 		path := filepath.Join(root, filepath.FromSlash(name))
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0666); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(path, 0644); err != nil {
+		if err := os.Chmod(path, 0666); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -147,7 +168,11 @@ func manifestFixtureRepository(t *testing.T, root string) {
 		"scope/cache.pyc":     "bytecode",
 		filepath.Join("scope", "__pycache__", "module.pyc"): "bytecode",
 	} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0644); err != nil {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(content), 0666); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0666); err != nil {
 			t.Fatal(err)
 		}
 	}

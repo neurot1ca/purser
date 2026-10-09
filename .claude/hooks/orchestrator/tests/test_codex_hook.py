@@ -2585,11 +2585,12 @@ def test_code_map_line_survives_worker_prompt(workspace, config):
 @pytest.mark.parametrize(("phase", "route"), (("implementation", "normal"), ("plan", "plan_standard")))
 def test_code_map_is_appended_to_worker_prompt(workspace, config, monkeypatch, phase, route):
     repo, state = workspace
-    monkeypatch.setattr(code_map, "refresh", lambda root, **kwargs: (Path("C:/map.txt"), "FRESH"))
+    map_path = Path(repo).parent / "code map" / "map.txt"
+    monkeypatch.setattr(code_map, "refresh", lambda root, **kwargs: (map_path, "FRESH"))
     call = event(prompt=orch(phase=phase, route=route) + "\nDo the work.", tool_use_id=f"map-added-{phase}")
     updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)[
         "hookSpecificOutput"]["updatedInput"]["prompt"]
-    assert updated.splitlines().count("CODE_MAP=C:\\map.txt STATUS=FRESH") == 1
+    assert updated.splitlines().count(f"CODE_MAP={map_path} STATUS=FRESH") == 1
 
 
 def test_code_map_line_is_not_duplicated(workspace, config, monkeypatch):

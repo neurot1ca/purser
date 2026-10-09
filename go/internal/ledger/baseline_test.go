@@ -91,7 +91,11 @@ func assertBaselineExpected(t *testing.T, got map[string]any, expected json.RawM
 
 func baselineFixtureRepository(t *testing.T, root string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0600); err != nil {
+	tracked := filepath.Join(root, "tracked.txt")
+	if err := os.WriteFile(tracked, []byte("base\n"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tracked, 0666); err != nil {
 		t.Fatal(err)
 	}
 	git(t, root, "add", "tracked.txt")
@@ -99,13 +103,20 @@ func baselineFixtureRepository(t *testing.T, root string) {
 	t.Setenv("GIT_COMMITTER_DATE", "2000-01-01T00:00:00+00:00")
 	command := []string{"-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "fixture"}
 	git(t, root, command...)
-	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("work\n"), 0600); err != nil {
+	if err := os.WriteFile(tracked, []byte("work\n"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tracked, 0666); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "scope"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "scope", "new.txt"), []byte("new\n"), 0600); err != nil {
+	newFile := filepath.Join(root, "scope", "new.txt")
+	if err := os.WriteFile(newFile, []byte("new\n"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(newFile, 0666); err != nil {
 		t.Fatal(err)
 	}
 }

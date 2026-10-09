@@ -387,7 +387,11 @@ func replaceRepo(input map[string]any, repo string) map[string]any {
 func replaceTemporaryRoot(value any, scratch string) any {
 	switch value := value.(type) {
 	case string:
-		return strings.ReplaceAll(value, scratch, "__TMP_ROOT__")
+		value = strings.ReplaceAll(value, scratch, "__TMP_ROOT__")
+		if strings.Contains(value, "__TMP_ROOT__") {
+			value = strings.ReplaceAll(value, `\`, "/")
+		}
+		return value
 	case map[string]any:
 		for key, item := range value {
 			value[key] = replaceTemporaryRoot(item, scratch)

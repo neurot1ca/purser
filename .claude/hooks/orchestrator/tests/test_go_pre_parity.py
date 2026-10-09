@@ -117,6 +117,8 @@ def _seed_decision_state(case, repo, runtime):
 def _replace_fixture_roots(value, temporary_root):
     if isinstance(value, str):
         value = value.replace(str(temporary_root), "__TMP_ROOT__")
+        if "__TMP_ROOT__" in value:
+            value = value.replace("\\", "/")
         return re.sub(r"(?i)(projects[\\/])[0-9a-f]{16}([\\/])", r"\1__PROJECT_KEY__\2", value)
     if isinstance(value, dict):
         return {key: _replace_fixture_roots(item, temporary_root) for key, item in value.items()}

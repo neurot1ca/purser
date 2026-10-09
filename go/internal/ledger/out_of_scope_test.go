@@ -36,7 +36,10 @@ func TestOutOfScopePythonFixture(t *testing.T) {
 				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				if err := os.WriteFile(path, []byte(content), 0666); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0666); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -73,7 +76,10 @@ func writeFixtureChange(t *testing.T, root string, change fixtureChange) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(change.Content), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(change.Content), 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0666); err != nil {
 		t.Fatal(err)
 	}
 }

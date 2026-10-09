@@ -51,6 +51,10 @@ func TestRunWorktreeSetup(t *testing.T) {
 					t.Fatal("missing command did not produce shell error output")
 				}
 				result.Failure.Output = "<nonempty-shell-error>"
+				if runtime.GOOS != "windows" {
+					posixShellExitCode := 127
+					test.Expected.SetupError.ExitCode = &posixShellExitCode
+				}
 			}
 			got := struct {
 				Failed     bool                `json:"failed"`

@@ -26,7 +26,7 @@ def _repository(root):
     for name, content in files.items():
         path = root / name
         path.write_bytes(content.encode())
-        path.chmod(0o644)
+        path.chmod(0o666)
     _git(root, "add", "--all")
     _git(root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture")
     (root / "scope" / "before.txt").rename(root / "scope" / "after.txt")
@@ -38,7 +38,7 @@ def _repository(root):
     }.items():
         path = root / name
         path.write_bytes(content.encode())
-        path.chmod(0o644)
+        path.chmod(0o666)
     _git(root, "add", "-A", "--", "scope/before.txt", "scope/after.txt")
 
 
@@ -54,6 +54,12 @@ def test_python_and_go_manifest_fixture(tmp_path):
     }
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert actual == {key: fixture[key] for key in actual}
+
+    before = ledger._tracked_snapshots(repo, statuses, 2)["scope/untracked.txt"]["worktree"]["mode"]
+    (repo / "scope" / "untracked.txt").chmod(0o444 if os.name == "nt" else 0o644)
+    changed_status = ledger._status_entries(repo, 2)
+    after = ledger._tracked_snapshots(repo, changed_status, 2)["scope/untracked.txt"]["worktree"]["mode"]
+    assert after != before, "permission change disappeared from the baseline snapshot"
 
     subprocess.run(
         ["go", "test", "./internal/ledger", "-run", "^(TestScopedManifestPythonFixture|TestScopedManifestBudgetFailures|TestScopedManifestFilesystemFailureIsNotPartialEvidence|TestFilesystemFingerprintKinds)$", "-count=1"],

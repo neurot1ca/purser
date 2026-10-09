@@ -20,7 +20,7 @@ def _ptr(value):
     return value
 
 
-def _cases():
+def _cases(tmp_path):
     config = {
         "model_reasoning_effort": "high",
         "nested": {
@@ -44,49 +44,55 @@ def _cases():
             "input": {
                 "binary_override": "codex", "name": "codex", "cwd": "C:/work",
                 "model": "gpt-test", "config": config, "sandbox": "workspace-write",
-                "output_path": "C:/tmp/last-message.txt",
+                "output_path": str(tmp_path / "last-message.txt"),
                 "developer_instructions": _ptr("follow these instructions"),
                 "base_instructions": _ptr("base rules"), "compact_prompt": _ptr("compact this"),
                 "approval_policy": _ptr("never"),
             },
             "expected": bridge._agent_command("codex", ["codex"], "codex", "C:/work", "gpt-test",
                                                config_args, "workspace-write", None,
-                                               Path("C:/tmp/last-message.txt"), "prompt text stays on stdin"),
+                                               Path(tmp_path / "last-message.txt"), "prompt text stays on stdin"),
         },
         {
             "name": "resume_all_options",
             "input": {
                 "binary_override": "codex", "name": "codex-reply", "cwd": "C:/ignored",
                 "model": "gpt-test", "config": config, "thread_id": "thread-123",
-                "output_path": "C:/tmp/resume.txt",
+                "output_path": str(tmp_path / "resume.txt"),
                 "developer_instructions": _ptr("follow these instructions"),
                 "base_instructions": _ptr("base rules"), "compact_prompt": _ptr("compact this"),
                 "approval_policy": _ptr("never"),
             },
             "expected": bridge._agent_command("codex", ["codex"], "codex-reply", "C:/ignored", "gpt-test",
                                                config_args, None, "thread-123",
-                                               Path("C:/tmp/resume.txt"), "prompt text stays on stdin"),
+                                               Path(tmp_path / "resume.txt"), "prompt text stays on stdin"),
         },
         {
             "name": "new_optional_fields_absent",
             "input": {"binary_override": "codex", "name": "codex", "cwd": "C:/work",
-                      "output_path": "C:/tmp/empty.txt"},
+                      "output_path": str(tmp_path / "empty.txt")},
             "expected": bridge._agent_command("codex", ["codex"], "codex", "C:/work", None,
-                                               [], None, None, Path("C:/tmp/empty.txt"), "stdin"),
+                                               [], None, None, Path(tmp_path / "empty.txt"), "stdin"),
         },
         {
             "name": "resume_optional_fields_absent",
             "input": {"binary_override": "codex", "name": "codex-reply", "thread_id": "thread-empty",
-                      "output_path": "C:/tmp/empty-resume.txt"},
+                      "output_path": str(tmp_path / "empty-resume.txt")},
             "expected": bridge._agent_command("codex", ["codex"], "codex-reply", "", None,
-                                               [], None, "thread-empty", Path("C:/tmp/empty-resume.txt"), "stdin"),
+                                               [], None, "thread-empty", Path(tmp_path / "empty-resume.txt"), "stdin"),
         },
     ]
     return cases
 
 
 def test_launch_args_python_oracle_and_go_parity():
-    cases = _cases()
+    tmp_path = ROOT / ".tmp" / "launch-args-native"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    cases = _cases(tmp_path)
+    for case in cases:
+        case["input"]["output_path"] = "__TMP__/" + Path(case["input"]["output_path"]).name
+        index = case["expected"].index("-o") + 1
+        case["expected"][index] = case["expected"][index].replace(str(tmp_path), "__TMP__").replace("\\", "/")
     expected = {"cases": cases}
     if os.environ.get("PURSER_REGEN_GO_JOBS_LAUNCH_ARGS") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)

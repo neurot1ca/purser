@@ -16,6 +16,7 @@ def _repo(path, committed=True):
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
     if committed:
         (path / "tracked.txt").write_text("base\n", encoding="utf-8", newline="\n")
+        (path / "tracked.txt").chmod(0o666)
         subprocess.run(["git", "add", "tracked.txt"], cwd=path, check=True)
         env = {**os.environ, "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
                "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"}
@@ -23,8 +24,10 @@ def _repo(path, committed=True):
                         "user.email=fixture@example.invalid", "commit", "-m", "fixture"],
                        cwd=path, env=env, check=True, capture_output=True)
         (path / "tracked.txt").write_text("work\n", encoding="utf-8", newline="\n")
+        (path / "tracked.txt").chmod(0o666)
         (path / "scope").mkdir()
         (path / "scope" / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
+        (path / "scope" / "new.txt").chmod(0o666)
     return path
 
 
