@@ -2,6 +2,7 @@ package initsetup
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,5 +97,102 @@ func TestClaudeCoderPlanAndApply(t *testing.T) {
 	coding, _ := user["coding"].(map[string]any)
 	if _, exists := coding["routes"]; exists {
 		t.Error("Claude config should use built-in routes without a [coding.routes] table")
+	}
+}
+
+func TestAutoCompactInit(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	state := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	marker := filepath.Join(state, "auto-compact.json")
+	baseArgs := []string{"--coder", "claude", "--reviewer", "agy"}
+
+	for _, tc := range []struct {
+		flag string
+		want bool
+	}{{"--auto-compact", true}, {"--no-auto-compact", false}} {
+		t.Run(tc.flag, func(t *testing.T) {
+			planArgs := append([]string{"--plan"}, append(baseArgs, tc.flag)...)
+			var plan bytes.Buffer
+			if code := Run(&plan, &bytes.Buffer{}, planArgs); code != 0 {
+				t.Fatalf("plan failed with %d: %s", code, plan.String())
+			}
+			wantPlan := "Automatic /compact: disabled for this user"
+			if tc.want {
+				wantPlan = "Automatic /compact: enabled for this user"
+			}
+			if !strings.Contains(plan.String(), wantPlan) {
+				t.Errorf("plan missing %q:\n%s", wantPlan, plan.String())
+			}
+			applyArgs := append([]string{"--apply"}, append(baseArgs, tc.flag)...)
+			if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, applyArgs); code != 0 {
+				t.Fatalf("apply failed with %d", code)
+			}
+			var saved struct {
+				Enabled bool `json:"enabled"`
+			}
+			raw, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(raw, &saved); err != nil {
+				t.Fatalf("invalid auto-compact marker %q: %v", raw, err)
+			}
+			if saved.Enabled != tc.want {
+				t.Errorf("saved enabled = %t, want %t", saved.Enabled, tc.want)
+			}
+		})
+	}
+
+	original := []byte("{\"enabled\":true}\n")
+	if err := os.WriteFile(marker, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, append([]string{"--apply"}, baseArgs...)); code != 0 {
+		t.Fatalf("apply without auto-compact choice failed with %d", code)
+	}
+	after, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Errorf("apply without choice changed auto-compact file: got %q, want %q", after, original)
+	}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, append(append([]string{"--plan"}, baseArgs...), "--auto-compact", "--no-auto-compact")); code != 2 {
+		t.Errorf("conflicting auto-compact flags returned %d, want usage error 2", code)
+	}
+
+	for _, want := range []any{nil, true, false} {
+		if want != nil {
+			raw, _ := json.Marshal(map[string]bool{"enabled": want.(bool)})
+			if err := os.WriteFile(marker, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		args := []string{"--detect", "--json"}
+		if code := Run(&output, &bytes.Buffer{}, args); code != 0 {
+			t.Fatalf("detect failed with %d: %s", code, output.String())
+		}
+		var detected map[string]any
+		if err := json.Unmarshal(output.Bytes(), &detected); err != nil {
+			t.Fatalf("invalid detect output %q: %v", output.String(), err)
+		}
+		if got, ok := detected["auto_compact_enabled"]; !ok || got != want {
+			t.Errorf("auto_compact_enabled = %#v (present %t), want %#v", got, ok, want)
+		}
 	}
 }

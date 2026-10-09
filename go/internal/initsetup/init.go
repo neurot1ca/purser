@@ -26,7 +26,7 @@ import (
 type options struct {
 	detect, list, plan, apply, concise, trust, scaffold, jsonOutput                   bool
 	coder, model, fallbackAgent, fallbackModel, mode, effort, reviewer, reviewerModel string
-	maintenance, mechanical                                                           *bool
+	maintenance, mechanical, autoCompact                                              *bool
 }
 
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -50,17 +50,19 @@ func Run(stdout, stderr io.Writer, args []string) int {
 	fs.StringVar(&o.effort, "effort", "", "model effort")
 	fs.StringVar(&o.reviewer, "reviewer", "", "Reviewer-1 agent")
 	fs.StringVar(&o.reviewerModel, "reviewer-model", "", "Reviewer-1 model")
-	var maintenance, noMaintenance, mechanical, noMechanical bool
+	var maintenance, noMaintenance, mechanical, noMechanical, autoCompact, noAutoCompact bool
 	fs.BoolVar(&maintenance, "maintenance", false, "enable maintenance reports")
 	fs.BoolVar(&noMaintenance, "no-maintenance", false, "disable maintenance reports")
 	fs.BoolVar(&mechanical, "opencode-mechanical", false, "enable OpenCode mechanical route")
 	fs.BoolVar(&noMechanical, "no-opencode-mechanical", false, "disable OpenCode mechanical route")
+	fs.BoolVar(&autoCompact, "auto-compact", false, "enable automatic /compact")
+	fs.BoolVar(&noAutoCompact, "no-auto-compact", false, "disable automatic /compact")
 	fs.BoolVar(&o.trust, "trust", false, "trust this project")
 	fs.BoolVar(&o.scaffold, "scaffold-profile", false, "create project profile")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 0 || (maintenance && noMaintenance) || (mechanical && noMechanical) {
+	if fs.NArg() != 0 || (maintenance && noMaintenance) || (mechanical && noMechanical) || (autoCompact && noAutoCompact) {
 		fmt.Fprintln(stderr, "purser:init: invalid arguments")
 		return 2
 	}
@@ -80,6 +82,14 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		v := false
 		o.mechanical = &v
 	}
+	if autoCompact {
+		v := true
+		o.autoCompact = &v
+	}
+	if noAutoCompact {
+		v := false
+		o.autoCompact = &v
+	}
 	count := 0
 	for _, yes := range []bool{o.detect, o.list, o.plan, o.apply, o.concise} {
 		if yes {
@@ -95,17 +105,17 @@ func Run(stdout, stderr io.Writer, args []string) int {
 			fmt.Fprintln(stderr, "purser:init: unsupported coder")
 			return 2
 		}
-		if !o.jsonOutput || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || (o.model != "" && o.coder == "") {
+		if !o.jsonOutput || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil || (o.model != "" && o.coder == "") {
 			fmt.Fprintln(stderr, "purser:init: --detect requires --json and accepts only optional --coder and --model")
 			return 2
 		}
 	}
-	if o.list && (!o.jsonOutput || !oneOf(o.coder, "codex", "opencode", "agy") || o.model != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil) {
+	if o.list && (!o.jsonOutput || !oneOf(o.coder, "codex", "opencode", "agy") || o.model != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil) {
 		fmt.Fprintln(stderr, "purser:init: --list-models requires --json and --coder codex, opencode, or agy")
 		return 2
 	}
 	if o.concise {
-		if o.jsonOutput || o.coder != "" || o.model != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil {
+		if o.jsonOutput || o.coder != "" || o.model != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil {
 			fmt.Fprintln(stderr, "purser:init: --enable-concise-style accepts no other options")
 			return 2
 		}
@@ -306,6 +316,15 @@ func detect(home, root string, o options) (map[string]any, error) {
 			}
 		}
 	}
+	autoCompactEnabled := any(nil)
+	if raw, e := os.ReadFile(filepath.Join(stateRootPath(), "auto-compact.json")); e == nil {
+		var marker map[string]any
+		if json.Unmarshal(raw, &marker) == nil {
+			if b, ok := marker["enabled"].(bool); ok {
+				autoCompactEnabled = b
+			}
+		}
+	}
 	coderFamily := selectedFamily(data, o, providers)
 	reviewerOptions := []map[string]any{}
 	for _, name := range []string{"codex", "agy", "opencode"} {
@@ -325,7 +344,7 @@ func detect(home, root string, o options) (map[string]any, error) {
 	if coderFamily != "" {
 		familyValue = coderFamily
 	}
-	return map[string]any{"agents": agents, "reviewer_options": reviewerOptions, "coder_family": familyValue, "roles": defaultMap(roles), "trusted": trusted, "profile_exists": exists(filepath.Join(root, ".orchestrator", "profile.toml")), "maintenance_enabled": maintenanceEnabled}, nil
+	return map[string]any{"agents": agents, "reviewer_options": reviewerOptions, "coder_family": familyValue, "roles": defaultMap(roles), "trusted": trusted, "profile_exists": exists(filepath.Join(root, ".orchestrator", "profile.toml")), "maintenance_enabled": maintenanceEnabled, "auto_compact_enabled": autoCompactEnabled}, nil
 }
 func defaultMap(v map[string]any) map[string]any {
 	if v == nil {
@@ -782,6 +801,13 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 				fmt.Fprintln(out, "Maintenance reports: disabled for this project")
 			}
 		}
+		if o.autoCompact != nil {
+			if *o.autoCompact {
+				fmt.Fprintln(out, "Automatic /compact: enabled for this user")
+			} else {
+				fmt.Fprintln(out, "Automatic /compact: disabled for this user")
+			}
+		}
 		if !bytes.Equal(original, changed) {
 			fmt.Fprint(out, unifiedInitialDiff(configPath, string(original), string(changed)))
 		}
@@ -832,6 +858,12 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		rootJSON, _ := json.Marshal(canonical)
 		b := []byte(fmt.Sprintf("{\"project_root\": %s, \"enabled\": %t}", rootJSON, *o.maintenance))
 		if e = atomicWrite(marker, b, false); e != nil {
+			return printError(errOut, e)
+		}
+	}
+	if o.autoCompact != nil {
+		marker := filepath.Join(stateRootPath(), "auto-compact.json")
+		if e = atomicWrite(marker, []byte(fmt.Sprintf("{\"enabled\": %t}", *o.autoCompact)), false); e != nil {
 			return printError(errOut, e)
 		}
 	}

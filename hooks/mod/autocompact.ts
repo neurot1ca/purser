@@ -25,10 +25,24 @@ async function trace($, text: string) {
   try {
     const stamp = new Date(await $.clock.now()).toISOString()
     lines = [...lines, `${stamp} ${text}`].slice(-LOG_LINES)
-    const os = await $.env.get('OS')
-    const home = os === 'Windows_NT' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
+    const home = await homeDir($)
     if (home) await $.fs.write(`${home}/.claude/purser/auto-compact.log`, `${lines.join('\n')}\n`)
   } catch { /* logging must not affect the turn */ }
+}
+
+async function homeDir($): Promise<string | undefined> {
+  const os = await $.env.get('OS')
+  return os === 'Windows_NT' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
+}
+
+// Off unless /purser:init recorded the user's yes in ~/.claude/purser/auto-compact.json.
+export async function optedIn($): Promise<boolean> {
+  try {
+    const home = await homeDir($)
+    return home !== undefined && JSON.parse(await $.fs.read(`${home}/.claude/purser/auto-compact.json`))?.enabled === true
+  } catch {
+    return false
+  }
 }
 
 // The engine's refusal when the host can only compact through the /compact command.
@@ -112,7 +126,7 @@ export function registerAutoCompact(on) {
     if (e.agentId || e.isAborted || inFlight) return result
     try {
       const threshold = thresholdFrom(await $.env.get('PURSER_AUTO_COMPACT_TOKENS'))
-      if (threshold === undefined) return result
+      if (threshold === undefined || !(await optedIn($))) return result
       const tokens = (await $.session.usage()).context.tokens
       const compacting = tokens !== undefined && tokens >= threshold
       await trace($, `turn ${e.turnId}: ${tokens ?? 'no'} tokens, threshold ${threshold}, ${compacting ? 'compacting' : 'below'}`)

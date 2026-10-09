@@ -3,10 +3,14 @@ import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, RESUME_PROMPT, th
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 
-function engine(on, tokens: number, env: Record<string, string> = {}, failures = 0) {
+function engine(on, tokens: number, env: Record<string, string> = {}, failures = 0, setting: string | null = '{"enabled": true}') {
   const calls = { compacts: 0 }
   const clock = mock.clock(on)
-  mock.env(on, env)
+  mock.env(on, { HOME: '/home', ...env })
+  on('fs.read', async (_$, e) => {
+    if (setting === null || !/auto-compact.json$/.test(e.path)) throw new Error('ENOENT')
+    return { value: setting }
+  })
   on('turn.complete', async () => ({ text: 'ok' }))
   on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }))
   on('session.compact', async (_$, e) => {
@@ -42,6 +46,27 @@ test('leaves turns under the threshold alone', async ($, on) => {
 
 test('the off switch disables it', async ($, on) => {
   const { calls, clock } = engine(on, 900_000, { PURSER_AUTO_COMPACT_TOKENS: '0' })
+  await $.turn.complete(TURN)
+  await clock.advance(20_000)
+  expect(calls.compacts).toBe(0)
+})
+
+test('stays off without a recorded choice', async ($, on) => {
+  const { calls, clock } = engine(on, 900_000, {}, 0, null)
+  await $.turn.complete(TURN)
+  await clock.advance(20_000)
+  expect(calls.compacts).toBe(0)
+})
+
+test('stays off when init recorded no', async ($, on) => {
+  const { calls, clock } = engine(on, 900_000, {}, 0, '{"enabled": false}')
+  await $.turn.complete(TURN)
+  await clock.advance(20_000)
+  expect(calls.compacts).toBe(0)
+})
+
+test('stays off when the setting is unreadable', async ($, on) => {
+  const { calls, clock } = engine(on, 900_000, {}, 0, 'junk')
   await $.turn.complete(TURN)
   await clock.advance(20_000)
   expect(calls.compacts).toBe(0)
