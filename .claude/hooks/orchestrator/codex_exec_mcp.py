@@ -2693,8 +2693,22 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
             else:
                 created = None
             launch = json.loads(launch_path.read_text(encoding="utf-8"))
+            repo_root = None
+            if (launch["name"] in ("codex", "codex-reply")
+                    and not job.get("worktreePath")
+                    and launch["args"].get("worktree") is not True):
+                import ledger
+                requested_cwd = Path(launch["args"].get("cwd", os.getcwd())).resolve()
+                try:
+                    repo_root = Path(os.fsdecode(ledger._run_git(
+                        requested_cwd, ["rev-parse", "--show-toplevel"], 30.0,
+                        "resolving job repository root")).strip()).resolve()
+                except (OSError, ValueError, ledger._InspectionError):
+                    pass
             job.update(hostPid=os.getpid(), hostCreatedAt=created,
                        hostContained=bool(containment), signalPort=server.listener.getsockname()[1])
+            if repo_root is not None:
+                job["repoRoot"] = os.fspath(repo_root)
             server._write_job(job)
         if (launch["name"] in ("codex", "codex-reply")
                 and (job.get("worktreePath") or launch["args"].get("worktree") is True)):
@@ -2773,19 +2787,6 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                     "writable_roots": [os.fspath(worktree_path.resolve())]}
                 args["config"] = config
                 launch["args"] = args
-        elif launch["name"] in ("codex", "codex-reply"):
-            import ledger
-            requested_cwd = Path(launch["args"].get("cwd", os.getcwd())).resolve()
-            try:
-                repo_root = Path(os.fsdecode(ledger._run_git(
-                    requested_cwd, ["rev-parse", "--show-toplevel"], 30.0,
-                    "resolving job repository root")).strip()).resolve()
-            except (OSError, ValueError, ledger._InspectionError):
-                repo_root = None
-            if repo_root is not None:
-                job = server._read_job(job_id)
-                job["repoRoot"] = os.fspath(repo_root)
-                server._write_job(job)
         server.codex_bin = launch["codexBin"]
         server.agent = launch.get("agent", "codex")
         server.claim_generation = generation

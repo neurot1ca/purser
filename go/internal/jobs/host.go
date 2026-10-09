@@ -103,6 +103,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			}
 		}
 	}
+	repoRoot := ""
+	if worktreePath == "" && argsMap["worktree"] != true {
+		if root, rootErr := ledger.GitTopLevel(args.Cwd); rootErr == nil {
+			repoRoot = root
+		}
+	}
 	defer os.Remove(args.OutputPath)
 	agent := launch.Agent
 	if agent == "" {
@@ -173,6 +179,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				if lockErr = job.Set(field.key, field.value); lockErr != nil {
 					break
 				}
+			}
+			if lockErr == nil && repoRoot != "" {
+				lockErr = job.Set("repoRoot", repoRoot)
 			}
 			if lockErr == nil {
 				lockErr = Write(path, job)
@@ -298,20 +307,6 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			}
 			config["sandbox_workspace_write"] = map[string]any{"writable_roots": []any{worktreePath}}
 			args.Config = config
-		}
-	} else if launch.Name == "codex" || launch.Name == "codex-reply" {
-		requested, absErr := filepath.Abs(args.Cwd)
-		if absErr == nil {
-			if repoRoot, gitErr := ledger.GitTopLevel(requested); gitErr == nil {
-				if repoRoot != "" {
-					if err = job.Set("repoRoot", repoRoot); err == nil {
-						err = Write(path, job)
-					}
-					if err != nil {
-						return nil, err
-					}
-				}
-			}
 		}
 	}
 	if launch.CodexBin != nil {

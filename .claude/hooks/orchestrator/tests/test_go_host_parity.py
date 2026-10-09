@@ -96,6 +96,8 @@ def _normalize(value, root):
                 result[key] = "__TIME__"
             elif key == "longestSilentGapSeconds":
                 result[key] = "__DURATION__"
+            elif key == "repoRoot" and isinstance(item, str) and Path(item).resolve() == ROOT:
+                result[key] = "__ROOT__"
             else:
                 result[key] = _normalize(item, root)
         return result

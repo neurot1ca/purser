@@ -16,6 +16,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "codex",
       "liveness": {
@@ -35,7 +36,8 @@
         "model": null,
         "config_args": [],
         "sandbox": null,
-        "agent": "codex"
+        "agent": "codex",
+        "repoRoot": "__ROOT__"
       },
       "exitCode": 0,
       "responsivenessAttempts": 1,
@@ -61,6 +63,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "codex",
       "liveness": {
@@ -80,7 +83,8 @@
         "model": null,
         "config_args": [],
         "sandbox": null,
-        "agent": "codex"
+        "agent": "codex",
+        "repoRoot": "__ROOT__"
       },
       "exitCode": 7,
       "launchFailureEvidence": {
@@ -112,6 +116,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "codex",
       "liveness": {
@@ -149,6 +154,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "codex",
       "liveness": {
@@ -201,6 +207,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "codex",
       "liveness": {
@@ -220,7 +227,8 @@
         "model": null,
         "config_args": [],
         "sandbox": null,
-        "agent": "codex"
+        "agent": "codex",
+        "repoRoot": "__ROOT__"
       },
       "exitCode": 0,
       "responsivenessAttempts": 1,
@@ -246,6 +254,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "finishedAt": "__TIME__",
       "errorCode": "CANCELLED",
       "message": "Codex cancelled",
@@ -279,6 +288,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "codex",
       "pid": "__PID__",
@@ -310,6 +320,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "codex",
       "pid": "__PID__",
@@ -447,6 +458,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "opencode",
       "liveness": {
@@ -466,7 +478,8 @@
         "model": "provider/model",
         "config_args": [],
         "sandbox": null,
-        "agent": "opencode"
+        "agent": "opencode",
+        "repoRoot": "__ROOT__"
       },
       "exitCode": 0,
       "responsivenessAttempts": 1,
@@ -492,6 +505,7 @@
       "hostCreatedAt": "__HOST_IDENTITY__",
       "hostContained": true,
       "signalPort": "__HOST_IDENTITY__",
+      "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "opencode",
       "liveness": {
@@ -511,7 +525,8 @@
         "model": "provider/model",
         "config_args": [],
         "sandbox": null,
-        "agent": "opencode"
+        "agent": "opencode",
+        "repoRoot": "__ROOT__"
       },
       "exitCode": 1,
       "launchFailureEvidence": {

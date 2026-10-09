@@ -39,6 +39,12 @@ func TestHostPythonOracleReplay(t *testing.T) {
 	for _, fixture := range want {
 		t.Run(fixture.Name, func(t *testing.T) {
 			root := t.TempDir()
+			if fixture.Name != "worktree_success" && fixture.Name != "worktree_create_failure" && fixture.Name != "worktree_setup_failure" {
+				cmd := exec.Command("git", "init", "-q", root)
+				if output, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("git init: %v: %s", err, output)
+				}
+			}
 			jobID := hexHash(hostParityCall)
 			dir := filepath.Join(root, "codex_exec_mcp", "jobs")
 			if err := os.MkdirAll(dir, 0700); err != nil {
