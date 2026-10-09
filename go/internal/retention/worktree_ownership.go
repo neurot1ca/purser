@@ -15,10 +15,13 @@ import (
 
 // WorktreeOwnership is the directly addressable owner set for one worktree.
 type WorktreeOwnership struct {
-	WorktreePath string   `json:"worktreePath"`
-	Jobs         []string `json:"jobs"`
-	Threads      []string `json:"threads"`
-	Retiring     bool     `json:"retiring,omitempty"`
+	WorktreePath     string   `json:"worktreePath"`
+	Jobs             []string `json:"jobs"`
+	Threads          []string `json:"threads"`
+	Retiring         bool     `json:"retiring,omitempty"`
+	Claimed          bool     `json:"retirementClaimed,omitempty"`
+	WorktreeGone     bool     `json:"worktreeRemoved,omitempty"`
+	PreparationsGone bool     `json:"preparationsRemoved,omitempty"`
 }
 
 func worktreeOwnershipPath(root, worktree string) string {
@@ -99,6 +102,55 @@ func IsWorktreeRetiring(root, worktree string) (bool, error) {
 		return false, err
 	}
 	return owned.Retiring, nil
+}
+
+// UpdateWorktreeOwnership changes durable retirement progress under the owner lock.
+func UpdateWorktreeOwnership(root, worktree string, update func(*WorktreeOwnership)) (WorktreeOwnership, error) {
+	path := worktreeOwnershipPath(root, worktree)
+	unlock, err := lease.Lock(strings.TrimSuffix(path, ".json") + ".owner-lock")
+	if err != nil {
+		return WorktreeOwnership{}, err
+	}
+	defer unlock()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return WorktreeOwnership{}, err
+	}
+	var owned WorktreeOwnership
+	if err = json.Unmarshal(data, &owned); err != nil {
+		return WorktreeOwnership{}, err
+	}
+	update(&owned)
+	return owned, writeWorktreeOwnership(path, owned)
+}
+
+// ReadWorktreeOwnership returns the exact record for a path without creating it.
+func ReadWorktreeOwnership(root, worktree string) (WorktreeOwnership, error) {
+	path := worktreeOwnershipPath(root, worktree)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return WorktreeOwnership{}, err
+	}
+	var owned WorktreeOwnership
+	err = json.Unmarshal(data, &owned)
+	return owned, err
+}
+
+// WorktreeRetirementLock serializes duplicate retirement children.
+func WorktreeRetirementLock(root, worktree string) (func() error, error) {
+	path := worktreeOwnershipPath(root, worktree)
+	return lease.Lock(strings.TrimSuffix(path, ".json") + ".retirement-lock")
+}
+
+// DeleteWorktreeOwnership removes the record after both owned targets are gone.
+func DeleteWorktreeOwnership(root, worktree string) error {
+	path := worktreeOwnershipPath(root, worktree)
+	unlock, err := lease.Lock(strings.TrimSuffix(path, ".json") + ".owner-lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return os.Remove(path)
 }
 
 func addOwner(values []string, value string) []string {

@@ -52,7 +52,7 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "maintenance" {
 		os.Exit(maintenanceMain(os.Args[2:]))
 	}
-	if len(os.Args) > 1 && (os.Args[1] == "op" || os.Args[1] == "host") {
+	if len(os.Args) > 1 && (os.Args[1] == "op" || os.Args[1] == "host" || os.Args[1] == "retire-worktree") {
 		os.Exit(privateMain())
 	}
 	defer func() { _ = recover() }()

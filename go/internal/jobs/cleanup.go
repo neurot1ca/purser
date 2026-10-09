@@ -58,6 +58,9 @@ func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr
 	if err != nil {
 		return fmt.Errorf("resolve state root: %w", err)
 	}
+	if err = recoverRetiringWorktrees(root); err != nil {
+		return fmt.Errorf("recover retiring worktrees: %w", err)
+	}
 	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
 	entries, err := os.ReadDir(jobsDir)
 	if err != nil && !os.IsNotExist(err) {
@@ -309,6 +312,54 @@ func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr
 		cancel()
 	}
 	retention.PruneState(root, current, checkCeiling)
+	return nil
+}
+
+func recoverRetiringWorktrees(root string) error {
+	dir := filepath.Join(root, "worktree_ownership")
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if readErr != nil {
+			return readErr
+		}
+		var owned retention.WorktreeOwnership
+		if json.Unmarshal(data, &owned) != nil || !owned.Retiring || len(owned.Jobs) == 0 {
+			continue
+		}
+		if !validOwnedWorktree(root, owned.WorktreePath) {
+			continue
+		}
+		if !owned.Claimed {
+			_, err = retention.UpdateWorktreeOwnership(root, owned.WorktreePath, func(record *retention.WorktreeOwnership) { record.Claimed = true })
+			if err != nil {
+				continue
+			}
+		}
+		id := owned.Jobs[0]
+		job := readCleanupJSON(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"))
+		if job == nil {
+			continue
+		}
+		var retireErr error
+		if generation, ok := cleanupNumber(job["generation"]); ok && generation > 0 {
+			retireErr = RetireWorktree(root, id, int64(generation))
+		} else {
+			retireErr = RetireWorktree(root, id)
+		}
+		if retireErr != nil {
+			continue
+		}
+	}
 	return nil
 }
 

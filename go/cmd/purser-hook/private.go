@@ -31,7 +31,36 @@ func privateMain() (code int) {
 	if os.Args[1] == "host" {
 		return hostMain(os.Args[2:])
 	}
+	if os.Args[1] == "retire-worktree" {
+		return retireWorktreeMain(os.Args[2:])
+	}
 	return operationMain(os.Args[2:])
+}
+
+func retireWorktreeMain(argv []string) int {
+	if len(argv) != 2 && len(argv) != 3 {
+		privateError(errors.New("usage: purser-hook retire-worktree <stateRoot> <jobId> [generation]"))
+		return 2
+	}
+	var err error
+	if len(argv) == 3 {
+		var generation int64
+		generation, err = strconv.ParseInt(argv[2], 10, 64)
+		if err == nil && generation < 1 {
+			err = errors.New("generation must be positive")
+		}
+		if err == nil {
+			err = jobs.RetireWorktree(argv[0], argv[1], generation)
+		}
+	} else {
+		err = jobs.RetireWorktree(argv[0], argv[1])
+	}
+	if err != nil {
+		privateError(err)
+		return 1
+	}
+	writePrivateJSON(map[string]any{"status": "ok"})
+	return 0
 }
 
 func operationMain(argv []string) int {
