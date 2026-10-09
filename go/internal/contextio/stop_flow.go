@@ -11,11 +11,19 @@ func planCodexDispatched(records []map[string]any, latestUser int, planID string
 	for _, record := range records[latestUser+1:] {
 		for _, raw := range transcriptBlocks(record) {
 			block, ok := raw.(map[string]any)
-			if !ok || block["type"] != "tool_use" || shortStopToolName(str(block["name"])) != "codex_start" {
+			if !ok || block["type"] != "tool_use" {
 				continue
 			}
-			if planTaskInDispatchInput(block["input"], planID) {
-				return true
+			switch shortStopToolName(str(block["name"])) {
+			case "codex_start":
+				if planTaskInDispatchInput(block["input"], planID) {
+					return true
+				}
+			case "Agent":
+				input, ok := block["input"].(map[string]any)
+				if ok && input["subagent_type"] == "purser:dispatcher" {
+					return true
+				}
 			}
 		}
 	}
