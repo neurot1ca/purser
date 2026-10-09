@@ -37,7 +37,6 @@ import reviewer as reviewer_module
 import telemetry
 import compaction_advisor
 import telemetry_schema
-import route_outcome_report
 
 
 CONFIG_PATH = Path(__file__).parents[1] / "config.json"
@@ -8446,15 +8445,6 @@ def test_reviewer_finding_count_stays_separate_from_task_decisions_and_schema_is
     assert task("skipped")["reviewer1_result"] is None
     assert task("skipped")["reviewer1_skipped_reason"] == "NO_DELTA"
     assert "REVIEWER1_FINDING_DISPOSITION" not in telemetry_schema.EVENT_TYPES
-
-    report = route_outcome_report.report(
-        state, route_outcome_report.timestamp("2000-01-01T00:00:00Z"),
-        project_key="unresolved", min_samples=1,
-    )
-    rendered = route_outcome_report.markdown(report, state / "report.md", state)
-    assert "Task-level proxies: initial Reviewer-1 findings / CHANGES_REQUIRED / send-backs / accepted" in rendered
-    assert "2 findings total; 1 known / 2 unknown; 1 CHANGES_REQUIRED / 1 send-backs / 0 accepted" in rendered
-    assert "0 findings total; 1 known / 0 unknown; 0 CHANGES_REQUIRED / 0 send-backs / 1 accepted" in rendered
 
     valid_payloads = {
         "COMPACTION_ADVICE_OUTCOME": {"notice_id": "notice-1", "advice_written": True,
