@@ -646,12 +646,25 @@ func readTranscriptRecords(path string) []map[string]any {
 	if path == "" {
 		return nil
 	}
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
-	if len(data) > 4<<20 {
-		data = data[len(data)-(4<<20):]
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil
+	}
+	if info.Size() > 4<<20 {
+		if _, err := file.Seek(info.Size()-(4<<20), io.SeekStart); err != nil {
+			return nil
+		}
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil
+	}
+	if info.Size() > 4<<20 {
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
 			data = data[i+1:]
 		}
