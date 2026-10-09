@@ -65,6 +65,7 @@ POST_IMPORTED_CALLS = {
     "ledger.compute_job_delta": "go/internal/ledger.ComputeJobDelta (82)",
     "ledger.filter_job_delta": "go/internal/ledger.FilterJobDelta (82)",
     "ledger.prepare_job_replay": "go/internal/ledger.PrepareJobReplay (83b, 84)",
+    "codex_exec_mcp._dispatch_worktree_retirement": "go/internal/jobs.DispatchWorktreeRetirement (5)",
     "checks.select_checks": "go/internal/review.SelectChecks (90)",
     "checks.run_checks": "go/internal/review.RunChecks (90, 91)",
 }

@@ -15,7 +15,7 @@ import (
 const (
 	asyncJobDefaultTimeoutSeconds = 24 * 60 * 60
 	continuationPrompt            = "The previous execution was interrupted. Inspect the working tree and the task in this thread, avoid repeating completed steps, finish the remaining work, run the required focused validation, and report the final result."
-	recoveryRetentionSeconds      = 7 * 24 * 60 * 60
+	recoveryRetentionSeconds      = 3 * 24 * 60 * 60
 )
 
 func replaceRecoverJob(opt RecoverOptions, stateRoot, jobID string, job *Record, now float64) string {

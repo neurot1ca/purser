@@ -175,6 +175,7 @@ var registry = map[string]policy{
 	"raw_tool_outputs":          {maxAgeDays: 7, maxFiles: -1, maxBytes: 64 * mib},
 	"bundle_artifacts":          {maxAgeDays: 7, maxFiles: -1, maxBytes: 32 * mib},
 	"async_jobs":                bounded("jobs-cleanup"),
+	"worktree_ownership":        {owner: "worktree-retirement", maxAgeDays: 3, maxFiles: -1, maxBytes: -1},
 	"pending":                   bounded("jobs-cleanup"),
 	"sessions":                  limits(1024, 16*mib),
 	"threads":                   aged(90, 1024, 8*mib),
@@ -188,6 +189,7 @@ var registry = map[string]policy{
 	"codex-cli-version.json":    byteLimit(mib),
 	"model-version-notice.json": byteLimit(mib),
 	"plugin-version.json":       byteLimit(mib),
+	"auto-compact.json":         byteLimit(mib),
 	CeilingStamp:                bounded("retention"),
 	ceilingLock:                 bounded("retention"),
 }

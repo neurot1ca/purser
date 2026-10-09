@@ -39,6 +39,7 @@ REGISTRY: dict[str, Policy] = {
     "raw_tool_outputs": Policy(max_age_days=7, max_bytes=64 * MIB, delete_patterns=()),  # codex._persist_raw_output; recovery-linked
     "bundle_artifacts": Policy(max_age_days=7, max_bytes=32 * MIB, delete_patterns=()),  # codex._finalize_replacement; recovery-linked
     "async_jobs": Policy(owner="jobs-cleanup"),  # codex.py async index lifecycle
+    "worktree_ownership": Policy(owner="worktree-retirement", max_age_days=3),  # retired worktree ownership records
     "pending": Policy(owner="jobs-cleanup"),  # codex.py pending-call lifecycle
     "sessions": Policy(max_files=1024, max_bytes=16 * MIB, delete_patterns=()),  # ledger.SessionLedger.save
     "threads": Policy(max_age_days=90, max_files=1024, max_bytes=8 * MIB, delete_patterns=()),  # codex._record_thread_root
@@ -55,6 +56,7 @@ REGISTRY: dict[str, Policy] = {
     "codex-cli-version.json": Policy(max_bytes=MIB, delete_patterns=()),  # codex CLI version-state writer; retain by default
     "model-version-notice.json": Policy(max_bytes=MIB, delete_patterns=()),  # model_version_notice.write_state; retain by default
     "plugin-version.json": Policy(max_bytes=MIB, delete_patterns=()),  # compaction_advisor._atomic_write; retain by default
+    "auto-compact.json": Policy(max_bytes=MIB, delete_patterns=()),  # auto-compact hook setting; retain by default
     CEILING_STAMP: Policy(owner="retention"),
     CEILING_LOCK: Policy(owner="retention"),
 }

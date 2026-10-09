@@ -39,6 +39,7 @@ FAILURE_CALL_CONTRACTS = {
     "_base_bundle": "go/internal/enforce.baseBundle (121)",
     "_atomic_json_write": "go/internal/enforce.atomicObservationJSON (119)",
     "_bypass_path": "go/internal/enforce.bypassPath (119)",
+    "codex_exec_mcp._dispatch_worktree_retirement": "go/internal/jobs.DispatchWorktreeRetirement (5)",
     "_call_key": "go/internal/enforce.PostToolUseFailure (122)",
     "_cleanup_stale_pending": "go/internal/enforce.cleanupStaleFailurePending (94)",
     "_observe": "go/internal/enforce.failureObservation (95)",

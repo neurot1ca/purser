@@ -57,6 +57,9 @@ def _assert_registry_complete(written: set[str], registry) -> None:
 def test_state_root_writers_are_registered():
     written = _written_state_names()
     _assert_registry_complete(written, retention.REGISTRY)
+    ownership = retention.REGISTRY["worktree_ownership"]
+    assert ownership.owner == "worktree-retirement"
+    assert ownership.max_age_days == 3
     # Removing an entry from a temporary registry copy makes the guard fail.
     omitted = next(iter(written))
     incomplete = set(retention.REGISTRY) - {omitted}

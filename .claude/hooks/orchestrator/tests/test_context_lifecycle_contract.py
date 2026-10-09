@@ -824,13 +824,19 @@ def test_precompact_records_transcript_facts_and_active_plan(isolated):
         ]}},
     ]
     transcript.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-    jobs = state / "codex_exec_mcp" / "jobs"
-    jobs.mkdir(parents=True)
-    job_id = "a" * 64
-    (jobs / f"{job_id}.json").write_text(json.dumps({
-        "jobId": job_id, "taskId": "active-plan-m1of2", "phase": "implementation",
-        "repoRoot": str(repo), "acceptedAt": time.time(), "state": "SUCCEEDED",
-    }), encoding="utf-8")
+    artifact = _root / "accepted-plan.md"
+    artifact.write_text("accepted plan", encoding="utf-8")
+    plan = {
+        "version": 1, "revision": 1, "task_id": "active-plan",
+        "project_key": _project_key(repo), "project_root": str(repo.resolve()),
+        "artifact_path": str(artifact),
+        "artifact_digest": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "accepted_milestones": [1], "completed_milestones": [],
+        "current_milestone": 1, "pending_next_action": "implement",
+    }
+    plan_path = state / "projects" / _project_key(repo) / "active_plan.json"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
 
     result = _run("PreCompact", repo, state, session_id="precompact-facts", transcript_path=str(transcript))
 
@@ -838,7 +844,7 @@ def test_precompact_records_transcript_facts_and_active_plan(isolated):
     content = handoff.read_text(encoding="utf-8")
     assert "Triggers: idle, commit [transcript]" in content
     assert f"- task=review-1 tool=codex threadId=thread-1 claude_review_mode=required" in content
-    assert f"Plan active-plan: M1 SUCCEEDED (job={job_id}), next M1" in content
+    assert "active-plan M1/1" in content
 
 
 def test_stop_silent_and_fallback_block_contract(isolated):

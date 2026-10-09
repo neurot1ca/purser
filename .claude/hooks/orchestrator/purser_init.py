@@ -24,6 +24,7 @@ import model_version_notice
 import mechanical_learning
 import maintenance_reports
 import policy
+import state_root
 
 
 HEAD = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
@@ -183,6 +184,13 @@ def detect(config_path: Path, project: Path, coder: str | None = None, model: st
                 maintenance_enabled = value["enabled"]
         except (OSError, ValueError, AttributeError):
             pass
+    auto_compact_enabled = None
+    try:
+        marker = json.loads((state_root.default_state_root() / "auto-compact.json").read_text(encoding="utf-8"))
+        if isinstance(marker, dict) and type(marker.get("enabled")) is bool:
+            auto_compact_enabled = marker["enabled"]
+    except (OSError, UnicodeError, ValueError, AttributeError):
+        pass
     return {
         "agents": {
             "codex": codex,
@@ -196,6 +204,7 @@ def detect(config_path: Path, project: Path, coder: str | None = None, model: st
         "trusted": str(project) in trust.get("paths", []) if isinstance(trust, dict) else False,
         "profile_exists": (project / ".orchestrator" / "profile.toml").exists(),
         "maintenance_enabled": maintenance_enabled,
+        "auto_compact_enabled": auto_compact_enabled,
     }
 
 
