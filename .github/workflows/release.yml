@@ -23,10 +23,14 @@ jobs:
       version: ${{ steps.tag.outputs.version }}
       commit: ${{ steps.tag.outputs.commit }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
 
       - name: Validate tag and plugin version
         id: tag
@@ -58,10 +62,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          enabled="$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled')"
-          if [[ "$enabled" != true ]]; then
-            echo "::error::Enable immutable releases for this repository before publishing"
-            exit 1
+          if enabled="$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled' 2>/dev/null)"; then
+            if [[ "$enabled" == false ]]; then
+              echo "::error::Enable immutable releases for this repository before publishing"
+              exit 1
+            elif [[ "$enabled" != true ]]; then
+              echo "::warning::Could not verify immutable releases; confirm this manual repository setting"
+            fi
+          else
+            echo "::warning::Could not read immutable releases (for example, due to a 403/404); immutability is a manual repository setting"
           fi
 
       - name: Require successful CI for tag commit
@@ -84,15 +93,19 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.2'
+          go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
 
       - name: Package committed source tree
         env:
@@ -104,7 +117,7 @@ jobs:
           test -s dist/SHA256SUMS
           test -s dist/release-manifest.json
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@v7
         with:
           name: purser-release
           path: dist/
@@ -137,12 +150,16 @@ jobs:
             runner: macos-15
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v8
         with:
           name: purser-release
           path: dist
@@ -156,12 +173,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v8
         with:
           name: purser-release
           path: dist
@@ -192,7 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           archive="purser-${VERSION}.zip"
-          url="https://github.com/neurot1ca/purser/releases/download/${TAG}/${archive}"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${archive}"
           release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
           if [[ "$(jq -r '.draft' <<<"$release_json")" != true ]]; then
             echo "::error::Release must remain a draft until all pre-publish checks pass"
@@ -205,8 +226,14 @@ jobs:
             diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets") || true
             exit 1
           fi
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ ! "$line" =~ ^[[:xdigit:]]{64}\ \ .+$ ]]; then
+              echo "::error::Invalid SHA256SUMS line format"
+              exit 1
+            fi
+          done < dist/SHA256SUMS
           expected="$(awk -v name="$archive" '$2 == name { print $1 }' dist/SHA256SUMS)"
-          if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+          if [[ ! "$expected" =~ ^[[:xdigit:]]{64}$ ]]; then
             echo "::error::Missing or invalid archive digest in SHA256SUMS"
             exit 1
           fi
@@ -246,7 +273,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@v7
         with:
           name: marketplace-catalog-entry
           path: catalog-entry.json
