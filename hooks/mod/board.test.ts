@@ -58,9 +58,10 @@ test('omits activity text when the job has no activity or checkpoint timestamp',
 test('draws fixture job records in AbovePrompt and keeps the prior mod drawing', async ($, on) => {
   mock.clock(on)
   const repoRoot = '/repo'
-  mock.env(on, { OS: 'Linux', HOME: '/home/test', OSTYPE: 'linux-gnu', HOSTTYPE: 'x86_64' })
+  mock.env(on, { OS: 'Linux', HOME: '/home/test', CLAUDE_CONFIG_DIR: '/custom/claude', OSTYPE: 'linux-gnu', HOSTTYPE: 'x86_64' })
   const logs: string[] = []
   const opened: string[] = []
+  const listed: string[] = []
   const now = Date.now() / 1000
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(repoRoot))
   const projectKey = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
@@ -83,9 +84,12 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
   on('process.run', () => ({ value: { exitCode: 0, stdout: `${repoRoot}\n`, stderr: '' } }))
   on('session.cwd', () => ({ value: repoRoot }))
   on('session.id', () => ({ value: 'board-fixture' }))
-  on('fs.list', () => ({
+  on('fs.list', (_$, e) => {
+    listed.push(e.path)
+    return ({
     value: indexes.map(index => ({ name: `${index.jobId}.json`, kind: 'file', size: 1, mtimeMs: now, isLink: false })),
-  }))
+    })
+  })
   on('fs.read', (_$, e) => {
     const parts = e.path.split(/[\\/]/)
     const rootIndex = parts.lastIndexOf('purser')
@@ -107,6 +111,8 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
     props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100, scroll: { offset: 0, bodyRows: 12 }, view: {} },
   })
   expect(logs).toEqual([])
+  expect(listed).toHaveLength(1)
+  expect(listed[0].replace(/\\/g, '/').toLowerCase().endsWith('/custom/claude/purser/async_jobs')).toBe(true)
   const summary = await ui.find({ type: 'Text', text: '⚓' })
   expect(summary?.props.color).toBe('cyan')
   expect(summary?.props.wrap).toBe('truncate-end')

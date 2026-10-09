@@ -1,3 +1,5 @@
+import { stateRoot } from './state-root.js'
+
 type Job = Record<string, any>
 
 type BoardFiles = {
@@ -176,15 +178,19 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
 
 async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
   const os = await $.env.get('OS')
-  const home = os === 'Windows_NT' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
-  if (!home) throw new Error('home directory unavailable')
+  const [purserState, claudeConfig, home] = await Promise.all([
+    $.env.get('PURSER_STATE_DIR'),
+    $.env.get('CLAUDE_CONFIG_DIR'),
+    os === 'Windows_NT' ? $.env.get('USERPROFILE') : $.env.get('HOME'),
+  ])
+  const runtime = stateRoot({ purserState, claudeConfig, home })
+  if (!runtime) throw new Error('home directory unavailable')
   const rootResult = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 1000 })
   if (rootResult.exitCode !== 0) throw new Error('project root unavailable')
   let root = rootResult.stdout.trim()
   if (os === 'Windows_NT') root = root.replace(/\//g, '\\').toLowerCase()
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(root))
   const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
-  const runtime = `${home}/.claude/purser`
   let entries
   try { entries = await $.fs.list(`${runtime}/async_jobs`) }
   catch (error) {

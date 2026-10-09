@@ -1,3 +1,5 @@
+import { stateRoot } from './state-root.js'
+
 type Window = { percent: number; resetAt: number; windowMs: number }
 type Quota = { fiveHour?: Window; sevenDay?: Window; model?: string; effort?: string }
 type SessionData = { quota: Quota; contextFill?: number; cost?: number }
@@ -155,9 +157,9 @@ export function pillSvg(pill: Pill): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${style}<title>${escapeXml(pill.detail)}</title><rect class="pill" x=".5" y=".5" width="${width - 1}" height="${height - 1}" rx="${(height - 1) / 2}"/>${inner}</svg>`
 }
 
-async function readCodexQuota($, home: string, now: number): Promise<Quota> {
+async function readCodexQuota($, root: string, now: number): Promise<Quota> {
   try {
-    const dir = `${home}/.claude/purser/bundle_artifacts`
+    const dir = `${root.replace(/[\\/]+$/, '')}/bundle_artifacts`
     const files = (await $.fs.list(dir)).filter(item => item.kind === 'file' && /^[0-9a-f]{64}\.json$/.test(item.name))
       .sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 20)
     const records = []
@@ -168,6 +170,16 @@ async function readCodexQuota($, home: string, now: number): Promise<Quota> {
     }
     return { ...readQuotaSnapshot(records, now), ...readCodexModel(records) }
   } catch { return {} }
+}
+
+async function runtimeStateRoot($): Promise<string | undefined> {
+  const os = await $.env.get('OS')
+  const [purserState, claudeConfig, home] = await Promise.all([
+    $.env.get('PURSER_STATE_DIR'),
+    $.env.get('CLAUDE_CONFIG_DIR'),
+    os === 'Windows_NT' ? $.env.get('USERPROFILE') : $.env.get('HOME'),
+  ])
+  return stateRoot({ purserState, claudeConfig, home })
 }
 
 export function terminalBar(pill: Pill): string | undefined {
@@ -199,10 +211,9 @@ export function registerUsage(on) {
         timerStarted = true
         $.clock.every(5000, () => $.ui.invalidate('ui.render'))
       }
-      const [os, usage] = await Promise.all([$.env.get('OS'), $.session.usage()])
-      const home = os === 'Windows_NT' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
+      const [usage, root] = await Promise.all([$.session.usage(), runtimeStateRoot($)])
       const session = mapSessionUsage(usage)
-      const codex = home ? await readCodexQuota($, home, Date.now()) : {}
+      const codex = root ? await readCodexQuota($, root, Date.now()) : {}
       const groups = usageGroups(codex, session)
       if (!groups.length) return prior
       const { Box, Text, Svg } = $.ui.resolve(e)

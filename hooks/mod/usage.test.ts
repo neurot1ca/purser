@@ -109,7 +109,10 @@ test('draws valid Svg pills on desktop and keeps another mod drawing', async ($,
 test('keeps another mod drawing and uses the terminal fallback', async ($, on) => {
   mock.clock(on)
   mock.env(on, { OS: 'Linux', HOME: '/home/test' })
-  on('session.usage', () => ({ value: usage }))
+  on('session.usage', () => ({ value: {
+    ...usage,
+    rateLimits: usage.rateLimits.map(limit => ({ ...limit, resetsAt: new Date(Date.now() + 60 * 60_000).toISOString() })),
+  } }))
   on('fs.list', () => ({ deny: 'ENOENT' }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -133,18 +136,25 @@ test('keeps another mod drawing and uses the terminal fallback', async ($, on) =
 
 test('reads Codex quota from the newest artifact that contains it', async ($, on) => {
   mock.clock(on)
-  mock.env(on, { OS: 'Linux', HOME: '/home/test' })
+  mock.env(on, { OS: 'Linux', HOME: '/home/test', PURSER_STATE_DIR: '/shared/purser-state' })
   on('session.usage', () => ({ value: { context: { window: 200_000 }, rateLimits: [] } }))
   const newest = `${'a'.repeat(64)}.json`
   const prior = `${'b'.repeat(64)}.json`
   const reads: string[] = []
-  on('fs.list', () => ({ value: [
+  const listed: string[] = []
+  on('fs.list', (_$, e) => {
+    listed.push(e.path)
+    return ({ value: [
     { name: newest, kind: 'file', size: 50, mtimeMs: 20, isLink: false },
     { name: prior, kind: 'file', size: 50, mtimeMs: 10, isLink: false },
-  ] }))
+    ] })
+  })
   on('fs.read', (_$, e) => {
     reads.push(e.path)
-    return { value: e.path.endsWith(newest) ? '{"incomplete":true}' : JSON.stringify(quotaRecord(55, 65)) }
+    const snapshot = quotaRecord(55, 65)
+    snapshot.codex_quota['5h_resets_at'] = new Date(Date.now() + 60 * 60_000).toISOString()
+    snapshot.codex_quota['7d_resets_at'] = new Date(Date.now() + 24 * 60 * 60_000).toISOString()
+    return { value: e.path.endsWith(newest) ? '{"incomplete":true}' : JSON.stringify(snapshot) }
   })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -155,6 +165,8 @@ test('reads Codex quota from the newest artifact that contains it', async ($, on
     plugin: 'usage-codex-test', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
+  expect(listed).toHaveLength(1)
+  expect(listed[0].replace(/\\/g, '/').toLowerCase().endsWith('/shared/purser-state/bundle_artifacts')).toBe(true)
   expect(reads.map(path => path.split(/[\\/]/).at(-1))).toEqual([newest, prior])
   expect(await ui.find({ type: 'Text', text: /codex 5h/ })).toBeDefined()
   await ui.unmount()
