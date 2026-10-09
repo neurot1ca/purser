@@ -1,0 +1,260 @@
+name: Tagged release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate tag and plugin version
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Tag must match strict vX.Y.Z (no leading zeroes): $TAG"
+            exit 1
+          fi
+          commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          if [[ "$commit" != "$EVENT_SHA" ]]; then
+            echo "::error::Tag commit $commit does not match event commit $EVENT_SHA"
+            exit 1
+          fi
+          version="${TAG#v}"
+          manifest_version="$(python -c 'import json; print(json.load(open(".claude-plugin/plugin.json", encoding="utf-8"))["version"])')"
+          if [[ "$version" != "$manifest_version" ]]; then
+            echo "::error::Tag version $version does not match plugin version $manifest_version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Require immutable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          enabled="$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled')"
+          if [[ "$enabled" != true ]]; then
+            echo "::error::Enable immutable releases for this repository before publishing"
+            exit 1
+          fi
+
+      - name: Require successful CI for tag commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$CI_COMMIT" -f per_page=100 \
+            --jq '[.workflow_runs[] | select(.head_sha == env.CI_COMMIT and .conclusion == "success" and (.event == "push" or .event == "pull_request"))] | length')"
+          if [[ "$runs" -lt 1 ]]; then
+            echo "::error::No successful ci.yml run exists for commit $CI_COMMIT"
+            exit 1
+          fi
+
+  package:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache-dependency-path: go/go.sum
+
+      - name: Package committed source tree
+        env:
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: |
+          set -euo pipefail
+          python -c 'import sys; from scripts.release import package_release; package_release(sys.argv[1], sys.argv[2])' "$SOURCE_COMMIT" dist
+          test -f "dist/purser-${{ needs.preflight.outputs.version }}.zip"
+          test -s dist/SHA256SUMS
+          test -s dist/release-manifest.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: purser-release
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  smoke:
+    needs: [preflight, package]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            arch: amd64
+            runner: windows-2025
+          - os: windows
+            arch: arm64
+            runner: windows-11-arm
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: purser-release
+          path: dist
+
+      - name: Smoke test packaged release
+        run: python scripts/test_distribution.py dist
+
+  publish:
+    needs: [preflight, package, smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: purser-release
+          path: dist
+
+      - name: Refuse an existing release and create a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::A release for $TAG already exists; refusing to replace its assets"
+            exit 1
+          fi
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "Purser $VERSION" \
+            --notes "Purser $VERSION release."
+
+      - name: Verify draft assets and emit marketplace pin
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="purser-${VERSION}.zip"
+          url="https://github.com/neurot1ca/purser/releases/download/${TAG}/${archive}"
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+          if [[ "$(jq -r '.draft' <<<"$release_json")" != true ]]; then
+            echo "::error::Release must remain a draft until all pre-publish checks pass"
+            exit 1
+          fi
+          expected_assets="$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)"
+          actual_assets="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
+          if [[ "$actual_assets" != "$expected_assets" ]]; then
+            echo "::error::Draft assets do not exactly match the packaged assets; refusing replacement"
+            diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets") || true
+            exit 1
+          fi
+          expected="$(awk -v name="$archive" '$2 == name { print $1 }' dist/SHA256SUMS)"
+          if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Missing or invalid archive digest in SHA256SUMS"
+            exit 1
+          fi
+          asset_url="$(jq -r --arg name "$archive" '.assets[] | select(.name == $name) | .url' <<<"$release_json")"
+          if [[ -z "$asset_url" || "$asset_url" == null ]]; then
+            echo "::error::Draft archive asset is missing"
+            exit 1
+          fi
+          # Draft browser downloads are private; the authenticated asset API download
+          # is the pre-publish equivalent of the anonymous-download check.
+          curl --fail --silent --show-error --location \
+            -H 'Accept: application/octet-stream' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$asset_url" --output downloaded.zip
+          actual="$(sha256sum downloaded.zip | cut -d' ' -f1)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Draft asset digest mismatch: expected $expected, got $actual"
+            exit 1
+          fi
+          python - "$url" "$expected" <<'PY' > catalog-entry.json
+          import json
+          import sys
+
+          print(json.dumps({
+              "name": "purser",
+              "source": {
+                  "source": "archive",
+                  "url": sys.argv[1],
+                  "sha256": sys.argv[2],
+              },
+          }, indent=2))
+          PY
+          {
+            echo '### Marketplace catalog entry'
+            echo '```json'
+            cat catalog-entry.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: marketplace-catalog-entry
+          path: catalog-entry.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
