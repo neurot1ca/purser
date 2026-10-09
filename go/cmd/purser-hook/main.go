@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"time"
@@ -13,7 +11,6 @@ import (
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/hookactivity"
-	"purser-hook/internal/measures"
 )
 
 func main() {
@@ -25,9 +22,6 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "leases" {
 		os.Exit(leasesMain(os.Args[2:]))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "pilot-report" {
-		os.Exit(pilotReportMain(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "gear" {
 		os.Exit(gearMain(os.Args[2:]))
@@ -57,15 +51,6 @@ func main() {
 		os.Exit(privateMain())
 	}
 	defer func() { _ = recover() }()
-	if len(os.Args) > 1 && os.Args[1] == "measures-sync" {
-		root := measures.CurrentRepo()
-		if root == "" {
-			return
-		}
-		count, _ := measures.Sync(context.Background(), root)
-		_, _ = fmt.Fprintln(os.Stdout, count)
-		return
-	}
 	started := time.Now()
 	enforcementMode := len(os.Args) > 1 && os.Args[1] == "enforce"
 	data, err := io.ReadAll(os.Stdin)
