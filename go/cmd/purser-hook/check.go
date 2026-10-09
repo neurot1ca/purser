@@ -2,9 +2,9 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 
 	"purser-hook/internal/checkreport"
+	"purser-hook/internal/pluginroot"
 )
 
 func checkMain(args []string) int {
@@ -20,14 +20,10 @@ func checkMain(args []string) int {
 		_, _ = os.Stderr.WriteString("check: cannot resolve project directory\n")
 		return 1
 	}
-	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
+	pluginRoot := pluginroot.Root()
 	if pluginRoot == "" {
-		executable, err := os.Executable()
-		if err != nil {
-			_, _ = os.Stderr.WriteString("check: cannot resolve plugin directory\n")
-			return 1
-		}
-		pluginRoot = filepath.Dir(filepath.Dir(executable))
+		_, _ = os.Stderr.WriteString("check: cannot resolve plugin directory\n")
+		return 1
 	}
 	report := checkreport.Run(root, pluginRoot)
 	if jsonOutput {

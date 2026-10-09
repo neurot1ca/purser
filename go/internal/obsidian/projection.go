@@ -5,30 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"purser-hook/internal/pluginroot"
 )
 
 // PluginRoot is the shared source of the installed plugin package root.
 func PluginRoot() string {
-	if root := os.Getenv("CLAUDE_PLUGIN_ROOT"); root != "" {
-		return root
-	}
-	if executable, err := os.Executable(); err == nil {
-		if executable, err = filepath.EvalSymlinks(executable); err == nil {
-			if root := pluginRootFromExecutable(executable); root != "" {
-				return root
-			}
-		}
-	}
-	cwd, _ := os.Getwd()
-	return cwd
-}
-
-func pluginRootFromExecutable(executable string) string {
-	root := filepath.Dir(filepath.Dir(executable))
-	if _, err := os.Stat(filepath.Join(root, ".claude-plugin", "plugin.json")); err == nil {
-		return root
-	}
-	return ""
+	return pluginroot.Root()
 }
 
 // ConfigPath prefers the plugin's bundled config and falls back to the cwd ancestry.

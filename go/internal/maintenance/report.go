@@ -18,6 +18,7 @@ import (
 	"purser-hook/internal/checkreport"
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 )
@@ -525,14 +526,7 @@ func gitVersion(root string) string {
 }
 
 func maintenancePluginRoot() string {
-	if root := os.Getenv("CLAUDE_PLUGIN_ROOT"); root != "" {
-		return root
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return filepath.Dir(filepath.Dir(executable))
+	return pluginroot.Root()
 }
 
 func vultureVersion() string {

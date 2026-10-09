@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/policy"
 )
 
@@ -85,16 +86,7 @@ func gearRepository(path string) (string, error) {
 }
 
 func gearConfig() (map[string]any, error) {
-	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
-	if pluginRoot == "" {
-		cwd, _ := os.Getwd()
-		for dir := cwd; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-			if _, err := os.Stat(filepath.Join(dir, ".claude", "hooks", "orchestrator", "config.json")); err == nil {
-				pluginRoot = dir
-				break
-			}
-		}
-	}
+	pluginRoot := pluginroot.Root()
 	if pluginRoot == "" {
 		return nil, fmt.Errorf("orchestrator config path is unavailable")
 	}
