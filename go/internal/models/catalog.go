@@ -24,7 +24,7 @@ var modelsDevURL = catalogURL
 func RefreshCatalog(ctx context.Context, stateRoot string, now time.Time) error {
 	path := filepath.Join(stateRoot, "model-catalog", "catalog.json")
 	if fetchedAt, _, err := readCatalogCache(path); err == nil {
-		if now.Sub(fetchedAt) < 24*time.Hour {
+		if now.Sub(fetchedAt) < time.Hour {
 			return nil
 		}
 	}
@@ -136,6 +136,9 @@ func normalizeModel(modelID string, value any) (map[string]any, bool) {
 		return nil, false
 	}
 	fact := map[string]any{"id": modelID, "name": name, "reasoning": reasoning}
+	if releaseDate, ok := model["release_date"].(string); ok && releaseDate != "" {
+		fact["release_date"] = releaseDate
+	}
 	if cost, ok := model["cost"].(map[string]any); ok && validCost(cost) {
 		fact["cost"] = map[string]any{"input": cost["input"], "output": cost["output"]}
 	}

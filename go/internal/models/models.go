@@ -181,8 +181,65 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 		}
 		return check.model, candidate, true
 	}
+	if family, candidate := newestCatalogModel(cached.Providers); candidate != "" {
+		if state.Report == nil || state.Report.Current != family || state.Report.New != candidate || !state.Report.Delivered {
+			if state.Report == nil || state.Report.Current != family || state.Report.New != candidate {
+				state.Report = &noticeReport{Current: family, New: candidate}
+			}
+			if writeNoticeState(statePath, state) != nil {
+				return "", "", false
+			}
+			if recordCheck(statePath) != nil {
+				return "", "", false
+			}
+			return family, candidate, true
+		}
+	}
 	_ = recordCheck(statePath)
 	return "", "", false
+}
+
+func newestCatalogModel(providers map[string]map[string]json.RawMessage) (family, model string) {
+	newestRelease := ""
+	for provider, models := range providers {
+		for id, raw := range models {
+			var fact struct {
+				Name        string `json:"name"`
+				ReleaseDate string `json:"release_date"`
+			}
+			if json.Unmarshal(raw, &fact) != nil {
+				continue
+			}
+			name, release := strings.ToLower(fact.Name), fact.ReleaseDate
+			candidateFamily := ""
+			switch provider {
+			case "anthropic":
+				if strings.HasPrefix(id, "claude-") {
+					for _, tier := range []string{"haiku", "sonnet", "opus"} {
+						if strings.Contains(id, tier) || strings.Contains(name, tier) {
+							candidateFamily = "Claude " + strings.ToUpper(tier[:1]) + tier[1:]
+							break
+						}
+					}
+				}
+			case "openai":
+				if strings.HasPrefix(id, "gpt-") && (strings.HasSuffix(id, "-luna") || strings.HasSuffix(id, "-sol")) {
+					candidateFamily = "OpenAI GPT"
+				}
+			case "google":
+				if strings.HasPrefix(id, "gemini-") {
+					candidateFamily = "Gemini"
+				}
+			}
+			if candidateFamily == "" {
+				continue
+			}
+			if model == "" || release > newestRelease || release == newestRelease && id > model {
+				family, model, newestRelease = candidateFamily, id, release
+			}
+		}
+	}
+	return family, model
 }
 
 // DiscoverCachedCodexVersion checks the visible models in CODEX_HOME without

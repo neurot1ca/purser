@@ -256,6 +256,39 @@ func TestDiscoverReportsEachChangeOnce(t *testing.T) {
 	}
 }
 
+func TestDiscoverCatalogModelInUnconfiguredFamily(t *testing.T) {
+	setupDiscovery(t, map[string]any{"coder_agent": "codex", "routes": map[string]any{"normal": "gpt-6-luna"}}, func(string, map[string]map[string]json.RawMessage) listingResult {
+		return listingResult{available: true, ids: []string{"gpt-6-luna"}}
+	})
+	loadCatalog = func() (catalog, error) {
+		return catalog{Providers: map[string]map[string]json.RawMessage{
+			"anthropic": {"claude-5-5-haiku": json.RawMessage(`{"name":"Claude Haiku 5.5","reasoning":true,"family":"claude-haiku","release_date":"2026-10-07"}`)},
+		}}, nil
+	}
+
+	current, newer, ok := DiscoverModelVersion(t.TempDir())
+	if !ok || current != "Claude Haiku" || newer != "claude-5-5-haiku" {
+		t.Fatalf("got %q -> %q, available = %v", current, newer, ok)
+	}
+}
+
+func TestDiscoverCatalogModelAlreadyAnnouncedDoesNotRepeat(t *testing.T) {
+	root := setupDiscovery(t, map[string]any{"coder_agent": "codex", "routes": map[string]any{"normal": "gpt-6-luna"}}, func(string, map[string]map[string]json.RawMessage) listingResult {
+		return listingResult{available: true, ids: []string{"gpt-6-luna"}}
+	})
+	loadCatalog = func() (catalog, error) {
+		return catalog{Providers: map[string]map[string]json.RawMessage{
+			"anthropic": {"claude-5-5-haiku": json.RawMessage(`{"name":"Claude Haiku 5.5","reasoning":true,"family":"claude-haiku","release_date":"2026-10-07"}`)},
+		}}, nil
+	}
+	yesterday := "2000-01-01"
+	writeCheckedState(t, root, yesterday, &noticeReport{Current: "Claude Haiku", New: "claude-5-5-haiku", Delivered: true})
+
+	if current, newer, ok := DiscoverModelVersion(t.TempDir()); ok {
+		t.Fatalf("already announced model repeated as %q -> %q", current, newer)
+	}
+}
+
 func TestDiscoverUnavailableListingRecordsCheckWithoutReport(t *testing.T) {
 	root := setupDiscovery(t, map[string]any{"routes": map[string]any{"normal": "gpt-6-luna"}}, func(string, map[string]map[string]json.RawMessage) listingResult {
 		return listingResult{}

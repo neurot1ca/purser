@@ -43,7 +43,7 @@ func TestRefreshCatalogFreshCacheSkipsRequest(t *testing.T) {
 	setCatalogURL(t, server.URL)
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 	root := t.TempDir()
-	writeCatalogCache(t, root, now.Add(-23*time.Hour))
+	writeCatalogCache(t, root, now.Add(-time.Minute))
 	if err := RefreshCatalog(context.Background(), root, now); err != nil {
 		t.Fatal(err)
 	}
