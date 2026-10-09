@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.99 — 2026-10-09
+
+- **Fixed:** The audit receipt's commit command lists every changed path instead of only the first 10.
+- **Fixed:** A dispatcher agent's `codex_apply` now really waits for main Claude's acceptance; the check also refuses it if the gate itself fails.
+
 ## 0.1.98 — 2026-10-09
 
 - **Fixed:** Replying on a Codex thread works again after new commits land; the reply uses the job's recorded repository instead of failing with WORKTREE_SNAPSHOT_FAILED.
