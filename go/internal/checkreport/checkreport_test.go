@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -150,10 +152,47 @@ func TestWriteJSONPreservesUTF8(t *testing.T) {
 	}
 }
 
+func TestHookActivityRowMissingFile(t *testing.T) {
+	home := checkReportTestDir(t, "checkreport-activity-missing-")
+	t.Setenv("PURSER_STATE_DIR", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	got := hookActivityCheck(home)
+	if got.Check != "Hook activity" || got.Status != "INFO" || got.Detail != "No hook activity recorded yet." || got.NextStep != nil {
+		t.Fatalf("Hook activity row = %#v", got)
+	}
+}
+
+func TestHookActivityRowPopulatedFile(t *testing.T) {
+	home := checkReportTestDir(t, "checkreport-activity-populated-")
+	t.Setenv("PURSER_STATE_DIR", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	stateRoot := filepath.Join(home, ".claude", "purser")
+	if err := os.MkdirAll(stateRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	activity := map[string]string{
+		"PreToolUse": time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339),
+		"Stop":       time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(activity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, "hook-activity.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := hookActivityCheck(home)
+	if got.Check != "Hook activity" || got.Status != "OK" || got.NextStep != nil ||
+		!strings.Contains(got.Detail, "PreToolUse 2h ago") || !strings.Contains(got.Detail, "Stop 1d ago") ||
+		!strings.Contains(got.Detail, "updated at most hourly") {
+		t.Fatalf("Hook activity row = %#v", got)
+	}
+}
+
 func withoutRuntimeRows(report Report) Report {
 	checks := make([]Row, 0, len(report.Checks)-1)
 	for _, item := range report.Checks {
-		if item.Check != "Runtime" && item.Check != "Python" && item.Check != "Python locator" {
+		if item.Check != "Runtime" && item.Check != "Python" && item.Check != "Python locator" && item.Check != "Hook activity" {
 			checks = append(checks, item)
 		}
 	}
@@ -169,4 +208,19 @@ func withoutRuntimeRows(report Report) Report {
 		}
 	}
 	return report
+}
+
+func checkReportTestDir(t *testing.T, prefix string) string {
+	t.Helper()
+	_, source, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", "..", ".tmp"))
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(root, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }

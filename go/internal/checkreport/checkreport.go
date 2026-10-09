@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/hookactivity"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 )
@@ -62,6 +63,7 @@ func run(projectRoot, pluginRoot, home string) Report {
 			return row("Runtime", "OK", RuntimeDetail(pluginRoot), "")
 		}),
 		runRow("Hook registration", func() Row { return checkRegistration(home) }),
+		runRow("Hook activity", func() Row { return hookActivityCheck(home) }),
 		runRow("Codex MCP", func() Row { return mcpCheck(home, pluginRoot) }),
 		runRow("Codex CLI", codexCheck),
 		runRow("Roles", func() Row { return rolesCheck(p) }),
@@ -79,6 +81,48 @@ func run(projectRoot, pluginRoot, home string) Report {
 		}
 	}
 	return report
+}
+
+func hookActivityCheck(home string) Row {
+	stateRoot := os.Getenv("PURSER_STATE_DIR")
+	if stateRoot == "" {
+		if config := os.Getenv("CLAUDE_CONFIG_DIR"); config != "" {
+			stateRoot = filepath.Join(config, "purser")
+		} else {
+			stateRoot = filepath.Join(home, ".claude", "purser")
+		}
+	}
+	activity := hookactivity.Load(stateRoot)
+	if len(activity) == 0 {
+		return row("Hook activity", "INFO", "No hook activity recorded yet.", "")
+	}
+	events := make([]string, 0, len(activity))
+	for event := range activity {
+		events = append(events, event)
+	}
+	sort.Strings(events)
+	entries := make([]string, 0, len(events))
+	now := time.Now()
+	for _, event := range events {
+		entries = append(entries, event+" "+activityAge(now.Sub(activity[event])))
+	}
+	return row("Hook activity", "OK", strings.Join(entries, ", ")+". Activity is updated at most hourly.", "")
+}
+
+func activityAge(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	switch {
+	case age < time.Minute:
+		return "just now"
+	case age < time.Hour:
+		return fmt.Sprintf("%dm ago", int(age/time.Minute))
+	case age < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(age/time.Hour))
+	default:
+		return fmt.Sprintf("%dd ago", int(age/(24*time.Hour)))
+	}
 }
 
 func runRow(label string, check func() Row) (result Row) {

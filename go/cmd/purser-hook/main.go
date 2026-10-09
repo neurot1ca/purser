@@ -12,6 +12,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/hookactivity"
 	"purser-hook/internal/measures"
 )
 
@@ -142,6 +143,12 @@ func main() {
 	case "Stop":
 		if output := contextio.Stop(event, started); len(output) > 0 {
 			_, _ = os.Stdout.Write(output)
+		}
+	}
+	if eventName, ok := event["hook_event_name"].(string); ok {
+		switch eventName {
+		case "PostToolUse", "PostToolUseFailure", "PreToolUse", "SessionStart", "UserPromptSubmit", "PreCompact", "Stop":
+			hookactivity.Record(stateRoot(), eventName, time.Now())
 		}
 	}
 }
