@@ -71,7 +71,7 @@ func postStart(event map[string]any, root string) (map[string]any, error) {
 	if configField, ok := event["post_tool_output_field"].(string); ok && (configField == "updatedToolOutput" || configField == "updatedMCPToolOutput") {
 		field = configField
 	}
-	next := fmt.Sprintf("Run in the background (use the PowerShell tool on Windows): %s ; when it finishes, call codex_result with this jobId.", waiter.Command(jobID))
+	next := fmt.Sprintf("Run in the background (use the PowerShell tool on Windows): %s ; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.", waiter.Command(jobID))
 	textValue, _ := canonicalJSON(map[string]any{"jobId": jobID, "state": state, "next": next})
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse",
 		field: []any{map[string]any{"type": "text", "text": string(textValue)}}}}, nil

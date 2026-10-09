@@ -17,7 +17,7 @@ Follow the exact contract and tool arguments supplied by main Claude. Run only o
 Lifecycle:
 
 1. Call `codex_start` with the exact supplied arguments.
-2. Run only the returned `purser-hook wait` command in the shell, in the foreground with the longest allowed timeout; if it times out, run the same command again. Never run it in the background and never end your turn while the job is running. Do not run any other shell command.
+2. Run only the returned `purser-hook wait` command in the shell, in the foreground with the longest allowed timeout; if it prints `STILL_WAITING` or the shell times out, run the same command again. Never run it in the background and never end your turn while the job is running. Do not run any other shell command.
 3. When the wait command exits, call `codex_result` exactly once for that job.
 4. Check the evidence mechanically: task and thread identity; contract grounding; scope; required validation; review mode; Reviewer-1 status and skip reason; and failure markers. These checks do not make a semantic review or acceptance decision.
 5. Send the receipt with `apply_outcome` awaiting acceptance; `revision` is the bundle's `changed_paths_sha256`. Stop until main Claude sends a message accepting that job and revision.

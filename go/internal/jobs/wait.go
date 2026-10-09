@@ -29,6 +29,11 @@ var waitSleep = time.Sleep
 // by the Python waiter. SignalWait is bounded so replacement generations are
 // noticed promptly even while an older endpoint is still open.
 func Wait(stateRoot, jobID string) WaitResult {
+	started := time.Now()
+	maxWaitSeconds := int64(9 * 60)
+	if configured, err := strconv.ParseInt(os.Getenv("PURSER_WAIT_MAX_SECONDS"), 10, 64); err == nil && configured > 0 {
+		maxWaitSeconds = configured
+	}
 	if !validWaitID(jobID) {
 		return WaitResult{Lines: []string{"purser-wait " + jobID + " UNKNOWN_JOB"}, ExitCode: 2}
 	}
@@ -59,12 +64,18 @@ func Wait(stateRoot, jobID string) WaitResult {
 		if remainingSeconds <= 0 {
 			return reportWaitRecord(dir, jobID, nil)
 		}
+		remainingWaitSeconds := float64(maxWaitSeconds) - time.Since(started).Seconds()
+		if remainingWaitSeconds <= 0 {
+			return WaitResult{Lines: []string{"purser-wait " + jobID + " STILL_WAITING"}, ExitCode: 5}
+		}
 		if port != 0 {
-			wait := time.Duration(math.Min(1, remainingSeconds) * float64(time.Second))
+			wait := time.Duration(math.Min(1, math.Min(remainingSeconds, remainingWaitSeconds)) * float64(time.Second))
 			_, _ = SignalWait("127.0.0.1:"+strconv.Itoa(port), jobID, token, wait)
-			waitSleep(time.Duration(math.Min(0.1, remainingSeconds) * float64(time.Second)))
+			pause := math.Min(0.1, math.Min(remainingSeconds, remainingWaitSeconds))
+			waitSleep(time.Duration(pause * float64(time.Second)))
 		} else {
-			waitSleep(time.Duration(math.Min(0.1, remainingSeconds) * float64(time.Second)))
+			pause := math.Min(0.1, math.Min(remainingSeconds, remainingWaitSeconds))
+			waitSleep(time.Duration(pause * float64(time.Second)))
 		}
 	}
 }

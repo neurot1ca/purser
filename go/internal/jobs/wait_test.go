@@ -75,6 +75,24 @@ func TestWaitAlreadyTerminalWritesObservation(t *testing.T) {
 	}
 }
 
+func TestWaitReturnsStillWaitingAtConfiguredBound(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
+	root := t.TempDir()
+	writeWaitJob(t, root, "queued", map[string]any{
+		"state":      "QUEUED",
+		"deadlineAt": float64(time.Now().Add(time.Hour).UnixNano()) / 1e9,
+	})
+
+	started := time.Now()
+	got := Wait(root, "queued")
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Wait took %s, want configured bound within 2s", elapsed)
+	}
+	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait queued STILL_WAITING" {
+		t.Fatalf("Wait = %#v, want STILL_WAITING with exit code 5", got)
+	}
+}
+
 func TestWaitObservesTerminalDuringSignalWait(t *testing.T) {
 	root := t.TempDir()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

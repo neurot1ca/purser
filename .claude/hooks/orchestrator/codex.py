@@ -2995,7 +2995,7 @@ def _post_start(event: Mapping[str, Any], config: Mapping[str, Any] | None,
         })
         waiter = Path(__file__).resolve().parent / "purser_wait.py"
         command = (f'Run in the background (use the PowerShell tool on Windows): "{sys.executable}" "{waiter}" {job_id} '
-                   "; when it finishes, call codex_result with this jobId.")
+                   "; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.")
         response = _replacement({"jobId": job_id, "state": value["state"], "next": command},
                                 _load_config(config))
         return _append_dispatch_receipt(response, pending, root, event)
