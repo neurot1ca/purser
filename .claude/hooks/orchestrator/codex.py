@@ -3604,7 +3604,10 @@ def _store_plan(runtime_root: Path, event: Mapping[str, Any], task_id: Any,
     finally:
         temp.unlink(missing_ok=True)
     bundle["plan_path"] = str(path)
-    bundle["plan_summary"] = _plan_summary(content)
+    summary = _plan_summary(content)
+    if not summary and content.strip():
+        summary = f"Plan summary is empty; complete plan is available at {path}."
+    bundle["plan_summary"] = summary
 
 
 def _non_report_bytes(bundle: Mapping[str, Any]) -> int:
@@ -3747,7 +3750,9 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
 
     plan_summary_notice = ""
     if bundle.get("plan_summary") and bundle.get("plan_path"):
-        plan_summary_notice = f"Complete plan summary is available at {bundle['plan_path']}."
+        plan_summary_notice = (
+            f"Inline plan summary omitted; complete plan is available at {bundle['plan_path']}."
+        )
         candidate = dict(compact)
         candidate["plan_summary"] = plan_summary_notice
         if _non_report_bytes(candidate) <= cap:

@@ -102,7 +102,7 @@ def test_multibyte_plan_summary_budget_uses_complete_artifact():
     summary = "界🙂" * 1000
     path = str(Path(".tmp") / "complete-plan.md")
     bundle = {"plan_path": path, "plan_summary": summary, "findings": [], "implementer_report": ""}
-    notice = f"Complete plan summary is available at {path}."
+    notice = f"Inline plan summary omitted; complete plan is available at {path}."
     cap = len(summary) + 50
     assert codex._non_report_bytes({**bundle, "plan_summary": notice}) <= cap < len(summary.encode("utf-8"))
     compact, overflow = codex._compact_bundle(bundle, cap)

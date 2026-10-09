@@ -86,7 +86,7 @@ func TestCompactBundleUsesPlanArtifactWhenMultibyteSummaryExceedsByteBudget(t *t
 	bundle := map[string]any{
 		"plan_path": path, "plan_summary": summary, "findings": []any{}, "implementer_report": "",
 	}
-	notice := "Complete plan summary is available at " + path + "."
+	notice := "Inline plan summary omitted; complete plan is available at " + path + "."
 	cap := utf8.RuneCountInString(summary) + 50
 	if utf8.RuneCountInString(summary) >= cap || len([]byte(summary)) <= cap {
 		t.Fatalf("test does not distinguish rune count from transport bytes: runes=%d bytes=%d cap=%d", utf8.RuneCountInString(summary), len([]byte(summary)), cap)
@@ -139,5 +139,38 @@ func TestStorePostPlanShapeFinding(t *testing.T) {
 				t.Fatalf("plan summary fallback changed: got %#v", got)
 			}
 		})
+	}
+}
+
+func TestStorePostPlanPreservesContentBeyondOutputLimits(t *testing.T) {
+	report := "Summary:\n" + strings.Repeat("界🙂", 13000)
+	bundle := map[string]any{"findings": []any{}}
+	path, err := storePostPlan(t.TempDir(), map[string]any{"session_id": "s", "tool_use_id": "u"}, "long-plan", report, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored) != report {
+		t.Fatalf("stored plan differs from worker output: got %d bytes, want %d", len(stored), len(report))
+	}
+}
+
+func TestStorePostPlanEmptySummaryIncludesArtifactPointer(t *testing.T) {
+	report := "# Summary:\n\n# Milestones\n- Complete the plan"
+	bundle := map[string]any{"findings": []any{}}
+	path, err := storePostPlan(t.TempDir(), map[string]any{"session_id": "s", "tool_use_id": "u"}, "empty-summary", report, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Plan summary is empty; complete plan is available at " + path + "."
+	if bundle["plan_summary"] != want || bundle["plan_path"] != path {
+		t.Fatalf("empty summary lacks complete plan pointer: %#v", bundle)
+	}
+	compact, overflow, err := compactBundle(bundle, 10000)
+	if err != nil || overflow || compact["plan_summary"] != want || compact["plan_path"] != path {
+		t.Fatalf("Claude-facing bundle lost empty-summary pointer: overflow=%v bundle=%#v err=%v", overflow, compact, err)
 	}
 }

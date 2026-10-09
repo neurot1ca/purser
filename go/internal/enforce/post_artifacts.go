@@ -45,7 +45,11 @@ func storePostPlan(root string, event map[string]any, taskID any, report string,
 	if err := atomicWrite(path, []byte(content)); err != nil {
 		return "", err
 	}
-	bundle["plan_path"], bundle["plan_summary"] = path, postPlanSummary(content)
+	summary := postPlanSummary(content)
+	if summary == "" && strings.TrimSpace(content) != "" {
+		summary = "Plan summary is empty; complete plan is available at " + path + "."
+	}
+	bundle["plan_path"], bundle["plan_summary"] = path, summary
 	return path, nil
 }
 

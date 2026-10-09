@@ -153,7 +153,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 	planSummaryNotice := ""
 	if summary, ok := bundle["plan_summary"].(string); ok && summary != "" {
 		if planPath, ok := bundle["plan_path"].(string); ok && planPath != "" {
-			planSummaryNotice = "Complete plan summary is available at " + planPath + "."
+			planSummaryNotice = "Inline plan summary omitted; complete plan is available at " + planPath + "."
 			candidate := make(map[string]any, len(compact))
 			for key, value := range compact {
 				candidate[key] = value

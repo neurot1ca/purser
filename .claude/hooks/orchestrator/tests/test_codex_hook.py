@@ -720,12 +720,27 @@ def test_plan_attributes_only_foreign_leased_changes(workspace, config, unleased
 
 def test_plan_file_and_summary_caps(workspace):
     _, state = workspace
-    report = "Summary:\n" + "x" * 16000
+    report = "Summary:\n" + "界🙂" * 13000
     bundle = {"findings": []}
     codex._store_plan(state, event(), "long-plan", report, bundle)
     assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == report
-    assert bundle["plan_summary"] == "x" * 16000
+    assert bundle["plan_summary"] == "界🙂" * 13000
     assert [finding["code"] for finding in bundle["findings"]] == ["PLAN_SHAPE_MISSING"]
+
+
+def test_plan_empty_summary_points_to_complete_artifact(workspace):
+    _, state = workspace
+    report = "# Summary:\n\n# Milestones\n- Complete the plan"
+    bundle = {"findings": []}
+    codex._store_plan(state, event(), "empty-summary", report, bundle)
+    assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == report
+    assert bundle["plan_summary"] == (
+        f"Plan summary is empty; complete plan is available at {bundle['plan_path']}."
+    )
+    compact, overflow = codex._compact_bundle(bundle, 10000)
+    assert not overflow
+    assert compact["plan_summary"] == bundle["plan_summary"]
+    assert compact["plan_path"] == bundle["plan_path"]
 
 
 @pytest.mark.parametrize("name", ("codex_result", "codex_cancel"))
