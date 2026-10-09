@@ -53,7 +53,7 @@ def _reply_case(monkeypatch):
     codex_exec_mcp._save_record(state, record)
     codex_exec_mcp._save_record(state, {"thread_id": "thread-metadata", "cwd": "C:/saved/cwd",
                                          "model": "codex-z", "config_args": [], "sandbox": None,
-                                         "agent": "codex"})
+                                         "agent": "codex", "repoRoot": str(ROOT)})
     server = codex_exec_mcp.Server(codex_bin='["unused-codex"]', agent="codex", job_dir=jobs)
     launched = {}
 
