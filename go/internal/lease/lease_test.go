@@ -116,6 +116,21 @@ func TestAdmissionKeepsRecentMissingJobLease(t *testing.T) {
 	}
 }
 
+func TestAcquireReportsFirstConflictingOwnerInStoredOrder(t *testing.T) {
+	root := t.TempDir()
+	fixture := `{"version":1,"owners":{"z-first":{"state":"ACTIVE","scope":["src"],"task_id":"z-task","acquired_at":90},"a-second":{"state":"ACTIVE","scope":["src"],"task_id":"a-task","acquired_at":90},"expired":{"state":"ACTIVE","scope":["old"],"task_id":"expired-task","acquired_at":1,"deadline_at":99}}}`
+	if err := os.WriteFile(filepath.Join(root, "scope_leases.json"), []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := New(root)
+	for attempt := 0; attempt < 2; attempt++ {
+		got := store.Acquire("request", fmt.Sprintf("request-%d", attempt), []string{"src/file"}, AcquireOptions{}, 100)
+		if got.Code != "SCOPE_LEASE_CONFLICT" || got.TaskID != "z-task" {
+			t.Fatalf("attempt %d reported conflict %#v, want first stored owner z-task", attempt, got)
+		}
+	}
+}
+
 func TestAdmissionParityOutcome(t *testing.T) {
 	root := os.Getenv("PURSER_LEASE_ADMISSION_ROOT")
 	if root == "" {

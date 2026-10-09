@@ -141,6 +141,8 @@ func (s *Store) Acquire(ownerKey, taskID string, scope []string, options Acquire
 			}
 			owner["retention_after"] = now + timeout + 7*24*60*60
 		}
+		ownerKeys, _ := value[ownerOrderKey].([]string)
+		value[ownerOrderKey] = append(ownerKeys, ownerKey)
 		owners[ownerKey] = owner
 		return true
 	})
@@ -401,7 +403,7 @@ func jsonObjectKeys(raw json.RawMessage) []string {
 var replaceLeaseFile = os.Rename
 
 func (s *Store) write(value map[string]any, now float64) error {
-	delete(value, ownerOrderKey)
+	ownerKeys, _ := value[ownerOrderKey].([]string)
 	cutoff := now - releasedLeaseRetentionSeconds
 	owners := value["owners"].(map[string]any)
 	activeStarts := make([]float64, 0, len(owners))
@@ -450,7 +452,14 @@ func (s *Store) write(value map[string]any, now float64) error {
 		recent = recent[:maxConflictPaths]
 	}
 	value["conflicts"] = recent
-	encoded, err := json.Marshal(value)
+	ordered := make(map[string]any, len(value))
+	for key, item := range value {
+		if key != ownerOrderKey {
+			ordered[key] = item
+		}
+	}
+	ordered["owners"] = orderedLeaseOwners{owners: owners, keys: ownerKeys}
+	encoded, err := json.Marshal(ordered)
 	if err != nil {
 		return err
 	}
@@ -474,6 +483,52 @@ func (s *Store) write(value map[string]any, now float64) error {
 		return closeErr
 	}
 	return replaceLeaseFile(name, s.path)
+}
+
+type orderedLeaseOwners struct {
+	owners map[string]any
+	keys   []string
+}
+
+func (o orderedLeaseOwners) MarshalJSON() ([]byte, error) {
+	keys := append([]string(nil), o.keys...)
+	seen := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		seen[key] = true
+	}
+	missing := make([]string, 0)
+	for key := range o.owners {
+		if !seen[key] {
+			missing = append(missing, key)
+		}
+	}
+	sort.Strings(missing)
+	keys = append(keys, missing...)
+
+	var buffer bytes.Buffer
+	buffer.WriteByte('{')
+	for _, key := range keys {
+		owner, exists := o.owners[key]
+		if !exists {
+			continue
+		}
+		if buffer.Len() > 1 {
+			buffer.WriteByte(',')
+		}
+		encodedKey, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		encodedOwner, err := json.Marshal(owner)
+		if err != nil {
+			return nil, err
+		}
+		buffer.Write(encodedKey)
+		buffer.WriteByte(':')
+		buffer.Write(encodedOwner)
+	}
+	buffer.WriteByte('}')
+	return buffer.Bytes(), nil
 }
 
 func (s *Store) promote(value map[string]any, now float64) bool {
