@@ -192,6 +192,63 @@ func TestRunHostGenerationDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestRunHostReplyUsesRecordedRepositoryAfterMainAdvances(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	gitStart(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base")
+	worktree := filepath.Join(t.TempDir(), "reply-worktree")
+	gitStart(t, repo, "worktree", "add", "-qb", "reply", worktree, "HEAD")
+	gitStart(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "main advanced")
+	serverCWD := t.TempDir()
+	if err := os.Chdir(serverCWD); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	priorID := strings.Repeat("a", 64)
+	writeHostTestJSON(t, filepath.Join(dir, priorID+".json"), map[string]any{
+		"jobId": priorID, "state": "SUCCEEDED", "threadId": "reply-thread", "repoRoot": repo,
+		"worktreePath": worktree, "finishedAt": float64(time.Now().UnixNano()) / 1e9,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9,
+		"threadId": "reply-thread", "repoRoot": repo, "worktreePath": worktree,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex-reply", "agent": "codex", "args": map[string]any{"prompt": "continue", "threadId": "reply-thread"},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		if filepath.Clean(args.Cwd) != filepath.Clean(worktree) {
+			t.Errorf("reply cwd = %q, want existing worktree %q", args.Cwd, worktree)
+		}
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}}
+	if _, err := RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
+		t.Fatal(err)
+	}
+	got := readJob(dir, hostTestID)
+	var state string
+	got.Get("state", &state)
+	if state != "SUCCEEDED" {
+		t.Fatalf("reply state = %s, want SUCCEEDED", state)
+	}
+}
+
 func TestHostReplacesDottedSandboxWorkspaceWriteKeys(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
