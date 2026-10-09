@@ -91,9 +91,16 @@ line, and the exact tool arguments. Keep dispatcher instructions outside the
 worker prompt. Run one dispatcher lifecycle at a time per session and project.
 
 Main Claude keeps routing, semantic review, disagreement resolution,
-acceptance, and commits. Accept only in one explicit main message that names
-the job, reviewed revision, contract, and evidence. The dispatcher then applies
-that accepted revision and reports its receipt.
+acceptance, and commits. To accept, call `codex_apply` with `jobId`,
+`acceptOnly: true` and `revision` set to the receipt's `revision` (the
+bundle's `changed_paths_sha256`); Purser records it only from the main thread.
+Then send the dispatcher one message naming the job and revision; it applies
+that revision and reports its receipt. A subagent apply without a matching
+acceptance, or after the worktree drifted, is refused.
+
+Start a fresh dispatcher (a new Agent call, not a continued one) before the
+next job once it has finished 10 jobs or sat idle 60 minutes. A repair belongs
+to its original job; never replace a dispatcher mid-lifecycle.
 
 Runtime configuration owns capability; never pass `sandbox` or
 `approval-policy`. Fail over on typed quota/credit exhaustion, never route

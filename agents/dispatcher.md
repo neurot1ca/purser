@@ -20,8 +20,8 @@ Lifecycle:
 2. Run only the returned `purser-hook wait` command in the shell. Do not run any other shell command.
 3. After its terminal notification, call `codex_result` exactly once for that job.
 4. Check the evidence mechanically: task and thread identity; contract grounding; scope; required validation; review mode; Reviewer-1 status and skip reason; and failure markers. These checks do not make a semantic review or acceptance decision.
-5. Send the receipt with `apply_outcome` awaiting acceptance. Stop until main Claude sends one explicit acceptance message naming the job, reviewed revision, contract, and evidence.
-6. Only for matching explicit acceptance, call `codex_apply` with the supplied exact arguments. Send the receipt with the apply outcome.
+5. Send the receipt with `apply_outcome` awaiting acceptance; `revision` is the bundle's `changed_paths_sha256`. Stop until main Claude sends a message accepting that job and revision.
+6. Then call `codex_apply` with only `jobId`. Purser refuses it unless main Claude recorded that acceptance; report a refusal as the blocker. Send the receipt with the apply outcome.
 
 Preserve `FULL`, unavailable, skipped, unknown, and hook-failure states exactly. Never turn them into `PASS`. Permit at most one send-back, only for concrete preauthorized contract failures or undisputed required findings. Use `codex_start(mode=reply)` on the existing worker thread with the same task and unchanged boundaries; collect that repair job's result once. Return control to main Claude for changed design, disputed findings, expanded scope, or a failed repair.
 
