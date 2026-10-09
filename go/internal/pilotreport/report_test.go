@@ -34,7 +34,7 @@ func fixture(t *testing.T, includeDispatcher, mismatched bool) (string, string) 
 	main := `{"type":"assistant","timestamp":"2026-10-09T12:00:01Z","requestId":"req-1","message":{"id":"msg-1","role":"assistant","model":"claude-main","content":[{"type":"tool_use","id":"tool-1","name":"mcp__codex-main__codex","input":{"jobId":"job-1","taskId":"task-1"}}],"usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":3,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}}}}` + "\n" +
 		`{"type":"assistant","timestamp":"2026-10-09T12:00:01Z","requestId":"req-1","message":{"id":"msg-1","role":"assistant","model":"claude-main","content":[{"type":"tool_use","id":"tool-1","name":"mcp__codex-main__codex","input":{"jobId":"job-1","taskId":"task-1"}}],"usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":3,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}}}}` + "\n" +
 		`{"type":"user","timestamp":"2026-10-09T12:00:04Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"completed job-1 task-1"}]}}` + "\n" +
-		`{"type":"assistant","requestId":"unrelated","message":{"id":"unrelated","role":"assistant","model":"claude-main","content":[],"usage":{"input_tokens":999,"output_tokens":999}}}` + "\n"
+		`{"type":"assistant","requestId":"unrelated","message":{"id":"unrelated","role":"assistant","model":"<synthetic>","content":[],"usage":{"input_tokens":999,"output_tokens":999}}}` + "\n"
 	write(filepath.Join(projects, "project-a", "session-1.jsonl"), main)
 	if includeDispatcher {
 		name := "agent-dispatcher-1.jsonl"
@@ -93,6 +93,11 @@ func TestPilotReport(t *testing.T) {
 				t.Fatalf("incomplete = %v", r.Incomplete)
 			}
 		}},
+		{name: "synthetic model is filtered", check: func(t *testing.T, r Report) {
+			if strings.Contains(strings.Join(r.Models.Main, " "), "<synthetic>") {
+				t.Fatalf("main models = %v", r.Models.Main)
+			}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -103,5 +108,53 @@ func TestPilotReport(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestPilotReportPromptResponses(t *testing.T) {
+	state, projects := fixture(t, false, false)
+	path := filepath.Join(projects, "project-a", "session-1.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(`{"type":"user","timestamp":"2026-10-09T12:00:06Z","message":{"role":"user","content":"first prompt"}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-10-09T12:00:06.500Z","message":{"role":"assistant","stop_reason":"end_turn","content":[]}}` + "\n" +
+		`{"type":"user","timestamp":"2026-10-09T12:00:07Z","message":{"role":"user","content":[{"type":"text","text":"second prompt"}]}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got := Build(state, projects, "job-1")
+	if len(got.PromptResponseSeconds) != 1 || got.PromptResponseSeconds[0] != 0.5 {
+		t.Fatalf("prompt responses = %v", got.PromptResponseSeconds)
+	}
+	if !strings.Contains(strings.Join(got.Incomplete, " "), "prompt_response_missing") {
+		t.Fatalf("incomplete = %v", got.Incomplete)
+	}
+}
+
+func TestPilotReportCosts(t *testing.T) {
+	state, projects := fixture(t, true, false)
+	pricesPath := filepath.Join(t.TempDir(), "prices.json")
+	if err := os.WriteFile(pricesPath, []byte(`{"claude-main":{"input":1,"output":2,"cache_write_5m":3,"cache_write_1h":4,"cache_read":5}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(pricesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prices map[string]Prices
+	if err := json.Unmarshal(data, &prices); err != nil {
+		t.Fatal(err)
+	}
+	got := BuildWithPrices(state, projects, "job-1", prices)
+	if got.APIEquivalentUSD == nil || got.APIEquivalentUSD.Main == nil || *got.APIEquivalentUSD.Main != 0.000043 || got.APIEquivalentUSD.Dispatcher != nil {
+		t.Fatalf("api equivalent = %#v", got.APIEquivalentUSD)
+	}
+	if !strings.Contains(strings.Join(got.Incomplete, " "), "dispatcher_price_missing") {
+		t.Fatalf("incomplete = %v", got.Incomplete)
 	}
 }

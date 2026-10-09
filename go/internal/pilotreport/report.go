@@ -17,8 +17,21 @@ type Report struct {
 	Route                   any        `json:"route"`
 	Boundaries              Boundaries `json:"boundaries"`
 	Usage                   Usage      `json:"usage"`
+	PromptResponseSeconds   []float64  `json:"prompt_response_seconds"`
+	APIEquivalentUSD        *ArmCosts  `json:"api_equivalent_usd"`
 	LifecycleBlockedSeconds *float64   `json:"lifecycle_blocked_seconds"`
 	Incomplete              []string   `json:"incomplete"`
+}
+type Prices struct {
+	Input        float64 `json:"input"`
+	Output       float64 `json:"output"`
+	CacheWrite5m float64 `json:"cache_write_5m"`
+	CacheWrite1h float64 `json:"cache_write_1h"`
+	CacheRead    float64 `json:"cache_read"`
+}
+type ArmCosts struct {
+	Main       *float64 `json:"main"`
+	Dispatcher *float64 `json:"dispatcher"`
 }
 
 type IDs struct {
@@ -60,7 +73,11 @@ type CacheCreation struct {
 
 // Build reads only the supplied state and Claude projects roots, making the report deterministic and testable.
 func Build(stateRoot, projectsRoot, jobID string) Report {
-	r := Report{IDs: IDs{Job: jobID}, Models: Models{Main: []string{}, Dispatcher: []string{}}, Incomplete: []string{}}
+	return BuildWithPrices(stateRoot, projectsRoot, jobID, nil)
+}
+
+func BuildWithPrices(stateRoot, projectsRoot, jobID string, prices map[string]Prices) Report {
+	r := Report{IDs: IDs{Job: jobID}, Models: Models{Main: []string{}, Dispatcher: []string{}}, PromptResponseSeconds: []float64{}, Incomplete: []string{}}
 	jobPath := filepath.Join(stateRoot, "codex_exec_mcp", "jobs", jobID+".json")
 	job, err := readObject(jobPath)
 	if err != nil {
@@ -148,6 +165,7 @@ func Build(stateRoot, projectsRoot, jobID string) Report {
 				r.Usage.Main, r.Usage.CoordinationTurns = usage, &turns
 				r.Models.Main = models
 				r.LifecycleBlockedSeconds = &blocked
+				r.PromptResponseSeconds = promptResponses(records, r.Boundaries.Started, finalized, &r.Incomplete)
 			}
 		}
 	} else {
@@ -175,7 +193,117 @@ func Build(stateRoot, projectsRoot, jobID string) Report {
 	}
 	sort.Strings(r.Models.Main)
 	sort.Strings(r.Models.Dispatcher)
+	if prices != nil {
+		r.APIEquivalentUSD = &ArmCosts{
+			Main:       armCost("main", r.Models.Main, r.Usage.Main, prices, &r.Incomplete),
+			Dispatcher: armCost("dispatcher", r.Models.Dispatcher, r.Usage.Dispatcher, prices, &r.Incomplete),
+		}
+	}
 	return r
+}
+
+func armCost(arm string, models []string, usage *Tokens, prices map[string]Prices, incomplete *[]string) *float64 {
+	if len(models) > 1 {
+		*incomplete = appendUnique(*incomplete, arm+"_cost_multiple_models")
+		return nil
+	}
+	if len(models) == 0 {
+		*incomplete = appendUnique(*incomplete, arm+"_cost_model_unknown")
+		return nil
+	}
+	price, ok := prices[models[0]]
+	if !ok {
+		*incomplete = appendUnique(*incomplete, arm+"_price_missing")
+		return nil
+	}
+	if usage == nil || usage.Input == nil || usage.Output == nil || usage.CacheRead == nil || usage.CacheCreation == nil || usage.CacheCreation.Ephemeral5m == nil || usage.CacheCreation.Ephemeral1h == nil {
+		*incomplete = appendUnique(*incomplete, arm+"_usage_unknown")
+		return nil
+	}
+	total := (float64(*usage.Input)*price.Input + float64(*usage.Output)*price.Output +
+		float64(*usage.CacheCreation.Ephemeral5m)*price.CacheWrite5m +
+		float64(*usage.CacheCreation.Ephemeral1h)*price.CacheWrite1h +
+		float64(*usage.CacheRead)*price.CacheRead) / 1_000_000
+	return &total
+}
+
+func promptResponses(records []map[string]any, started, finalized *string, incomplete *[]string) []float64 {
+	responses := []float64{}
+	if started == nil || finalized == nil {
+		return responses
+	}
+	start, err1 := time.Parse(time.RFC3339Nano, *started)
+	end, err2 := time.Parse(time.RFC3339Nano, *finalized)
+	if err1 != nil || err2 != nil {
+		return responses
+	}
+	for i, record := range records {
+		if !genuinePrompt(record) {
+			continue
+		}
+		prompt, ok := transcriptTime(record)
+		if !ok || prompt.Before(start) || prompt.After(end) {
+			continue
+		}
+		found := false
+		for _, reply := range records[i+1:] {
+			if !assistant(reply) {
+				continue
+			}
+			message, _ := reply["message"].(map[string]any)
+			if message["stop_reason"] != "end_turn" {
+				continue
+			}
+			replyTime, valid := transcriptTime(reply)
+			if valid && replyTime.After(prompt) {
+				responses = append(responses, replyTime.Sub(prompt).Seconds())
+				found = true
+				break
+			}
+		}
+		if !found {
+			*incomplete = appendUnique(*incomplete, "prompt_response_missing")
+		}
+	}
+	return responses
+}
+
+func genuinePrompt(record map[string]any) bool {
+	if record["type"] != "user" || record["isMeta"] == true || record["isCompactSummary"] == true {
+		return false
+	}
+	m, _ := record["message"].(map[string]any)
+	switch value := m["content"].(type) {
+	case string:
+		return strings.TrimSpace(value) != "" && !strings.HasPrefix(strings.TrimLeft(value, " \t\r\n"), "<task-notification>") && !strings.HasPrefix(strings.TrimLeft(value, " \t\r\n"), "[SYSTEM NOTIFICATION - NOT USER INPUT]")
+	case []any:
+		text := false
+		for _, raw := range value {
+			block, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if block["type"] == "tool_result" {
+				return false
+			}
+			if block["type"] == "text" && strings.TrimSpace(stringValue(block["text"])) != "" {
+				text = true
+			}
+		}
+		return text
+	default:
+		return false
+	}
+}
+
+func transcriptTime(record map[string]any) (time.Time, bool) {
+	stamp := stringValue(record["timestamp"])
+	if stamp == "" {
+		m, _ := record["message"].(map[string]any)
+		stamp = stringValue(m["timestamp"])
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, stamp)
+	return parsed, err == nil
 }
 
 func locateSession(root, session string) (string, error) {
@@ -454,6 +582,9 @@ func values(m map[string]map[string]any) []map[string]any {
 func keys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
+		if k == "<synthetic>" {
+			continue
+		}
 		out = append(out, k)
 	}
 	sort.Strings(out)
