@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.98 — 2026-10-09
+
+- **Fixed:** Replying on a Codex thread works again after new commits land; the reply uses the job's recorded repository instead of failing with WORKTREE_SNAPSHOT_FAILED.
+- **Added:** Codex jobs started by the dispatcher agent are tagged with its id, and its contract records main Claude's acceptance with `codex_apply acceptOnly` (pilot groundwork).
+
 ## 0.1.97 — 2026-10-08
 
 - **Fixed:** The Claude Haiku reviewer returns a valid review: the prompt is no longer swallowed by the `--tools` flag.
