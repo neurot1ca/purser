@@ -81,6 +81,7 @@ func applyResolvedJob(stateRoot, dir, jobID string, job *Record, repo, worktree,
 	recordScopeOutcome(opt, stateRoot, values, "resolved_by_hand")
 	recordApplyDecision(opt, stateRoot, values, "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
+	dispatchWorktreeRetirement(stateRoot, jobID)
 	return applyToolResult(value)
 }
 

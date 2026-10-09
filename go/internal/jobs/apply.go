@@ -109,6 +109,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
+		dispatchWorktreeRetirement(stateRoot, jobID)
 		return result(saved)
 	}
 	if resolved {
@@ -213,6 +214,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
+		dispatchWorktreeRetirement(stateRoot, jobID)
 	}
 	return result(value)
 }
@@ -236,6 +238,7 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 	recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 	recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
+	dispatchWorktreeRetirement(stateRoot, jobID)
 	return applyToolResult(value)
 }
 

@@ -55,10 +55,12 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	values := recordMap(job)
 	state, _ := values["state"].(string)
 	if values["discarded"] == true {
+		dispatchWorktreeRetirement(stateRoot, id)
 		return jobResult(map[string]any{"jobId": id, "state": state, "discarded": true})
 	}
 	worktree, _ := values["worktreePath"].(string)
 	if terminalJobState(state) && worktree != "" && values["applyState"] != "applied" {
+		discardedPersisted := false
 		lock, err := AcquireOwnership(dir, id)
 		if err != nil {
 			return jobUpdateFailed(id, state)
@@ -82,10 +84,14 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 					_ = lock.Release()
 					return jobUpdateFailed(id, state)
 				}
+				discardedPersisted = true
 			}
 		}
 		_ = lock.Release()
 		_ = releaseScopeLease(stateRoot, id)
+		if discardedPersisted {
+			dispatchWorktreeRetirement(stateRoot, id)
+		}
 		return jobResult(map[string]any{"jobId": id, "state": state, "discarded": true})
 	}
 	if values["leaseQueued"] == true && state == "QUEUED" {
@@ -110,10 +116,14 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 		_ = lock.Release()
 		if state == "CANCELLED" {
+			dispatchWorktreeRetirement(stateRoot, id)
 			return jobResult(map[string]any{"jobId": id, "state": state, "errorCode": "CANCELLED", "message": cancelMessage})
 		}
 	}
 	if terminalJobState(state) {
+		if state == "CANCELLED" {
+			dispatchWorktreeRetirement(stateRoot, id)
+		}
 		return cancelRecordResult(values)
 	}
 	port, portOK := values["signalPort"].(float64)
@@ -131,6 +141,9 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		var currentState string
 		current.Get("state", &currentState)
 		if terminalJobState(currentState) {
+			if currentState == "CANCELLED" {
+				dispatchWorktreeRetirement(stateRoot, id)
+			}
 			return cancelRecordResult(recordMap(current))
 		}
 	}
@@ -143,6 +156,9 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		var currentState string
 		current.Get("state", &currentState)
 		if terminalJobState(currentState) {
+			if currentState == "CANCELLED" {
+				dispatchWorktreeRetirement(stateRoot, id)
+			}
 			return cancelRecordResult(recordMap(current))
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,11 +13,22 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/retention"
 )
 
 var errRetirementOwnershipMissing = errors.New("worktree ownership record not found")
 var launchRetirementDetached = LaunchDetached
+
+func init() {
+	enforce.WorktreeRetirementDispatcher = DispatchWorktreeRetirement
+}
+
+func dispatchWorktreeRetirement(stateRoot, jobID string) {
+	if err := DispatchWorktreeRetirement(stateRoot, jobID); err != nil {
+		log.Printf("worktree retirement dispatch failed for job %s: %v", jobID, err)
+	}
+}
 
 // DispatchWorktreeRetirement records intent and starts one detached retirement child.
 func DispatchWorktreeRetirement(stateRoot, jobID string) error {

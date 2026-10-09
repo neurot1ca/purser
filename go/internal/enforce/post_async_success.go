@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,10 @@ import (
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
+
+// WorktreeRetirementDispatcher is installed by jobs to keep enforce independent
+// of the package that owns retirement dispatch.
+var WorktreeRetirementDispatcher func(stateRoot, jobID string) error
 
 // finishAsyncSuccess assembles the already-claimed codex_result success path.
 // Inputs that belong to the surrounding Post lane are explicit so this remains
@@ -110,12 +115,15 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		return nil, err
 	}
 	noDelta := stringValue(pending["phase"]) == "operation"
+	zeroDelta := false
 	if count, exists := bundle["delta_files"]; exists && numberOr(count, -1) == 0 {
 		noDelta = true
+		zeroDelta = true
 	}
 	paths, pathsOK := postStringList(bundle["changed_paths"])
 	if mapValue(bundle["delta"])["status"] == ledger.OK && pathsOK && len(paths) == 0 {
 		noDelta = true
+		zeroDelta = true
 	}
 	if noDelta {
 		owner := stringValue(pending["lease_owner"])
@@ -197,6 +205,14 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	}
 	if err = consumeAsyncResult(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index, artifact, response); err != nil {
 		return nil, err
+	}
+	if zeroDelta && WorktreeRetirementDispatcher != nil {
+		if err = WorktreeRetirementDispatcher(root, stringValue(index["jobId"])); err != nil {
+			diagnosticErr := writePostDiagnostic(root, event, fmt.Errorf("worktree retirement dispatch failed: %w", err))
+			if diagnosticErr != nil {
+				log.Printf("worktree retirement dispatch failed for job %s: %v; diagnostic write failed: %v", index["jobId"], err, diagnosticErr)
+			}
+		}
 	}
 	return response, nil
 }

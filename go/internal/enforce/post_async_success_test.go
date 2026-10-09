@@ -3,6 +3,7 @@ package enforce
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,7 +121,7 @@ func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
 	}
 }
 
-func TestFinishAsyncSuccessRemainingFixtureCases(t *testing.T) {
+func TestPostAsyncSuccessRemainingFixtureCases(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "post_async_success.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +135,13 @@ func TestFinishAsyncSuccessRemainingFixtureCases(t *testing.T) {
 	for _, name := range []string{"success_no_delta", "success_delta_audit", "success_reviewer_full", "finalizing_recovery", "unapplied_worktree_lease_retained"} {
 		t.Run(name, func(t *testing.T) {
 			state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, name)
+			retirementCalls := 0
+			priorDispatcher := WorktreeRetirementDispatcher
+			WorktreeRetirementDispatcher = func(string, string) error {
+				retirementCalls++
+				return errors.New("launcher unavailable")
+			}
+			t.Cleanup(func() { WorktreeRetirementDispatcher = priorDispatcher })
 			if name == "success_delta_audit" || name == "success_reviewer_full" {
 				if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// worker delta\n"), 0600); err != nil {
 					t.Fatal(err)
@@ -164,6 +172,19 @@ func TestFinishAsyncSuccessRemainingFixtureCases(t *testing.T) {
 				response = recovered
 			} else if err != nil {
 				t.Fatal(err)
+			}
+			wantRetirementCalls := 1
+			if name == "success_delta_audit" || name == "success_reviewer_full" {
+				wantRetirementCalls = 0
+			}
+			if retirementCalls != wantRetirementCalls {
+				t.Fatalf("retirement calls=%d want %d", retirementCalls, wantRetirementCalls)
+			}
+			if wantRetirementCalls > 0 {
+				diagnostic, readErr := os.ReadFile(filepath.Join(state, "diagnostics.jsonl"))
+				if readErr != nil || !strings.Contains(string(diagnostic), "launcher unavailable") {
+					t.Fatalf("retirement dispatch diagnostic=%q err=%v", diagnostic, readErr)
+				}
 			}
 			bundle := responseBundle(t, response)
 			want := fixture.Cases[name]
