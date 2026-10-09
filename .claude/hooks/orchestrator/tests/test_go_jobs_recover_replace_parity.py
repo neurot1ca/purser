@@ -131,11 +131,19 @@ def test_python_and_go_recovery_contend_for_python_record_once(go_test_tools, tm
     marker = tmp_path / "worker-launches.txt"
     now = time.time()
     server = bridge.Server(agent="codex", job_dir=jobs)
-    server._write_job({"jobId": JOB, "call": "python-created", "state": "RUNNING",
+    child_pid = None
+    if os.name != "nt":
+        child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        child.wait(timeout=5)
+        child_pid = child.pid
+    job = {"jobId": JOB, "call": "python-created", "state": "RUNNING",
                        "acceptedAt": now - 1, "deadlineAt": now + 30, "generation": 1,
                        "ownershipToken": "python-owner-token", "signalToken": "python-signal-token",
                        "hostPid": 2**30, "hostCreatedAt": 0, "hostContained": True,
-                       "resumedAfterInterruption": 0})
+                       "resumedAfterInterruption": 0}
+    if child_pid is not None:
+        job["pid"] = child_pid
+    server._write_job(job)
     launch = {"name": "codex", "args": {"cwd": str(tmp_path), "prompt": "recover",
                                            "timeoutSeconds": 30},
               "codexBin": str(fake), "agent": "codex"}

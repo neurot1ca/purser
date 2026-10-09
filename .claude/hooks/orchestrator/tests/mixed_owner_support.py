@@ -9,8 +9,9 @@ import pytest
 @pytest.fixture(scope="session")
 def go_test_tools():
     go_root = Path(__file__).parents[4] / "go"
-    scratch = go_root / ".tmp"
-    scratch.mkdir(exist_ok=True)
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    scratch = go_root / ".tmp" / f"mixed-owner-{worker}"
+    scratch.mkdir(parents=True, exist_ok=True)
     cache = scratch / "gocache"
     hook = scratch / ("purser-hook-mixed.exe" if os.name == "nt" else "purser-hook-mixed")
     fake = scratch / ("fake-codex.exe" if os.name == "nt" else "fake-codex")
