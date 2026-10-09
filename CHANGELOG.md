@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.104 — 2026-10-09
+
+- **Fixed:** Reviewer-1's claude fallback gets a valid effort, so a failed agy attempt no longer ends every review as unavailable; each unavailable attempt keeps its reason.
+- **Fixed:** codex_start without `cwd` launches in the repository root and refuses with a clear error outside a repository.
+- **Fixed:** An empty or omitted inline plan summary names the complete plan file.
+- **Fixed:** The Go hook uses the configured bundle size budget (default 8192 bytes), as Python does.
+
 ## 0.1.103 — 2026-10-09
 
 - **Added:** A job's worktree and preparation are removed in the background right after apply, discard, cancellation or a no-change finish; a later reply starts on a fresh worktree.
