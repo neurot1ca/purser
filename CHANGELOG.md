@@ -3,6 +3,20 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.102 — 2026-10-09
+
+- **Fixed:** Maintenance no longer treats RUNNING/QUEUED jobs past their deadline as live work.
+- **Fixed:** Transcript reading seeks to the last 4 MiB instead of loading the whole file.
+- **Fixed:** Lease conflict reports name the first stored owner.
+- **Fixed:** The plan Stop reminder stays quiet while a job for the plan's task, including a reply job, is running.
+- **Fixed:** A reply on an already-applied worktree finalizes instead of failing replay preparation.
+- **Fixed:** A reply launch inherits a missing repository root and worktree path from the prior thread job.
+- **Fixed:** A finished job's thread keeps its task, route, model and effort, so a reply to it is admitted.
+- **Fixed:** Reviewer-1 findings reach the bundle whatever list type they arrive in.
+- **Changed:** The plan Post hook names every missing required plan section.
+- **Added:** The new-model notice also announces the newest catalog model in usable families; the catalog refreshes hourly.
+- **Added:** The Go hooks offer a Codex CLI update once per new version.
+
 ## 0.1.101 — 2026-10-09
 
 - **Fixed:** The plan Stop hook no longer asks to dispatch while a `purser:dispatcher` agent runs the pass.
