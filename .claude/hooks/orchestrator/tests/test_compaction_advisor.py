@@ -1194,36 +1194,85 @@ def test_precompact_replaces_recent_turns_and_ignores_injected_summary_records(s
         assert excluded not in recent
 
 
-def test_plan_milestones_in_handoff_show_jobs_apply_and_next(setup):
-    repo, local, scratch = setup
-    jobs = scratch / "purser-state" / "codex_exec_mcp" / "jobs"
-    jobs.mkdir(parents=True)
-    ids = [f"{number:064x}" for number in range(1, 4)]
-    for number, state, applied in ((1, "SUCCEEDED", "applied"),
-                                   (2, "SUCCEEDED", "applied"), (3, "FAILED", None)):
-        job = {"jobId": ids[number - 1], "taskId": f"launch-m{number}of3",
-               "phase": "implementation", "repoRoot": str(repo), "state": state,
-               "acceptedAt": number}
-        if applied:
-            job["applyState"] = applied
-        (jobs / f"{job['jobId']}.json").write_text(json.dumps(job), encoding="utf-8")
-    unrelated = {"jobId": f"{4:064x}", "taskId": "other-m1of2",
-                 "phase": "implementation", "repoRoot": str(repo), "state": "SUCCEEDED",
-                 "applyState": "applied", "acceptedAt": 0}
-    (jobs / f"{unrelated['jobId']}.json").write_text(json.dumps(unrelated), encoding="utf-8")
-    foreign = {**unrelated, "jobId": f"{5:064x}", "taskId": "launch-m2of3",
-               "repoRoot": str(scratch / "foreign"), "acceptedAt": 5}
-    (jobs / f"{foreign['jobId']}.json").write_text(json.dumps(foreign), encoding="utf-8")
-    event = _event(scratch, repo, local, _records("commit"))
-    assert advisor.advise(event, repo, now=NOW)
-    handoff = advisor.handoff_path(repo).read_text(encoding="utf-8")
-    assert f"Plan launch: M1 applied (job={ids[0]})" in handoff
-    assert f"M2 applied (job={ids[1]})" in handoff
-    assert f"M3 FAILED (job={ids[2]})" in handoff
-    assert "next M3" in handoff
-    assert "other-m1of2" not in handoff
-    assert f"job={foreign['jobId']}" not in handoff
-    assert len([line for line in handoff.splitlines() if line.startswith("Plan ")]) == 1
+def _accepted_plan(repo, artifact, task_id, current, milestones, **overrides):
+    import hashlib
+
+    return {
+        "version": 1,
+        "revision": 1,
+        "project_key": advisor.project_root.project_key(repo),
+        "project_root": str(repo.resolve()),
+        "task_id": task_id,
+        "artifact_path": str(artifact.resolve()),
+        "artifact_digest": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "accepted_milestones": milestones,
+        "completed_milestones": [],
+        "current_milestone": current,
+        "pending_next_action": "dispatch",
+        "user_stopped": False,
+        "gate": "",
+        **overrides,
+    }
+
+
+def _write_accepted_plans(scratch, repo, plans, *, version=2):
+    state_path = (scratch / "purser-state" / "projects"
+                  / advisor.project_root.project_key(repo) / "active_plan.json")
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    value = {"version": version, "plans": plans} if version == 2 else plans[0]
+    state_path.write_text(json.dumps(value), encoding="utf-8")
+    return state_path
+
+
+def test_accepted_plan_legacy_schema_renders_current_milestone(setup):
+    repo, _local, scratch = setup
+    artifact = scratch / "plan.md"
+    artifact.write_text("legacy plan", encoding="utf-8")
+    _write_accepted_plans(scratch, repo, [
+        _accepted_plan(repo, artifact, "solo", 4, [1, 2, 3, 4, 5],
+                       completed_milestones=[1, 2, 3]),
+    ], version=1)
+
+    assert advisor._active_plan_line(repo) == "solo M4/5"
+
+
+def test_accepted_plan_collection_renders_unfinished_plans_and_gates(setup):
+    repo, _local, scratch = setup
+    artifact = scratch / "plan.md"
+    artifact.write_text("multi plan", encoding="utf-8")
+    plans = [
+        _accepted_plan(repo, artifact, "A", 4, [1, 2, 3, 4, 5],
+                       completed_milestones=[1, 2, 3]),
+        _accepted_plan(repo, artifact, "B", 1, [1, 2], gate="approval required"),
+        _accepted_plan(repo, artifact, "stopped", 2, [1, 2], user_stopped=True),
+        _accepted_plan(repo, artifact, "completed", 0, [1], completed_milestones=[1]),
+    ]
+    _write_accepted_plans(scratch, repo, plans)
+
+    assert advisor._active_plan_line(repo) == "A M4/5; B M1/2 (gate: approval required)"
+
+
+@pytest.mark.parametrize("case", ["malformed", "project_key", "project_root", "digest"])
+def test_invalid_accepted_plan_state_renders_nothing(setup, case):
+    repo, _local, scratch = setup
+    artifact = scratch / "plan.md"
+    artifact.write_text("valid plan", encoding="utf-8")
+    plan = _accepted_plan(repo, artifact, "A", 1, [1, 2])
+    if case == "malformed":
+        value = '{"version": 2, "plans": ['
+        path = scratch / "purser-state" / "projects" / advisor.project_root.project_key(repo) / "active_plan.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value, encoding="utf-8")
+    else:
+        if case == "project_key":
+            plan["project_key"] = "0" * 16
+        elif case == "project_root":
+            plan["project_root"] = str(scratch / "foreign")
+        else:
+            plan["artifact_digest"] = "0" * 64
+        _write_accepted_plans(scratch, repo, [plan])
+
+    assert advisor._active_plan_line(repo) is None
 
 
 def test_precompact_without_handoff_does_not_create_one(setup, monkeypatch):

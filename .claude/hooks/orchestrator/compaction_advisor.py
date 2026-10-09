@@ -705,46 +705,81 @@ def _replace_state_block(path: Path, body: str, recent: str | None = "") -> None
 
 
 def _active_plan_line(repository: Path) -> str | None:
-    jobs: dict[str, dict[int, dict[str, Any]]] = {}
-    newest: tuple[float, str] | None = None
-    for path in (state_root.default_state_root() / "codex_exec_mcp" / "jobs").glob("*.json"):
-        try:
-            job = json.loads(path.read_text(encoding="utf-8"))
-            task = job.get("taskId")
-            match = re.fullmatch(r"(.+)-m([1-5])of([1-5])", task) if isinstance(task, str) else None
-            if (not match or int(match[2]) > int(match[3])
-                    or job.get("phase") != "implementation"
-                    or job.get("repoRoot") != os.fspath(repository)
-                    or job.get("jobId") != path.stem or not re.fullmatch(r"[0-9a-f]{64}", path.stem)):
-                continue
-            plan, number = match[1], int(match[2])
-            previous = jobs.setdefault(plan, {}).get(number)
-            if previous is None or job.get("acceptedAt", 0) > previous.get("acceptedAt", 0):
-                jobs[plan][number] = job
-            stamp = job.get("acceptedAt", 0)
-            if isinstance(stamp, (int, float)) and (newest is None or stamp > newest[0]):
-                newest = stamp, plan
-        except (OSError, ValueError, TypeError, AttributeError):
-            continue
-    if newest is None:
-        return None
-    plan = newest[1]
-    plan_jobs = jobs[plan]
-    total = int(re.fullmatch(r".+-m[1-5]of([1-5])", plan_jobs[max(plan_jobs)]["taskId"])[1])
-    parts = []
-    next_number = None
-    for number in range(1, total + 1):
-        job = plan_jobs.get(number)
-        if job is None:
-            next_number = next_number or number
-            continue
-        state = str(job.get("state", "unknown"))
-        if job.get("applyState") == "applied":
-            state = "applied"
+    try:
+        repository, _ = project_root.resolve_candidate(repository)
+        if repository is None:
+            return None
+        project_key = project_root.project_key(repository)
+        path = state_root.default_state_root() / "projects" / project_key / "active_plan.json"
+        data = json.loads(path.read_text(encoding="utf-8"), parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()))
+        if not isinstance(data, dict) or type(data.get("version")) is not int:
+            return None
+        if data["version"] == 1:
+            plans = [data]
+        elif data["version"] == 2 and isinstance(data.get("plans"), list):
+            plans = data["plans"]
         else:
-            next_number = next_number or number
-        parts.append(f"M{number} {state} (job={job['jobId']})")
-    return f"Plan {plan}: " + ", ".join(parts + [f"next M{next_number}"]) if next_number else None
+            return None
+        if not plans:
+            return None
+
+        ids: set[str] = set()
+        active: list[dict[str, Any]] = []
+        for plan in plans:
+            if not isinstance(plan, dict):
+                return None
+            version, revision, task_id = plan.get("version", 0), plan.get("revision", 0), plan.get("task_id", "")
+            key, root = plan.get("project_key", ""), plan.get("project_root", "")
+            artifact_path, digest = plan.get("artifact_path", ""), plan.get("artifact_digest", "")
+            accepted = plan.get("accepted_milestones")
+            completed = plan.get("completed_milestones", [])
+            completed = [] if completed is None else completed
+            current = plan.get("current_milestone", 0)
+            linked_jobs = plan.get("linked_jobs", [])
+            linked_jobs = [] if linked_jobs is None else linked_jobs
+            linked_job = plan.get("linked_job", "")
+            passes = plan.get("applied_passes", [])
+            passes = [] if passes is None else passes
+            normalized_linked = linked_jobs + ([linked_job] if linked_job and linked_job not in linked_jobs else []) if isinstance(linked_jobs, list) and isinstance(linked_job, str) else []
+            if (type(version) is not int or version != 1 or type(revision) is not int or revision < 1
+                    or not all(isinstance(value, str) and value for value in (task_id, key, root, artifact_path))
+                    or key != project_key or os.path.normcase(os.fspath(Path(root).resolve())) != os.path.normcase(os.fspath(repository))
+                    or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest)
+                    or not isinstance(accepted, list) or not accepted
+                    or any(type(value) is not int or value < 1 for value in accepted) or len(set(accepted)) != len(accepted)
+                    or not isinstance(completed, list)
+                    or any(type(value) is not int or value not in accepted for value in completed)
+                    or len(set(completed)) != len(completed)
+                    or type(current) is not int or (current != 0 and (current not in accepted or current in completed))
+                    or type(plan.get("user_stopped", False)) is not bool
+                    or not isinstance(plan.get("gate", ""), str)
+                    or not isinstance(plan.get("pending_next_action", ""), str)
+                    or not isinstance(linked_job, str) or not isinstance(linked_jobs, list)
+                    or any(not isinstance(value, str) or not value for value in linked_jobs)
+                    or len(set(normalized_linked)) != len(normalized_linked)
+                    or not isinstance(passes, list) or task_id in ids):
+                return None
+            ids.add(task_id)
+            pass_jobs: set[str] = set()
+            for item in passes:
+                if not isinstance(item, dict):
+                    return None
+                milestone, pass_task, job_id = item.get("milestone", 0), item.get("task_id", ""), item.get("job_id", "")
+                match = re.fullmatch(re.escape(task_id) + r"-m([0-9]+)(?:of[0-9]+)?(?:-p[0-9]+[a-z]?)?(?:-[a-z][a-z0-9-]*)?", pass_task) if isinstance(pass_task, str) else None
+                if (type(milestone) is not int or not job_id or not isinstance(job_id, str) or job_id in pass_jobs
+                        or not match or int(match[1]) != milestone or milestone not in accepted):
+                    return None
+                pass_jobs.add(job_id)
+            if current and not plan.get("user_stopped", False):
+                if hashlib.sha256(Path(artifact_path).read_bytes()).hexdigest() != digest:
+                    return None
+                active.append(plan)
+
+        parts = [f"{plan['task_id']} M{plan['current_milestone']}/{len(plan['accepted_milestones'])}"
+                 + (f" (gate: {plan['gate']})" if plan.get("gate") else "") for plan in active]
+        return "; ".join(parts) or None
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError, RecursionError):
+        return None
 
 
 def _mechanical_state(repository: Path, context: int, triggers: list[str], calls: list[dict[str, Any]]) -> str:

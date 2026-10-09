@@ -21,7 +21,7 @@ func planCodexDispatched(records []map[string]any, latestUser int, planID string
 				}
 			case "Agent":
 				input, ok := block["input"].(map[string]any)
-				if ok && input["subagent_type"] == "purser:dispatcher" {
+				if ok && input["subagent_type"] == "purser:dispatcher" && planTaskInDispatchInput(input, planID) {
 					return true
 				}
 			}

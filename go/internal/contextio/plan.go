@@ -591,6 +591,88 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 	return state, nil
 }
 
+// ReconcilePlans reconciles every unfinished plan independently and returns
+// the unfinished records in collection order.
+func ReconcilePlans(root, repository string) ([]*PlanState, error) {
+	path, canonical, err := planPath(root, repository)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := LockFile(path + ".lock")
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	states, err := readPlans(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return nil, err
+	}
+	var unfinished []*PlanState
+	changed := false
+	for _, state := range states {
+		if state.CurrentMilestone == 0 {
+			continue
+		}
+		if err := validatePlanArtifact(state); err != nil {
+			return nil, err
+		}
+		linked := linkedJobs(state)
+		remaining := make([]string, 0, len(linked))
+		planChanged := false
+		for _, jobID := range linked {
+			data, readErr := os.ReadFile(filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"))
+			var job map[string]any
+			if readErr == nil {
+				readErr = json.Unmarshal(data, &job)
+			}
+			if readErr != nil || job["jobId"] != jobID {
+				planChanged = true
+				continue
+			}
+			taskID, _ := job["taskId"].(string)
+			owner, milestone, matches, ownerErr := resolvePlanOwner(states, taskID)
+			if ownerErr != nil {
+				return nil, ownerErr
+			}
+			if taskID != "" && (!matches || owner != state) {
+				return nil, fmt.Errorf("linked job %q does not belong uniquely to plan %q", jobID, state.TaskID)
+			}
+			if job["applyState"] == "applied" {
+				if matches && owner == state && containsMilestone(state.AcceptedMilestones, milestone) && !hasAppliedJob(state, jobID) {
+					state.AppliedPasses = append(state.AppliedPasses, PlanPass{Milestone: milestone, TaskID: taskID, JobID: jobID})
+				}
+				planChanged = true
+				continue
+			}
+			stateText, _ := job["state"].(string)
+			if stateText == "FAILED" || stateText == "CANCELLED" || stateText == "TIMED_OUT" {
+				planChanged = true
+				continue
+			}
+			remaining = append(remaining, jobID)
+		}
+		setLinkedJobs(state, remaining)
+		if state.PendingNextAction != pendingAction(state) {
+			planChanged = true
+		}
+		state.PendingNextAction = pendingAction(state)
+		if planChanged {
+			state.Revision++
+			changed = true
+		}
+		unfinished = append(unfinished, state)
+	}
+	if changed {
+		if err := writePlans(path, states); err != nil {
+			return nil, err
+		}
+	}
+	return unfinished, nil
+}
+
 func resolvePlanOwner(states []*PlanState, taskID string) (*PlanState, int, bool, error) {
 	var owner *PlanState
 	milestone := 0

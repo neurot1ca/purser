@@ -77,7 +77,7 @@ func TestPlanCodexDispatchedDetectsDispatcher(t *testing.T) {
 		subagentType string
 		want         bool
 	}{
-		{name: "dispatcher after latest user", subagentType: "purser:dispatcher", want: true},
+		{name: "dispatcher without plan identity", subagentType: "purser:dispatcher", want: false},
 		{name: "other subagent after latest user", subagentType: "general-purpose", want: false},
 	}
 	for _, test := range tests {
@@ -86,6 +86,15 @@ func TestPlanCodexDispatchedDetectsDispatcher(t *testing.T) {
 				t.Fatalf("planCodexDispatched() = %t, want %t", got, test.want)
 			}
 		})
+	}
+	identified := []map[string]any{
+		{"type": "user", "message": map[string]any{"content": []any{"continue"}}},
+		{"type": "assistant", "message": map[string]any{"content": []any{
+			map[string]any{"type": "tool_use", "name": "mcp__Agent", "input": map[string]any{"subagent_type": "purser:dispatcher", "prompt": "ORCH|task=plan-123-m1of2-p1c|phase=implement"}},
+		}}},
+	}
+	if !planCodexDispatched(identified, 0, "plan-123") || planCodexDispatched(identified, 0, "plan-456") {
+		t.Fatal("dispatcher suppression did not follow the identified plan")
 	}
 }
 

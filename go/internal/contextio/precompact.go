@@ -296,21 +296,62 @@ func extractResultJSON(value any) map[string]any {
 }
 
 func renderActivePlanPointer(repository string) string {
-	state, err := ReconcilePlanJob(stateRoot(), repository)
-	if err != nil || state == nil || state.UserStopped || state.CurrentMilestone == 0 {
+	plans, err := ReconcilePlans(stateRoot(), repository)
+	if err != nil || len(plans) == 0 {
 		return ""
 	}
-	if !containsMilestone(state.AcceptedMilestones, state.CurrentMilestone) {
+	if len(plans) == 1 {
+		state := plans[0]
+		if state.UserStopped || !containsMilestone(state.AcceptedMilestones, state.CurrentMilestone) {
+			return ""
+		}
+		action := state.PendingNextAction
+		if state.Gate != "" {
+			action = "gate: " + state.Gate
+		}
+		if action == "" {
+			return ""
+		}
+		return fmt.Sprintf("Plan %s: milestone %d of %d; %d applied passes; next action: %s; plan: %s.", state.TaskID, state.CurrentMilestone, len(state.AcceptedMilestones), len(state.AppliedPasses), action, state.ArtifactPath)
+	}
+	path, _, err := planPath(stateRoot(), repository)
+	if err != nil {
 		return ""
 	}
-	action := state.PendingNextAction
-	if state.Gate != "" {
-		action = "gate: " + state.Gate
+	lines := make([]string, 0, len(plans)+2)
+	lines = append(lines, "Unfinished plans:")
+	for _, plan := range plans {
+		action := plan.PendingNextAction
+		if plan.UserStopped {
+			action = "stopped"
+		} else if plan.Gate != "" {
+			action = "gate: " + plan.Gate
+		}
+		if !containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) {
+			action = "invalid milestone"
+		}
+		lines = append(lines, fmt.Sprintf("%s M%d/%d %s", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones), action))
 	}
-	if action == "" {
-		return ""
+	lines = append(lines, "Details: purser-hook plan status --task-id <id>.")
+	stateLine := "State: " + path
+	const limit = 900
+	text := strings.Join(lines, "\n")
+	if len([]rune(text+"\n"+stateLine)) > limit {
+		kept := make([]string, 0, len(plans))
+		for i, line := range lines[1 : len(lines)-1] {
+			candidate := append(append([]string(nil), kept...), line)
+			omitted := len(plans) - i - 1
+			candidate = append(candidate, fmt.Sprintf("... %d plans omitted", omitted), lines[len(lines)-1], stateLine)
+			if len([]rune(strings.Join(candidate, "\n"))) > limit {
+				break
+			}
+			kept = append(kept, line)
+		}
+		omitted := len(plans) - len(kept)
+		lines = append([]string{"Unfinished plans:"}, kept...)
+		lines = append(lines, fmt.Sprintf("... %d plans omitted", omitted), "Details: purser-hook plan status --task-id <id>.", stateLine)
 	}
-	return fmt.Sprintf("Plan %s: milestone %d of %d; %d applied passes; next action: %s; plan: %s.", state.TaskID, state.CurrentMilestone, len(state.AcceptedMilestones), len(state.AppliedPasses), action, state.ArtifactPath)
+	return strings.Join(lines, "\n")
 }
 
 func deliverPlanPointer(repository, statePath, session string, sessionStart bool) string {

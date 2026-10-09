@@ -142,3 +142,18 @@ func TestPlanPointerReplacesJobScan(t *testing.T) {
 		t.Fatal("legacy job-scan plan inference remains in precompact.go")
 	}
 }
+
+func TestPlanPointerBoundsRosterWithStatePointer(t *testing.T) {
+	root, repo, artifact, _ := planPointerFixture(t, []int{1})
+	for i := 0; i < 30; i++ {
+		id := "plan-roster-" + strings.Repeat("x", 24) + string(rune('a'+i))
+		if _, err := AcceptPlan(root, repo, id, artifact, []int{1, 2}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := renderActivePlanPointer(repo)
+	statePath := filepath.Join(root, "projects", repositoryProjectKey(repo), "active_plan.json")
+	if len([]rune(got)) > 1000 || !strings.Contains(got, "plans omitted") || !strings.Contains(got, statePath) || !strings.Contains(got, "purser-hook plan status --task-id") {
+		t.Fatalf("large plan roster is not bounded and actionable (%d chars): %s", len([]rune(got)), got)
+	}
+}

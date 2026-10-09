@@ -149,14 +149,25 @@ func Stop(event map[string]any, started time.Time) []byte {
 	add := func(kind, reason string) { reasons = append(reasons, reason); kinds[kind] = true }
 	planReason := ""
 	if latestUser >= 0 {
-		if blocked, ok := exactInteger(state["plan_boundary_blocked_user"]); !ok || blocked != latestUser {
-			if plan, err := ReconcilePlanJob(stateRoot(), repository); err == nil && plan != nil && !plan.UserStopped && plan.Gate == "" && plan.CurrentMilestone != 0 &&
-				containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) && plan.PendingNextAction == "dispatch" && !hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) && !hasOpenPlanTaskJob(stateRoot(), plan) &&
-				!planCodexDispatched(records, latestUser, plan.TaskID) {
-				if pointer := renderActivePlanPointer(repository); pointer != "" {
-					planReason = fmt.Sprintf("Continue accepted plan %s at milestone %d of %d: dispatch the next pass through normal Purser routing and review. %s", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones), pointer)
-					state["plan_boundary_blocked_user"] = latestUser
+		reminded, _ := state["plan_boundary_blocked_users"].(map[string]any)
+		if reminded == nil {
+			reminded = map[string]any{}
+		}
+		if plans, err := ReconcilePlans(stateRoot(), repository); err == nil {
+			var eligible []string
+			for _, plan := range plans {
+				if blocked, ok := exactInteger(reminded[plan.TaskID]); ok && blocked == latestUser {
+					continue
 				}
+				if plan.UserStopped || plan.Gate != "" || !containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) || plan.PendingNextAction != "dispatch" || hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) || hasOpenPlanTaskJob(stateRoot(), plan) || planCodexDispatched(records, latestUser, plan.TaskID) {
+					continue
+				}
+				eligible = append(eligible, fmt.Sprintf("%s M%d/%d", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones)))
+				reminded[plan.TaskID] = latestUser
+			}
+			if len(eligible) > 0 {
+				state["plan_boundary_blocked_users"] = reminded
+				planReason = "Continue accepted plans " + strings.Join(eligible, "; ") + " through normal Purser routing and review."
 			}
 		}
 	}
