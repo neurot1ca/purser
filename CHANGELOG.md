@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.106 — 2026-10-09
+
+- **Fixed:** A plan's complete-milestone is no longer blocked by a collected no-change or discarded job.
+- **Fixed:** A reply on a job without a worktree launches in that job's recorded repository root.
+- **Fixed:** The session ledger no longer rejects a record whose keys are repository paths containing words like "token".
+- **Changed:** A failed Reviewer-1 launch records the resolved executable, argument flags, cwd and PATH head for diagnosis.
+- **Removed:** pilot-report, measures-sync, the one-off evaluation, token report, migration and report scripts, and the unread shadow telemetry events.
+
 ## 0.1.105 — 2026-10-09
 
 - **Added:** `/purser:check` shows a Hook activity row: when each hook event last ran, recorded at most hourly.
