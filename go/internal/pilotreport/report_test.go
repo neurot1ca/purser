@@ -43,6 +43,8 @@ func fixture(t *testing.T, includeDispatcher, mismatched bool) (string, string) 
 		}
 		dispatch := `{"type":"assistant","requestId":"d1","message":{"id":"d1","role":"assistant","model":"claude-dispatch","content":[],"usage":{"input_tokens":7,"output_tokens":5,"cache_read_input_tokens":2}}}` + "\n" +
 			`{"type":"assistant","requestId":"d1","message":{"id":"d1","role":"assistant","model":"claude-dispatch","content":[],"usage":{"input_tokens":7,"output_tokens":5,"cache_read_input_tokens":2}}}` + "\n"
+		launch := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"launch-job-1","name":"mcp__codex__codex_start","input":{"jobId":"job-1","taskId":"task-1"}}]}}` + "\n"
+		dispatch = launch + dispatch
 		write(filepath.Join(projects, "project-a", "session-1", "subagents", name), dispatch)
 	}
 	return state, projects
@@ -108,6 +110,147 @@ func TestPilotReport(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestPilotReportWarmDispatcherScopesEachJob(t *testing.T) {
+	state, projects := fixture(t, true, false)
+	path := filepath.Join(projects, "project-a", "session-1", "subagents", "agent-dispatcher-1.jsonl")
+	dispatch := strings.Join([]string{
+		`{"type":"assistant","requestId":"before","message":{"id":"before","role":"assistant","content":[],"usage":{"input_tokens":100}}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"start-1","name":"mcp__codex__codex_start","input":{"jobId":"job-1","taskId":"task-1"}}],"usage":{"input_tokens":1}}}`,
+		`{"type":"assistant","requestId":"job-1-request","message":{"id":"job-1-request","role":"assistant","content":[],"usage":{"input_tokens":7}}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"start-2","name":"mcp__codex__codex_start","input":{"jobId":"job-2","taskId":"task-2"}}],"usage":{"input_tokens":1}}}`,
+		`{"type":"assistant","requestId":"job-2-request","message":{"id":"job-2-request","role":"assistant","content":[],"usage":{"input_tokens":9}}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(dispatch), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := Build(state, projects, "job-1")
+	if got.Usage.Dispatcher == nil || got.Usage.Dispatcher.Input == nil || *got.Usage.Dispatcher.Input != 8 {
+		t.Fatalf("dispatcher usage = %#v, want current job only (8)", got.Usage.Dispatcher)
+	}
+	records, err := readLines(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobTwo, _ := analyzeDispatcher(records, "job-2", "task-2")
+	if jobTwo == nil || jobTwo.Input == nil || *jobTwo.Input != 10 {
+		t.Fatalf("second job dispatcher usage = %#v, want only second job (10)", jobTwo)
+	}
+}
+
+func TestPilotReportMainDeduplicatesRequestID(t *testing.T) {
+	state, projects := fixture(t, false, false)
+	path := filepath.Join(projects, "project-a", "session-1.jsonl")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString(`{"type":"assistant","timestamp":"2026-10-09T12:00:01Z","requestId":"req-1","message":{"id":"msg-1-stream","role":"assistant","model":"claude-main","content":[{"type":"tool_use","id":"tool-stream","name":"mcp__codex-main__codex","input":{"jobId":"job-1","taskId":"task-1"}}],"usage":{"input_tokens":10,"output_tokens":4}}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got := Build(state, projects, "job-1")
+	if got.Usage.Main == nil || got.Usage.Main.Input == nil || *got.Usage.Main.Input != 10 {
+		t.Fatalf("main input = %#v, want duplicated request counted once (10)", got.Usage.Main)
+	}
+}
+
+func TestPilotReportWorkerAndAcceptanceBoundaries(t *testing.T) {
+	state, projects := fixture(t, false, false)
+	got := Build(state, projects, "job-1")
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report map[string]any
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	boundaries := report["boundaries"].(map[string]any)
+	if boundaries["worker_seconds"] != float64(10) || boundaries["to_acceptance_seconds"] != float64(15) {
+		t.Fatalf("boundaries = %#v, want worker_seconds=10 and to_acceptance_seconds=15", boundaries)
+	}
+	jobPath := filepath.Join(state, "codex_exec_mcp", "jobs", "job-1.json")
+	jobData, err := os.ReadFile(jobPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job map[string]any
+	if err := json.Unmarshal(jobData, &job); err != nil {
+		t.Fatal(err)
+	}
+	delete(job, "acceptance")
+	jobData, err = json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(jobPath, jobData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(state, "telemetry", "events", "by_task", "task-1.jsonl")
+	eventData, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withoutAcceptance []string
+	for _, line := range strings.Split(strings.TrimSpace(string(eventData)), "\n") {
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event["event_type"] != "CLAUDE_DECISION_RECORDED" {
+			withoutAcceptance = append(withoutAcceptance, line)
+		}
+	}
+	if err := os.WriteFile(eventsPath, []byte(strings.Join(withoutAcceptance, "\n")+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got = Build(state, projects, "job-1")
+	if got.Boundaries.ToAcceptanceSeconds != nil {
+		t.Fatalf("to_acceptance_seconds = %#v, want null when acceptance is absent", got.Boundaries.ToAcceptanceSeconds)
+	}
+}
+
+func TestPilotReportFindsDispatcherFromCodexStart(t *testing.T) {
+	state, projects := fixture(t, false, false)
+	eventsPath := filepath.Join(state, "telemetry", "events", "by_task", "task-1.jsonl")
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		delete(event, "agent_id")
+		events = append(events, event)
+	}
+	var encoded strings.Builder
+	for _, event := range events {
+		b, _ := json.Marshal(event)
+		encoded.Write(b)
+		encoded.WriteByte('\n')
+	}
+	if err := os.WriteFile(eventsPath, []byte(encoded.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(projects, "project-a", "session-1", "subagents", "agent-found.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"mcp__codex__codex_start","input":{"jobId":"job-1"}}]}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := Build(state, projects, "job-1")
+	if got.IDs.DispatcherAgent == nil || *got.IDs.DispatcherAgent != "found" {
+		t.Fatalf("dispatcher_agent_id = %#v, want found", got.IDs.DispatcherAgent)
 	}
 }
 

@@ -54,6 +54,8 @@ type Boundaries struct {
 	Acceptance              *string  `json:"acceptance"`
 	Applied                 *string  `json:"applied"`
 	FinalizedLatencySeconds *float64 `json:"finalized_latency_seconds"`
+	WorkerSeconds           *float64 `json:"worker_seconds"`
+	ToAcceptanceSeconds     *float64 `json:"to_acceptance_seconds"`
 }
 type Usage struct {
 	Main              *Tokens `json:"main"`
@@ -139,6 +141,23 @@ func BuildWithPrices(stateRoot, projectsRoot, jobID string, prices map[string]Pr
 	if r.Boundaries.Started == nil {
 		r.Incomplete = appendUnique(r.Incomplete, "job_started_at_missing")
 	}
+	r.Boundaries.WorkerSeconds = elapsed(r.Boundaries.Started, r.Boundaries.Finished)
+	r.Boundaries.ToAcceptanceSeconds = elapsed(r.Boundaries.Started, r.Boundaries.Acceptance)
+	if r.IDs.DispatcherAgent == nil && r.IDs.Session != nil {
+		if mainPath, locateErr := locateSession(projectsRoot, *r.IDs.Session); locateErr == nil {
+			paths, _ := filepath.Glob(filepath.Join(filepath.Dir(mainPath), *r.IDs.Session, "subagents", "agent-*.jsonl"))
+			sort.Strings(paths)
+			for _, path := range paths {
+				records, readErr := readLines(path)
+				if readErr != nil || !hasCodexStart(records, jobID, task) {
+					continue
+				}
+				name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "agent-"), ".jsonl")
+				r.IDs.DispatcherAgent = optionalString(name)
+				break
+			}
+		}
+	}
 	finalized := r.Boundaries.Finished
 	if applyState == "applied" {
 		finalized = r.Boundaries.Applied
@@ -185,7 +204,7 @@ func BuildWithPrices(stateRoot, projectsRoot, jobID string, prices map[string]Pr
 			}
 			r.Incomplete = append(r.Incomplete, "dispatcher_transcript: "+cause.Error())
 		} else {
-			usage, models := analyzeWhole(records)
+			usage, models := analyzeDispatcher(records, jobID, task)
 			r.Usage.Dispatcher, r.Models.Dispatcher = usage, models
 		}
 	} else {
@@ -225,6 +244,19 @@ func armCost(arm string, models []string, usage *Tokens, prices map[string]Price
 		float64(*usage.CacheCreation.Ephemeral1h)*price.CacheWrite1h +
 		float64(*usage.CacheRead)*price.CacheRead) / 1_000_000
 	return &total
+}
+
+func elapsed(started, ended *string) *float64 {
+	if started == nil || ended == nil {
+		return nil
+	}
+	start, e1 := time.Parse(time.RFC3339Nano, *started)
+	end, e2 := time.Parse(time.RFC3339Nano, *ended)
+	if e1 != nil || e2 != nil {
+		return nil
+	}
+	seconds := end.Sub(start).Seconds()
+	return &seconds
 }
 
 func promptResponses(records []map[string]any, started, finalized *string, incomplete *[]string) []float64 {
@@ -451,6 +483,22 @@ func recordID(record map[string]any) string {
 	}
 	return stringValue(record["requestId"])
 }
+func requestIDs(record map[string]any) []string {
+	ids := []string{}
+	if id := stringValue(record["requestId"]); id != "" {
+		ids = append(ids, id)
+	}
+	if m, _ := record["message"].(map[string]any); stringValue(m["id"]) != "" {
+		id, found := stringValue(m["id"]), false
+		for _, existing := range ids {
+			found = found || existing == id
+		}
+		if !found {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
 func model(record map[string]any) string {
 	m, _ := record["message"].(map[string]any)
 	return stringValue(m["model"])
@@ -546,31 +594,106 @@ func analyzeMain(records []map[string]any, jobID, taskID string) (*Tokens, int, 
 			}
 		}
 	}
-	usage := sumUsage(values(matchedAssistant))
-	turns := len(matchedAssistant)
+	selected := dedupeAssistant(values(matchedAssistant))
+	usage := sumUsage(selected)
+	turns := len(selected)
 	return usage, turns, keys(modelSet), blocked
 }
+
+func analyzeDispatcher(records []map[string]any, jobID, taskID string) (*Tokens, []string) {
+	start, end := -1, len(records)
+	for i, rec := range records {
+		if codexStartFor(rec, jobID, taskID) || matchesJob(rec, jobID, taskID) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil, []string{}
+	}
+	for i := start + 1; i < len(records); i++ {
+		if !codexStartFor(records[i], "", "") {
+			continue
+		}
+		input := codexStartInput(records[i])
+		otherJob, otherTask := stringValue(input["jobId"]), stringValue(input["taskId"])
+		if otherJob != jobID && otherTask != taskID {
+			end = i
+			break
+		}
+	}
+	return analyzeWhole(records[start:end])
+}
+
 func analyzeWhole(records []map[string]any) (*Tokens, []string) {
 	selected := []map[string]any{}
-	ids := map[string]bool{}
 	models := map[string]bool{}
-	for i, rec := range records {
+	for _, rec := range records {
 		if !assistant(rec) {
 			continue
 		}
 		if m := model(rec); m != "" {
 			models[m] = true
 		}
-		id := recordID(rec)
-		if id == "" {
-			id = fmt.Sprintf("line:%d", i)
+		selected = append(selected, rec)
+	}
+	return sumUsage(dedupeAssistant(selected)), keys(models)
+}
+
+func dedupeAssistant(records []map[string]any) []map[string]any {
+	seen := map[string]bool{}
+	selected := make([]map[string]any, 0, len(records))
+	for i, rec := range records {
+		ids := requestIDs(rec)
+		duplicate := false
+		for _, id := range ids {
+			duplicate = duplicate || seen[id]
 		}
-		if !ids[id] {
-			ids[id] = true
-			selected = append(selected, rec)
+		if duplicate {
+			continue
+		}
+		if len(ids) == 0 {
+			ids = []string{fmt.Sprintf("line:%d", i)}
+		}
+		for _, id := range ids {
+			seen[id] = true
+		}
+		selected = append(selected, rec)
+	}
+	return selected
+}
+
+func codexStartInput(record map[string]any) map[string]any {
+	for _, raw := range content(record) {
+		block, ok := raw.(map[string]any)
+		if !ok || block["type"] != "tool_use" || !strings.Contains(strings.ToLower(stringValue(block["name"])), "codex_start") {
+			continue
+		}
+		if input, ok := block["input"].(map[string]any); ok {
+			return input
 		}
 	}
-	return sumUsage(selected), keys(models)
+	return nil
+}
+
+func codexStartFor(record map[string]any, jobID, taskID string) bool {
+	input := codexStartInput(record)
+	if input == nil {
+		return false
+	}
+	if jobID == "" && taskID == "" {
+		return true
+	}
+	return jobID != "" && stringValue(input["jobId"]) == jobID || taskID != "" && stringValue(input["taskId"]) == taskID
+}
+
+func hasCodexStart(records []map[string]any, jobID, taskID string) bool {
+	for _, record := range records {
+		if codexStartFor(record, jobID, taskID) {
+			return true
+		}
+	}
+	return false
 }
 func values(m map[string]map[string]any) []map[string]any {
 	out := make([]map[string]any, 0, len(m))
