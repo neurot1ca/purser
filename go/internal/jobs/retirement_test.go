@@ -13,6 +13,21 @@ import (
 
 func retirementID(ch byte) string { return strings.Repeat(string(ch), 64) }
 
+func TestSameWorktreeUsesResolvedPathIdentity(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	if !sameWorktree(real, alias) {
+		t.Fatal("worktree path aliases were treated as different identities")
+	}
+}
+
 func TestRetireWorktreeClearsReferencesAndPreservesNewerBinding(t *testing.T) {
 	root := t.TempDir()
 	repo := cleanupRepo(t, root)

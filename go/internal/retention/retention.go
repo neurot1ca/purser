@@ -441,6 +441,14 @@ func fileMtime(path string) (float64, error) {
 }
 
 func samePath(a, b string) bool {
+	left, leftErr := filepath.EvalSymlinks(a)
+	right, rightErr := filepath.EvalSymlinks(b)
+	if leftErr == nil && rightErr == nil {
+		if runtime.GOOS == "windows" {
+			return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+		}
+		return filepath.Clean(left) == filepath.Clean(right)
+	}
 	rel, err := filepath.Rel(a, b)
 	return err == nil && rel == "."
 }
@@ -816,19 +824,12 @@ func safeRoot(path string) bool {
 	if err != nil {
 		return false
 	}
-	volume := filepath.VolumeName(absolute)
-	current := volume + string(filepath.Separator)
-	rest := strings.TrimPrefix(absolute, current)
-	for _, part := range strings.Split(rest, string(filepath.Separator)) {
-		if part == "" {
-			continue
-		}
-		current = filepath.Join(current, part)
-		if isReparsePath(current) {
-			return false
-		}
+	info, err := os.Lstat(absolute)
+	if err != nil || !info.IsDir() || isReparseInfo(info) {
+		return false
 	}
-	return true
+	_, err = filepath.EvalSymlinks(absolute)
+	return err == nil
 }
 
 func isReparsePath(path string) bool {

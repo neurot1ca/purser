@@ -24,6 +24,22 @@ func putFile(t *testing.T, path string, data []byte, stamp int64) {
 
 func unixTime(seconds int64) time.Time { return time.Unix(seconds, 0) }
 
+func TestSafeRootAllowsSymlinkedTempAncestor(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	root := filepath.Join(real, "state")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	if !safeRoot(filepath.Join(alias, "state")) {
+		t.Fatal("root under a symlinked temporary ancestor was rejected")
+	}
+}
+
 func TestPluginCacheKeepsRunningAndNewestOtherVersion(t *testing.T) {
 	root := t.TempDir()
 	cache := filepath.Join(root, "marketplace", "purser")

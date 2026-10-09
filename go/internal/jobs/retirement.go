@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -333,20 +332,20 @@ func validOwnedWorktree(root, path string) bool {
 	if err != nil || !cleanupPath(root, abs) {
 		return false
 	}
-	rel, err := filepath.Rel(filepath.Join(root, "wt"), abs)
+	wtRoot, target := worktreeKey(filepath.Join(root, "wt")), worktreeKey(abs)
+	if wtRoot == "" || target == "" {
+		return false
+	}
+	rel, err := filepath.Rel(wtRoot, target)
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func sameWorktree(a, b string) bool {
-	left, err1 := filepath.Abs(a)
-	right, err2 := filepath.Abs(b)
-	if err1 != nil || err2 != nil {
+	left, right := worktreeKey(a), worktreeKey(b)
+	if left == "" || right == "" {
 		return false
 	}
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
-	}
-	return filepath.Clean(left) == filepath.Clean(right)
+	return left == right
 }
 
 func containsOwner(owners []string, id string) bool {

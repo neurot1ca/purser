@@ -500,19 +500,35 @@ func cleanupNumber(v any) (float64, bool) {
 }
 func cleanupPath(root, p string) bool {
 	root, err := filepath.Abs(root)
-	if err != nil || !safeCleanupPath(root) {
+	if err != nil {
 		return false
 	}
 	p, err = filepath.Abs(p)
 	if err != nil {
 		return false
 	}
-	rel, e := filepath.Rel(root, p)
-	if e != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil || !safeCleanupPath(root) {
+		return false
+	}
+	rootInfo, err := os.Lstat(root)
+	if err != nil || isReparsePoint(rootInfo) {
+		return false
+	}
+	resolvedPath, err := resolveCleanupPath(p)
+	if err != nil {
+		return false
+	}
+	lexicalRel, e := filepath.Rel(root, p)
+	if e != nil || lexicalRel == "." || lexicalRel == ".." || strings.HasPrefix(lexicalRel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	resolvedRel, e := filepath.Rel(resolvedRoot, resolvedPath)
+	if e != nil || resolvedRel == "." || resolvedRel == ".." || strings.HasPrefix(resolvedRel, ".."+string(filepath.Separator)) {
 		return false
 	}
 	cur := root
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+	for _, part := range strings.Split(lexicalRel, string(filepath.Separator)) {
 		cur = filepath.Join(cur, part)
 		if isCleanupLink(cur) {
 			return false
@@ -525,22 +541,35 @@ func safeCleanupPath(p string) bool {
 	if e != nil {
 		return false
 	}
-	cur := string(filepath.Separator)
-	vol := filepath.VolumeName(a)
-	if vol != "" {
-		cur = vol + string(filepath.Separator)
+	if isCleanupLink(a) {
+		return false
 	}
-	rel := strings.TrimPrefix(strings.TrimPrefix(a, vol), string(filepath.Separator))
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
-		if part == "" {
-			continue
+	_, e = resolveCleanupPath(a)
+	return e == nil
+}
+func resolveCleanupPath(p string) (string, error) {
+	a, e := filepath.Abs(p)
+	if e != nil {
+		return "", e
+	}
+	if resolved, err := filepath.EvalSymlinks(a); err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	suffix := []string{}
+	for {
+		parent := filepath.Dir(a)
+		if parent == a {
+			return "", os.ErrNotExist
 		}
-		cur = filepath.Join(cur, part)
-		if isCleanupLink(cur) {
-			return false
+		suffix = append(suffix, filepath.Base(a))
+		a = parent
+		if resolved, err := filepath.EvalSymlinks(a); err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
 		}
 	}
-	return true
 }
 func isCleanupLink(p string) bool {
 	fi, e := os.Lstat(p)
@@ -622,12 +651,15 @@ func gitWorktreeListing(repo string) *worktreeListing {
 	return &worktreeListing{paths[0], paths}
 }
 func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing, prune map[string]string) bool {
-	wtRoot := filepath.Join(root, "wt")
 	target, e := filepath.Abs(wt)
 	if e != nil || !cleanupPath(root, target) {
 		return false
 	}
-	rr, e := filepath.Rel(wtRoot, target)
+	wtRootKey, targetKey := worktreeKey(filepath.Join(root, "wt")), worktreeKey(target)
+	if wtRootKey == "" || targetKey == "" {
+		return false
+	}
+	rr, e := filepath.Rel(wtRootKey, targetKey)
 	if e != nil || rr == "." || rr == ".." || strings.HasPrefix(rr, ".."+string(filepath.Separator)) {
 		return false
 	}
@@ -648,7 +680,7 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 	}
 	found := false
 	for _, p := range l.paths {
-		if strings.EqualFold(filepath.Clean(p), filepath.Clean(target)) {
+		if worktreeKey(p) == worktreeKey(target) {
 			found = true
 		}
 	}
@@ -666,7 +698,7 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 	}
 	next := l.paths[:0]
 	for _, p := range l.paths {
-		if !strings.EqualFold(filepath.Clean(p), filepath.Clean(target)) {
+		if worktreeKey(p) != worktreeKey(target) {
 			next = append(next, p)
 		}
 	}

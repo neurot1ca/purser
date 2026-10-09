@@ -60,6 +60,37 @@ func cleanupJob(t *testing.T, state, id, status string, extra map[string]any) {
 }
 func cleanupNow() time.Time { return time.Unix(2_000_000_000, 0) }
 
+func TestCleanupPathAllowsSymlinkedTempAncestor(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	root := filepath.Join(real, "state")
+	if err := os.MkdirAll(filepath.Join(root, "wt"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	if !cleanupPath(filepath.Join(alias, "state"), filepath.Join(alias, "state", "wt", "child")) {
+		t.Fatal("owned path under a symlinked temporary ancestor was rejected")
+	}
+}
+
+func TestCleanupPathRejectsLexicalEscapeResolvedInsideRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "sibling")
+	if err := os.Symlink(root, outside); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	if cleanupPath(root, filepath.Join(outside, "child")) {
+		t.Fatal("path outside the lexical root was accepted after resolving inside it")
+	}
+}
+
 func TestCleanupRetentionIsThreeDays(t *testing.T) {
 	if cleanupRetention != 3*24*time.Hour {
 		t.Fatalf("cleanup retention = %s, want 72h", cleanupRetention)

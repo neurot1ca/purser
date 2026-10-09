@@ -93,6 +93,9 @@ func resolvedJobPath(repo, name string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	target := filepath.Join(root, filepath.FromSlash(name))
 	rel, err := filepath.Rel(root, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
