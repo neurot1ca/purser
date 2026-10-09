@@ -476,6 +476,9 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		ManifestBudgetSeconds: numberValue(config["manifest_budget_seconds"]), LiveThread: live,
 		Profile: profileValue, ReadinessCheck: readiness, MechanicalOpenCodeEnabled: &mechanicalEnabled,
 	})
+	if agentID := stringValue(event["agent_id"]); agentID != "" {
+		pending["dispatcherAgentId"] = agentID
+	}
 	if priorThread != nil {
 		pending["prior_thread_id"] = *priorThread
 		bypassMetadata["prior_thread_id"] = *priorThread

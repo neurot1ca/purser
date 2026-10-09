@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,6 +104,22 @@ func TestPostImplementerObservationRejectsInvalidPayloadP106(t *testing.T) {
 				t.Fatal("invalid implementer payload was accepted")
 			}
 		})
+	}
+}
+
+func TestPostImplementerObservationsCarriesDispatcherAgentID(t *testing.T) {
+	root := t.TempDir()
+	event := map[string]any{"session_id": "session-dispatcher", "tool_response": map[string]any{}}
+	pending := map[string]any{"task_id": "dispatcher-task", "project_key": "unresolved", "agent": "codex",
+		"dispatcherAgentId": "dispatcher-1", "route": "normal", "phase": "implementation", "model": "openai/gpt-5", "effort": "high"}
+	bundle := map[string]any{"implementer": "codex-main", "model": "openai/gpt-5", "effort": "high", "validation": "UNKNOWN",
+		"worker_validation": map[string]any{"status": "UNKNOWN"}, "claude_review_mode": "FULL", "routing_enforced": true}
+	PostImplementerObservations(event, pending, bundle, root)
+
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "events", "by_task", "dispatcher-task.jsonl"))
+	var observation map[string]any
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(string(data))), &observation) != nil || observation["agent_id"] != "dispatcher-1" {
+		t.Fatalf("success observation lost dispatcher identity: %v %s", err, data)
 	}
 }
 

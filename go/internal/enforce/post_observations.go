@@ -25,6 +25,9 @@ func init() {
 // PostImplementerObservations mirrors the implementer event and task fold at
 // the end of Python PostToolUse. The Post handler owns when to call it.
 func PostImplementerObservations(event, pending, bundle map[string]any, root string) {
+	if agentID := stringValue(pending["dispatcherAgentId"]); agentID != "" {
+		event["agent_id"] = agentID
+	}
 	taskID := pending["task_id"]
 	project := pendingProjectKey(pending)
 	repository := stringValue(pending["repo_root"])

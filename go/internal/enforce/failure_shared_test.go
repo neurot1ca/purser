@@ -173,3 +173,16 @@ func TestFailureSharedParityFixture(t *testing.T) {
 		t.Fatal("non-empty pending directory removal succeeded")
 	}
 }
+
+func TestFailureObservationCarriesDispatcherAgentID(t *testing.T) {
+	root := t.TempDir()
+	event := map[string]any{"session_id": "session-dispatcher", "tool_name": "mcp__codex-main__codex_start"}
+	pending := map[string]any{"task_id": "dispatcher-failed", "project_key": "unresolved", "dispatcherAgentId": "dispatcher-1"}
+	failureObservation(root, event, pending)
+
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "events", "by_task", "dispatcher-failed.jsonl"))
+	var observation map[string]any
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(string(data))), &observation) != nil || observation["agent_id"] != "dispatcher-1" {
+		t.Fatalf("failure observation lost dispatcher identity: %v %s", err, data)
+	}
+}

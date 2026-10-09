@@ -165,8 +165,17 @@ func TestPreDecisionsP63Fixture(t *testing.T) {
 					t.Fatalf("async start was not durably admitted: %#v %v", got, gotErr)
 				}
 				pending, _ := pendingPath(runtimeRoot, event)
-				if raw, readErr := os.ReadFile(pending); readErr != nil || !strings.Contains(string(raw), `"async_ready":true`) {
+				if raw, readErr := os.ReadFile(pending); readErr != nil || !strings.Contains(string(raw), `"async_ready":true`) || strings.Contains(string(raw), `"dispatcherAgentId"`) {
 					t.Fatalf("async start pending record is not ready: %v %s", readErr, raw)
+				}
+				event["agent_id"] = "dispatcher-1"
+				if _, err := Pre(event, runtimeRoot); err != nil {
+					t.Fatal(err)
+				}
+				raw, readErr := os.ReadFile(pending)
+				var saved map[string]any
+				if readErr != nil || json.Unmarshal(raw, &saved) != nil || saved["dispatcherAgentId"] != "dispatcher-1" {
+					t.Fatalf("subagent start pending record lost dispatcher identity: %v %s", readErr, raw)
 				}
 				return
 			}

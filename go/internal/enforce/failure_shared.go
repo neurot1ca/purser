@@ -157,6 +157,9 @@ func saveFailureSession(root string, event, pending map[string]any, outcome map[
 }
 func failureObservation(root string, event, pending map[string]any) {
 	defer func() { _ = recover() }()
+	if agentID := stringValue(pending["dispatcherAgentId"]); agentID != "" {
+		event["agent_id"] = agentID
+	}
 	taskID := stringValue(pending["task_id"])
 	projectKey := stringValue(pending["project_key"])
 	if projectKey == "" {
