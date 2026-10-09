@@ -23,9 +23,9 @@ class DistributionError(Exception):
 
 def host_target():
     systems = {"Windows": "windows", "Linux": "linux", "Darwin": "darwin"}
-    machines = {"AMD64": "amd64", "x86_64": "amd64", "aarch64": "arm64", "ARM64": "arm64"}
+    machines = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
     goos = systems.get(platform.system())
-    goarch = machines.get(platform.machine().upper())
+    goarch = machines.get(platform.machine().lower())
     if not goos or not goarch:
         raise DistributionError(f"unsupported host: {platform.system()}/{platform.machine()}")
     suffix = ".exe" if goos == "windows" else ""
@@ -245,7 +245,7 @@ def verify_mcp(binary, env, cwd):
         raise DistributionError("MCP ping response was invalid")
 
 
-def verify_hooks(plugin_root, binary, env, cwd, temp_root):
+def verify_hook_binary_events(plugin_root, binary, env, cwd, temp_root):
     config = json.loads((plugin_root / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     sources = []
     for module in config.get("modules", []):
@@ -305,14 +305,16 @@ def main(argv):
     if len(argv) != 2:
         raise DistributionError("usage: python scripts/test_distribution.py <artifact-dir>")
     artifact_dir = Path(argv[1]).resolve()
+    scratch_dir = Path(__file__).resolve().parents[1] / ".tmp"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
     archives = sorted(artifact_dir.glob("purser-*.zip"))
     if len(archives) != 1:
         raise DistributionError(f"expected one purser-X.Y.Z.zip in {artifact_dir}")
     archive = archives[0]
     goos, goarch, selected_name = host_target()
     digest, sums = verify_archive(artifact_dir, archive)
+    bad_sums = scratch_dir / f".bad-SHA256SUMS-{secrets.token_hex(6)}"
     try:
-        bad_sums = artifact_dir / ".bad-SHA256SUMS"
         entries = (artifact_dir / "SHA256SUMS").read_text(encoding="utf-8")
         bad_sums.write_text(entries.replace(digest, "0" * 64, 1), encoding="utf-8")
         verify_archive(artifact_dir, archive, bad_sums)
@@ -332,7 +334,7 @@ def main(argv):
     if not node:
         raise DistributionError("Node.js is required for launcher checks")
     env = os.environ.copy()
-    root = artifact_dir.parent / f"purser-distribution-{secrets.token_hex(6)}"
+    root = scratch_dir / f"purser-distribution-{secrets.token_hex(6)}"
     root.mkdir()
     try:
         fake_tools(root, env)
@@ -369,7 +371,7 @@ def main(argv):
         env["HTTP_PROXY"] = env["HTTPS_PROXY"] = env["http_proxy"] = env["https_proxy"] = proxy_url
         env["NO_PROXY"] = env["no_proxy"] = "127.0.0.1,localhost"
         verify_mcp(binary, env, project)
-        verify_hooks(plugin_root, binary, env, project, root)
+        verify_hook_binary_events(plugin_root, binary, env, project, root)
         missing_binary_check(plugin_root, node, env, project, selected_name)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != sums[binary_name]:
             raise DistributionError("host binary changed during first-run checks")
@@ -382,7 +384,7 @@ def main(argv):
             "selected_binary": selected_name,
             "client_version": version,
             "digest": digest,
-            "checks": ["archive checksum", "execute bit", "MCP initialize/ping", "lifecycle hook", "enforcement hook", "hooks succeeded with proxy environment pointed at dead address", "bad checksum rejected", "missing-binary launcher error", "unsafe archive members rejected"] + (["Claude plugin validation"] if version else []),
+            "checks": ["archive checksum", "execute bit", "MCP initialize/ping", "configured hook registration references", "direct lifecycle binary event", "direct enforcement binary event", "direct hook events succeeded with proxy environment pointed at dead address", "bad checksum rejected", "missing-binary launcher error", "unsafe archive members rejected"] + (["Claude plugin validation"] if version else []),
             "claude_install": install_note,
         }, separators=(",", ":")))
         return 0
