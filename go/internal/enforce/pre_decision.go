@@ -17,6 +17,7 @@ import (
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/models"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/policy"
 	"purser-hook/internal/profile"
 )
@@ -973,16 +974,7 @@ func preOpenCodeCandidates(runtimeRoot string) []any {
 }
 
 func loadPreConfig() (map[string]any, error) {
-	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
-	if pluginRoot == "" {
-		cwd, _ := os.Getwd()
-		for dir := cwd; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-			if _, err := os.Stat(filepath.Join(dir, ".claude", "hooks", "orchestrator", "config.json")); err == nil {
-				pluginRoot = dir
-				break
-			}
-		}
-	}
+	pluginRoot := pluginroot.Root()
 	if pluginRoot == "" {
 		return nil, errors.New("orchestrator config path is unavailable")
 	}

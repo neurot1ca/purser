@@ -21,6 +21,7 @@ import (
 	"unicode"
 
 	"purser-hook/internal/measures"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/waiter"
 )
 
@@ -1243,13 +1244,9 @@ func quotaWindow(window map[string]any, now int64) (float64, bool) {
 }
 
 func maintenanceCommandPath() string {
-	root := os.Getenv("CLAUDE_PLUGIN_ROOT")
+	root := pluginroot.Root()
 	if root == "" {
-		executable, err := os.Executable()
-		if err != nil {
-			return ""
-		}
-		root = filepath.Dir(filepath.Dir(executable))
+		return ""
 	}
 	suffix := ""
 	if runtime.GOOS == "windows" {

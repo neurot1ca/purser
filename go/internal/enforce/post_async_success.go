@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
@@ -137,7 +137,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	schedulePostReview(repoRoot, pending, bundle, resolved, checks, gateConfig, 30*time.Second, true, true)
 	delta := mapValue(bundle["delta"])
 	if bundle["reviewer1_skipped_reason"] == nil && bundle["claude_review_mode"] == review.Full {
-		pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
+		pluginRoot := pluginroot.Root()
 		if pluginRoot == "" {
 			pluginRoot = repoRoot
 		}
