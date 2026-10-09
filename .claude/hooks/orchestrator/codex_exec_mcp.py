@@ -1569,6 +1569,18 @@ class Server:
         try:
             self._agent_prefix(job_agent)
             if mode == "new":
+                if "cwd" not in args or args["cwd"] == "":
+                    try:
+                        root = subprocess.run(
+                            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
+                            check=True, capture_output=True, text=True,
+                        ).stdout.strip()
+                        if not root:
+                            raise subprocess.CalledProcessError(1, "git rev-parse")
+                    except (OSError, subprocess.CalledProcessError):
+                        return _job_result({"state": "FAILED", "errorCode": "INVALID_ARGUMENT",
+                                            "message": "cwd is missing and repository root could not be resolved for Codex launch"})
+                    args["cwd"] = root
                 if not isinstance(args.get("cwd", os.getcwd()), str) or not args.get("cwd", os.getcwd()):
                     raise ValueError("invalid cwd")
                 if args.get("model") is not None and not isinstance(args["model"], str):

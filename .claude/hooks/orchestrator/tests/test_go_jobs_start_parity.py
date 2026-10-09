@@ -21,7 +21,7 @@ def _server(monkeypatch, state_root, config_error=False):
 
 
 def _invalid(name, args, tmp_path, monkeypatch, config_error=False):
-    server = _server(monkeypatch, tmp_path / name, config_error); result = server._start_job(args); assert not server.job_dir.exists()
+    server = _server(monkeypatch, tmp_path / name, config_error); result = server._start_job(dict(args)); assert not server.job_dir.exists()
     return {"name": name, "args": args, "result": result}
 
 
@@ -123,7 +123,7 @@ def test_go_start_validation_matches_python_oracle(tmp_path, monkeypatch):
         _start_case("reply_retired",[{"call":CALL,"prompt":"reply","mode":"reply","threadId":"thread-retired"}],tmp_path,monkeypatch,
             [{"jobId":"f"*64,"threadId":"thread-retired","state":"SUCCEEDED","applyState":"pending","worktreePath":str(tmp_path/"reply_retired"/"old-worktree"),"snapshot":"tree-old","repoRoot":str(tmp_path/"reply_retired"/"repo"),"acceptedAt":1}],
             {"thread_id":"thread-retired","cwd":str(tmp_path/"reply_retired"/"old-worktree"),"config_args":[],"worktreePath":str(tmp_path/"reply_retired"/"old-worktree"),"snapshot":"tree-old","repoRoot":str(tmp_path/"reply_retired"/"repo")},retiring=True),
-        _start_case("redispatch_reject_and_skip",[{"call":CALL,"prompt":"new","mode":"new","taskId":"task-x"}],tmp_path,monkeypatch,
+        _start_case("redispatch_reject_and_skip",[{"call":CALL,"prompt":"new","mode":"new","taskId":"task-x","cwd":"C:/repo"}],tmp_path,monkeypatch,
             [{"jobId":"b"*64,"state":"SUCCEEDED","taskId":"task-x","worktreePath":"C:/wt-a","applyState":"pending","acceptedAt":1},
              {"jobId":"c"*64,"state":"SUCCEEDED","taskId":"task-x","worktreePath":"C:/wt-b","applyState":"applied","acceptedAt":2},
              {"jobId":"d"*64,"state":"SUCCEEDED","taskId":"task-x","worktreePath":"C:/wt-c","applyState":"pending","decisionRecorded":True,"acceptedAt":3}]),

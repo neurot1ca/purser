@@ -2409,6 +2409,43 @@ def test_async_start_result_idempotency_and_sync(area):
         client.close()
 
 
+def test_async_start_defaults_missing_cwd_to_repository_root(area, monkeypatch):
+    repo = area / "repo"
+    nested = repo / "nested"
+    nested.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    previous = Path.cwd()
+    os.chdir(nested)
+    try:
+        job_dir = area / "jobs"
+        server = codex_exec_mcp.Server(json.dumps(["codex"]), job_dir=job_dir, agent="codex")
+        # Keep the start path local while inspecting the durable launch payload.
+        monkeypatch.setattr(server, "_await_host", lambda job_id: {"jobId": job_id, "state": "QUEUED"})
+        monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *_args: None)
+        server._start_job({"call": str(uuid.uuid4()), "prompt": "default cwd"})
+        launch = json.loads(next(job_dir.glob("*.launch")).read_text(encoding="utf-8"))
+        cwd = launch["args"]["cwd"]
+        argv = codex_exec_mcp._agent_command("codex", ["codex"], "codex", cwd, None,
+                                             [], None, None, area / "output", "default cwd")
+        assert Path(cwd).resolve() == repo.resolve()
+        assert Path(argv[argv.index("-C") + 1]).resolve() == repo.resolve()
+    finally:
+        os.chdir(previous)
+
+
+def test_async_start_refuses_missing_cwd_outside_repository(area, monkeypatch):
+    server = codex_exec_mcp.Server(json.dumps(["codex"]), job_dir=area / "jobs", agent="codex")
+    def no_repository(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, args[0], stderr="not a repository")
+
+    monkeypatch.setattr(codex_exec_mcp.subprocess, "run", no_repository)
+    result = server._start_job({"call": str(uuid.uuid4()), "prompt": "missing cwd"})["structuredContent"]
+    assert result["state"] == "FAILED"
+    assert result["errorCode"] == "INVALID_ARGUMENT"
+    assert "cwd" in result["message"]
+    assert not (area / "jobs").exists()
+
+
 def test_thread_identity_and_config_are_durable_before_exit(area):
     release = area / "release-codex"
     client = Client(area, extra_env={"FAKE_RELEASE_AFTER_START": str(release)})

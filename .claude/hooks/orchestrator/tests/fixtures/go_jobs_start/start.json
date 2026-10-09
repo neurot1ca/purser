@@ -780,7 +780,8 @@
           "call": "00000000-0000-4000-8000-000000000001",
           "prompt": "new",
           "mode": "new",
-          "taskId": "task-x"
+          "taskId": "task-x",
+          "cwd": "C:/repo"
         }
       ],
       "seed": [
@@ -845,7 +846,8 @@
             "call": "00000000-0000-4000-8000-000000000001",
             "prompt": "new",
             "mode": "new",
-            "taskId": "task-x"
+            "taskId": "task-x",
+            "cwd": "C:/repo"
           },
           "codexBin": null,
           "agent": "codex"

@@ -97,6 +97,9 @@ func TestValidateStartDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
 	if err != nil || failure != nil || filepath.Clean(strings.ReplaceAll(root, "/", string(filepath.Separator))) != filepath.Clean(repo) {
 		t.Fatalf("missing cwd did not resolve to repository root: root=%q request=%#v failure=%#v err=%v", root, request, failure, err)
 	}
+	if got := request.Args["cwd"]; got != root {
+		t.Fatalf("missing cwd in validated launch args = %#v, want repository root %q", got, root)
+	}
 	argv, err := BuildCodexCommand(LaunchArgs{Name: "codex", Cwd: root, BinaryOverride: "codex"})
 	if err != nil {
 		t.Fatal(err)
@@ -107,8 +110,29 @@ func TestValidateStartDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
 		}
 	}
 	emptyArgs := map[string]any{"call": "00000000-0000-0000-0000-000000000002", "prompt": "run", "cwd": ""}
-	if _, failure = ValidateStart(emptyArgs, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }}); failure != nil {
-		t.Fatalf("empty cwd was not defaultable: %#v", failure)
+	emptyRequest, emptyFailure := ValidateStart(emptyArgs, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }})
+	if emptyFailure != nil || emptyRequest.Args["cwd"] != root {
+		t.Fatalf("empty cwd was not defaulted to repository root: request=%#v failure=%#v", emptyRequest, emptyFailure)
+	}
+}
+
+func TestValidateStartRefusesMissingCWDOutsideRepository(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	args := map[string]any{"call": "00000000-0000-4000-8000-000000000001", "prompt": "run"}
+	_, failure := ValidateStart(args, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }})
+	if failure == nil {
+		t.Fatal("missing cwd outside a repository was accepted")
+	}
+	result := failure["structuredContent"].(map[string]any)
+	if result["errorCode"] != "INVALID_ARGUMENT" || result["message"] != "cwd is missing and repository root could not be resolved for Codex launch" {
+		t.Fatalf("unexpected missing cwd failure: %#v", result)
 	}
 }
 

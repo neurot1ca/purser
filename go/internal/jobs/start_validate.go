@@ -101,9 +101,11 @@ func ValidateStart(args map[string]any, opt StartValidationOptions) (StartReques
 	if mode == "new" {
 		cwd, exists := args["cwd"]
 		if !exists || cwd == "" {
-			if _, err := resolveRepositoryRoot(); err != nil {
-				return fail("INVALID_ARGUMENT", "Repository root could not be resolved for Codex launch")
+			root, err := resolveRepositoryRoot()
+			if err != nil {
+				return fail("INVALID_ARGUMENT", "cwd is missing and repository root could not be resolved for Codex launch")
 			}
+			args["cwd"] = root
 		}
 	}
 	name := "codex"
