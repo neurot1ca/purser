@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"purser-hook/internal/review"
@@ -65,5 +66,22 @@ func TestPostRereviewPythonFixture(t *testing.T) {
 				t.Fatalf("final review = %#v; Python oracle = %#v", actual, tc.Expected)
 			}
 		})
+	}
+}
+
+func TestPostRereviewCommitCommandIncludesAllChangedPaths(t *testing.T) {
+	paths := []string{
+		"file-01.go", "file-02.go", "file-03.go", "file-04.go", "file-05.go", "file-06.go",
+		"file-07.go", "file-08.go", "file-09.go", "file-10.go", "file-11.go", "file-12.go",
+	}
+	receipt := buildPostAuditReceipt(map[string]any{"changed_paths": paths}, "task-12")
+
+	quoted := make([]string, len(paths))
+	for i, path := range paths {
+		quoted[i] = `"` + path + `"`
+	}
+	want := `git add ` + strings.Join(quoted, " ") + ` && git commit -m "feat(task-12): implement changes"`
+	if got := receipt["commit_command"]; got != want {
+		t.Fatalf("commit_command = %q; want %q", got, want)
 	}
 }

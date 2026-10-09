@@ -100,8 +100,8 @@ func buildPostAuditReceipt(bundle map[string]any, taskID string) map[string]any 
 	if !ok || len(paths) == 0 {
 		return nil
 	}
-	quoted := make([]string, 0, min(10, len(paths)))
-	for _, path := range paths[:min(10, len(paths))] {
+	quoted := make([]string, 0, len(paths))
+	for _, path := range paths {
 		quoted = append(quoted, `"`+path+`"`)
 	}
 	if taskID == "" {
