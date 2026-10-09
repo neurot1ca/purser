@@ -143,6 +143,16 @@ test('invalid Go Post JSON preserves the host result and requires FULL review', 
   expect(calls).toHaveLength(1)
 })
 
+test('an empty Go Post object, as after an acceptance, adds nothing', options, async ($, on) => {
+  const calls: string[] = []
+  stubGo(on, postOutput, calls, [], undefined, undefined, undefined, () => ({ stdout: '{}' }))
+  on('classic.PostToolUse', () => ({}))
+
+  const apply = { ...postEvent('PostToolUse'), tool_name: 'mcp__plugin_purser_codex-main__codex_apply' }
+  await expect($.classic.PostToolUse(apply)).resolves.toEqual({})
+  expect(calls).toHaveLength(1)
+})
+
 test('nonzero Go Post exit preserves the host result and requires FULL review', options, async ($, on) => {
   const calls: string[] = []
   const toasts: string[] = []

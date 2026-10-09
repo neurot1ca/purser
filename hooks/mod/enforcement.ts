@@ -35,6 +35,7 @@ function mapPostToolUse(event: PostEvent, stdout: string): {
 } {
   if (!stdout.trim()) return {}
   const output = JSON.parse(stdout)
+  if (output !== null && typeof output === 'object' && !Array.isArray(output) && Object.keys(output).length === 0) return {}
   const specific = output?.hookSpecificOutput
   if (specific?.hookEventName !== event) throw new Error(`invalid Go ${event} output`)
   if (specific.updatedToolOutput !== undefined && !Array.isArray(specific.updatedToolOutput)) {
