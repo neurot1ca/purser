@@ -30,7 +30,7 @@ GO_HOOK_TARGETS = (
     ("linux", "amd64"), ("linux", "arm64"),
     ("darwin", "amd64"), ("darwin", "arm64"),
 )
-MOD_SOURCE_FILES = ("hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts", "hooks/mod/board.ts", "hooks/mod/usage.ts", "hooks/mod/enforcement.ts", "hooks/mod/autocompact.ts")
+MOD_SOURCE_FILES = ("hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts", "hooks/mod/board.ts", "hooks/mod/usage.ts", "hooks/mod/enforcement.ts", "hooks/mod/autocompact.ts", "hooks/mod/state-root.ts")
 PLUGIN_RUNTIME_FILES = (
     "bin/purser-launcher.js", "plugin/mcp.json", "hooks/hooks.json",
     ".claude/hooks/orchestrator/config.json",
