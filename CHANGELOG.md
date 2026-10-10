@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.110 — 2026-10-10
+
+- **Changed:** The job host records the worker's test runs (command, exit code, output tail) and validation comes from that evidence, so Claude no longer reruns focused tests that already passed.
+- **Changed:** The band and the job board name each job's stage (coding, coded · fetching result, in review, accepted, done) and no longer show overdue.
+- **Fixed:** A job whose worker died is finished by wait (TIMED_OUT past its deadline), and cancelling it gives CANCELLED instead of PROCESS_UNCONFIRMED.
+- **Fixed:** Scope leases no longer leak: hand-applied jobs, superseded send-back jobs, cancelled queued jobs and unconfirmed launches release theirs.
+- **Fixed:** The Linux test suite and Go parity tests pass on Linux.
+
 ## 0.1.109 — 2026-10-09
 
 - **Fixed:** Codex jobs launch on Linux and macOS instead of failing with PROCESS_UNCONFIRMED.
