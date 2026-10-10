@@ -83,6 +83,37 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		bundle["worker_validation"] = worker
 		bundle["validation"] = worker["status"]
 	}
+	evidence, _ := job["testEvidence"].([]any)
+	if len(evidence) > 0 {
+		worker := mapValue(bundle["worker_validation"])
+		worker["test_evidence"] = evidence
+		worker["source"] = "HOST_TEST_EVIDENCE"
+		status := "PASS"
+		malformed := false
+		failed := job["testEvidenceFailed"] == true
+		for _, entry := range evidence {
+			value := mapValue(entry)["exit_code"]
+			code, ok := value.(float64)
+			if !ok {
+				if integer, valid := value.(int); valid {
+					code, ok = float64(integer), true
+				}
+			}
+			if !ok || code != float64(int(code)) {
+				malformed = true
+				break
+			}
+			if code != 0 {
+				failed = true
+			}
+		}
+		if malformed {
+			status = "UNKNOWN"
+		} else if failed {
+			status = "FAIL"
+		}
+		worker["status"] = status
+	}
 	if stringValue(pending["phase"]) == "plan" {
 		if _, planErr := storePostPlan(root, original, pending["task_id"], content, bundle); planErr != nil {
 			return nil, planErr

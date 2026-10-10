@@ -93,7 +93,9 @@ dispatcher runs in the background; keep talking with the user meanwhile.
 
 Main Claude keeps routing, semantic review, disagreement resolution,
 acceptance, and commits. Review from the receipt and the bundle files it
-names. To accept, call `codex_apply` with `jobId`, `acceptOnly: true` and
+names. When `worker_validation.source` is `HOST_TEST_EVIDENCE` with status
+PASS, the host saw the worker's test runs pass: do not rerun those focused
+tests; rerun only when that evidence is missing, UNKNOWN or FAIL. To accept, call `codex_apply` with `jobId`, `acceptOnly: true` and
 `revision` set to the receipt's `revision` (the bundle's
 `changed_paths_sha256`); Purser records it only from the main thread. Then
 send the dispatcher one message naming the job and revision; it applies that

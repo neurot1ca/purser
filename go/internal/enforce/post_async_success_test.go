@@ -259,6 +259,68 @@ func TestFinalizeNoDeltaReleasesScopeLease(t *testing.T) {
 	}
 }
 
+func TestAsyncSuccessValidationUsesRecordedTestEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantWorker, wantBundle, wantSource string
+		evidence                                 []any
+		evidenceFailed                           bool
+	}{
+		{name: "pass", wantWorker: "PASS", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(0)}}},
+		{name: "fail", wantWorker: "FAIL", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(1)}}},
+		{name: "capped_out_failure", wantWorker: "FAIL", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{
+			map[string]any{"command": "go test ./pkg0", "exit_code": float64(0)},
+			map[string]any{"command": "go test ./pkg1", "exit_code": float64(0)},
+			map[string]any{"command": "go test ./pkg2", "exit_code": float64(0)},
+			map[string]any{"command": "go test ./pkg3", "exit_code": float64(0)},
+			map[string]any{"command": "go test ./pkg4", "exit_code": float64(0)},
+			map[string]any{"command": "go test ./pkg5", "exit_code": float64(0)},
+		}, evidenceFailed: true},
+		{name: "malformed", wantWorker: "UNKNOWN", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./..."}}},
+		{name: "worker_fail_overridden", wantWorker: "PASS", wantBundle: "FAIL", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(0)}}},
+		{name: "no_evidence_fallback", wantWorker: "PASS", wantBundle: "PASS", wantSource: "WORKER_REPORTED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, tc.name)
+			pending["worker_validation"] = map[string]any{"source": "WORKER_REPORTED", "status": "PASS", "summary": "passed"}
+			if tc.name == "worker_fail_overridden" {
+				pending["worker_validation"] = map[string]any{"source": "WORKER_REPORTED", "status": "FAIL", "summary": "failed"}
+			}
+			if tc.evidence != nil {
+				job["testEvidence"] = tc.evidence
+				if tc.evidenceFailed {
+					job["testEvidenceFailed"] = true
+				}
+				if err := atomicAdmissionJSON(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+					t.Fatal(err)
+				}
+			}
+			response, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+				map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bundle := responseBundle(t, response)
+			worker := mapValue(bundle["worker_validation"])
+			if worker["status"] != tc.wantWorker || bundle["validation"] != tc.wantBundle {
+				t.Fatalf("worker validation=%v bundle validation=%v want worker=%s bundle=%s", worker, bundle["validation"], tc.wantWorker, tc.wantBundle)
+			}
+			if worker["source"] != tc.wantSource {
+				t.Fatalf("worker source=%v want %s", worker["source"], tc.wantSource)
+			}
+			if tc.evidence == nil {
+				if _, exists := bundle["test_evidence"]; exists {
+					t.Fatalf("unexpected test_evidence: %#v", bundle["test_evidence"])
+				}
+				if _, exists := worker["test_evidence"]; exists {
+					t.Fatalf("unexpected worker test_evidence: %#v", worker["test_evidence"])
+				}
+			} else if !reflect.DeepEqual(worker["test_evidence"], tc.evidence) {
+				t.Fatalf("worker test_evidence=%#v want %#v", worker["test_evidence"], tc.evidence)
+			}
+		})
+	}
+}
+
 func TestPostAsyncPlanCompletionStoresCompleteArtifact(t *testing.T) {
 	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -56,6 +58,38 @@ func TestEventStreamRecordsThreadBeforeTerminalFailure(t *testing.T) {
 	result := stream.Result(false, 1, "")
 	if result.ThreadID != "thread-resume" || result.Status != "error" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestTestEvidenceKeepsLatestRunnerRunsAndBoundsOutput(t *testing.T) {
+	events := []map[string]any{
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./...", "exit_code": float64(1), "aggregated_output": "old"}},
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "echo hello", "exit_code": float64(0), "aggregated_output": "ignored"}},
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "echo \"go test\"", "exit_code": float64(0), "aggregated_output": "ignored"}},
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "grep 'npm test' file", "exit_code": float64(0), "aggregated_output": "ignored"}},
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./...", "exit_code": float64(0), "aggregated_output": strings.Repeat("x", 5000)}},
+	}
+	got := TestEvidence(events)
+	if len(got) != 1 || got[0]["exit_code"] != 0 || got[0]["command"] != "go test ./..." {
+		t.Fatalf("test evidence = %#v", got)
+	}
+	if tail := got[0]["output_tail"].(string); len(tail) != 4096 {
+		t.Fatalf("output tail bytes = %d, want 4096", len(tail))
+	}
+}
+
+func TestTestEvidenceFailedSeesFailureOutsideOutputCap(t *testing.T) {
+	events := []map[string]any{
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./failed", "exit_code": float64(1)}},
+	}
+	for i := 0; i < 6; i++ {
+		events = append(events, map[string]any{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./pkg" + strconv.Itoa(i), "exit_code": float64(0)}})
+	}
+	if evidence := TestEvidence(events); len(evidence) != 6 {
+		t.Fatalf("capped evidence length = %d, want 6", len(evidence))
+	}
+	if !TestEvidenceFailed(events) {
+		t.Fatal("capped-out failure was not retained")
 	}
 }
 

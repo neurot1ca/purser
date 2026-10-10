@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // EventResult is the interpretation of an agent's JSON event stream.
@@ -141,6 +143,98 @@ func (s *EventStream) consume(line []byte) {
 }
 
 func (s *EventStream) Events() []map[string]any { return s.events }
+
+type testEvidenceRun struct {
+	index int
+	value map[string]any
+}
+
+func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
+	latest := make(map[string]testEvidenceRun)
+	for i, event := range events {
+		if event["type"] != "item.completed" {
+			continue
+		}
+		item, _ := event["item"].(map[string]any)
+		if item["type"] != "command_execution" {
+			continue
+		}
+		command, _ := item["command"].(string)
+		if !testRunnerCommand(command) {
+			continue
+		}
+		exitCode, ok := item["exit_code"].(float64)
+		if !ok || exitCode != float64(int(exitCode)) {
+			continue
+		}
+		output, _ := item["aggregated_output"].(string)
+		lines := strings.Split(output, "\n")
+		if len(lines) > 40 {
+			lines = lines[len(lines)-40:]
+		}
+		tail := strings.Join(lines, "\n")
+		if len(tail) > 4096 {
+			tail = tail[len(tail)-4096:]
+			for !utf8.ValidString(tail) {
+				tail = tail[1:]
+			}
+		}
+		latest[command] = testEvidenceRun{index: i, value: map[string]any{
+			"command": command, "exit_code": int(exitCode), "output_tail": tail,
+		}}
+	}
+	runs := make([]testEvidenceRun, 0, len(latest))
+	failed := false
+	for _, item := range latest {
+		runs = append(runs, item)
+		if item.value["exit_code"].(int) != 0 {
+			failed = true
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool { return runs[i].index < runs[j].index })
+	return runs, failed
+}
+
+// TestEvidence returns the latest completed test-runner command for each
+// distinct command string, keeping only the six most recent runs.
+func TestEvidence(events []map[string]any) []map[string]any {
+	runs, _ := collectTestEvidence(events)
+	if len(runs) > 6 {
+		runs = runs[len(runs)-6:]
+	}
+	out := make([]map[string]any, len(runs))
+	for i, item := range runs {
+		out[i] = item.value
+	}
+	return out
+}
+
+// TestEvidenceFailed reports whether any latest-per-command test run failed,
+// including runs omitted from TestEvidence's six-entry output cap.
+func TestEvidenceFailed(events []map[string]any) bool {
+	_, failed := collectTestEvidence(events)
+	return failed
+}
+
+func testRunnerCommand(command string) bool {
+	tokens := strings.Fields(command)
+	for _, prefix := range [][]string{{"go", "test"}, {"pytest"}, {"npm", "test"}, {"pnpm", "test"}, {"cargo", "test"}} {
+		if len(tokens) < len(prefix) {
+			continue
+		}
+		matched := true
+		for i, token := range prefix {
+			if tokens[i] != token {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
 
 // Result flushes an unterminated final line and returns a snapshot.
 func (s *EventStream) Result(interrupted bool, exitCode int, stderr string) EventResult {

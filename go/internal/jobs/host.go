@@ -479,6 +479,13 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		job, err = Read(path)
 		if err == nil {
 			_ = job.Set("exitCode", exitCode)
+			events := stream.Events()
+			if evidence := TestEvidence(events); len(evidence) > 0 {
+				_ = job.Set("testEvidence", evidence)
+			}
+			if TestEvidenceFailed(events) {
+				_ = job.Set("testEvidenceFailed", true)
+			}
 			err = Write(path, job)
 		}
 		if releaseErr := lock.Release(); err == nil {

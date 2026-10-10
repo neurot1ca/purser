@@ -38,6 +38,9 @@ func TestHostFakeWorker(t *testing.T) {
 	}
 	_, _ = os.Stdout.WriteString("{\"type\": \"thread.started\", \"thread_id\": \"fake-thread\"}\r\n")
 	_, _ = os.Stdout.WriteString("{\"type\": \"item.completed\", \"item\": {\"type\": \"agent_message\", \"text\": \"fake answer\"}}\r\n")
+	if os.Getenv("PURSER_HOST_FAKE_TEST_EVIDENCE") == "1" {
+		_, _ = os.Stdout.WriteString("{\"type\": \"item.completed\", \"item\": {\"type\": \"command_execution\", \"command\": \"go test ./...\", \"exit_code\": 0, \"aggregated_output\": \"ok\\n\"}}\r\n")
+	}
 	_, _ = os.Stdout.WriteString("{\"type\": \"turn.completed\"}\r\n")
 	_ = os.WriteFile(output, []byte("fake answer"), 0600)
 	if mode == "nonzero" {
@@ -103,6 +106,9 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "success" {
+				t.Setenv("PURSER_HOST_FAKE_TEST_EVIDENCE", "1")
+			}
 			root := t.TempDir()
 			dir := filepath.Join(root, "codex_exec_mcp", "jobs")
 			if err := os.MkdirAll(dir, 0700); err != nil {
@@ -178,6 +184,10 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 				data, readErr := os.ReadFile(filepath.Join(dir, output))
 				if readErr != nil || thread != "fake-thread" || string(data) != "fake answer" {
 					t.Fatalf("success fields mismatch: thread=%q output=%q err=%v", thread, data, readErr)
+				}
+				var evidence []map[string]any
+				if !got.Get("testEvidence", &evidence) || len(evidence) != 1 || evidence[0]["command"] != "go test ./..." || evidence[0]["exit_code"] != float64(0) {
+					t.Fatalf("test evidence missing from completed record: %#v", evidence)
 				}
 				threadRecord := LoadRecord(filepath.Join(root, "codex_exec_mcp", "threads"), thread)
 				if threadRecord["cwd"] != root || threadRecord["thread_id"] != thread {
