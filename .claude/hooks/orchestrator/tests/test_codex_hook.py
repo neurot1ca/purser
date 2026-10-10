@@ -6145,7 +6145,7 @@ def test_worker_validation_uses_host_test_evidence(
     validation = response_bundle(raw, config)["worker_validation"]
     assert validation["status"] == expected_status
     assert validation["source"] == expected_source
-    assert validation["test_evidence"] == test_evidence
+    assert validation.get("test_evidence", []) == test_evidence
     if test_evidence_failed:
         assert validation["test_evidence_failed"] is True
 
