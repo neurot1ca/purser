@@ -223,6 +223,74 @@ func TestPlanStopRemindsApplyAndDispatchPlans(t *testing.T) {
 	}
 }
 
+func TestPlanStopResumesAfterResolvedLinkedJobs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fields map[string]any
+	}{
+		{name: "hand applied", fields: map[string]any{"state": "SUCCEEDED", "applyState": "applied", "applyReason": "hand_applied_detected"}},
+		{name: "discarded", fields: map[string]any{"state": "SUCCEEDED", "discarded": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, artifact := planFixture(t)
+			t.Setenv("PURSER_STATE_DIR", root)
+			_, err := AcceptPlan(root, repo, "plan-resolved", artifact, []int{1, 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			jobID, taskID := strings.Repeat("d", 64), "plan-resolved-m1of2-p1c"
+			if _, matched, err := BindPlanJob(root, repo, taskID, jobID); err != nil || !matched {
+				t.Fatalf("bind plan job: matched=%v err=%v", matched, err)
+			}
+			job := map[string]any{"jobId": jobID, "taskId": taskID}
+			for key, value := range tc.fields {
+				job[key] = value
+			}
+			jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+			if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+				t.Fatal(err)
+			}
+			data, _ := json.Marshal(job)
+			if err := os.WriteFile(jobPath, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			plans, err := ReconcilePlans(root, repo)
+			if err != nil || len(plans) != 1 || plans[0].PendingNextAction != "dispatch" {
+				t.Fatalf("reconciled plan = %#v, err=%v; want dispatch", plans, err)
+			}
+			transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+			appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue the plan."}})
+			if got := planStop(t, repo, transcript, false); !strings.Contains(got, "plan-resolved M1/2 dispatch") {
+				t.Fatalf("Stop did not resume the next pass: %q", got)
+			}
+		})
+	}
+}
+
+func TestPlanStopKeepsApplyForUnappliedSucceededJob(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	t.Setenv("PURSER_STATE_DIR", root)
+	if _, err := AcceptPlan(root, repo, "plan-unapplied", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	jobID, taskID := strings.Repeat("e", 64), "plan-unapplied-m1of2-p1c"
+	if _, matched, err := BindPlanJob(root, repo, taskID, jobID); err != nil || !matched {
+		t.Fatalf("bind plan job: matched=%v err=%v", matched, err)
+	}
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+	if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{"jobId": jobID, "taskId": taskID, "state": "SUCCEEDED"})
+	if err := os.WriteFile(jobPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	plans, err := ReconcilePlans(root, repo)
+	if err != nil || len(plans) != 1 || plans[0].PendingNextAction != "apply" {
+		t.Fatalf("reconciled plan = %#v, err=%v; want apply", plans, err)
+	}
+}
+
 func TestPlanStopCompactSizeDoesNotExceedLegacySingleton(t *testing.T) {
 	root, repo, artifact := planFixture(t)
 	t.Setenv("PURSER_STATE_DIR", root)

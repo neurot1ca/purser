@@ -741,6 +741,9 @@ func hasAppliedJob(state *PlanState, jobID string) bool {
 }
 
 func terminalPlanJob(job map[string]any, state string) bool {
+	if discarded, _ := job["discarded"].(bool); discarded {
+		return true
+	}
 	if state == "FAILED" || state == "CANCELLED" || state == "TIMED_OUT" {
 		return true
 	}
