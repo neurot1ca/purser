@@ -1,0 +1,14 @@
+[
+  {
+    "name": "tool_input_cwd_precedes_event_cwd",
+    "tool_input_cwd": "<TOOL_CWD>",
+    "event_cwd": "<EVENT_CWD>",
+    "want": "<TOOL_ROOT>"
+  },
+  {
+    "name": "event_cwd_is_used_without_tool_input_cwd",
+    "tool_input_cwd": "",
+    "event_cwd": "<EVENT_CWD>",
+    "want": "<EVENT_ROOT>"
+  }
+]

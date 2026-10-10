@@ -458,6 +458,73 @@ func TestProjectRootWalk(t *testing.T) {
 	}
 }
 
+func TestProjectRootCwdPrecedence(t *testing.T) {
+	for _, key := range []string{"GIT_DIR", "GIT_WORK_TREE"} {
+		value, set := os.LookupEnv(key)
+		_ = os.Unsetenv(key)
+		t.Cleanup(func() {
+			if set {
+				_ = os.Setenv(key, value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		})
+	}
+	var cases []struct {
+		Name         string `json:"name"`
+		ToolInputCwd string `json:"tool_input_cwd"`
+		EventCwd     string `json:"event_cwd"`
+		Want         string `json:"want"`
+	}
+	data, err := os.ReadFile(filepath.Join("testdata", "project_root_events.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	toolRepo := filepath.Join(base, "tool-repo")
+	eventRepo := filepath.Join(base, "event-repo")
+	for _, repo := range []string{toolRepo, eventRepo} {
+		if out, err := exec.Command("git", "init", "--quiet", repo).CombinedOutput(); err != nil {
+			t.Fatalf("git init %q: %v: %s", repo, err, out)
+		}
+	}
+	toolCwd := filepath.Join(toolRepo, "nested", "work")
+	if err := os.MkdirAll(toolCwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			toolInputCwd := tc.ToolInputCwd
+			if toolInputCwd == "<TOOL_CWD>" {
+				toolInputCwd = toolCwd
+			}
+			eventCwd := tc.EventCwd
+			if eventCwd == "<EVENT_CWD>" {
+				eventCwd = eventRepo
+			}
+			want := tc.Want
+			switch want {
+			case "<TOOL_ROOT>":
+				want = resolve(toolRepo)
+			case "<EVENT_ROOT>":
+				want = resolve(eventRepo)
+			}
+			event := map[string]any{"cwd": eventCwd}
+			if toolInputCwd != "" {
+				event["tool_input"] = map[string]any{"cwd": toolInputCwd}
+			} else {
+				event["tool_input"] = map[string]any{}
+			}
+			if got := projectRoot(event); got != want {
+				t.Fatalf("projectRoot() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestProtectedProfileParseFailure(t *testing.T) {
 	for _, input := range []string{
 		"schema_version = 1\n[paths]\nprotected = [\"private/**\"\n",
