@@ -30,15 +30,12 @@ func TestPythonOracleParity(t *testing.T) {
 	if err := json.Unmarshal(oracleBytes, &oracle); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, ".tmp"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	home, err := os.MkdirTemp(filepath.Join(root, ".tmp"), "checkreport-")
+	home, err := os.MkdirTemp(t.TempDir(), "checkreport-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(home)
-	project, err := os.MkdirTemp(filepath.Join(root, ".tmp"), "checkreport-project-")
+	project, err := os.MkdirTemp(t.TempDir(), "checkreport-project-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +108,7 @@ func TestPythonOracleParity(t *testing.T) {
 func TestRuntimeRowUsesPluginVersionAndPlatform(t *testing.T) {
 	_, source, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	if err := os.MkdirAll(filepath.Join(root, ".tmp"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	home, err := os.MkdirTemp(filepath.Join(root, ".tmp"), "checkreport-runtime-")
+	home, err := os.MkdirTemp(t.TempDir(), "checkreport-runtime-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,15 +236,9 @@ func withoutRuntimeRows(report Report) Report {
 
 func checkReportTestDir(t *testing.T, prefix string) string {
 	t.Helper()
-	_, source, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", "..", ".tmp"))
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, prefix)
+	dir, err := os.MkdirTemp(t.TempDir(), prefix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }

@@ -7,11 +7,10 @@ import pytest
 
 
 @pytest.fixture(scope="session")
-def go_test_tools():
+def go_test_tools(tmp_path_factory):
     go_root = Path(__file__).parents[4] / "go"
     worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
-    scratch = go_root / ".tmp" / f"mixed-owner-{worker}"
-    scratch.mkdir(parents=True, exist_ok=True)
+    scratch = tmp_path_factory.mktemp(f"mixed-owner-{worker}")
     cache = scratch / "gocache"
     hook = scratch / ("purser-hook-mixed.exe" if os.name == "nt" else "purser-hook-mixed")
     fake = scratch / ("fake-codex.exe" if os.name == "nt" else "fake-codex")

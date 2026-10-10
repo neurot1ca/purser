@@ -3,6 +3,7 @@ package ledger
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -83,6 +84,40 @@ func TestScopedManifestBudgetFailures(t *testing.T) {
 	failure, ok := err.(*inspectionError)
 	if !ok || failure.Code != "MANIFEST_BUDGET_EXCEEDED" || manifest != nil {
 		t.Fatalf("expired manifest = %#v, %v", manifest, err)
+	}
+}
+
+func TestScopedManifestSkipsIgnoredDirectoryContents(t *testing.T) {
+	root := initGitRepository(t)
+	ignore := filepath.Join(root, ".gitignore")
+	if err := os.WriteFile(ignore, []byte("scope/large/\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "scope"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scope", "tracked.txt"), []byte("tracked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "add", ".gitignore", "scope/tracked.txt")
+	git(t, root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture")
+	large := filepath.Join(root, "scope", "large")
+	if err := os.MkdirAll(large, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5000; i++ {
+		name := filepath.Join(large, fmt.Sprintf("%05d", i))
+		if err := os.WriteFile(name, []byte("ignored"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manifest, err := scopedManifest(root, []string{"scope"}, time.Second, 3)
+	if err != nil {
+		t.Fatalf("capture scoped manifest with ignored directory: %v", err)
+	}
+	if len(manifest) != 1 || manifest[0]["path"] != "scope/large" || manifest[0]["kind"] != "directory" {
+		t.Fatalf("ignored directory manifest = %#v; want one directory entry", manifest)
 	}
 }
 

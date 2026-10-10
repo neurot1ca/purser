@@ -167,7 +167,7 @@ func manifestPaths(raw []byte, deadline time.Time) (map[string]bool, error) {
 			}
 		}
 		if path != "" {
-			paths[decodeGitPath([]byte(path))] = true
+			paths[strings.TrimSuffix(decodeGitPath([]byte(path)), "/")] = true
 		}
 	}
 	return paths, checkManifestDeadline(deadline)
@@ -200,7 +200,7 @@ func scopedManifest(root string, scope []string, timeout time.Duration, budgetSe
 	if err != nil {
 		return nil, err
 	}
-	ignored, err := manifestGit(root, append([]string{"ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--"}, pathspecs...), timeout, "listing scoped ignored files", deadline)
+	ignored, err := manifestGit(root, append([]string{"ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory", "-z", "--"}, pathspecs...), timeout, "listing scoped ignored files", deadline)
 	if err != nil {
 		return nil, err
 	}
@@ -248,6 +248,8 @@ func scopedManifest(root string, scope []string, timeout time.Duration, budgetSe
 				return nil, &inspectionError{"MANIFEST_IO_FAILED", "A scoped manifest file could not be fingerprinted."}
 			}
 			manifest = append(manifest, map[string]any{"path": relative, "sha256": digest, "line_count": lines, "kind": "file"})
+		} else if info.IsDir() {
+			manifest = append(manifest, map[string]any{"path": relative, "line_count": 0, "kind": "directory"})
 		}
 	}
 	return manifest, nil
