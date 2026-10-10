@@ -141,6 +141,41 @@ func TestCancelRetirementFailureKeepsDiscardResult(t *testing.T) {
 	}
 }
 
+func TestDiscardedCancelRetiresWorktreeWhenChildCompletes(t *testing.T) {
+	id := strings.Repeat("e", 64)
+	state, worktree := retirementApplyJob(t, id)
+	if _, err := retention.AttachWorktree(state, worktree, id, "thread"); err != nil {
+		t.Fatal(err)
+	}
+	jobPath := filepath.Join(state, "codex_exec_mcp", "jobs", id+".json")
+	var job map[string]any
+	encoded, err := os.ReadFile(jobPath)
+	if err != nil || json.Unmarshal(encoded, &job) != nil {
+		t.Fatalf("read job: %v", err)
+	}
+	job["discarded"] = true
+	encoded, err = json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, jobPath, string(encoded))
+	prior := launchRetirementDetached
+	launchRetirementDetached = func(argv, _ []string, _ string) (int, int64, error) {
+		if len(argv) < 4 || argv[1] != "retire-worktree" || argv[3] != id {
+			t.Fatalf("unexpected retirement command: %#v", argv)
+		}
+		return 1, 1, RetireWorktree(state, id)
+	}
+	t.Cleanup(func() { launchRetirementDetached = prior })
+	result := Cancel(state, map[string]any{"jobId": id})
+	if result["structuredContent"].(map[string]any)["discarded"] != true {
+		t.Fatalf("cancel result = %#v", result)
+	}
+	if pathExists(worktree) {
+		t.Fatal("discarded worktree was not retired")
+	}
+}
+
 func retirementApplyJob(t *testing.T, id string) (string, string) {
 	t.Helper()
 	base := t.TempDir()

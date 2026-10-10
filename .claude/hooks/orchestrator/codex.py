@@ -2791,6 +2791,8 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                     state = "accepted"
                 else:
                     state = "in review"
+            if job.get("discarded") is True:
+                state, review, apply = "discarded", "—", "—"
             eta_label = "—"
             if state in {"coding", "stalled"}:
                 started = job.get("startedAt", job.get("acceptedAt"))
@@ -3263,7 +3265,9 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             if (event.get("tool_name") in CODEX_CANCEL_TOOL_NAMES
                     and job is not None and job.get("discarded") is True):
                 _release_async_lease(root, index, pending)
-                return _replacement({"jobId": index["jobId"], "discarded": True}, _load_config(config))
+                (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
+                return _replacement({"jobId": index["jobId"], "state": job.get("state"), "discarded": True},
+                                    _load_config(config))
             if index.get("terminal_failure") is True or not (job and job.get("worktreePath") and job.get("applyState") != "applied"):
                 _release_async_lease(root, index, pending)
                 (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
@@ -3294,6 +3298,15 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
         index["stage"] = "FINALIZING"
         _atomic_json_write(path, index)
         job = _async_job(root, index)
+        if (event.get("tool_name") in CODEX_CANCEL_TOOL_NAMES
+                and job is not None and job.get("discarded") is True):
+            response = _replacement({"jobId": index["jobId"], "state": job.get("state"), "discarded": True},
+                                    _load_config(config))
+            index.update(stage="CONSUMED", response=response)
+            _atomic_json_write(path, index)
+            _release_async_lease(root, index, pending)
+            _remove_pending(root, original)
+            return response
         liveness = job.get("liveness") if isinstance(job, Mapping) else None
         silent_gap = liveness.get("longestSilentGapSeconds") if isinstance(liveness, Mapping) else None
         if (isinstance(silent_gap, (int, float)) and not isinstance(silent_gap, bool)

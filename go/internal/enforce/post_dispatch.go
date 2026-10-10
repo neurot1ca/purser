@@ -357,6 +357,33 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 		return response, replaceErr
 	}
 	defer func() { releaseTaskUsageLock(lock); _ = lock.Close() }()
+	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") {
+		if job := asyncJob(root, index); job != nil && job["discarded"] == true {
+			loaded, loadErr := loadPreConfig()
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			field := stringValue(loaded["post_tool_output_field"])
+			if field == "" {
+				field = "updatedToolOutput"
+			}
+			response, replaceErr := replacement(map[string]any{"jobId": index["jobId"], "state": job["state"], "discarded": true}, field)
+			if replaceErr != nil {
+				return nil, replaceErr
+			}
+			indexPath := filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json")
+			if err := consumeAsyncResult(indexPath, index, "", response); err != nil {
+				return nil, err
+			}
+			key := stringValue(index["call_key"])
+			project := stringValue(index["project_key"])
+			if asyncHash.MatchString(key) {
+				_ = leaseRelease(root, project, key)
+				_ = os.Remove(filepath.Join(root, "pending", key+".json"))
+			}
+			return response, nil
+		}
+	}
 	if cached != nil {
 		response, _ := cached.(map[string]any)
 		job := asyncJob(root, index)

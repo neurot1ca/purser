@@ -49,6 +49,36 @@ func TestFinishAsyncSuccessKeepsStringMapFindings(t *testing.T) {
 	t.Fatalf("async finding missing from bundle: %#v", findings)
 }
 
+func TestPostAsyncDiscardedCancelReturnsOnlyReceipt(t *testing.T) {
+	state, repo, event, index, _, _, job, _, _ := newAsyncSuccessCase(t, "discarded_cancel")
+	event["tool_name"] = "mcp__codex-main__codex_cancel"
+	event["cwd"] = repo
+	job["discarded"] = true
+	if err := atomicAdmissionJSON(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	response, err := postAsyncDispatch(event, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := responseBundle(t, response); !reflect.DeepEqual(got, map[string]any{
+		"jobId": index["jobId"], "state": "SUCCEEDED", "discarded": true,
+	}) {
+		t.Fatalf("discard receipt = %#v", got)
+	}
+	if _, exists := response["systemMessage"]; exists {
+		t.Fatalf("discard receipt added completion guidance: %#v", response)
+	}
+	var saved map[string]any
+	data, err := os.ReadFile(filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json"))
+	if err != nil || json.Unmarshal(data, &saved) != nil {
+		t.Fatal(err)
+	}
+	if saved["stage"] != "CONSUMED" {
+		t.Fatalf("discard receipt was not cached: %#v", saved)
+	}
+}
+
 func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "durable_review_finalization.json"))
 	if err != nil {

@@ -40,6 +40,9 @@ def test_post_board_python_fixture(tmp_path, monkeypatch):
                    boardDisplayCount=0)
     cases.append(_case("applied_at_wins", [applied]))
     for name, job, bundle in (
+        ("discarded", _job("7" * 64, discarded=True, boardDisplayCount=0),
+         {"phase": "implementation", "apply": "codex_apply", "changed_paths": ["src/a"],
+          "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE"}),
         ("in_review", _job("f" * 64, boardDisplayCount=0),
          {"phase": "implementation", "apply": "codex_apply", "changed_paths": ["src/a"]}),
         ("accepted", _job("g" * 64, acceptance={}, boardDisplayCount=0),
@@ -89,6 +92,8 @@ def test_post_board_python_fixture(tmp_path, monkeypatch):
             path.write_text(content, encoding="utf-8")
         board, ids = codex._project_job_board_details(state, "fixture")
         case["board"], case["ids"] = board, sorted(ids)
+        if case["name"] == "discarded":
+            assert "| discarded | — | — |" in board
 
     clock = datetime(2027, 1, 15, tzinfo=timezone.utc)
     base_receipt = {"model": "gpt-test", "effort": "high", "5h_used_pct": 31,

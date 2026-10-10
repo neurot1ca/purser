@@ -2079,6 +2079,8 @@ def test_cancel_on_applied_job_remains_consumed_denial(workspace, config):
 def test_discard_cancel_is_idempotent_and_leaves_foreign_owner_lease(workspace, config, monkeypatch):
     repo, state, job_id, job_path, index, leases = _consumed_worktree_job(workspace, config)
     assert leases.acquire("foreign-owner", "foreign-task", ["other.py"], job_id="f" * 64)["status"] == ledger.OK
+    index["stage"] = "ACTIVE"
+    (state / "async_jobs" / f"{job_id}.json").write_text(json.dumps(index), encoding="utf-8")
     monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: state)
     server = codex_exec_mcp.Server(host=True, job_dir=job_path.parent)
     first = server._cancel_job({"jobId": job_id})["structuredContent"]
@@ -2090,7 +2092,13 @@ def test_discard_cancel_is_idempotent_and_leaves_foreign_owner_lease(workspace, 
                                    config=config, state_root=state, repo_root=repo)
 
     assert first["discarded"] is True and second["discarded"] is True
-    assert response_bundle(response, config)["discarded"] is True
+    assert response_bundle(response, config) == {"jobId": job_id, "state": "SUCCEEDED", "discarded": True}
+    assert "systemMessage" not in response
+    assert "codex_apply" not in json.dumps(response)
+    replay = codex.post_tool_use({**followup, "hook_event_name": "PostToolUse",
+                                  "tool_response": {"structuredContent": second}},
+                                 config=config, state_root=state, repo_root=repo)
+    assert response_bundle(replay, config) == {"jobId": job_id, "state": "SUCCEEDED", "discarded": True}
     assert leases.owner_state(index["call_key"]) == "RELEASED"
     assert leases.owner_state("foreign-owner") == "ACTIVE"
 

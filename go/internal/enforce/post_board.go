@@ -229,6 +229,9 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 				state = "in review"
 			}
 		}
+		if j["discarded"] == true {
+			state, review, apply = "discarded", "—", "—"
+		}
 		eta := "—"
 		if state == "coding" || state == "stalled" {
 			elapsed := (float64(now.UnixNano())/1e9 - boardNumber(first(j["startedAt"], j["acceptedAt"]))) / 60
