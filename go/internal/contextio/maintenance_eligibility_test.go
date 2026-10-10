@@ -11,7 +11,7 @@ import (
 )
 
 func TestMaintenanceEligibilityPythonOracle(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "maintenance_reports_oracle.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "maintenance_reports_oracle.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

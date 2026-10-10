@@ -99,7 +99,7 @@ func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "codex_exec_records", "running.json")
+	fixturePath := filepath.Join("testdata", "codex_exec_records", "running.json")
 	fixtureData, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)

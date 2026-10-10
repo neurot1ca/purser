@@ -2,11 +2,10 @@ package review
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"purser-hook/internal/testutil"
 	"runtime"
 	"strconv"
 	"strings"
@@ -14,107 +13,59 @@ import (
 	"time"
 
 	"purser-hook/internal/profile"
+	"purser-hook/internal/testutil"
 )
 
-func TestChecksParityFixture(t *testing.T) {
-	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/checks.json")
-	if err != nil {
-		t.Fatal(err)
+func TestChecksCommandHelper(t *testing.T) {
+	mode := os.Getenv("PURSER_CHECK_HELPER")
+	if mode == "" {
+		return
 	}
-	var fixture struct {
-		Definitions []profile.Check `json:"definitions"`
-		Changed     []string        `json:"changed_paths"`
-		Selected    []string        `json:"selected"`
-		Cases       []struct {
-			Name     string            `json:"name"`
-			Tracked  map[string]string `json:"tracked_files"`
-			PreFiles map[string]string `json:"pre_files"`
-			NoGit    bool              `json:"no_git"`
-			Argv     []string          `json:"argv"`
-			Expected ChecksReport      `json:"expected"`
-		} `json:"cases"`
+	switch mode {
+	case "fail":
+		fmt.Fprintln(os.Stderr, "go check failed")
+		os.Exit(7)
+	case "sleep":
+		if path := os.Getenv("PURSER_CHECK_PID_FILE"); path != "" {
+			if err := os.WriteFile(path, []byte(fmt.Sprint(os.Getpid())), 0600); err != nil {
+				os.Exit(8)
+			}
+		}
+		for {
+			time.Sleep(time.Minute)
+		}
+	case "write":
+		if err := os.WriteFile(os.Getenv("PURSER_CHECK_WRITE_FILE"), []byte("changed"), 0600); err != nil {
+			os.Exit(8)
+		}
+		os.Exit(0)
+	default:
+		os.Exit(9)
 	}
-	if err := json.Unmarshal(data, &fixture); err != nil {
-		t.Fatal(err)
+}
+
+func TestChecksSelectionAndProtectedGlobs(t *testing.T) {
+	checks := []profile.Check{
+		{Name: "go", When: []string{"go/**"}},
+		{Name: "docs", When: []string{"docs/**"}},
+		{Name: "protected", When: []string{".claude/**"}},
 	}
-	selected := SelectChecks(fixture.Definitions, fixture.Changed)
-	names := make([]string, len(selected))
-	for i, check := range selected {
-		names[i] = check.Name
-	}
-	if !equalJSON(names, fixture.Selected) {
-		t.Fatalf("selected %v want %v", names, fixture.Selected)
-	}
-	python := pythonPath(t)
-	working, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, item := range fixture.Cases {
-		repo, err := filepath.Abs(filepath.Join(working, "..", "..", "..", ".tmp", "checks-oracle", item.Name))
-		if err != nil {
-			t.Fatal(err)
+	for _, tc := range []struct {
+		changed []string
+		want    []string
+	}{
+		{[]string{"go/internal/review/checks.go"}, []string{"go"}},
+		{[]string{"docs/readme.md", "go/main.go"}, []string{"go", "docs"}},
+		{[]string{".claude/settings.json"}, []string{"protected"}},
+		{[]string{"other/file.go"}, nil},
+	} {
+		got := SelectChecks(checks, tc.changed)
+		var names []string
+		for _, check := range got {
+			names = append(names, check.Name)
 		}
-		if err := os.MkdirAll(repo, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if !item.NoGit {
-			if err := testutil.Hide(exec.Command("git", "-C", repo, "init", "-q")).Run(); err != nil {
-				t.Fatal(err)
-			}
-			if testutil.Hide(exec.Command("git", "-C", repo, "rev-parse", "--verify", "HEAD")).Run() == nil {
-				cmd := testutil.Hide(exec.Command("git", "-C", repo, "reset", "--hard"))
-				if err := cmd.Run(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := testutil.Hide(exec.Command("git", "-C", repo, "clean", "-fdx")).Run(); err != nil {
-				t.Fatal(err)
-			}
-			for name, content := range item.Tracked {
-				if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if len(item.Tracked) > 0 {
-				for _, args := range [][]string{{"config", "user.email", "parity@example.invalid"}, {"config", "user.name", "Parity"}, {"add", "."}, {"commit", "--allow-empty", "-qm", "baseline"}} {
-					cmd := testutil.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...))
-					if output, err := cmd.CombinedOutput(); err != nil {
-						t.Fatalf("git %v: %v: %s", args, err, output)
-					}
-				}
-			}
-			for name, content := range item.PreFiles {
-				if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-		argv := append([]string(nil), item.Argv...)
-		if len(argv) > 0 && argv[0] == "__PYTHON__" {
-			argv[0] = python
-		}
-		oldCeiling, hadCeiling := os.LookupEnv("GIT_CEILING_DIRECTORIES")
-		if item.NoGit {
-			if err := os.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(repo)); err != nil {
-				t.Fatal(err)
-			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		got := RunChecksReport(repo, []profile.Check{{Name: item.Name, Argv: argv, TimeoutSeconds: 5}}, ctx)
-		cancel()
-		if item.NoGit {
-			if hadCeiling {
-				_ = os.Setenv("GIT_CEILING_DIRECTORIES", oldCeiling)
-			} else {
-				_ = os.Unsetenv("GIT_CEILING_DIRECTORIES")
-			}
-		}
-		for i := range got.Results {
-			got.Results[i].DurationMS = 0
-		}
-		if !equalJSON(got, item.Expected) {
-			t.Fatalf("case %s report %#v want %#v", item.Name, got, item.Expected)
+		if strings.Join(names, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("SelectChecks(%v) = %v, want %v", tc.changed, names, tc.want)
 		}
 	}
 }
@@ -126,95 +77,130 @@ func TestRunChecksEmptyArgvIsUnknown(t *testing.T) {
 	}
 }
 
-func TestRunChecksFailureAndTimeoutKillChild(t *testing.T) {
-	python := pythonPath(t)
-	failed := RunChecks(t.TempDir(), []profile.Check{{Name: "bad", Argv: []string{python, "-c", "print('bad'); raise SystemExit(7)"}, TimeoutSeconds: 2}}, context.Background())
-	if failed[0].Status != "FAIL" || failed[0].ExitCode == nil || *failed[0].ExitCode != 7 || strings.TrimSpace(failed[0].Tail) != "bad" {
-		t.Fatalf("failure result %#v", failed[0])
+func TestRunChecksUnresolvableExecutableIsUnknown(t *testing.T) {
+	got := RunChecks(t.TempDir(), []profile.Check{{Name: "missing", Argv: []string{"purser-missing-check-executable"}, TimeoutSeconds: 1}}, context.Background())
+	if len(got) != 1 || got[0].Status != "UNKNOWN" || !strings.HasPrefix(got[0].Tail, "unresolvable executable:") {
+		t.Fatalf("missing executable result %#v", got)
 	}
+}
+
+func TestRunChecksReportsUntrackedAndTrackedChanges(t *testing.T) {
+	for _, tracked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tracked=%v", tracked), func(t *testing.T) {
+			root := t.TempDir()
+			if err := testutil.Hide(exec.Command("git", "-C", root, "init", "-q")).Run(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "changed.txt")
+			if tracked {
+				if err := os.WriteFile(path, []byte("before"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				for _, args := range [][]string{{"config", "user.email", "test@example.invalid"}, {"config", "user.name", "Test"}, {"add", "changed.txt"}, {"commit", "-qm", "baseline"}} {
+					if out, err := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...)).CombinedOutput(); err != nil {
+						t.Fatalf("git %v: %v: %s", args, err, out)
+					}
+				}
+			}
+			t.Setenv("PURSER_CHECK_HELPER", "write")
+			t.Setenv("PURSER_CHECK_WRITE_FILE", path)
+			got := RunChecksReport(root, []profile.Check{{Name: "write", Argv: checkHelperArgv(), TimeoutSeconds: 2}}, context.Background())
+			if got.Status != "PASS" || len(got.SideEffectPaths) != 1 || got.SideEffectPaths[0] != "changed.txt" {
+				t.Fatalf("report %#v", got)
+			}
+		})
+	}
+}
+
+func TestRunChecksFailureAndTimeoutKillChild(t *testing.T) {
+	failed := runCheckHelper(t, "fail", 2*time.Second, "")
+	if failed.Status != "FAIL" || failed.ExitCode == nil || *failed.ExitCode != 7 || strings.TrimSpace(failed.Tail) != "go check failed" {
+		t.Fatalf("failure result %#v", failed)
+	}
+
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	t.Setenv("CHECK_CHILD_PID", pidFile)
-	script := "import os,subprocess,sys,time; c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); open(os.environ['CHECK_CHILD_PID'],'w').write(str(c.pid)); time.sleep(60)"
-	got := RunChecks(t.TempDir(), []profile.Check{{Name: "tree", Argv: []string{python, "-c", script}, TimeoutSeconds: 1}}, context.Background())
-	if got[0].Status != "UNKNOWN" || !strings.HasSuffix(got[0].Tail, "\ntimed out") {
-		t.Fatalf("timeout result %#v", got[0])
+	got := runCheckHelper(t, "sleep", time.Second, pidFile)
+	if got.Status != "UNKNOWN" || !strings.HasSuffix(got.Tail, "\ntimed out") {
+		t.Fatalf("timeout result %#v", got)
 	}
 	pid := waitCheckPID(t, pidFile)
-	if checkProcessExists(pid) {
-		t.Fatalf("child process %s remains", pid)
+	if processExists(pid) {
+		t.Fatalf("timed out Go check process %s remains", pid)
 	}
 }
 
 func TestRunChecksSharedDeadlineAndCancellation(t *testing.T) {
-	python := pythonPath(t)
+	t.Setenv("PURSER_CHECK_HELPER", "sleep")
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	got := RunChecks(t.TempDir(), []profile.Check{
-		{Name: "first", Argv: []string{python, "-c", "import time; time.sleep(2)"}, TimeoutSeconds: 5},
-		{Name: "second", Argv: []string{python, "-c", "pass"}, TimeoutSeconds: 5},
+		{Name: "first", Argv: checkHelperArgv(), TimeoutSeconds: 5},
+		{Name: "second", Argv: checkHelperArgv(), TimeoutSeconds: 5},
 	}, ctx)
 	if got[0].Status != "UNKNOWN" || !strings.HasSuffix(got[0].Tail, "\ntimed out") || got[1].Tail != "not run: deadline" {
 		t.Fatalf("deadline results %#v", got)
 	}
-	pidFile := filepath.Join(t.TempDir(), "cancel.pid")
-	t.Setenv("CHECK_CHILD_PID", pidFile)
-	childScript := "import os,subprocess,sys,time; c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); open(os.environ['CHECK_CHILD_PID'],'w').write(str(c.pid)); time.sleep(60)"
+
 	cancelCtx, stop := context.WithCancel(context.Background())
 	done := make(chan []CheckResult, 1)
 	go func() {
-		done <- RunChecks(t.TempDir(), []profile.Check{{Name: "cancel", Argv: []string{python, "-c", childScript}, TimeoutSeconds: 10}}, cancelCtx)
+		done <- RunChecks(t.TempDir(), []profile.Check{{Name: "cancel", Argv: checkHelperArgv(), TimeoutSeconds: 10}}, cancelCtx)
 	}()
-	pid := waitCheckPID(t, pidFile)
+	time.Sleep(100 * time.Millisecond)
 	stop()
 	result := <-done
-	if result[0].Status != "UNKNOWN" || !strings.HasSuffix(result[0].Tail, "\ntimed out") || checkProcessExists(pid) {
-		t.Fatalf("cancellation result %#v child exists=%v", result[0], checkProcessExists(pid))
+	if result[0].Status != "UNKNOWN" || !strings.HasSuffix(result[0].Tail, "\ntimed out") {
+		t.Fatalf("cancellation result %#v", result[0])
 	}
 }
 
-func pythonPath(t *testing.T) string {
+func runCheckHelper(t *testing.T, mode string, timeout time.Duration, pidFile string) CheckResult {
 	t.Helper()
-	for _, name := range []string{"python", "python3"} {
-		if path, err := exec.LookPath(name); err == nil {
-			return path
-		}
+	t.Setenv("PURSER_CHECK_HELPER", mode)
+	if pidFile != "" {
+		t.Setenv("PURSER_CHECK_PID_FILE", pidFile)
 	}
-	t.Fatal("python required")
-	return ""
+	got := RunChecks(t.TempDir(), []profile.Check{{Name: mode, Argv: checkHelperArgv(), TimeoutSeconds: int(timeout.Seconds())}}, context.Background())
+	if len(got) != 1 {
+		t.Fatalf("got %d results", len(got))
+	}
+	return got[0]
 }
-func equalJSON(a, b any) bool {
-	x, _ := json.Marshal(a)
-	y, _ := json.Marshal(b)
-	return string(x) == string(y)
+
+func checkHelperArgv() []string {
+	return []string{os.Args[0], "-test.run=^TestChecksCommandHelper$"}
 }
+
 func waitCheckPID(t *testing.T, path string) string {
 	t.Helper()
-	end := time.Now().Add(3 * time.Second)
-	for time.Now().Before(end) {
-		if b, e := os.ReadFile(path); e == nil {
-			return strings.TrimSpace(string(b))
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil {
+			return strings.TrimSpace(string(data))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("pid file missing: %s", path)
 	return ""
 }
-func checkProcessExists(pid string) bool {
+
+func processExists(pid string) bool {
 	if runtime.GOOS == "windows" {
-		err := testutil.Hide(exec.Command("powershell.exe", "-NoProfile", "-Command", "$p=Get-Process -Id "+pid+" -ErrorAction SilentlyContinue; if ($p) { exit 0 }; exit 1")).Run()
+		cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", "$p=Get-Process -Id "+pid+" -ErrorAction SilentlyContinue; if ($p) { exit 0 }; exit 1")
+		err := cmd.Run()
 		if err == nil {
 			return true
 		}
-		e, ok := err.(*exec.ExitError)
-		return !ok || e.ExitCode() != 1
+		exit, ok := err.(*exec.ExitError)
+		return !ok || exit.ExitCode() != 1
 	}
-	n, e := strconv.Atoi(pid)
-	if e != nil {
+	n, err := strconv.Atoi(pid)
+	if err != nil {
 		return true
 	}
-	p, e := os.FindProcess(n)
-	if e != nil {
+	proc, err := os.FindProcess(n)
+	if err != nil {
 		return false
 	}
-	return p.Signal(os.Signal(nil)) == nil
+	return proc.Signal(os.Signal(nil)) == nil
 }

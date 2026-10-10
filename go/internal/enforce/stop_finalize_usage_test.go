@@ -109,7 +109,7 @@ func TestStopFinalizeKeepsSessionLockAcrossDecisionAndWrites(t *testing.T) {
 }
 
 func TestStopFinalizeP130PythonFiles(t *testing.T) {
-	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "stop_finalize_writes.json")
+	fixturePath := filepath.Join("testdata", "stop_finalize_writes.json")
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestStopFinalizeP130PythonFiles(t *testing.T) {
 }
 
 func TestStopFinalizeP129Fixture(t *testing.T) {
-	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "stop_usage.json")
+	path := filepath.Join("testdata", "stop_usage.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

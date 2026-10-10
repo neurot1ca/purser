@@ -1,0 +1,87 @@
+{
+  "oracle": "claude_transcript_usage.finalize_stop_task",
+  "now": "2026-10-05T12:00:00Z",
+  "cases": [
+    {
+      "name": "p128-no-active-task",
+      "session_id": "p128-no-active",
+      "record": null,
+      "expected": null
+    },
+    {
+      "name": "p128-active-task-finalized",
+      "session_id": "p128-ready",
+      "record": {
+        "task_id": "task-ready",
+        "tool_use_id": "tool-ready",
+        "created_at": "2026-10-05T11:00:00Z",
+        "completed": false,
+        "invalidated": false,
+        "canonical_transcript_path": "fixture.jsonl"
+      },
+      "expected": {
+        "status": "READY"
+      }
+    },
+    {
+      "name": "p128-lock-held-by-another-process",
+      "session_id": "p128-lock-contention",
+      "record": {
+        "task_id": "task-lock",
+        "tool_use_id": "tool-lock",
+        "completed": false
+      },
+      "lock_contention": true,
+      "expected": {
+        "status": "FAILED",
+        "reason": "ACTIVE_TASK_STATE_CONTENTION"
+      }
+    },
+    {
+      "name": "p128-already-completed",
+      "session_id": "p128-completed",
+      "record": {
+        "task_id": "task-done",
+        "tool_use_id": "tool-done",
+        "completed": true
+      },
+      "expected": null
+    },
+    {
+      "name": "p128-invalidated-task",
+      "session_id": "p128-invalidated",
+      "record": {
+        "task_id": "task-invalid",
+        "tool_use_id": "tool-invalid",
+        "completed": false,
+        "invalidated": true
+      },
+      "expected": {
+        "status": "FAILED",
+        "reason": "OVERLAPPING_TASK_BOUNDARY"
+      }
+    },
+    {
+      "name": "p128-stale-task",
+      "session_id": "p128-stale",
+      "record": {
+        "task_id": "task-stale",
+        "tool_use_id": "tool-stale",
+        "created_at": "2026-10-03T11:59:59Z",
+        "completed": false,
+        "invalidated": false
+      },
+      "expected": {
+        "status": "FAILED",
+        "reason": "STALE_ACTIVE_TASK"
+      }
+    },
+    {
+      "name": "p128-malformed-task-record",
+      "session_id": "p128-malformed",
+      "record": "{ malformed",
+      "raw_record": true,
+      "expected": null
+    }
+  ]
+}

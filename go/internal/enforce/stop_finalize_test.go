@@ -30,7 +30,7 @@ func TestStopFinalizeLockHelper(t *testing.T) {
 }
 
 func TestStopFinalizeP128Fixture(t *testing.T) {
-	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "stop_finalize.json")
+	fixturePath := filepath.Join("testdata", "stop_finalize.json")
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)

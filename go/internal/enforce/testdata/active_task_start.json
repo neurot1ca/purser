@@ -1,0 +1,176 @@
+{
+  "oracle": "claude_transcript_usage.start_active_task",
+  "now": "2026-10-04T12:00:00.123456Z",
+  "cases": [
+    {
+      "name": "p61-fresh-record",
+      "task_id": "task-new",
+      "session_id": "session-fresh",
+      "tool_use_id": "tool-new",
+      "project_key": "project-a",
+      "expected_status": "STARTED",
+      "expected_record": {
+        "session_id": "session-fresh",
+        "task_id": "task-new",
+        "project_key": "project-a",
+        "tool_use_id": "tool-new",
+        "canonical_transcript_path": null,
+        "transcript_dev": null,
+        "transcript_ino": null,
+        "transcript_ctime_ns": null,
+        "initial_size": 0,
+        "anchor_byte_offset": null,
+        "anchor_search_start_offset": 0,
+        "anchor_deferred": true,
+        "created_at": "$NOW",
+        "completed": false,
+        "invalidated": false,
+        "invalidated_reason": null,
+        "affected_task_ids": ["task-new"],
+        "terminal_task_ids": []
+      }
+    },
+    {
+      "name": "p61-stale-existing-record",
+      "task_id": "task-new",
+      "session_id": "session-stale",
+      "tool_use_id": "tool-new",
+      "project_key": null,
+      "existing": {
+        "session_id": "session-stale",
+        "task_id": "task-old",
+        "tool_use_id": "tool-old",
+        "created_at": "2026-10-03T10:00:00.000000Z",
+        "completed": false,
+        "invalidated": false,
+        "affected_task_ids": ["task-old"],
+        "terminal_task_ids": []
+      },
+      "expected_status": "STARTED",
+      "expected_record": {
+        "session_id": "session-stale",
+        "task_id": "task-new",
+        "project_key": null,
+        "tool_use_id": "tool-new",
+        "canonical_transcript_path": null,
+        "transcript_dev": null,
+        "transcript_ino": null,
+        "transcript_ctime_ns": null,
+        "initial_size": 0,
+        "anchor_byte_offset": null,
+        "anchor_search_start_offset": 0,
+        "anchor_deferred": true,
+        "created_at": "$NOW",
+        "completed": false,
+        "invalidated": false,
+        "invalidated_reason": null,
+        "affected_task_ids": ["task-new"],
+        "terminal_task_ids": []
+      }
+    },
+    {
+      "name": "p61-retained-existing-record",
+      "task_id": "task-active",
+      "session_id": "session-retained",
+      "tool_use_id": "tool-retry",
+      "existing": {
+        "session_id": "session-retained",
+        "task_id": "task-active",
+        "tool_use_id": "tool-original",
+        "created_at": "$NOW",
+        "completed": false,
+        "invalidated": false,
+        "affected_task_ids": ["task-active"],
+        "terminal_task_ids": []
+      },
+      "expected_status": "RETAINED",
+      "expected_record": {
+        "session_id": "session-retained",
+        "task_id": "task-active",
+        "tool_use_id": "tool-original",
+        "created_at": "$NOW",
+        "completed": false,
+        "invalidated": false,
+        "affected_task_ids": ["task-active"],
+        "terminal_task_ids": []
+      }
+    },
+    {
+      "name": "p61-overlapping-existing-record",
+      "task_id": "task-new",
+      "session_id": "session-overlap",
+      "tool_use_id": "tool-new",
+      "existing": {
+        "session_id": "session-overlap",
+        "task_id": "task-active",
+        "tool_use_id": "tool-active",
+        "created_at": "$NOW",
+        "completed": false,
+        "invalidated": false,
+        "affected_task_ids": ["task-active"],
+        "terminal_task_ids": []
+      },
+      "expected_status": "DENIED",
+      "expected_reason": "OVERLAPPING_TASK_BOUNDARY",
+      "expected_record": {
+        "session_id": "session-overlap",
+        "task_id": "task-active",
+        "tool_use_id": "tool-active",
+        "created_at": "$NOW",
+        "completed": true,
+        "invalidated": true,
+        "invalidated_reason": "OVERLAPPING_TASK_BOUNDARY",
+        "affected_task_ids": ["task-active", "task-new"],
+        "terminal_task_ids": []
+      }
+    },
+    {
+      "name": "p61-terminal-existing-record",
+      "task_id": "task-done",
+      "session_id": "session-terminal",
+      "tool_use_id": "tool-new",
+      "existing": {
+        "session_id": "session-terminal",
+        "task_id": "task-done",
+        "tool_use_id": "tool-old",
+        "created_at": "$NOW",
+        "completed": true,
+        "invalidated": false,
+        "affected_task_ids": ["task-done"],
+        "terminal_task_ids": []
+      },
+      "expected_status": "DENIED",
+      "expected_reason": "ALREADY_COMPLETED",
+      "expected_record": {
+        "session_id": "session-terminal",
+        "task_id": "task-done",
+        "tool_use_id": "tool-old",
+        "created_at": "$NOW",
+        "completed": true,
+        "invalidated": false,
+        "affected_task_ids": ["task-done"],
+        "terminal_task_ids": []
+      }
+    },
+    {
+      "name": "p61-unknown-usage-update",
+      "task_id": "task-bad-transcript",
+      "session_id": "session-unknown",
+      "tool_use_id": "tool-missing",
+      "oversized_transcript": true,
+      "expected_status": "DENIED",
+      "expected_reason": "BOUNDS_EXCEEDED",
+      "expected_record": null
+    },
+    {
+      "name": "p61-lock-contention",
+      "task_id": "task-contender",
+      "session_id": "session-locked",
+      "tool_use_id": "tool-new",
+      "lock_contention": true,
+      "expected_status": "DENIED",
+      "expected_reason": "ACTIVE_TASK_STATE_CONTENTION",
+      "expected_record": null
+    }
+  ]
+}

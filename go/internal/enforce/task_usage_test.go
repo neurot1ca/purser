@@ -5,17 +5,14 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"purser-hook/internal/testutil"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestTaskUsageP61ActiveTaskFixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "active_task_start.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "active_task_start.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +112,7 @@ func TestTaskUsageP61ActiveTaskFixture(t *testing.T) {
 	}
 }
 
-func TestTaskUsageP61PythonFinalizerReadsGoRecord(t *testing.T) {
+func TestTaskUsageP61GoFinalizerReadsTranscript(t *testing.T) {
 	root := t.TempDir()
 	projects := filepath.Join(root, "projects")
 	if err := os.Mkdir(projects, 0700); err != nil {
@@ -131,20 +128,15 @@ func TestTaskUsageP61PythonFinalizerReadsGoRecord(t *testing.T) {
 	if result["status"] != "STARTED" {
 		t.Fatalf("Go start result: %#v", result)
 	}
-	_, source, _, _ := runtime.Caller(0)
-	repo := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	pythonRoot := filepath.Join(repo, ".claude", "hooks", "orchestrator")
-	python, err := exec.LookPath("python")
-	if err != nil {
-		python, err = exec.LookPath("python3")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	got := finalizeStopTask(root, session, transcript, projects, time.Second, now)
+	usage := mapValue(got["usage"])
+	if got["status"] != "COMPLETED" || !sameJSON(map[string]any{"input": usage["claude_task_input_tokens"], "output": usage["claude_task_output_tokens"]}, map[string]any{"input": 7, "output": 3}) {
+		t.Fatalf("Go finalizer usage = %#v", got)
 	}
-	if err != nil {
-		t.Fatal("Python interpreter required for Go-to-Python finalizer cross-check")
-	}
-	script := `import sys; sys.path.insert(0, sys.argv[1]); import claude_transcript_usage as u; import telemetry; telemetry.emit=lambda *a,**k: None; telemetry.update_task=lambda *a,**k: None; result=u.finalize_stop_task(sys.argv[2], session_id=sys.argv[3], allowed_projects_root=sys.argv[4]); assert result["status"] == "COMPLETED" and result["usage"]["claude_task_input_tokens"] == 7, result`
-	cmd := testutil.Hide(exec.Command(python, "-c", script, pythonRoot, root, session, projects))
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("Python finalize_stop_task failed reading Go record: %v\n%s", err, output)
+	active, err := readActiveTask(root, session)
+	if err != nil || active["completed"] != true {
+		t.Fatalf("finalized task = %#v, %v", active, err)
 	}
 }
 
@@ -170,13 +162,12 @@ func sameJSON(left, right any) bool {
 }
 
 func TestTaskUsageP59Fixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "task_usage.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "task_usage.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var f struct {
-		Oracle string `json:"oracle"`
-		Cases  []struct {
+		Cases []struct {
 			Name, Op, File, Session, Content, Tool, Expected string
 			Outside                                          bool
 			Offset                                           int64
@@ -188,9 +179,6 @@ func TestTaskUsageP59Fixture(t *testing.T) {
 	}
 	if err = json.Unmarshal(data, &f); err != nil {
 		t.Fatal(err)
-	}
-	if f.Oracle == "" {
-		t.Fatal("missing Python oracle")
 	}
 	for _, c := range f.Cases {
 		if len(c.Name) < 3 || c.Name[:3] != "p59" {
@@ -266,7 +254,7 @@ func TestTaskUsageP59Fixture(t *testing.T) {
 }
 
 func TestTaskUsageP60Fixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "task_usage.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "task_usage.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,7 +9,7 @@ import (
 )
 
 func TestRetryFixtures(t *testing.T) {
-	p := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_jobs_retry", "retry.json")
+	p := filepath.Join("testdata", "retry.json")
 	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)

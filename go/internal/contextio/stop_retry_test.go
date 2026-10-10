@@ -8,7 +8,7 @@ import (
 )
 
 func TestPythonStopRetryGoldenParity(t *testing.T) {
-	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "stop_retry.json")
+	path := filepath.Join("testdata", "stop_retry.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestStopRetrySkipsTerminalFailedAsyncIndex(t *testing.T) {
 }
 
 func TestPythonStopRetryStateWriteParity(t *testing.T) {
-	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "stop_retry.json")
+	path := filepath.Join("testdata", "stop_retry.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

@@ -41,45 +41,37 @@ func TestJournalWriteRoundTrip(t *testing.T) {
 	}
 }
 
-func TestP33ActiveCoderOracleFixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "fallback.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fixture struct {
-		Oracle string `json:"oracle"`
-		Cases  []struct {
-			Name     string         `json:"name"`
-			Raw      *string        `json:"raw"`
-			Expected map[string]any `json:"expected"`
-			Error    bool           `json:"error"`
-		} `json:"cases"`
-	}
-	if err := json.Unmarshal(data, &fixture); err != nil || fixture.Oracle != "Python active_coder_state.read" {
-		t.Fatalf("invalid Python oracle fixture: %v", err)
-	}
-	for _, test := range fixture.Cases {
-		t.Run(test.Name, func(t *testing.T) {
-			project := filepath.Join(t.TempDir(), test.Name)
-			root := filepath.Join(t.TempDir(), "runtime")
+func TestActiveCoderStateReadValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data string
+		want map[string]any
+		bad  bool
+	}{
+		{name: "missing defaults", want: defaultActiveCoderState()},
+		{name: "primary", data: `{"active_coder":"primary","triggering_evidence":null,"reset_cycle_marker":null,"last_probe_time":null}`, want: defaultActiveCoderState()},
+		{name: "fallback", data: `{"active_coder":"fallback","triggering_evidence":{"type":"RATE_LIMITED","trigger_id":"r1"},"reset_cycle_marker":"cycle-1","last_probe_time":"2026-10-01T00:00:00Z"}`, want: map[string]any{"active_coder": "fallback", "triggering_evidence": map[string]any{"type": "RATE_LIMITED", "trigger_id": "r1"}, "reset_cycle_marker": "cycle-1", "last_probe_time": "2026-10-01T00:00:00Z"}},
+		{name: "malformed json", data: `{`, bad: true},
+		{name: "invalid active coder", data: `{"active_coder":"other","triggering_evidence":null,"reset_cycle_marker":null,"last_probe_time":null}`, bad: true},
+		{name: "missing required field", data: `{"active_coder":"primary"}`, bad: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project, root := t.TempDir(), t.TempDir()
 			path := activeCoderPath(project, root)
-			if test.Raw != nil {
+			if tc.data != "" {
 				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(path, []byte(*test.Raw), 0600); err != nil {
+				if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			actual, err := readProjectActiveCoder(project, root)
-			if err != nil && !test.Error {
-				t.Fatalf("read: %v", err)
+			got, err := readProjectActiveCoder(project, root)
+			if (err != nil) != tc.bad {
+				t.Fatalf("readProjectActiveCoder error = %v, want bad=%v", err, tc.bad)
 			}
-			if err == nil && test.Error {
-				t.Fatal("corrupt state was accepted")
-			}
-			if err == nil && !reflect.DeepEqual(actual, test.Expected) {
-				t.Fatalf("state = %#v, want %#v", actual, test.Expected)
+			if err == nil && !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("state = %#v, want %#v", got, tc.want)
 			}
 		})
 	}

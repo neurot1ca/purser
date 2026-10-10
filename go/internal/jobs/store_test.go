@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +29,7 @@ func scratch(t *testing.T) string {
 }
 
 func TestFixtureRecordsRoundTripBytes(t *testing.T) {
-	fixtures := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "codex_exec_records")
+	fixtures := filepath.Join("testdata", "codex_exec_records")
 	entries, err := os.ReadDir(fixtures)
 	if err != nil {
 		t.Fatal(err)
@@ -139,101 +138,67 @@ func TestConcurrentGenerationClaimsAreFenced(t *testing.T) {
 	}
 }
 
-func TestPythonOwnerLockInteroperability(t *testing.T) {
-	python, err := exec.LookPath("python")
-	if err != nil {
-		t.Skip("python unavailable for lock interoperability")
+func TestOwnershipLockSubprocessHelper(t *testing.T) {
+	if os.Getenv("PURSER_LOCK_HELPER") != "1" {
+		return
 	}
-	dir := scratch(t)
-	fixtureLock := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "codex_exec_records", "interrupted-host.json")
-	b, err := os.ReadFile(fixtureLock)
+	dir := os.Getenv("PURSER_LOCK_DIR")
+	started := os.Getenv("PURSER_LOCK_STARTED")
+	acquired := os.Getenv("PURSER_LOCK_ACQUIRED")
+	if err := os.WriteFile(started, []byte("started"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := AcquireOwnership(dir, "job")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fixture struct {
-		Files map[string]string `json:"files"`
-	}
-	if err = json.Unmarshal(b, &fixture); err != nil {
+	if err := os.WriteFile(acquired, []byte("acquired"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	var rel, content string
-	for name, value := range fixture.Files {
-		if strings.HasSuffix(name, ".owner-lock") {
-			rel, content = name, value
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOwnershipLockSerializesGoProcesses(t *testing.T) {
+	dir := t.TempDir()
+	lock, err := AcquireOwnership(dir, "job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, acquired := filepath.Join(dir, "started"), filepath.Join(dir, "acquired")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestOwnershipLockSubprocessHelper$")
+	cmd.Env = append(os.Environ(), "PURSER_LOCK_HELPER=1", "PURSER_LOCK_DIR="+dir, "PURSER_LOCK_STARTED="+started, "PURSER_LOCK_ACQUIRED="+acquired)
+	if err := cmd.Start(); err != nil {
+		_ = lock.Release()
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(started); err == nil {
 			break
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	path := filepath.Join(dir, filepath.FromSlash(rel))
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if _, err := os.Stat(started); err != nil {
+		_ = lock.Release()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("lock helper did not start: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(acquired); err == nil {
+		_ = lock.Release()
+		_ = cmd.Wait()
+		t.Fatal("second process acquired an owned job lock")
+	}
+	if err := lock.Release(); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(path, []byte(content), 0600); err != nil {
+	if err := cmd.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	// msvcrt.locking requires the lock byte to exist; the fixture itself is empty.
-	if runtime.GOOS == "windows" {
-		if err = os.WriteFile(path, []byte("0"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	lock, err := AcquireOwnership(filepath.Dir(path), strings.TrimSuffix(filepath.Base(path), ".owner-lock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS == "windows" { // msvcrt.locking must fail while Go holds the same byte range.
-		cmd := exec.Command(python, "-c", `import msvcrt,sys; f=open(sys.argv[1],"a+b"); f.seek(0);
-try: msvcrt.locking(f.fileno(),msvcrt.LK_NBLCK,1); sys.exit(2)
-except OSError: sys.exit(0)`, path)
-		if output, runErr := cmd.CombinedOutput(); runErr != nil {
-			lock.Release()
-			t.Fatalf("Python did not observe Go lock: %v: %s", runErr, output)
-		}
-	} else {
-		cmd := exec.Command(python, "-c", `import fcntl,sys; f=open(sys.argv[1],"a+b");
-try: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB); sys.exit(2)
-except BlockingIOError: sys.exit(0)`, path)
-		if output, runErr := cmd.CombinedOutput(); runErr != nil {
-			lock.Release()
-			t.Fatalf("Python did not observe Go lock: %v: %s", runErr, output)
-		}
-	}
-	if err = lock.Release(); err != nil {
-		t.Fatal(err)
-	}
-	// Python takes the fixture lock; the Go acquire must wait and then proceed.
-	script := `import fcntl,sys,time; f=open(sys.argv[1],"a+b"); fcntl.flock(f,fcntl.LOCK_EX); print("locked",flush=True); time.sleep(.15)`
-	if runtime.GOOS == "windows" {
-		script = `import msvcrt,sys,time; f=open(sys.argv[1],"a+b"); f.seek(0); msvcrt.locking(f.fileno(),msvcrt.LK_LOCK,1); print("locked",flush=True); time.sleep(.15)`
-	}
-	cmd := exec.Command(python, "-c", script, path)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	line := make([]byte, 7)
-	if _, err = stdout.Read(line); err != nil {
-		t.Fatal(err)
-	}
-	acquired := make(chan error, 1)
-	go func() {
-		l, e := AcquireOwnership(filepath.Dir(path), strings.TrimSuffix(filepath.Base(path), ".owner-lock"))
-		if e == nil {
-			e = l.Release()
-		}
-		acquired <- e
-	}()
-	select {
-	case err = <-acquired:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Go lock did not resume after Python released")
-	}
-	if err = cmd.Wait(); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(acquired); err != nil {
+		t.Fatalf("waiting process did not acquire released lock: %v", err)
 	}
 }

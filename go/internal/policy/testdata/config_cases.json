@@ -1,0 +1,1844 @@
+[
+  {
+    "name": "valid-default-agent",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "ok": true,
+    "error": "",
+    "loaded": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    }
+  },
+  {
+    "name": "valid-codex",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "codex"
+    },
+    "ok": true,
+    "error": "",
+    "loaded": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "codex"
+    }
+  },
+  {
+    "name": "valid-opencode",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "openai/gpt-5",
+          "effort": "high"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "opencode"
+    },
+    "ok": true,
+    "error": "",
+    "loaded": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "openai/gpt-5",
+          "effort": "high"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "opencode"
+    }
+  },
+  {
+    "name": "valid-agy",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gemini-3.8-pro",
+          "effort": "max"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "agy"
+    },
+    "ok": true,
+    "error": "",
+    "loaded": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gemini-3.8-pro",
+          "effort": "max"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "agy"
+    }
+  },
+  {
+    "name": "not-a-mapping",
+    "input": null,
+    "expected_code": "INVALID_CONFIG",
+    "ok": false,
+    "error": "INVALID_CONFIG: config must be a mapping",
+    "loaded": null
+  },
+  {
+    "name": "missing-required-field",
+    "input": {
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_code": "MISSING_CONFIG_FIELD",
+    "ok": false,
+    "error": "MISSING_CONFIG_FIELD: config is missing required field(s): allowed_phases",
+    "loaded": null
+  },
+  {
+    "name": "invalid-allowed-phases-6",
+    "input": {
+      "allowed_phases": "implementation",
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "allowed_phases",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: allowed_phases must be a non-empty list of unique non-empty strings",
+    "loaded": null
+  },
+  {
+    "name": "invalid-allowed-phases-7",
+    "input": {
+      "allowed_phases": [],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "allowed_phases",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: allowed_phases must be a non-empty list of unique non-empty strings",
+    "loaded": null
+  },
+  {
+    "name": "invalid-allowed-phases-8",
+    "input": {
+      "allowed_phases": [
+        "x",
+        "x"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "allowed_phases",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: allowed_phases must be a non-empty list of unique non-empty strings",
+    "loaded": null
+  },
+  {
+    "name": "invalid-allowed-phases-9",
+    "input": {
+      "allowed_phases": [
+        "x",
+        ""
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "allowed_phases",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: allowed_phases must be a non-empty list of unique non-empty strings",
+    "loaded": null
+  },
+  {
+    "name": "invalid-agent",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "unknown"
+    },
+    "expected_field": "coder_agent",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: coder_agent must be codex, opencode or agy",
+    "loaded": null
+  },
+  {
+    "name": "invalid-route-table-11",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {},
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "routes",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: routes must be a non-empty mapping",
+    "loaded": null
+  },
+  {
+    "name": "invalid-route-table-12",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": [],
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "routes",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: routes must be a non-empty mapping",
+    "loaded": null
+  },
+  {
+    "name": "invalid-route-table-13",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "other": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_code": "ROUTE_TABLE_INCOMPLETE",
+    "ok": false,
+    "error": "ROUTE_TABLE_INCOMPLETE: routes must contain exactly the configured required_routes",
+    "loaded": null
+  },
+  {
+    "name": "invalid-route-entry",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": null
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_code": "INVALID_ROUTE_ENTRY",
+    "ok": false,
+    "error": "INVALID_ROUTE_ENTRY: invalid route entry for 'normal'",
+    "loaded": null
+  },
+  {
+    "name": "quoted-invalid-route-entry",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "coder's"
+      ],
+      "routes": {
+        "coder's": null
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_code": "INVALID_ROUTE_ENTRY",
+    "ok": false,
+    "error": "INVALID_ROUTE_ENTRY: invalid route entry for \"coder's\"",
+    "loaded": null
+  },
+  {
+    "name": "missing-model",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_code": "INVALID_ROUTE_ENTRY",
+    "ok": false,
+    "error": "INVALID_ROUTE_ENTRY: route 'normal' has no model",
+    "loaded": null
+  },
+  {
+    "name": "invalid-opencode-model",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "opencode"
+    },
+    "expected_code": "INVALID_ROUTE_ENTRY",
+    "ok": false,
+    "error": "INVALID_ROUTE_ENTRY: route 'normal' OpenCode model must be provider/model",
+    "loaded": null
+  },
+  {
+    "name": "invalid-agy-model",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "coder_agent": "agy"
+    },
+    "expected_code": "INVALID_ROUTE_ENTRY",
+    "ok": false,
+    "error": "INVALID_ROUTE_ENTRY: route 'normal' Antigravity model must be Gemini",
+    "loaded": null
+  },
+  {
+    "name": "invalid-route-effort",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "extreme"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_code": "INVALID_ROUTE_EFFORT",
+    "ok": false,
+    "error": "INVALID_ROUTE_EFFORT: route 'normal' names unsupported effort 'extreme'",
+    "loaded": null
+  },
+  {
+    "name": "unknown-always-full-route",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "unknown"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "always_full_routes",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: always_full_routes must name configured routes",
+    "loaded": null
+  },
+  {
+    "name": "invalid-reviewer-gate",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": [],
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "reviewer_gate",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: reviewer_gate must be a mapping",
+    "loaded": null
+  },
+  {
+    "name": "invalid-small_delta_max_lines",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": true,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "small_delta_max_lines",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: small_delta_max_lines must be a non-negative integer",
+    "loaded": null
+  },
+  {
+    "name": "invalid-small_delta_max_files",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": -1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "small_delta_max_files",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: small_delta_max_files must be a non-negative integer",
+    "loaded": null
+  },
+  {
+    "name": "float-reviewer-gate-limit",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 1.0,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "small_delta_max_lines",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: small_delta_max_lines must be a non-negative integer",
+    "loaded": null
+  },
+  {
+    "name": "invalid-manifest-budget",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 0,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "manifest_budget_seconds",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: manifest_budget_seconds must be a positive finite number",
+    "loaded": null
+  },
+  {
+    "name": "invalid-bundle_non_report_max_bytes",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "bundle_non_report_max_bytes": true
+    },
+    "expected_field": "bundle_non_report_max_bytes",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: bundle_non_report_max_bytes must be a positive integer",
+    "loaded": null
+  },
+  {
+    "name": "invalid-implementation_report_max_chars",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "implementation_report_max_chars": 0
+    },
+    "expected_field": "implementation_report_max_chars",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: implementation_report_max_chars must be a positive integer",
+    "loaded": null
+  },
+  {
+    "name": "invalid-operation_report_max_chars",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "operation_report_max_chars": -1
+    },
+    "expected_field": "operation_report_max_chars",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: operation_report_max_chars must be a positive integer",
+    "loaded": null
+  },
+  {
+    "name": "invalid-reviewer-skip-reasons",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "NO_DELTA"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ]
+    },
+    "expected_field": "reviewer_skip_reasons",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: reviewer_skip_reasons must contain the specified skip codes",
+    "loaded": null
+  },
+  {
+    "name": "invalid-reviewer-results",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "UNCERTAIN"
+      ]
+    },
+    "expected_field": "reviewer_results",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: reviewer_results must contain the four specified result codes",
+    "loaded": null
+  },
+  {
+    "name": "invalid-micro-repair-timeout",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "micro_repair_timeout_seconds": 0
+    },
+    "expected_field": "micro_repair_timeout_seconds",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: micro_repair_timeout_seconds must be a positive finite number",
+    "loaded": null
+  },
+  {
+    "name": "invalid-hook-budget",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "max_total_hook_budget_seconds": 0
+    },
+    "expected_field": "max_total_hook_budget_seconds",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: max_total_hook_budget_seconds must be a positive finite number",
+    "loaded": null
+  },
+  {
+    "name": "invalid-micro-repair-enabled",
+    "input": {
+      "allowed_phases": [
+        "implementation",
+        "plan"
+      ],
+      "allowed_reasons": [
+        "normal"
+      ],
+      "allowed_efforts": [
+        "low",
+        "high"
+      ],
+      "required_routes": [
+        "normal"
+      ],
+      "routes": {
+        "normal": {
+          "model": "gpt-5",
+          "effort": "low"
+        }
+      },
+      "always_full_routes": [
+        "normal"
+      ],
+      "reviewer_gate": {
+        "small_delta_max_lines": 2,
+        "small_delta_max_files": 1
+      },
+      "manifest_budget_seconds": 2.5,
+      "reviewer_skip_reasons": [
+        "PHASE_OPERATION",
+        "PHASE_PLAN",
+        "NO_DELTA",
+        "BELOW_THRESHOLD",
+        "REVIEWER_UNAVAILABLE"
+      ],
+      "reviewer_results": [
+        "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+        "CHANGES_REQUIRED",
+        "UNCERTAIN",
+        "REVIEWER1_UNAVAILABLE"
+      ],
+      "micro_repair_enabled": 1
+    },
+    "expected_field": "micro_repair_enabled",
+    "ok": false,
+    "error": "INVALID_CONFIG_FIELD: micro_repair_enabled must be a boolean",
+    "loaded": null
+  },
+{"name":"shipped-json-no-user","mode":"coder","user_toml":null,"ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"high"},"subtle":{"model":"gpt-6-luna","effort":"high"},"normal":{"model":"gpt-6.1-sol","effort":"medium"},"consequential":{"model":"gpt-6.1-sol","effort":"high"},"escalated":{"model":"gpt-6.1-sol","effort":"xhigh"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6.1-sol","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false}},
+{"name":"mechanical-default-and-codex-default","mode":"coder","user_toml":"[mechanical]\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"high"},"subtle":{"model":"gpt-6-luna","effort":"high"},"normal":{"model":"gpt-6.1-sol","effort":"medium"},"consequential":{"model":"gpt-6.1-sol","effort":"high"},"escalated":{"model":"gpt-6.1-sol","effort":"xhigh"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6.1-sol","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true}},
+{"name":"mechanical-disabled","mode":"coder","user_toml":"[mechanical]\nopencode_enabled = false\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"high"},"subtle":{"model":"gpt-6-luna","effort":"high"},"normal":{"model":"gpt-6.1-sol","effort":"medium"},"consequential":{"model":"gpt-6.1-sol","effort":"high"},"escalated":{"model":"gpt-6.1-sol","effort":"xhigh"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6.1-sol","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":false}},
+{"name":"reviewer-settings","mode":"coder","user_toml":"[coding]\nreviewer1_model_requested = \"gemini-3.9-flash\"\nreviewer1_executable = \"__REVIEWER_EXECUTABLE__\"\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"high"},"subtle":{"model":"gpt-6-luna","effort":"high"},"normal":{"model":"gpt-6.1-sol","effort":"medium"},"consequential":{"model":"gpt-6.1-sol","effort":"high"},"escalated":{"model":"gpt-6.1-sol","effort":"xhigh"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6.1-sol","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.9-flash","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true,"reviewer1_executable":"__REVIEWER_EXECUTABLE__"}},
+{"name":"readiness-off","mode":"coder","user_toml":"[coding.readiness_check]\nagent = \"off\"\nmodel = \"gemini-3.8-flash\"\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"high"},"subtle":{"model":"gpt-6-luna","effort":"high"},"normal":{"model":"gpt-6.1-sol","effort":"medium"},"consequential":{"model":"gpt-6.1-sol","effort":"high"},"escalated":{"model":"gpt-6.1-sol","effort":"xhigh"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6.1-sol","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"off","model":"gemini-3.8-flash"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true}},
+{"name":"readiness-model-override","mode":"coder","user_toml":"[coding.readiness_check]\nmodel = \"gemini-3.9-pro\"\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"high"},"subtle":{"model":"gpt-6-luna","effort":"high"},"normal":{"model":"gpt-6.1-sol","effort":"medium"},"consequential":{"model":"gpt-6.1-sol","effort":"high"},"escalated":{"model":"gpt-6.1-sol","effort":"xhigh"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6.1-sol","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.9-pro"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true}},
+{"name":"codex-route-overrides","mode":"coder","user_toml":"[coding.routes]\nmechanical = { model = \"gpt-6-luna\", effort = \"low\" }\nsubtle = { model = \"gpt-6-luna\", effort = \"low\" }\nnormal = { model = \"gpt-6-codex\", effort = \"medium\" }\nconsequential = { model = \"gpt-6-codex\", effort = \"high\" }\nescalated = { model = \"gpt-6-codex\", effort = \"ultra\" }\noperation = { model = \"gpt-6-luna\", effort = \"high\" }\nplan_standard = { model = \"gpt-6-codex\", effort = \"high\" }\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"low"},"subtle":{"model":"gpt-6-luna","effort":"low"},"normal":{"model":"gpt-6-codex","effort":"medium"},"consequential":{"model":"gpt-6-codex","effort":"high"},"escalated":{"model":"gpt-6-codex","effort":"ultra"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6-codex","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true}},
+{"name":"reject-mechanical-type","mode":"coder","user_toml":"[mechanical]\nopencode_enabled = \"false\"\n","expected_error":"[mechanical]","ok":false,"error":"[mechanical] opencode_enabled must be a boolean","loaded":null},
+{"name":"reject-reviewer-model","mode":"coder","user_toml":"[coding]\nreviewer1_model_requested = \"codex-review\"\n","expected_error":"reviewer1_model_requested is invalid","ok":false,"error":"[coding] reviewer1_model_requested is invalid","loaded":null},
+{"name":"reject-coding-type","mode":"coder","user_toml":"coding = \"invalid\"\n","expected_error":"[coding] must be a table","ok":false,"error":"[coding] must be a table","loaded":null},
+{"name":"reject-readiness-key","mode":"coder","user_toml":"[coding.readiness_check]\nextra = \"x\"\n","expected_error":"accepts only agent and model","ok":false,"error":"[coding.readiness_check] accepts only agent and model","loaded":null},
+{"name":"reject-readiness-type","mode":"coder","user_toml":"[coding]\nreadiness_check = \"invalid\"\n","expected_error":"accepts only agent and model","ok":false,"error":"[coding.readiness_check] accepts only agent and model","loaded":null},
+{"name":"reject-readiness-agent","mode":"coder","user_toml":"[coding.readiness_check]\nagent = \"codex\"\n","expected_error":"agent must be agy or off","ok":false,"error":"[coding.readiness_check] agent must be agy or off","loaded":null},
+{"name":"reject-readiness-model","mode":"coder","user_toml":"[coding.readiness_check]\nmodel = \"gpt-5\"\n","expected_error":"model is invalid","ok":false,"error":"[coding.readiness_check] model is invalid","loaded":null},
+{"name":"reject-relative-reviewer-executable","mode":"coder","user_toml":"[coding]\nreviewer1_executable = \"reviewer\"\n","expected_error":"must be an absolute path","ok":false,"error":"[coding] reviewer1_executable must be an absolute path","loaded":null},
+{"name":"reject-codex-route-model","mode":"coder","user_toml":"[coding.routes]\nmechanical = { model = \"gpt-6-luna\", effort = \"low\" }\nsubtle = { model = \"gpt-6-luna\", effort = \"low\" }\nnormal = { model = \"provider/model\", effort = \"medium\" }\nconsequential = { model = \"gpt-6-codex\", effort = \"high\" }\nescalated = { model = \"gpt-6-codex\", effort = \"ultra\" }\noperation = { model = \"gpt-6-luna\", effort = \"high\" }\nplan_standard = { model = \"gpt-6-codex\", effort = \"high\" }\n","expected_error":"Codex route model or effort is invalid","ok":false,"error":"[coding] Codex route model or effort is invalid","loaded":null},
+{"name":"reject-codex-route-effort","mode":"coder","user_toml":"[coding.routes]\nmechanical = { model = \"gpt-6-luna\", effort = \"low\" }\nsubtle = { model = \"gpt-6-luna\", effort = \"low\" }\nnormal = { model = \"gpt-6-codex\", effort = \"bogus\" }\nconsequential = { model = \"gpt-6-codex\", effort = \"high\" }\nescalated = { model = \"gpt-6-codex\", effort = \"ultra\" }\noperation = { model = \"gpt-6-luna\", effort = \"high\" }\nplan_standard = { model = \"gpt-6-codex\", effort = \"high\" }\n","expected_error":"Codex route model or effort is invalid","ok":false,"error":"[coding] Codex route model or effort is invalid","loaded":null},
+{"name":"reject-codex-route-table","mode":"coder","user_toml":"[coding.routes]\nnormal = { model = \"gpt-6-codex\", effort = \"medium\" }\n","expected_error":"coder routes or role are invalid","ok":false,"error":"[coding] coder routes or role are invalid","loaded":null},
+{"name":"reject-coder-agent","mode":"coder","user_toml":"[coding]\ncoder_agent = \"unknown\"\n","expected_error":"coder_agent is invalid","ok":false,"error":"[coding] coder_agent is invalid","loaded":null},
+{"name":"reject-hook-field","mode":"hook","changes":{"post_tool_output_field":"output"},"expected_error":"post_tool_output_field","ok":false,"error":"post_tool_output_field is not a supported hook field","loaded":null},
+{"name":"accept-hook-field-alias","mode":"hook","changes":{"post_tool_output_field":"updatedMCPToolOutput"},"ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"high"},"subtle":{"model":"gpt-6-luna","effort":"high"},"normal":{"model":"gpt-6.1-sol","effort":"medium"},"consequential":{"model":"gpt-6.1-sol","effort":"high"},"escalated":{"model":"gpt-6.1-sol","effort":"xhigh"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6.1-sol","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedMCPToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false}},
+{"name":"reject-hook-reviewer-missing","mode":"hook","changes":{"reviewer1_model_requested":null},"expected_error":"reviewer1_model_requested","ok":false,"error":"reviewer1_model_requested must be a non-empty string","loaded":null},
+{"name":"reject-hook-deadline-bool","mode":"hook","changes":{"hook_checks_deadline_seconds":true},"expected_error":"hook_checks_deadline_seconds","ok":false,"error":"hook_checks_deadline_seconds must be positive","loaded":null},
+{"name":"reject-hook-deadline-zero","mode":"hook","changes":{"hook_checks_deadline_seconds":0},"expected_error":"hook_checks_deadline_seconds","ok":false,"error":"hook_checks_deadline_seconds must be positive","loaded":null},
+{"name":"p32-valid-codex-overlay","mode":"coder","user_toml":"[coding]\ncoder_agent = \"codex\"\n[coding.routes]\nmechanical = { model = \"gpt-6-p32\", effort = \"high\" }\nsubtle = { model = \"gpt-6-p32\", effort = \"high\" }\nnormal = { model = \"gpt-6-p32\", effort = \"high\" }\nconsequential = { model = \"gpt-6-p32\", effort = \"high\" }\nescalated = { model = \"gpt-6-p32\", effort = \"high\" }\noperation = { model = \"gpt-6-p32\", effort = \"high\" }\nplan_standard = { model = \"gpt-6-p32\", effort = \"high\" }\n[roles]\ncoder = \"codex\"\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-p32","effort":"high"},"subtle":{"model":"gpt-6-p32","effort":"high"},"normal":{"model":"gpt-6-p32","effort":"high"},"consequential":{"model":"gpt-6-p32","effort":"high"},"escalated":{"model":"gpt-6-p32","effort":"high"},"operation":{"model":"gpt-6-p32","effort":"high"},"plan_standard":{"model":"gpt-6-p32","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true}},
+{"name":"p32-valid-opencode-overlay","mode":"coder","user_toml":"[coding]\ncoder_agent = \"opencode\"\nfamily = \"team-opencode\"\n[coding.routes]\nmechanical = \"provider/p32\"\nsubtle = \"provider/p32\"\nnormal = \"provider/p32\"\nconsequential = \"provider/p32\"\nescalated = \"provider/p32\"\noperation = \"provider/p32\"\nplan_standard = \"provider/p32\"\n[roles]\ncoder = \"opencode\"\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"opencode","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"provider/p32","effort":"none"},"subtle":{"model":"provider/p32","effort":"none"},"normal":{"model":"provider/p32","effort":"none"},"consequential":{"model":"provider/p32","effort":"none"},"escalated":{"model":"provider/p32","effort":"none"},"operation":{"model":"provider/p32","effort":"none"},"plan_standard":{"model":"provider/p32","effort":"none"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true,"coder_family":"team-opencode"}},
+{"name":"p32-valid-agy-overlay","mode":"coder","user_toml":"[coding]\ncoder_agent = \"agy\"\nfamily = \"team-agy\"\n[coding.routes]\nmechanical = { model = \"gemini-p32\", effort = \"high\" }\nsubtle = { model = \"gemini-p32\", effort = \"high\" }\nnormal = { model = \"gemini-p32\", effort = \"high\" }\nconsequential = { model = \"gemini-p32\", effort = \"high\" }\nescalated = { model = \"gemini-p32\", effort = \"high\" }\noperation = { model = \"gemini-p32\", effort = \"high\" }\nplan_standard = { model = \"gemini-p32\", effort = \"high\" }\n[roles]\ncoder = \"agy\"\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"agy","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gemini-p32","effort":"high"},"subtle":{"model":"gemini-p32","effort":"high"},"normal":{"model":"gemini-p32","effort":"high"},"consequential":{"model":"gemini-p32","effort":"high"},"escalated":{"model":"gemini-p32","effort":"high"},"operation":{"model":"gemini-p32","effort":"high"},"plan_standard":{"model":"gemini-p32","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true,"coder_family":"team-agy"}},
+{"name":"p32-valid-fallback-overlay","mode":"coder","user_toml":"[coding]\ncoder_agent = \"codex\"\n[fallback]\nagent = \"agy\"\nmodel = \"gemini-backup\"\nfamily = \"backup\"\n","ok":true,"error":"","loaded":{"codex_tool_names":["mcp__codex-main__codex","mcp__plugin_purser_codex-main__codex"],"codex_reply_tool_names":["mcp__codex-main__codex-reply","mcp__plugin_purser_codex-main__codex-reply"],"codex_async_tool_names":["mcp__codex-main__codex_start","mcp__codex-main__codex_result","mcp__codex-main__codex_cancel","mcp__plugin_purser_codex-main__codex_start","mcp__plugin_purser_codex-main__codex_result","mcp__plugin_purser_codex-main__codex_cancel"],"allowed_phases":["implementation","operation","plan"],"allowed_reasons":["new_task","continue","fix","route_change","reanchor","repeated_failure","user_override"],"allowed_efforts":["low","medium","high","xhigh","max","ultra"],"coder_agent":"codex","tool_output_token_limit":8000,"required_routes":["mechanical","subtle","normal","consequential","escalated","operation","plan_standard"],"routes":{"mechanical":{"model":"gpt-6-luna","effort":"high"},"subtle":{"model":"gpt-6-luna","effort":"high"},"normal":{"model":"gpt-6.1-sol","effort":"medium"},"consequential":{"model":"gpt-6.1-sol","effort":"high"},"escalated":{"model":"gpt-6.1-sol","effort":"xhigh"},"operation":{"model":"gpt-6-luna","effort":"high"},"plan_standard":{"model":"gpt-6.1-sol","effort":"high"}},"sol_model":"gpt-6.1-sol","always_full_routes":["consequential","escalated","plan_standard"],"reviewer_gate":{"small_delta_max_lines":50,"small_delta_max_files":2},"manifest_budget_seconds":3.0,"bundle_non_report_max_bytes":8192,"implementation_report_max_chars":1200,"operation_report_max_chars":24000,"post_tool_output_field":"updatedToolOutput","reviewer1_model_requested":"gemini-3.8-flash-high","readiness_check":{"agent":"agy","model":"gemini-3.8-flash-high"},"reviewer1_timeout_seconds":180,"hook_checks_deadline_seconds":150,"reviewer1_packet_max_bytes":200000,"reviewer_skip_reasons":["PHASE_OPERATION","PHASE_PLAN","NO_DELTA","BELOW_THRESHOLD","REVIEWER_UNAVAILABLE"],"reviewer_results":["NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","CHANGES_REQUIRED","UNCERTAIN","REVIEWER1_UNAVAILABLE"],"micro_repair_timeout_seconds":60,"max_total_hook_budget_seconds":240.0,"obsidian_projection":{"enabled":true},"micro_repair_enabled":false,"mechanical_opencode_enabled":true,"fallback":{"agent":"agy","model":"gemini-backup","family":"backup"}}},
+{"name":"p32-reject-codex-family","mode":"coder","user_toml":"[coding]\ncoder_agent = \"codex\"\nfamily = \"bad family\"\n[coding.routes]\nmechanical = { model = \"gpt-6-p32\", effort = \"high\" }\nsubtle = { model = \"gpt-6-p32\", effort = \"high\" }\nnormal = { model = \"gpt-6-p32\", effort = \"high\" }\nconsequential = { model = \"gpt-6-p32\", effort = \"high\" }\nescalated = { model = \"gpt-6-p32\", effort = \"high\" }\noperation = { model = \"gpt-6-p32\", effort = \"high\" }\nplan_standard = { model = \"gpt-6-p32\", effort = \"high\" }\n[roles]\ncoder = \"codex\"\n","expected_error":"[coding] family is invalid","ok":false,"error":"[coding] family is invalid","loaded":null},
+{"name":"p32-reject-opencode-role","mode":"coder","user_toml":"[coding]\ncoder_agent = \"opencode\"\nfamily = \"team\"\n[coding.routes]\nmechanical = \"provider/p32\"\nsubtle = \"provider/p32\"\nnormal = \"provider/p32\"\nconsequential = \"provider/p32\"\nescalated = \"provider/p32\"\noperation = \"provider/p32\"\nplan_standard = \"provider/p32\"\n[roles]\ncoder = \"agy\"\n","expected_error":"[coding] coder routes or role are invalid","ok":false,"error":"[coding] coder routes or role are invalid","loaded":null},
+{"name":"p32-reject-opencode-routes","mode":"coder","user_toml":"[coding]\ncoder_agent = \"opencode\"\nfamily = \"team\"\n[roles]\ncoder = \"opencode\"\n","expected_error":"[coding] coder routes or role are invalid","ok":false,"error":"[coding] coder routes or role are invalid","loaded":null},
+{"name":"p32-reject-opencode-model","mode":"coder","user_toml":"[coding]\ncoder_agent = \"opencode\"\nfamily = \"team\"\n[coding.routes]\nmechanical = \"not-a-provider-model\"\nsubtle = \"provider/p32\"\nnormal = \"provider/p32\"\nconsequential = \"provider/p32\"\nescalated = \"provider/p32\"\noperation = \"provider/p32\"\nplan_standard = \"provider/p32\"\n[roles]\ncoder = \"opencode\"\n","expected_error":"[coding] coder route model is invalid","ok":false,"error":"[coding] coder route model is invalid","loaded":null},
+{"name":"p32-reject-opencode-model-disagreement","mode":"coder","user_toml":"[coding]\ncoder_agent = \"opencode\"\nfamily = \"team\"\n[coding.routes]\nmechanical = \"provider/other\"\nsubtle = \"provider/p32\"\nnormal = \"provider/p32\"\nconsequential = \"provider/p32\"\nescalated = \"provider/p32\"\noperation = \"provider/p32\"\nplan_standard = \"provider/p32\"\n[roles]\ncoder = \"opencode\"\n","expected_error":"[coding] coder routes must use one model","ok":false,"error":"[coding] coder routes must use one model","loaded":null},
+{"name":"p32-reject-agy-effort","mode":"coder","user_toml":"[coding]\ncoder_agent = \"agy\"\nfamily = \"team\"\n[coding.routes]\nmechanical = { model = \"gemini-p32\", effort = \"bogus\" }\nsubtle = { model = \"gemini-p32\", effort = \"high\" }\nnormal = { model = \"gemini-p32\", effort = \"high\" }\nconsequential = { model = \"gemini-p32\", effort = \"high\" }\nescalated = { model = \"gemini-p32\", effort = \"high\" }\noperation = { model = \"gemini-p32\", effort = \"high\" }\nplan_standard = { model = \"gemini-p32\", effort = \"high\" }\n[roles]\ncoder = \"agy\"\n","expected_error":"[coding] Antigravity route model or effort is invalid","ok":false,"error":"[coding] Antigravity route model or effort is invalid","loaded":null},
+{"name":"p32-reject-agy-model-disagreement","mode":"coder","user_toml":"[coding]\ncoder_agent = \"agy\"\nfamily = \"team\"\n[coding.routes]\nmechanical = { model = \"gemini-other\", effort = \"high\" }\nsubtle = { model = \"gemini-p32\", effort = \"high\" }\nnormal = { model = \"gemini-p32\", effort = \"high\" }\nconsequential = { model = \"gemini-p32\", effort = \"high\" }\nescalated = { model = \"gemini-p32\", effort = \"high\" }\noperation = { model = \"gemini-p32\", effort = \"high\" }\nplan_standard = { model = \"gemini-p32\", effort = \"high\" }\n[roles]\ncoder = \"agy\"\n","expected_error":"[coding] coder routes must use one model","ok":false,"error":"[coding] coder routes must use one model","loaded":null},
+{"name":"p32-reject-fallback-shape","mode":"coder","user_toml":"[fallback]\nagent = \"agy\"\nmodel = \"gemini-backup\"\n","expected_error":"[fallback] agent, model, or family is invalid","ok":false,"error":"[fallback] agent, model, or family is invalid","loaded":null},
+{"name":"p32-reject-fallback-agent","mode":"coder","user_toml":"[fallback]\nagent = \"unknown\"\nmodel = \"backup\"\nfamily = \"backup\"\n","expected_error":"[fallback] agent, model, or family is invalid","ok":false,"error":"[fallback] agent, model, or family is invalid","loaded":null},
+{"name":"p32-reject-fallback-family","mode":"coder","user_toml":"[fallback]\nagent = \"agy\"\nmodel = \"gemini-backup\"\nfamily = \"bad family\"\n","expected_error":"[fallback] agent, model, or family is invalid","ok":false,"error":"[fallback] agent, model, or family is invalid","loaded":null},
+{"name":"p32-reject-fallback-model","mode":"coder","user_toml":"[fallback]\nagent = \"agy\"\nmodel = \"backup\"\nfamily = \"backup\"\n","expected_error":"[fallback] model is invalid","ok":false,"error":"[fallback] model is invalid","loaded":null},
+{"name":"p32-reject-fallback-same-model","mode":"coder","user_toml":"[fallback]\nagent = \"codex\"\nmodel = \"gpt-6.1-sol\"\nfamily = \"backup\"\n","expected_error":"[fallback] model must differ from the primary coder model","ok":false,"error":"[fallback] model must differ from the primary coder model","loaded":null},
+{"name":"p32-reject-roles-table","mode":"coder","user_toml":"roles = \"invalid\"\n","expected_error":"'str' object has no attribute 'get'","ok":false,"error":"'str' object has no attribute 'get'","loaded":null}
+]

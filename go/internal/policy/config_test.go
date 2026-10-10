@@ -11,7 +11,7 @@ import (
 )
 
 func TestPythonConfigGoldenParity(t *testing.T) {
-	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "config_cases.json")
+	path := filepath.Join("testdata", "config_cases.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestClaudeCoderUsesTierAliasesAndRequiresClaudeRole(t *testing.T) {
 }
 
 func testPythonCoderConfigGoldenParity(t *testing.T, p32Only bool) {
-	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "config_cases.json")
+	path := filepath.Join("testdata", "config_cases.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

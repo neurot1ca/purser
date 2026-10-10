@@ -1,0 +1,670 @@
+{
+  "oracle": "Python .claude/hooks/orchestrator/code_map.py inventory and refresh cache",
+  "version": 5,
+  "parser": "unavailable",
+  "limits": {
+    "max_files": 5000,
+    "max_file_bytes": 524288,
+    "max_total_bytes": 33554432,
+    "max_map_bytes": 262144,
+    "max_seconds": 10
+  },
+  "cases": [
+    {
+      "name": "p43_symlink_internal",
+      "op": "inventory",
+      "kind": "symlink-internal",
+      "expected_entry": "unknown",
+      "expected_contained": false,
+      "expected_regular": false
+    },
+    {
+      "name": "p43_symlink_escape",
+      "op": "inventory",
+      "kind": "symlink-escape",
+      "expected_entry": "unknown",
+      "expected_contained": false,
+      "expected_regular": false
+    },
+    {
+      "name": "p43_nonregular",
+      "op": "inventory",
+      "kind": "tracked-directory",
+      "expected_entry": "unknown",
+      "expected_contained": false,
+      "expected_regular": false
+    },
+    {
+      "name": "p43_cache_version_mismatch",
+      "op": "cache",
+      "version": 4,
+      "parser": "unavailable",
+      "expected_valid": false,
+      "refresh_status": "FRESH"
+    },
+    {
+      "name": "p43_cache_parser_mismatch",
+      "op": "cache",
+      "version": 5,
+      "parser": "different-parser",
+      "expected_valid": false,
+      "refresh_status": "FRESH"
+    },
+    {
+      "name": "p43_cache_key_same_metadata",
+      "op": "cache-key",
+      "size": 9,
+      "same_mtime": true,
+      "expected_hit": true
+    },
+    {
+      "name": "p43_cache_key_size_changed",
+      "op": "cache-key",
+      "size": 10,
+      "same_mtime": true,
+      "expected_hit": false
+    },
+    {
+      "name": "p43_limits_file_size_boundary",
+      "op": "limit",
+      "size": 524288,
+      "total": 524288,
+      "expected_skip": false
+    },
+    {
+      "name": "p43_limits_file_size_over",
+      "op": "limit",
+      "size": 524289,
+      "total": 524289,
+      "expected_skip": true
+    },
+    {
+      "name": "p43_limits_total_over",
+      "op": "limit",
+      "size": 1,
+      "total": 33554432,
+      "expected_error": "total size",
+      "refresh_status": "UNAVAILABLE"
+    },
+    {
+      "name": "p43_limits_file_count_over",
+      "op": "file-count",
+      "count": 5001,
+      "expected_error": "file count",
+      "refresh_status": "UNAVAILABLE"
+    },
+    {
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: unavailable\nCovered languages: python\n\nnested.py\n  2 class Outer\n  5 method Outer.create(cls, value: dict[str, int], *items: str, flag: bool=True, **kwargs: object) -> 'Outer'\n  6 function Outer.create.inner(item: tuple[int, str]) -> tuple[int, str]\n  10 method Outer.run(self, count: int=1) -> str\n  11 function Outer.run.nested(label: str) -> None\n  15 class Outer.Inner\n  17 method Outer.Inner.convert(value: bytes) -> str\n  21 function top(value: int) -> int\n  22 function top.nested_top(flag: bool=False) -> None\n",
+      "expected_symbols": {
+        "nested.py": [
+          [
+            2,
+            "class",
+            "Outer",
+            ""
+          ],
+          [
+            5,
+            "method",
+            "Outer.create",
+            "(cls, value: dict[str, int], *items: str, flag: bool=True, **kwargs: object) -> 'Outer'"
+          ],
+          [
+            6,
+            "function",
+            "Outer.create.inner",
+            "(item: tuple[int, str]) -> tuple[int, str]"
+          ],
+          [
+            10,
+            "method",
+            "Outer.run",
+            "(self, count: int=1) -> str"
+          ],
+          [
+            11,
+            "function",
+            "Outer.run.nested",
+            "(label: str) -> None"
+          ],
+          [
+            15,
+            "class",
+            "Outer.Inner",
+            ""
+          ],
+          [
+            17,
+            "method",
+            "Outer.Inner.convert",
+            "(value: bytes) -> str"
+          ],
+          [
+            21,
+            "function",
+            "top",
+            "(value: int) -> int"
+          ],
+          [
+            22,
+            "function",
+            "top.nested_top",
+            "(flag: bool=False) -> None"
+          ]
+        ]
+      },
+      "name": "p43_oracle_symbols",
+      "op": "oracle",
+      "sources": {
+        "nested.py": "@module_decorator\nclass Outer(Base[int]):\n    @classmethod\n    @decorate(\"factory\")\n    def create(cls, value: dict[str, int], *items: str, flag: bool = True, **kwargs: object) -> \"Outer\":\n        def inner(item: tuple[int, str]) -> tuple[int, str]:\n            return item\n        return cls()\n\n    async def run(self, count: int = 1) -> str:\n        async def nested(label: str) -> None:\n            pass\n        return str(count)\n\n    class Inner:\n        @staticmethod\n        def convert(value: bytes) -> str:\n            return value.decode()\n\n@decorator\ndef top(value: int) -> int:\n    def nested_top(flag: bool = False) -> None:\n        pass\n    return value\n"
+      }
+    },
+    {
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: unavailable\nCovered languages: python\n\na_first.py\n  1 function first(argument_0: str='value', argument_1: str='value', argument_2: str='value', argument_3: str='value', …\nm_middle.py\n  1 class Zebra\n  3 class Alpha\nz_last.py\n  1 function zed()\n",
+      "expected_symbols": {
+        "a_first.py": [
+          [
+            1,
+            "function",
+            "first",
+            "(argument_0: str='value', argument_1: str='value', argument_2: str='value', argument_3: str='value', argument_4: str='value', argument_5: str='value', argument…"
+          ]
+        ],
+        "m_middle.py": [
+          [
+            1,
+            "class",
+            "Zebra",
+            ""
+          ],
+          [
+            3,
+            "class",
+            "Alpha",
+            ""
+          ]
+        ],
+        "z_last.py": [
+          [
+            1,
+            "function",
+            "zed",
+            "()"
+          ]
+        ]
+      },
+      "name": "p43_oracle_render",
+      "op": "oracle",
+      "sources": {
+        "a_first.py": "def first(argument_0: str = 'value', argument_1: str = 'value', argument_2: str = 'value', argument_3: str = 'value', argument_4: str = 'value', argument_5: str = 'value', argument_6: str = 'value', argument_7: str = 'value', argument_8: str = 'value', argument_9: str = 'value', argument_10: str = 'value', argument_11: str = 'value', argument_12: str = 'value', argument_13: str = 'value', argument_14: str = 'value', argument_15: str = 'value', argument_16: str = 'value', argument_17: str = 'value', argument_18: str = 'value', argument_19: str = 'value', argument_20: str = 'value', argument_21: str = 'value', argument_22: str = 'value', argument_23: str = 'value', argument_24: str = 'value', argument_25: str = 'value', argument_26: str = 'value', argument_27: str = 'value', argument_28: str = 'value', argument_29: str = 'value', argument_30: str = 'value', argument_31: str = 'value', argument_32: str = 'value', argument_33: str = 'value', argument_34: str = 'value') -> dict[str, str]:\n    pass\n",
+        "m_middle.py": "class Zebra:\n    pass\nclass Alpha:\n    pass\n",
+        "z_last.py": "def zed(): pass\n"
+      }
+    },
+    {
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: unavailable\nCovered languages: none\n\nsample.js\n  symbols: unavailable (install tree-sitter-language-pack)\n",
+      "expected_symbols": {},
+      "name": "p43_oracle_unavailable",
+      "op": "oracle",
+      "sources": {
+        "sample.js": "function hello() {}\n"
+      }
+    },
+    {
+      "name": "p3d_oracle_rust",
+      "op": "oracle",
+      "sources": {
+        "sample.rs": "struct Boxed { value: i32 }\nenum Color { Red }\ntype Alias = i32;\ntrait Draw {}\nfn build() {}\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: rust\n\nsample.rs\n  1 class Boxed\n  2 class Color\n  3 class Alias\n  4 interface Draw\n  5 function build\n",
+      "expected_symbols": {
+        "sample.rs": [
+          [
+            1,
+            "class",
+            "Boxed",
+            ""
+          ],
+          [
+            2,
+            "class",
+            "Color",
+            ""
+          ],
+          [
+            3,
+            "class",
+            "Alias",
+            ""
+          ],
+          [
+            4,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            5,
+            "function",
+            "build",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3d_oracle_java",
+      "op": "oracle",
+      "sources": {
+        "sample.java": "class Box { Box() {} int get() { return 1; } }\ninterface Draw { void draw(); }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: java\n\nsample.java\n  1 class Box\n  1 method Box.Box\n  1 method Box.get\n  2 interface Draw\n  2 method Draw.draw\n",
+      "expected_symbols": {
+        "sample.java": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            1,
+            "method",
+            "Box.Box",
+            ""
+          ],
+          [
+            1,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            2,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Draw.draw",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3d_oracle_c",
+      "op": "oracle",
+      "sources": {
+        "sample.c": "struct Box { int value; };\nunion Value { int i; } value;\ntypedef int Count;\nenum Color { RED };\nint add(int a, int b) { return a + b; }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: c\n\nsample.c\n  1 class Box\n  2 class Value\n  3 type Count\n  4 type Color\n  5 function add\n",
+      "expected_symbols": {
+        "sample.c": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "class",
+            "Value",
+            ""
+          ],
+          [
+            3,
+            "type",
+            "Count",
+            ""
+          ],
+          [
+            4,
+            "type",
+            "Color",
+            ""
+          ],
+          [
+            5,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3d_oracle_cpp",
+      "op": "oracle",
+      "sources": {
+        "sample.cpp": "class Box { int get() { return 1; } };\nstruct Point {};\nint add(int a, int b) { return a + b; }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: cpp\n\nsample.cpp\n  1 class Box\n  3 function add\n",
+      "expected_symbols": {
+        "sample.cpp": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            3,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3d_oracle_c_sharp",
+      "op": "oracle",
+      "sources": {
+        "sample.cs": "class Box { int Get() { return 1; } }\ninterface Draw { void Draw(); }\nstruct Point { int X; }\nenum Color { Red }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: none\n\nsample.cs\n  symbols: unavailable (parser failed: DownloadError)\n",
+      "expected_symbols": {
+        "sample.cs": []
+      }
+    },
+    {
+      "name": "p3d_oracle_ruby",
+      "op": "oracle",
+      "sources": {
+        "sample.rb": "class Box\n  def get(value)\n    value\n  end\nend\nclass Outer::Inner\n  def self.build\n  end\nend\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: ruby\n\nsample.rb\n  1 class Box\n  2 method Box.get\n  6 class Outer::Inner\n  7 method Outer::Inner.build\n",
+      "expected_symbols": {
+        "sample.rb": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            6,
+            "class",
+            "Outer::Inner",
+            ""
+          ],
+          [
+            7,
+            "method",
+            "Outer::Inner.build",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_php",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.php": "<?php\nclass Box { public function get($x) {} }\ninterface Draw { public function draw(); }\nfunction add($a, $b) {}\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: php\n\nsample.php\n  2 class Box\n  2 method Box.get\n  3 interface Draw\n  3 method Draw.draw\n  4 function add\n",
+      "expected_symbols": {
+        "sample.php": [
+          [
+            2,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            3,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            3,
+            "method",
+            "Draw.draw",
+            ""
+          ],
+          [
+            4,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_swift",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.swift": "class Box {}\nfunc add(_ a: Int, _ b: Int) -> Int { a+b }\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: swift\n\nsample.swift\n  1 class Box\n  2 function add\n",
+      "expected_symbols": {
+        "sample.swift": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_kotlin",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.kt": "class Box {\n fun get(x: Int): Int = x\n}\ninterface Draw { fun draw() }\nfun add(a: Int, b: Int) = a+b\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: kotlin\n\nsample.kt\n  1 class Box\n  2 method Box.get\n  4 class Draw\n  4 method Draw.draw\n  5 function add\n",
+      "expected_symbols": {
+        "sample.kt": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            4,
+            "class",
+            "Draw",
+            ""
+          ],
+          [
+            4,
+            "method",
+            "Draw.draw",
+            ""
+          ],
+          [
+            5,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_scala",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.scala": "class Box {\n def get(x: Int): Int = x\n}\ntrait Draw { def draw(): Unit }\ndef add(a: Int, b: Int): Int = a+b\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: scala\n\nsample.scala\n  1 class Box\n  2 method Box.get\n  4 interface Draw\n  5 method add\n",
+      "expected_symbols": {
+        "sample.scala": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Box.get",
+            ""
+          ],
+          [
+            4,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            5,
+            "method",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_lua",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.lua": "function Box.get(x)\n return x\nend\nlocal function add(a, b)\n return a+b\nend\nBox.other = function(x) return x end\nlocal t = {f = function(x) return x end}\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: lua\n\nsample.lua\n  1 function get\n  4 function add\n  7 function other\n  8 function f\n",
+      "expected_symbols": {
+        "sample.lua": [
+          [
+            1,
+            "function",
+            "get",
+            ""
+          ],
+          [
+            4,
+            "function",
+            "add",
+            ""
+          ],
+          [
+            7,
+            "function",
+            "other",
+            ""
+          ],
+          [
+            8,
+            "function",
+            "f",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_oracle_bash",
+      "op": "oracle",
+      "oracle": "Python tree-sitter oracle",
+      "sources": {
+        "sample.sh": "function greet() {\n echo hi\n}\nadd() {\n :\n}\n"
+      },
+      "expected_map": "# Code map v5\nParser: Python ast; other languages: tree_sitter_language_pack\nCovered languages: bash\n\nsample.sh\n  1 function greet\n  4 function add\n",
+      "expected_symbols": {
+        "sample.sh": [
+          [
+            1,
+            "function",
+            "greet",
+            ""
+          ],
+          [
+            4,
+            "function",
+            "add",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "name": "p3e_go_only_c_sharp",
+      "op": "oracle",
+      "oracle": "GO_ONLY: Python tree-sitter-language-pack does not ship c_sharp",
+      "sources": {
+        "sample.cs": "class Box { int Get() { return 1; } }\ninterface Draw { void Draw(); }\nstruct Point { int X; }\nenum Color { Red }\n"
+      },
+      "expected_map": "# Code map v5\nParser: native Go/Python/tree-sitter\nCovered languages: c_sharp\n\nsample.cs\n  1 class Box\n  1 method Box.Get\n  2 interface Draw\n  2 method Draw.Draw\n  3 struct Point\n  4 enum Color\n",
+      "expected_symbols": {
+        "sample.cs": [
+          [
+            1,
+            "class",
+            "Box",
+            ""
+          ],
+          [
+            1,
+            "method",
+            "Box.Get",
+            ""
+          ],
+          [
+            2,
+            "interface",
+            "Draw",
+            ""
+          ],
+          [
+            2,
+            "method",
+            "Draw.Draw",
+            ""
+          ],
+          [
+            3,
+            "struct",
+            "Point",
+            ""
+          ],
+          [
+            4,
+            "enum",
+            "Color",
+            ""
+          ]
+        ]
+      }
+    }
+  ]
+}

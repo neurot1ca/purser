@@ -21,7 +21,7 @@ type agentCase struct {
 }
 
 func TestAgentCommandPythonParity(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_jobs_agents", "agents.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "agents.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

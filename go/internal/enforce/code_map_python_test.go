@@ -36,7 +36,7 @@ def top(value: int) -> int:
 `
 
 func TestCodeMapPythonOracleSymbols(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "code_map.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "code_map.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

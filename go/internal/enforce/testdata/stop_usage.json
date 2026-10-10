@@ -1,0 +1,245 @@
+{
+  "oracle": "claude_transcript_usage.finalize_stop_task",
+  "cases": [
+    {
+      "name": "p129-normal",
+      "transcript": [
+        {
+          "type": "assistant",
+          "message": {
+            "id": "anchor",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-129"
+              }
+            ],
+            "usage": {
+              "input_tokens": 7,
+              "output_tokens": 3,
+              "cache_creation_input_tokens": 1,
+              "cache_read_input_tokens": 2
+            }
+          },
+          "requestId": "req-anchor",
+          "isSidechain": false
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "next",
+            "content": [],
+            "usage": {
+              "input_tokens": 5,
+              "output_tokens": 2,
+              "cache_creation_input_tokens": 1,
+              "cache_read_input_tokens": 2
+            }
+          },
+          "requestId": "req-next",
+          "isSidechain": false
+        }
+      ],
+      "expected": {
+        "status": "COMPLETED",
+        "usage": {
+          "claude_task_usage_source": "desktop_jsonl_observed",
+          "claude_task_usage_known": true,
+          "claude_task_usage_complete": true,
+          "claude_task_input_tokens": 12,
+          "claude_task_output_tokens": 5,
+          "claude_task_cache_creation_input_tokens": 2,
+          "claude_task_cache_read_input_tokens": 4,
+          "claude_task_total_observed_tokens": 23,
+          "claude_task_request_count": 2,
+          "claude_task_usage_boundary": "anchored_pre_tool_to_stop",
+          "claude_task_usage_dedup": "message_id_request_id",
+          "claude_task_usage_unknown_reason": null,
+          "claude_task_subagent_usage_included": false
+        }
+      }
+    },
+    {
+      "name": "p129-outside-root",
+      "outside": true,
+      "transcript": [
+        {
+          "type": "assistant",
+          "message": {
+            "id": "anchor",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-129"
+              }
+            ],
+            "usage": {
+              "input_tokens": 7,
+              "output_tokens": 3,
+              "cache_creation_input_tokens": 1,
+              "cache_read_input_tokens": 2
+            }
+          },
+          "requestId": "req-anchor",
+          "isSidechain": false
+        }
+      ],
+      "expected": {
+        "status": "FAILED",
+        "reason": "TRANSCRIPT_PATH_ESCAPE"
+      }
+    },
+    {
+      "name": "p129-identity-changed",
+      "identity_changed": true,
+      "transcript": [
+        {
+          "type": "assistant",
+          "message": {
+            "id": "anchor",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-129"
+              }
+            ],
+            "usage": {
+              "input_tokens": 7,
+              "output_tokens": 3,
+              "cache_creation_input_tokens": 1,
+              "cache_read_input_tokens": 2
+            }
+          },
+          "requestId": "req-anchor",
+          "isSidechain": false
+        }
+      ],
+      "expected": {
+        "status": "FAILED",
+        "reason": "TRANSCRIPT_IDENTITY_MISMATCH"
+      }
+    },
+    {
+      "name": "p129-transcript-shrank",
+      "shrank": true,
+      "transcript": [
+        {
+          "type": "assistant",
+          "message": {
+            "id": "anchor",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-129"
+              }
+            ],
+            "usage": {
+              "input_tokens": 7,
+              "output_tokens": 3,
+              "cache_creation_input_tokens": 1,
+              "cache_read_input_tokens": 2
+            }
+          },
+          "requestId": "req-anchor",
+          "isSidechain": false
+        }
+      ],
+      "expected": {
+        "status": "FAILED",
+        "reason": "TRANSCRIPT_ROTATED_OR_TRUNCATED"
+      }
+    },
+    {
+      "name": "p129-subagent-usage-included",
+      "transcript": [
+        {
+          "type": "assistant",
+          "message": {
+            "id": "anchor",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-129"
+              }
+            ],
+            "usage": {
+              "input_tokens": 7,
+              "output_tokens": 3,
+              "cache_creation_input_tokens": 1,
+              "cache_read_input_tokens": 2
+            }
+          },
+          "requestId": "req-anchor",
+          "isSidechain": false
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "id": "subagent",
+            "content": [],
+            "usage": {
+              "input_tokens": 11,
+              "output_tokens": 4,
+              "cache_creation_input_tokens": 1,
+              "cache_read_input_tokens": 2
+            }
+          },
+          "requestId": "req-subagent",
+          "isSidechain": true
+        }
+      ],
+      "expected": {
+        "status": "COMPLETED",
+        "usage": {
+          "claude_task_usage_source": "desktop_jsonl_observed",
+          "claude_task_usage_known": true,
+          "claude_task_usage_complete": true,
+          "claude_task_input_tokens": 18,
+          "claude_task_output_tokens": 7,
+          "claude_task_cache_creation_input_tokens": 2,
+          "claude_task_cache_read_input_tokens": 4,
+          "claude_task_total_observed_tokens": 31,
+          "claude_task_request_count": 2,
+          "claude_task_usage_boundary": "anchored_pre_tool_to_stop",
+          "claude_task_usage_dedup": "message_id_request_id",
+          "claude_task_usage_unknown_reason": null,
+          "claude_task_subagent_usage_included": false
+        }
+      }
+    },
+    {
+      "name": "p129-missing-usage-fields",
+      "transcript": [
+        {
+          "type": "assistant",
+          "requestId": "req-anchor",
+          "message": {
+            "id": "anchor",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-129"
+              }
+            ],
+            "usage": {
+              "input_tokens": 7
+            }
+          }
+        }
+      ],
+      "expected": {
+        "status": "FAILED",
+        "reason": "INVALID_USAGE_RECORD"
+      }
+    },
+    {
+      "name": "p129-malformed-transcript-line",
+      "raw_transcript": "not-json\n",
+      "transcript": [],
+      "expected": {
+        "status": "FAILED",
+        "reason": "INVALID_USAGE_RECORD"
+      }
+    }
+  ]
+}

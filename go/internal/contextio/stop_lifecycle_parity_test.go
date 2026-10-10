@@ -1,14 +1,11 @@
 package contextio_test
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"purser-hook/internal/testutil"
 	"reflect"
 	"runtime"
 	"strings"
@@ -19,17 +16,14 @@ import (
 	"purser-hook/internal/enforce"
 )
 
-var _ = enforce.FinalizeStopTask
-
-func TestP132StopLifecyclePythonParity(t *testing.T) {
+func TestP132StopLifecycleBehavior(t *testing.T) {
 	path := filepath.Join("testdata", "stop_lifecycle_python_fixture.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var fixture struct {
-		Oracle string `json:"oracle"`
-		Cases  []struct {
+		Cases []struct {
 			Name         string           `json:"name"`
 			Session      string           `json:"session"`
 			Transcript   *string          `json:"transcript"`
@@ -41,7 +35,7 @@ func TestP132StopLifecyclePythonParity(t *testing.T) {
 			ActiveSeed   map[string]any   `json:"active_seed"`
 		} `json:"cases"`
 	}
-	if err := json.Unmarshal(data, &fixture); err != nil || fixture.Oracle != "registered Python codex.stop + compaction_advisor.stop" {
+	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatalf("invalid lifecycle fixture: %v", err)
 	}
 	for _, tc := range fixture.Cases {
@@ -134,7 +128,7 @@ func TestP132StopLifecyclePythonParity(t *testing.T) {
 	}
 }
 
-func TestP132GoWrittenActiveRecordPythonFinalization(t *testing.T) {
+func TestP132GoWrittenActiveRecordFinalization(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "stop_lifecycle_python_fixture.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -163,9 +157,13 @@ func TestP132GoWrittenActiveRecordPythonFinalization(t *testing.T) {
 		}
 	}
 	if tc == nil || tc.Transcript == nil || tc.ActiveSeed == nil {
-		t.Fatal("active Python Pre record missing from fixture")
+		t.Fatal("active task fixture is incomplete")
 	}
 	root, repo, home := t.TempDir(), filepath.Join(t.TempDir(), "repo"), t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", root)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	projects := filepath.Join(home, ".claude", "projects")
 	if err := os.MkdirAll(projects, 0700); err != nil {
 		t.Fatal(err)
@@ -196,21 +194,7 @@ func TestP132GoWrittenActiveRecordPythonFinalization(t *testing.T) {
 	if err := os.WriteFile(activePath, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	event, _ := json.Marshal(map[string]any{"hook_event_name": "Stop", "cwd": repo, "session_id": tc.Session,
-		"stop_hook_active": false, "last_assistant_message": "Done.", "transcript_path": transcript})
-	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entrypoint := range []string{"hook.py", "context_io_hook.py"} {
-		cmd := exec.Command(testutil.Python(t), filepath.Join(pluginRoot, entrypoint))
-		cmd.Dir = repo
-		cmd.Stdin = bytes.NewReader(event)
-		cmd.Env = append(os.Environ(), "PURSER_STATE_DIR="+root, "USERPROFILE="+home, "HOME="+home, "CLAUDE_CONFIG_DIR="+filepath.Join(home, ".claude"))
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("Python %s: %v: %s", entrypoint, err, output)
-		}
-	}
+	enforce.FinalizeStopTask(root, tc.Session, transcript)
 	var finalized map[string]any
 	data, err = os.ReadFile(activePath)
 	if err != nil {
@@ -220,7 +204,7 @@ func TestP132GoWrittenActiveRecordPythonFinalization(t *testing.T) {
 		t.Fatal(err)
 	}
 	if finalized["completed"] != true || finalized["invalidated"] != false {
-		t.Fatalf("Python finalizer state = %#v", finalized)
+		t.Fatalf("Go finalizer state = %#v", finalized)
 	}
 }
 

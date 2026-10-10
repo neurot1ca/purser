@@ -41,7 +41,7 @@ func TestCodeMapGoRenderedFunctionSeparatesNameAndSignature(t *testing.T) {
 }
 
 func TestCodeMapPass3dOracleSymbols(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "code_map.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "code_map.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestCodeMapPass3dOracleSymbols(t *testing.T) {
 }
 
 func TestCodeMapPass3eSymbols(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "code_map.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "code_map.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func nativeMapRepo(t *testing.T, files map[string]string) (string, string) {
 
 func nativeMapFixture(t *testing.T, name string) string {
 	t.Helper()
-	p := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "code_map.json")
+	p := filepath.Join("testdata", "code_map.json")
 	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
