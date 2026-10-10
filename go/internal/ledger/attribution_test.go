@@ -10,7 +10,7 @@ import (
 )
 
 func TestAttributeKnownConcurrentScopesPythonFixture(t *testing.T) {
-	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "attribution.json")
+	file := filepath.Join("testdata", "attribution.json")
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestAttributeKnownConcurrentScopesMalformedOwnerFailsOpen(t *testing.T) {
 }
 
 func TestClassifyConcurrentWritersPythonFixture(t *testing.T) {
-	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "concurrent_writers.json")
+	file := filepath.Join("testdata", "concurrent_writers.json")
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)

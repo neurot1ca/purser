@@ -9,7 +9,7 @@ import (
 )
 
 func TestDriftAndApplyJobPatchPythonFixture(t *testing.T) {
-	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_ledger_apply", "oracle.json")
+	file := filepath.Join("testdata", "apply_patch.json")
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)

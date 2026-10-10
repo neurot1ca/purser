@@ -28,7 +28,7 @@ func TestScopedManifestPythonFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "manifest.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

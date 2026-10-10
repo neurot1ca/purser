@@ -11,7 +11,7 @@ import (
 )
 
 func TestJobWorktreePythonFixture(t *testing.T) {
-	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "job_worktree.json")
+	file := filepath.Join("testdata", "job_worktree.json")
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)

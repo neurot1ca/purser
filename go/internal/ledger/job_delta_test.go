@@ -11,7 +11,7 @@ import (
 )
 
 func TestComputeJobDeltaPythonFixture(t *testing.T) {
-	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "job_delta.json")
+	fixturePath := filepath.Join("testdata", "job_delta.json")
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)

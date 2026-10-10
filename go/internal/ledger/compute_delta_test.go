@@ -8,7 +8,7 @@ import (
 )
 
 func TestComputeDeltaPythonFixture(t *testing.T) {
-	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "compute_delta.json")
+	file := filepath.Join("testdata", "compute_delta.json")
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)

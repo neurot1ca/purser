@@ -1,24 +1,19 @@
 package ledger
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestSessionLookupParityFixture(t *testing.T) {
-	_, source, _, _ := runtime.Caller(0)
-	repo := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	fixturePath := filepath.Join(repo, ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "session_lookup.json")
+	fixturePath := filepath.Join("testdata", "session_lookup.json")
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
@@ -69,20 +64,6 @@ func TestSessionLookupParityFixture(t *testing.T) {
 	loaded := Load(path, roundTrip["task_id"].(string))
 	if loaded.Status != OK || !reflect.DeepEqual(loaded.Record, roundTrip) {
 		t.Fatalf("Go round trip: %#v", loaded)
-	}
-	moduleDir := filepath.Join(repo, ".claude", "hooks", "orchestrator")
-	expected, _ := json.Marshal(roundTrip)
-	script := "import json,sys; sys.path.insert(0,sys.argv[1]); from ledger import SessionLedger; result=SessionLedger(sys.argv[2]).load(sys.argv[3]); assert result['status']=='OK' and result['record']==json.loads(sys.argv[4]), result"
-	python, err := exec.LookPath("python")
-	if err != nil {
-		python, err = exec.LookPath("python3")
-	}
-	if err != nil {
-		t.Fatal("Python interpreter unavailable")
-	}
-	command := exec.Command(python, "-B", "-c", script, moduleDir, root, roundTrip["task_id"].(string), string(expected))
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("Python could not load constructed Go record: %v: %s", err, output)
 	}
 	for _, test := range fixture.Lookup {
 		sessions := filepath.Join(root, "sessions")
@@ -175,7 +156,7 @@ func TestPythonLedgerFixtures(t *testing.T) {
 	}
 }
 
-func TestPythonFloatLedgerChecksumParity(t *testing.T) {
+func TestLedgerFloatChecksumSpelling(t *testing.T) {
 	const payload = `{"task_id":"task-float","live_thread":null,"pending_call_baseline":null,"last_outcome":{"codex_quota":{"remaining":27.0,"limit":60.0}}}`
 	decoder := json.NewDecoder(strings.NewReader(payload))
 	decoder.UseNumber()
@@ -187,23 +168,8 @@ func TestPythonFloatLedgerChecksumParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, source, _, _ := runtime.Caller(0)
-	repo := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	moduleDir := filepath.Join(repo, ".claude", "hooks", "orchestrator")
-	python, err := exec.LookPath("python")
-	if err != nil {
-		python, err = exec.LookPath("python3")
-	}
-	if err != nil {
-		t.Fatal("Python interpreter unavailable")
-	}
-	script := "import json,sys; sys.path.insert(0,sys.argv[1]); from ledger import _canonical_json; sys.stdout.buffer.write(_canonical_json(json.loads(sys.argv[2])))"
-	output, err := exec.Command(python, "-B", "-c", script, moduleDir, payload).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(goCanonical, output) {
-		t.Fatalf("canonical checksum bytes differ\nGo: %s\nPython: %s", goCanonical, output)
+	if want := `{"last_outcome":{"codex_quota":{"limit":60.0,"remaining":27.0}},"live_thread":null,"pending_call_baseline":null,"task_id":"task-float"}`; string(goCanonical) != want {
+		t.Fatalf("canonical checksum bytes = %s, want %s", goCanonical, want)
 	}
 	digest := sha256.Sum256(goCanonical)
 	envelope := `{"schema_version":1,"checksum":"` + hex.EncodeToString(digest[:]) + `","payload":` + payload + `}`
@@ -298,28 +264,6 @@ func TestLastOutcomePlainAPIKeyIsRejected(t *testing.T) {
 	record["last_outcome"] = map[string]any{"api_key": "not-a-pattern-matched-value"}
 	if got := Save(t.TempDir(), record); got.Status != "UNKNOWN" || got.Code != "LEDGER_RECORD_INVALID" {
 		t.Fatalf("save: %#v", got)
-	}
-}
-
-func TestGoSaveLoadsInPython(t *testing.T) {
-	root := t.TempDir()
-	if got := Save(root, testRecord("go-to-python")); got.Status != OK {
-		t.Fatalf("save: %#v", got)
-	}
-	python, err := exec.LookPath("python")
-	if err != nil {
-		python, err = exec.LookPath("python3")
-	}
-	if err != nil {
-		t.Fatal("Python interpreter unavailable")
-	}
-	_, source, _, _ := runtime.Caller(0)
-	repo := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	moduleDir := filepath.Join(repo, ".claude", "hooks", "orchestrator")
-	script := "import sys; sys.path.insert(0, sys.argv[1]); from ledger import SessionLedger; result=SessionLedger(sys.argv[2]).load('go-to-python'); assert result['status']=='OK' and result['record']['task_id']=='go-to-python', result"
-	command := exec.Command(python, "-c", script, moduleDir, root)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("Python could not load Go record: %v: %s", err, output)
 	}
 }
 

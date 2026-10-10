@@ -11,7 +11,7 @@ import (
 )
 
 func TestDeltaPythonFixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "delta.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "delta.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

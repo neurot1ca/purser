@@ -12,7 +12,7 @@ import (
 )
 
 func TestGitPythonFixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "git.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "git.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

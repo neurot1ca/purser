@@ -119,7 +119,7 @@ func TestPrepareJobReplayThreeWayStagesAddedFile(t *testing.T) {
 }
 
 func TestPrepareJobReplayPythonFixture(t *testing.T) {
-	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "replay.json")
+	file := filepath.Join("testdata", "replay.json")
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)

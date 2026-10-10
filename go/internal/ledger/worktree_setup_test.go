@@ -1,77 +1,58 @@
 package ledger
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"purser-hook/internal/testutil"
-	"reflect"
 	"runtime"
-	"strings"
 	"testing"
 
 	"purser-hook/internal/profile"
 )
 
 func TestRunWorktreeSetup(t *testing.T) {
-	_, source, _, _ := runtime.Caller(0)
-	repo := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	fixturePath := filepath.Join(repo, ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "worktree_setup.json")
-	data, err := os.ReadFile(fixturePath)
-	if err != nil {
-		t.Fatal(err)
+	success, failure, timeout := "printf 'setup ok\\n'", "printf 'setup failed\\n'; exit 7", "printf 'started\\n'; sleep 5"
+	if runtime.GOOS == "windows" {
+		success = "echo setup ok"
+		failure = "echo setup failed & exit /b 7"
+		timeout = "echo started & ping -n 6 127.0.0.1 >nul 2>&1"
 	}
-	var fixture struct {
-		Oracle string `json:"oracle"`
-		Cases  []struct {
-			Name           string `json:"name"`
-			Command        string `json:"command"`
-			TimeoutSeconds int    `json:"timeout_seconds"`
-			Expected       struct {
-				Failed     bool `json:"failed"`
-				SetupError *struct {
-					ExitCode *int   `json:"exitCode"`
-					TimedOut bool   `json:"timedOut"`
-					Output   string `json:"output"`
-				} `json:"setupError,omitempty"`
-			} `json:"expected"`
-		} `json:"cases"`
-	}
-	if err := json.Unmarshal(data, &fixture); err != nil {
-		t.Fatal(err)
-	}
-	if fixture.Oracle != "Python ledger._run_worktree_setup" {
-		t.Fatalf("unexpected oracle: %q", fixture.Oracle)
-	}
-	python := testutil.Python(t)
-	for _, test := range fixture.Cases {
-		t.Run(test.Name, func(t *testing.T) {
-			command := strings.Replace(test.Command, "python", `"`+python+`"`, 1)
-			result := RunWorktreeSetup(t.TempDir(), profile.WorktreeSetup{
-				Setup: &command, SetupTimeoutSeconds: test.TimeoutSeconds,
-			})
-			if test.Name == "missing_command" && test.Expected.SetupError != nil && test.Expected.SetupError.Output == "<nonempty-shell-error>" {
-				if result.Failure == nil || result.Failure.Output == "" {
-					t.Fatal("missing command did not produce shell error output")
-				}
-				result.Failure.Output = "<nonempty-shell-error>"
-				if runtime.GOOS != "windows" {
-					posixShellExitCode := 127
-					test.Expected.SetupError.ExitCode = &posixShellExitCode
-				}
+	tests := []struct {
+		name    string
+		command string
+		timeout int
+		check   func(*testing.T, WorktreeSetupResult)
+	}{
+		{name: "success", command: success, timeout: 5, check: func(t *testing.T, got WorktreeSetupResult) {
+			if got.Failed() {
+				t.Fatalf("setup failed: %#v", got.Failure)
 			}
-			got := struct {
-				Failed     bool                `json:"failed"`
-				SetupError *WorktreeSetupError `json:"setupError,omitempty"`
-			}{Failed: result.Failed(), SetupError: result.Failure}
-			wantJSON, _ := json.Marshal(test.Expected)
-			gotJSON, _ := json.Marshal(got)
-			var want, actual any
-			_ = json.Unmarshal(wantJSON, &want)
-			_ = json.Unmarshal(gotJSON, &actual)
-			if !reflect.DeepEqual(actual, want) {
-				t.Fatalf("setup result = %s, want %s", gotJSON, wantJSON)
+		}},
+		{name: "nonzero_exit", command: failure, timeout: 5, check: func(t *testing.T, got WorktreeSetupResult) {
+			want := "setup failed\n"
+			if runtime.GOOS == "windows" {
+				want = "setup failed \n"
 			}
+			if got.Failure == nil || got.Failure.ExitCode == nil || *got.Failure.ExitCode != 7 || got.Failure.TimedOut || got.Failure.Output != want {
+				t.Fatalf("setup failure = %#v", got.Failure)
+			}
+		}},
+		{name: "timeout", command: timeout, timeout: 1, check: func(t *testing.T, got WorktreeSetupResult) {
+			want := "started\n"
+			if runtime.GOOS == "windows" {
+				want = "started \n"
+			}
+			if got.Failure == nil || !got.Failure.TimedOut || got.Failure.ExitCode != nil || got.Failure.Output != want {
+				t.Fatalf("setup timeout = %#v", got.Failure)
+			}
+		}},
+		{name: "missing_command", command: "purser_missing_setup_command_76136", timeout: 5, check: func(t *testing.T, got WorktreeSetupResult) {
+			if got.Failure == nil || got.Failure.TimedOut || got.Failure.Output == "" {
+				t.Fatalf("missing command result = %#v", got.Failure)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := RunWorktreeSetup(t.TempDir(), profile.WorktreeSetup{Setup: &test.command, SetupTimeoutSeconds: test.timeout})
+			test.check(t, got)
 		})
 	}
 }

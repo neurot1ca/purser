@@ -48,7 +48,7 @@ func TestJobPatchHandlesAlreadyStagedDeletion(t *testing.T) {
 }
 
 func TestJobReplayPythonFixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "job_patch.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "job_patch.json"))
 	checkPatchError(t, err)
 	var fixture struct {
 		Cases []struct {

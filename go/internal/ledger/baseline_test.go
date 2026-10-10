@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var baselineGoldenPath = filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "capture.json")
+var baselineGoldenPath = filepath.Join("testdata", "capture.json")
 
 func TestBaselineCapturePythonGolden(t *testing.T) {
 	for name, expected := range baselineExpectations(t) {

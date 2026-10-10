@@ -8,7 +8,7 @@ import (
 )
 
 func TestOutOfScopePythonFixture(t *testing.T) {
-	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "out_of_scope.json")
+	file := filepath.Join("testdata", "out_of_scope.json")
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
