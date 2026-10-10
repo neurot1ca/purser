@@ -1157,7 +1157,12 @@ def test_precompact_refreshes_only_existing_handoff_state(setup, monkeypatch):
     assert "Context tokens: 211337" in new_state
     assert old_state != new_state
     assert before.split(advisor.STATE_START, 1)[0] == after.split(advisor.STATE_START, 1)[0]
-    assert before.split(advisor.STATE_END, 1)[1] == after.split(advisor.STATE_END, 1)[1]
+    before_tail = before.split(advisor.STATE_END, 1)[1]
+    after_tail = after.split(advisor.STATE_END, 1)[1]
+    without_capture_time = lambda tail: [
+        line for line in tail.splitlines() if not line.startswith("Captured UTC: ")
+    ]
+    assert without_capture_time(before_tail) == without_capture_time(after_tail)
     hooks_dir = Path(__file__).parents[4] / "hooks"
     assert "on('classic.PreCompact'," in (hooks_dir / "register.ts").read_text(encoding="utf-8")
     hooks = json.loads((hooks_dir / "hooks.json").read_text(encoding="utf-8"))

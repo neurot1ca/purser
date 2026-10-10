@@ -2854,8 +2854,13 @@ def test_async_codex_launch_failure_includes_cause(area):
 def test_async_local_cancel_signal(area):
     client = Client(area, extra_env={"FAKE_SLOW": "1"})
     try:
+        calls_before_cancel = len(client.calls())
         job = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "cancel"})
         record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (job["jobId"] + ".json"))
+        deadline = time.monotonic() + 5
+        while len(client.calls()) == calls_before_cancel and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert len(client.calls()) > calls_before_cancel, "fake Codex did not start before cancellation"
         with socket.create_connection(("127.0.0.1", record["signalPort"]), timeout=4) as connection:
             connection.sendall(f"{job['jobId']}:{record['signalToken']}:CANCEL".encode("ascii"))
             assert connection.recv(1) == b"1"
