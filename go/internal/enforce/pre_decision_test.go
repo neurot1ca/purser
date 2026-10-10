@@ -92,6 +92,23 @@ func TestAppendPrePlanShapeIsPlanOnlyAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestPlanMilestoneLabel(t *testing.T) {
+	for _, test := range []struct {
+		name, taskID, label, want string
+	}{
+		{name: "plan milestone", taskID: "ci-go-plan-m5of5", label: "CI green on 3 OSes", want: "CI green on 3 OSes [ci-go-plan-5/5]"},
+		{name: "non-plan", taskID: "ci-go", label: "CI green on 3 OSes", want: "CI green on 3 OSes"},
+		{name: "already suffixed", taskID: "ci-go-plan-m5of5", label: "CI green on 3 OSes [ci-go-plan-5/5]", want: "CI green on 3 OSes [ci-go-plan-5/5]"},
+		{name: "empty", taskID: "ci-go-plan-m5of5", label: "", want: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := planMilestoneLabel(test.taskID, test.label); got != test.want {
+				t.Fatalf("planMilestoneLabel(%q, %q) = %q, want %q", test.taskID, test.label, got, test.want)
+			}
+		})
+	}
+}
+
 func TestPreDecisionsP63Fixture(t *testing.T) {
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/pre_decisions.json")
 	if err != nil {

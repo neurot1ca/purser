@@ -1449,6 +1449,16 @@ def internal_pre_error_response(
     return _internal_pre_allow(reason, recorded)
 
 
+def _plan_milestone_label(task_id: str, label: Any) -> Any:
+    if not isinstance(label, str) or not label:
+        return label
+    match = re.fullmatch(r"^(.+)-m([0-9]+)of([0-9]+)$", task_id)
+    if match is None:
+        return label
+    suffix = f" [{match.group(1)}-{match.group(2)}/{match.group(3)}]"
+    return label if label.endswith(suffix) else label + suffix
+
+
 def pre_tool_use(
     event: Mapping[str, Any],
     *,
@@ -1923,6 +1933,7 @@ def pre_tool_use(
                     state_root=state_root, task_id=parsed.task_id,
                 )
 
+        task_label = _plan_milestone_label(parsed.task_id, task_label)
         route = policy.resolve_route(parsed.route, loaded_config)
         if not route.valid:
             if route.code == policy.CONFIG_INVALID:

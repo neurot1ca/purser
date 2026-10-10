@@ -783,6 +783,17 @@ def test_codex_start_posttooluse_returns_dispatch_guidance(workspace, config):
     assert "> ⚓ **Codex:" in context
 
 
+def test_plan_milestone_label():
+    assert codex._plan_milestone_label("ci-go-plan-m5of5", "CI green on 3 OSes") == (
+        "CI green on 3 OSes [ci-go-plan-5/5]"
+    )
+    assert codex._plan_milestone_label("ci-go", "CI green on 3 OSes") == "CI green on 3 OSes"
+    assert codex._plan_milestone_label(
+        "ci-go-plan-m5of5", "CI green on 3 OSes [ci-go-plan-5/5]"
+    ) == "CI green on 3 OSes [ci-go-plan-5/5]"
+    assert codex._plan_milestone_label("ci-go-plan-m5of5", "") == ""
+
+
 START_TOOL = "mcp__plugin_purser_codex-main__codex_start"
 RESULT_TOOL = "mcp__plugin_purser_codex-main__codex_result"
 CANCEL_TOOL = "mcp__plugin_purser_codex-main__codex_cancel"

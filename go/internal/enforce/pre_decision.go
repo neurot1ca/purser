@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 )
 
 var afterPreMetadata = func() {}
+var planMilestoneTaskID = regexp.MustCompile(`^(.+)-m([0-9]+)of([0-9]+)$`)
 
 // preDecision assembles the existing Pre policy pieces. Success persistence is
 // intentionally left to pass 64.
@@ -73,6 +75,11 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	if !parsed.Valid {
 		return denyPre(parsed.Code, parsed.Message), nil
 	}
+	label := inputLabel(event)
+	if (label == nil || label == "") && reply {
+		label = live["label"]
+	}
+	label = planMilestoneLabel(pointerValue(parsed.TaskID), label)
 	if root != nil && parsed.Phase != nil && *parsed.Phase != "operation" &&
 		ClaudeRunsFullSuiteAtAcceptance(*root) {
 		if phrase := WorkerFullSuiteRequestPhrase(stringValue(input["prompt"])); phrase != "" {
@@ -362,7 +369,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		inputHash = hex.EncodeToString(sum[:])
 		updated["mode"], updated["call"], updated["taskId"], updated["route"] = mode, callID, *parsed.TaskID, *parsed.Route
 		updated["jobModel"], updated["jobEffort"] = selection.Model, selection.Effort
-		if label, ok := input["label"]; ok {
+		if text, ok := label.(string); ok && text != "" {
 			updated["jobLabel"] = label
 		}
 		updated["jobPhase"] = *parsed.Phase
@@ -393,12 +400,12 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 	}
 	return persistPreSuccess(event, runtimeRoot, root, live, parsed, selection, updated,
-		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, config, bypassMetadata)
+		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, label, config, bypassMetadata)
 }
 
 func persistPreSuccess(event map[string]any, runtimeRoot string, repository *string, live map[string]any,
 	parsed policy.OrchParseResult, selection CoderSelection, updated map[string]any,
-	callID, inputHash string, pendingETA *int, worktreeReplyPath *string, isStart, reply, worktreeStart, worktreeReply bool, config map[string]any, bypassMetadata map[string]any) (result map[string]any, retErr error) {
+	callID, inputHash string, pendingETA *int, worktreeReplyPath *string, isStart, reply, worktreeStart, worktreeReply bool, label any, config map[string]any, bypassMetadata map[string]any) (result map[string]any, retErr error) {
 	phase, taskID, routeName := pointerValue(parsed.Phase), pointerValue(parsed.TaskID), pointerValue(parsed.Route)
 	project := projectKey(repository)
 	input, _ := event["tool_input"].(map[string]any)
@@ -468,7 +475,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	mechanicalEnabled := config["mechanical_opencode_enabled"] != false
 	baseline, pending := BuildPendingCall(PendingCallInput{
 		TaskID: taskID, ProjectKey: project, Phase: phase, Route: routeName, Model: selection.Model,
-		Effort: selection.Effort, Label: stringValue(inputLabel(event)), Agent: selection.Agent,
+		Effort: selection.Effort, Label: stringValue(label), Agent: selection.Agent,
 		FallbackFamily: fallbackFamily, Scope: parsed.Scope, Prompt: stringValue(updated["prompt"]), WorktreeReplyPath: worktreeReplyPath,
 		TaskObjective: objective, AcceptanceCriteria: criteria, TaskContractGrounded: grounded,
 		TaskType: taskType, SuspectedRouteMismatch: suspected, HasCodeMap: strings.Contains(stringValue(updated["prompt"]), "CODE_MAP="),
@@ -519,7 +526,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	}
 	session := ledger.BuildSessionRecord(taskID, threadID, routeName, selection.Model, selection.Effort, map[string]any{
 		"agent": selection.Agent, "phase": phase, "scope": stringSliceAny(parsed.Scope), "pending_call_baseline": baseline,
-		"reason": optionalString(reason), "label": inputLabel(event), "task_contract_grounded": grounded,
+		"reason": optionalString(reason), "label": label, "task_contract_grounded": grounded,
 		"task_objective": objective, "acceptance_criteria": criteria, "profile_checks": anySlice(pending["profile_checks"]),
 	})
 	var leaseRoot string
@@ -686,6 +693,22 @@ func hasCompletedPlan(stateRoot, taskID string) bool {
 func inputLabel(event map[string]any) any {
 	input, _ := event["tool_input"].(map[string]any)
 	return input["label"]
+}
+
+func planMilestoneLabel(taskID string, label any) any {
+	text, ok := label.(string)
+	if !ok || text == "" {
+		return label
+	}
+	match := planMilestoneTaskID.FindStringSubmatch(taskID)
+	if len(match) != 4 {
+		return label
+	}
+	suffix := fmt.Sprintf(" [%s-%s/%s]", match[1], match[2], match[3])
+	if strings.HasSuffix(text, suffix) {
+		return label
+	}
+	return text + suffix
 }
 
 func stringSliceAny(values []string) []any {
