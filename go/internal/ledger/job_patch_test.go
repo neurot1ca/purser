@@ -29,6 +29,24 @@ func TestJobPatchStagesOnlyChangedPaths(t *testing.T) {
 	}
 }
 
+func TestJobPatchHandlesAlreadyStagedDeletion(t *testing.T) {
+	root, snapshot := initJobPatchRepository(t)
+	git(t, root, "rm", "--", "delete.txt")
+	writePatchTestFile(t, filepath.Join(root, "tracked.txt"), []byte("changed\n"))
+
+	patch, err := JobPatch(root, snapshot)
+	checkPatchError(t, err)
+	if !strings.Contains(patch, "delete.txt") || !strings.Contains(patch, "tracked.txt") ||
+		!strings.Contains(patch, "-delete") || !strings.Contains(patch, "+changed") {
+		t.Fatalf("patch omitted deletion or modification: %q", patch)
+	}
+	revision, err := JobChangedPathsSHA256(root, snapshot)
+	checkPatchError(t, err)
+	if len(revision) != 64 {
+		t.Fatalf("unexpected revision hash %q", revision)
+	}
+}
+
 func TestJobReplayPythonFixture(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "job_patch.json"))
 	checkPatchError(t, err)

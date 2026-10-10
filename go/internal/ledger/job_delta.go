@@ -206,11 +206,27 @@ func jobPatchWithGit(worktreePath, snapshot string, run func(string, []string, t
 		return "", nil
 	}
 	addArgs := []string{"add", "-A", "--"}
+	removeArgs := []string{"rm", "--cached", "--ignore-unmatch", "-q", "--"}
 	for _, path := range paths {
-		addArgs = append(addArgs, ":(literal)"+path)
+		pathspec := ":(literal)" + path
+		_, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(path)))
+		if statErr == nil {
+			addArgs = append(addArgs, pathspec)
+		} else if os.IsNotExist(statErr) {
+			removeArgs = append(removeArgs, pathspec)
+		} else {
+			return "", statErr
+		}
 	}
-	if _, err = run(root, addArgs, 30*time.Second, "staging job changes for patch generation", nil, nil); err != nil {
-		return "", err
+	if len(removeArgs) > 5 {
+		if _, err = run(root, removeArgs, 30*time.Second, "staging job deletions for patch generation", nil, nil); err != nil {
+			return "", err
+		}
+	}
+	if len(addArgs) > 3 {
+		if _, err = run(root, addArgs, 30*time.Second, "staging job changes for patch generation", nil, nil); err != nil {
+			return "", err
+		}
 	}
 	args := []string{"diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", snapshot, "--"}
 	for _, path := range paths {

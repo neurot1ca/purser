@@ -1052,6 +1052,21 @@ def test_job_patch_stages_only_changed_paths(repo, tmp_path, monkeypatch):
     assert set(add_commands[0][3:]) == {":(literal)src/target.py", ":(literal)job-new.txt"}
 
 
+def test_job_patch_handles_already_staged_deletion(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "e" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    git(worktree, "rm", "--", "src/helper.py")
+    (worktree / "src" / "target.py").write_text("value = 9\n", encoding="utf-8")
+
+    patch = ledger.job_patch(worktree, result["snapshot"])
+    assert "src/helper.py" in patch
+    assert "src/target.py" in patch
+    assert "-helper = 1" in patch
+    assert "+value = 9" in patch
+    revision = ledger.job_changed_paths_sha256(worktree, result["snapshot"])
+    assert len(revision) == 64
+
+
 def test_job_changed_paths_sha256_binds_patch_content(repo, tmp_path):
     result = ledger.create_job_worktree(repo, "c" * 64, tmp_path / "worktrees")
     worktree = Path(result["path"])

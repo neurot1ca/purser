@@ -720,8 +720,22 @@ def job_patch(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
     paths = _filter_job_paths(worktree, paths)
     if not paths:
         return ""
-    _run_git(worktree, ["add", "-A", "--", *[f":(literal){path}" for path in paths]],
-             30.0, "staging job changes for patch generation")
+    add_paths = []
+    remove_paths = []
+    for path in paths:
+        pathspec = f":(literal){path}"
+        try:
+            os.lstat(worktree / path)
+        except FileNotFoundError:
+            remove_paths.append(pathspec)
+        else:
+            add_paths.append(pathspec)
+    if remove_paths:
+        _run_git(worktree, ["rm", "--cached", "--ignore-unmatch", "-q", "--", *remove_paths],
+                 30.0, "staging job deletions for patch generation")
+    if add_paths:
+        _run_git(worktree, ["add", "-A", "--", *add_paths],
+                 30.0, "staging job changes for patch generation")
     raw = _run_git(worktree, ["diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames",
                               snapshot, "--", *[f":(literal){path}" for path in paths]],
                    30.0, "generating job patch")
