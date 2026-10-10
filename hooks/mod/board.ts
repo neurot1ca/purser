@@ -1,4 +1,5 @@
 import { stateRoot } from './state-root.js'
+import { projectKeyFromRoot } from './project-key.js'
 
 type Job = Record<string, any>
 
@@ -203,10 +204,7 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
   if (!runtime) throw new Error('home directory unavailable')
   const rootResult = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 1000 })
   if (rootResult.exitCode !== 0) throw new Error('project root unavailable')
-  let root = rootResult.stdout.trim()
-  if (os === 'Windows_NT') root = root.replace(/\//g, '\\').toLowerCase()
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(root))
-  const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
+  const key = await projectKeyFromRoot(rootResult.stdout.trim(), os)
   let entries
   try { entries = await $.fs.list(`${runtime}/async_jobs`) }
   catch (error) {
