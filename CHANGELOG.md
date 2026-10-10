@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.112 — 2026-10-10
+
+- **Fixed:** Job patches and three-way replay no longer fail when a job deletes a file or adds one missing from the checkout.
+- **Fixed:** The cleanup notice re-checks its findings, drops resolved ones, gives each a reason, trims evidence at a word and shows a report at most twice.
+- **Fixed:** The Python host detects dead processes on macOS, and the reviewer fallback test no longer depends on the platform.
+
 ## 0.1.111 — 2026-10-10
 
 - **Changed:** Plan milestone jobs show `<label> [<plan>-N/T]`, and applying a plain milestone job (also by hand) completes the milestone; the Stop reminder lists every open plan.

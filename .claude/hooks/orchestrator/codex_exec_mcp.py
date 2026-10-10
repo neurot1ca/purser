@@ -576,7 +576,7 @@ def _posix_process_group_stopped(pid: int) -> bool:
         try:
             result = subprocess.run(
                 ["ps", "-axo", "pgid=,stat="], capture_output=True, text=True,
-                encoding="ascii", timeout=2, check=True,
+                encoding="ascii", timeout=2, check=True, creationflags=0,
             )
             for line in result.stdout.splitlines():
                 fields = line.split()
