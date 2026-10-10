@@ -53,6 +53,9 @@ func TestDetachedHelper(t *testing.T) {
 }
 
 func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		t.Skip("GitHub Actions runs tests inside a kill-on-close job object; detachment is verified on interactive desktops only")
+	}
 	window, _, _ := getShellWindow.Call()
 	if window == 0 {
 		t.Skip("desktop shell parent unavailable; cannot verify detachment from the launcher's job")
