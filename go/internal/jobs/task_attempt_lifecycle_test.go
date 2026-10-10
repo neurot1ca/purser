@@ -85,3 +85,25 @@ func TestStartAttemptSendBackReplayAndCancelRecovery(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskAttemptRejectedRedispatchNonLunaDoesNotLatchFailure(t *testing.T) {
+	root := scratch(t)
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	project := contextio.ProjectKey(repo)
+	if err := enforce.SaveTaskAttempt(root, enforce.TaskAttempt{ProjectKey: project, TaskID: "task",
+		SendBackUsed: true}); err != nil {
+		t.Fatal(err)
+	}
+	job := map[string]any{"taskId": "task", "jobId": "redispatch", "repoRoot": repo,
+		"decisionRecorded": true, "phase": "implementation", "route": "consequential", "model": "gpt-6-sol"}
+	if err := persistRejectedTaskAttempt(root, job); err != nil {
+		t.Fatal(err)
+	}
+	got, status, err := enforce.LoadTaskAttempt(root, project, "task")
+	if err != nil || status != enforce.TaskAttemptOK || got.TerminalDisposition != "rejected" || got.Failure != nil {
+		t.Fatalf("non-luna rejection attempt = %#v status=%s err=%v", got, status, err)
+	}
+}

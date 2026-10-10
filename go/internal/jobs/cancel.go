@@ -268,8 +268,7 @@ func persistCancellationAttempt(root string, job map[string]any) error {
 		Phase: nonemptyString(job["phase"]), Route: nonemptyString(job["route"]), Model: nonemptyString(job["model"]),
 		Outcome: outcome, CancellationReason: nonemptyString(job["cancellationReason"]), SendBackUsed: previous.SendBackUsed}
 	var failure *enforce.TaskFailureEvidence
-	if input.Phase == "implementation" && (input.Route == "subtle" || input.Route == "mechanical") &&
-		models.SameFamily(input.Model, "gpt-6-luna") {
+	if lunaImplementationAttempt(job) {
 		if input.CancellationReason == "failed" {
 			failure = &enforce.TaskFailureEvidence{JobID: jobID, Category: "failed_abandonment"}
 		} else if input.Outcome == "rejected" && input.SendBackUsed {
@@ -282,6 +281,12 @@ func persistCancellationAttempt(root string, job map[string]any) error {
 	}
 	return enforce.SaveTaskAttempt(root, enforce.TaskAttempt{ProjectKey: project, TaskID: taskID,
 		TerminalDisposition: disposition, Failure: failure})
+}
+
+func lunaImplementationAttempt(job map[string]any) bool {
+	return nonemptyString(job["phase"]) == "implementation" &&
+		(nonemptyString(job["route"]) == "subtle" || nonemptyString(job["route"]) == "mechanical") &&
+		models.SameFamily(nonemptyString(job["model"]), "gpt-6-luna")
 }
 
 func deadHostTreeConfirmed(record *Record) bool {

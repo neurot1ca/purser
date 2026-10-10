@@ -389,8 +389,12 @@ func persistRejectedTaskAttempt(root string, job map[string]any) error {
 	if !previous.SendBackUsed {
 		return nil
 	}
+	var failure *enforce.TaskFailureEvidence
+	if lunaImplementationAttempt(job) {
+		failure = &enforce.TaskFailureEvidence{JobID: jobID, Category: "rejected_after_sendback"}
+	}
 	return enforce.SaveTaskAttempt(root, enforce.TaskAttempt{ProjectKey: project, TaskID: taskID,
-		TerminalDisposition: "rejected", Failure: &enforce.TaskFailureEvidence{JobID: jobID, Category: "rejected_after_sendback"}})
+		TerminalDisposition: "rejected", Failure: failure})
 }
 
 func unappliedThreadJob(dir, thread string) *Record {
