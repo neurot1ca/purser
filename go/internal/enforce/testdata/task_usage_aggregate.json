@@ -1,0 +1,52 @@
+{
+  "cases": [
+    {
+      "name": "desktop-record-and-category-arithmetic",
+      "records": [
+        {"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"call-1"}],"usage":{"input_tokens":500,"output_tokens":200,"cache_creation_input_tokens":50,"cache_read_input_tokens":100}}},
+        {"type":"assistant","requestId":"req-2","message":{"id":"msg-2","content":[],"usage":{"input_tokens":200,"output_tokens":40,"cache_creation_input_tokens":20,"cache_read_input_tokens":15}}}
+      ],
+      "expected": {"claude_task_usage_source":"desktop_jsonl_observed","claude_task_usage_known":true,"claude_task_usage_complete":true,"claude_task_input_tokens":700,"claude_task_output_tokens":240,"claude_task_cache_creation_input_tokens":70,"claude_task_cache_read_input_tokens":115,"claude_task_total_observed_tokens":1125,"claude_task_request_count":2,"claude_task_usage_boundary":"anchored_pre_tool_to_stop","claude_task_usage_dedup":"message_id_request_id","claude_task_usage_unknown_reason":null,"claude_task_subagent_usage_included":false}
+    },
+    {
+      "name": "identical-message-request-duplicate-counts-once",
+      "records": [
+        {"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"call-1"}],"usage":{"input_tokens":100,"output_tokens":50}}},
+        {"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[],"usage":{"input_tokens":100,"output_tokens":50}}}
+      ],
+      "expected": {"claude_task_input_tokens":100,"claude_task_output_tokens":50,"claude_task_cache_creation_input_tokens":0,"claude_task_cache_read_input_tokens":0,"claude_task_total_observed_tokens":150,"claude_task_request_count":1}
+    },
+    {
+      "name": "contradictory-duplicate-fails-closed",
+      "records": [
+        {"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"call-1"}],"usage":{"input_tokens":100,"output_tokens":50}}},
+        {"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[],"usage":{"input_tokens":150,"output_tokens":50}}}
+      ],
+      "reason": "CONTRADICTORY_USAGE_RECORD"
+    },
+    {
+      "name": "missing-request-id-fallback-deduplicates-by-message",
+      "records": [
+        {"type":"assistant","message":{"id":"msg-1","content":[{"type":"tool_use","id":"call-1"}],"usage":{"input_tokens":200,"output_tokens":50}}},
+        {"type":"assistant","message":{"id":"msg-1","content":[],"usage":{"input_tokens":200,"output_tokens":50}}},
+        {"type":"assistant","message":{"id":"msg-2","content":[],"usage":{"input_tokens":100,"output_tokens":25}}}
+      ],
+      "expected": {"claude_task_input_tokens":300,"claude_task_output_tokens":75,"claude_task_total_observed_tokens":375,"claude_task_request_count":2}
+    },
+    {
+      "name": "content-block-duplicate-counts-once",
+      "records": [
+        {"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"call-1"}],"usage":{"input_tokens":1000,"output_tokens":100}}},
+        {"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[],"usage":{"input_tokens":1000,"output_tokens":100}}}
+      ],
+      "expected": {"claude_task_input_tokens":1000,"claude_task_output_tokens":100,"claude_task_total_observed_tokens":1100,"claude_task_request_count":1}
+    },
+    {
+      "name": "missing-usage-fields-fail-closed",
+      "records": [
+        {"type":"assistant","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"call-1"}],"usage":{"input_tokens":7}}}
+      ],
+      "reason": "INVALID_USAGE_RECORD"
+    }
+  ]
+}

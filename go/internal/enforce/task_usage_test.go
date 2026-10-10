@@ -424,3 +424,75 @@ func TestTaskUsageP59ReadBounds(t *testing.T) {
 	}
 	file.Close()
 }
+
+func TestTaskUsageAggregateParity(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "task_usage_aggregate.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name     string           `json:"name"`
+			Records  []map[string]any `json:"records"`
+			Expected map[string]any   `json:"expected"`
+			Reason   string           `json:"reason"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fixture.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			got, reason := aggregateStopTaskUsage(c.Records, "call-1")
+			if reason != c.Reason {
+				t.Fatalf("reason %q, want %q", reason, c.Reason)
+			}
+			if c.Reason != "" {
+				if got != nil {
+					t.Fatalf("usage on failure: %#v", got)
+				}
+				return
+			}
+			for key, expected := range c.Expected {
+				if !sameJSON(got[key], expected) {
+					t.Errorf("%s = %#v, want %#v", key, got[key], expected)
+				}
+			}
+		})
+	}
+}
+
+func TestTaskUsageAggregateRejectsInvalidTokenValues(t *testing.T) {
+	invalid := []struct {
+		name  string
+		value any
+	}{
+		{"negative", int64(-1)}, {"true", true}, {"false", false}, {"fractional", 1.5},
+		{"string", "100"}, {"over-limit", int64(maxTaskUsageToken + 1)},
+	}
+	for _, c := range invalid {
+		t.Run(c.name, func(t *testing.T) {
+			record := map[string]any{"message": map[string]any{
+				"id": "msg-1", "content": []any{map[string]any{"type": "tool_use", "id": "call-1"}},
+				"usage": map[string]any{"input_tokens": c.value, "output_tokens": int64(1)},
+			}}
+			got, reason := aggregateStopTaskUsage([]map[string]any{record}, "call-1")
+			if got != nil || reason != "INVALID_USAGE_RECORD" {
+				t.Fatalf("usage/reason = %#v/%q", got, reason)
+			}
+		})
+	}
+	for _, token := range []string{"Infinity", "NaN"} {
+		t.Run("non-json-"+token, func(t *testing.T) {
+			file, err := os.CreateTemp(t.TempDir(), "transcript-*.jsonl")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = file.WriteString(`{"type":"assistant","message":{"id":"msg-1","usage":{"input_tokens":` + token + `}}}` + "\n")
+			if _, reason := readTaskUsageRecords(file, 0, false); reason != "INVALID_USAGE_RECORD" {
+				t.Fatalf("reason %q, want INVALID_USAGE_RECORD", reason)
+			}
+			_ = file.Close()
+		})
+	}
+}
