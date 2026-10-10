@@ -87,9 +87,27 @@ func ApplyJobPatch(repoRoot, patch string) map[string]any {
 		}
 		return paths
 	}
+	registerNewFiles := func(paths []string) error {
+		for _, path := range paths {
+			if info, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); statErr != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			pathspec := ":(literal)" + path
+			if _, e := runGit(root, []string{"ls-files", "--error-unmatch", "--", pathspec}, 30*time.Second, "checking applied path tracking", nil, nil); e == nil {
+				continue
+			}
+			if _, e := runGit(root, []string{"add", "--intent-to-add", "--force", "--", pathspec}, 30*time.Second, "registering applied new file", nil, nil); e != nil {
+				return e
+			}
+		}
+		return nil
+	}
 	paths := patchPaths()
 	if len(paths) == 0 {
 		if _, err = runGit(root, []string{"apply", "--binary", "-"}, 30*time.Second, "applying job patch", raw, nil); err == nil {
+			if err = registerNewFiles(paths); err != nil {
+				return map[string]any{"applied": false, "conflicts": []string{}, "applicable": paths}
+			}
 			return map[string]any{"applied": true, "conflicts": []string{}}
 		}
 		return map[string]any{"applied": false, "conflicts": []string{}, "applicable": []string{}}
@@ -116,6 +134,9 @@ func ApplyJobPatch(repoRoot, patch string) map[string]any {
 			}
 			if _, e := runGit(root, []string{"apply", "--check", "--binary", "-"}, 30*time.Second, "checking merged job patch", merged, nil); e == nil {
 				if _, e = runGit(root, []string{"apply", "--binary", "-"}, 30*time.Second, "applying merged job patch", merged, nil); e == nil {
+					if e = registerNewFiles(paths); e != nil {
+						return map[string]any{"applied": false, "conflicts": []string{}, "applicable": paths}
+					}
 					return map[string]any{"applied": true, "conflicts": []string{}}
 				}
 			}
@@ -123,6 +144,9 @@ func ApplyJobPatch(repoRoot, patch string) map[string]any {
 		return map[string]any{"applied": false, "conflicts": conflicts, "applicable": applicable}
 	}
 	if _, err = runGit(root, []string{"apply", "--binary", "-"}, 30*time.Second, "applying job patch", raw, nil); err == nil {
+		if err = registerNewFiles(paths); err != nil {
+			return map[string]any{"applied": false, "conflicts": []string{}, "applicable": paths}
+		}
 		return map[string]any{"applied": true, "conflicts": []string{}}
 	}
 	conflicts, applicable := checkPaths()

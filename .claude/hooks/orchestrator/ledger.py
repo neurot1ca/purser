@@ -1032,6 +1032,26 @@ def apply_job_patch(repo_root: str | os.PathLike[str], patch: str) -> dict[str, 
             return []
 
     paths = patch_paths()
+
+    def register_new_files() -> bool:
+        for name in paths:
+            target = root / name
+            if not target.is_file() or target.is_symlink():
+                continue
+            pathspec = f":(literal){name}"
+            try:
+                _run_git(root, ["ls-files", "--error-unmatch", "--", pathspec], 30.0,
+                         "checking applied path tracking")
+                continue
+            except _InspectionError:
+                pass
+            try:
+                _run_git(root, ["add", "--intent-to-add", "--force", "--", pathspec], 30.0,
+                         "registering applied new file")
+            except _InspectionError:
+                return False
+        return True
+
     if not paths:
         try:
             _run_git(root, ["apply", "--binary", "-"], 30.0,
@@ -1068,6 +1088,8 @@ def apply_job_patch(repo_root: str | os.PathLike[str], patch: str) -> dict[str, 
                          "checking merged job patch", input_data=merged_patch)
                 _run_git(root, ["apply", "--binary", "-"], 30.0,
                          "applying merged job patch", input_data=merged_patch)
+                if not register_new_files():
+                    return {"applied": False, "conflicts": [], "applicable": paths}
                 return {"applied": True, "conflicts": []}
             except _InspectionError:
                 # A changed tree between preflight and application is reported without
@@ -1077,6 +1099,8 @@ def apply_job_patch(repo_root: str | os.PathLike[str], patch: str) -> dict[str, 
     try:
         _run_git(root, ["apply", "--binary", "-"], 30.0,
                  "applying job patch", input_data=raw_patch)
+        if not register_new_files():
+            return {"applied": False, "conflicts": [], "applicable": paths}
         return {"applied": True, "conflicts": []}
     except _InspectionError:
         conflicts, applicable = check_paths()

@@ -3,10 +3,54 @@ package ledger
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestApplyJobPatchLeavesNewFileIntentToAdd(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gitApplyPatchTest(t, root, "init", "-q")
+	gitApplyPatchTest(t, root, "add", "tracked.txt")
+	gitApplyPatchTest(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base")
+	patch := "diff --git a/new-worker-test.go b/new-worker-test.go\nnew file mode 100644\nindex 0000000..0000000\n--- /dev/null\n+++ b/new-worker-test.go\n@@ -0,0 +1 @@\n+package worker\n"
+	result := ApplyJobPatch(root, patch)
+	if result["applied"] != true {
+		t.Fatalf("new file patch failed: %#v", result)
+	}
+	status := gitApplyPatchOutput(t, root, "status", "--short", "--", "new-worker-test.go")
+	if !strings.Contains(status, "A new-worker-test.go") {
+		t.Fatalf("new file is not visible as intent-to-add: %q", status)
+	}
+	if cached := gitApplyPatchOutput(t, root, "diff", "--cached", "--", "new-worker-test.go"); cached != "" {
+		t.Fatalf("intent-to-add staged file contents: %q", cached)
+	}
+}
+
+func gitApplyPatchTest(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+}
+
+func gitApplyPatchOutput(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return string(out)
+}
 
 func TestDriftAndApplyJobPatchPythonFixture(t *testing.T) {
 	file := filepath.Join("testdata", "apply_patch.json")

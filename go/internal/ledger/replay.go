@@ -22,7 +22,7 @@ func PrepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 	return prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath, resolver, runGit)
 }
 
-func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, resolver func(conflicts []string, current string) (bool, error), run replayGitRunner) (map[string]any, error) {
+func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, resolver func(conflicts []string, current string) (bool, error), run replayGitRunner) (prepared map[string]any, returnErr error) {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return nil, err
@@ -73,6 +73,14 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 		}
 		return copyReplayTree(filepath.Join(recovery, "worker-tree"), worktree)
 	}
+	mutatingWorktree := false
+	defer func() {
+		if returnErr != nil && mutatingWorktree {
+			if restoreErr := restore(snapshot); restoreErr != nil {
+				returnErr = fmt.Errorf("%v; restoring worker worktree failed: %w", returnErr, restoreErr)
+			}
+		}
+	}()
 	result := func(status, tree string, paths any) map[string]any {
 		return map[string]any{"status": status, "snapshot": tree, "paths": paths}
 	}
@@ -210,6 +218,7 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 	if err := saveState(map[string]any{"state": "PREPARING", "snapshot": snapshot, "target": current, "paths": paths}); err != nil {
 		return nil, err
 	}
+	mutatingWorktree = true
 	if _, err := git(worktree, []string{"read-tree", "--reset", current}, nil, "resetting replay index"); err != nil {
 		return nil, err
 	}

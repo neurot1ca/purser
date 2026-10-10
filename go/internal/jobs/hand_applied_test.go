@@ -13,6 +13,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
+	"purser-hook/internal/ledger"
 )
 
 func TestAdmissionReleasesOnlyHandAppliedSucceededBlockers(t *testing.T) {
@@ -109,6 +110,63 @@ func TestHandAppliedPlanJobCompletesAndAdvancesMilestone(t *testing.T) {
 	}
 	if updated.CurrentMilestone != 2 || len(updated.CompletedMilestones) != 1 || updated.CompletedMilestones[0] != 1 || len(updated.AppliedPasses) != 1 || len(updated.LinkedJobs) != 0 {
 		t.Fatalf("hand-applied plan progress = %+v", updated)
+	}
+}
+
+func TestHandAppliedDetectionIgnoresMainOnlyWorktreePaths(t *testing.T) {
+	root, repo, worktree, snapshot := handAppliedAdmissionFixture(t, true)
+	jobID := strings.Repeat("9", 64)
+	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	prep := filepath.Join(root, "preparations", jobID)
+	workerTree := filepath.Join(prep, "worker-tree")
+	if err := os.MkdirAll(workerTree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "worker-test.go"), []byte("package worker\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	workerPatch, err := ledger.JobPatch(worktree, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workerTree, "worker-test.go"), []byte("package worker\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prep, "worker.patch"), []byte(workerPatch), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prep, "state.json"), []byte(`{"state":"PREPARING"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Model the partially replayed worktree: it now contains only the main checkout's paths.
+	if err := os.Remove(filepath.Join(worktree, "src", "file.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(worktree, "worker-test.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "main-only.txt"), []byte("main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "main-only.txt"), []byte("main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	job := map[string]any{"jobId": jobID, "state": "SUCCEEDED", "worktreePath": worktree, "repoRoot": repo, "snapshot": snapshot}
+	writeHandAppliedJSON(t, filepath.Join(jobsDir, jobID+".json"), job)
+
+	markHandAppliedJob(root, jobID)
+
+	saved, err := Read(filepath.Join(jobsDir, jobID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applyState string
+	saved.Get("applyState", &applyState)
+	if applyState == "applied" {
+		t.Fatal("main-only worktree paths were incorrectly accepted as the worker patch")
 	}
 }
 

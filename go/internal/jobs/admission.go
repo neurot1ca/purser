@@ -119,16 +119,44 @@ func markHandAppliedJob(stateRoot, jobID string) {
 	if info, statErr := os.Stat(worktree); statErr != nil || !info.IsDir() {
 		return
 	}
-	patch, err := ledger.JobPatch(worktree, snapshot)
-	if err != nil {
+	preparation := filepath.Join(stateRoot, "preparations", jobID)
+	var revision int64
+	job.Get("snapshotRevision", &revision)
+	if revision > 0 {
+		preparation = filepath.Join(preparation, fmt.Sprintf("revision-%d", revision))
+	}
+	patchPath := filepath.Join(preparation, "worker.patch")
+	patchBytes, patchErr := os.ReadFile(patchPath)
+	patchTree := worktree
+	preserved := patchErr == nil
+	if preserved {
+		patchTree = filepath.Join(preparation, "worker-tree")
+	} else {
+		patch, err := ledger.JobPatch(worktree, snapshot)
+		if err != nil {
+			return
+		}
+		patchBytes = []byte(patch)
+	}
+	prepState := ""
+	if data, readErr := os.ReadFile(filepath.Join(preparation, "state.json")); readErr == nil {
+		var stateRecord struct {
+			State string `json:"state"`
+		}
+		if json.Unmarshal(data, &stateRecord) != nil {
+			return
+		}
+		prepState = stateRecord.State
+	}
+	if (prepState == "PREPARING" || (applyState != "" && applyState != "applied") || (state == "FAILED" && errorCode != "PATCH_UNAVAILABLE")) && !preserved {
 		return
 	}
-	paths, err := ledger.JobPatchPaths(root, patch)
+	paths, err := ledger.JobPatchPaths(root, string(patchBytes))
 	if err != nil || len(paths) == 0 {
 		return
 	}
 	for _, path := range paths {
-		if !ledger.SameWorktreeContent(worktree, root, path) {
+		if !ledger.SameWorktreeContent(patchTree, root, path) {
 			return
 		}
 	}

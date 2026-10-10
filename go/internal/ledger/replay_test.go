@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +94,35 @@ func TestPrepareJobReplayRetryFromAppliedPreparingState(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(worker, "tracked.txt")); err != nil || string(got) != "job result\n" {
 		t.Fatalf("retry produced wrong worker tree: %q, %v", got, err)
+	}
+}
+
+func TestPrepareJobReplayFailureRestoresWorkerDiff(t *testing.T) {
+	base := t.TempDir()
+	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
+	snapshot := initReplayRepository(t, repo, "")
+	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
+	writePatchTestFile(t, filepath.Join(worker, "tracked.txt"), []byte("worker change\n"))
+	writePatchTestFile(t, filepath.Join(worker, "new-worker-test.go"), []byte("package worker\n"))
+	writePatchTestFile(t, filepath.Join(repo, "other.txt"), []byte("main change\n"))
+	patch, err := JobPatch(worker, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+		out, runErr := runGit(root, args, timeout, operation, input, env)
+		if operation == "applying replay result" {
+			return out, fmt.Errorf("simulated apply failure after mutation")
+		}
+		return out, runErr
+	}
+	_, err = prepareJobReplay(repo, worker, snapshot, filepath.Join(base, "recovery"), nil, runner)
+	if err == nil {
+		t.Fatal("replay unexpectedly succeeded")
+	}
+	got, err := JobPatch(worker, snapshot)
+	if err != nil || got != patch {
+		t.Fatalf("failed replay changed worker diff: err=%v\n got=%q\nwant=%q", err, got, patch)
 	}
 }
 

@@ -23,6 +23,7 @@ SCRATCH = ROOT.parents[2] / ".tmp" / "codex-exec-mcp-tests"
 sys.path.insert(0, str(ROOT))
 import codex
 import codex_exec_mcp
+import ledger
 from mixed_owner_support import go_test_tools, launch_go_host
 
 
@@ -1951,6 +1952,21 @@ def test_codex_apply_is_idempotent_and_reports_conflicts(area):
         assert Path(other_result["worktreePath"]).is_dir()
     finally:
         client.close()
+
+
+def test_apply_job_patch_leaves_new_file_intent_to_add(area):
+    repo = _git_repo(area)
+    patch = ("diff --git a/new-worker-test.go b/new-worker-test.go\n"
+             "new file mode 100644\nindex 0000000..3e75765\n"
+             "--- /dev/null\n+++ b/new-worker-test.go\n@@ -0,0 +1 @@\n+new\n")
+    result = ledger.apply_job_patch(repo, patch)
+    assert result["applied"] is True
+    status = subprocess.run(["git", "-C", str(repo), "status", "--short", "--", "new-worker-test.go"],
+                            capture_output=True, text=True, check=True).stdout
+    assert "A new-worker-test.go" in status
+    cached = subprocess.run(["git", "-C", str(repo), "diff", "--cached", "--", "new-worker-test.go"],
+                            capture_output=True, text=True, check=True).stdout
+    assert cached == ""
 
 
 def test_apply_and_reply_emit_decisions_but_conflict_does_not(area):
