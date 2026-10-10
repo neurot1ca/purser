@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -490,5 +491,15 @@ func TestPreparationRetiresTimedOutUnappliedJob(t *testing.T) {
 	RetirePreparations(root, 1000+maxPrepAge+86400, false)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("TIMED_OUT unapplied preparation remains: %v", err)
+	}
+}
+
+func TestTaskRetryEvidenceSurvivesRetention(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "task_retries", "attempt.json")
+	putFile(t, path, []byte(`{"failure":{"category":"failed_abandonment"}}`), 1000)
+	PruneState(root, 1000+365*86400, false)
+	if data, err := os.ReadFile(path); err != nil || !strings.Contains(string(data), "failed_abandonment") {
+		t.Fatalf("sticky retry evidence was pruned: data=%q err=%v", data, err)
 	}
 }

@@ -171,6 +171,7 @@ var registry = map[string]policy{
 	"marketplace":               bounded("release"),
 	"telemetry":                 bounded("telemetry-distill"),
 	"projects":                  byteLimit(128 * mib),
+	"task_retries":              bounded("task-retry-evidence"),
 	"codex_exec_mcp":            bounded("jobs-cleanup"),
 	"raw_tool_outputs":          {maxAgeDays: 7, maxFiles: -1, maxBytes: 64 * mib},
 	"bundle_artifacts":          {maxAgeDays: 7, maxFiles: -1, maxBytes: 32 * mib},
