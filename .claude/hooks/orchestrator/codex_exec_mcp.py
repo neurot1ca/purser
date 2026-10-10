@@ -47,6 +47,7 @@ import state_root as purser_state_root
 import coder_config
 import model_listing
 import project_root
+import task_retry
 
 
 def _record_claude_decision(job: dict[str, Any], decision: str, kind: str, source_job_id: str,
@@ -1915,6 +1916,11 @@ class Server:
                     value = args.get(supplied, args.get(stored))
                     if value is not None:
                         job[stored] = value
+                if mode == "new" and isinstance(args.get("cwd"), str) and args["cwd"]:
+                    job["repoRoot"] = args["cwd"]
+                if (send_back_from is not None and send_back_from.get("taskId") == job.get("taskId")
+                        and isinstance(send_back_from.get("jobId"), str)):
+                    job["predecessorJobId"] = send_back_from["jobId"]
                 if args.get("readinessGrounded") is True and isinstance(args.get("readinessCriteria"), dict):
                     criteria = args["readinessCriteria"]
                     if (set(criteria) == {"objective", "acceptance_criteria"}
@@ -1941,6 +1947,10 @@ class Server:
                                  {"name": name, "args": args, "codexBin": self.codex_bin,
                                  "agent": job_agent})
                     self._write_job(job)
+                    try:
+                        task_retry.start(self.state_root, job)
+                    except (OSError, ValueError) as exc:
+                        print(f"task attempt persistence failed for job {job_id}: {exc}", file=sys.stderr, flush=True)
                     if mode == "new" and isinstance(job.get("taskId"), str) and job["taskId"]:
                         for path in sorted(self.job_dir.glob("*.json")):
                             earlier_id = path.stem
@@ -1957,6 +1967,10 @@ class Server:
                                 _record_claude_decision(earlier, "rejected", "redispatch", job_id)
                                 earlier["decisionRecorded"] = True
                                 self._write_job(earlier)
+                                try:
+                                    task_retry.terminal(self.state_root, earlier, "rejected")
+                                except (OSError, ValueError) as exc:
+                                    print(f"task attempt persistence failed for redispatch {earlier_id}: {exc}", file=sys.stderr, flush=True)
                     try:
                         _launch_host(self.job_dir, job_id, job["generation"], job["ownershipToken"])
                     except OSError as exc:
@@ -2071,6 +2085,17 @@ class Server:
             if host_state == "UNCONFIRMED":
                 return _job_result({"jobId": job["jobId"], "state": state,
                                     "message": "Host identity unconfirmed"})
+        if state in TERMINAL:
+            try:
+                disposition = ("discarded" if job.get("discarded") is True else
+                               "cancelled" if state == "CANCELLED" else
+                               "failed" if state in {"FAILED", "TIMED_OUT"} else "")
+                if disposition or job.get("reviewedOutcome"):
+                    task_retry.terminal(self.state_root, job, disposition,
+                                        reason=job.get("cancellationReason", ""),
+                                        reviewer_result=job.get("reviewedOutcome", ""))
+            except (OSError, ValueError) as exc:
+                print(f"task attempt persistence failed for result job {job['jobId']}: {exc}", file=sys.stderr, flush=True)
         if state == "SUCCEEDED" and not job.get("worktreePath") and not job.get("decisionRecorded"):
             with _ownership_lock(self.job_dir, job["jobId"]):
                 current = self._read_job(job["jobId"])
@@ -2283,7 +2308,16 @@ class Server:
         if job is None:
             return _job_result({"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
         job_id = job["jobId"]
+        reason = args.get("reason")
+        if isinstance(reason, str) and reason != job.get("cancellationReason"):
+            job["cancellationReason"] = reason
+            self._write_job(job)
         if job.get("discarded") is True:
+            try:
+                task_retry.terminal(self.state_root, job, "discarded",
+                                    reason=job.get("cancellationReason", ""))
+            except (OSError, ValueError) as exc:
+                print(f"task attempt persistence failed for cancelled job {job_id}: {exc}", file=sys.stderr, flush=True)
             _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
             return _job_result({"jobId": job_id, "state": job["state"], "discarded": True})
         if job["state"] in TERMINAL and job.get("worktreePath") and job.get("applyState") != "applied":
@@ -2298,6 +2332,11 @@ class Server:
                     if isinstance(current.get("taskId"), str) and current["taskId"]:
                         current["decisionRecorded"] = True
                     self._write_job(current)
+                    try:
+                        task_retry.terminal(self.state_root, current, "discarded",
+                                            reason=current.get("cancellationReason", ""))
+                    except (OSError, ValueError) as exc:
+                        print(f"task attempt persistence failed for cancelled job {job_id}: {exc}", file=sys.stderr, flush=True)
             self._release_job_scope_lease(purser_state_root.default_state_root(), job_id)
             _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
             return _job_result({"jobId": job_id, "state": job["state"], "discarded": True})

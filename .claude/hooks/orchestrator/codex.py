@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from dataclasses import replace
 import hashlib
 import inspect
 import json
@@ -38,6 +39,7 @@ import reviewer as reviewer1
 import telemetry
 import telemetry_schema
 import state_root as purser_state_root
+import task_retry
 
 
 CODEX_TOOL = "mcp__codex-main__codex"
@@ -1541,8 +1543,15 @@ def pre_tool_use(
                 return _deny("ASYNC_CALL_CONFLICT", "This tool use already has a pending call.")
             call_uuid = str(uuid.uuid5(uuid.NAMESPACE_OID, _call_key(event)))
             prior_job = hashlib.sha256(call_uuid.encode("utf-8")).hexdigest()
-            if (_state_root(state_root) / "codex_exec_mcp" / "jobs" / f"{prior_job}.json").exists():
-                return _deny("ASYNC_CALL_ALREADY_ACCEPTED", "This tool use already has a bridge job.")
+            prior_path = _state_root(state_root) / "codex_exec_mcp" / "jobs" / f"{prior_job}.json"
+            try:
+                prior_record = json.loads(prior_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                prior_record = None
+            if isinstance(prior_record, Mapping) and prior_record.get("jobId") == prior_job:
+                replay = dict(tool_input)
+                replay["call"] = call_uuid
+                return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": replay}}
         parsed = policy.parse_orch_prompt(tool_input.get("prompt"), loaded_config)
         reply_without_orch = (
             reply_call
@@ -1815,6 +1824,7 @@ def pre_tool_use(
         )
         record: Mapping[str, Any] | None
         live_thread: Mapping[str, Any] | None
+        failed_task = False
         if reply_call:
             forbidden = {"model", "config", "developer-instructions"}.intersection(tool_input)
             if is_start:
@@ -1869,6 +1879,37 @@ def pre_tool_use(
                 return _observed_denial(
                     event, parsed.code, parsed.message, state_root=state_root, task_id=parsed.task_id
                 )
+            attempt, attempt_status = task_retry.load(runtime_root, project_namespace, parsed.task_id)
+            failed_attempt = attempt.get("failure") if attempt_status == task_retry.OK else None
+            failed_task = isinstance(failed_attempt, Mapping) and parsed.phase == "implementation"
+            reusable_attempt = (attempt_status == task_retry.OK and attempt.get("terminal_disposition")
+                                in {"cancelled", "discarded", "failed"})
+            if failed_task and reply_call and not is_start:
+                return {"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back."
+                    ),
+                }}
+            if failed_task:
+                category = failed_attempt.get("category")
+                basis = (f"Prior luna implementation attempt {failed_attempt.get('job_id')} was cancelled as failed."
+                         if category == "failed_abandonment" else
+                         f"Prior luna implementation attempt {failed_attempt.get('job_id')} was rejected after send-back.")
+                effective_route = parsed.route if parsed.route in {"consequential", "escalated"} else "consequential"
+                header = (f"ORCH|task={parsed.task_id}|phase={parsed.phase}|route={effective_route}"
+                          f"|reason=repeated_failure|basis={basis}|scope={','.join(parsed.scope)}")
+                if parsed.eta_minutes is not None:
+                    header += f"|eta={parsed.eta_minutes}m"
+                parsed = replace(parsed, route=effective_route, reason="repeated_failure", basis=basis,
+                                 prompt=header + "\n" + parsed.prompt)
+                if is_start and mode == "reply":
+                    tool_input = dict(tool_input)
+                    tool_input["mode"] = "new"
+                    tool_input.pop("threadId", None)
+                    if repository is not None:
+                        tool_input["cwd"] = str(repository)
+                    mode, new_call, reply_call = "new", True, False
             if reply_call:
                 recorded = session_ledger.find_by_thread_id(tool_input.get("threadId"))
                 if recorded is not None:
@@ -1914,12 +1955,15 @@ def pre_tool_use(
                 raise WiringError("session ledger is unreadable")
             record = loaded.get("record") if loaded["status"] == ledger.OK else None
             live_thread = record.get("live_thread") if isinstance(record, Mapping) else None
-            if is_start and not reply_call and isinstance(record, Mapping) and record.get("last_outcome") is not None:
+            if (is_start and not reply_call and isinstance(record, Mapping)
+                    and record.get("last_outcome") is not None and not reusable_attempt):
                 return _observed_denial(
                     event, "TASK_ALREADY_FINISHED",
                     "This task already finished; use a fresh task id.",
                     state_root=state_root, task_id=parsed.task_id,
                 )
+            if reusable_attempt or failed_task:
+                live_thread = None
 
         if task_label is None:
             inherited_label = live_thread.get("label") if isinstance(live_thread, Mapping) else None
@@ -2003,14 +2047,18 @@ def pre_tool_use(
                     raise WiringError("mechanical OpenCode candidate model is invalid")
                 agent, model = "opencode", candidate
                 mechanical_candidate = True
-        if fallback_active:
+        fallback_is_luna = (isinstance(loaded_config.get("fallback"), Mapping)
+                            and isinstance(loaded_config["fallback"].get("model"), str)
+                            and re.fullmatch(r"gpt-6(?:\.\d+)*-luna",
+                                             loaded_config["fallback"]["model"].lower()))
+        if fallback_active and not (failed_task and fallback_is_luna):
             fallback = loaded_config["fallback"]
             agent, model = fallback["agent"], fallback["model"]
             effort = "medium" if agent == "agy" else "none" if agent == "opencode" else effort
             requested["model"] = model
             requested["effort"] = effort
             mechanical_candidate = False
-        elif (new_call and not mechanical_candidate
+        elif (new_call and not failed_task and not mechanical_candidate
               and agent == loaded_config.get("coder_agent", "codex")):
             supplied_model = tool_input.get("model")
             if isinstance(supplied_model, str) and coder_config.CODEX_MODEL.fullmatch(supplied_model):
@@ -2461,6 +2509,10 @@ def pre_tool_use(
             result["systemMessage"] = (
                 f"Purser: route={route_name} -> {model_name} / {effort_name}"
             )
+            if failed_task:
+                result["systemMessage"] = (
+                    f"Purser: prior luna attempt failed; route={route_name} -> {model_name} / {effort_name}."
+                )
         except Exception:
             pass
         if reply_call and not is_start:
@@ -5132,6 +5184,14 @@ def post_tool_use(
                 if isinstance(reported_model, str) and reported_model:
                     bundle["reviewer1_model_requested"] = reported_model
                 bundle["reviewer1_result"] = result
+                if pending.get("phase") == "implementation" and isinstance(pending.get("task_id"), str):
+                    try:
+                        task_retry.save(runtime_root, {
+                            "project_key": pending.get("project_key"),
+                            "task_id": pending["task_id"], "terminal_disposition": result,
+                        })
+                    except (OSError, ValueError) as exc:
+                        print(f"task attempt persistence failed for result job: {exc}", file=sys.stderr, flush=True)
                 whole_tree = bundle.get("whole_tree_delta")
                 report_status = (
                     reviewer_report.get("review_status")

@@ -425,7 +425,8 @@
           "generation": 1,
           "ownershipToken": "TOKEN",
           "taskId": "task-1",
-          "model": "model-x"
+          "model": "model-x",
+          "repoRoot": "C:/repo"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
           "name": "codex",
@@ -491,7 +492,8 @@
           "deadlineAt": "DEADLINE",
           "signalToken": "TOKEN",
           "generation": 1,
-          "ownershipToken": "TOKEN"
+          "ownershipToken": "TOKEN",
+          "repoRoot": "C:/repo"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
           "name": "codex",
@@ -555,7 +557,8 @@
           "deadlineAt": "DEADLINE",
           "signalToken": "TOKEN",
           "generation": 1,
-          "ownershipToken": "TOKEN"
+          "ownershipToken": "TOKEN",
+          "repoRoot": "C:/repo"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
           "name": "codex",
@@ -838,7 +841,8 @@
           "signalToken": "TOKEN",
           "generation": 1,
           "ownershipToken": "TOKEN",
-          "taskId": "task-x"
+          "taskId": "task-x",
+          "repoRoot": "C:/repo"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
           "name": "codex",
