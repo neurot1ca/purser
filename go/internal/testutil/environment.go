@@ -21,13 +21,17 @@ func RunIsolated(m *testing.M) int {
 	if err := os.MkdirAll(home, 0700); err != nil {
 		return 1
 	}
+	goCache := filepath.Join(tempRoot, "go-cache")
+	if err := os.MkdirAll(goCache, 0700); err != nil {
+		return 1
+	}
 	set := func(key, value string) bool { return os.Setenv(key, value) == nil }
 	for _, key := range []string{"PURSER_STATE_DIR", "PURSER_CODEX_SHIM_STATE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_CONFIG_HOME", "APPDATA", "LOCALAPPDATA"} {
 		if err := os.Unsetenv(key); err != nil {
 			return 1
 		}
 	}
-	if !set("HOME", home) || !set("USERPROFILE", home) || !set("HOMEDRIVE", "") || !set("HOMEPATH", "") {
+	if !set("HOME", home) || !set("USERPROFILE", home) || !set("HOMEDRIVE", "") || !set("HOMEPATH", "") || !set("GOCACHE", goCache) {
 		return 1
 	}
 	// testing.T.TempDir follows these variables, so point it at the physical

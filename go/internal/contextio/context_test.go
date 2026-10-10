@@ -360,7 +360,7 @@ func TestReadEdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	usernameHome := home
+	usernameHome := current.HomeDir
 	if runtime.GOOS == "windows" {
 		usernameHome = filepath.Join(filepath.Dir(home), current.Username)
 	}

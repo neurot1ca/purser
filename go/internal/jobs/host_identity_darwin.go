@@ -2,4 +2,12 @@
 
 package jobs
 
-func hostProcessIdentity() (any, bool) { return nil, true }
+import "os"
+
+func hostProcessIdentity() (any, bool) {
+	state, created := processIdentity(os.Getpid())
+	if created == nil || state != ProcessAlive {
+		return nil, false
+	}
+	return *created, true
+}
