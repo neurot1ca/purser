@@ -1,0 +1,332 @@
+{
+  "healthy_install": {
+    "go": {
+      "report": {
+        "checks": [
+          {
+            "check": "Hook registration",
+            "status": "OK",
+            "detail": "Purser plugin enabled as `purser@purser-local`; no manual hooks found.",
+            "next_step": null
+          },
+          {
+            "check": "Codex MCP",
+            "status": "OK",
+            "detail": "plugin `codex-main` command: `node`.",
+            "next_step": null
+          },
+          {
+            "check": "Codex CLI",
+            "status": "OK",
+            "detail": "codex 0.156.0; C:/fake/codex.exe",
+            "next_step": null
+          },
+          {
+            "check": "Roles",
+            "status": "OK",
+            "detail": "orchestrator=claude-code; coder=codex; reviewer=agy",
+            "next_step": null
+          },
+          {
+            "check": "Reviewer",
+            "status": "WARN",
+            "detail": "No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.",
+            "next_step": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          },
+          {
+            "check": "Project",
+            "status": "OK",
+            "detail": "trusted=False; profile present=False; [[checks]]=0",
+            "next_step": null
+          },
+          {
+            "check": "Quota",
+            "status": "INFO",
+            "detail": "Quota data is unavailable for the newest rollout.",
+            "next_step": null
+          }
+        ],
+        "next_steps": [
+          {
+            "number": 1,
+            "check": "Reviewer",
+            "action": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          }
+        ],
+        "exit_code": 0
+      },
+      "rendered": {
+        "markdown": "| Check | Status | Detail |\n| --- | --- | --- |\n| Hook registration | OK | Purser plugin enabled as `purser@purser-local`; no manual hooks found. |\n| Codex MCP | OK | plugin `codex-main` command: `node`. |\n| Codex CLI | OK | codex 0.156.0; C:/fake/codex.exe |\n| Roles | OK | orchestrator=claude-code; coder=codex; reviewer=agy |\n| Reviewer | WARN | No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review. |\n| Project | OK | trusted=False; profile present=False; [[checks]]=0 |\n| Quota | INFO | Quota data is unavailable for the newest rollout. |\n\nNext steps:\n1. **Reviewer:** Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.",
+        "json": "{\"checks\": [{\"check\": \"Hook registration\", \"status\": \"OK\", \"detail\": \"Purser plugin enabled as `purser@purser-local`; no manual hooks found.\", \"next_step\": null}, {\"check\": \"Codex MCP\", \"status\": \"OK\", \"detail\": \"plugin `codex-main` command: `node`.\", \"next_step\": null}, {\"check\": \"Codex CLI\", \"status\": \"OK\", \"detail\": \"codex 0.156.0; C:/fake/codex.exe\", \"next_step\": null}, {\"check\": \"Roles\", \"status\": \"OK\", \"detail\": \"orchestrator=claude-code; coder=codex; reviewer=agy\", \"next_step\": null}, {\"check\": \"Reviewer\", \"status\": \"WARN\", \"detail\": \"No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.\", \"next_step\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}, {\"check\": \"Project\", \"status\": \"OK\", \"detail\": \"trusted=False; profile present=False; [[checks]]=0\", \"next_step\": null}, {\"check\": \"Quota\", \"status\": \"INFO\", \"detail\": \"Quota data is unavailable for the newest rollout.\", \"next_step\": null}], \"next_steps\": [{\"number\": 1, \"check\": \"Reviewer\", \"action\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}], \"exit_code\": 0}"
+      }
+    }
+  },
+  "missing_registration": {
+    "go": {
+      "report": {
+        "checks": [
+          {
+            "check": "Hook registration",
+            "status": "FAIL",
+            "detail": "Neither manual Purser hooks nor an enabled Purser plugin were found.",
+            "next_step": "Install and enable `purser@<marketplace>`, or register the manual Purser hooks; see docs/PLUGIN.md."
+          },
+          {
+            "check": "Codex MCP",
+            "status": "INFO",
+            "detail": "plugin `codex-main` is bundled but the Purser plugin is not enabled.",
+            "next_step": null
+          },
+          {
+            "check": "Codex CLI",
+            "status": "OK",
+            "detail": "codex 0.156.0; C:/fake/codex.exe",
+            "next_step": null
+          },
+          {
+            "check": "Roles",
+            "status": "OK",
+            "detail": "orchestrator=claude-code; coder=codex; reviewer=agy",
+            "next_step": null
+          },
+          {
+            "check": "Reviewer",
+            "status": "WARN",
+            "detail": "No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.",
+            "next_step": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          },
+          {
+            "check": "Project",
+            "status": "OK",
+            "detail": "trusted=False; profile present=False; [[checks]]=0",
+            "next_step": null
+          },
+          {
+            "check": "Quota",
+            "status": "INFO",
+            "detail": "Quota data is unavailable for the newest rollout.",
+            "next_step": null
+          }
+        ],
+        "next_steps": [
+          {
+            "number": 1,
+            "check": "Hook registration",
+            "action": "Install and enable `purser@<marketplace>`, or register the manual Purser hooks; see docs/PLUGIN.md."
+          },
+          {
+            "number": 2,
+            "check": "Reviewer",
+            "action": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          }
+        ],
+        "exit_code": 1
+      },
+      "rendered": {
+        "markdown": "| Check | Status | Detail |\n| --- | --- | --- |\n| Hook registration | FAIL | Neither manual Purser hooks nor an enabled Purser plugin were found. |\n| Codex MCP | INFO | plugin `codex-main` is bundled but the Purser plugin is not enabled. |\n| Codex CLI | OK | codex 0.156.0; C:/fake/codex.exe |\n| Roles | OK | orchestrator=claude-code; coder=codex; reviewer=agy |\n| Reviewer | WARN | No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review. |\n| Project | OK | trusted=False; profile present=False; [[checks]]=0 |\n| Quota | INFO | Quota data is unavailable for the newest rollout. |\n\nNext steps:\n1. **Hook registration:** Install and enable `purser@<marketplace>`, or register the manual Purser hooks; see docs/PLUGIN.md.\n2. **Reviewer:** Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.",
+        "json": "{\"checks\": [{\"check\": \"Hook registration\", \"status\": \"FAIL\", \"detail\": \"Neither manual Purser hooks nor an enabled Purser plugin were found.\", \"next_step\": \"Install and enable `purser@<marketplace>`, or register the manual Purser hooks; see docs/PLUGIN.md.\"}, {\"check\": \"Codex MCP\", \"status\": \"INFO\", \"detail\": \"plugin `codex-main` is bundled but the Purser plugin is not enabled.\", \"next_step\": null}, {\"check\": \"Codex CLI\", \"status\": \"OK\", \"detail\": \"codex 0.156.0; C:/fake/codex.exe\", \"next_step\": null}, {\"check\": \"Roles\", \"status\": \"OK\", \"detail\": \"orchestrator=claude-code; coder=codex; reviewer=agy\", \"next_step\": null}, {\"check\": \"Reviewer\", \"status\": \"WARN\", \"detail\": \"No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.\", \"next_step\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}, {\"check\": \"Project\", \"status\": \"OK\", \"detail\": \"trusted=False; profile present=False; [[checks]]=0\", \"next_step\": null}, {\"check\": \"Quota\", \"status\": \"INFO\", \"detail\": \"Quota data is unavailable for the newest rollout.\", \"next_step\": null}], \"next_steps\": [{\"number\": 1, \"check\": \"Hook registration\", \"action\": \"Install and enable `purser@<marketplace>`, or register the manual Purser hooks; see docs/PLUGIN.md.\"}, {\"number\": 2, \"check\": \"Reviewer\", \"action\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}], \"exit_code\": 1}"
+      }
+    }
+  },
+  "registration_conflict": {
+    "go": {
+      "report": {
+        "checks": [
+          {
+            "check": "Hook registration",
+            "status": "FAIL",
+            "detail": "double registration: manual Purser hooks and enabled plugin `purser@purser-local` are both present.",
+            "next_step": "Remove the manual hook entries from ~/.claude/settings.json; see docs/PLUGIN.md."
+          },
+          {
+            "check": "Codex MCP",
+            "status": "OK",
+            "detail": "plugin `codex-main` command: `node`.",
+            "next_step": null
+          },
+          {
+            "check": "Codex CLI",
+            "status": "OK",
+            "detail": "codex 0.156.0; C:/fake/codex.exe",
+            "next_step": null
+          },
+          {
+            "check": "Roles",
+            "status": "OK",
+            "detail": "orchestrator=claude-code; coder=codex; reviewer=agy",
+            "next_step": null
+          },
+          {
+            "check": "Reviewer",
+            "status": "WARN",
+            "detail": "No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.",
+            "next_step": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          },
+          {
+            "check": "Project",
+            "status": "OK",
+            "detail": "trusted=False; profile present=False; [[checks]]=0",
+            "next_step": null
+          },
+          {
+            "check": "Quota",
+            "status": "INFO",
+            "detail": "Quota data is unavailable for the newest rollout.",
+            "next_step": null
+          }
+        ],
+        "next_steps": [
+          {
+            "number": 1,
+            "check": "Hook registration",
+            "action": "Remove the manual hook entries from ~/.claude/settings.json; see docs/PLUGIN.md."
+          },
+          {
+            "number": 2,
+            "check": "Reviewer",
+            "action": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          }
+        ],
+        "exit_code": 1
+      },
+      "rendered": {
+        "markdown": "| Check | Status | Detail |\n| --- | --- | --- |\n| Hook registration | FAIL | double registration: manual Purser hooks and enabled plugin `purser@purser-local` are both present. |\n| Codex MCP | OK | plugin `codex-main` command: `node`. |\n| Codex CLI | OK | codex 0.156.0; C:/fake/codex.exe |\n| Roles | OK | orchestrator=claude-code; coder=codex; reviewer=agy |\n| Reviewer | WARN | No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review. |\n| Project | OK | trusted=False; profile present=False; [[checks]]=0 |\n| Quota | INFO | Quota data is unavailable for the newest rollout. |\n\nNext steps:\n1. **Hook registration:** Remove the manual hook entries from ~/.claude/settings.json; see docs/PLUGIN.md.\n2. **Reviewer:** Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.",
+        "json": "{\"checks\": [{\"check\": \"Hook registration\", \"status\": \"FAIL\", \"detail\": \"double registration: manual Purser hooks and enabled plugin `purser@purser-local` are both present.\", \"next_step\": \"Remove the manual hook entries from ~/.claude/settings.json; see docs/PLUGIN.md.\"}, {\"check\": \"Codex MCP\", \"status\": \"OK\", \"detail\": \"plugin `codex-main` command: `node`.\", \"next_step\": null}, {\"check\": \"Codex CLI\", \"status\": \"OK\", \"detail\": \"codex 0.156.0; C:/fake/codex.exe\", \"next_step\": null}, {\"check\": \"Roles\", \"status\": \"OK\", \"detail\": \"orchestrator=claude-code; coder=codex; reviewer=agy\", \"next_step\": null}, {\"check\": \"Reviewer\", \"status\": \"WARN\", \"detail\": \"No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.\", \"next_step\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}, {\"check\": \"Project\", \"status\": \"OK\", \"detail\": \"trusted=False; profile present=False; [[checks]]=0\", \"next_step\": null}, {\"check\": \"Quota\", \"status\": \"INFO\", \"detail\": \"Quota data is unavailable for the newest rollout.\", \"next_step\": null}], \"next_steps\": [{\"number\": 1, \"check\": \"Hook registration\", \"action\": \"Remove the manual hook entries from ~/.claude/settings.json; see docs/PLUGIN.md.\"}, {\"number\": 2, \"check\": \"Reviewer\", \"action\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}], \"exit_code\": 1}"
+      }
+    }
+  },
+  "missing_codex": {
+    "go": {
+      "report": {
+        "checks": [
+          {
+            "check": "Hook registration",
+            "status": "OK",
+            "detail": "Purser plugin enabled as `purser@purser-local`; no manual hooks found.",
+            "next_step": null
+          },
+          {
+            "check": "Codex MCP",
+            "status": "OK",
+            "detail": "plugin `codex-main` command: `node`.",
+            "next_step": null
+          },
+          {
+            "check": "Codex CLI",
+            "status": "FAIL",
+            "detail": "`codex` was not found on PATH.",
+            "next_step": "Install the Codex CLI and ensure `codex` resolves on PATH."
+          },
+          {
+            "check": "Roles",
+            "status": "OK",
+            "detail": "orchestrator=claude-code; coder=codex; reviewer=agy",
+            "next_step": null
+          },
+          {
+            "check": "Reviewer",
+            "status": "WARN",
+            "detail": "No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.",
+            "next_step": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          },
+          {
+            "check": "Project",
+            "status": "OK",
+            "detail": "trusted=False; profile present=False; [[checks]]=0",
+            "next_step": null
+          },
+          {
+            "check": "Quota",
+            "status": "INFO",
+            "detail": "Quota data is unavailable for the newest rollout.",
+            "next_step": null
+          }
+        ],
+        "next_steps": [
+          {
+            "number": 1,
+            "check": "Codex CLI",
+            "action": "Install the Codex CLI and ensure `codex` resolves on PATH."
+          },
+          {
+            "number": 2,
+            "check": "Reviewer",
+            "action": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          }
+        ],
+        "exit_code": 1
+      },
+      "rendered": {
+        "markdown": "| Check | Status | Detail |\n| --- | --- | --- |\n| Hook registration | OK | Purser plugin enabled as `purser@purser-local`; no manual hooks found. |\n| Codex MCP | OK | plugin `codex-main` command: `node`. |\n| Codex CLI | FAIL | `codex` was not found on PATH. |\n| Roles | OK | orchestrator=claude-code; coder=codex; reviewer=agy |\n| Reviewer | WARN | No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review. |\n| Project | OK | trusted=False; profile present=False; [[checks]]=0 |\n| Quota | INFO | Quota data is unavailable for the newest rollout. |\n\nNext steps:\n1. **Codex CLI:** Install the Codex CLI and ensure `codex` resolves on PATH.\n2. **Reviewer:** Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.",
+        "json": "{\"checks\": [{\"check\": \"Hook registration\", \"status\": \"OK\", \"detail\": \"Purser plugin enabled as `purser@purser-local`; no manual hooks found.\", \"next_step\": null}, {\"check\": \"Codex MCP\", \"status\": \"OK\", \"detail\": \"plugin `codex-main` command: `node`.\", \"next_step\": null}, {\"check\": \"Codex CLI\", \"status\": \"FAIL\", \"detail\": \"`codex` was not found on PATH.\", \"next_step\": \"Install the Codex CLI and ensure `codex` resolves on PATH.\"}, {\"check\": \"Roles\", \"status\": \"OK\", \"detail\": \"orchestrator=claude-code; coder=codex; reviewer=agy\", \"next_step\": null}, {\"check\": \"Reviewer\", \"status\": \"WARN\", \"detail\": \"No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.\", \"next_step\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}, {\"check\": \"Project\", \"status\": \"OK\", \"detail\": \"trusted=False; profile present=False; [[checks]]=0\", \"next_step\": null}, {\"check\": \"Quota\", \"status\": \"INFO\", \"detail\": \"Quota data is unavailable for the newest rollout.\", \"next_step\": null}], \"next_steps\": [{\"number\": 1, \"check\": \"Codex CLI\", \"action\": \"Install the Codex CLI and ensure `codex` resolves on PATH.\"}, {\"number\": 2, \"check\": \"Reviewer\", \"action\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}], \"exit_code\": 1}"
+      }
+    }
+  },
+  "internal_inspection_failure": {
+    "go": {
+      "report": {
+        "checks": [
+          {
+            "check": "Hook registration",
+            "status": "WARN",
+            "detail": "Check could not run: broken inspection",
+            "next_step": "Resolve the reported check error and run `/purser:check` again."
+          },
+          {
+            "check": "Codex MCP",
+            "status": "OK",
+            "detail": "plugin `codex-main` command: `node`.",
+            "next_step": null
+          },
+          {
+            "check": "Codex CLI",
+            "status": "OK",
+            "detail": "codex 0.156.0; C:/fake/codex.exe",
+            "next_step": null
+          },
+          {
+            "check": "Roles",
+            "status": "OK",
+            "detail": "orchestrator=claude-code; coder=codex; reviewer=agy",
+            "next_step": null
+          },
+          {
+            "check": "Reviewer",
+            "status": "WARN",
+            "detail": "No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.",
+            "next_step": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          },
+          {
+            "check": "Project",
+            "status": "OK",
+            "detail": "trusted=False; profile present=False; [[checks]]=0",
+            "next_step": null
+          },
+          {
+            "check": "Quota",
+            "status": "INFO",
+            "detail": "Quota data is unavailable for the newest rollout.",
+            "next_step": null
+          }
+        ],
+        "next_steps": [
+          {
+            "number": 1,
+            "check": "Hook registration",
+            "action": "Resolve the reported check error and run `/purser:check` again."
+          },
+          {
+            "number": 2,
+            "check": "Reviewer",
+            "action": "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config."
+          }
+        ],
+        "exit_code": 0
+      },
+      "rendered": {
+        "markdown": "| Check | Status | Detail |\n| --- | --- | --- |\n| Hook registration | WARN | Check could not run: broken inspection |\n| Codex MCP | OK | plugin `codex-main` command: `node`. |\n| Codex CLI | OK | codex 0.156.0; C:/fake/codex.exe |\n| Roles | OK | orchestrator=claude-code; coder=codex; reviewer=agy |\n| Reviewer | WARN | No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review. |\n| Project | OK | trusted=False; profile present=False; [[checks]]=0 |\n| Quota | INFO | Quota data is unavailable for the newest rollout. |\n\nNext steps:\n1. **Hook registration:** Resolve the reported check error and run `/purser:check` again.\n2. **Reviewer:** Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.",
+        "json": "{\"checks\": [{\"check\": \"Hook registration\", \"status\": \"WARN\", \"detail\": \"Check could not run: broken inspection\", \"next_step\": \"Resolve the reported check error and run `/purser:check` again.\"}, {\"check\": \"Codex MCP\", \"status\": \"OK\", \"detail\": \"plugin `codex-main` command: `node`.\", \"next_step\": null}, {\"check\": \"Codex CLI\", \"status\": \"OK\", \"detail\": \"codex 0.156.0; C:/fake/codex.exe\", \"next_step\": null}, {\"check\": \"Roles\", \"status\": \"OK\", \"detail\": \"orchestrator=claude-code; coder=codex; reviewer=agy\", \"next_step\": null}, {\"check\": \"Reviewer\", \"status\": \"WARN\", \"detail\": \"No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.\", \"next_step\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}, {\"check\": \"Project\", \"status\": \"OK\", \"detail\": \"trusted=False; profile present=False; [[checks]]=0\", \"next_step\": null}, {\"check\": \"Quota\", \"status\": \"INFO\", \"detail\": \"Quota data is unavailable for the newest rollout.\", \"next_step\": null}], \"next_steps\": [{\"number\": 1, \"check\": \"Hook registration\", \"action\": \"Resolve the reported check error and run `/purser:check` again.\"}, {\"number\": 2, \"check\": \"Reviewer\", \"action\": \"Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.\"}], \"exit_code\": 0}"
+      }
+    }
+  }
+}

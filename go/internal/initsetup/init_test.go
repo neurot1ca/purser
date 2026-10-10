@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/policy"
 	"purser-hook/internal/profile"
 )
@@ -227,4 +228,308 @@ func TestEnableConciseUsesActiveClaudeConfigDir(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPlanDoesNotWriteAndShowsHandoff(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	state := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", state)
+	var out, errOut bytes.Buffer
+	args := []string{"--plan", "--coder", "codex", "--reviewer", "none", "--trust", "--scaffold-profile"}
+	if code := Run(&out, &errOut, args); code != 0 {
+		t.Fatalf("plan returned %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "---") || !strings.Contains(out.String(), "+++") || !strings.Contains(out.String(), "schema_version = 1") {
+		t.Fatalf("plan did not contain the expected diff and profile: %s", out.String())
+	}
+	handoff := filepath.Join(state, "projects", contextio.ProjectKey(root), "telemetry", "purser-handoff.md")
+	if !strings.Contains(out.String(), "Create "+handoff+":") {
+		t.Errorf("plan omitted handoff path %q: %s", handoff, out.String())
+	}
+	if _, err := os.Stat(handoff); !os.IsNotExist(err) {
+		t.Errorf("plan created handoff (stat error: %v)", err)
+	}
+	for _, path := range []string{filepath.Join(home, ".orchestrator"), filepath.Join(root, ".orchestrator")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("plan created %s (stat error: %v)", path, err)
+		}
+	}
+}
+
+func TestApplyPreservesExistingConfigBytesAndBacksUp(t *testing.T) {
+	original, err := os.ReadFile(filepath.Join("testdata", "preserved_config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _, restore := initTestEnvironment(t)
+	defer restore()
+	config := filepath.Join(home, ".orchestrator", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(config), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := Run(&out, &errOut, []string{"--apply", "--coder", "codex", "--reviewer", "none", "--trust"}); code != 0 {
+		t.Fatalf("apply returned %d: %s", code, errOut.String())
+	}
+	changed, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(changed, []byte("# keep comment\r\n[telemetry]\r\nvault_root = \"C:/vault\" # keep exact\r\n")) {
+		t.Errorf("unrelated CRLF bytes or comments changed:\n%s", changed)
+	}
+	parsed, _, err := profile.DecodeTOML(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles, _ := parsed["roles"].(map[string]any)
+	if roles["orchestrator"] != "claude-code" || roles["coder"] != "codex" || roles["reviewer"] != "none" {
+		t.Errorf("saved roles = %#v", roles)
+	}
+	trust, _ := parsed["trust"].(map[string]any)
+	paths, _ := trust["paths"].([]any)
+	if !containsStringValue(paths, mustCwd()) {
+		t.Errorf("project path %q missing from trust paths: %#v", mustCwd(), paths)
+	}
+	backups, err := filepath.Glob(config + ".bak-*")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backup files = %v, error = %v; want one backup", backups, err)
+	}
+	backupBytes, err := os.ReadFile(backups[0])
+	if err != nil || !bytes.Equal(backupBytes, original) {
+		t.Errorf("backup = %q, error = %v; want original bytes", backupBytes, err)
+	}
+}
+
+func TestInvalidConfigIsUntouchedAndCreatesNoBackup(t *testing.T) {
+	home, _, restore := initTestEnvironment(t)
+	defer restore()
+	config := filepath.Join(home, ".orchestrator", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(config), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("schema_version = 1\n[bad\n")
+	if err := os.WriteFile(config, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, []string{"--apply", "--coder", "codex", "--reviewer", "none", "--trust"}); code == 0 {
+		t.Fatal("apply accepted invalid config")
+	}
+	after, err := os.ReadFile(config)
+	if err != nil || !bytes.Equal(after, original) {
+		t.Errorf("config after failed apply = %q, error = %v", after, err)
+	}
+	backups, err := filepath.Glob(config + ".bak-*")
+	if err != nil || len(backups) != 0 {
+		t.Errorf("failed apply created backups %v (error %v)", backups, err)
+	}
+}
+
+func TestSecondApplyIsNoopAndKeepsExistingHandoff(t *testing.T) {
+	home, _, restore := initTestEnvironment(t)
+	defer restore()
+	state := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", state)
+	args := []string{"--apply", "--coder", "claude", "--reviewer", "none", "--trust", "--scaffold-profile"}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, args); code != 0 {
+		t.Fatal("first apply failed")
+	}
+	config := filepath.Join(home, ".orchestrator", "config.toml")
+	before, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(mustCwd(), ".orchestrator", "profile.toml")
+	profileBytes, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff := filepath.Join(state, "projects", contextio.ProjectKey(mustCwd()), "telemetry", "purser-handoff.md")
+	if err := os.WriteFile(handoff, []byte("user handoff; keep it\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := Run(&out, &bytes.Buffer{}, args); code != 0 {
+		t.Fatalf("second apply failed: %s", out.String())
+	}
+	after, err := os.ReadFile(config)
+	if err != nil || !bytes.Equal(after, before) {
+		t.Errorf("second apply changed config: %v", err)
+	}
+	afterProfile, err := os.ReadFile(profilePath)
+	if err != nil || !bytes.Equal(afterProfile, profileBytes) {
+		t.Errorf("second apply changed profile: %v", err)
+	}
+	if !strings.HasPrefix(out.String(), "No changes.\nHandoff: ") {
+		t.Errorf("second apply output = %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".orchestrator", "python")); !os.IsNotExist(err) {
+		t.Errorf("apply created Python locator (stat error: %v)", err)
+	}
+	if got, err := os.ReadFile(handoff); err != nil || string(got) != "user handoff; keep it\n" {
+		t.Errorf("existing handoff = %q, error = %v", got, err)
+	}
+}
+
+func TestConciseOfferIsClaimedOnce(t *testing.T) {
+	home, _, restore := initTestEnvironment(t)
+	defer restore()
+	args := []string{"--apply", "--coder", "claude", "--reviewer", "none"}
+	var first bytes.Buffer
+	if code := Run(&first, &bytes.Buffer{}, args); code != 0 {
+		t.Fatalf("first apply failed: %s", first.String())
+	}
+	if !strings.Contains(first.String(), "Concise reply style offer due.") {
+		t.Errorf("first apply omitted offer: %s", first.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".orchestrator", "reply-style-suggestion-shown")); err != nil {
+		t.Errorf("offer marker missing: %v", err)
+	}
+	var second bytes.Buffer
+	if code := Run(&second, &bytes.Buffer{}, args); code != 0 {
+		t.Fatalf("second apply failed: %s", second.String())
+	}
+	if strings.Contains(second.String(), "Concise reply style offer due.") {
+		t.Errorf("second apply repeated offer: %s", second.String())
+	}
+}
+
+func TestGlobalConciseStyleSuppressesOfferAndProjectStyleTakesPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, global, project string
+		wantOffer             bool
+	}{
+		{name: "global concise", global: `{"outputStyle":"Concise"}`},
+		{name: "project override", global: `{"outputStyle":"Concise"}`, project: `{"outputStyle":"Explanatory"}`, wantOffer: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, root, restore := initTestEnvironment(t)
+			defer restore()
+			globalPath := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(globalPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(globalPath, []byte(tc.global), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.project != "" {
+				projectPath := filepath.Join(root, ".claude", "settings.json")
+				if err := os.MkdirAll(filepath.Dir(projectPath), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(projectPath, []byte(tc.project), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out bytes.Buffer
+			if code := Run(&out, &bytes.Buffer{}, []string{"--apply", "--coder", "claude", "--reviewer", "none"}); code != 0 {
+				t.Fatalf("apply failed: %s", out.String())
+			}
+			gotOffer := strings.Contains(out.String(), "Concise reply style offer due.")
+			if gotOffer != tc.wantOffer {
+				t.Errorf("offer due = %t, want %t; output: %s", gotOffer, tc.wantOffer, out.String())
+			}
+			marker := filepath.Join(home, ".orchestrator", "reply-style-suggestion-shown")
+			_, err := os.Stat(marker)
+			if tc.wantOffer && err != nil {
+				t.Errorf("expected offer marker: %v", err)
+			}
+			if !tc.wantOffer && !os.IsNotExist(err) {
+				t.Errorf("global Concise style created marker (stat error: %v)", err)
+			}
+		})
+	}
+}
+
+func TestEnableConcisePreservesSettingsAndReportsProjectOverride(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	settings := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte("{\n  \"other\": {\"keep\": true},\n  \"outputStyle\": \"Explanatory\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shared := filepath.Join(root, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(shared), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shared, []byte(`{"outputStyle":"Explanatory"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := Run(&out, &bytes.Buffer{}, []string{"--enable-concise-style"}); code != 0 {
+		t.Fatalf("enable concise failed: %s", out.String())
+	}
+	var saved map[string]any
+	raw, err := os.ReadFile(settings)
+	if err != nil || json.Unmarshal(raw, &saved) != nil {
+		t.Fatalf("settings = %s, error = %v", raw, err)
+	}
+	other, _ := saved["other"].(map[string]any)
+	if saved["outputStyle"] != "Concise" || other["keep"] != true {
+		t.Errorf("settings update lost or failed to set values: %#v", saved)
+	}
+	if !strings.Contains(strings.ToLower(out.String()), "project") || !strings.Contains(strings.ToLower(out.String()), "override") {
+		t.Errorf("output did not report project override: %s", out.String())
+	}
+	var unchanged map[string]any
+	projectBytes, err := os.ReadFile(shared)
+	if err != nil || json.Unmarshal(projectBytes, &unchanged) != nil || unchanged["outputStyle"] != "Explanatory" {
+		t.Errorf("shared project settings changed: %s, error %v", projectBytes, err)
+	}
+}
+
+func TestExistingProfileIsNeverOverwritten(t *testing.T) {
+	_, root, restore := initTestEnvironment(t)
+	defer restore()
+	profilePath := filepath.Join(root, ".orchestrator", "profile.toml")
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("existing content\n")
+	if err := os.WriteFile(profilePath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, []string{"--apply", "--coder", "codex", "--reviewer", "none", "--scaffold-profile"}); code != 0 {
+		t.Fatal("apply failed")
+	}
+	after, err := os.ReadFile(profilePath)
+	if err != nil || !bytes.Equal(after, original) {
+		t.Errorf("profile = %q, error = %v; want original bytes", after, err)
+	}
+}
+
+func initTestEnvironment(t *testing.T) (home, root string, restore func()) {
+	t.Helper()
+	home, root = t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	return home, root, func() {
+		if err := os.Chdir(oldWD); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}
+}
+
+func containsStringValue(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

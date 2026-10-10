@@ -12,12 +12,14 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"purser-hook/internal/profile"
 )
 
-func TestPythonOracleParity(t *testing.T) {
+func TestReportFixtures(t *testing.T) {
 	_, source, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	oracleBytes, err := os.ReadFile(filepath.Join(root, ".claude", "hooks", "orchestrator", "tests", "fixtures", "purser_check_oracle.json"))
+	oracleBytes, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "purser_check_oracle.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +145,59 @@ func TestWriteJSONPreservesUTF8(t *testing.T) {
 	}
 	if !utf8.Valid(output.Bytes()) || !bytes.Contains(output.Bytes(), []byte("Turkish ı and marker ❯")) {
 		t.Fatalf("JSON was not emitted as UTF-8: %q", output.Bytes())
+	}
+	var parsed Report
+	if err := json.Unmarshal(output.Bytes(), &parsed); err != nil || parsed.Checks[0].Detail != report.Checks[0].Detail {
+		t.Fatalf("JSON output did not round-trip: report=%#v error=%v", parsed, err)
+	}
+}
+
+func TestManualOnlyRegistrationIsOK(t *testing.T) {
+	home := checkReportTestDir(t, "checkreport-manual-registration-")
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"python ~/.orchestrator/hook.py"}]}]}}`
+	if err := os.WriteFile(settingsPath, []byte(settings), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := registrationCheck(home)
+	if got.Status != "OK" || !strings.Contains(strings.ToLower(got.Detail), "manual") {
+		t.Fatalf("registrationCheck = %#v; want manual-only registration OK", got)
+	}
+}
+
+func TestDisabledReviewerUsesFullReview(t *testing.T) {
+	p := profile.ResolvedProfile{Roles: profile.Roles{Reviewer: "none"}}
+	roles := rolesCheck(p)
+	if roles.Status != "INFO" || !strings.Contains(roles.Detail, "reviewer=none") || !strings.Contains(roles.Detail, "every call is FULL review") {
+		t.Fatalf("rolesCheck = %#v", roles)
+	}
+	reviewer := reviewerCheck(p, t.TempDir())
+	if reviewer.Status != "INFO" || !strings.Contains(reviewer.Detail, "every call is FULL review") {
+		t.Fatalf("reviewerCheck = %#v", reviewer)
+	}
+}
+
+func TestMissingReviewerExecutableWarnsAndUsesFullReview(t *testing.T) {
+	pluginRoot := t.TempDir()
+	configPath := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing-reviewer.exe")
+	config, err := json.Marshal(map[string]string{"reviewer1_executable": missing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p := profile.ResolvedProfile{Roles: profile.Roles{Reviewer: "agy"}}
+	got := reviewerCheck(p, pluginRoot)
+	if got.Status != "WARN" || !strings.Contains(got.Detail, "reviewer unavailable") || !strings.Contains(got.Detail, "every call will be FULL review") {
+		t.Fatalf("reviewerCheck = %#v", got)
 	}
 }
 

@@ -1,0 +1,8 @@
+schema_version = 1
+# keep comment
+[telemetry]
+vault_root = "C:/vault" # keep exact
+[roles]
+coder = "claude"
+[trust]
+paths = []

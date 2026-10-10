@@ -46,12 +46,48 @@ func TestChecksCommandHelper(t *testing.T) {
 		for {
 			time.Sleep(time.Minute)
 		}
+	case "spawn-child-sleep":
+		child := exec.Command(os.Args[0], "-test.run=^TestChecksCommandHelper$")
+		child.Env = append(os.Environ(), "PURSER_CHECK_HELPER=write-after-delay")
+		if err := child.Start(); err != nil {
+			os.Exit(8)
+		}
+		for {
+			time.Sleep(time.Minute)
+		}
+	case "write-after-delay":
+		time.Sleep(1500 * time.Millisecond)
+		if err := os.WriteFile(os.Getenv("PURSER_CHECK_WRITE_FILE"), []byte("alive"), 0600); err != nil {
+			os.Exit(8)
+		}
+		os.Exit(0)
 	default:
 		os.Exit(9)
 	}
 }
 
 func TestChecksSelectionAndProtectedGlobs(t *testing.T) {
+	alwaysAndScoped := []profile.Check{
+		{Name: "always"},
+		{Name: "scoped", When: []string{"app/**", "**/*.ts"}},
+	}
+	for _, tc := range []struct {
+		changed []string
+		want    []string
+	}{
+		{[]string{"other/file.py"}, []string{"always"}},
+		{[]string{"./app/deep/file.py"}, []string{"always", "scoped"}},
+	} {
+		got := SelectChecks(alwaysAndScoped, tc.changed)
+		var names []string
+		for _, check := range got {
+			names = append(names, check.Name)
+		}
+		if strings.Join(names, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("SelectChecks(%v) = %v, want %v", tc.changed, names, tc.want)
+		}
+	}
+
 	checks := []profile.Check{
 		{Name: "go", When: []string{"go/**"}},
 		{Name: "docs", When: []string{"docs/**"}},
@@ -129,15 +165,22 @@ func TestRunChecksFindsContentChangesWithStableGitStatus(t *testing.T) {
 		}
 	}
 	tracked := filepath.Join(root, "edited.txt")
+	untouched := filepath.Join(root, "untouched.txt")
 	if err := os.WriteFile(tracked, []byte("baseline\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"add", "edited.txt"}, {"commit", "-qm", "baseline"}} {
+	if err := os.WriteFile(untouched, []byte("baseline\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "edited.txt", "untouched.txt"}, {"commit", "-qm", "baseline"}} {
 		if err := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...)).Run(); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := os.WriteFile(tracked, []byte("already dirty\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(untouched, []byte("also dirty\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ name, path, initial string }{
@@ -237,6 +280,19 @@ func TestRunChecksFailureAndTimeoutKillChild(t *testing.T) {
 	pid := waitCheckPID(t, pidFile)
 	if processExists(pid) {
 		t.Fatalf("timed out Go check process %s remains", pid)
+	}
+}
+
+func TestRunChecksTimeoutKillsDescendants(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "descendant.txt")
+	t.Setenv("PURSER_CHECK_WRITE_FILE", marker)
+	got := runCheckHelper(t, "spawn-child-sleep", time.Second, "")
+	if got.Status != "UNKNOWN" || !strings.HasSuffix(got.Tail, "\ntimed out") {
+		t.Fatalf("timeout result %#v", got)
+	}
+	time.Sleep(700 * time.Millisecond)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("timed out check descendant wrote marker: %v", err)
 	}
 }
 
