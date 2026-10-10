@@ -569,9 +569,18 @@ def _run_git(
             "GIT_UNAVAILABLE", f"Git could not run while {operation}."
         ) from error
     if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace")
+        lines = [line.strip() for line in stderr.strip().split("\n")]
+        lines = [line[:-1] if line.endswith("\r") else line for line in lines]
+        while lines and not lines[-1]:
+            lines.pop()
+        detail = " ".join(lines).encode("utf-8")[:400].decode("utf-8", errors="replace")
+        message = f"Git failed with exit code {completed.returncode} while {operation}."
+        if detail:
+            message += " Git stderr: " + detail
         raise _InspectionError(
             "GIT_FAILED",
-            f"Git failed with exit code {completed.returncode} while {operation}.",
+            message,
         )
     return completed.stdout
 
