@@ -146,6 +146,95 @@ func TestCleanupDistillsBeforeDeletingExpiredJob(t *testing.T) {
 	}
 }
 
+func TestCleanupSessionStartKeepsUncheckpointedExpiredJob(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("e", 64)
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{
+		"finishedAt": float64(cleanupNow().Unix()) - 8*86400,
+	})
+
+	if err := CleanupJobs(root, cleanupNow(), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")); err != nil {
+		t.Fatalf("uncheckpointed job was removed during session cleanup: %v", err)
+	}
+}
+
+func TestCleanupPreservesFinalizingEvidence(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("8", 64)
+	call := "finalizing-call"
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{
+		"call": call, "finishedAt": float64(cleanupNow().Unix()) - 8*86400, "outputFile": id + ".output",
+	})
+	indexPath := filepath.Join(root, "async_jobs", id+".json")
+	index := map[string]any{"jobId": id, "call": call, "call_key": id,
+		"project_key": "0123456789abcdef", "stage": "FINALIZING"}
+	indexData, err := json.Marshal(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(indexPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, indexData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	pendingPath := filepath.Join(root, "pending", id+".json")
+	pendingData, err := json.Marshal(map[string]any{"job_id": id, "async_call": call})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(pendingPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pendingPath, pendingData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(root, "codex_exec_mcp", "jobs", id+".output")
+	if err := os.WriteFile(outputPath, []byte("output"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CleanupJobs(root, cleanupNow(), true); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), indexPath, pendingPath, outputPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("finalizing evidence %s was removed: %v", filepath.Base(path), err)
+		}
+	}
+}
+
+func TestCleanupUsesRecordModTimeAndExistingCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("7", 64)
+	record := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+	cleanupJob(t, root, id, "FAILED", nil)
+	old := time.Unix(cleanupNow().Unix()-8*86400, 0)
+	if err := os.Chtimes(record, old, old); err != nil {
+		t.Fatal(err)
+	}
+	summary := filepath.Join(root, "telemetry", "learning_summary.json")
+	data, err := json.Marshal(map[string]any{"schema_version": 1, "sources": []any{id},
+		"records": []any{}, "cohorts": map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(summary), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(summary, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CleanupJobs(root, cleanupNow(), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("checkpointed stale record remains: %v", err)
+	}
+}
+
 func TestCleanupRemovesLaunchFileAndSharesActionBound(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
