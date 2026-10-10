@@ -75,25 +75,48 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
   const finished = visible.filter(({ job }) => job.state !== 'QUEUED' && job.state !== 'RUNNING')
   if (!active.length && !finished.some(({ job }) => job.boardDisplayCount === 0)) return undefined
 
-  const counts = { running: 0, queued: 0, done: 0, failed: 0, cancelled: 0 }
+  const applyOf = (job: Job, bundle: Job) => {
+    const paths = Array.isArray(job.changed_paths) ? job.changed_paths : bundle.changed_paths
+    const threadApplyCoversDelta = typeof job.threadId === 'string' && Array.isArray(paths) && paths.length > 0 &&
+      paths.every((path: unknown) => typeof path === 'string') &&
+      indexed.some(({ job: other }) => other.threadId === job.threadId && other.applyState === 'applied' &&
+        other.applyResult?.applied === true && Array.isArray(other.applyResult.paths) &&
+        other.applyResult.paths.every((path: unknown) => typeof path === 'string') &&
+        paths.every((path: string) => other.applyResult.paths.includes(path)))
+    let apply = job.applyState === 'applied' || threadApplyCoversDelta ? 'applied' :
+      job.applyState === 'conflict' ? 'conflict' : '—'
+    if (apply === '—' && (['operation', 'plan'].includes(job.phase ?? bundle.phase) || (Object.keys(bundle).length && bundle.apply !== 'codex_apply'))) apply = 'n/a'
+    if (apply === '—' && !['QUEUED', 'RUNNING', 'UNKNOWN_OR_IN_PROGRESS'].includes(job.state) && Array.isArray(paths) && paths.length === 0) apply = 'no change'
+    return apply
+  }
+  // A succeeded job is only done once Claude has taken its result and applied
+  // (or had nothing to apply); before that it is still moving through review.
+  const stageOf = (job: Job, bundle: Job, apply: string) => {
+    if (job.state !== 'SUCCEEDED') return undefined
+    if (!Object.keys(bundle).length) return apply === 'applied' ? 'done' : 'fetching'
+    if (['applied', 'n/a', 'no change'].includes(apply)) return 'done'
+    return job.acceptance ? 'accepted' : 'review'
+  }
+  const counts = { coding: 0, queued: 0, fetching: 0, review: 0, accepted: 0, done: 0, failed: 0, cancelled: 0 }
   let nearestEta: number | undefined
-  let overdueMinutes = 0
   let quietSeconds = 0
-  for (const { job } of visible) {
+  for (const { job, index } of visible) {
     if (job.state === 'RUNNING' || job.state === 'UNKNOWN_OR_IN_PROGRESS') {
-      counts.running++
+      counts.coding++
       const started = finiteTime(job.startedAt) ? job.startedAt : job.acceptedAt
       const expected = Number.isInteger(job.etaMinutes) ? job.etaMinutes : routeMinutes[job.route]
       if (finiteTime(started) && Number.isInteger(expected)) {
         const elapsed = Math.max(0, now - started)
-        if (elapsed > expected * 60) overdueMinutes = Math.max(overdueMinutes, Math.ceil((elapsed - expected * 60) / 60))
-        else nearestEta = Math.min(nearestEta ?? Infinity, expected * 60 - elapsed)
+        if (elapsed <= expected * 60) nearestEta = Math.min(nearestEta ?? Infinity, expected * 60 - elapsed)
       }
       const lastActivity = [job.liveness?.lastActivityAt, job.lastActivityAt, job.liveness?.checkpointAt, job.checkpointAt]
         .find(finiteTime)
       if (finiteTime(lastActivity)) quietSeconds = Math.max(quietSeconds, now - lastActivity)
     } else if (job.state === 'QUEUED') counts.queued++
-    else if (job.state === 'SUCCEEDED') counts.done++
+    else if (job.state === 'SUCCEEDED') {
+      const bundle = files.bundles?.[index.call_key] ?? {}
+      counts[stageOf(job, bundle, applyOf(job, bundle))!]++
+    }
     else if (job.state === 'CANCELLED') counts.cancelled++
     else counts.failed++
   }
@@ -104,19 +127,24 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
     summary.push({ text: firstCount ? ' ' : ' · ', dimColor: true }, { text: `${glyph} ${count}`, color }, { text: ` ${label}`, dimColor: true })
     firstCount = false
   }
-  addCount(counts.running, '●', 'running', 'cyan')
+  addCount(counts.coding, '●', 'coding', 'cyan')
   addCount(counts.queued, '◌', 'queued', 'yellow')
+  addCount(counts.fetching, '◐', 'fetching result', 'cyan')
+  addCount(counts.review, '◑', 'in review', 'magenta')
+  addCount(counts.accepted, '◕', 'accepted', 'green')
   addCount(counts.done, '✓', 'done', 'green')
   addCount(counts.failed, '!', 'failed', 'red')
   addCount(counts.cancelled, '−', 'cancelled', 'gray')
-  if (overdueMinutes) summary.push({ text: ' · ', dimColor: true }, { text: `overdue +${overdueMinutes}m`, color: 'yellow' })
-  else if (nearestEta !== undefined) summary.push({ text: ' · ', dimColor: true }, { text: `next ${duration(nearestEta)}`, dimColor: true })
+  if (nearestEta !== undefined) summary.push({ text: ' · ', dimColor: true }, { text: `next ${duration(nearestEta)}`, dimColor: true })
   if (quietSeconds >= 300) summary.push({ text: ' · ', dimColor: true }, { text: `quiet ${duration(quietSeconds)}`, dimColor: true })
 
   const rows = visible.map(({ job, index }) => {
     const raw = job.state
-    let state = ({ QUEUED: 'queued', RUNNING: 'running', SUCCEEDED: 'done', FAILED: 'failed',
-      TIMED_OUT: 'failed', CANCELLED: 'cancelled', UNKNOWN_OR_IN_PROGRESS: 'running' } as Record<string, string>)[raw] ?? 'failed'
+    const bundle = files.bundles?.[index.call_key] ?? {}
+    const apply = applyOf(job, bundle)
+    let state = ({ QUEUED: 'queued', RUNNING: 'coding', SUCCEEDED: 'done', FAILED: 'failed',
+      TIMED_OUT: 'failed', CANCELLED: 'cancelled', UNKNOWN_OR_IN_PROGRESS: 'coding' } as Record<string, string>)[raw] ?? 'failed'
+    state = ({ fetching: 'coded · fetching result', review: 'in review', accepted: 'accepted', done: 'done' } as Record<string, string>)[stageOf(job, bundle, apply) ?? ''] ?? state
     if (raw === 'QUEUED' && queuedBehind.has(job.jobId)) state = `queued behind ${queuedBehind.get(job.jobId)}`
     if (raw === 'RUNNING' && job.errorCode === 'STALLED') state = 'stalled'
     if (raw === 'RUNNING') {
@@ -128,24 +156,11 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
       }
     }
 
-    const bundle = files.bundles?.[index.call_key] ?? {}
     let review = '—'
     if (bundle.reviewer1_result) review = bundle.reviewer1_result === 'REVIEWER1_UNAVAILABLE' ? 'failed' : 'reviewed'
     else if (bundle.reviewer1_skipped_reason) review = bundle.reviewer1_skipped_reason === 'REVIEWER1_UNAVAILABLE' ? 'failed' : 'skipped'
     else if (['operation', 'plan'].includes(job.phase ?? bundle.phase)) review = 'skipped'
     else if (['FULL', 'AUDIT'].includes(bundle.claude_review_mode) || ['FAILED', 'TIMED_OUT'].includes(raw)) review = 'failed'
-
-    const paths = Array.isArray(job.changed_paths) ? job.changed_paths : bundle.changed_paths
-    const threadApplyCoversDelta = typeof job.threadId === 'string' && Array.isArray(paths) && paths.length > 0 &&
-      paths.every((path: unknown) => typeof path === 'string') &&
-      indexed.some(({ job: other }) => other.threadId === job.threadId && other.applyState === 'applied' &&
-        other.applyResult?.applied === true && Array.isArray(other.applyResult.paths) &&
-        other.applyResult.paths.every((path: unknown) => typeof path === 'string') &&
-        paths.every((path: string) => other.applyResult.paths.includes(path)))
-    let apply = job.applyState === 'applied' || threadApplyCoversDelta ? 'applied' :
-      job.applyState === 'conflict' ? 'conflict' : '—'
-    if (apply === '—' && (['operation', 'plan'].includes(job.phase ?? bundle.phase) || (Object.keys(bundle).length && bundle.apply !== 'codex_apply'))) apply = 'n/a'
-    if (apply === '—' && !['QUEUED', 'RUNNING', 'UNKNOWN_OR_IN_PROGRESS'].includes(raw) && Array.isArray(paths) && paths.length === 0) apply = 'no change'
 
     let eta = '—'
     if (raw === 'QUEUED' && finiteTime(job.acceptedAt)) {
@@ -155,10 +170,8 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
       if (finiteTime(started)) {
         const elapsed = Math.max(0, now - started)
         const expected = Number.isInteger(job.etaMinutes) ? job.etaMinutes : routeMinutes[job.route]
-        eta = Number.isInteger(expected)
-          ? elapsed > expected * 60
-            ? `${duration(elapsed)} elapsed, overdue +${Math.max(1, Math.ceil((elapsed - expected * 60) / 60))} min`
-            : `${duration(elapsed)} elapsed, ${duration(expected * 60 - elapsed)} left`
+        eta = Number.isInteger(expected) && elapsed <= expected * 60
+          ? `${duration(elapsed)} elapsed, ${duration(expected * 60 - elapsed)} left`
           : `${duration(elapsed)} elapsed`
       }
     }

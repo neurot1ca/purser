@@ -24,22 +24,36 @@ const files = {
 
 test('summarizes mixed job states and keeps the current per-job table for details', () => {
   const board = renderJobBoard(files, 1000)
-  expect(board?.summary.map(part => part.text).join('')).toBe('⚓ ● 1 running · ◌ 1 queued · ✓ 1 done · next 3m')
+  expect(board?.summary.map(part => part.text).join('')).toBe('⚓ ● 1 coding · ◌ 1 queued · ✓ 1 done · next 3m')
   expect(board?.summary.filter(part => part.text === ' · ').every(part => part.dimColor)).toBe(true)
   expect(board?.detail).toBe([
     '| ⚓ Task | Model | State | ETA | Review | Apply |',
     '| --- | --- | --- | --- | --- | --- |',
-    '| api fix | gpt-6-sol (high) | running · codex-main active 3s ago | 2m elapsed, 3m left | reviewed | n/a |',
+    '| api fix | gpt-6-sol (high) | coding · codex-main active 3s ago | 2m elapsed, 3m left | reviewed | n/a |',
     '| test update | gpt-6-sol (medium) | queued behind api fix | waited 30s | — | — |',
     '| docs | gpt-6-sol (low) | done | — | — | applied |',
   ].join('\n'))
 })
 
-test('shows an overdue duration against the job ETA', () => {
+test('shows only elapsed time once a job runs past its ETA, with no overdue text', () => {
   const job = { ...files.jobs[0], startedAt: 100, etaMinutes: 5, activeAgent: undefined, liveness: undefined }
   const board = renderJobBoard({ indexes: [files.indexes[0]], jobs: [job] }, 1000)
-  expect(board?.detail).toContain('| api fix | gpt-6-sol (high) | running | 15m elapsed, overdue +10 min |')
-  expect(board?.summary.some(part => part.text === 'overdue +10m' && part.color === 'yellow')).toBe(true)
+  expect(board?.detail).toContain('| api fix | gpt-6-sol (high) | coding | 15m elapsed |')
+  expect(board?.summary.map(part => part.text).join('')).not.toContain('overdue')
+})
+
+test('a succeeded job moves through fetching result, review and acceptance before done', () => {
+  const coded = { ...files.jobs[2], applyState: undefined, appliedAt: undefined }
+  const index = { ...files.indexes[2], call_key: 'done-bundle' }
+  const stage = (job: Record<string, unknown>, bundles: Record<string, Record<string, unknown>>) => {
+    const board = renderJobBoard({ indexes: [index], jobs: [job], bundles }, 1000)
+    return [board?.summary.map(part => part.text).join(''), board?.detail.split('\n')[2]]
+  }
+  expect(stage(coded, {})).toEqual(['⚓ ◐ 1 fetching result', '| docs | gpt-6-sol (low) | coded · fetching result | — | — | — |'])
+  const bundle = { 'done-bundle': { reviewer1_result: 'PASS', apply: 'codex_apply' } }
+  expect(stage(coded, bundle)[0]).toBe('⚓ ◑ 1 in review')
+  expect(stage({ ...coded, acceptance: { revision: 'r' } }, bundle)[0]).toBe('⚓ ◕ 1 accepted')
+  expect(stage(files.jobs[2], bundle)[0]).toBe('⚓ ✓ 1 done')
 })
 
 test('shows a dim quiet hint from an old running-job activity timestamp', () => {
@@ -51,7 +65,7 @@ test('shows a dim quiet hint from an old running-job activity timestamp', () => 
 test('omits activity text when the job has no activity or checkpoint timestamp', () => {
   const job = { ...files.jobs[0], activeAgent: undefined, liveness: undefined }
   const board = renderJobBoard({ indexes: [files.indexes[0]], jobs: [job] }, 1000)
-  expect(board?.detail).toContain('| running |')
+  expect(board?.detail).toContain('| coding |')
   expect(board?.detail).not.toContain('active')
 })
 
