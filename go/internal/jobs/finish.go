@@ -123,7 +123,8 @@ func finishJob(dir, id, state, code string, result map[string]any, message strin
 	}
 	if leaseQueued, _ := recordMap(r)["leaseQueued"].(bool); leaseQueued {
 		job := recordMap(r)
-		if _, started := job["startedAt"]; !started && (state == "CANCELLED" || state == "TIMED_OUT" || code == "HOST_LAUNCH_UNCONFIRMED") {
+		_, started := job["startedAt"]
+		if code == "HOST_DIED" || !started && (state == "CANCELLED" || state == "TIMED_OUT" || code == "HOST_LAUNCH_UNCONFIRMED" || code == "ADMISSION_BASELINE_UNAVAILABLE") {
 			root := filepath.Dir(filepath.Dir(dir))
 			if b, e := os.ReadFile(filepath.Join(root, "async_jobs", id+".json")); e == nil {
 				var index map[string]any

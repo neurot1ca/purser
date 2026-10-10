@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -85,11 +84,11 @@ func TestRecoverPythonParity(t *testing.T) {
 	}
 }
 
-func TestRecoverWithoutLauncherIsUnconfirmedWithoutSideEffects(t *testing.T) {
+func TestRecoverWithoutLauncherFailsConfirmedDeadHost(t *testing.T) {
 	root := scratch(t)
 	id := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
-	job, err := Decode([]byte(`{"jobId":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","state":"RUNNING","generation":1,"hostPid":123,"hostCreatedAt":456,"hostContained":true,"pid":789}`))
+	job, err := Decode([]byte(`{"jobId":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","state":"RUNNING","generation":1,"ownershipToken":"owner","hostPid":123,"hostCreatedAt":456,"hostContained":true,"pid":789}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,34 +99,16 @@ func TestRecoverWithoutLauncherIsUnconfirmedWithoutSideEffects(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(dir, id+".launch"), launch, 0600); err != nil {
 		t.Fatal(err)
 	}
-	jobBefore, err := os.ReadFile(filepath.Join(dir, id+".json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	launchBefore, err := os.ReadFile(filepath.Join(dir, id+".launch"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	got := RecoverJob(root, id, 2_000_000_000, RecoverOptions{
 		ProcessAlive: func(int, int64) string { return "DEAD" },
 		GroupStopped: func(int) bool { return true },
 	})
-	if got != "UNCONFIRMED" {
-		t.Fatalf("default replacement result = %s, want UNCONFIRMED", got)
+	if got != "FAILED" {
+		t.Fatalf("default recovery result = %s, want FAILED", got)
 	}
-	jobAfter, err := os.ReadFile(filepath.Join(dir, id+".json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(jobAfter, jobBefore) {
-		t.Fatalf("job record changed without a launcher:\n before %s\n after  %s", jobBefore, jobAfter)
-	}
-	launchAfter, err := os.ReadFile(filepath.Join(dir, id+".launch"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(launchAfter, launchBefore) {
-		t.Fatalf(".launch changed without a launcher:\n before %s\n after  %s", launchBefore, launchAfter)
+	final := recordMap(readJob(dir, id))
+	if final["state"] != "FAILED" || final["errorCode"] != "HOST_DIED" {
+		t.Fatalf("final record = %#v", final)
 	}
 }
 

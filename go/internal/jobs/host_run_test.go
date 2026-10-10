@@ -540,6 +540,42 @@ func TestRunHostGenerationWritesValidFailureRecord(t *testing.T) {
 	}
 }
 
+func TestQueuedAdmissionBaselineFailureIsTerminalAndDetailed(t *testing.T) {
+	root := admissionTempDir(t)
+	setupAdmission(t, root, "queued")
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	jobID := admissionJobID()
+	job := readJob(dir, jobID)
+	for key, value := range map[string]any{
+		"generation": 1, "ownershipToken": "owner", "signalToken": "signal",
+		"deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9, "leaseQueued": true,
+	} {
+		if err := job.Set(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Write(filepath.Join(dir, jobID+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	launch := map[string]any{"name": "codex", "agent": "codex", "args": map[string]any{"cwd": filepath.Join(root, "repo"), "prompt": "unused"}}
+	writeHostTestJSON(t, filepath.Join(dir, jobID+".launch"), launch)
+	pendingPath := filepath.Join(root, "pending", admissionOwner()+".json")
+	pending := admissionJSON(t, pendingPath).(map[string]any)
+	pending["repo_root"] = filepath.Join(root, "missing-repo")
+	writeHostTestJSON(t, pendingPath, pending)
+	status, err := RunHostGeneration(dir, jobID, 1, "owner", HostOptions{WorkerCommand: func(LaunchArgs) ([]string, error) {
+		return []string{"unused"}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := recordMap(readJob(dir, jobID))
+	if status["errorCode"] != "ADMISSION_BASELINE_UNAVAILABLE" || final["state"] != "FAILED" ||
+		final["errorCode"] != "ADMISSION_BASELINE_UNAVAILABLE" || !strings.Contains(final["message"].(string), "GIT_UNAVAILABLE:") {
+		t.Fatalf("status=%#v record=%#v", status, final)
+	}
+}
+
 func mustRecordJSON(t *testing.T, record *Record) string {
 	t.Helper()
 	data, err := record.Bytes()

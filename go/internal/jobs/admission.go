@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -193,7 +194,7 @@ func BindQueuedBaseline(runtimeRoot, jobID string) (bool, error) {
 	}
 	baseline := ledger.CaptureBaseline(repoRoot, scope, 3)
 	if baseline["status"] != ledger.OK {
-		return false, errors.New("admission baseline is unavailable")
+		return false, fmt.Errorf("%v: %v", baseline["code"], baseline["message"])
 	}
 	sessionPath, err := ledger.PathForTask(projectRoot, taskID)
 	if err != nil {

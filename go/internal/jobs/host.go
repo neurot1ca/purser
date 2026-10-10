@@ -353,8 +353,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				_ = finishJob(dir, jobID, "CANCELLED", "CANCELLED", nil, "Codex cancelled", float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
 				return map[string]any{"status": "ok"}, nil
 			}
-			_ = finishJob(dir, jobID, "UNKNOWN_OR_IN_PROGRESS", "ADMISSION_BASELINE_UNAVAILABLE", nil, "Fresh admission baseline could not be bound; FULL review required", float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
-			return map[string]any{"status": "error", "errorCode": "ADMISSION_BASELINE_UNAVAILABLE", "message": "Fresh admission baseline could not be bound; FULL review required"}, nil
+			message := "Fresh admission baseline could not be bound; FULL review required: " + err.Error()
+			_ = finishJob(dir, jobID, "FAILED", "ADMISSION_BASELINE_UNAVAILABLE", nil, message, float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
+			return map[string]any{"status": "error", "errorCode": "ADMISSION_BASELINE_UNAVAILABLE", "message": message}, nil
 		}
 	}
 	if cancelled.Load() {

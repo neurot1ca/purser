@@ -125,6 +125,26 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 	if consumed {
 		return "UNCHANGED"
 	}
+	if opt.LaunchHost == nil && opt.Replace == nil {
+		generation, valid := recoveryInteger(job, "generation")
+		var token string
+		job.Get("ownershipToken", &token)
+		if !valid || token == "" {
+			return "UNCONFIRMED"
+		}
+		_ = lock.Release()
+		lock = nil
+		if err := finishJob(dir, jobID, "FAILED", "HOST_DIED", nil,
+			"Host and worker process tree were confirmed dead; no safe recovery launcher is available", now,
+			FinishOptions{Generation: &generation, Token: token}); err != nil {
+			return "UNCONFIRMED"
+		}
+		final := recordMap(readJob(dir, jobID))
+		if final["state"] == "FAILED" && final["errorCode"] == "HOST_DIED" {
+			return "FAILED"
+		}
+		return "UNCHANGED"
+	}
 	if truthy(values["leaseQueued"]) && state == "QUEUED" {
 		if deadline, ok := number(values["deadlineAt"]); ok && now >= deadline {
 			_ = lock.Release()

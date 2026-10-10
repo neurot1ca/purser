@@ -244,7 +244,7 @@ func TestWaitExitCodes(t *testing.T) {
 	}
 }
 
-func TestWaitRecoversDeadHostPastDeadline(t *testing.T) {
+func TestWaitFinishesDeadHostBeforeDeadline(t *testing.T) {
 	root := t.TempDir()
 	created, ok := hostProcessIdentity()
 	if !ok {
@@ -258,12 +258,12 @@ func TestWaitRecoversDeadHostPastDeadline(t *testing.T) {
 	path := writeWaitJob(t, root, "deadhost", map[string]any{
 		"hostPid": deadHost, "hostCreatedAt": createdAt + 1, "hostContained": true,
 		"pid": deadHost + 1, "generation": 1, "ownershipToken": "owner",
-		"deadlineAt": float64(time.Now().Add(-time.Second).UnixNano()) / 1e9,
+		"deadlineAt": float64(time.Now().Add(time.Hour).UnixNano()) / 1e9,
 	})
 	got := Wait(root, "deadhost")
 	fields := readWaitFields(t, path)
-	if got.ExitCode != 1 || got.Lines[0] != "purser-wait deadhost TIMED_OUT" ||
-		fields["state"] != "TIMED_OUT" || fields["errorCode"] != "DEADLINE_EXCEEDED" {
+	if got.ExitCode != 1 || got.Lines[0] != "purser-wait deadhost FAILED" ||
+		fields["state"] != "FAILED" || fields["errorCode"] != "HOST_DIED" {
 		t.Fatalf("result=%#v record=%#v", got, fields)
 	}
 }
