@@ -2566,6 +2566,7 @@ def _cancel_start_job(root: Path, call_uuid: str, job_id: str) -> bool:
             return False
         with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=3) as connection:
             connection.sendall(f"{job_id}:{job['signalToken']}:CANCEL".encode("ascii"))
+            connection.shutdown(socket.SHUT_WR)
             return connection.recv(1) == b"1"
     except (OSError, ValueError, KeyError, TypeError, UnicodeError):
         return False

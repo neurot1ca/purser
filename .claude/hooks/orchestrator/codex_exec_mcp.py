@@ -1167,12 +1167,51 @@ class Server:
         with connection:
             try:
                 connection.settimeout(5)
-                identity = connection.recv(256).decode("ascii").strip().split(":")
-                if len(identity) not in (2, 3):
-                    return
-                job = self._read_job(identity[0])
-                if job is None or job.get("signalToken") != identity[1]:
-                    return
+                message = bytearray()
+                identity = None
+                bounded = False
+                while True:
+                    try:
+                        chunk = connection.recv(257 - len(message))
+                    except socket.timeout:
+                        if identity is not None and bounded:
+                            break
+                        return
+                    if chunk:
+                        message.extend(chunk)
+                    if len(message) > 257:
+                        return
+                    if len(message) > 256 and not message.endswith(b"\n"):
+                        return
+                    candidate = bytes(message[:-1] if message.endswith(b"\n") else message)
+                    identity = None
+                    try:
+                        parsed = candidate.decode("ascii").split(":")
+                    except UnicodeError:
+                        parsed = None
+                    valid = (parsed is not None and len(parsed) in (2, 3)
+                             and (len(parsed) != 3 or parsed[2] in ("PING", "CANCEL")))
+                    job = self._read_job(parsed[0]) if valid else None
+                    matches = job is not None and job.get("signalToken") == parsed[1]
+                    if matches:
+                        identity = parsed
+                        if message.endswith(b"\n") or not chunk:
+                            break
+                        if not bounded:
+                            connection.settimeout(0.05)
+                            bounded = True
+                    elif valid:
+                        expected = (f"{parsed[0]}:{job.get('signalToken')}"
+                                    if job is not None else "")
+                        if not any((expected + suffix).startswith(candidate.decode("ascii"))
+                                   for suffix in ("", ":PING", ":CANCEL")):
+                            return
+                    elif message.endswith(b"\n"):
+                        return
+                    elif len(message) > 256:
+                        return
+                    if not chunk:
+                        return
                 if len(identity) == 3:
                     if identity[2] == "CANCEL":
                         cancelled = self._cancel_job({"jobId": identity[0]})
@@ -1368,6 +1407,7 @@ class Server:
             with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=0.5) as connection:
                 connection.settimeout(0.5)
                 connection.sendall(f'{job["jobId"]}:{job["signalToken"]}:PING'.encode("ascii"))
+                connection.shutdown(socket.SHUT_WR)
                 return connection.recv(1) == b"1"
         except (OSError, KeyError, TypeError, ValueError):
             return False
@@ -2221,6 +2261,7 @@ class Server:
                 with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=5) as connection:
                     connection.settimeout(7)
                     connection.sendall(f'{job_id}:{job["signalToken"]}:CANCEL'.encode("ascii"))
+                    connection.shutdown(socket.SHUT_WR)
                     confirmed = connection.recv(1) == b"1"
                 if confirmed:
                     result = self._result_job({"jobId": job_id})
@@ -2232,6 +2273,7 @@ class Server:
                     with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=7) as connection:
                         connection.settimeout(7)
                         connection.sendall(f'{job_id}:{job["signalToken"]}'.encode("ascii"))
+                        connection.shutdown(socket.SHUT_WR)
                         confirmed = connection.recv(1) == b"1"
             except (OSError, KeyError, TypeError, ValueError):
                 confirmed = False

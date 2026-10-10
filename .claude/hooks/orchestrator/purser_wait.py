@@ -121,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=min(1.0, remaining)) as connection:
                     connection.sendall(f"{job_id}:{token}".encode("ascii"))
+                    connection.shutdown(socket.SHUT_WR)
                     endpoint = (job.get("generation"), port, token, deadline)
                     while True:
                         connection.settimeout(min(1.0, max(0.01, float(deadline) - time.time())))

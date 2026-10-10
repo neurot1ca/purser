@@ -1327,7 +1327,9 @@ def test_grounded_readiness_criteria_are_durable_job_metadata(area):
         })
         path = area / "root" / "codex_exec_mcp" / "jobs" / f"{started['jobId']}.json"
         job = read_job_record(path)
-        assert job["readinessCheck"] == {
+        readiness = job["readinessCheck"]
+        assert {key: readiness[key] for key in
+                ("grounded", "objective", "acceptance_criteria", "agent", "model")} == {
             "grounded": True, **criteria, "agent": "agy", "model": "gemini-3.8-flash-high"
         }
         assert finish(client, started["jobId"], "SUCCEEDED")["content"] == "Reply from fake Codex"

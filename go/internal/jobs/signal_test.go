@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -75,6 +76,58 @@ func TestSignalWaitOutlivesWriteDeadline(t *testing.T) {
 	}()
 	if ok, err := SignalWait(host.Addr().String(), "job", "secret", time.Second); err != nil || !ok {
 		t.Fatalf("wait after long-running job: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestSignalPartialWrite(t *testing.T) {
+	terminal := make(chan struct{})
+	host, err := StartSignalHost("job", "secret", terminal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close()
+	connection, err := net.DialTimeout("tcp", host.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcp := connection.(*net.TCPConn)
+	defer tcp.Close()
+	if _, err := tcp.Write([]byte("job:sec")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := tcp.Write([]byte("ret:PING")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tcp.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	_ = tcp.SetReadDeadline(time.Now().Add(time.Second))
+	var acknowledgement [1]byte
+	if _, err := io.ReadFull(tcp, acknowledgement[:]); err != nil || acknowledgement[0] != '1' {
+		t.Fatalf("partial write acknowledgement = %q, err=%v", acknowledgement, err)
+	}
+}
+
+func TestSignalOldStyleClient(t *testing.T) {
+	terminal := make(chan struct{})
+	host, err := StartSignalHost("job", "secret", terminal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close()
+	connection, err := net.DialTimeout("tcp", host.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	if _, err := connection.Write([]byte("job:secret:PING")); err != nil {
+		t.Fatal(err)
+	}
+	var acknowledgement [1]byte
+	if _, err := io.ReadFull(connection, acknowledgement[:]); err != nil || acknowledgement[0] != '1' {
+		t.Fatalf("old-style acknowledgement = %q, err=%v", acknowledgement, err)
 	}
 }
 
