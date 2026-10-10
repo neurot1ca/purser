@@ -268,6 +268,7 @@ func isolateSynchronousEnvironment(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("PURSER_AGENT", "codex")
 	t.Setenv("PATH", t.TempDir())
 }
 

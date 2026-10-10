@@ -26,6 +26,7 @@ THREAD = {"structuredContent": {"threadId": "contract-thread", "content": "Imple
 PRE_CALL_CONTRACTS = {
     name: "C1" for name in "_append_code_map _append_worker_validation_instruction _asks_worker_to_run_full_suite _atomic_json_write _full_suite_request_phrase _baseline_state_fields _bypass_path _call_key _check_snapshot _claude_runs_full_suite_at_acceptance _cleanup_stale_pending _derive_task_type _fallback_question _handoff_matches _implementer_provider _indexed_reply_root _inherited_reply_parse _last_launch_failure _load_config _observe _observed_denial _parse_task_contract _pending_candidates _pending_path _pending_project_key _project_state_root _read_pending _reconcile_rejected_starts _record_thread_root _repo_root _requested_thread _route_duration_percentiles _route_eta_minutes _safe_error _start_job_terminal_or_absent _state_root _telemetry_envelope _thread_index_path _thread_worktree_path".split()
 }
+PRE_CALL_CONTRACTS["_plan_milestone_label"] = "C1: plan milestone label normalization"
 PRE_CALL_CONTRACTS.update({"_deny": "C2", "_internal_pre_allow": "C3", "_record_diagnostic": "C3",
                            "_release_scope_lease": "C3", "_remove_pending": "C3", "_write_pre_bypass": "C3"})
 PRE_CALL_EXCLUSIONS = {

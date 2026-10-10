@@ -34,7 +34,7 @@ func processIdentity(pid int) (string, *uint64) {
 	if length == 0 {
 		return ProcessDead, nil
 	}
-	if length < 12 {
+	if length < 37 {
 		return ProcessUnconfirmed, nil
 	}
 
@@ -44,6 +44,12 @@ func processIdentity(pid int) (string, *uint64) {
 		return ProcessUnconfirmed, nil
 	}
 	created := uint64(seconds*1_000_000 + micros)
+	// KERN_PROC_PID returns a 64-bit extern_proc whose p_stat follows the
+	// start-time union, vmspace, sigacts, and p_flag fields. A killed child
+	// remains in the process table as SZOMB until its parent waits for it.
+	if data[36] == 5 { // SZOMB
+		return ProcessDead, &created
+	}
 	return ProcessAlive, &created
 }
 
