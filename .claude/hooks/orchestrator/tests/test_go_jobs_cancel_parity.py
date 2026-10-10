@@ -58,6 +58,7 @@ def test_go_cancel_matches_python_oracle(tmp_path, monkeypatch):
                 def __exit__(self, *_): return False
                 def settimeout(self, *_): pass
                 def sendall(self, *_): pass
+                def shutdown(self, *_): pass
                 def recv(self, *_):
                     server._finish_job(job_id, "CANCELLED", "CANCELLED")
                     return b"1"

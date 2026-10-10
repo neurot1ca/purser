@@ -176,6 +176,9 @@ def test_wait_timeout_returns_four(tmp_path, monkeypatch, capsys):
         def sendall(self, data):
             assert data == b"timeout:secret"
 
+        def shutdown(self, how):
+            pass
+
         def recv(self, size):
             raise socket.timeout
 

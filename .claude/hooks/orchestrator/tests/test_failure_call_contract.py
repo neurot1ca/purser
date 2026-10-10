@@ -176,7 +176,7 @@ FAILURE_CALL_CONTRACTS = {
     "uuid.uuid4": "go/internal/enforce.PostToolUseFailure (122)",
 }
 
-for _name in "append astimezone date decode difference duration_hint encode endswith expanduser extend fileno find flock flush fromkeys fullmatch get glob group hexdigest is_alive is_file isoformat items join keys load locking lower lstrip mkdir open pop read read_text record_conflicts record_sample recv release replace resolve rstrip save seek sendall set_retention_after setdefault split splitlines start start_shadow startswith stat strftime strip timestamp unlink update utcoffset values with_name with_suffix write write_text __enter__ __exit__".split():
+for _name in "append astimezone date decode difference duration_hint encode endswith expanduser extend fileno find flock flush fromkeys fullmatch get glob group hexdigest is_alive is_file isoformat items join keys load locking lower lstrip mkdir open pop read read_text record_conflicts record_sample recv release replace resolve rstrip save seek sendall set_retention_after setdefault shutdown split splitlines start start_shadow startswith stat strftime strip timestamp unlink update utcoffset values with_name with_suffix write write_text __enter__ __exit__".split():
     FAILURE_CALL_CONTRACTS[_name] = "go/internal/enforce.PostToolUseFailureAsyncFollowup (120)"
 for _name in "AsyncAdoptionRequired ValueError WiringError all any bool dict enumerate float getattr int interrupted isinstance len list map max min preview reject repair_callable resume reviewer_callable round set sorted str tuple type".split():
     FAILURE_CALL_CONTRACTS[_name] = "go/internal/enforce.PostToolUseFailureAsyncFollowup (120)"
