@@ -243,7 +243,7 @@ func TestPlanDoesNotWriteAndShowsHandoff(t *testing.T) {
 	if !strings.Contains(out.String(), "---") || !strings.Contains(out.String(), "+++") || !strings.Contains(out.String(), "schema_version = 1") {
 		t.Fatalf("plan did not contain the expected diff and profile: %s", out.String())
 	}
-	handoff := filepath.Join(state, "projects", contextio.ProjectKey(root), "telemetry", "purser-handoff.md")
+	handoff := filepath.Join(stateRootPath(), "projects", contextio.ProjectKey(mustCwd()), "telemetry", "purser-handoff.md")
 	if !strings.Contains(out.String(), "Create "+handoff+":") {
 		t.Errorf("plan omitted handoff path %q: %s", handoff, out.String())
 	}
@@ -258,10 +258,7 @@ func TestPlanDoesNotWriteAndShowsHandoff(t *testing.T) {
 }
 
 func TestApplyPreservesExistingConfigBytesAndBacksUp(t *testing.T) {
-	original, err := os.ReadFile(filepath.Join("testdata", "preserved_config.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	original := []byte("schema_version = 1\r\n# keep comment\r\n[telemetry]\r\nvault_root = \"C:/vault\" # keep exact\r\n[roles]\r\ncoder = \"claude\"\r\n[trust]\r\npaths = []\r\n")
 	home, _, restore := initTestEnvironment(t)
 	defer restore()
 	config := filepath.Join(home, ".orchestrator", "config.toml")
