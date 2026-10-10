@@ -23,12 +23,12 @@ claude plugin marketplace add <dir>
 claude plugin install purser@purser-local
 ```
 
-For development, Python is used by `scripts/release.py` to refresh this
-marketplace from the release commit before running the plugin update commands.
-To refresh it without a version bump, run:
+For development, the Go release tool refreshes this marketplace from the
+release commit before running the plugin update commands. To refresh it
+without a version bump, run:
 
 ```powershell
-python scripts/release.py --export-only
+go run ./go/cmd/purser-release --export-only
 ```
 
 Use `--marketplace-dir <dir>` to choose another local path.

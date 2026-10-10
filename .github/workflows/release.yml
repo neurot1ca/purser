@@ -28,10 +28,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
       - name: Validate tag and plugin version
         id: tag
         env:
@@ -49,7 +45,7 @@ jobs:
             exit 1
           fi
           version="${TAG#v}"
-          manifest_version="$(python -c 'import json; print(json.load(open(".claude-plugin/plugin.json", encoding="utf-8"))["version"])')"
+          manifest_version="$(jq -r '.version' .claude-plugin/plugin.json)"
           if [[ "$version" != "$manifest_version" ]]; then
             echo "::error::Tag version $version does not match plugin version $manifest_version"
             exit 1
@@ -103,16 +99,12 @@ jobs:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
       - name: Package committed source tree
         env:
           SOURCE_COMMIT: ${{ needs.preflight.outputs.commit }}
         run: |
           set -euo pipefail
-          python -c 'import sys; from scripts.release import package_release; package_release(sys.argv[1], sys.argv[2])' "$SOURCE_COMMIT" dist
+          go run ./go/cmd/purser-release package --commit "$SOURCE_COMMIT" --output-dir dist
           test -f "dist/purser-${{ needs.preflight.outputs.version }}.zip"
           test -s dist/SHA256SUMS
           test -s dist/release-manifest.json
@@ -155,9 +147,10 @@ jobs:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-go@v7
         with:
-          python-version: '3.12'
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
 
       - uses: actions/download-artifact@v8
         with:
@@ -165,7 +158,7 @@ jobs:
           path: dist
 
       - name: Smoke test packaged release
-        run: python scripts/test_distribution.py dist
+        run: go run ./go/cmd/purser-release smoke --artifact-dir dist
 
   publish:
     needs: [preflight, package, smoke]
@@ -178,9 +171,10 @@ jobs:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-go@v7
         with:
-          python-version: '3.12'
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
 
       - uses: actions/download-artifact@v8
         with:
@@ -253,19 +247,7 @@ jobs:
             echo "::error::Draft asset digest mismatch: expected $expected, got $actual"
             exit 1
           fi
-          python - "$url" "$expected" <<'PY' > catalog-entry.json
-          import json
-          import sys
-
-          print(json.dumps({
-              "name": "purser",
-              "source": {
-                  "source": "archive",
-                  "url": sys.argv[1],
-                  "sha256": sys.argv[2],
-              },
-          }, indent=2))
-          PY
+          go run ./go/cmd/purser-release catalog --url "$url" --sha256 "$expected" --output catalog-entry.json
           {
             echo '### Marketplace catalog entry'
             echo '```json'
