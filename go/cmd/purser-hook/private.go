@@ -205,7 +205,9 @@ func hostMain(argv []string) (code int) {
 	}
 	// The Windows kill-on-close Job Object must stay open until this host exits.
 	_ = closeContainment
-	status, err := jobs.RunHostGeneration(argv[0], argv[1], generation, argv[3], jobs.HostOptions{HostContained: closeContainment != nil})
+	status, err := jobs.RunHostGeneration(argv[0], argv[1], generation, argv[3], jobs.HostOptions{
+		HostContained: closeContainment != nil, StateRoot: stateRoot(),
+	})
 	if err != nil {
 		return hostFailure(jobID, generation, err, 1)
 	}

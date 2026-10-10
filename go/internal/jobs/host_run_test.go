@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"purser-hook/internal/policy"
+	"purser-hook/internal/retention"
 )
 
 const hostTestID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -537,6 +538,33 @@ func TestRunHostGenerationWritesValidFailureRecord(t *testing.T) {
 		!failure.Get("errorCode", &code) || code != "WORKTREE_SNAPSHOT_FAILED" ||
 		!failure.Get("message", &message) || message != "Repository root could not be resolved for Codex launch" {
 		t.Fatalf("invalid launch failure record: %s", mustRecordJSON(t, failure))
+	}
+}
+
+func TestHostThreadOwnershipUsesExplicitStateRoot(t *testing.T) {
+	stateRoot := t.TempDir()
+	jobsRoot := t.TempDir()
+	jobDir := filepath.Join(jobsRoot, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(stateRoot, "wt", "owned")
+	if err := os.MkdirAll(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHostTestJSON(t, filepath.Join(jobDir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "RUNNING", "generation": 1, "ownershipToken": "owner",
+	})
+	if err := saveHostThread(jobDir, hostTestID, 1, "owner", "thread", map[string]any{
+		"worktreePath": worktree,
+	}, true, stateRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retention.ReadWorktreeOwnership(stateRoot, worktree); err != nil {
+		t.Fatalf("ownership was not stored under Purser state root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(jobsRoot, "worktree_ownership")); !os.IsNotExist(err) {
+		t.Fatalf("ownership leaked beside relative/custom job directory: %v", err)
 	}
 }
 

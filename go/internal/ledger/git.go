@@ -68,11 +68,33 @@ func runGit(root string, args []string, timeout time.Duration, operation string,
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return nil, &inspectionError{"GIT_FAILED", fmt.Sprintf("Git failed with exit code %d while %s.", exitErr.ExitCode(), operation)}
+			message := fmt.Sprintf("Git failed with exit code %d while %s.", exitErr.ExitCode(), operation)
+			if detail := gitStderrSummary(stderr.String()); detail != "" {
+				message += " Git stderr: " + detail
+			}
+			return nil, &inspectionError{"GIT_FAILED", message}
 		}
 		return nil, &inspectionError{"GIT_UNAVAILABLE", "Git could not run while " + operation + "."}
 	}
 	return []byte(stdout.String()), nil
+}
+
+func gitStderrSummary(stderr string) string {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSpace(strings.TrimSuffix(lines[i], "\r"))
+	}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	detail := strings.Join(lines, " ")
+	if len(detail) > 400 {
+		detail = detail[:400]
+	}
+	return detail
 }
 
 // GitTopLevel resolves a directory through Git's work-tree semantics.

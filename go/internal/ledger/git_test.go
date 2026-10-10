@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,6 +76,20 @@ func TestGitMalformedOutput(t *testing.T) {
 	failure := &inspectionError{"GIT_OUTPUT_INVALID", "Git status output was malformed."}
 	encoded, _ := json.Marshal(map[string]string{"code": failure.Code, "message": failure.Message})
 	fmt.Println(string(encoded))
+}
+
+func TestGitFailureIncludesBoundedStderr(t *testing.T) {
+	root := t.TempDir()
+	_, err := runGit(root, []string{"apply", "--check", "-"}, time.Second,
+		"checking patch", []byte("not a patch\n"), nil)
+	failure, ok := err.(*inspectionError)
+	if !ok || failure.Code != "GIT_FAILED" || !strings.Contains(failure.Message, "Git stderr:") ||
+		!strings.Contains(failure.Message, "No valid patches") {
+		t.Fatalf("Git failure did not include stderr: %v", err)
+	}
+	if got := gitStderrSummary(strings.Repeat("x", 500)); len(got) != 400 {
+		t.Fatalf("stderr summary length = %d, want 400", len(got))
+	}
 }
 
 func TestGitLiveOutcome(t *testing.T) {

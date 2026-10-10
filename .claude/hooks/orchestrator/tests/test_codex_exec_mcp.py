@@ -988,6 +988,15 @@ def test_worktree_retirement_dispatch_persists_claim_before_launch(tmp_path, mon
     assert launches == [(state, job_id, 3)]
 
 
+def test_server_keeps_purser_state_root_separate_from_relative_job_dir(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    server = codex_exec_mcp.Server(job_dir=Path("relative-jobs"))
+
+    assert server.job_dir == Path("relative-jobs").resolve()
+    assert server.state_root == state.resolve()
+
+
 def test_stream_activity_updates_and_checkpoints_are_throttled(tmp_path, monkeypatch):
     job_id = "e" * 64
     server = codex_exec_mcp.Server(job_dir=tmp_path)

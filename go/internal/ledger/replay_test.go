@@ -118,6 +118,32 @@ func TestPrepareJobReplayThreeWayStagesAddedFile(t *testing.T) {
 	}
 }
 
+func TestPrepareJobReplayWhenTargetAlreadyContainsNewOwnershipLock(t *testing.T) {
+	base := t.TempDir()
+	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
+	snapshot := initReplayRepository(t, repo, "")
+	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
+	lockPath := filepath.Join("worktree_ownership", strings.Repeat("a", 64)+".owner-lock")
+	writePatchTestFile(t, filepath.Join(repo, lockPath), nil)
+	git(t, repo, "add", "--", lockPath)
+	writePatchTestFile(t, filepath.Join(worker, lockPath), nil)
+	directCheckFailed := false
+	runner := func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+		out, runErr := runGit(root, args, timeout, operation, input, env)
+		if operation == "checking direct replay" && runErr != nil {
+			directCheckFailed = true
+		}
+		return out, runErr
+	}
+	result, err := prepareJobReplay(repo, worker, snapshot, filepath.Join(base, "recovery"), nil, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !directCheckFailed || result["status"] != "prepared" {
+		t.Fatalf("direct-check fallback with target ownership lock failed: directCheckFailed=%v result=%#v", directCheckFailed, result)
+	}
+}
+
 func TestPrepareJobReplayPythonFixture(t *testing.T) {
 	file := filepath.Join("testdata", "replay.json")
 	data, err := os.ReadFile(file)

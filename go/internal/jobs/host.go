@@ -37,6 +37,7 @@ func validJobID(value string) bool {
 type HostOptions struct {
 	WorkerCommand func(LaunchArgs) ([]string, error)
 	HostContained bool
+	StateRoot     string
 }
 
 // RunHostGeneration owns and executes one queued agent generation.
@@ -195,7 +196,10 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 	}
 	if worktreePath != "" || argsMap["worktree"] == true {
-		stateRoot := filepath.Dir(filepath.Dir(dir))
+		stateRoot := opt.StateRoot
+		if stateRoot == "" {
+			stateRoot = filepath.Dir(filepath.Dir(dir))
+		}
 		var repoRoot, relativeCWD string
 		if worktreePath != "" {
 			var recordedRoot string
@@ -526,7 +530,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				threadConfig[key] = value
 			}
 		}
-		if err = saveHostThread(dir, jobID, generation, token, result.ThreadID, threadConfig, launch.Name == "codex"); err != nil {
+		if err = saveHostThread(dir, jobID, generation, token, result.ThreadID, threadConfig, launch.Name == "codex", opt.StateRoot); err != nil {
 			return nil, err
 		}
 	}
@@ -668,7 +672,7 @@ func hostFinishOptions(generation int64, token string) FinishOptions {
 	return FinishOptions{Generation: &generation, Token: token}
 }
 
-func saveHostThread(dir, id string, generation int64, token, threadID string, config map[string]any, saveRecord bool) error {
+func saveHostThread(dir, id string, generation int64, token, threadID string, config map[string]any, saveRecord bool, stateRoot string) error {
 	lock, err := AcquireOwnership(dir, id)
 	if err != nil {
 		return err
@@ -699,7 +703,10 @@ func saveHostThread(dir, id string, generation int64, token, threadID string, co
 		return err
 	}
 	if worktree := nonemptyString(config["worktreePath"]); worktree != "" {
-		attached, attachErr := retention.AttachWorktree(filepath.Dir(filepath.Dir(dir)), worktree, id, threadID)
+		if stateRoot == "" {
+			stateRoot = filepath.Dir(filepath.Dir(dir))
+		}
+		attached, attachErr := retention.AttachWorktree(stateRoot, worktree, id, threadID)
 		if attachErr != nil || !attached {
 			return fmt.Errorf("thread worktree attachment was rejected")
 		}

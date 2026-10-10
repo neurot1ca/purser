@@ -97,7 +97,8 @@ def _record_scope_conflict_outcome(job: dict[str, Any], action: str) -> None:
         pass
 
 
-def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | None:
+def _unapplied_thread_job(job_dir: Path, thread_id: str,
+                          state_root: Path | None = None) -> dict[str, Any] | None:
     latest = None
     try:
         for path in sorted(job_dir.glob("*.json")):
@@ -108,7 +109,7 @@ def _unapplied_thread_job(job_dir: Path, thread_id: str) -> dict[str, Any] | Non
             if (isinstance(job, dict) and job.get("threadId") == thread_id
                     and job.get("state") == "SUCCEEDED" and job.get("applyState") != "applied"
                     and job.get("worktreePath")
-                    and not _worktree_is_retiring(job_dir.parent.parent, job["worktreePath"])):
+                    and not _worktree_is_retiring(state_root or job_dir.parent.parent, job["worktreePath"])):
                 timestamp = job.get("finishedAt")
                 if timestamp is None:
                     timestamp = job.get("acceptedAt", 0)
@@ -1104,12 +1105,13 @@ class Server:
         self.codex_bin = codex_bin
         self._fixed_agent = agent is not None
         self.agent = agent or os.environ.get("PURSER_AGENT") or self._configured_agent()
+        self.state_root = purser_state_root.default_state_root()
         self.state_dir = _state_dir()
         self.write_lock = threading.Lock()
         self.jobs_lock = threading.Lock()
         self.jobs: dict[Any, subprocess.Popen[bytes] | None] = {}
         self.cancelled: set[Any] = set()
-        self.job_dir = job_dir or purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs"
+        self.job_dir = (job_dir or purser_state_root.default_state_root() / "codex_exec_mcp" / "jobs").resolve()
         self.job_processes: dict[str, subprocess.Popen[bytes]] = {}
         self.job_events: dict[str, threading.Event] = {}
         self.child_job_handle: Any = None
@@ -1752,11 +1754,12 @@ class Server:
                         return _job_result({"state": "FAILED", "errorCode": "UNKNOWN_THREAD", "message": "Thread is unknown to this server"})
                     retired = bool(reply_record.get("worktreePath") and
                                    (not Path(reply_record["worktreePath"]).is_dir() or
-                                    _worktree_is_retiring(self.job_dir.parent.parent, reply_record["worktreePath"])))
-                    send_back_from = None if retired else _unapplied_thread_job(self.job_dir, args["threadId"])
+                                    _worktree_is_retiring(self.state_root, reply_record["worktreePath"])))
+                    send_back_from = None if retired else _unapplied_thread_job(
+                        self.job_dir, args["threadId"], self.state_root)
                     if (not retired and send_back_from is not None and send_back_from.get("worktreePath")
                             and (not Path(send_back_from["worktreePath"]).is_dir() or
-                                 _worktree_is_retiring(self.job_dir.parent.parent, send_back_from["worktreePath"]))):
+                                 _worktree_is_retiring(self.state_root, send_back_from["worktreePath"]))):
                         retired = True
                         send_back_from = None
                     if retired:
@@ -1833,7 +1836,7 @@ class Server:
                                 ("worktreePath", "snapshot", "head", "repoRoot",
                                  "baselineSnapshot") if key in reply_record})
                     if job.get("worktreePath"):
-                        ownership = _worktree_ownership(self.job_dir.parent.parent, job["worktreePath"],
+                        ownership = _worktree_ownership(self.state_root, job["worktreePath"],
                                                         job_id=job_id, thread_id=args.get("threadId", ""))
                         if ownership.get("retiring"):
                             return _job_result({"state": "FAILED", "errorCode": "WORKTREE_RETIRING",
@@ -2580,7 +2583,7 @@ class Server:
                                 current.update(threadId=started_id, threadConfig=thread_config)
                                 self._write_job(current)
                         if thread_config.get("worktreePath"):
-                            _worktree_ownership(self.job_dir.parent.parent,
+                            _worktree_ownership(self.state_root,
                                                 thread_config["worktreePath"],
                                                 job_id=request_id, thread_id=started_id)
                         if name == "codex":
@@ -2918,7 +2921,7 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                 job.update(worktreePath=snapshot["path"], snapshot=snapshot["snapshot"],
                            baselineSnapshot=snapshot["snapshot"],
                            head=snapshot["head"], repoRoot=os.fspath(repo_root))
-                ownership = _worktree_ownership(job_dir.parent.parent, snapshot["path"],
+                ownership = _worktree_ownership(server.state_root, snapshot["path"],
                                                 job_id=job_id, thread_id=job.get("threadId", ""))
                 if ownership.get("retiring"):
                     server._finish_job(job_id, "FAILED", "WORKTREE_RETIRING")
