@@ -1422,7 +1422,12 @@ def test_async_worktree_reply_is_admitted_during_overlapping_job(workspace, conf
     result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
     updated = result["hookSpecificOutput"]["updatedInput"]
     assert updated["mode"] == "reply"
-    assert "leaseQueued" not in updated
+    assert updated["leaseQueued"] is True
+    disjoint = event(START_TOOL, prompt=orch(task="worktree-reply", scope="docs/") + "\nContinue.",
+                     tool_use_id="worktree-reply-disjoint", mode="reply", threadId="worktree-thread")
+    disjoint_input = codex.pre_tool_use(disjoint, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]
+    assert "leaseQueued" not in disjoint_input
 
 
 def test_worktree_flag_does_not_change_sync_plan_or_operation_calls(workspace, config):

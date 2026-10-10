@@ -11,7 +11,9 @@ import (
 	"purser-hook/internal/testutil"
 	"strings"
 	"testing"
+	"time"
 
+	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
 
@@ -254,6 +256,78 @@ func TestPreTelemetryScopePathCount(t *testing.T) {
 		}
 	}
 	t.Fatal("TASK_ROUTE_SELECTED observation missing")
+}
+
+func TestPreWorktreeReplyQueuesOnlyOnHotOverlap(t *testing.T) {
+	for _, tc := range []struct {
+		name, scope string
+		wantQueued  bool
+	}{
+		{name: "overlapping active lease", scope: "tests/", wantQueued: true},
+		{name: "non-overlapping reply", scope: "docs/", wantQueued: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scratch := preTempDir(t)
+			repo, runtimeRoot := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+			if err := os.MkdirAll(repo, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v %s", err, out)
+			}
+			home := filepath.Join(scratch, "home")
+			if err := os.MkdirAll(home, 0700); err != nil {
+				t.Fatal(err)
+			}
+			pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("PURSER_STATE_DIR", runtimeRoot)
+			t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+			t.Setenv("CODEX_HOME", filepath.Join(scratch, "codex"))
+			thread := "worktree-reply"
+			project := projectKey(&repo)
+			prior := ledger.BuildSessionRecord("reply-task", &thread, "normal", "gpt-6.1-sol", "medium", map[string]any{
+				"phase": "implementation", "scope": []any{"tests/"}, "label": "worktree reply",
+			})
+			if saved := ledger.Save(filepath.Join(runtimeRoot, "projects", project), prior); saved.Status != ledger.OK {
+				t.Fatalf("seed thread session: %#v", saved)
+			}
+			shimRoot := filepath.Join(runtimeRoot, "codex_exec_mcp", "threads")
+			threadSum := sha256.Sum256([]byte(thread))
+			if err := atomicAdmissionJSON(filepath.Join(shimRoot, hex.EncodeToString(threadSum[:])+".json"), map[string]any{
+				"thread_id": thread, "cwd": repo, "config_args": []any{}, "worktreePath": repo,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			store := lease.New(filepath.Join(runtimeRoot, "projects", project))
+			now := float64(time.Now().UnixNano()) / 1e9
+			if got := store.Acquire("active-owner", "other-task", []string{"tests/"}, lease.AcquireOptions{}, now); got.Status != "OK" {
+				t.Fatalf("seed active lease: %#v", got)
+			}
+			if err := store.RecordConflicts([]string{"tests/hot.py"}, now); err != nil {
+				t.Fatal(err)
+			}
+			prompt := "ORCH|task=reply-task|phase=implementation|route=normal|reason=continue|basis=continue implementation|scope=" + tc.scope + "\nContinue."
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start",
+				"tool_use_id": "worktree-reply-" + tc.name, "session_id": "worktree-reply-session", "cwd": repo,
+				"tool_input": map[string]any{"mode": "reply", "threadId": thread, "prompt": prompt, "label": "worktree reply"}}
+			got, err := Pre(event, runtimeRoot)
+			if err != nil {
+				t.Fatalf("Pre: %v", err)
+			}
+			updated := mapValue(mapValue(got["hookSpecificOutput"])["updatedInput"])
+			if updated == nil {
+				t.Fatalf("async reply was not admitted: %#v", got)
+			}
+			if queued := updated["leaseQueued"] == true; queued != tc.wantQueued {
+				t.Fatalf("leaseQueued=%v, want %v; input=%#v", queued, tc.wantQueued, updated)
+			}
+		})
+	}
 }
 
 func TestPreLatestModelDispatchAndReplies(t *testing.T) {

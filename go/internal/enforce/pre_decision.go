@@ -538,7 +538,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		admitted := AdmitPending(PendingAdmission{RuntimeRoot: runtimeRoot, ProjectKey: project, OwnerKey: owner,
 			TaskID: taskID, Pending: pending, Session: session, PendingPath: path, Scope: leaseScope, JobID: jobID,
 			TimeoutSeconds: timeout, Now: float64(time.Now().UnixNano()) / 1e9,
-			ReadOnly: phase == "plan", AllowOverlap: worktreeStart || worktreeReply, HotPathQueue: worktreeStart,
+			ReadOnly: phase == "plan", AllowOverlap: worktreeStart || worktreeReply, HotPathQueue: worktreeStart || worktreeReply,
 			ThreadID: threadID, Repository: repository, OnAdmission: func(status, code string) {
 				if code == "SCOPE_LEASE_CONFLICT" {
 					preEmit(runtimeRoot, event, repository, taskID, project, "SCOPE_CONFLICT_OUTCOME", map[string]any{"action": "denied", "job_id": observationJobID(jobID)})
