@@ -240,9 +240,9 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 		_, readErr := io.Copy(&tail, stderr)
 		stderrDone <- readErr
 	}()
-	waitErr := command.Wait()
 	<-stdoutDone
 	<-stderrDone
+	waitErr := command.Wait()
 	if ctx.Err() != nil {
 		return nil, errSynchronousCancelled
 	}

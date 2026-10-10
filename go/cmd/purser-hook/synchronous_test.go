@@ -192,6 +192,49 @@ func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
 	}
 }
 
+func TestDispatchOperationReadsUsageAfterDelayedCompletion(t *testing.T) {
+	python := activePythonInterpreter(t)
+	_, source, _, _ := runtime.Caller(0)
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		FakeCodex string `json:"fakeCodex"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	fixture.FakeCodex = strings.Replace(fixture.FakeCodex,
+		`print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}}), flush=True)`,
+		`time.sleep(0.05)`+"\n"+`print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}}), flush=True)`, 1)
+	if !strings.Contains(fixture.FakeCodex, "time.sleep(0.05)") {
+		t.Fatal("fake Codex script has no turn.completed event to delay")
+	}
+	bin, err := json.Marshal([]string{python, "-c", fixture.FakeCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateSynchronousEnvironment(t)
+	root := t.TempDir()
+	cwd := filepath.Join(root, "repo")
+	if err := os.MkdirAll(cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", root)
+	t.Setenv("PURSER_CODEX_BIN", string(bin))
+	t.Setenv("PURSER_SYNC_ORACLE_MODE", "success")
+	t.Setenv("PURSER_SYNC_ORACLE_THREAD", "thread-new")
+	got, err := dispatchOperation(context.Background(), "codex", map[string]any{"cwd": cwd, "prompt": "delayed completion"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotText := got["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(gotText, `"usage": {"input_tokens": 3, "output_tokens": 2}`) {
+		t.Fatalf("result text lost delayed turn usage: %q", gotText)
+	}
+}
+
 func TestDispatchOperationContextCancellationStopsChild(t *testing.T) {
 	python := activePythonInterpreter(t)
 	_, source, _, _ := runtime.Caller(0)
