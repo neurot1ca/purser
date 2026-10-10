@@ -1,6 +1,8 @@
 package jobs
 
 import (
+	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -9,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
+	"purser-hook/internal/models"
 )
 
 const cancelMessage = "Codex cancelled"
@@ -57,6 +61,9 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	values := recordMap(job)
 	state, _ := values["state"].(string)
 	if values["discarded"] == true {
+		if err := persistCancellationAttempt(stateRoot, values); err != nil {
+			log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
+		}
 		dispatchWorktreeRetirement(stateRoot, id)
 		return jobResult(map[string]any{"jobId": id, "state": state, "discarded": true})
 	}
@@ -74,17 +81,24 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 			currentWorktree, _ := m["worktreePath"].(string)
 			if terminalJobState(currentState) && currentWorktree != "" && m["applyState"] != "applied" {
 				_ = current.Set("discarded", true)
+				if reason, ok := args["reason"].(string); ok {
+					_ = current.Set("cancellationReason", reason)
+				}
 				if _, exists := m["discardedAt"]; !exists {
 					_ = current.Set("discardedAt", float64(time.Now().UnixNano())/1e9)
 				}
-				recordDecision(m, "rejected", "discard", id)
-				recordScopeOutcome(recordMap(current), "discarded")
 				if task, _ := m["taskId"].(string); task != "" {
 					_ = current.Set("decisionRecorded", true)
 				}
 				if err = Write(filepath.Join(dir, id+".json"), current); err != nil {
 					_ = lock.Release()
 					return jobUpdateFailed(id, state)
+				}
+				m = recordMap(current)
+				recordDecision(m, "rejected", "discard", id)
+				recordScopeOutcome(m, "discarded")
+				if err = persistCancellationAttempt(stateRoot, m); err != nil {
+					log.Printf("task attempt persistence failed for discarded job %s: %v", id, err)
 				}
 				discardedPersisted = true
 			}
@@ -107,6 +121,9 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 			current.Get("state", &currentState)
 			if currentState == "QUEUED" {
 				finishCancelled(current)
+				if reason, ok := args["reason"].(string); ok {
+					_ = current.Set("cancellationReason", reason)
+				}
 				if err = Write(filepath.Join(dir, id+".json"), current); err != nil {
 					_ = lock.Release()
 					return processUnconfirmed(id)
@@ -118,6 +135,9 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 		_ = lock.Release()
 		if state == "CANCELLED" {
+			if err := persistCancellationAttempt(stateRoot, values); err != nil {
+				log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
+			}
 			stopRecordedHost(current)
 			dispatchWorktreeRetirement(stateRoot, id)
 			return jobResult(map[string]any{"jobId": id, "state": state, "errorCode": "CANCELLED", "message": cancelMessage})
@@ -125,6 +145,12 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	}
 	if terminalJobState(state) {
 		if state == "CANCELLED" {
+			if reason, ok := args["reason"].(string); ok {
+				values["cancellationReason"] = reason
+			}
+			if err := persistCancellationAttempt(stateRoot, values); err != nil {
+				log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
+			}
 			dispatchWorktreeRetirement(stateRoot, id)
 		}
 		return cancelRecordResult(values)
@@ -141,6 +167,9 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 		if current != nil && currentState == "RUNNING" && deadHostTreeConfirmed(current) {
 			finishCancelled(current)
+			if reason, ok := args["reason"].(string); ok {
+				_ = current.Set("cancellationReason", reason)
+			}
 			if err = Write(filepath.Join(dir, id+".json"), current); err != nil {
 				_ = lock.Release()
 				return processUnconfirmed(id)
@@ -150,6 +179,9 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 		_ = lock.Release()
 		if state == "CANCELLED" {
+			if err := persistCancellationAttempt(stateRoot, values); err != nil {
+				log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
+			}
 			dispatchWorktreeRetirement(stateRoot, id)
 			return cancelRecordResult(values)
 		}
@@ -169,10 +201,19 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		var currentState string
 		current.Get("state", &currentState)
 		if terminalJobState(currentState) {
+			m := recordMap(current)
+			if currentState == "CANCELLED" {
+				if reason, ok := args["reason"].(string); ok {
+					m["cancellationReason"] = reason
+				}
+				if err := persistCancellationAttempt(stateRoot, m); err != nil {
+					log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
+				}
+			}
 			if currentState == "CANCELLED" {
 				dispatchWorktreeRetirement(stateRoot, id)
 			}
-			return cancelRecordResult(recordMap(current))
+			return cancelRecordResult(m)
 		}
 	}
 	confirmed, err = SignalWait(address, id, token, 7*time.Second)
@@ -184,13 +225,63 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		var currentState string
 		current.Get("state", &currentState)
 		if terminalJobState(currentState) {
+			m := recordMap(current)
+			if currentState == "CANCELLED" {
+				if reason, ok := args["reason"].(string); ok {
+					m["cancellationReason"] = reason
+				}
+				if err := persistCancellationAttempt(stateRoot, m); err != nil {
+					log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
+				}
+			}
 			if currentState == "CANCELLED" {
 				dispatchWorktreeRetirement(stateRoot, id)
 			}
-			return cancelRecordResult(recordMap(current))
+			return cancelRecordResult(m)
 		}
 	}
 	return processUnconfirmed(id)
+}
+
+func persistCancellationAttempt(root string, job map[string]any) error {
+	taskID, jobID := nonemptyString(job["taskId"]), nonemptyString(job["jobId"])
+	repository := nonemptyString(job["repoRoot"])
+	if taskID == "" || jobID == "" || repository == "" {
+		return nil
+	}
+	project := contextio.ProjectKey(repository)
+	previous, status, err := enforce.LoadTaskAttempt(root, project, taskID)
+	if err != nil || status == enforce.TaskAttemptCorrupt {
+		if err != nil {
+			return err
+		}
+		return errors.New("task attempt record is corrupt")
+	}
+	outcome := "cancelled"
+	if job["discarded"] == true {
+		outcome = "discarded"
+	}
+	if outcome == "discarded" && previous.SendBackUsed && job["decisionRecorded"] == true && nonemptyString(job["cancellationReason"]) == "" {
+		outcome = "rejected"
+	}
+	input := enforce.TaskFailureInput{ProjectKey: project, TaskID: taskID, JobID: jobID,
+		Phase: nonemptyString(job["phase"]), Route: nonemptyString(job["route"]), Model: nonemptyString(job["model"]),
+		Outcome: outcome, CancellationReason: nonemptyString(job["cancellationReason"]), SendBackUsed: previous.SendBackUsed}
+	var failure *enforce.TaskFailureEvidence
+	if input.Phase == "implementation" && (input.Route == "subtle" || input.Route == "mechanical") &&
+		models.SameFamily(input.Model, "gpt-6-luna") {
+		if input.CancellationReason == "failed" {
+			failure = &enforce.TaskFailureEvidence{JobID: jobID, Category: "failed_abandonment"}
+		} else if input.Outcome == "rejected" && input.SendBackUsed {
+			failure = &enforce.TaskFailureEvidence{JobID: jobID, Category: "rejected_after_sendback"}
+		}
+	}
+	disposition := outcome
+	if input.CancellationReason == "failed" {
+		disposition = "failed"
+	}
+	return enforce.SaveTaskAttempt(root, enforce.TaskAttempt{ProjectKey: project, TaskID: taskID,
+		TerminalDisposition: disposition, Failure: failure})
 }
 
 func deadHostTreeConfirmed(record *Record) bool {

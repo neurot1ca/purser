@@ -216,11 +216,18 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		recordPostReviewerObservations(root, original, &repoRoot, stringValue(pending["task_id"]), pendingProjectKey(pending),
 			false, "", stringValue(loaded["reviewer1_model_requested"]), reason, review.BridgeOutcome{}, nil, 0, -1)
 	}
+	job["reviewedOutcome"] = bundle["reviewer1_result"]
 	if worktree != "" {
 		job["reviewedSnapshot"] = job["snapshot"]
 		delete(job, "reviewRefreshPending")
 		if err = writeAsyncObject(filepath.Join(root, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
 			return nil, err
+		}
+	}
+	if taskID := stringValue(pending["task_id"]); taskID != "" {
+		if err = SaveTaskAttempt(root, TaskAttempt{ProjectKey: pendingProjectKey(pending), TaskID: taskID,
+			TerminalDisposition: stringValue(bundle["reviewer1_result"])}); err != nil {
+			log.Printf("task attempt persistence failed for result job %s: %v", stringValue(index["jobId"]), err)
 		}
 	}
 	finishedAt := float64(time.Now().UnixNano()) / 1e9

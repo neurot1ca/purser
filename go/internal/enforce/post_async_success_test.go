@@ -39,6 +39,10 @@ func TestFinishAsyncSuccessKeepsStringMapFindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	attempt, attemptState, attemptErr := LoadTaskAttempt(state, pendingProjectKey(pending), stringValue(pending["task_id"]))
+	if attemptErr != nil || attemptState != TaskAttemptOK || attempt.TerminalDisposition != "CHANGES_REQUIRED" {
+		t.Fatalf("reviewed task outcome = %#v state=%s err=%v", attempt, attemptState, attemptErr)
+	}
 	findings := responseBundle(t, response)["findings"].([]any)
 	for _, raw := range findings {
 		finding := mapValue(raw)

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,7 +57,13 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 		return early, nil, nil
 	}
 	if req.ExistingResult != nil {
-		return req.ExistingResult, readJob(dir, req.JobID), nil
+		existing := readJob(dir, req.JobID)
+		if existing != nil {
+			if err := persistTaskAttempt(opt.StateRoot, recordMap(existing), nonemptyString(args["cwd"])); err != nil {
+				log.Printf("task attempt persistence failed for replayed job %s: %v", req.JobID, err)
+			}
+		}
+		return req.ExistingResult, existing, nil
 	}
 	var thread map[string]any
 	var sendBackFrom *Record
@@ -223,6 +230,11 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 			job[k] = v
 		}
 	}
+	if sendBackFrom != nil {
+		if priorTask := nonemptyString(recordMap(sendBackFrom)["taskId"]); priorTask != "" && priorTask == nonemptyString(args["taskId"]) {
+			job["predecessorJobId"] = nonemptyString(recordMap(sendBackFrom)["jobId"])
+		}
+	}
 	for _, p := range [][2]string{{"model", "jobModel"}, {"effort", "jobEffort"}, {"label", "jobLabel"}, {"phase", "jobPhase"}} {
 		v, ok := args[p[1]]
 		if !ok {
@@ -231,6 +243,9 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 		if ok && v != nil {
 			job[p[0]] = v
 		}
+	}
+	if nonemptyString(job["repoRoot"]) == "" && nonemptyString(args["cwd"]) != "" {
+		job["repoRoot"] = nonemptyString(args["cwd"])
 	}
 	if readyCheck(args) {
 		job["readinessCheck"] = readinessValue(args)
@@ -262,6 +277,9 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	}
 	if err = Write(filepath.Join(dir, req.JobID+".json"), r); err != nil {
 		return nil, nil, err
+	}
+	if err = persistTaskAttempt(opt.StateRoot, recordMap(r), nonemptyString(args["cwd"])); err != nil {
+		log.Printf("task attempt persistence failed for job %s: %v", req.JobID, err)
 	}
 	if sendBackFrom != nil {
 		prior := recordMap(sendBackFrom)
@@ -296,7 +314,13 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 				if m["state"] == "SUCCEEDED" && m["taskId"] == job["taskId"] && nonemptyString(m["worktreePath"]) != "" && m["applyState"] != "applied" && !truthy(m["decisionRecorded"]) {
 					recordStartDecision(opt, m, "rejected", "redispatch", req.JobID)
 					if e = earlier.Set("decisionRecorded", true); e == nil {
-						_ = Write(filepath.Join(dir, name), earlier)
+						if e = Write(filepath.Join(dir, name), earlier); e != nil {
+							_ = lock.Release()
+							return nil, r, e
+						}
+						if e = persistRejectedTaskAttempt(opt.StateRoot, recordMap(earlier)); e != nil {
+							log.Printf("task attempt persistence failed for redispatch %s: %v", nonemptyString(m["jobId"]), e)
+						}
 					}
 				}
 			}
@@ -328,6 +352,45 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 		}
 	}
 	return await(req.JobID, r), r, nil
+}
+
+func persistTaskAttempt(root string, job map[string]any, repository string) error {
+	taskID := nonemptyString(job["taskId"])
+	if repository == "" {
+		repository = nonemptyString(job["repoRoot"])
+	}
+	if repository == "" {
+		repository = nonemptyString(job["cwd"])
+	}
+	if taskID == "" || repository == "" {
+		return nil
+	}
+	return enforce.SaveTaskAttempt(root, enforce.TaskAttempt{
+		ProjectKey: contextio.ProjectKey(repository), TaskID: taskID,
+		LatestJobID: nonemptyString(job["jobId"]), PredecessorJobID: nonemptyString(job["predecessorJobId"]),
+		SendBackUsed: nonemptyString(job["predecessorJobId"]) != "",
+	})
+}
+
+func persistRejectedTaskAttempt(root string, job map[string]any) error {
+	taskID, jobID := nonemptyString(job["taskId"]), nonemptyString(job["jobId"])
+	repository := nonemptyString(job["repoRoot"])
+	if taskID == "" || jobID == "" || repository == "" || !truthy(job["decisionRecorded"]) {
+		return nil
+	}
+	project := contextio.ProjectKey(repository)
+	previous, status, err := enforce.LoadTaskAttempt(root, project, taskID)
+	if err != nil || status == enforce.TaskAttemptCorrupt {
+		if err != nil {
+			return err
+		}
+		return errors.New("task attempt record is corrupt")
+	}
+	if !previous.SendBackUsed {
+		return nil
+	}
+	return enforce.SaveTaskAttempt(root, enforce.TaskAttempt{ProjectKey: project, TaskID: taskID,
+		TerminalDisposition: "rejected", Failure: &enforce.TaskFailureEvidence{JobID: jobID, Category: "rejected_after_sendback"}})
 }
 
 func unappliedThreadJob(dir, thread string) *Record {
