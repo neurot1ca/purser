@@ -17,8 +17,7 @@ func TestPrePlanRedirect(t *testing.T) {
 		scope                            []string
 		reply, completedPlan, wantDeny   bool
 	}{
-		{name: "five non-test paths deny", task: "subtle", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a.go", "b.go", "c.go", "d.go", "e.go"}, wantDeny: true},
-		{name: "five non-test paths deny without reason", task: "subtle-no-reason", phase: "implementation", route: "subtle", scope: []string{"a.go", "b.go", "c.go", "d.go", "e.go"}, wantDeny: true},
+		{name: "six non-test paths allow", task: "six-paths", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go"}},
 		{name: "four paths plus tests allow", task: "four-plus-tests", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a.go", "b.go", "c.go", "d.go", "tests/test_a.py", "test_unit.py", "x_test.go"}},
 		{name: "consequential one path deny", task: "consequential", phase: "implementation", route: "consequential", reason: "new_task", scope: []string{"a.go"}, wantDeny: true},
 		{name: "mechanical ten paths allow", task: "mechanical", phase: "implementation", route: "mechanical", reason: "new_task", scope: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}},
@@ -31,7 +30,7 @@ func TestPrePlanRedirect(t *testing.T) {
 		{name: "reply allows", task: "task-recorded", phase: "implementation", route: "subtle", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}, reply: true},
 		{name: "planned milestone naming exempt", task: "foo-m2of3", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}, completedPlan: true},
 		{name: "planned arbitrary child exempt", task: "foo-anything", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}, completedPlan: true},
-		{name: "milestone name without plan denied", task: "bar-m2of3", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}, wantDeny: true},
+		{name: "milestone name without plan allows", task: "bar-m2of3", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,12 +83,7 @@ func TestPrePlanRedirect(t *testing.T) {
 			}
 			if tc.wantDeny {
 				reason := stringValue(hook["permissionDecisionReason"])
-				why := fmt.Sprintf("%d non-test scope paths", nonTestScopeCount(tc.scope))
-				if tc.route == "consequential" || tc.route == "escalated" {
-					if nonTestScopeCount(tc.scope) < 5 {
-						why = "route=" + tc.route
-					}
-				}
+				why := "route=" + tc.route
 				wantReason := fmt.Sprintf("Purser: this is a large new task (%s). Run /purser:plan with the same goal and scope first, then implement its milestones as <plan-task>-m<N>of<T>. If the user explicitly asked to skip planning, resend with reason=user_override.", why)
 				if reason != wantReason {
 					t.Fatalf("redirect reason=%q", reason)
@@ -114,6 +108,18 @@ func TestPrePlanRedirect(t *testing.T) {
 				payload := mapValue(event["payload"])
 				if event["event_type"] != "PLAN_REDIRECT" || event["task_id"] != tc.task || payload["route"] != tc.route || payload["non_test_scope_count"] != float64(nonTestScopeCount(tc.scope)) {
 					t.Fatalf("unexpected redirect telemetry: %#v", event)
+				}
+			} else if tc.task == "six-paths" {
+				telemetry, err := os.ReadFile(filepath.Join(state, "telemetry", "events", "by_task", tc.task+".jsonl"))
+				if err == nil {
+					for _, line := range strings.Split(strings.TrimSpace(string(telemetry)), "\n") {
+						var event map[string]any
+						if json.Unmarshal([]byte(line), &event) == nil && event["event_type"] == "PLAN_REDIRECT" {
+							t.Fatalf("unexpected PLAN_REDIRECT telemetry: %s", line)
+						}
+					}
+				} else if !os.IsNotExist(err) {
+					t.Fatalf("read telemetry: %v", err)
 				}
 			}
 		})

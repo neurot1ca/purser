@@ -105,9 +105,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		!hasCompletedPlan(defaultPreStateRoot(runtimeRoot), pointerValue(parsed.TaskID)) {
 		nonTestCount := nonTestScopeCount(parsed.Scope)
 		why := ""
-		if nonTestCount >= 5 {
-			why = fmt.Sprintf("%d non-test scope paths", nonTestCount)
-		} else if *parsed.Route == "consequential" || *parsed.Route == "escalated" {
+		if *parsed.Route == "consequential" || *parsed.Route == "escalated" {
 			why = "route=" + *parsed.Route
 		}
 		if why != "" {
