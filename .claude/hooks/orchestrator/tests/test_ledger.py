@@ -1032,6 +1032,26 @@ def test_job_patch_excludes_preexisting_user_changes_and_applies_to_dirty_tree(r
     assert git(repo, "diff", "--cached", "--binary").stdout == before_index
 
 
+def test_job_patch_stages_only_changed_paths(repo, tmp_path, monkeypatch):
+    result = ledger.create_job_worktree(repo, "d" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 7\n", encoding="utf-8")
+    (worktree / "job-new.txt").write_text("new\n", encoding="utf-8")
+    original = ledger._run_git
+    add_commands = []
+
+    def recording_run_git(root, arguments, timeout, operation, **kwargs):
+        if arguments[:2] == ["add", "-A"]:
+            add_commands.append(list(arguments))
+        return original(root, arguments, timeout, operation, **kwargs)
+
+    monkeypatch.setattr(ledger, "_run_git", recording_run_git)
+    assert "src/target.py" in ledger.job_patch(worktree, result["snapshot"])
+    assert len(add_commands) == 1
+    assert add_commands[0][2] == "--"
+    assert set(add_commands[0][3:]) == {":(literal)src/target.py", ":(literal)job-new.txt"}
+
+
 def test_prepare_job_replay_uses_checkout_snapshot_without_touching_checkout(repo, tmp_path):
     (repo / "notes.txt").write_text("staged checkout\n", encoding="utf-8")
     git(repo, "add", "notes.txt")
@@ -1047,14 +1067,35 @@ def test_prepare_job_replay_uses_checkout_snapshot_without_touching_checkout(rep
     outcome = ledger.prepare_job_replay(repo, worktree, result["snapshot"], tmp_path / "recovery")
 
     assert outcome["status"] == "prepared"
-    assert (worktree / "notes.txt").read_text(encoding="utf-8") == "checkout edit\n"
-    assert (worktree / "local.txt").read_text(encoding="utf-8") == "untracked checkout file\n"
+    assert (worktree / "notes.txt").read_text(encoding="utf-8") == "original\n"
+    assert not (worktree / "local.txt").exists()
     prepared_patch = ledger.job_patch(worktree, outcome["snapshot"])
     assert prepared_patch.count("diff --git") == 1
     assert "notes.txt" not in prepared_patch
     assert git(repo, "diff", "--cached", "--binary").stdout == before_index
     assert ((repo / "notes.txt").read_bytes(), (repo / "local.txt").read_bytes()) == before_files
     assert (tmp_path / "recovery" / "worker-tree" / "src" / "target.py").read_text(encoding="utf-8") == "value = 9\n"
+
+
+def test_prepare_job_replay_stages_only_job_paths(repo, tmp_path, monkeypatch):
+    result = ledger.create_job_worktree(repo, "e" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    (worktree / "src" / "target.py").write_text("value = 5\n", encoding="utf-8")
+    (repo / "notes.txt").write_text("outside scope\n", encoding="utf-8")
+    original = ledger._run_git
+    add_commands = []
+
+    def recording_run_git(root, arguments, timeout, operation, **kwargs):
+        if arguments[:2] == ["add", "-A"]:
+            add_commands.append(list(arguments))
+        return original(root, arguments, timeout, operation, **kwargs)
+
+    monkeypatch.setattr(ledger, "_run_git", recording_run_git)
+    outcome = ledger.prepare_job_replay(repo, worktree, result["snapshot"], tmp_path / "recovery")
+    assert outcome["status"] == "prepared"
+    assert len(add_commands) >= 2
+    assert all(command[2:] == ["--", ":(literal)src/target.py"] for command in add_commands)
+    assert (worktree / "notes.txt").read_text(encoding="utf-8") == "original\n"
 
 
 def test_prepare_job_replay_skips_unchanged_checkout(repo, tmp_path):
@@ -1092,7 +1133,7 @@ def test_prepare_job_replay_allows_unrelated_dirty_checkout_paths(repo, tmp_path
 
     assert outcome["status"] == "prepared"
     assert (worktree / "src" / "target.py").read_text(encoding="utf-8") == "value = 2\n"
-    assert (worktree / "notes.txt").read_text(encoding="utf-8") == "unrelated checkout edit\n"
+    assert (worktree / "notes.txt").read_text(encoding="utf-8") == "original\n"
 
 
 def test_prepare_job_replay_allows_reply_on_unapplied_thread_delta(repo, tmp_path, monkeypatch):

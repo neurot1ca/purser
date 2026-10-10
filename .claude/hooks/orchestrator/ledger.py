@@ -709,22 +709,27 @@ def create_job_worktree(
 def job_patch(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
     """Return a binary patch from the immutable snapshot tree to current job state."""
     worktree = Path(worktree_path).resolve()
-    _run_git(worktree, ["add", "-A"], 30.0, "staging job changes for patch generation")
     names = _run_git(worktree, ["diff", "--name-only", "-z", "--no-renames", snapshot, "--"],
                      30.0, "listing job patch paths").split(b"\0")
     paths = [_decode_path(path) for path in names if path]
+    untracked = _run_git(worktree, ["ls-files", "--others", "--exclude-standard", "-z"],
+                         30.0, "listing untracked job patch paths").split(b"\0")
+    paths.extend(_decode_path(path) for path in untracked if path)
     if not paths:
         return ""
     paths = _filter_job_paths(worktree, paths)
     if not paths:
         return ""
+    _run_git(worktree, ["add", "-A", "--", *[f":(literal){path}" for path in paths]],
+             30.0, "staging job changes for patch generation")
     raw = _run_git(worktree, ["diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames",
                               snapshot, "--", *[f":(literal){path}" for path in paths]],
                    30.0, "generating job patch")
     return raw.decode("utf-8", "surrogateescape")
 
 
-def checkout_snapshot(repo_root: str | os.PathLike[str], *, timeout: float = 30.0) -> str:
+def checkout_snapshot(repo_root: str | os.PathLike[str], paths: Sequence[str] | None = None,
+                      *, timeout: float = 30.0) -> str:
     """Capture tracked and untracked checkout state without touching its index."""
     root = Path(repo_root).resolve()
     git_dir = Path(_decode_path(_run_git(root, ["rev-parse", "--absolute-git-dir"], timeout,
@@ -733,7 +738,23 @@ def checkout_snapshot(repo_root: str | os.PathLike[str], *, timeout: float = 30.
     env = {"GIT_INDEX_FILE": os.fspath(index_path)}
     try:
         _run_git(root, ["read-tree", "HEAD"], timeout, "initializing checkout snapshot index", env=env)
-        _run_git(root, ["add", "-A"], timeout, "capturing current checkout state", env=env)
+        if paths is None:
+            names = _run_git(root, ["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"],
+                             timeout, "listing checkout snapshot paths").split(b"\0")
+            untracked = _run_git(root, ["ls-files", "--others", "--exclude-standard", "-z"],
+                                 timeout, "listing untracked checkout snapshot paths").split(b"\0")
+            paths = [_decode_path(path) for path in (*names, *untracked) if path]
+        if paths:
+            tracked_raw = _run_git(
+                root, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--",
+                      *[f":(literal){path}" for path in paths]],
+                timeout, "checking checkout snapshot paths",
+            )
+            tracked = {_decode_path(path) for path in tracked_raw.split(b"\0") if path}
+            paths = [path for path in paths if os.path.lexists(root / path) or path in tracked]
+        if paths:
+            _run_git(root, ["add", "-A", "--", *[f":(literal){path}" for path in paths]],
+                     timeout, "capturing current checkout state", env=env)
         return _decode_path(_run_git(root, ["write-tree"], timeout,
                                      "writing current checkout snapshot", env=env)).strip()
     finally:
@@ -803,9 +824,6 @@ def prepare_job_replay(
     else:
         original = job_patch(worktree, snapshot)
         paths = None
-    current = checkout_snapshot(root, timeout=timeout)
-    if current == snapshot and prior is None:
-        return {"status": "unchanged", "snapshot": snapshot, "paths": []}
     raw = original.encode("utf-8", "surrogateescape")
     if paths is None and raw:
         names = _run_git(worktree, ["apply", "--numstat", "-z", "-"], timeout,
@@ -813,6 +831,14 @@ def prepare_job_replay(
         paths = [_decode_path(row.split(b"\t", 2)[2]) for row in names.split(b"\0") if row]
     if paths is None:
         paths = []
+    current = checkout_snapshot(root, paths, timeout=timeout)
+    if current == snapshot and prior is None:
+        changed = _run_git(root, ["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"],
+                           timeout, "checking checkout changes").split(b"\0")
+        untracked = _run_git(root, ["ls-files", "--others", "--exclude-standard", "-z"],
+                             timeout, "checking untracked checkout changes").split(b"\0")
+        if not any(changed) and not any(untracked):
+            return {"status": "unchanged", "snapshot": snapshot, "paths": []}
     if prior is not None:
         _run_git(worktree, ["read-tree", "--reset", snapshot], timeout, "restoring interrupted replay index")
         _run_git(worktree, ["clean", "-fdx"], timeout, "clearing interrupted replay")

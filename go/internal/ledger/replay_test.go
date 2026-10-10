@@ -6,9 +6,44 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
+	base := t.TempDir()
+	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
+	snapshot := initReplayRepository(t, repo, "")
+	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
+	writePatchTestFile(t, filepath.Join(worker, "tracked.txt"), []byte("worker\n"))
+	writePatchTestFile(t, filepath.Join(repo, "other.txt"), []byte("outside scope\n"))
+	var addArgs [][]string
+	runner := func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "add" && args[1] == "-A" {
+			addArgs = append(addArgs, append([]string(nil), args...))
+		}
+		return runGit(root, args, timeout, operation, input, env)
+	}
+	result, err := prepareJobReplay(repo, worker, snapshot, filepath.Join(base, "recovery"), nil, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["status"] != "prepared" {
+		t.Fatalf("unexpected replay result: %#v", result)
+	}
+	if len(addArgs) < 2 {
+		t.Fatalf("expected patch and snapshot staging calls, got %#v", addArgs)
+	}
+	for _, args := range addArgs {
+		if len(args) < 4 || args[2] != "--" || strings.Join(args[3:], " ") != ":(literal)tracked.txt" {
+			t.Fatalf("replay preparation used unexpected add arguments: %#v", addArgs)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(worker, "other.txt")); string(got) != "other\n" {
+		t.Fatalf("outside-scope checkout content leaked into replay snapshot: %q", got)
+	}
+}
 
 func TestPrepareJobReplayPythonFixture(t *testing.T) {
 	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "replay.json")
@@ -40,7 +75,11 @@ func TestPrepareJobReplayPythonFixture(t *testing.T) {
 			git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
 			applyReplayChanges(t, repo, c.TargetChanges)
 			applyReplayChanges(t, worker, c.WorkerChanges)
-			target, err := CheckoutSnapshot(repo)
+			jobPaths := make([]string, 0, len(c.WorkerChanges))
+			for _, change := range c.WorkerChanges {
+				jobPaths = append(jobPaths, change["path"])
+			}
+			target, err := checkoutSnapshotWithGit(repo, jobPaths, runGit)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -109,10 +148,14 @@ func TestPrepareJobReplayPythonFixture(t *testing.T) {
 			if runErr != nil {
 				t.Fatal(runErr)
 			}
-			if err = assertReplayFixture(got, c.Result, snapshot, target); err != nil {
+			normalizationTarget := target
+			if target == snapshot && (c.Result["status"] != "prepared" || c.Seed == "PREPARED") {
+				normalizationTarget = ""
+			}
+			if err = assertReplayFixture(got, c.Result, snapshot, normalizationTarget); err != nil {
 				t.Fatal(err)
 			}
-			if err = assertReplayFixture(replayArtifacts(t, recovery), c.Recovery, snapshot, target); err != nil {
+			if err = assertReplayFixture(replayArtifacts(t, recovery), c.Recovery, snapshot, normalizationTarget); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -243,11 +286,11 @@ func normalizeReplay(v any, snapshot, target string) any {
 		}
 		return o
 	case string:
+		if x == target && target != "" {
+			return "<TARGET>"
+		}
 		if x == snapshot {
 			return "<SNAPSHOT>"
-		}
-		if x == target {
-			return "<TARGET>"
 		}
 		return x
 	}

@@ -181,20 +181,31 @@ func filterJobPaths(root string, paths []string) ([]string, error) {
 
 // JobPatch returns a binary patch from the immutable snapshot tree to current job state.
 func JobPatch(worktreePath, snapshot string) (string, error) {
+	return jobPatchWithGit(worktreePath, snapshot, runGit)
+}
+
+func jobPatchWithGit(worktreePath, snapshot string, run func(string, []string, time.Duration, string, []byte, map[string]string) ([]byte, error)) (string, error) {
 	root, err := filepath.Abs(worktreePath)
 	if err != nil {
 		return "", err
 	}
-	if _, err = runGit(root, []string{"add", "-A"}, 30*time.Second, "staging job changes for patch generation", nil, nil); err != nil {
-		return "", err
-	}
-	names, err := runGit(root, []string{"diff", "--name-only", "-z", "--no-renames", snapshot, "--"}, 30*time.Second,
+	names, err := run(root, []string{"diff", "--name-only", "-z", "--no-renames", snapshot, "--"}, 30*time.Second,
 		"listing job patch paths", nil, nil)
 	if err != nil {
 		return "", err
 	}
 	paths := make([]string, 0)
 	for _, path := range strings.Split(string(names), "\x00") {
+		if path != "" {
+			paths = append(paths, decodeGitPath([]byte(path)))
+		}
+	}
+	untracked, err := run(root, []string{"ls-files", "--others", "--exclude-standard", "-z"}, 30*time.Second,
+		"listing untracked job patch paths", nil, nil)
+	if err != nil {
+		return "", err
+	}
+	for _, path := range strings.Split(string(untracked), "\x00") {
 		if path != "" {
 			paths = append(paths, decodeGitPath([]byte(path)))
 		}
@@ -209,6 +220,13 @@ func JobPatch(worktreePath, snapshot string) (string, error) {
 	if len(paths) == 0 {
 		return "", nil
 	}
+	addArgs := []string{"add", "-A", "--"}
+	for _, path := range paths {
+		addArgs = append(addArgs, ":(literal)"+path)
+	}
+	if _, err = run(root, addArgs, 30*time.Second, "staging job changes for patch generation", nil, nil); err != nil {
+		return "", err
+	}
 	args := []string{"diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", snapshot, "--"}
 	for _, path := range paths {
 		args = append(args, ":(literal)"+path)
@@ -219,11 +237,15 @@ func JobPatch(worktreePath, snapshot string) (string, error) {
 
 // CheckoutSnapshot captures tracked and untracked checkout state without touching its index.
 func CheckoutSnapshot(repoRoot string) (string, error) {
+	return checkoutSnapshotWithGit(repoRoot, nil, runGit)
+}
+
+func checkoutSnapshotWithGit(repoRoot string, paths []string, run func(string, []string, time.Duration, string, []byte, map[string]string) ([]byte, error)) (string, error) {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return "", err
 	}
-	gitDirRaw, err := runGit(root, []string{"rev-parse", "--absolute-git-dir"}, 30*time.Second,
+	gitDirRaw, err := run(root, []string{"rev-parse", "--absolute-git-dir"}, 30*time.Second,
 		"locating checkout snapshot index", nil, nil)
 	if err != nil {
 		return "", err
@@ -246,17 +268,87 @@ func CheckoutSnapshot(repoRoot string) (string, error) {
 		_ = os.Remove(indexPath + ".lock")
 	}()
 	env := map[string]string{"GIT_INDEX_FILE": indexPath}
-	if _, err = runGit(root, []string{"read-tree", "HEAD"}, 30*time.Second, "initializing checkout snapshot index", nil, env); err != nil {
+	if _, err = run(root, []string{"read-tree", "HEAD"}, 30*time.Second, "initializing checkout snapshot index", nil, env); err != nil {
 		return "", err
 	}
-	if _, err = runGit(root, []string{"add", "-A"}, 30*time.Second, "capturing current checkout state", nil, env); err != nil {
+	if paths == nil {
+		paths, err = changedCheckoutPaths(root, "HEAD", run)
+		if err != nil {
+			return "", err
+		}
+	}
+	paths, err = existingSnapshotPaths(root, paths, run)
+	if err != nil {
 		return "", err
 	}
-	tree, err := runGit(root, []string{"write-tree"}, 30*time.Second, "writing current checkout snapshot", nil, env)
+	if len(paths) > 0 {
+		args := []string{"add", "-A", "--"}
+		for _, path := range paths {
+			args = append(args, ":(literal)"+path)
+		}
+		if _, err = run(root, args, 30*time.Second, "capturing current checkout state", nil, env); err != nil {
+			return "", err
+		}
+	}
+	tree, err := run(root, []string{"write-tree"}, 30*time.Second, "writing current checkout snapshot", nil, env)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(decodeGitPath(tree)), nil
+}
+
+func existingSnapshotPaths(root string, paths []string, run func(string, []string, time.Duration, string, []byte, map[string]string) ([]byte, error)) ([]string, error) {
+	if len(paths) == 0 {
+		return []string{}, nil
+	}
+	args := []string{"ls-tree", "-r", "--name-only", "-z", "HEAD", "--"}
+	for _, path := range paths {
+		args = append(args, ":(literal)"+path)
+	}
+	trackedRaw, err := run(root, args, 30*time.Second, "checking checkout snapshot paths", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	tracked := make(map[string]bool)
+	for _, path := range strings.Split(string(trackedRaw), "\x00") {
+		if path != "" {
+			tracked[decodeGitPath([]byte(path))] = true
+		}
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); err == nil || tracked[path] {
+			filtered = append(filtered, path)
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	return filtered, nil
+}
+
+func changedCheckoutPaths(root, base string, run func(string, []string, time.Duration, string, []byte, map[string]string) ([]byte, error)) ([]string, error) {
+	names, err := run(root, []string{"diff", "--name-only", "-z", "--no-renames", base, "--"}, 30*time.Second,
+		"listing checkout snapshot paths", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0)
+	for _, path := range strings.Split(string(names), "\x00") {
+		if path != "" {
+			paths = append(paths, decodeGitPath([]byte(path)))
+		}
+	}
+	untracked, err := run(root, []string{"ls-files", "--others", "--exclude-standard", "-z"}, 30*time.Second,
+		"listing untracked checkout snapshot paths", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range strings.Split(string(untracked), "\x00") {
+		if path != "" {
+			paths = append(paths, decodeGitPath([]byte(path)))
+		}
+	}
+	return paths, nil
 }
 
 // AppliedReplyMatches returns true when every changed worktree path matches repoRoot.

@@ -5,8 +5,29 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestJobPatchStagesOnlyChangedPaths(t *testing.T) {
+	root, snapshot := initJobPatchRepository(t)
+	writePatchTestFile(t, filepath.Join(root, "tracked.txt"), []byte("changed\n"))
+	writePatchTestFile(t, filepath.Join(root, "untracked.txt"), []byte("new\n"))
+	var addArgs [][]string
+	runner := func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "add" && args[1] == "-A" {
+			addArgs = append(addArgs, append([]string(nil), args...))
+		}
+		return runGit(root, args, timeout, operation, input, env)
+	}
+	if _, err := jobPatchWithGit(root, snapshot, runner); err != nil {
+		t.Fatal(err)
+	}
+	if len(addArgs) != 1 || len(addArgs[0]) < 4 || addArgs[0][2] != "--" || strings.Join(addArgs[0][3:], " ") != ":(literal)tracked.txt :(literal)untracked.txt" {
+		t.Fatalf("patch generation used unexpected add arguments: %#v", addArgs)
+	}
+}
 
 func TestJobReplayPythonFixture(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "job_patch.json"))

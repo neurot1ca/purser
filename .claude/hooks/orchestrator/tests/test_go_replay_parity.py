@@ -68,10 +68,10 @@ def _normalize(value, snapshot, target):
         return {key: _normalize(item, snapshot, target) for key, item in value.items()}
     if isinstance(value, list):
         return [_normalize(item, snapshot, target) for item in value]
-    if value == snapshot:
-        return "<SNAPSHOT>"
     if value == target:
         return "<TARGET>"
+    if value == snapshot:
+        return "<SNAPSHOT>"
     return value
 
 
@@ -82,7 +82,8 @@ def _case(case, root):
     _git(repo, "worktree", "add", "--detach", str(worker.resolve()), "HEAD")
     _changes(repo, case.get("target_changes", []))
     _changes(worker, case.get("worker_changes", []))
-    target = ledger.checkout_snapshot(repo)
+    job_paths = [change["path"] for change in case.get("worker_changes", [])]
+    target = ledger.checkout_snapshot(repo, job_paths)
     seed = case.get("seed")
     if seed:
         recovery.mkdir()
@@ -118,11 +119,14 @@ def _case(case, root):
         error = None
     except ledger._InspectionError as exc:
         result, error = None, {"code": exc.code, "message": exc.message}
+    normalization_target = target
+    if target == snapshot and ((result or {}).get("status") != "prepared" or seed == "PREPARED"):
+        normalization_target = ""
     state = None
     state_path = recovery / "state.json"
     if state_path.exists():
         try:
-            state = _normalize(json.loads(state_path.read_text(encoding="utf-8")), snapshot, target)
+            state = _normalize(json.loads(state_path.read_text(encoding="utf-8")), snapshot, normalization_target)
         except (OSError, ValueError):
             state = "<UNREADABLE>"
     tree = []
@@ -134,7 +138,7 @@ def _case(case, root):
             elif path.is_symlink():
                 tree.append({"path": path.relative_to(worker_tree).as_posix(), "symlink": os.readlink(path)})
     ledger._run_git = original_run_git
-    return {**case, "result": _normalize(result, snapshot, target), "error": error,
+    return {**case, "result": _normalize(result, snapshot, normalization_target), "error": error,
             "recovery": {"files": sorted(path.name for path in recovery.iterdir()) if recovery.exists() else [],
                          "state": state, "worker_patch": (recovery / "worker.patch").exists(), "worker_tree": tree}}
 

@@ -142,18 +142,11 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 		paths, _ = prior["paths"]
 		pathList = replayPaths(paths)
 	} else {
-		text, patchErr := JobPatch(worktree, snapshot)
+		text, patchErr := jobPatchWithGit(worktree, snapshot, run)
 		if patchErr != nil {
 			return nil, patchErr
 		}
 		patch = []byte(text)
-	}
-	current, err := CheckoutSnapshot(root)
-	if err != nil {
-		return nil, err
-	}
-	if current == snapshot && prior == nil {
-		return result("unchanged", snapshot, []string{}), nil
 	}
 	if paths == nil && len(patch) > 0 {
 		names, pathErr := git(worktree, []string{"apply", "--numstat", "-z", "-"}, patch, "listing replay paths")
@@ -173,6 +166,20 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 	}
 	if paths == nil {
 		paths = []string{}
+	}
+	pathList = replayPaths(paths)
+	current, err := checkoutSnapshotWithGit(root, pathList, run)
+	if err != nil {
+		return nil, err
+	}
+	if current == snapshot && prior == nil {
+		changed, changeErr := changedCheckoutPaths(root, "HEAD", run)
+		if changeErr != nil {
+			return nil, changeErr
+		}
+		if len(changed) == 0 {
+			return result("unchanged", snapshot, []string{}), nil
+		}
 	}
 	if prior != nil {
 		if err := restore(snapshot); err != nil {
