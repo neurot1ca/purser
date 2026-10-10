@@ -56,6 +56,12 @@ test('a succeeded job moves through fetching result, review and acceptance befor
   expect(stage(files.jobs[2], bundle)[0]).toBe('⚓ ✓ 1 done')
 })
 
+test('a coded job still moving to review sits above queued jobs', () => {
+  const coded = { ...files.jobs[2], applyState: undefined, appliedAt: undefined }
+  const board = renderJobBoard({ indexes: files.indexes, jobs: [files.jobs[0], files.jobs[1], coded] }, 1000)
+  expect(board?.detail.split('\n').slice(2).map(line => line.split(' | ')[0])).toEqual(['| api fix', '| docs', '| test update'])
+})
+
 test('shows a dim quiet hint from an old running-job activity timestamp', () => {
   const job = { ...files.jobs[0], startedAt: 900, acceptedAt: 900, activeAgent: undefined, liveness: { lastActivityAt: 100 } }
   const board = renderJobBoard({ indexes: [files.indexes[0]], jobs: [job] }, 1000)

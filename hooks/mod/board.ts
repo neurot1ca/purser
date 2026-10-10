@@ -144,7 +144,8 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
     const apply = applyOf(job, bundle)
     let state = ({ QUEUED: 'queued', RUNNING: 'coding', SUCCEEDED: 'done', FAILED: 'failed',
       TIMED_OUT: 'failed', CANCELLED: 'cancelled', UNKNOWN_OR_IN_PROGRESS: 'coding' } as Record<string, string>)[raw] ?? 'failed'
-    state = ({ fetching: 'coded · fetching result', review: 'in review', accepted: 'accepted', done: 'done' } as Record<string, string>)[stageOf(job, bundle, apply) ?? ''] ?? state
+    const stage = stageOf(job, bundle, apply)
+    state = ({ fetching: 'coded · fetching result', review: 'in review', accepted: 'accepted', done: 'done' } as Record<string, string>)[stage ?? ''] ?? state
     if (raw === 'QUEUED' && queuedBehind.has(job.jobId)) state = `queued behind ${queuedBehind.get(job.jobId)}`
     if (raw === 'RUNNING' && job.errorCode === 'STALLED') state = 'stalled'
     if (raw === 'RUNNING') {
@@ -180,7 +181,9 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
     const line = `| ${clean(job.label)} | ${model} | ${state} | ${eta} | ${review} | ${apply} |`
     const timestamp = raw === 'QUEUED' || raw === 'RUNNING' ? job.acceptedAt :
       job.applyState === 'applied' && finiteTime(job.appliedAt) ? job.appliedAt : job.finishedAt
-    return { line, rank: raw === 'RUNNING' ? 0 : raw === 'QUEUED' ? 1 : 2, timestamp: finiteTime(timestamp) ? timestamp : 0 }
+    // Coding and post-coding stages lead, queued jobs follow, finished jobs last.
+    const rank = raw === 'RUNNING' ? 0 : stage && stage !== 'done' ? 1 : raw === 'QUEUED' ? 2 : 3
+    return { line, rank, timestamp: finiteTime(timestamp) ? timestamp : 0 }
   }).sort((a, b) => a.rank - b.rank || b.timestamp - a.timestamp)
   return {
     summary,
