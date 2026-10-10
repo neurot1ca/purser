@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.117 — 2026-10-11
+
+- **Added:** When a luna implementation attempt is rejected after its send-back or cancelled as failed, Purser routes the next attempt of the same task to consequential (sol, high) itself, with the failed attempt as basis.
+- **Fixed:** A cancelled or discarded task id can start a fresh job instead of being refused as already finished.
+
 ## 0.1.116 — 2026-10-10
 
 - **Fixed:** The reply-language instruction is part of every request, so turns started by background task notifications keep the user's language.
