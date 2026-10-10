@@ -91,7 +91,8 @@ func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
 		}
 	})
 	if !IdentityMatches(pid, identity) {
-		t.Fatal("creation identity did not match the live detached process")
+		actual, alive, inspectErr := processIdentity(uint32(pid))
+		t.Fatalf("creation identity did not match the live detached process: pid=%d expected=%d actual=%d alive=%t err=%v", pid, identity, actual, alive, inspectErr)
 	}
 	if _, err := os.Stat(consoleMarker); err == nil {
 		t.Fatal("detached child has a console window")
