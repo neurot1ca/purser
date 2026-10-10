@@ -2715,9 +2715,9 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
         def board_row(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple[int, int, float, str]:
             job, index = item
             raw_state = job.get("state")
-            state = {"QUEUED": "queued", "RUNNING": "running", "SUCCEEDED": "done",
+            state = {"QUEUED": "queued", "RUNNING": "coding", "SUCCEEDED": "done",
                      "FAILED": "failed", "TIMED_OUT": "failed", "CANCELLED": "cancelled",
-                     "UNKNOWN_OR_IN_PROGRESS": "running"}.get(raw_state, "failed")
+                     "UNKNOWN_OR_IN_PROGRESS": "coding"}.get(raw_state, "failed")
             if raw_state == "QUEUED" and job.get("jobId") in queued_behind:
                 state = f"queued behind {queued_behind[job['jobId']]}"
             if raw_state == "RUNNING" and job.get("errorCode") == "STALLED":
@@ -2768,8 +2768,17 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             if (apply == "—" and raw_state not in {"QUEUED", "RUNNING", "UNKNOWN_OR_IN_PROGRESS"}
                     and changed_paths == []):
                 apply = "no change"
+            if raw_state == "SUCCEEDED":
+                if not bundle:
+                    state = "done" if apply == "applied" else "coded · fetching result"
+                elif apply in {"applied", "n/a", "no change"}:
+                    state = "done"
+                elif job.get("acceptance") is not None:
+                    state = "accepted"
+                else:
+                    state = "in review"
             eta_label = "—"
-            if state in {"running", "stalled"}:
+            if state in {"coding", "stalled"}:
                 started = job.get("startedAt", job.get("acceptedAt"))
                 elapsed = max(0.0, (now - started) / 60) if isinstance(started, (int, float)) else None
                 estimates = _route_duration_percentiles(
@@ -2781,7 +2790,8 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
                                                    "agent": job.get("agent", "codex")}, root, estimates)
                 if elapsed is not None and expected is not None:
                     overdue_after = estimates[1] if estimates is not None else 2 * expected
-                    eta_label = "overdue" if elapsed > overdue_after else f"~{max(0, math.ceil(expected - elapsed))} min"
+                    if elapsed <= overdue_after:
+                        eta_label = f"~{max(0, math.ceil(expected - elapsed))} min"
             label = str(job.get("label", "—")).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
             model, effort = job.get("model"), job.get("effort")
             model_label = (f"{model} ({effort})".replace("|", "\\|")

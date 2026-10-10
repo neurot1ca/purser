@@ -153,7 +153,7 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 		j, idx := item.job, item.index
 		id, _ := j["jobId"].(string)
 		label := strings.NewReplacer("|", "\\|", "\r", " ", "\n", " ").Replace(fmt.Sprint(j["label"]))
-		state := map[string]string{"QUEUED": "queued", "RUNNING": "running", "SUCCEEDED": "done", "FAILED": "failed", "TIMED_OUT": "failed", "CANCELLED": "cancelled", "UNKNOWN_OR_IN_PROGRESS": "running"}[fmt.Sprint(j["state"])]
+		state := map[string]string{"QUEUED": "queued", "RUNNING": "coding", "SUCCEEDED": "done", "FAILED": "failed", "TIMED_OUT": "failed", "CANCELLED": "cancelled", "UNKNOWN_OR_IN_PROGRESS": "coding"}[fmt.Sprint(j["state"])]
 		if state == "" {
 			state = "failed"
 		}
@@ -205,8 +205,23 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 		if apply == "—" && j["state"] != "QUEUED" && j["state"] != "RUNNING" && j["state"] != "UNKNOWN_OR_IN_PROGRESS" && ok && len(changed) == 0 {
 			apply = "no change"
 		}
+		if j["state"] == "SUCCEEDED" {
+			switch {
+			case len(bundle) == 0:
+				state = "coded · fetching result"
+				if apply == "applied" {
+					state = "done"
+				}
+			case contains([]any{"applied", "n/a", "no change"}, apply):
+				state = "done"
+			case truthy(j["acceptance"]):
+				state = "accepted"
+			default:
+				state = "in review"
+			}
+		}
 		eta := "—"
-		if state == "running" || state == "stalled" {
+		if state == "coding" || state == "stalled" {
 			elapsed := (float64(now.UnixNano())/1e9 - boardNumber(first(j["startedAt"], j["acceptedAt"]))) / 60
 			expected, ok := j["etaMinutes"].(json.Number)
 			minutes := int64(0)
@@ -221,9 +236,7 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 				if elapsed < 0 {
 					elapsed = 0
 				}
-				if elapsed > 2*float64(minutes) {
-					eta = "overdue"
-				} else {
+				if elapsed <= 2*float64(minutes) {
 					eta = fmt.Sprintf("~%d min", maxInt(0, int(math.Ceil(float64(minutes)-elapsed))))
 				}
 			}

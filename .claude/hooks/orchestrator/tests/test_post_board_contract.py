@@ -39,6 +39,18 @@ def test_post_board_python_fixture(tmp_path, monkeypatch):
     applied = _job("b" * 64, applyState="applied", appliedAt=NOW - 10, finishedAt=NOW - 7200,
                    boardDisplayCount=0)
     cases.append(_case("applied_at_wins", [applied]))
+    for name, job, bundle in (
+        ("in_review", _job("f" * 64, boardDisplayCount=0),
+         {"phase": "implementation", "apply": "codex_apply", "changed_paths": ["src/a"]}),
+        ("accepted", _job("g" * 64, acceptance={}, boardDisplayCount=0),
+         {"phase": "implementation", "apply": "codex_apply", "changed_paths": ["src/a"]}),
+        ("done_not_applicable", _job("h" * 64, phase="operation", boardDisplayCount=0),
+         {"phase": "operation", "apply": "codex_apply"}),
+        ("done_no_change", _job("i" * 64, boardDisplayCount=0),
+         {"phase": "implementation", "apply": "codex_apply", "changed_paths": []}),
+    ):
+        call_key = "key-" + job["jobId"]
+        cases.append(_case(name, [job], {f"bundle_artifacts/{call_key}.json": bundle}))
     cases.append(_case("older_than_hour", [_job("c" * 64, finishedAt=NOW - 3601, boardDisplayCount=0)]))
     cases.append(_case("newest_thread_job", [
         _job("d" * 64, threadId="same", acceptedAt=NOW - 20, state="RUNNING"),
@@ -53,6 +65,8 @@ def test_post_board_python_fixture(tmp_path, monkeypatch):
         "projects/fixture/scope_leases.json": json.dumps(leases)}))
     cases.append(_case("stalled_missing_effort", [_job("3" * 64, state="RUNNING", errorCode="STALLED",
                                                        startedAt=NOW - 600, model="gpt-test")]))
+    cases.append(_case("running_coding", [_job("9" * 64, state="RUNNING", startedAt=NOW - 300,
+                                                 etaMinutes=2, boardDisplayCount=0)]))
     cases.append(_case("nothing_visible", [_job("4" * 64, boardDisplayCount=1)]))
     cases.append(_case("malformed_indexes_and_jobs", [], {
         "async_jobs/bad.json": "{broken",

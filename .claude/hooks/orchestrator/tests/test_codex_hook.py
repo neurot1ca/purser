@@ -1473,6 +1473,28 @@ def test_project_job_board_is_omitted_with_one_job(workspace):
     assert "| only |" in codex._project_job_board(state, "project")
 
 
+@pytest.mark.parametrize(("name", "values", "bundle", "expected"), [
+    ("fetching", {}, None, "coded · fetching result"),
+    ("review", {}, {"apply": "codex_apply", "changed_paths": ["src/a"]}, "in review"),
+    ("accepted", {"acceptance": {}},
+     {"apply": "codex_apply", "changed_paths": ["src/a"]}, "accepted"),
+    ("applied", {"applyState": "applied"}, None, "done"),
+    ("not_applicable", {"phase": "operation"}, {"phase": "operation"}, "done"),
+    ("no_change", {}, {"apply": "codex_apply", "changed_paths": []}, "done"),
+])
+def test_project_job_board_succeeded_stages(workspace, name, values, bundle, expected):
+    _, state = workspace
+    _, call_key = _board_job(state, name, "SUCCEEDED", **values)
+    if bundle is not None:
+        bundle_dir = state / "bundle_artifacts"
+        bundle_dir.mkdir(exist_ok=True)
+        (bundle_dir / f"{call_key}.json").write_text(json.dumps(bundle), encoding="utf-8")
+
+    board = codex._project_job_board(state, "project")
+
+    assert f"| {name} | gpt-6-sol (medium) | {expected} |" in board
+
+
 def test_project_job_board_marks_only_stalled_job(workspace):
     _, state = workspace
     _board_job(state, "stalled", "RUNNING", errorCode="STALLED", stallDetectedAt=1234.0)
@@ -1481,7 +1503,7 @@ def test_project_job_board_marks_only_stalled_job(workspace):
     message = codex._project_job_board(state, "project")
 
     assert "| stalled | gpt-6-sol (medium) | stalled |" in message
-    assert "| healthy | gpt-6-sol (medium) | running |" in message
+    assert "| healthy | gpt-6-sol (medium) | coding |" in message
 
 
 def test_project_job_board_explains_queued_scope_lease(workspace):
@@ -1688,9 +1710,10 @@ def test_project_job_board_uses_route_default_without_history(workspace, monkeyp
     _board_job(state, "unknown", etaMinutes=None, acceptedAt=time.time() - 10)
     _board_job(state, "mechanical", route="mechanical", acceptedAt=time.time())
     message = codex._project_job_board(state, "project")
-    assert "| overdue | gpt-6-sol (medium) | running | overdue |" in message
-    assert "| unknown | gpt-6-sol (medium) | running | ~5 min |" in message
-    assert "| mechanical | gpt-6-sol (medium) | running | ~3 min |" in message
+    assert "| overdue | gpt-6-sol (medium) | coding | — |" in message
+    assert "| coding | overdue |" not in message
+    assert "| unknown | gpt-6-sol (medium) | coding | ~5 min |" in message
+    assert "| mechanical | gpt-6-sol (medium) | coding | ~3 min |" in message
 
 
 def test_project_job_board_queued_job_eta_ignores_time_waiting_for_lease(workspace):
@@ -1710,7 +1733,7 @@ def test_project_job_board_running_eta_uses_started_at_when_present(workspace):
 
     board = codex._project_job_board(state, "project")
 
-    assert "| running-recent | gpt-6-sol (medium) | running | ~5 min |" in board
+    assert "| running-recent | gpt-6-sol (medium) | coding | ~5 min |" in board
 
 
 def test_project_job_board_waits_for_route_p90_before_overdue(workspace, monkeypatch):
@@ -1721,7 +1744,7 @@ def test_project_job_board_waits_for_route_p90_before_overdue(workspace, monkeyp
     job_id, _ = _board_job(state, "within-p90", route="normal", etaMinutes=5, acceptedAt=now - 7 * 60)
     _board_job(state, "second-running")
     board = codex._project_job_board(state, "project")
-    assert "| within-p90 | gpt-6-sol (medium) | running | ~0 min |" in board
+    assert "| within-p90 | gpt-6-sol (medium) | coding | ~0 min |" in board
     receipt = json.loads((state / "codex_exec_mcp" / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
     assert receipt["etaMinutes"] == 5
 
@@ -1799,7 +1822,7 @@ def test_project_job_board_keeps_newest_job_for_thread(workspace):
     message = codex._project_job_board(state, "project")
 
     assert message.count("| continued |") == 1
-    assert "| continued | gpt-6-sol (medium) | done | — | reviewed | conflict |" in message
+    assert "| continued | gpt-6-sol (medium) | in review | — | reviewed | conflict |" in message
 
     job_path = state / "codex_exec_mcp" / "jobs" / f"{new_job_id}.json"
     job = json.loads(job_path.read_text(encoding="utf-8"))
@@ -1823,7 +1846,7 @@ def test_project_job_board_shows_no_change_and_pending_apply(workspace):
     message = codex._project_job_board(state, "project")
 
     assert "| no-change | gpt-6-sol (medium) | done | — | — | no change |" in message
-    assert "| changed | gpt-6-sol (medium) | done | — | — | — |" in message
+    assert "| changed | gpt-6-sol (medium) | in review | — | — | — |" in message
 
 
 def test_project_job_board_retains_undisplayed_terminal_and_active_jobs(workspace):
@@ -1926,7 +1949,7 @@ def test_hook_dispatch_refreshes_result_board_after_apply(workspace, monkeypatch
     codex._append_project_job_status({}, state, "project", result_event)
     pending_path = advisor_state / "compaction_advisor.json"
     pending = codex.compaction_advisor._read_state(pending_path, "session-1")["dispatch_pending"]
-    assert "| applied-after-result | gpt-6-sol (medium) | done | — | — | — |" in pending["board"]
+    assert "| applied-after-result | gpt-6-sol (medium) | coded · fetching result | — | — | — |" in pending["board"]
 
     job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
     job = json.loads(job_path.read_text(encoding="utf-8"))
