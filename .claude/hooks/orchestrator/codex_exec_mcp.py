@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import ctypes
+import errno
 import hashlib
 import json
 import math
@@ -532,7 +533,31 @@ def _windows_process_identity(pid: int) -> tuple[str, int | None]:
 
 
 def _posix_process_identity(pid: int) -> tuple[str, int | None]:
-    """Return Linux process state and /proc start ticks, or fail closed."""
+    """Return process state and a stable creation identity, or fail closed."""
+    if sys.platform == "darwin":
+        try:
+            mib = (ctypes.c_int32 * 4)(1, 14, 1, pid)  # KERN_PROC, KERN_PROC_PID
+            data = ctypes.create_string_buffer(648)
+            length = ctypes.c_size_t(len(data))
+            sysctl = ctypes.CDLL(None, use_errno=True).sysctl
+            sysctl.argtypes = [ctypes.POINTER(ctypes.c_int32), ctypes.c_uint,
+                               ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t),
+                               ctypes.c_void_p, ctypes.c_size_t]
+            sysctl.restype = ctypes.c_int
+            if sysctl(mib, len(mib), data, ctypes.byref(length), None, 0) != 0:
+                return ("DEAD", None) if ctypes.get_errno() == errno.ESRCH else ("UNCONFIRMED", None)
+            if length.value == 0:
+                return "DEAD", None
+            if length.value < 37:
+                return "UNCONFIRMED", None
+            seconds = int.from_bytes(data.raw[:8], "little", signed=True)
+            micros = int.from_bytes(data.raw[8:12], "little", signed=True)
+            if seconds <= 0 or not 0 <= micros < 1_000_000:
+                return "UNCONFIRMED", None
+            created = seconds * 1_000_000 + micros
+            return ("DEAD" if data.raw[36] == 5 else "ALIVE"), created  # SZOMB
+        except (AttributeError, OSError, ValueError):
+            return "UNCONFIRMED", None
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
         fields = stat[stat.rfind(")") + 2:].split()
@@ -547,6 +572,19 @@ def _posix_process_identity(pid: int) -> tuple[str, int | None]:
 
 def _posix_process_group_stopped(pid: int) -> bool:
     """Confirm a detached POSIX child session has no live processes."""
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["ps", "-axo", "pgid=,stat="], capture_output=True, text=True,
+                encoding="ascii", timeout=2, check=True,
+            )
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if len(fields) >= 2 and int(fields[0]) == pid and fields[1][0] not in {"Z", "X"}:
+                    return False
+            return True
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+            return False
     try:
         entries = list(Path("/proc").iterdir())
     except OSError:
@@ -1344,7 +1382,7 @@ class Server:
             if not job.get("hostContained"):
                 return "UNCONFIRMED"
             state, actual_created = _windows_process_identity(pid)
-        elif sys.platform.startswith("linux"):
+        elif sys.platform.startswith("linux") or sys.platform == "darwin":
             state, actual_created = _posix_process_identity(pid)
         else:
             return "UNCONFIRMED"
@@ -2761,7 +2799,7 @@ def _host_main(job_id: str, job_dir: Path | None, generation: int = 1,
                 process_state, created = _windows_process_identity(os.getpid())
                 if process_state != "ALIVE" or created is None:
                     raise OSError("host process identity unavailable")
-            elif sys.platform.startswith("linux"):
+            elif sys.platform.startswith("linux") or sys.platform == "darwin":
                 process_state, created = _posix_process_identity(os.getpid())
                 if process_state != "ALIVE" or created is None:
                     raise OSError("host process identity unavailable")

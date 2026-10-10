@@ -500,7 +500,7 @@ def test_unavailable_primary_falls_back_and_records_attempts(workspace, config, 
                     "error_code": "AGY_DOWN", "findings": [{"code": "AGY_DOWN", "message": "provider unavailable"}]}
         command = reviewer_module.CLAUDE_ADAPTER.build_command(
             "review", reviewer_module.REVIEW_SCHEMA,
-            {"reviewer1_executable": str(Path.cwd() / "fake-claude"),
+            {"reviewer1_executable": str(Path.cwd() / "claude"),
              "reviewer1_model_requested": kwargs["reviewer_model"],
              "reviewer1_effort": kwargs["reviewer_effort"]},
             cwd=Path.cwd(),
