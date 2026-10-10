@@ -928,7 +928,7 @@ def _recoverable(root, *, thread_id=None, stage="PENDING", attempts=0):
     record = jobs / f"{job_id}.json"
     job = json.loads(record.read_text(encoding="utf-8"))
     job.update(generation=1, ownershipToken="old", hostPid=123, pid=789,
-               hostCreatedAt=456, hostContained=True, deadlineAt=100,
+               hostCreatedAt=456, hostContained=True, deadlineAt=2000,
                resumedAfterInterruption=attempts)
     if thread_id:
         job["threadId"] = thread_id

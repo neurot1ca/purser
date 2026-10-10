@@ -4352,8 +4352,8 @@ def post_tool_use(
                 test_evidence = event.get("test_evidence", [])
                 test_evidence_failed = event.get("test_evidence_failed") is True
                 if isinstance(test_evidence, list):
-                    worker_validation["test_evidence"] = test_evidence
                     if test_evidence:
+                        worker_validation["test_evidence"] = test_evidence
                         worker_validation["source"] = "HOST_TEST_EVIDENCE"
                         if all(isinstance(entry, Mapping)
                                and type(entry.get("exit_code")) is int for entry in test_evidence):

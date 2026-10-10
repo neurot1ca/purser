@@ -2120,7 +2120,7 @@ def test_recovered_job_reviews_original_baseline_and_releases_lease_after_consum
     (repo / "file0.py").write_text("before = True\n", encoding="utf-8")
     job = json.loads(record.read_text(encoding="utf-8"))
     job.update(generation=1, ownershipToken="old", hostPid=123, pid=789, hostCreatedAt=456,
-               hostContained=True, deadlineAt=time.time() - 1, signalToken="secret")
+               hostContained=True, deadlineAt=time.time() + 3600, signalToken="secret")
     record.write_text(json.dumps(job), encoding="utf-8")
     record.with_suffix(".launch").write_text(json.dumps({"name": "codex", "args": {
         "prompt": "Update both files.", "timeoutSeconds": 30}, "codexBin": "codex"}), encoding="utf-8")
@@ -2173,7 +2173,7 @@ def test_failed_recovery_finalizes_through_ambiguous_path(workspace, config, mon
     start, job_id, record = async_started(workspace, config)
     job = json.loads(record.read_text(encoding="utf-8"))
     job.update(generation=1, ownershipToken="old", hostPid=123, pid=789, hostCreatedAt=456,
-               hostContained=True, deadlineAt=time.time() - 1)
+               hostContained=True, deadlineAt=time.time() + 3600)
     record.write_text(json.dumps(job), encoding="utf-8")
     monkeypatch.setattr(codex_exec_mcp.Server, "_classify_host", lambda self, job: "DEAD")
     monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
