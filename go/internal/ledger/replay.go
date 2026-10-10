@@ -352,10 +352,28 @@ func tryThreeWayJobPatch(root, destination string, paths []string, patch []byte,
 			return nil, err
 		}
 	}
-	args := []string{"add", "-A", "--"}
-	args = append(args, literalPathspecs(paths)...)
-	if _, err = run(args, nil, "staging current job target paths"); err != nil {
-		return nil, err
+	presentPaths := make([]string, 0, len(paths))
+	missingPaths := make([]string, 0)
+	for _, name := range paths {
+		if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(name))); statErr == nil {
+			presentPaths = append(presentPaths, name)
+		} else if os.IsNotExist(statErr) {
+			missingPaths = append(missingPaths, name)
+		} else {
+			return nil, statErr
+		}
+	}
+	if len(missingPaths) > 0 {
+		args := append([]string{"rm", "--cached", "--ignore-unmatch", "-q", "--"}, literalPathspecs(missingPaths)...)
+		if _, err = run(args, nil, "staging missing job target paths"); err != nil {
+			return nil, err
+		}
+	}
+	if len(presentPaths) > 0 {
+		args := append([]string{"add", "-A", "--"}, literalPathspecs(presentPaths)...)
+		if _, err = run(args, nil, "staging current job target paths"); err != nil {
+			return nil, err
+		}
 	}
 	before, err := run([]string{"write-tree"}, nil, "saving isolated merge base")
 	if err != nil {

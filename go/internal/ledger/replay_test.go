@@ -45,6 +45,79 @@ func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
 	}
 }
 
+func TestPrepareJobReplayRetryFromAppliedPreparingState(t *testing.T) {
+	base := t.TempDir()
+	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
+	snapshot := initReplayRepository(t, repo, "")
+	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
+	if err := os.WriteFile(filepath.Join(worker, "tracked.txt"), []byte("job result\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	patch, err := JobPatch(worker, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := filepath.Join(base, "recovery")
+	if err = os.Mkdir(recovery, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = copyReplayTree(worker, filepath.Join(recovery, "worker-tree")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(recovery, "worker.patch"), []byte(patch), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := json.Marshal(map[string]any{"state": "PREPARING", "snapshot": snapshot, "target": snapshot, "paths": []string{"tracked.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(recovery, "state.json"), state, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restored := false
+	runner := func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+		if operation == "restoring worker index" {
+			restored = true
+		}
+		return runGit(root, args, timeout, operation, input, env)
+	}
+	result, err := prepareJobReplay(repo, worker, snapshot, recovery, nil, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["status"] != "prepared" {
+		t.Fatalf("retry did not prepare: %#v", result)
+	}
+	if !restored {
+		t.Fatal("retry did not restore the saved worker tree")
+	}
+	if got, err := os.ReadFile(filepath.Join(worker, "tracked.txt")); err != nil || string(got) != "job result\n" {
+		t.Fatalf("retry produced wrong worker tree: %q, %v", got, err)
+	}
+}
+
+func TestPrepareJobReplayThreeWayStagesAddedFile(t *testing.T) {
+	base := t.TempDir()
+	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
+	snapshot := initReplayRepository(t, repo, "")
+	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
+	if err := os.WriteFile(filepath.Join(worker, "new.txt"), []byte("job added\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	patch, err := JobPatch(worker, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflicts := []string{}
+	merged, err := tryThreeWayJobPatch(repo, "", []string{"new.txt"}, []byte(patch), &conflicts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) == 0 || len(conflicts) != 0 {
+		t.Fatalf("three-way merge did not produce the added file patch: merged=%q conflicts=%v", merged, conflicts)
+	}
+}
+
 func TestPrepareJobReplayPythonFixture(t *testing.T) {
 	file := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_baseline", "replay.json")
 	data, err := os.ReadFile(file)
