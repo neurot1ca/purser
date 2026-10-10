@@ -267,6 +267,62 @@ func TestCodeMapNativeReusesCacheAndDropsDeletedFiles(t *testing.T) {
 	}
 }
 
+func TestCodeMapNativeRefreshesDirtyFile(t *testing.T) {
+	r, s := nativeMapRepo(t, map[string]string{"a.py": "def one():\n    pass\n"})
+	calls := 0
+	e := map[string]codeMapSymbolExtractor{"python": func(source []byte) ([]codeMapSymbol, error) {
+		calls++
+		return extractPythonSymbols(source)
+	}}
+	p, status := refreshCodeMapNative(r, s, time.Second, e, nil)
+	if status != "FRESH" || calls != 1 {
+		t.Fatalf("initial status=%s calls=%d", status, calls)
+	}
+	if err := os.WriteFile(filepath.Join(r, "a.py"), []byte("def two(arg):\n    pass\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, status = refreshCodeMapNative(r, s, time.Second, e, nil)
+	data, err := os.ReadFile(p)
+	if err != nil || status != "FRESH" || calls != 2 || !strings.Contains(string(data), "function two(arg)") {
+		t.Fatalf("dirty refresh status=%s calls=%d err=%v\n%s", status, calls, err, data)
+	}
+}
+
+func TestCodeMapNativeSkipsOversizedAndBinaryFiles(t *testing.T) {
+	r, s := nativeMapRepo(t, map[string]string{"small.py": "def okay():\n    pass\n"})
+	if err := os.WriteFile(filepath.Join(r, "large.bin"), make([]byte, codeMapMaxFileBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r, "binary.bin"), []byte{0, 0xff}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, status := refreshCodeMapNative(r, s, time.Second, nil, nil)
+	data, err := os.ReadFile(p)
+	if err != nil || status != "FRESH" {
+		t.Fatalf("status=%s err=%v\n%s", status, err, data)
+	}
+	manifestData, err := os.ReadFile(filepath.Join(filepath.Dir(p), "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest codeMapManifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SkippedFiles != 2 || !strings.Contains(string(data), "small.py") || strings.Contains(string(data), "large.bin") || strings.Contains(string(data), "binary.bin") {
+		t.Fatalf("skipped=%d map=%s", manifest.SkippedFiles, data)
+	}
+}
+
+func TestCodeMapNativeUnknownLanguageIsListed(t *testing.T) {
+	r, s := nativeMapRepo(t, map[string]string{"notes.txt": "not source code\n"})
+	p, status := refreshCodeMapNative(r, s, time.Second, nil, nil)
+	data, err := os.ReadFile(p)
+	if err != nil || status != "FRESH" || !strings.Contains(string(data), "Covered languages: none") || !strings.Contains(string(data), "notes.txt") || strings.Contains(string(data), "symbols:") {
+		t.Fatalf("status=%s err=%v\n%s", status, err, data)
+	}
+}
+
 func TestCodeMapNativeFailuresPreserveMapAndNeverFresh(t *testing.T) {
 	for _, f := range []string{"lock", "write", "limit"} {
 		t.Run(f, func(t *testing.T) {
