@@ -3,6 +3,18 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.111 — 2026-10-10
+
+- **Changed:** Plan milestone jobs show `<label> [<plan>-N/T]`, and applying a plain milestone job (also by hand) completes the milestone; the Stop reminder lists every open plan.
+- **Changed:** Implementation jobs are no longer refused for having five or more scope paths; only consequential and escalated routes go to planning first.
+- **Changed:** The board lists coded jobs still in result, review or acceptance above queued jobs.
+- **Changed:** A Go release tool replaces scripts/release.py.
+- **Fixed:** A confirmed-dead host fails its job as HOST_DIED before the deadline, and a failed admission baseline ends FAILED with its real cause instead of hanging as coding.
+- **Fixed:** The acceptance revision hashes the job's patch, so it binds content and survives an incomplete admission baseline.
+- **Fixed:** Replay stages only the job's paths, so it no longer times out on large checkouts.
+- **Fixed:** The scoped manifest records ignored directories without walking them, and tests no longer leave builds in go/.tmp.
+- **Fixed:** Fetching a result no longer flashes a console window.
+
 ## 0.1.110 — 2026-10-10
 
 - **Changed:** The job host records the worker's test runs (command, exit code, output tail) and validation comes from that evidence, so Claude no longer reruns focused tests that already passed.

@@ -64,6 +64,7 @@ POST_IMPORTED_CALLS = {
     "ledger.classify_concurrent_writers": "go/internal/ledger.ClassifyConcurrentWriters (80)",
     "ledger.compute_job_delta": "go/internal/ledger.ComputeJobDelta (82)",
     "ledger.filter_job_delta": "go/internal/ledger.FilterJobDelta (82)",
+    "ledger.job_changed_paths_sha256": "go/internal/ledger.JobChangedPathsSHA256 (82)",
     "ledger.prepare_job_replay": "go/internal/ledger.PrepareJobReplay (83b, 84)",
     "codex_exec_mcp._dispatch_worktree_retirement": "go/internal/jobs.DispatchWorktreeRetirement (5)",
     "checks.select_checks": "go/internal/review.SelectChecks (90)",

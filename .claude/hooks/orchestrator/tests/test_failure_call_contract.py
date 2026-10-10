@@ -130,6 +130,7 @@ FAILURE_CALL_CONTRACTS = {
     "ledger.classify_concurrent_writers": "go/internal/enforce.PostToolUseFailure (122)",
     "ledger.compute_delta": "go/internal/enforce.PostToolUseFailure (122)",
     "ledger.compute_job_delta": "go/internal/enforce.PostToolUseFailure (122)",
+    "ledger.job_changed_paths_sha256": "go/internal/enforce.PostToolUseFailure (122)",
     "ledger.detect_out_of_scope_modifications": "go/internal/enforce.PostToolUseFailure (122)",
     "ledger.detect_protected_paths": "go/internal/enforce.PostToolUseFailure (122)",
     "ledger.filter_job_delta": "go/internal/enforce.PostToolUseFailure (122)",
