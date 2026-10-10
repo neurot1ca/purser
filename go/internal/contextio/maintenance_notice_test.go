@@ -1,9 +1,115 @@
 package contextio
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestMaintenanceNoticeDropsResolvedFindings(t *testing.T) {
+	repo := t.TempDir()
+	command := exec.Command("git", "-C", repo, "init", "-q")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	tracked := filepath.Join(repo, "artifact.db")
+	if err := os.WriteFile(tracked, []byte("artifact"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "artifact.db"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "baseline", "-q"}} {
+		command = exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	for _, args := range [][]string{{"rm", "--cached", "artifact.db", "-q"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "untrack artifact", "-q"}} {
+		command = exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	notice := map[string]any{"finding_count": 2, "findings": []any{
+		map[string]any{"path_line": "artifact.db:1", "evidence": "Tracked database"},
+		map[string]any{"path_line": "gone/run.py:1", "evidence": "untracked files"},
+	}}
+	if got := reverifyMaintenanceFindings(repo, notice); got != 0 {
+		t.Fatalf("remaining findings=%d, want 0", got)
+	}
+	if notice["done"] != true || len(notice["findings"].([]any)) != 0 {
+		t.Fatalf("resolved report was not marked done and emptied: %#v", notice)
+	}
+}
+
+func TestMaintenanceNoticeKeepsPresentUntrackedDirectoryFinding(t *testing.T) {
+	repo := t.TempDir()
+	command := exec.Command("git", "-C", repo, "init", "-q")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	dir := filepath.Join(repo, "scratch")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "run.py")
+	if err := os.WriteFile(path, []byte("print('ok')"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	notice := map[string]any{"finding_count": 1, "findings": []any{
+		map[string]any{"path_line": "scratch/run.py:1", "evidence": "untracked files"},
+	}}
+	if got := reverifyMaintenanceFindings(repo, notice); got != 1 {
+		t.Fatalf("remaining findings=%d, want 1", got)
+	}
+	if notice["done"] == true || notice["resolved"] == true {
+		t.Fatalf("present untracked finding was marked resolved: %#v", notice)
+	}
+}
+
+func TestMaintenanceNoticeKeepsFindingWhenGitReverificationFails(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(repo, "artifact.db")
+	if err := os.WriteFile(path, []byte("artifact"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git"), []byte("gitdir: C:\\does-not-exist"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	notice := map[string]any{"finding_count": 1, "findings": []any{
+		map[string]any{"path_line": "artifact.db:1", "evidence": "tracked database"},
+	}}
+	if got := reverifyMaintenanceFindings(repo, notice); got != 1 {
+		t.Fatalf("remaining findings=%d, want 1", got)
+	}
+	if notice["done"] == true || notice["resolved"] == true {
+		t.Fatalf("Git failure marked report resolved: %#v", notice)
+	}
+}
+
+func TestMaintenanceNoticeLegacyFindingHasReason(t *testing.T) {
+	got := maintenanceWhy(map[string]any{"symbol": ".coverage", "evidence": "Tracked binary coverage artifact"})
+	if got == "—" || got == "" {
+		t.Fatalf("missing deterministic reason: %q", got)
+	}
+}
+
+func TestMaintenanceNoticeEvidenceTruncatesAtWordBoundary(t *testing.T) {
+	got := truncateMaintenanceEvidence("Tracked 1,568,768-byte SQLite coverage database; added as binary in bdafda8", 48)
+	if strings.Contains(got, "databas") || strings.HasSuffix(got, " ") || !strings.HasSuffix(got, "…") {
+		t.Fatalf("evidence was cut mid-word or lacks ellipsis: %q", got)
+	}
+}
+
+func TestMaintenanceShowCapsTotalShowsAcrossQuotaCycles(t *testing.T) {
+	notice := map[string]any{"cycles": map[string]any{
+		"reset-1": map[string]any{"shows": 1}, "reset-2": map[string]any{"shows": 1}, "reset-3": map[string]any{"shows": 1},
+	}}
+	window := &[3]any{"5h", float64(90), "reset-4"}
+	if show, _, _ := maintenanceShow(notice, map[string]any{}, window); show {
+		t.Fatal("report was shown again after its report-wide show limit")
+	}
+}
 
 func TestMaintenanceNoticeCoverageTargetAndFindingOrder(t *testing.T) {
 	for _, test := range []struct {
@@ -58,7 +164,7 @@ func TestMaintenanceNoticeWhyColumnsAndLegacyFindings(t *testing.T) {
 				"finding_count": 1,
 				"findings":      []any{map[string]any{"path_line": "a.py:1", "symbol": "a", "evidence": "e", "confidence": "high"}},
 			})
-			if !strings.Contains(text, test.header) || !strings.Contains(text, "| a.py:1 a | — | e |") || !strings.Contains(text, master) {
+			if !strings.Contains(text, test.header) || !strings.Contains(text, "reported as unused by the cleanup scan") || strings.Contains(text, "| a.py:1 a | — | e |") || !strings.Contains(text, master) {
 				t.Fatalf("legacy notice missing reason column or master instruction: %s", text)
 			}
 		})
@@ -70,7 +176,7 @@ func TestMaintenanceNoticeWhyColumnsAndLegacyFindings(t *testing.T) {
 				"finding_count": 1,
 				"findings":      []any{map[string]any{"path_line": "a.py:1", "symbol": "a", "why": why, "evidence": evidence, "confidence": "high"}},
 			})
-			row := "| a.py:1 a | " + strings.Repeat("界", 64) + " | " + strings.Repeat("e", 48) + " |"
+			row := "| a.py:1 a | " + strings.Repeat("界", 64) + " | " + strings.Repeat("e", 47) + "… |"
 			if !strings.Contains(text, row) {
 				t.Fatalf("notice did not apply rune limits: %s", text)
 			}

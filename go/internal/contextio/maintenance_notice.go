@@ -1,16 +1,20 @@
 package contextio
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"purser-hook/internal/proc"
 )
 
 func queueMaintenanceNotice(statePath, repository, key, session string) {
@@ -42,6 +46,15 @@ func queueMaintenanceNotice(statePath, repository, key, session string) {
 				notice["report_type"] = "test-gaps"
 			} else {
 				notice["report_type"] = "cleanup"
+			}
+		}
+		if findings, ok := notice["findings"].([]any); ok {
+			if reverifyMaintenanceFindings(repository, notice) == 0 {
+				notice["done"], notice["resolved"], notice["pending"] = true, true, false
+				_ = writeJSONAtomically(path, notice)
+				continue
+			} else if updated, ok := notice["findings"].([]any); ok && len(updated) != len(findings) {
+				_ = writeJSONAtomically(path, notice)
 			}
 		}
 		show, cycle, skipSecond := maintenanceShow(notice, quota, window)
@@ -218,7 +231,13 @@ func maintenanceShow(notice, quota map[string]any, window *[3]any) (bool, string
 		cycle = map[string]any{}
 	}
 	shows := number(cycle["shows"])
-	if cycle["skip_second"] == true || shows >= 2 {
+	totalShows := 0
+	for _, raw := range cycles {
+		if entry, ok := raw.(map[string]any); ok {
+			totalShows += number(entry["shows"])
+		}
+	}
+	if cycle["skip_second"] == true || totalShows >= 2 {
 		return false, "", false
 	}
 	if shows == 0 && remaining > 70 || shows == 1 && remaining > 30 {
@@ -266,7 +285,7 @@ func formatMaintenanceNotice(notice map[string]any) string {
 		} else {
 			lines = append(lines, "> *The table below shows each gap, why it matters, and its evidence; the full report is at `"+path+"`.*", "> | Gap | Why it matters | Evidence |", "> | --- | --- | --- |")
 			for _, item := range rankMaintenanceFindings(findings, 5, true) {
-				lines = append(lines, fmt.Sprintf("> | %s | %s | %s |", truncateRunes(maintenanceCandidate(item), 48), maintenanceWhy(item), truncateRunes(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)))
+				lines = append(lines, fmt.Sprintf("> | %s | %s | %s |", truncateRunes(maintenanceCandidate(item), 48), maintenanceWhy(item), truncateMaintenanceEvidence(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)))
 			}
 		}
 		if notice["pending_cycle"] != nil && notice["pending_cycle"] != "no-window" && number(notice["pending_show"]) == 1 && notice["pending_skip_second"] != true {
@@ -290,7 +309,7 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	lines := []string{"> " + intro, "> *" + instruction + "*", "> | Finding | Why clean it | Evidence |", "> | --- | --- | --- |"}
 	for _, item := range ranked {
 		candidate := truncateRunes(maintenanceCandidate(item), 48)
-		evidence := truncateRunes(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)
+		evidence := truncateMaintenanceEvidence(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)
 		lines = append(lines, fmt.Sprintf("> | %s | %s | %s |", candidate, maintenanceWhy(item), evidence))
 	}
 	if notice["pending_cycle"] != nil && notice["pending_cycle"] != "no-window" && number(notice["pending_show"]) == 1 && notice["pending_skip_second"] != true {
@@ -351,9 +370,96 @@ func maintenanceCandidate(item map[string]any) string {
 func maintenanceWhy(item map[string]any) string {
 	why := strings.Join(strings.Fields(str(item["why"])), " ")
 	if why == "" {
-		return "—"
+		evidence := strings.ToLower(str(item["evidence"]))
+		symbol := strings.ToLower(str(item["symbol"]))
+		tracked := strings.Contains(evidence, "tracked") && !strings.Contains(evidence, "untracked")
+		switch {
+		case tracked && (strings.Contains(evidence, "binary") || strings.Contains(evidence, "database") || strings.Contains(symbol, ".coverage")):
+			return "tracked build artifact bloats the repo"
+		case strings.Contains(evidence, "untracked"):
+			return "untracked experiment files add repository clutter"
+		default:
+			return "reported as unused by the cleanup scan"
+		}
 	}
 	return truncateRunes(why, 64)
+}
+
+func truncateMaintenanceEvidence(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 1 {
+		return "…"
+	}
+	end := limit - 1
+	for end > 0 && runes[end] != ' ' && runes[end] != '\t' && runes[end] != '\n' {
+		end--
+	}
+	if end == 0 {
+		end = limit - 1
+	}
+	return strings.TrimRight(string(runes[:end]), " \t\n") + "…"
+}
+
+func reverifyMaintenanceFindings(repository string, notice map[string]any) int {
+	rawFindings, ok := notice["findings"].([]any)
+	if !ok {
+		return 0
+	}
+	remaining := make([]any, 0, len(rawFindings))
+	for _, raw := range rawFindings {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		pathLine := str(item["path_line"])
+		rel := strings.TrimSpace(strings.SplitN(pathLine, ":", 2)[0])
+		if rel == "" || filepath.IsAbs(rel) || strings.HasPrefix(filepath.Clean(rel), "..") {
+			continue
+		}
+		evidence := strings.ToLower(str(item["evidence"]))
+		tracked := strings.Contains(evidence, "tracked") && !strings.Contains(evidence, "untracked")
+		if _, err := os.Stat(filepath.Join(repository, filepath.FromSlash(rel))); err != nil {
+			continue
+		}
+		if strings.Contains(evidence, "untracked") {
+			dir := strings.Split(filepath.ToSlash(rel), "/")[0]
+			output, gitErr := gitOutput(repository, "status", "--porcelain", "--untracked-files=all", "--", dir)
+			if gitErr != nil {
+				remaining = append(remaining, raw)
+				continue
+			}
+			if len(output) == 0 {
+				continue
+			}
+		}
+		if tracked {
+			output, gitErr := gitOutput(repository, "ls-tree", "-r", "--name-only", "HEAD", "--", filepath.ToSlash(rel))
+			if gitErr != nil {
+				remaining = append(remaining, raw)
+				continue
+			}
+			if len(output) == 0 {
+				continue
+			}
+		}
+		remaining = append(remaining, raw)
+	}
+	notice["findings"] = remaining
+	notice["finding_count"] = len(remaining)
+	if len(remaining) == 0 {
+		notice["done"], notice["resolved"], notice["pending"] = true, true, false
+	}
+	return len(remaining)
+}
+
+func gitOutput(repository string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	command := proc.Hide(exec.CommandContext(ctx, "git", append([]string{"-C", repository}, args...)...))
+	return command.Output()
 }
 
 func truncateRunes(value string, limit int) string {
