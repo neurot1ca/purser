@@ -191,6 +191,152 @@ func TestSizePrunesOldestEligibleFilesFirst(t *testing.T) {
 	}
 }
 
+func TestAgeThenCountAndBytePruning(t *testing.T) {
+	root := t.TempDir()
+	now := int64(2_000_000)
+	old := filepath.Join(root, "expired.cache")
+	oldest := filepath.Join(root, "oldest.cache")
+	middle := filepath.Join(root, "middle.cache")
+	newest := filepath.Join(root, "newest.cache")
+	putFile(t, old, []byte("x"), now-90_000)
+	putFile(t, oldest, []byte("x"), now-3_000)
+	putFile(t, middle, []byte("x"), now-2_000)
+	putFile(t, newest, []byte("x"), now-1_000)
+	p := policy{maxAgeDays: 1, maxFiles: 2, maxBytes: 1, deleteGlobs: []string{"*.cache"}}
+	if prune(root, p, float64(now)) {
+		t.Fatal("remaining files unexpectedly exceed policy")
+	}
+	for _, path := range []string{old, oldest, middle} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("eligible older file remains %s: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(newest); err != nil {
+		t.Fatalf("newest file was removed: %v", err)
+	}
+}
+
+func TestPruneDeletesOnlyClosedPatternAndProtectsRecentAndLocks(t *testing.T) {
+	root := t.TempDir()
+	cache := filepath.Join(root, "closed.cache")
+	durable := filepath.Join(root, "valuable.json")
+	recent := filepath.Join(root, "recent.cache")
+	lock := filepath.Join(root, "held.lock")
+	putFile(t, cache, []byte("generated"), 1000)
+	putFile(t, durable, []byte("durable"), 1000)
+	putFile(t, recent, []byte("recent"), 1970)
+	putFile(t, lock, []byte("lock"), 1000)
+	p := policy{maxAgeDays: 0, maxFiles: 0, maxBytes: 0, deleteGlobs: []string{"*.cache"}}
+	if !prune(root, p, 2000) {
+		t.Fatal("protected files exceeding the limits were not reported")
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Errorf("closed-pattern cache remains: %v", err)
+	}
+	for _, path := range []string{durable, recent, lock} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("protected file %s changed: %v", path, err)
+		}
+	}
+}
+
+func TestAppendOnlyDiagnosticsAreNotRotated(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "diagnostics.jsonl")
+	original := []byte("old\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nnewest\n")
+	putFile(t, path, original, 1000)
+	p := byteLimit(12)
+	if !prune(path, p, 2000) {
+		t.Fatal("oversized append-only diagnostics were not reported")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != string(original) {
+		t.Fatalf("append-only diagnostics changed: %q %v", data, err)
+	}
+}
+
+func TestUnknownDirectoryUsesDefaultAndWarnsWithoutDeleting(t *testing.T) {
+	root := t.TempDir()
+	stale := filepath.Join(root, "new-state", "stale")
+	putFile(t, stale, []byte("keep"), 1000)
+	PruneState(root, 1000+31*86400, false)
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("unknown-directory file was removed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "telemetry_health.json"))
+	if err != nil {
+		t.Fatalf("unknown-directory warning missing: %v", err)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	if health["status"] != "DEGRADED" || health["last_error_code"] != "STATE_RETENTION_LIMIT" {
+		t.Fatalf("unexpected health warning: %#v", health)
+	}
+}
+
+func TestOwnerManagedStateIsUntouched(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"preparations", "wt", "marketplace", "telemetry", "codex_exec_mcp", "async_jobs", "pending"} {
+		putFile(t, filepath.Join(root, name, "old"), []byte("owned"), 1000)
+	}
+	PruneState(root, 1000+100*86400, false)
+	for _, name := range []string{"preparations", "wt", "marketplace", "telemetry", "codex_exec_mcp", "async_jobs", "pending"} {
+		if _, err := os.Stat(filepath.Join(root, name, "old")); err != nil {
+			t.Errorf("owner-managed entry %s was changed: %v", name, err)
+		}
+	}
+}
+
+func TestProjectsAreWarnOnlyWhenOverLimit(t *testing.T) {
+	root := t.TempDir()
+	profile := filepath.Join(root, "projects", "0123456789abcdef", "profile.toml")
+	putFile(t, profile, []byte("profile"), 1000)
+	previous, existed := registry["projects"]
+	registry["projects"] = limits(0, 0)
+	t.Cleanup(func() {
+		if existed {
+			registry["projects"] = previous
+		} else {
+			delete(registry, "projects")
+		}
+	})
+	PruneState(root, 1000+86400, false)
+	if _, err := os.Stat(profile); err != nil {
+		t.Fatalf("warn-only project profile was removed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "telemetry_health.json"))
+	if err != nil {
+		t.Fatalf("over-limit warning missing: %v", err)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	if health["last_error_code"] != "STATE_RETENTION_LIMIT" {
+		t.Fatalf("unexpected warning: %#v", health)
+	}
+}
+
+func TestProductionDeleteAllowlistIsOnlyCatalogCache(t *testing.T) {
+	ownership := registry["worktree_ownership"]
+	if ownership.owner != "worktree-retirement" || ownership.maxAgeDays != 3 {
+		t.Fatalf("worktree ownership policy = %#v", ownership)
+	}
+	for name, p := range registry {
+		if name == "model-catalog" {
+			if len(p.deleteGlobs) != 1 || p.deleteGlobs[0] != "catalog.json" {
+				t.Fatalf("model-catalog allowlist = %#v", p.deleteGlobs)
+			}
+			continue
+		}
+		if len(p.deleteGlobs) != 0 {
+			t.Errorf("unexpected production delete allowlist for %q: %#v", name, p.deleteGlobs)
+		}
+	}
+}
+
 func TestDirectoryPoliciesKeepOwnerManagedAndDeleteOnlyCatalogCache(t *testing.T) {
 	root := t.TempDir()
 	putFile(t, filepath.Join(root, "preparations", "job", "old"), []byte("owned"), 1000)
