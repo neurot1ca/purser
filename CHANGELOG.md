@@ -3,6 +3,17 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.115 — 2026-10-10
+
+- **Fixed:** A failed apply replay restores the worker's worktree, and hand-applied detection compares the preserved worker patch, so a job is never marked applied (and its worktree retired) from main's changes alone.
+- **Fixed:** codex_apply registers newly created files with git (intent-to-add), so committing them by path works.
+- **Fixed:** A worktree send-back whose scope overlaps another task's active lease queues like a start instead of being refused.
+- **Fixed:** A plan no longer stays on "apply" after its linked jobs are discarded, so the Stop continuation resumes the next pass.
+- **Fixed:** Host test evidence recognizes shell-wrapped, env-prefixed and `python -m pytest` test commands, so a worker's test run is recorded instead of rerun.
+- **Fixed:** Git failures include a short stderr summary, and worktree ownership locks are written under the Purser state root instead of the repository.
+- **Fixed:** Synchronous dispatch drains worker output before waiting, so the final usage event is not lost.
+- **Fixed:** Discarded jobs show as discarded on the board, and cancelling a finished unapplied job returns a short receipt.
+
 ## 0.1.114 — 2026-10-10
 
 - **Fixed:** Job signal servers read the whole message, so a PING or CANCEL split across TCP reads is no longer dropped (seen on macOS); older clients and hosts keep working.
