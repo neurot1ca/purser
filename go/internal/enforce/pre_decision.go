@@ -43,22 +43,6 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	tool := stringValue(event["tool_name"])
 	isStart := strings.HasSuffix(tool, "__codex_start")
-	if isStart {
-		if key, keyErr := callKey(event); keyErr == nil {
-			call := codexCallUUID(key)
-			digest := sha256.Sum256([]byte(call))
-			data, readErr := os.ReadFile(filepath.Join(defaultPreStateRoot(runtimeRoot), "codex_exec_mcp", "jobs", hex.EncodeToString(digest[:])+".json"))
-			var job map[string]any
-			if readErr == nil && json.Unmarshal(data, &job) == nil && job["jobId"] == hex.EncodeToString(digest[:]) {
-				updated := make(map[string]any, len(input)+1)
-				for key, value := range input {
-					updated[key] = value
-				}
-				updated["call"] = call
-				return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}}, nil
-			}
-		}
-	}
 	reply := strings.HasSuffix(tool, "__codex-reply")
 	mode := "new"
 	if isStart {
@@ -69,6 +53,14 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		reply = mode == "reply"
 		if mode != "new" && mode != "reply" {
 			return denyPre("INVALID_ASYNC_MODE", "codex_start mode must be new or reply."), nil
+		}
+		if key, keyErr := callKey(event); keyErr == nil {
+			call := codexCallUUID(key)
+			digest := sha256.Sum256([]byte(call))
+			path := filepath.Join(defaultPreStateRoot(runtimeRoot), "codex_exec_mcp", "jobs", hex.EncodeToString(digest[:])+".json")
+			if _, statErr := os.Stat(path); statErr == nil {
+				return denyPre("ASYNC_CALL_ALREADY_ACCEPTED", "This tool use already has a bridge job."), nil
+			}
 		}
 	}
 	parsed := policy.ParseOrchPrompt(input["prompt"], config)

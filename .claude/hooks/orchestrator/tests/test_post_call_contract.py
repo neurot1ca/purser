@@ -69,6 +69,8 @@ POST_IMPORTED_CALLS = {
     "ledger.job_changed_paths_sha256": "go/internal/ledger.JobChangedPathsSHA256 (82)",
     "ledger.prepare_job_replay": "go/internal/ledger.PrepareJobReplay (83b, 84)",
     "codex_exec_mcp._dispatch_worktree_retirement": "go/internal/jobs.DispatchWorktreeRetirement (5)",
+    "task_retry.load": "go/internal/enforce.LoadTaskAttempt (task_retry.go)",
+    "task_retry.save": "go/internal/enforce.SaveTaskAttempt (task_retry.go)",
     "checks.select_checks": "go/internal/review.SelectChecks (90)",
     "checks.run_checks": "go/internal/review.RunChecks (90, 91)",
 }
@@ -77,7 +79,7 @@ POST_IMPORTED_CALLS["re.finditer"] = "go/internal/enforce.postPlanSummary (116a)
 POST_METHOD_CALLS = {name: "go/internal/enforce.PostToolUse (116a)" for name in "append astimezone date decode difference duration_hint encode endswith expanduser extend fileno find flock flush fromkeys fullmatch get glob group hexdigest is_alive is_file isoformat items join keys load locking lower lstrip mkdir open overlapping_owners pop read read_text record_conflicts record_sample recv release replace resolve rstrip save seek sendall set_retention_after setdefault shutdown split splitlines start start_shadow startswith stat strftime strip timestamp unlink update utcoffset values with_name with_suffix write write_text __enter__ __exit__".split()}
 POST_METHOD_CALLS.update({"overlapping_owners": "go/internal/lease.Store.OverlappingOwners (85, 85c)",
                           "set_retention_after": "go/internal/lease.Store.SetRetentionAfter (85)"})
-POST_BUILTIN_CALLS = {name: "go/internal/enforce.PostToolUse (116a)" for name in "all any bool dict enumerate float getattr int isinstance len list map max min round set sorted str tuple type ValueError WiringError AsyncAdoptionRequired interrupted preview reject repair_callable resume reviewer_callable".split()}
+POST_BUILTIN_CALLS = {name: "go/internal/enforce.PostToolUse (116a)" for name in "all any bool dict enumerate float getattr int isinstance len list map max min print round set sorted str tuple type ValueError WiringError AsyncAdoptionRequired interrupted preview reject repair_callable resume reviewer_callable".split()}
 POST_EXCLUSIONS = {"reviewer_bridge": "reviewer seam remains Python until bridge adapter assembly (115)"}
 
 

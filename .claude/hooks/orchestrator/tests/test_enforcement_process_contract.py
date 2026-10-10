@@ -66,6 +66,10 @@ ASYNC_PRE_BUILTIN_CALLS = {
 PRE_IMPORTED_CALLS = {
     name: "C1" for name in "active_coder_state.approve_fallback active_coder_state.read active_coder_state.record_fallback_question active_coder_state.update coder_config.load coder_config.opencode_candidates codex_exec_mcp._load_record codex_exec_mcp._state_dir compaction_advisor.queue_fallback_question datetime.datetime.fromisoformat datetime.datetime.now hashlib.sha256 json.loads json_transport.dumps ledger.ScopeLeases ledger.SessionLedger ledger.build_session_record ledger.capture_baseline math.ceil math.isfinite os.fsync os.replace policy.OrchParseResult policy.fresh_codex_decision policy.parse_orch_prompt policy.resolve_route policy.thread_compatibility policy.validate_config project_profile.load_profile project_root.project_key project_root.resolve_candidate project_root.resolve_project_root re.escape re.fullmatch re.match re.search re.sub state_root.default_state_root telemetry.record_health tempfile.NamedTemporaryFile time.time uuid.uuid5".split()
 }
+PRE_IMPORTED_CALLS.update({
+    "task_retry.load": "C1: go/internal/enforce.LoadTaskAttempt (task_retry.go)",
+    "task_retry.save": "C1: go/internal/enforce.SaveTaskAttempt (task_retry.go)",
+})
 PRE_IMPORTED_CALLS.update({"codex_quota.read_latest_quota": "C1: optional quota read; errors are ignored",
                           "codex_exec_mcp.probe_api_primary": "EXCLUDED: fallback recovery branch can wait 25 seconds"})
 PRE_METHOD_CALLS = {name: "C1" for name in "acquire add append associate_turn casefold decode duration_hint encode end endswith exists fileno find find_by_thread_id finditer flush fullmatch get glob group hexdigest intersection is_absolute isoformat isprintable items join load lower mkdir open partition pop read read_text refresh relative_to replace resolve rstrip save search split splitlines start start_active_task startswith stat strip sub timestamp total_seconds unlink update upper write".split()}

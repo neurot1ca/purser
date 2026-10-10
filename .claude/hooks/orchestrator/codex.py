@@ -1544,14 +1544,8 @@ def pre_tool_use(
             call_uuid = str(uuid.uuid5(uuid.NAMESPACE_OID, _call_key(event)))
             prior_job = hashlib.sha256(call_uuid.encode("utf-8")).hexdigest()
             prior_path = _state_root(state_root) / "codex_exec_mcp" / "jobs" / f"{prior_job}.json"
-            try:
-                prior_record = json.loads(prior_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                prior_record = None
-            if isinstance(prior_record, Mapping) and prior_record.get("jobId") == prior_job:
-                replay = dict(tool_input)
-                replay["call"] = call_uuid
-                return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": replay}}
+            if prior_path.exists():
+                return _deny("ASYNC_CALL_ALREADY_ACCEPTED", "This tool use already has a bridge job.")
         parsed = policy.parse_orch_prompt(tool_input.get("prompt"), loaded_config)
         reply_without_orch = (
             reply_call
@@ -5184,7 +5178,8 @@ def post_tool_use(
                 if isinstance(reported_model, str) and reported_model:
                     bundle["reviewer1_model_requested"] = reported_model
                 bundle["reviewer1_result"] = result
-                if pending.get("phase") == "implementation" and isinstance(pending.get("task_id"), str):
+                if (pending.get("job_id") and pending.get("phase") == "implementation"
+                        and isinstance(pending.get("task_id"), str)):
                     try:
                         task_retry.save(runtime_root, {
                             "project_key": pending.get("project_key"),

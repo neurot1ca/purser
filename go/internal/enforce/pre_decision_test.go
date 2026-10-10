@@ -563,7 +563,7 @@ func TestPreTaskRetryDispatch(t *testing.T) {
 		{name: "unresolved protected", route: "subtle", disposition: "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", finished: true, deny: "TASK_ALREADY_FINISHED:"},
 		{name: "async reply fresh", route: "consequential", category: "rejected_after_sendback", mode: "reply"},
 		{name: "sync reply denied", route: "subtle", category: "rejected_after_sendback", mode: "reply", sync: true, deny: "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back."},
-		{name: "duplicate replay", route: "subtle", disposition: "applied", finished: true, duplicate: true},
+		{name: "duplicate denied", route: "subtle", disposition: "applied", finished: true, duplicate: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			scratch := preTempDir(t)
@@ -637,8 +637,8 @@ func TestPreTaskRetryDispatch(t *testing.T) {
 				}
 			}
 			if tc.duplicate {
-				if hook["permissionDecision"] == "deny" || mapValue(hook["updatedInput"])["call"] != call {
-					t.Fatalf("duplicate denied: %#v", got)
+				if hook["permissionDecision"] != "deny" {
+					t.Fatalf("duplicate was not denied: %#v", got)
 				}
 				return
 			}

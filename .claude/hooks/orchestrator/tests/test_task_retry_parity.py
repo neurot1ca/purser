@@ -143,8 +143,11 @@ def test_python_matches_go_task_retry_dispatch(scratch, go_hook, name):
         assert responses[0]["permissionDecision"] == "deny"
         assert responses[0]["permissionDecisionReason"] == (
             "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back.")
-    elif name in {"cancelled_reuse", "duplicate"}:
+    elif name == "cancelled_reuse":
         assert "dispatch" in responses[0]
+    elif name == "duplicate":
+        assert responses[0]["permissionDecision"] == "deny"
+        assert responses[0]["permissionDecisionReason"].startswith("ASYNC_CALL_ALREADY_ACCEPTED:")
     elif name == "corrupt":
         assert responses[0]["permissionDecision"] == "deny"
         assert responses[0]["permissionDecisionReason"] == (
