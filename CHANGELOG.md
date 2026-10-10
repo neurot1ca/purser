@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.114 — 2026-10-10
+
+- **Fixed:** Job signal servers read the whole message, so a PING or CANCEL split across TCP reads is no longer dropped (seen on macOS); older clients and hosts keep working.
+
 ## 0.1.113 — 2026-10-10
 
 - **Fixed:** Applying a job closes earlier unapplied results of the same task, so superseded send-back rows no longer stay "in review" and their scope leases are released.
