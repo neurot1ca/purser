@@ -1,0 +1,83 @@
+{
+  "oracle": "Python ledger snapshot_drift_paths/apply_job_patch",
+  "cases": [
+    {
+      "name": "clean_apply",
+      "checkout": "base\n",
+      "patch": "diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 +1 @@\n-base\n+worker\n",
+      "paths": [
+        "tracked.txt"
+      ],
+      "drift": [],
+      "outcome": {
+        "applied": true,
+        "conflicts": []
+      }
+    },
+    {
+      "name": "already_present",
+      "checkout": "worker\n",
+      "patch": "diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 +1 @@\n-base\n+worker\n",
+      "paths": [
+        "tracked.txt"
+      ],
+      "drift": [
+        "tracked.txt"
+      ],
+      "outcome": {
+        "applied": false,
+        "conflicts": [
+          "tracked.txt"
+        ],
+        "applicable": []
+      }
+    },
+    {
+      "name": "drifted_path",
+      "checkout": "checkout\n",
+      "patch": "",
+      "paths": [
+        "tracked.txt"
+      ],
+      "drift": [
+        "tracked.txt"
+      ],
+      "outcome": {
+        "applied": true,
+        "conflicts": []
+      }
+    },
+    {
+      "name": "conflict",
+      "checkout": "checkout\n",
+      "patch": "diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 +1 @@\n-base\n+worker\n",
+      "paths": [
+        "tracked.txt"
+      ],
+      "drift": [
+        "tracked.txt"
+      ],
+      "outcome": {
+        "applied": false,
+        "conflicts": [
+          "tracked.txt"
+        ],
+        "applicable": []
+      }
+    },
+    {
+      "name": "unsafe_path",
+      "checkout": "base\n",
+      "patch": "diff --git a/../escape.txt b/../escape.txt\n--- a/../escape.txt\n+++ b/../escape.txt\n@@ -1 +1 @@\n-base\n+worker\n",
+      "paths": [],
+      "drift": [],
+      "outcome": {
+        "applied": false,
+        "conflicts": [
+          "../escape.txt"
+        ],
+        "applicable": []
+      }
+    }
+  ]
+}

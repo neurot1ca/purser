@@ -1,0 +1,94 @@
+{
+  "manifest": [
+    {
+      "kind": "file",
+      "line_count": 1,
+      "path": "scope/ignored.txt",
+      "sha256": "a6c7e3c5ddd823efc8b7a30853eabc152dac866843bd7a39dc4a29e0a0eb68b3"
+    },
+    {
+      "kind": "file",
+      "line_count": 2,
+      "path": "scope/untracked.txt",
+      "sha256": "21066d108d5319ecb5a1fc4454f42ef22fc5f1c7df49c31d90294950e0ea8b2c"
+    }
+  ],
+  "provenance": "Python ledger._status_entries, _tracked_snapshots, and _scoped_manifest; isolated repository input",
+  "scope": [
+    "scope"
+  ],
+  "status": [
+    {
+      "path": "scope/__pycache__/module.pyc",
+      "state": "??"
+    },
+    {
+      "original_path": "scope/before.txt",
+      "path": "scope/after.txt",
+      "state": "R "
+    },
+    {
+      "path": "scope/cache.pyc",
+      "state": "??"
+    },
+    {
+      "path": "scope/untracked.txt",
+      "state": "??"
+    }
+  ],
+  "tracked_snapshots": {
+    "scope/__pycache__/module.pyc": {
+      "index": [],
+      "status": [
+        "??"
+      ],
+      "worktree": {
+        "kind": "file",
+        "mode": 438,
+        "sha256": "8e896187127726aada2f6e407d70a39043554768dd4367f4d0dcf457920c0432"
+      }
+    },
+    "scope/after.txt": {
+      "index": [
+        "100644 43372edea46de0470388d72da4ad490183f95954 0"
+      ],
+      "status": [
+        "R "
+      ],
+      "worktree": {
+        "kind": "file",
+        "mode": 438,
+        "sha256": "b60af87edb9fed6d3a0fe5d4713c59c86b8f77f15718d3d9cd22e17aae3f7f67"
+      }
+    },
+    "scope/before.txt": {
+      "index": [],
+      "status": [],
+      "worktree": {
+        "kind": "missing"
+      }
+    },
+    "scope/cache.pyc": {
+      "index": [],
+      "status": [
+        "??"
+      ],
+      "worktree": {
+        "kind": "file",
+        "mode": 438,
+        "sha256": "8e896187127726aada2f6e407d70a39043554768dd4367f4d0dcf457920c0432"
+      }
+    },
+    "scope/untracked.txt": {
+      "index": [],
+      "status": [
+        "??"
+      ],
+      "worktree": {
+        "kind": "file",
+        "mode": 438,
+        "sha256": "21066d108d5319ecb5a1fc4454f42ef22fc5f1c7df49c31d90294950e0ea8b2c"
+      }
+    }
+  }
+}
