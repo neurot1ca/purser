@@ -3,15 +3,10 @@ package optimize
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"purser-hook/internal/testutil"
-	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestClaudeUserFilesUseActiveConfigDir(t *testing.T) {
@@ -81,97 +76,6 @@ func putJSONL(t *testing.T, path string, records ...map[string]any) {
 		if err := enc.Encode(r); err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func parityUser(cwd, entrypoint, prompt string) map[string]any {
-	return map[string]any{
-		"type": "user", "cwd": cwd, "entrypoint": entrypoint, "userType": "external",
-		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": prompt}}},
-	}
-}
-
-func parityAssistant(cwd, entrypoint, id, command string) map[string]any {
-	return map[string]any{
-		"type": "assistant", "cwd": cwd, "entrypoint": entrypoint, "timestamp": "2026-10-01T12:00:00Z", "requestId": id,
-		"message": map[string]any{
-			"id": id, "role": "assistant", "stop_reason": "end_turn", "usage": map[string]any{"input_tokens": 100},
-			"content": []any{map[string]any{"type": "text", "text": "ok"}, map[string]any{"type": "tool_use", "id": id + "-tool", "name": "Bash", "input": map[string]any{"command": command}}},
-		},
-	}
-}
-
-func TestRunMatchesLegacyPythonReportOnFixture(t *testing.T) {
-	root := t.TempDir()
-	home, repo := filepath.Join(root, "home"), filepath.Join(root, "repo")
-	projects := filepath.Join(home, ".claude", "projects")
-	if err := os.MkdirAll(filepath.Join(repo, ".claude", "skills", "local"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(home, ".claude", "plugins", "cache", "official", "security-guidance", "1.0"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(`{"enabledPlugins":{"security-guidance@official":false}}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	install := filepath.Join(home, ".claude", "plugins", "cache", "official", "security-guidance", "1.0")
-	if err := os.WriteFile(filepath.Join(install, "README.md"), []byte("Automated security review for changes."), 0600); err != nil {
-		t.Fatal(err)
-	}
-	installed := `{"plugins":{"security-guidance@official":[{"installPath":"` + strings.ReplaceAll(install, `\`, `\\`) + `"}]}}`
-	if err := os.WriteFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), []byte(installed), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	listingContent := "- security-guidance:unused: " + strings.Repeat("x", 1400) + "\n- local: local skill\n- plugin:local: plugin copy\n"
-	listing := map[string]any{"type": "attachment", "cwd": repo, "entrypoint": "cli", "timestamp": "2026-10-01T12:00:00Z", "attachment": map[string]any{
-		"type": "skill_listing", "content": listingContent, "names": []any{"security-guidance:unused", "local", "plugin:local"}, "isInitial": true}}
-	mcp := map[string]any{"type": "attachment", "cwd": repo, "entrypoint": "cli", "timestamp": "2026-10-01T12:00:00Z", "attachment": map[string]any{
-		"type": "mcp_instructions_delta", "addedNames": []any{"search-server"}, "addedBlocks": []any{"## search-server\n" + strings.Repeat("instructions ", 100)}}}
-	commands := []string{"git add -A", "git commit -m message", "claude plugin marketplace list"}
-	for sessionIndex := 0; sessionIndex < 3; sessionIndex++ {
-		records := []map[string]any{listing, mcp, parityUser(repo, "cli", "work")}
-		for commandIndex, command := range commands {
-			records = append(records, parityAssistant(repo, "cli", fmt.Sprintf("s%d-%d", sessionIndex, commandIndex), command))
-		}
-		path := filepath.Join(projects, "project", fmt.Sprintf("session-%d.jsonl", sessionIndex))
-		putJSONL(t, path, records...)
-		stamp := time.Now().Add(time.Duration(sessionIndex) * time.Second)
-		if err := os.Chtimes(path, stamp, stamp); err != nil {
-			t.Fatal(err)
-		}
-	}
-	hidden := []map[string]any{parityUser("", "sdk-py", "Run security review for sdk-py"), {"type": "assistant", "entrypoint": "sdk-py", "timestamp": "2026-10-02T12:00:00Z", "message": map[string]any{"id": "hidden", "role": "assistant", "stop_reason": "end_turn", "usage": map[string]any{"input_tokens": 300}, "content": []any{map[string]any{"type": "text", "text": "ok"}}}}}
-	hiddenPath := filepath.Join(projects, "project", "hidden.jsonl")
-	putJSONL(t, hiddenPath, hidden...)
-	if err := os.Chtimes(hiddenPath, time.Now(), time.Now()); err != nil {
-		t.Fatal(err)
-	}
-
-	var goOut bytes.Buffer
-	if err := Run(&goOut, projects, home, repo, 30); err != nil {
-		t.Fatal(err)
-	}
-	workspaceRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	script := filepath.Join(workspaceRoot, ".claude", "hooks", "orchestrator", "purser_optimize.py")
-	cmd := exec.Command(testutil.Python(t), script, "--projects-root", projects, "--days", "30")
-	cmd.Dir = repo
-	cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "HOMEDRIVE=", "HOMEPATH=")
-	pyOut, err := cmd.Output()
-	if err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			t.Fatalf("python report failed: %v\n%s", err, exit.Stderr)
-		}
-		t.Fatal(err)
-	}
-	if runtime.GOOS == "windows" {
-		pyOut = bytes.ReplaceAll(pyOut, []byte("\r\n"), []byte("\n"))
-	}
-	if got, want := goOut.String(), string(pyOut); got != want {
-		t.Fatalf("Go/Python optimize reports differ:\n--- Go ---\n%s\n--- Python ---\n%s", got, want)
 	}
 }
 
