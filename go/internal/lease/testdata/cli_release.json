@@ -1,0 +1,1 @@
+{"version":1,"owners":{"target-owner":{"task_id":"target-task","scope":["src/a.py"],"state":"ACTIVE","acquired_at":1999999990},"other-owner":{"task_id":"other-task","scope":["src/b.py"],"state":"ACTIVE","acquired_at":1999999990}},"conflicts":[]}

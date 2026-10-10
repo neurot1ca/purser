@@ -1,0 +1,1 @@
+{"version":1,"owners":{"sync-owner":{"task_id":"task-sync","scope":["src/a.py"],"state":"ACTIVE","acquired_at":1999999990,"job_id":null},"async-owner":{"task_id":"task-async","scope":["src/b.py"],"state":"ACTIVE","acquired_at":1999999980,"job_id":"__JOB_ID__"}},"conflicts":[]}
