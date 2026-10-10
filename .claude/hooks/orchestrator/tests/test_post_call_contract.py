@@ -15,6 +15,8 @@ TOOL = "mcp__codex-main__codex"
 # Go symbols carry their implementation pass. Primitive and imported call
 # sites are part of the PostToolUse assembly entrypoint.
 POST_CALL_CONTRACTS = {
+    "_project_job_board": "go/internal/enforce.PostProjectJobBoard (23)",
+    "_refresh_cached_job_board": "go/internal/enforce.refreshCachedBoard (303)",
     "_append_dispatch_receipt": "go/internal/enforce.PostDispatchReceipt (105d)", "_append_pending_guidance": "go/internal/enforce.postPendingGuidance (116a)",
     "_append_project_job_status": "go/internal/enforce.appendAsyncProjectStatus (116a)", "_append_worktree_apply_context": "go/internal/enforce.PostApplyGuidance (105d)",
     "_post_start": "go/internal/enforce.postStart (110)", "_async_post_followup": "go/internal/enforce.postAsyncDispatch (111)",

@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.113 — 2026-10-10
+
+- **Fixed:** Applying a job closes earlier unapplied results of the same task, so superseded send-back rows no longer stay "in review" and their scope leases are released.
+- **Fixed:** Jobs applied by hand after PATCH_UNAVAILABLE are detected and release their leases.
+- **Fixed:** A cached tool result shows the current job board instead of the one from when it was first answered.
+
 ## 0.1.112 — 2026-10-10
 
 - **Fixed:** Job patches and three-way replay no longer fail when a job deletes a file or adds one missing from the checkout.

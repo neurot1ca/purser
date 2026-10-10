@@ -26,6 +26,8 @@ def test_failure_registration_is_owned_by_go_mod():
 
 # Entries name the current Go owner, or the first still-pending assembly pass.
 FAILURE_CALL_CONTRACTS = {
+    "_project_job_board": "go/internal/enforce.PostProjectJobBoard (23)",
+    "_refresh_cached_job_board": "go/internal/enforce.refreshCachedBoard (303)",
     "post_tool_use_failure": "go/internal/enforce.PostToolUseFailure (122)",
     "_async_post_followup": "go/internal/enforce.PostToolUseFailureAsyncFollowup (120)",
     "_cancel_start_job": "go/internal/enforce.cancelAsyncStart (111)",
