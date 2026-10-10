@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.116 — 2026-10-10
+
+- **Fixed:** The reply-language instruction is part of every request, so turns started by background task notifications keep the user's language.
+- **Fixed:** Worker test evidence counts only the latest run of each test target, so a passing rerun clears an earlier setup failure.
+
 ## 0.1.115 — 2026-10-10
 
 - **Fixed:** A failed apply replay restores the worker's worktree, and hand-applied detection compares the preserved worker patch, so a job is never marked applied (and its worktree retired) from main's changes alone.
