@@ -111,7 +111,9 @@ func markHandAppliedJob(stateRoot, jobID string) {
 	job.Get("worktreePath", &worktree)
 	job.Get("repoRoot", &currentRepo)
 	job.Get("snapshot", &snapshot)
-	if state != "SUCCEEDED" || applyState == "applied" || currentRepo != repo || worktree == "" || snapshot == "" {
+	var errorCode string
+	job.Get("errorCode", &errorCode)
+	if (state != "SUCCEEDED" && !(state == "FAILED" && errorCode == "PATCH_UNAVAILABLE")) || applyState == "applied" || currentRepo != repo || worktree == "" || snapshot == "" {
 		return
 	}
 	if info, statErr := os.Stat(worktree); statErr != nil || !info.IsDir() {

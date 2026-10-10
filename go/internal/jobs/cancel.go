@@ -270,7 +270,7 @@ func jobUpdateFailed(id, state string) map[string]any {
 
 func terminalJobState(state string) bool {
 	switch state {
-	case "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS":
+	case "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS", "SUPERSEDED":
 		return true
 	default:
 		return false

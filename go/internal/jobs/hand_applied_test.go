@@ -23,6 +23,7 @@ func TestAdmissionReleasesOnlyHandAppliedSucceededBlockers(t *testing.T) {
 		wantNext    string
 	}{
 		{name: "matching hand-applied owner", state: "SUCCEEDED", matching: true, wantOld: "RELEASED", wantNext: "ACTIVE"},
+		{name: "patch-unavailable job applied by hand", state: "FAILED", matching: true, wantOld: "RELEASED", wantNext: "ACTIVE"},
 		{name: "differing file", state: "SUCCEEDED", wantOld: "ACTIVE", wantNext: "QUEUED"},
 		{name: "running owner", state: "RUNNING", matching: true, wantOld: "ACTIVE", wantNext: "QUEUED"},
 	} {
@@ -44,6 +45,9 @@ func TestAdmissionReleasesOnlyHandAppliedSucceededBlockers(t *testing.T) {
 				t.Fatal(err)
 			}
 			job := map[string]any{"jobId": jobID, "call": call, "state": tc.state, "worktreePath": worktree, "repoRoot": repo, "snapshot": snapshot, "taskId": "prior-task"}
+			if tc.state == "FAILED" {
+				job["errorCode"] = "PATCH_UNAVAILABLE"
+			}
 			writeHandAppliedJSON(t, filepath.Join(jobsDir, jobID+".json"), job)
 			indexDir := filepath.Join(root, "async_jobs")
 			if err := os.MkdirAll(indexDir, 0700); err != nil {
@@ -105,6 +109,47 @@ func TestHandAppliedPlanJobCompletesAndAdvancesMilestone(t *testing.T) {
 	}
 	if updated.CurrentMilestone != 2 || len(updated.CompletedMilestones) != 1 || updated.CompletedMilestones[0] != 1 || len(updated.AppliedPasses) != 1 || len(updated.LinkedJobs) != 0 {
 		t.Fatalf("hand-applied plan progress = %+v", updated)
+	}
+}
+
+func TestAppliedJobSupersedesEarlierSucceededTaskJob(t *testing.T) {
+	root := t.TempDir()
+	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	priorID, appliedID := strings.Repeat("1", 64), strings.Repeat("2", 64)
+	project := strings.Repeat("c", 16)
+	owner := strings.Repeat("d", 64)
+	projectRoot := filepath.Join(root, "projects", project)
+	store := lease.New(projectRoot)
+	if got := store.Acquire(owner, "same-task", []string{"src"}, lease.AcquireOptions{JobID: &priorID}, 100); got.Status != "OK" {
+		t.Fatalf("seed prior scope lease: %#v", got)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "async_jobs"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHandAppliedJSON(t, filepath.Join(root, "async_jobs", priorID+".json"), map[string]any{"jobId": priorID, "project_key": project, "call_key": owner})
+	prior := map[string]any{"jobId": priorID, "state": "SUCCEEDED", "taskId": "same-task", "threadId": "same-thread", "acceptedAt": float64(1)}
+	current := map[string]any{"jobId": appliedID, "state": "SUCCEEDED", "taskId": "same-task", "threadId": "same-thread", "acceptedAt": float64(2), "applyState": "applied"}
+	writeHandAppliedJSON(t, filepath.Join(jobsDir, priorID+".json"), prior)
+	writeHandAppliedJSON(t, filepath.Join(jobsDir, appliedID+".json"), current)
+
+	supersedeEarlierTaskJobs(root, appliedID, current)
+
+	got, err := Read(filepath.Join(jobsDir, priorID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state, supersededBy string
+	got.Get("state", &state)
+	got.Get("supersededBy", &supersededBy)
+	if state != "SUPERSEDED" || supersededBy != appliedID {
+		t.Fatalf("prior state=%q supersededBy=%q, want SUPERSEDED by applied job", state, supersededBy)
+	}
+	leaseState, err := store.OwnerState(owner, 101)
+	if err != nil || leaseState != "RELEASED" {
+		t.Fatalf("prior lease state=%q, %v; want RELEASED", leaseState, err)
 	}
 }
 

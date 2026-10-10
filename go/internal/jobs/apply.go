@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"purser-hook/internal/contextio"
@@ -214,6 +215,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	}
 	if applied {
 		values := recordMap(job)
+		supersedeEarlierTaskJobs(stateRoot, jobID, values)
 		recordPlanApply(stateRoot, values, jobID)
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
@@ -248,7 +250,46 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 	recordPlanApply(stateRoot, recordMap(job), jobID)
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	dispatchWorktreeRetirement(stateRoot, jobID)
+	supersedeEarlierTaskJobs(stateRoot, jobID, recordMap(job))
 	return applyToolResult(value)
+}
+
+func supersedeEarlierTaskJobs(stateRoot, appliedID string, applied map[string]any) {
+	task, _ := applied["taskId"].(string)
+	acceptedAt, ok := applied["acceptedAt"].(float64)
+	if task == "" || !ok {
+		return
+	}
+	dir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		if entry.IsDir() || id == appliedID || entry.Name() != id+".json" {
+			continue
+		}
+		lock, err := AcquireOwnership(dir, id)
+		if err != nil {
+			continue
+		}
+		prior, err := Read(filepath.Join(dir, entry.Name()))
+		if err == nil {
+			m := recordMap(prior)
+			priorAt, _ := m["acceptedAt"].(float64)
+			if m["state"] == "SUCCEEDED" && m["applyState"] != "applied" && m["taskId"] == task && priorAt < acceptedAt {
+				_ = prior.Set("state", "SUPERSEDED")
+				_ = prior.Set("finishedAt", float64(time.Now().UnixNano())/1e9)
+				_ = prior.Set("supersededBy", appliedID)
+				if Write(filepath.Join(dir, entry.Name()), prior) == nil {
+					_ = lease.ReleaseJobScopeLease(stateRoot, id)
+					dispatchWorktreeRetirement(stateRoot, id)
+				}
+			}
+		}
+		_ = lock.Release()
+	}
 }
 
 func recordPlanApply(stateRoot string, job map[string]any, jobID string) {

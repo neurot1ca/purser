@@ -81,6 +81,9 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 	newestOrder := []string{}
 	for _, item := range jobs {
 		j := item.job
+		if j["state"] == "SUPERSEDED" {
+			continue
+		}
 		key, _ := j["threadId"].(string)
 		if key == "" {
 			key = fmt.Sprint(j["jobId"])
@@ -295,6 +298,33 @@ func boardDisplayZero(value any) bool {
 	}
 	parsed, err := number.Float64()
 	return err == nil && parsed == 0
+}
+
+func refreshCachedBoard(response map[string]any, board string) {
+	output := mapValue(response["hookSpecificOutput"])
+	if output == nil {
+		return
+	}
+	context := stringValue(output["additionalContext"])
+	if i := strings.Index(context, "Purser jobs:\n"); i >= 0 {
+		before, after := context[:i], context[i+len("Purser jobs:\n"):]
+		lines := strings.Split(after, "\n")
+		for len(lines) > 0 && strings.HasPrefix(lines[0], "> |") {
+			lines = lines[1:]
+		}
+		context = strings.TrimSpace(before + strings.Join(lines, "\n"))
+	}
+	if board != "" {
+		if context != "" {
+			context += "\n"
+		}
+		context += board
+	}
+	if context == "" {
+		delete(output, "additionalContext")
+	} else {
+		output["additionalContext"] = context
+	}
 }
 
 func readBoardJSON(path string) map[string]any {

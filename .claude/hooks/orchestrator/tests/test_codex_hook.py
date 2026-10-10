@@ -1596,6 +1596,18 @@ def test_project_job_board_keeps_all_in_progress_and_finished_jobs(workspace):
     assert tasks == ["running", "finished-0", "finished-1", "finished-2", "finished-3", "finished-4"]
 
 
+def test_project_job_board_hides_superseded_and_refreshes_cached_board(workspace):
+    _, state = workspace
+    _board_job(state, "superseded", "SUPERSEDED")
+    response = {"hookSpecificOutput": {"additionalContext": "kept guidance\nPurser jobs:\n> | old board |\nlater guidance"}}
+
+    board = codex._project_job_board(state, "project")
+    codex._refresh_cached_job_board(response, board)
+
+    assert board is None
+    assert response["hookSpecificOutput"]["additionalContext"] == "kept guidance\nlater guidance"
+
+
 def _show_project_board(repo, state, session_id="board-display-session"):
     board, job_ids = codex._project_job_board_details(state, "project")
     assert board is not None

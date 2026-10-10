@@ -77,6 +77,7 @@ func applyResolvedJob(stateRoot, dir, jobID string, job *Record, repo, worktree,
 		return applyToolResult(map[string]any{"state": "FAILED", "errorCode": "JOB_WRITE_FAILED", "message": err.Error()})
 	}
 	values = recordMap(job)
+	supersedeEarlierTaskJobs(stateRoot, jobID, values)
 	recordPlanApply(stateRoot, values, jobID)
 	recordScopeOutcome(opt, stateRoot, values, "resolved_by_hand")
 	recordApplyDecision(opt, stateRoot, values, "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])

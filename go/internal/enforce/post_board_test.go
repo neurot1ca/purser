@@ -113,3 +113,13 @@ func TestPostApplyGuidanceUsesModelContext(t *testing.T) {
 		t.Fatalf("default hook output=%#v", missingOutput)
 	}
 }
+
+func TestRefreshCachedBoardReplacesStaleSnapshot(t *testing.T) {
+	response := map[string]any{"hookSpecificOutput": map[string]any{"additionalContext": "review summary\nPurser jobs:\n> | queued behind old-holder |\nlater guidance"}}
+	refreshCachedBoard(response, "Purser jobs:\n> | current board |")
+	context := stringValue(mapValue(response["hookSpecificOutput"])["additionalContext"])
+	if strings.Contains(context, "old-holder") || !strings.Contains(context, "current board") ||
+		!strings.Contains(context, "review summary") || !strings.Contains(context, "later guidance") {
+		t.Fatalf("refreshed context = %q", context)
+	}
+}

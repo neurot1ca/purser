@@ -2701,6 +2701,8 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             if not isinstance(label, str) or not label.strip():
                 continue
             state = job.get("state")
+            if state == "SUPERSEDED":
+                continue
             finished = job.get("appliedAt") if job.get("applyState") == "applied" else None
             if not isinstance(finished, (int, float)):
                 finished = job.get("finishedAt")
@@ -2836,6 +2838,31 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
 def _project_job_board(root: Path, project_key: str) -> str | None:
     """Render the current project job board without polling any worker."""
     return _project_job_board_details(root, project_key)[0]
+
+
+def _refresh_cached_job_board(response: Any, board: str | None) -> Any:
+    if not isinstance(response, dict):
+        return response
+    output = response.get("hookSpecificOutput")
+    if not isinstance(output, dict):
+        return response
+    context = output.get("additionalContext")
+    if not isinstance(context, str):
+        return response
+    marker = "Purser jobs:\n"
+    if marker in context:
+        before, after = context.split(marker, 1)
+        lines = after.split("\n")
+        while lines and lines[0].startswith("> |"):
+            lines.pop(0)
+        context = (before + "\n".join(lines)).strip()
+    if board:
+        context = f"{context}\n{board}" if context else board
+    if context:
+        output["additionalContext"] = context
+    else:
+        output.pop("additionalContext", None)
+    return response
 
 
 def _append_pending_guidance(response: dict[str, Any], event: Mapping[str, Any],
@@ -3239,7 +3266,9 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             if index.get("terminal_failure") is True or not (job and job.get("worktreePath") and job.get("applyState") != "applied"):
                 _release_async_lease(root, index, pending)
                 (root / "pending" / f"{index['call_key']}.json").unlink(missing_ok=True)
-            return index.get("response") or interrupted()
+            response = index.get("response") or interrupted()
+            _refresh_cached_job_board(response, _project_job_board(root, index["project_key"]))
+            return response
         if index.get("stage") == "FINALIZING":
             artifact = root / "bundle_artifacts" / f"{index['call_key']}.json"
             raw = (root / "raw_tool_outputs" / f"{index['call_key']}.json").resolve()
