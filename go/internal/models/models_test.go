@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -468,6 +469,21 @@ func TestNewerVersionComparison(t *testing.T) {
 	}
 }
 
+func TestNewerVersionRejectsOtherFamiliesOlderAndUnparsableCandidates(t *testing.T) {
+	cases := []struct {
+		current    string
+		candidates []string
+	}{
+		{"gpt-6-luna", []string{"gpt-6.1-sol", "gpt-5-luna", "latest-luna", "gpt-luna"}},
+		{"gemini-3.8-flash-high", []string{"gemini-3.9-pro-high", "gemini-3.9-flash-medium"}},
+	}
+	for _, test := range cases {
+		if got := newerVersion(test.current, test.candidates); got != "" {
+			t.Errorf("newerVersion(%q, %v) = %q, want no candidate", test.current, test.candidates, got)
+		}
+	}
+}
+
 func TestParseMockListings(t *testing.T) {
 	cases := []struct {
 		agent, output string
@@ -506,6 +522,16 @@ func TestListingUsesExpectedMockExecutableAndTwoSecondDeadline(t *testing.T) {
 	result := listModels("codex", nil)
 	if !result.available || !reflect.DeepEqual(result.ids, []string{"gpt-6.1-luna"}) {
 		t.Fatalf("listing = %#v", result)
+	}
+}
+
+func TestListingCommandFailureIsUnavailable(t *testing.T) {
+	oldLookPath, oldRun := lookPath, runListingCommand
+	t.Cleanup(func() { lookPath, runListingCommand = oldLookPath, oldRun })
+	lookPath = func(string) (string, error) { return filepath.Join(t.TempDir(), "mock-codex"), nil }
+	runListingCommand = func(*exec.Cmd) ([]byte, error) { return nil, errors.New("listing failed") }
+	if result := listModels("codex", nil); result.available || len(result.ids) != 0 {
+		t.Fatalf("failed listing = %#v, want unavailable", result)
 	}
 }
 
