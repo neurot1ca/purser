@@ -1,0 +1,28 @@
+{
+  "terminal_success": {
+    "state": "SUCCEEDED",
+    "signalPort": null,
+    "signalToken": "secret",
+    "deadlineAt": 0
+  },
+  "terminal_failed": {
+    "state": "FAILED",
+    "signalPort": null,
+    "signalToken": "secret",
+    "deadlineAt": 0
+  },
+  "stalled": {
+    "state": "RUNNING",
+    "signalPort": null,
+    "signalToken": "secret",
+    "deadlineAt": 0,
+    "errorCode": "STALLED",
+    "stallDetectedAt": 1234
+  },
+  "running": {
+    "state": "RUNNING",
+    "signalPort": null,
+    "signalToken": "secret",
+    "deadlineAt": 0
+  }
+}
