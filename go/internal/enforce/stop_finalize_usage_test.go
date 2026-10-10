@@ -175,10 +175,10 @@ func TestStopFinalizeP130PythonFiles(t *testing.T) {
 			}
 			if c.Name == "persist-failure" {
 				events := filepath.Join(root, "telemetry", "events")
-				if err := os.MkdirAll(filepath.Dir(events), 0700); err != nil {
+				if err := os.MkdirAll(events, 0700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(events, []byte("blocked"), 0600); err != nil {
+				if err := os.Mkdir(filepath.Join(events, ".append.lock"), 0700); err != nil {
 					t.Fatal(err)
 				}
 			}
