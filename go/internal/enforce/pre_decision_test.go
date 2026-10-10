@@ -231,31 +231,110 @@ func TestPreTelemetryScopePathCount(t *testing.T) {
 	t.Setenv("PURSER_STATE_DIR", runtimeRoot)
 	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
 	t.Setenv("CODEX_HOME", filepath.Join(scratch, "codex"))
-	const prompt = "ORCH|task=scope-count|phase=implementation|route=normal|reason=new_task|basis=specific boundary|scope=src/a.go,src/b.go\nImplement."
-	event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex", "tool_use_id": "scope-count-call",
-		"session_id": "scope-count-session", "cwd": repo, "tool_input": map[string]any{"prompt": prompt, "label": "scope count"}}
-	if _, err := Pre(event, runtimeRoot); err != nil {
-		t.Fatalf("Pre: %v", err)
+	for _, tc := range []struct {
+		name, phase, route, scope string
+		wantCount                 float64
+	}{
+		{name: "implementation", phase: "implementation", route: "normal", scope: "src/a.go,src/b.go", wantCount: 2},
+		{name: "operation", phase: "operation", route: "operation", wantCount: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := []string{"task=" + tc.name, "phase=" + tc.phase, "route=" + tc.route}
+			if tc.route == "normal" {
+				fields = append(fields, "reason=new_task", "basis=specific boundary", "scope="+tc.scope)
+			}
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex", "tool_use_id": "scope-count-call",
+				"session_id": "scope-count-session", "cwd": repo, "tool_input": map[string]any{"prompt": "ORCH|" + strings.Join(fields, "|") + "\nImplement.", "label": "scope count"}}
+			if _, err := Pre(event, runtimeRoot); err != nil {
+				t.Fatalf("Pre: %v", err)
+			}
+			path := filepath.Join(runtimeRoot, "telemetry", "events", "by_task", tc.name+".jsonl")
+			file, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := []string{}
+			for _, line := range bytes.Split(bytes.TrimSpace(file), []byte{'\n'}) {
+				var observation map[string]any
+				if err := json.Unmarshal(line, &observation); err != nil {
+					t.Fatal(err)
+				}
+				if observation["event_type"] != "TASK_ROUTE_SELECTED" && observation["event_type"] != "IMPLEMENTER_STARTED" {
+					continue
+				}
+				payload := mapValue(observation["payload"])
+				if payload["scope_path_count"] != tc.wantCount || payload["scope"] != nil {
+					t.Fatalf("unexpected scope telemetry: %#v", payload)
+				}
+				seen = append(seen, observation["event_type"].(string))
+			}
+			if strings.Join(seen, ",") != "TASK_ROUTE_SELECTED,IMPLEMENTER_STARTED" {
+				t.Fatalf("scope event types = %#v", seen)
+			}
+		})
 	}
-	path := filepath.Join(runtimeRoot, "telemetry", "events", "by_task", "scope-count.jsonl")
-	file, err := os.ReadFile(path)
+}
+
+func TestPreTelemetryEnvelopeIdentityAndRepositoryBranch(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/feature/telemetry\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	preEmit(root, map[string]any{"session_id": "session", "tool_use_id": "tool-call-id", "agent_id": "agent-7", "agent_type": "reviewer"}, &repo,
+		"task", "unresolved", "TASK_ROUTE_SELECTED", map[string]any{"phase": "implementation", "route": "normal", "model": "gpt-6-sol", "effort": "medium", "routing_enforced": true, "fresh_thread": true, "reply_call": false})
+	path := filepath.Join(root, "telemetry", "events", "by_task", "task.jsonl")
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range bytes.Split(bytes.TrimSpace(file), []byte{'\n'}) {
-		var observation map[string]any
-		if err := json.Unmarshal(line, &observation); err != nil {
-			t.Fatal(err)
-		}
-		if observation["event_type"] == "TASK_ROUTE_SELECTED" {
-			payload := mapValue(observation["payload"])
-			if payload["scope_path_count"] != float64(2) || payload["scope"] != nil {
-				t.Fatalf("unexpected scope telemetry: %#v", payload)
-			}
-			return
-		}
+	var event map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("TASK_ROUTE_SELECTED observation missing")
+	if event["session_id"] != "session" || event["repo"] != filepath.Base(repo) || event["branch"] != normalizeObservationID("feature/telemetry", "branch") || event["agent_id"] != "agent-7" || event["agent_type"] != "reviewer" {
+		t.Fatalf("observation envelope = %#v", event)
+	}
+	if strings.Contains(string(data), "tool-call-id") {
+		t.Fatalf("tool call id leaked into observation: %s", data)
+	}
+}
+
+func TestPreTelemetryDetachedOrUnreadableBranchIsNull(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		setup func(string) error
+	}{
+		{name: "detached", setup: func(path string) error { return os.WriteFile(path, []byte("1e85bd1f4fa2d73c1ae011388c3504663a892db5\n"), 0600) }},
+		{name: "unreadable", setup: func(path string) error { return os.Mkdir(path, 0700) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(root, "repo")
+			if err := os.MkdirAll(filepath.Join(repo, ".git"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.setup(filepath.Join(repo, ".git", "HEAD")); err != nil {
+				t.Fatal(err)
+			}
+			preEmit(root, map[string]any{"session_id": "session"}, &repo, "task", "unresolved", "TASK_ROUTE_SELECTED",
+				map[string]any{"phase": "implementation", "route": "normal", "model": "gpt-6-sol", "effort": "medium", "routing_enforced": true, "fresh_thread": true, "reply_call": false})
+			data, err := os.ReadFile(filepath.Join(root, "telemetry", "events", "by_task", "task.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var event map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+				t.Fatal(err)
+			}
+			if event["branch"] != nil {
+				t.Fatalf("branch = %#v, want null", event["branch"])
+			}
+		})
+	}
 }
 
 func TestPreWorktreeReplyQueuesOnlyOnHotOverlap(t *testing.T) {

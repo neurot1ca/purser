@@ -88,6 +88,47 @@ func TestObservationP48Golden(t *testing.T) {
 	}
 }
 
+func TestObservationRetiredPythonSchemaAssertions(t *testing.T) {
+	envelope := map[string]any{"session_id": "session"}
+	valid := []struct {
+		name, eventType string
+		payload         map[string]any
+	}{
+		{"readiness unknown", "READINESS_CHECK_OUTCOME", map[string]any{"verdict": "UNKNOWN", "agent": "agy", "duration_ms": 0}},
+		{"reviewer failure", "REVIEWER1_FAILED", map[string]any{"failure_code": "REVIEWER1_UNAVAILABLE", "reviewer1_error_code": "REVIEWER_TIMEOUT", "reviewer1_provider": "agy", "reviewer1_model_requested": "gemini-3.8-flash-high", "served_model_attestation": "UNAVAILABLE", "reviewer1_result": "REVIEWER1_UNAVAILABLE", "duration_ms": 2500.0, "gemini_usage_known": false}},
+		{"worker pass", "IMPLEMENTER_FINISHED", map[string]any{"worker_validation_status": "PASS"}},
+		{"worker fail", "IMPLEMENTER_FINISHED", map[string]any{"worker_validation_status": "FAIL"}},
+		{"worker unknown", "IMPLEMENTER_FINISHED", map[string]any{"worker_validation_status": "UNKNOWN"}},
+		{"fix reason", "IMPLEMENTER_FINISHED", map[string]any{"reason": "fix"}},
+		{"legacy started", "IMPLEMENTER_STARTED", map[string]any{"phase": "implementation", "route": "normal", "model": "gpt-6-sol", "effort": "medium", "routing_enforced": true, "fresh_thread": true, "reply_call": false}},
+		{"legacy finished", "IMPLEMENTER_FINISHED", map[string]any{"duration_ms": 1000, "changed_paths_count": 1, "validation": "PASS", "thread_id": "thread-1", "claude_review_mode": "FULL", "routing_enforced": true, "codex_usage_known": false}},
+		{"decision", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "accepted", "task_type": "implementation", "source": map[string]any{"kind": "apply", "job_id": "job-1"}}},
+		{"route mismatch", "TASK_ROUTE_SELECTED", map[string]any{"phase": "implementation", "route": "subtle", "task_type": "counting_status", "suspected_route_mismatch": map[string]any{"declared_route": "subtle", "derived_type": "counting_status"}}},
+	}
+	for _, tc := range valid {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := buildObservation(tc.eventType, envelope, tc.payload, "task-1"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	invalid := []struct {
+		name, eventType string
+		payload         map[string]any
+	}{
+		{"readiness pass", "READINESS_CHECK_OUTCOME", map[string]any{"verdict": "PASS", "agent": "agy", "duration_ms": 0}},
+		{"decision value", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "maybe", "task_type": "implementation", "source": map[string]any{"kind": "apply", "job_id": "job-1"}}},
+		{"decision source", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "accepted", "task_type": "implementation", "source": map[string]any{"kind": "manual", "job_id": "job-1"}}},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := buildObservation(tc.eventType, envelope, tc.payload, "task-1"); err == nil {
+				t.Fatal("invalid Python schema case was accepted")
+			}
+		})
+	}
+}
+
 func TestObservationHealthP48DegradedAndWriterFailure(t *testing.T) {
 	root := t.TempDir()
 	recordObservationHealth(root, "DEGRADED", "CLAUDE_TRANSCRIPT_PARSER_FAILED")
@@ -110,6 +151,33 @@ func TestObservationHealthP48DegradedAndWriterFailure(t *testing.T) {
 	recordObservationHealth(blocked, "DEGRADED", "TELEMETRY_EMIT_FAILED")
 	if decision["permissionDecision"] != "deny" || decision["reason"] != "policy" {
 		t.Fatalf("telemetry changed enforcement: %#v", decision)
+	}
+}
+
+func TestObservationExcludesForbiddenPayloadContent(t *testing.T) {
+	root := t.TempDir()
+	forbidden := []string{
+		"prompt body api_key=" + "sk-" + strings.Repeat("a", 32),
+		"raw Codex output",
+		"diff --git a/secret.py b/secret.py",
+		"arbitrary exception credential text",
+	}
+	payload := map[string]any{"warning_code": "MALFORMED_VERDICT", "prompt": forbidden[0], "output": forbidden[1], "diff": forbidden[2], "exception": forbidden[3]}
+	if _, err := buildObservationAtStateRoot("TASK_ROUTE_SELECTED", map[string]any{"session_id": "session"}, payload, "task", root); err == nil {
+		t.Fatal("unregistered sensitive payload fields were accepted")
+	}
+	if _, err := os.Stat(filepath.Join(root, "telemetry")); !os.IsNotExist(err) {
+		t.Fatalf("invalid telemetry created output: %v", err)
+	}
+}
+
+func TestObservationTaskIDCannotEscapeTelemetry(t *testing.T) {
+	event, err := buildObservation("IMPLEMENTER_FINISHED", map[string]any{"session_id": "session"}, map[string]any{}, "../escape")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event["task_id"] == "../escape" || strings.ContainsAny(asString(event["task_id"]), `/\\:`) {
+		t.Fatalf("unsafe task id persisted: %#v", event["task_id"])
 	}
 }
 
