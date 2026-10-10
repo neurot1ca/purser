@@ -78,6 +78,37 @@ func TestTestEvidenceKeepsLatestRunnerRunsAndBoundsOutput(t *testing.T) {
 	}
 }
 
+func TestTestRunnerCommandRecognizesWrappedCommands(t *testing.T) {
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "$env:GOCACHE = C:\\cache; go test ./internal/jobs/ -run TestX"`, true},
+		{`powershell -c "go test ./..."`, true},
+		{`bash -lc 'cd go && go test ./...'`, true},
+		{`/bin/sh -c 'VAR=x pytest tests/x.py -q'`, true},
+		{`zsh -c 'npm test'`, true},
+		{`C:\Windows\System32\cmd.exe /c "cargo test --lib"`, true},
+		{`python -m pytest tests/x.py -q`, true},
+		{`C:\Python\python3.exe -m pytest`, true},
+		{`py -m pytest`, true},
+		{`uv run pytest tests/x.py`, true},
+		{`npm test`, true},
+		{`pnpm test`, true},
+		{`yarn test`, true},
+		{`cargo test`, true},
+		{`echo go test ./...`, false},
+		{`git log`, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.command, func(t *testing.T) {
+			if got := testRunnerCommand(tc.command); got != tc.want {
+				t.Fatalf("testRunnerCommand(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTestEvidenceFailedSeesFailureOutsideOutputCap(t *testing.T) {
 	events := []map[string]any{
 		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./failed", "exit_code": float64(1)}},

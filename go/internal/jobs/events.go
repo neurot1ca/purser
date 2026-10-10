@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -217,24 +218,86 @@ func TestEvidenceFailed(events []map[string]any) bool {
 }
 
 func testRunnerCommand(command string) bool {
-	tokens := strings.Fields(command)
-	for _, prefix := range [][]string{{"go", "test"}, {"pytest"}, {"npm", "test"}, {"pnpm", "test"}, {"cargo", "test"}} {
-		if len(tokens) < len(prefix) {
-			continue
+	words := shellWords(command)
+	if len(words) == 0 {
+		return false
+	}
+	base := func(path string) string {
+		path = strings.ToLower(strings.TrimSuffix(path, ".exe"))
+		if i := strings.LastIndexAny(path, `/\\`); i >= 0 {
+			path = path[i+1:]
 		}
-		matched := true
-		for i, token := range prefix {
-			if tokens[i] != token {
-				matched = false
+		return path
+	}
+	inner := command
+	if shell := base(words[0]); shell == "pwsh" || shell == "powershell" || shell == "bash" || shell == "sh" || shell == "zsh" || shell == "cmd" {
+		for i := 1; i < len(words)-1; i++ {
+			flag := strings.ToLower(words[i])
+			if shell != "cmd" && (flag == "-command" || flag == "-c" || flag == "-lc") || shell == "cmd" && flag == "/c" {
+				inner = words[i+1]
 				break
 			}
 		}
-		if matched {
+	}
+	for _, segment := range shellSeparator.Split(inner, -1) {
+		tokens := shellWords(segment)
+		for len(tokens) > 0 {
+			if strings.HasPrefix(tokens[0], "$env:") && len(tokens) >= 3 && tokens[1] == "=" {
+				tokens = tokens[3:]
+				continue
+			}
+			if strings.Contains(tokens[0], "=") && !strings.HasPrefix(tokens[0], "=") {
+				tokens = tokens[1:]
+				continue
+			}
+			break
+		}
+		if len(tokens) == 0 {
+			continue
+		}
+		cmd := base(tokens[0])
+		if cmd == "go" && len(tokens) > 1 && tokens[1] == "test" ||
+			cmd == "pytest" || cmd == "uv" && len(tokens) > 2 && tokens[1] == "run" && base(tokens[2]) == "pytest" ||
+			(cmd == "npm" || cmd == "pnpm" || cmd == "yarn" || cmd == "cargo") && len(tokens) > 1 && (tokens[1] == "test") ||
+			(cmd == "python" || cmd == "python3" || cmd == "py") && len(tokens) > 2 && tokens[1] == "-m" && tokens[2] == "pytest" {
 			return true
 		}
 	}
 	return false
 }
+
+func shellWords(command string) []string {
+	var words []string
+	var word strings.Builder
+	var quote rune
+	flush := func() {
+		if word.Len() > 0 {
+			words = append(words, word.String())
+			word.Reset()
+		}
+	}
+	for _, r := range command {
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			} else {
+				word.WriteRune(r)
+			}
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+		} else if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+			flush()
+		} else {
+			word.WriteRune(r)
+		}
+	}
+	flush()
+	return words
+}
+
+var shellSeparator = regexp.MustCompile(`;|&&|\|\||\n`)
 
 // Result flushes an unterminated final line and returns a snapshot.
 func (s *EventStream) Result(interrupted bool, exitCode int, stderr string) EventResult {

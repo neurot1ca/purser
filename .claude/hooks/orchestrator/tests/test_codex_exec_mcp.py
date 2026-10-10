@@ -1137,6 +1137,35 @@ def test_async_job_records_latest_completed_test_runs(area):
         client.close()
 
 
+@pytest.mark.parametrize(("command", "expected"), [
+    ('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "$env:GOCACHE = C:\\\\cache; go test ./internal/jobs/ -run TestX"', True),
+    ('powershell -c "go test ./..."', True),
+    ("bash -lc 'cd go && go test ./...'", True),
+    ("/bin/sh -c 'VAR=x pytest tests/x.py -q'", True),
+    ("zsh -c 'npm test'", True),
+    ('C:\\Windows\\System32\\cmd.exe /c "cargo test --lib"', True),
+    ("python -m pytest tests/x.py -q", True),
+    ("C:\\Python\\python3.exe -m pytest", True),
+    ("py -m pytest", True),
+    ("uv run pytest tests/x.py", True),
+    ("npm test", True),
+    ("pnpm test", True),
+    ("yarn test", True),
+    ("cargo test", True),
+    ("echo go test ./...", False),
+    ("git log", False),
+])
+def test_codex_test_evidence_matches_wrapped_runner_commands(command, expected):
+    events = [{"type": "item.completed", "item": {
+        "type": "command_execution", "command": command, "exit_code": 0, "aggregated_output": "ok\n",
+    }}]
+    evidence, failed = codex_exec_mcp._codex_test_evidence(events)
+    assert bool(evidence) is expected
+    assert failed is False
+    if expected:
+        assert evidence[0]["command"] == command
+
+
 def test_liveness_checkpoint_refuses_stale_generation(area):
     job_id = "f" * 64
     jobs = area / "root" / "codex_exec_mcp" / "jobs"

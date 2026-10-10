@@ -856,13 +856,71 @@ def _codex_test_evidence(events: list[dict[str, Any]]) -> tuple[list[dict[str, A
         output = item.get("aggregated_output")
         if (not isinstance(command, str) or not isinstance(exit_code, int)
                 or isinstance(exit_code, bool) or not isinstance(output, str)
-                or not any(runner in command.casefold() for runner in
-                           ("go test", "pytest", "npm test", "pnpm test", "cargo test"))):
+                or not _codex_test_runner_command(command)):
             continue
         tail = "\n".join(output.splitlines()[-40:]).encode("utf-8")[-4096:].decode("utf-8", errors="ignore")
         runs[command] = (index, {"command": command, "exit_code": exit_code, "output_tail": tail})
     latest = sorted(runs.values(), key=lambda run: run[0])[-6:]
     return [entry for _, entry in latest], any(entry["exit_code"] != 0 for _, entry in runs.values())
+
+
+def _codex_test_runner_command(command: str) -> bool:
+    def words(value: str) -> list[str]:
+        result: list[str] = []
+        word: list[str] = []
+        quote = ""
+        for char in value:
+            if quote:
+                if char == quote:
+                    quote = ""
+                else:
+                    word.append(char)
+            elif char in ("'", '"'):
+                quote = char
+            elif char.isspace():
+                if word:
+                    result.append("".join(word))
+                    word = []
+            else:
+                word.append(char)
+        if word:
+            result.append("".join(word))
+        return result
+
+    def base(path: str) -> str:
+        return path.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".exe").casefold()
+
+    parsed = words(command)
+    if not parsed:
+        return False
+    inner = command
+    shell = base(parsed[0])
+    if shell in {"pwsh", "powershell", "bash", "sh", "zsh", "cmd"}:
+        for index, flag in enumerate(parsed[1:-1], 1):
+            flag = flag.casefold()
+            if (shell != "cmd" and flag in {"-command", "-c", "-lc"}) or (shell == "cmd" and flag == "/c"):
+                inner = parsed[index + 1]
+                break
+    for segment in re.split(r";|&&|\|\||\r?\n", inner):
+        tokens = words(segment)
+        while tokens:
+            if tokens[0].casefold().startswith("$env:") and len(tokens) >= 3 and tokens[1] == "=":
+                tokens = tokens[3:]
+            elif "=" in tokens[0] and not tokens[0].startswith("="):
+                tokens = tokens[1:]
+            else:
+                break
+        if not tokens:
+            continue
+        runner = base(tokens[0])
+        if ((runner == "go" and len(tokens) > 1 and tokens[1] == "test")
+                or runner == "pytest"
+                or (runner == "uv" and len(tokens) > 2 and tokens[1] == "run" and base(tokens[2]) == "pytest")
+                or (runner in {"npm", "pnpm", "yarn", "cargo"} and len(tokens) > 1 and tokens[1] == "test")
+                or (runner in {"python", "python3", "py"} and len(tokens) > 2
+                    and tokens[1] == "-m" and tokens[2] == "pytest")):
+            return True
+    return False
 
 
 def _retry_after_seconds(value: Any) -> float | None:
