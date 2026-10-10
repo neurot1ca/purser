@@ -90,13 +90,18 @@ func attemptPostMicroRepair(bundle map[string]any, agent, result, threadID, repo
 func runPostRepairProcess(parent context.Context, argv []string, env []string, cwd, prompt string, timeout time.Duration) postRepairProcess {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := newPostRepairCommand(ctx, argv...)
 	cmd.Env, cmd.Dir, cmd.Stdin = env, cwd, strings.NewReader(prompt)
-	proc.ConfigureProcessTreeKill(cmd)
 	stdout, stderr := &cappedBuffer{limit: postRepairOutputLimit}, &cappedBuffer{limit: postRepairOutputLimit}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
 	return postRepairProcess{stdout: stdout.String(), stderr: stderr.String(), err: err, timedOut: ctx.Err() == context.DeadlineExceeded}
+}
+
+func newPostRepairCommand(ctx context.Context, argv ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	proc.ConfigureProcessTreeKill(cmd)
+	return proc.Hide(cmd)
 }
 
 func postRepairPrompt(findings []postRepairFinding, scope []string) string {
