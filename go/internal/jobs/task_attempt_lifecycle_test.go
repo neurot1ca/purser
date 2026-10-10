@@ -3,11 +3,44 @@ package jobs
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 )
+
+func TestStartAfterCancelAndDuplicateReplay(t *testing.T) {
+	root := scratch(t)
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	project := contextio.ProjectKey(repo)
+	if err := enforce.SaveTaskAttempt(root, enforce.TaskAttempt{ProjectKey: project, TaskID: "task", LatestJobID: "cancelled-job", TerminalDisposition: "cancelled"}); err != nil {
+		t.Fatal(err)
+	}
+	launches := 0
+	opt := StartOptions{StateRoot: root, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true,
+		ValidateAgent: func(string) error { return nil }}, Launch: func(string, int64, string) error { launches++; return nil }}
+	args := map[string]any{"call": "00000000-0000-4000-8000-000000000001", "prompt": "retry", "mode": "new", "cwd": repo, "taskId": "task"}
+	result, job, err := Start(root, args, opt)
+	if err != nil || job == nil {
+		t.Fatalf("start: %v %#v", err, result)
+	}
+	attempt, _, err := enforce.LoadTaskAttempt(root, project, "task")
+	if err != nil || attempt.TerminalDisposition != "started" || attempt.LatestJobID != recordMap(job)["jobId"] {
+		t.Fatalf("new start did not reset cancellation: %#v %v", attempt, err)
+	}
+	if err := enforce.SaveTaskAttempt(root, enforce.TaskAttempt{ProjectKey: project, TaskID: "task", LatestJobID: "later-job", TerminalDisposition: "applied"}); err != nil {
+		t.Fatal(err)
+	}
+	replayed, _, err := Start(root, args, opt)
+	attempt, _, loadErr := enforce.LoadTaskAttempt(root, project, "task")
+	if err != nil || loadErr != nil || launches != 1 || !reflect.DeepEqual(result, replayed) || attempt.LatestJobID != "later-job" || attempt.TerminalDisposition != "applied" {
+		t.Fatalf("duplicate replay changed result/attempt: %#v %#v launches=%d err=%v/%v", replayed, attempt, launches, err, loadErr)
+	}
+}
 
 func TestStartAttemptSendBackReplayAndCancelRecovery(t *testing.T) {
 	root := scratch(t)

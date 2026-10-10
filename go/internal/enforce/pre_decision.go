@@ -26,6 +26,10 @@ import (
 var afterPreMetadata = func() {}
 var planMilestoneTaskID = regexp.MustCompile(`^(.+)-m([0-9]+)of([0-9]+)$`)
 
+func init() {
+	observationFields["TELEMETRY_WARNING"] = fields("code")
+}
+
 // preDecision assembles the existing Pre policy pieces. Success persistence is
 // intentionally left to pass 64.
 func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[string]any) (map[string]any, error) {
@@ -39,6 +43,22 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	tool := stringValue(event["tool_name"])
 	isStart := strings.HasSuffix(tool, "__codex_start")
+	if isStart {
+		if key, keyErr := callKey(event); keyErr == nil {
+			call := codexCallUUID(key)
+			digest := sha256.Sum256([]byte(call))
+			data, readErr := os.ReadFile(filepath.Join(defaultPreStateRoot(runtimeRoot), "codex_exec_mcp", "jobs", hex.EncodeToString(digest[:])+".json"))
+			var job map[string]any
+			if readErr == nil && json.Unmarshal(data, &job) == nil && job["jobId"] == hex.EncodeToString(digest[:]) {
+				updated := make(map[string]any, len(input)+1)
+				for key, value := range input {
+					updated[key] = value
+				}
+				updated["call"] = call
+				return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}}, nil
+			}
+		}
+	}
 	reply := strings.HasSuffix(tool, "__codex-reply")
 	mode := "new"
 	if isStart {
@@ -63,8 +83,23 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	var root *string
 	rootReason := ""
 	var live map[string]any
+	var attempt TaskAttempt
+	loadAttempt := func(root *string, parsed policy.OrchParseResult) bool {
+		if root == nil || parsed.TaskID == nil {
+			attempt = TaskAttempt{}
+			return false
+		}
+		var status string
+		var attemptErr error
+		attempt, status, attemptErr = LoadTaskAttempt(defaultPreStateRoot(runtimeRoot), projectKey(root), *parsed.TaskID)
+		if attemptErr != nil || status == TaskAttemptCorrupt {
+			attempt = TaskAttempt{}
+			preEmit(runtimeRoot, event, root, *parsed.TaskID, projectKey(root), "TELEMETRY_WARNING", map[string]any{"code": "TASK_ATTEMPT_UNREADABLE"})
+		}
+		return attempt.Failure != nil && pointerValue(parsed.Phase) == "implementation"
+	}
 	if reply {
-		recovery := RecoverReply(event, runtimeRoot, nil, config)
+		recovery := recoverReply(event, runtimeRoot, nil, config, loadAttempt)
 		if recovery.Code != "VALID" {
 			return denyPre(recovery.Code, recovery.Message), nil
 		}
@@ -75,11 +110,33 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	if !parsed.Valid {
 		return denyPre(parsed.Code, parsed.Message), nil
 	}
+	if !reply {
+		loadAttempt(root, parsed)
+	}
 	label := inputLabel(event)
 	if (label == nil || label == "") && reply {
 		label = live["label"]
 	}
 	label = planMilestoneLabel(pointerValue(parsed.TaskID), label)
+	failed := attempt.Failure != nil && pointerValue(parsed.Phase) == "implementation"
+	reusable := attempt.TerminalDisposition == "cancelled" || attempt.TerminalDisposition == "discarded" || attempt.TerminalDisposition == "failed"
+	if failed {
+		if reply && !isStart {
+			return failedTaskReplyDenial(), nil
+		}
+		if reply {
+			mode, reply, live = "new", false, nil
+		}
+		if *parsed.Route != "escalated" && *parsed.Route != "consequential" {
+			*parsed.Route = "consequential"
+		}
+		reason := "repeated_failure"
+		basis := fmt.Sprintf("Prior luna implementation attempt %s was rejected after send-back.", attempt.Failure.JobID)
+		if attempt.Failure.Category == "failed_abandonment" {
+			basis = fmt.Sprintf("Prior luna implementation attempt %s was cancelled as failed.", attempt.Failure.JobID)
+		}
+		parsed.Reason, parsed.Basis = &reason, &basis
+	}
 	if root != nil && parsed.Phase != nil && *parsed.Phase != "operation" &&
 		ClaudeRunsFullSuiteAtAcceptance(*root) {
 		if phrase := WorkerFullSuiteRequestPhrase(stringValue(input["prompt"])); phrase != "" {
@@ -155,8 +212,11 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 		if loaded.Status == ledger.OK {
 			live, _ = loaded.Record["live_thread"].(map[string]any)
-			if isStart && !reply && loaded.Record["last_outcome"] != nil {
+			if isStart && !reply && loaded.Record["last_outcome"] != nil && !reusable {
 				return denyPre("TASK_ALREADY_FINISHED", "This task already finished; use a fresh task id."), nil
+			}
+			if reusable {
+				live = nil
 			}
 		}
 		fresh := policy.DecideFreshCodex(requested, live, parsed.Reason)
@@ -275,6 +335,16 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 	}
 
+	if failed {
+		fallbackActive := active != nil && active["active_coder"] == "fallback" && selection.Agent == stringValue(mapValue(config["fallback"])["agent"])
+		if models.SameFamily(selection.Model, "gpt-6-luna") || (!fallbackActive && !models.AtLeast(*route.Model, selection.Model)) {
+			selection.Agent, selection.Model, selection.Effort, selection.ModelSource = stringValue(config["coder_agent"]), *route.Model, *route.Effort, "route"
+		}
+		const efforts = "|low|medium|high|xhigh|max|ultra|"
+		if !fallbackActive && strings.Index(efforts, "|"+selection.Effort+"|") < strings.Index(efforts, "|"+*route.Effort+"|") {
+			selection.Effort = *route.Effort
+		}
+	}
 	prof := profile.ResolvedProfile{FullSuiteRequired: false}
 	if root != nil {
 		prof = profile.LoadProfile(*root)
@@ -284,6 +354,19 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		rewrite[key] = value
 	}
 	rewrite["prompt"] = parsed.Prompt
+	if failed {
+		header := fmt.Sprintf("ORCH|task=%s|phase=%s|route=%s|reason=%s|basis=%s|scope=%s", *parsed.TaskID, *parsed.Phase, *parsed.Route, *parsed.Reason, *parsed.Basis, strings.Join(parsed.Scope, ","))
+		if parsed.ETAMinutes != nil {
+			header += fmt.Sprintf("|eta=%dm", *parsed.ETAMinutes)
+		}
+		rewrite["prompt"] = header + "\n" + parsed.Prompt
+		if isStart && mode == "new" {
+			delete(rewrite, "threadId")
+			if root != nil {
+				rewrite["cwd"] = *root
+			}
+		}
+	}
 	updated := RewriteInstructionInput(rewrite, pointerValue(parsed.Phase), !reply, selection.Agent, prof.FullSuiteRequired)
 	delete(updated, "label")
 	if selection.Agent != stringValue(config["coder_agent"]) && selection.Agent != "" {
@@ -377,7 +460,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if worktreeStart {
 			updated["worktree"] = true
 			if root != nil {
-				requested, _ := input["cwd"].(string)
+				requested, _ := rewrite["cwd"].(string)
 				if requested == "" {
 					requested = stringValue(event["cwd"])
 				}
@@ -397,8 +480,17 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			}
 		}
 	}
-	return persistPreSuccess(event, runtimeRoot, root, live, parsed, selection, updated,
+	result, err := persistPreSuccess(event, runtimeRoot, root, live, parsed, selection, updated,
 		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, label, config, bypassMetadata)
+	if failed && err == nil && mapValue(result["hookSpecificOutput"])["permissionDecision"] != "deny" {
+		result["systemMessage"] = fmt.Sprintf("Purser: prior luna attempt failed; route=%s -> %s / %s.", *parsed.Route, selection.Model, selection.Effort)
+	}
+	return result, err
+}
+
+func failedTaskReplyDenial() map[string]any {
+	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "permissionDecision": "deny",
+		"permissionDecisionReason": "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back."}}
 }
 
 func persistPreSuccess(event map[string]any, runtimeRoot string, repository *string, live map[string]any,

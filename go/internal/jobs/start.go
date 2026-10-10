@@ -58,11 +58,6 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	}
 	if req.ExistingResult != nil {
 		existing := readJob(dir, req.JobID)
-		if existing != nil {
-			if err := persistTaskAttempt(opt.StateRoot, recordMap(existing), nonemptyString(args["cwd"])); err != nil {
-				log.Printf("task attempt persistence failed for replayed job %s: %v", req.JobID, err)
-			}
-		}
 		return req.ExistingResult, existing, nil
 	}
 	var thread map[string]any
@@ -368,7 +363,7 @@ func persistTaskAttempt(root string, job map[string]any, repository string) erro
 	return enforce.SaveTaskAttempt(root, enforce.TaskAttempt{
 		ProjectKey: contextio.ProjectKey(repository), TaskID: taskID,
 		LatestJobID: nonemptyString(job["jobId"]), PredecessorJobID: nonemptyString(job["predecessorJobId"]),
-		SendBackUsed: nonemptyString(job["predecessorJobId"]) != "",
+		SendBackUsed: nonemptyString(job["predecessorJobId"]) != "", TerminalDisposition: "started",
 	})
 }
 

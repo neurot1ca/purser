@@ -180,6 +180,11 @@ type ReplyRecovery struct {
 // RecoverReply mirrors codex.py Pre's indexed-root, forbidden-input, bare-reply,
 // mismatch, ledger, inherited-label and route checks, in that order.
 func RecoverReply(event map[string]any, runtimeRoot string, explicitRoot *string, config map[string]any) ReplyRecovery {
+	return recoverReply(event, runtimeRoot, explicitRoot, config, nil)
+}
+
+// recoverReply lets Pre read failure evidence before checking continuity.
+func recoverReply(event map[string]any, runtimeRoot string, explicitRoot *string, config map[string]any, failedTask func(*string, policy.OrchParseResult) bool) ReplyRecovery {
 	input, ok := event["tool_input"].(map[string]any)
 	if !ok {
 		return replyFailure("MALFORMED_TOOL_INPUT", "tool_input must be an object")
@@ -227,10 +232,14 @@ func RecoverReply(event map[string]any, runtimeRoot string, explicitRoot *string
 		if !ok {
 			return replyFailure("NO_LIVE_THREAD", "The codex-reply thread record lacks recoverable phase or scope context.")
 		}
+		if failedTask != nil {
+			failedTask(root, parsed)
+		}
 	} else {
 		if !parsed.Valid {
 			return replyFailure(parsed.Code, parsed.Message)
 		}
+		failed := failedTask != nil && failedTask(root, parsed)
 		id, _ := threadID.(string)
 		recorded := ledger.FindByThreadID(filepath.Join(runtimeRoot, "projects", projectKey(root)), id)
 		if recorded != nil {
@@ -239,7 +248,7 @@ func RecoverReply(event map[string]any, runtimeRoot string, explicitRoot *string
 			if recordedTask != *parsed.TaskID {
 				return replyMismatch("THREAD_TASK_MISMATCH", "task", recordedTask, *parsed.TaskID, id)
 			}
-			if recordedThread != nil {
+			if recordedThread != nil && !failed {
 				for _, item := range []struct{ field, code string }{{"phase", "THREAD_PHASE_MISMATCH"}, {"route", "THREAD_ROUTE_MISMATCH"}} {
 					if recordedThread[item.field] != *parsedValue(parsed, item.field) {
 						return replyMismatch(item.code, item.field, recordedThread[item.field], *parsedValue(parsed, item.field), id)

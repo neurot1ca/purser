@@ -525,6 +525,164 @@ func TestPreCodexStartRejectsFinishedTaskID(t *testing.T) {
 	}
 }
 
+func TestPreInvalidOrchWithoutTask(t *testing.T) {
+	scratch := preTempDir(t)
+	plugin, _ := filepath.Abs("../../..")
+	for key, value := range map[string]string{"HOME": scratch, "USERPROFILE": scratch, "HOMEDRIVE": "", "HOMEPATH": "", "CLAUDE_PLUGIN_ROOT": plugin} {
+		t.Setenv(key, value)
+	}
+	event := map[string]any{"tool_name": "mcp__codex-main__codex_start", "tool_input": map[string]any{
+		"mode": "new", "prompt": "ORCH|phase=implementation|route=subtle|reason=new_task|basis=design boundary|scope=src/a.go\nImplement."}}
+	got, err := preDecision(event, scratch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := mapValue(got["hookSpecificOutput"])
+	if hook["permissionDecision"] != "deny" || !strings.HasPrefix(stringValue(hook["permissionDecisionReason"]), "MISSING_REQUIRED_KEY:") {
+		t.Fatalf("expected normal parse denial: %#v", got)
+	}
+}
+
+func TestPreTaskRetryDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name, disposition, category, route, model, effort, mode, deny string
+		finished, corrupt, sync, duplicate                            bool
+	}{
+		{name: "first", route: "subtle"},
+		{name: "luna override", category: "rejected_after_sendback", route: "subtle", model: "gpt-6-luna", effort: "low"},
+		{name: "consequential floor", category: "rejected_after_sendback", route: "consequential", model: "gpt-6-sol", effort: "medium"},
+		{name: "escalated floor", category: "rejected_after_sendback", route: "escalated", model: "gpt-6.1-sol", effort: "high"},
+		{name: "corrupt dispatch", route: "subtle", corrupt: true},
+		{name: "corrupt reuse", route: "subtle", corrupt: true, finished: true, deny: "TASK_ALREADY_FINISHED:"},
+		{name: "cancelled reuse", route: "subtle", disposition: "cancelled", finished: true},
+		{name: "discarded reuse", route: "subtle", disposition: "discarded", finished: true},
+		{name: "failed reuse", route: "subtle", disposition: "failed", category: "failed_abandonment", finished: true},
+		{name: "started protected", route: "subtle", disposition: "started", finished: true, deny: "TASK_ALREADY_FINISHED:"},
+		{name: "accepted protected", route: "subtle", disposition: "accepted", finished: true, deny: "TASK_ALREADY_FINISHED:"},
+		{name: "applied protected", route: "subtle", disposition: "applied", finished: true, deny: "TASK_ALREADY_FINISHED:"},
+		{name: "unresolved protected", route: "subtle", disposition: "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", finished: true, deny: "TASK_ALREADY_FINISHED:"},
+		{name: "async reply fresh", route: "consequential", category: "rejected_after_sendback", mode: "reply"},
+		{name: "sync reply denied", route: "subtle", category: "rejected_after_sendback", mode: "reply", sync: true, deny: "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back."},
+		{name: "duplicate replay", route: "subtle", disposition: "applied", finished: true, duplicate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scratch := preTempDir(t)
+			repo, state := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v %s", err, out)
+			}
+			plugin, _ := filepath.Abs("../../..")
+			for key, value := range map[string]string{"HOME": scratch, "USERPROFILE": scratch, "HOMEDRIVE": "", "HOMEPATH": "", "PURSER_STATE_DIR": state, "CLAUDE_PLUGIN_ROOT": plugin, "CODEX_HOME": scratch} {
+				t.Setenv(key, value)
+			}
+			if tc.finished || tc.mode == "reply" {
+				seedPreThread(t, repo, state)
+				if tc.finished {
+					path, _ := ledger.PathForTask(filepath.Join(state, "projects", projectKey(&repo)), "task-recorded")
+					record := ledger.Load(path, "task-recorded").Record
+					record["last_outcome"] = map[string]any{"status": "finished"}
+					if saved := ledger.Save(filepath.Dir(filepath.Dir(path)), record); saved.Status != ledger.OK {
+						t.Fatal(saved)
+					}
+				}
+			}
+			attempt := TaskAttempt{ProjectKey: projectKey(&repo), TaskID: "task-recorded", LatestJobID: "prior-job", TerminalDisposition: tc.disposition}
+			if tc.category != "" {
+				attempt.Failure = &TaskFailureEvidence{JobID: "prior-job", Category: tc.category}
+			}
+			if tc.category != "" || tc.disposition != "" || tc.corrupt {
+				if err := SaveTaskAttempt(state, attempt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.corrupt {
+				if err := os.WriteFile(taskAttemptPath(state, attempt.ProjectKey, attempt.TaskID), []byte(`{"terminal_disposition":"cancelled","failure":`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			input := map[string]any{"mode": "new", "cwd": repo, "label": "retry task", "prompt": "ORCH|task=task-recorded|phase=implementation|route=" + tc.route + "|reason=new_task|basis=design boundary|scope=src/a.go|eta=7m\nImplement."}
+			tool := "mcp__codex-main__codex_start"
+			if tc.mode == "reply" {
+				input["mode"], input["threadId"], input["cwd"] = "reply", "thread-p63", scratch
+			}
+			if tc.sync {
+				tool = "mcp__codex-main__codex-reply"
+			}
+			if tc.model != "" {
+				input["model"], input["config"] = tc.model, map[string]any{"model_reasoning_effort": tc.effort}
+			}
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input, "cwd": repo, "session_id": "retry", "tool_use_id": "retry"}
+			key, _ := callKey(event)
+			call := codexCallUUID(key)
+			if tc.duplicate {
+				digest := sha256.Sum256([]byte(call))
+				path := filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(digest[:])+".json")
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				data, _ := json.Marshal(map[string]any{"jobId": hex.EncodeToString(digest[:]), "state": "SUCCEEDED"})
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := Pre(event, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hook := mapValue(got["hookSpecificOutput"])
+			if tc.corrupt {
+				data, _ := os.ReadFile(filepath.Join(state, "telemetry", "events", "by_task", "task-recorded.jsonl"))
+				if bytes.Count(data, []byte(`"code":"TASK_ATTEMPT_UNREADABLE"`)) != 1 {
+					t.Fatalf("corrupt attempt observation: %s", data)
+				}
+			}
+			if tc.duplicate {
+				if hook["permissionDecision"] == "deny" || mapValue(hook["updatedInput"])["call"] != call {
+					t.Fatalf("duplicate denied: %#v", got)
+				}
+				return
+			}
+			if tc.deny != "" {
+				text := stringValue(hook["permissionDecisionReason"])
+				if hook["permissionDecision"] != "deny" || !strings.HasPrefix(text, tc.deny) || (tc.sync && text != tc.deny) {
+					t.Fatalf("denial: %#v", got)
+				}
+				return
+			}
+			updated := mapValue(hook["updatedInput"])
+			wantRoute, wantModel, wantEffort := tc.route, "gpt-6-luna", "high"
+			if tc.category != "" {
+				wantModel = "gpt-6.1-sol"
+				if tc.route == "escalated" {
+					wantEffort = "xhigh"
+				} else {
+					wantRoute = "consequential"
+				}
+				basis := "Prior luna implementation attempt prior-job was rejected after send-back."
+				if tc.category == "failed_abandonment" {
+					basis = "Prior luna implementation attempt prior-job was cancelled as failed."
+				}
+				header := "ORCH|task=task-recorded|phase=implementation|route=" + wantRoute + "|reason=repeated_failure|basis=" + basis + "|scope=src/a.go|eta=7m\nImplement."
+				if !strings.HasPrefix(stringValue(updated["prompt"]), header) || got["systemMessage"] != "Purser: prior luna attempt failed; route="+wantRoute+" -> "+wantModel+" / "+wantEffort+"." {
+					t.Fatalf("rewritten header/receipt: %#v", got)
+				}
+			}
+			if hook["permissionDecision"] == "deny" || updated["route"] != wantRoute || updated["jobModel"] != wantModel || updated["jobEffort"] != wantEffort || updated["mode"] != "new" || updated["model"] != wantModel || mapValue(updated["config"])["model_reasoning_effort"] != wantEffort {
+				t.Fatalf("effective dispatch: %#v", got)
+			}
+			if tc.mode == "reply" && (updated["threadId"] != nil || updated["cwd"] != repo) {
+				t.Fatalf("fresh reply retained thread/cwd: %#v", updated)
+			}
+			path, _ := pendingPath(state, event)
+			data, _ := os.ReadFile(path)
+			var pending map[string]any
+			if json.Unmarshal(data, &pending) != nil || pending["route"] != wantRoute || pending["model"] != wantModel || pending["effort"] != wantEffort {
+				t.Fatalf("pending dispatch: %s", data)
+			}
+		})
+	}
+}
+
 func replaceFixtureProjectKey(value any, project string) any {
 	switch value := value.(type) {
 	case string:
