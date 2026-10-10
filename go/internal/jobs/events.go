@@ -180,7 +180,7 @@ func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 				tail = tail[1:]
 			}
 		}
-		latest[command] = testEvidenceRun{index: i, value: map[string]any{
+		latest[testRunnerTarget(command)] = testEvidenceRun{index: i, value: map[string]any{
 			"command": command, "exit_code": int(exitCode), "output_tail": tail,
 		}}
 	}
@@ -218,9 +218,13 @@ func TestEvidenceFailed(events []map[string]any) bool {
 }
 
 func testRunnerCommand(command string) bool {
+	return testRunnerTarget(command) != ""
+}
+
+func testRunnerTarget(command string) string {
 	words := shellWords(command)
 	if len(words) == 0 {
-		return false
+		return ""
 	}
 	base := func(path string) string {
 		path = strings.ToLower(strings.TrimSuffix(path, ".exe"))
@@ -260,10 +264,10 @@ func testRunnerCommand(command string) bool {
 			cmd == "pytest" || cmd == "uv" && len(tokens) > 2 && tokens[1] == "run" && base(tokens[2]) == "pytest" ||
 			(cmd == "npm" || cmd == "pnpm" || cmd == "yarn" || cmd == "cargo") && len(tokens) > 1 && (tokens[1] == "test") ||
 			(cmd == "python" || cmd == "python3" || cmd == "py") && len(tokens) > 2 && tokens[1] == "-m" && tokens[2] == "pytest" {
-			return true
+			return strings.Join(tokens, " ")
 		}
 	}
-	return false
+	return ""
 }
 
 func shellWords(command string) []string {

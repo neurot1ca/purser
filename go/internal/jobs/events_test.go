@@ -124,6 +124,58 @@ func TestTestEvidenceFailedSeesFailureOutsideOutputCap(t *testing.T) {
 	}
 }
 
+func TestTestEvidenceFailedUsesLatestRunPerTargetExitCode(t *testing.T) {
+	tests := []struct {
+		name           string
+		runs           []map[string]any
+		latestExitCode int
+		failed         bool
+	}{
+		{
+			name: "later pass clears earlier failure",
+			runs: []map[string]any{
+				{"command": "GOCACHE=/old go test ./pkg", "exit_code": float64(1), "aggregated_output": "cache denied"},
+				{"command": "GOCACHE=/new go test ./pkg", "exit_code": float64(0), "aggregated_output": "ok"},
+			},
+			latestExitCode: 0,
+			failed: false,
+		},
+		{
+			name: "later failure overrides earlier pass",
+			runs: []map[string]any{
+				{"command": "GOCACHE=/old go test ./pkg", "exit_code": float64(0), "aggregated_output": "ok"},
+				{"command": "GOCACHE=/new go test ./pkg", "exit_code": float64(1), "aggregated_output": "failed"},
+			},
+			latestExitCode: 1,
+			failed: true,
+		},
+		{
+			name: "traceback text does not override zero exit",
+			runs: []map[string]any{
+				{"command": "go test ./pkg", "exit_code": float64(0), "aggregated_output": "Traceback (most recent call last): setup note"},
+			},
+			failed: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			events := make([]map[string]any, 0, len(tc.runs))
+			for _, run := range tc.runs {
+				events = append(events, map[string]any{"type": "item.completed", "item": map[string]any{
+					"type": "command_execution", "command": run["command"], "exit_code": run["exit_code"], "aggregated_output": run["aggregated_output"],
+				}})
+			}
+			evidence := TestEvidence(events)
+			if len(evidence) != 1 || evidence[0]["exit_code"] != tc.latestExitCode {
+				t.Fatalf("TestEvidence() = %#v, want one latest run with exit code %d", evidence, tc.latestExitCode)
+			}
+			if got := TestEvidenceFailed(events); got != tc.failed {
+				t.Fatalf("TestEvidenceFailed() = %v, want %v", got, tc.failed)
+			}
+		})
+	}
+}
+
 func TestOpenCodeToolErrorIsNoteBeforeSuccessfulCompletion(t *testing.T) {
 	stream := NewEventStream("opencode")
 	stream.Write([]byte("{" +

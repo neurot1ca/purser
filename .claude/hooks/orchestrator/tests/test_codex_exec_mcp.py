@@ -1167,6 +1167,30 @@ def test_codex_test_evidence_matches_wrapped_runner_commands(command, expected):
         assert evidence[0]["command"] == command
 
 
+@pytest.mark.parametrize(("commands", "expected_exit_code", "expected_failed"), [
+    ([
+        ("GOCACHE=/old go test ./pkg", 1, "cache denied"),
+        ("GOCACHE=/new go test ./pkg", 0, "ok"),
+    ], 0, False),
+    ([
+        ("GOCACHE=/old go test ./pkg", 0, "ok"),
+        ("GOCACHE=/new go test ./pkg", 1, "failed"),
+    ], 1, True),
+    ([
+        ("go test ./pkg", 0, "Traceback (most recent call last): setup note"),
+    ], 0, False),
+])
+def test_codex_test_evidence_uses_latest_run_per_target_exit_code(commands, expected_exit_code, expected_failed):
+    events = [{"type": "item.completed", "item": {
+        "type": "command_execution", "command": command, "exit_code": exit_code,
+        "aggregated_output": output,
+    }} for command, exit_code, output in commands]
+    evidence, failed = codex_exec_mcp._codex_test_evidence(events)
+    assert len(evidence) == 1
+    assert evidence[0]["exit_code"] == expected_exit_code
+    assert failed is expected_failed
+
+
 def test_liveness_checkpoint_refuses_stale_generation(area):
     job_id = "f" * 64
     jobs = area / "root" / "codex_exec_mcp" / "jobs"

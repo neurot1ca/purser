@@ -859,12 +859,16 @@ def _codex_test_evidence(events: list[dict[str, Any]]) -> tuple[list[dict[str, A
                 or not _codex_test_runner_command(command)):
             continue
         tail = "\n".join(output.splitlines()[-40:]).encode("utf-8")[-4096:].decode("utf-8", errors="ignore")
-        runs[command] = (index, {"command": command, "exit_code": exit_code, "output_tail": tail})
+        runs[_codex_test_runner_target(command)] = (index, {"command": command, "exit_code": exit_code, "output_tail": tail})
     latest = sorted(runs.values(), key=lambda run: run[0])[-6:]
     return [entry for _, entry in latest], any(entry["exit_code"] != 0 for _, entry in runs.values())
 
 
 def _codex_test_runner_command(command: str) -> bool:
+    return bool(_codex_test_runner_target(command))
+
+
+def _codex_test_runner_target(command: str) -> str:
     def words(value: str) -> list[str]:
         result: list[str] = []
         word: list[str] = []
@@ -892,7 +896,7 @@ def _codex_test_runner_command(command: str) -> bool:
 
     parsed = words(command)
     if not parsed:
-        return False
+        return ""
     inner = command
     shell = base(parsed[0])
     if shell in {"pwsh", "powershell", "bash", "sh", "zsh", "cmd"}:
@@ -919,8 +923,8 @@ def _codex_test_runner_command(command: str) -> bool:
                 or (runner in {"npm", "pnpm", "yarn", "cargo"} and len(tokens) > 1 and tokens[1] == "test")
                 or (runner in {"python", "python3", "py"} and len(tokens) > 2
                     and tokens[1] == "-m" and tokens[2] == "pytest")):
-            return True
-    return False
+            return " ".join(tokens)
+    return ""
 
 
 def _retry_after_seconds(value: Any) -> float | None:
