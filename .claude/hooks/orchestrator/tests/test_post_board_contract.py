@@ -67,6 +67,11 @@ def test_post_board_python_fixture(tmp_path, monkeypatch):
                                                        startedAt=NOW - 600, model="gpt-test")]))
     cases.append(_case("running_coding", [_job("9" * 64, state="RUNNING", startedAt=NOW - 300,
                                                  etaMinutes=2, boardDisplayCount=0)]))
+    cases.append(_case("running_fetching_queued_order", [
+        _job("a" * 64, state="RUNNING", acceptedAt=NOW - 30),
+        _job("b" * 64, state="SUCCEEDED", acceptedAt=NOW - 20, boardDisplayCount=0),
+        _job("c" * 64, state="QUEUED", acceptedAt=NOW - 10),
+    ]))
     cases.append(_case("nothing_visible", [_job("4" * 64, boardDisplayCount=1)]))
     cases.append(_case("malformed_indexes_and_jobs", [], {
         "async_jobs/bad.json": "{broken",

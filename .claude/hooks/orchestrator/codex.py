@@ -2723,7 +2723,7 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
         if not in_progress and not any(job.get("boardDisplayCount") == 0 for _finished, (job, _index) in finished_jobs):
             return None, []
 
-        def board_row(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple[int, int, float, str]:
+        def board_row(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple[int, float, str]:
             job, index = item
             raw_state = job.get("state")
             state = {"QUEUED": "queued", "RUNNING": "coding", "SUCCEEDED": "done",
@@ -2808,17 +2808,24 @@ def _project_job_board_details(root: Path, project_key: str) -> tuple[str | None
             model_label = (f"{model} ({effort})".replace("|", "\\|")
                            if isinstance(model, str) and isinstance(effort, str) else "—")
             text = f"| {label} | {model_label} | {state} | {eta_label} | {review} | {apply} |"
-            if raw_state in {"QUEUED", "RUNNING"}:
+            if raw_state == "RUNNING":
+                rank = 0
+            elif raw_state == "SUCCEEDED" and state != "done":
+                rank = 1
+            elif raw_state == "QUEUED":
+                rank = 2
+            else:
+                rank = 3
+            if rank in {0, 2}:
                 stamp = job.get("acceptedAt")
-                return (0, 0 if raw_state == "RUNNING" else 1,
-                        -float(stamp) if isinstance(stamp, (int, float)) else 0.0, text)
+                return rank, -float(stamp) if isinstance(stamp, (int, float)) else 0.0, text
             stamp = job.get("appliedAt") if job.get("applyState") == "applied" else None
             if not isinstance(stamp, (int, float)):
                 stamp = job.get("finishedAt")
-            return 1, 0, -float(stamp) if isinstance(stamp, (int, float)) else 0.0, text
+            return rank, -float(stamp) if isinstance(stamp, (int, float)) else 0.0, text
 
         lines = ["> | ⚓ Task | Model | State | ETA | Review | Apply |", "> | --- | --- | --- | --- | --- | --- |"]
-        lines.extend("> " + row[3] for row in sorted(map(board_row, jobs), key=lambda row: row[:3]))
+        lines.extend("> " + row[2] for row in sorted(map(board_row, jobs), key=lambda row: row[:2]))
         block = "Purser jobs:\n" + "\n".join(lines)
         return block, [job["jobId"] for job, _index in jobs]
     except (OSError, ValueError, TypeError, KeyError, AttributeError):

@@ -148,7 +148,13 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 	})
 	sort.Slice(finished, func(i, j int) bool { return boardFinish(finished[i].job) > boardFinish(finished[j].job) })
 	ordered := append(inProgress, finished...)
-	rows := []string{"> | ⚓ Task | Model | State | ETA | Review | Apply |", "> | --- | --- | --- | --- | --- | --- |"}
+	type renderedBoardRow struct {
+		line     string
+		rank     int
+		accepted float64
+		finished float64
+	}
+	rendered := []renderedBoardRow{}
 	for _, item := range ordered {
 		j, idx := item.job, item.index
 		id, _ := j["jobId"].(string)
@@ -248,7 +254,33 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 				modelLabel = strings.NewReplacer("|", "\\|").Replace(m + " (" + e + ")")
 			}
 		}
-		rows = append(rows, fmt.Sprintf("> | %s | %s | %s | %s | %s | %s |", label, modelLabel, state, eta, review, apply))
+		rank := 3
+		switch {
+		case j["state"] == "RUNNING":
+			rank = 0
+		case j["state"] == "SUCCEEDED" && state != "done":
+			rank = 1
+		case j["state"] == "QUEUED":
+			rank = 2
+		}
+		rendered = append(rendered, renderedBoardRow{
+			line: fmt.Sprintf("> | %s | %s | %s | %s | %s | %s |", label, modelLabel, state, eta, review, apply),
+			rank: rank, accepted: boardNumber(j["acceptedAt"]), finished: boardFinish(j),
+		})
+	}
+	sort.SliceStable(rendered, func(i, j int) bool {
+		a, b := rendered[i], rendered[j]
+		if a.rank != b.rank {
+			return a.rank < b.rank
+		}
+		if a.rank == 0 || a.rank == 2 {
+			return a.accepted > b.accepted
+		}
+		return a.finished > b.finished
+	})
+	rows := []string{"> | ⚓ Task | Model | State | ETA | Review | Apply |", "> | --- | --- | --- | --- | --- | --- |"}
+	for _, row := range rendered {
+		rows = append(rows, row.line)
 	}
 	return "Purser jobs:\n" + strings.Join(rows, "\n"), ids
 }
