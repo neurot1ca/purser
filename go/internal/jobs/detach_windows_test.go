@@ -53,16 +53,18 @@ func TestDetachedHelper(t *testing.T) {
 }
 
 func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
+	window, _, _ := getShellWindow.Call()
+	if window == 0 {
+		t.Skip("desktop shell parent unavailable; cannot verify detachment from the launcher's job")
+	}
 	dir := t.TempDir()
 	release := filepath.Join(dir, "release")
 	consoleMarker := filepath.Join(dir, "console-window")
-	parentPID := strconv.Itoa(os.Getpid())
 	launcher := exec.Command(os.Args[0], "-test.run=^TestDetachedHelper$")
 	launcher.Env = append(os.Environ(),
 		"PURSER_DETACH_LAUNCHER=1",
 		"PURSER_DETACH_RELEASE="+release,
 		"PURSER_DETACH_CONSOLE_MARKER="+consoleMarker,
-		"PURSER_CODEX_TEST_PARENT_PID="+parentPID,
 	)
 	output, err := launcher.CombinedOutput()
 	if err != nil {
