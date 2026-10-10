@@ -1233,7 +1233,7 @@ def test_accepted_plan_legacy_schema_renders_current_milestone(setup):
                        completed_milestones=[1, 2, 3]),
     ], version=1)
 
-    assert advisor._active_plan_line(repo) == "solo M4/5"
+    assert advisor._active_plan_line(repo) == "solo M4/5 dispatch"
 
 
 def test_accepted_plan_collection_renders_unfinished_plans_and_gates(setup):
@@ -1249,7 +1249,7 @@ def test_accepted_plan_collection_renders_unfinished_plans_and_gates(setup):
     ]
     _write_accepted_plans(scratch, repo, plans)
 
-    assert advisor._active_plan_line(repo) == "A M4/5; B M1/2 (gate: approval required)"
+    assert advisor._active_plan_line(repo) == "A M4/5 dispatch; B M1/2 (gate: approval required)"
 
 
 @pytest.mark.parametrize("case", ["malformed", "project_key", "project_root", "digest"])

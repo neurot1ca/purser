@@ -159,10 +159,10 @@ func Stop(event map[string]any, started time.Time) []byte {
 				if blocked, ok := exactInteger(reminded[plan.TaskID]); ok && blocked == latestUser {
 					continue
 				}
-				if plan.UserStopped || plan.Gate != "" || !containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) || plan.PendingNextAction != "dispatch" || hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) || hasOpenPlanTaskJob(stateRoot(), plan) || planCodexDispatched(records, latestUser, plan.TaskID) {
+				if plan.UserStopped || plan.Gate != "" || !containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) || hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) || hasOpenPlanTaskJob(stateRoot(), plan) || planCodexDispatched(records, latestUser, plan.TaskID) {
 					continue
 				}
-				eligible = append(eligible, fmt.Sprintf("%s M%d/%d", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones)))
+				eligible = append(eligible, fmt.Sprintf("%s M%d/%d %s", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones), plan.PendingNextAction))
 				reminded[plan.TaskID] = latestUser
 			}
 			if len(eligible) > 0 {

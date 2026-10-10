@@ -402,6 +402,7 @@ func UpdatePlan(root, repository, taskID string, expectedRevision int, operation
 
 var planTaskSuffix = regexp.MustCompile(`^([0-9]+)of([0-9]+)(?:-p[0-9]+[a-z]?)?(?:-[a-z][a-z0-9-]*)?$`)
 var legacyPlanTaskSuffix = regexp.MustCompile(`^([0-9]+)(?:-p[0-9]+[a-z]?)?(?:-[a-z][a-z0-9-]*)?$`)
+var plainPlanTaskSuffix = regexp.MustCompile(`^([0-9]+)of([0-9]+)$`)
 
 // BindPlanJob links a pass to its accepted, unfinished milestone. The plan
 // lock serializes updates, but bindings do not require a caller revision:
@@ -452,8 +453,8 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 	return state, true, nil
 }
 
-// RecordPlanApply records an explicitly applied pass. It never advances the
-// milestone; only UpdatePlan(..., "complete-milestone", ...) can do that.
+// RecordPlanApply records an explicitly applied pass and advances a plain
+// milestone job when no linked work remains.
 func RecordPlanApply(root, repository, taskID, jobID string) error {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
@@ -497,6 +498,7 @@ func RecordPlanApply(root, repository, taskID, jobID string) error {
 	linked = removeString(linked, jobID)
 	setLinkedJobs(state, linked)
 	state.PendingNextAction = pendingAction(state)
+	advanceAppliedMilestone(root, state)
 	state.Revision++
 	return writePlans(path, states)
 }
@@ -574,7 +576,7 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 			continue
 		}
 		stateText, _ := job["state"].(string)
-		if stateText == "FAILED" || stateText == "CANCELLED" || stateText == "TIMED_OUT" {
+		if terminalPlanJob(job, stateText) {
 			changed = true
 			continue
 		}
@@ -585,6 +587,12 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 		changed = true
 	}
 	state.PendingNextAction = pendingAction(state)
+	currentBefore := state.CurrentMilestone
+	completedBefore := len(state.CompletedMilestones)
+	advanceAppliedMilestone(root, state)
+	if state.CurrentMilestone != currentBefore || len(state.CompletedMilestones) != completedBefore {
+		changed = true
+	}
 	if !changed {
 		return state, nil
 	}
@@ -620,6 +628,8 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 		if state.CurrentMilestone == 0 {
 			continue
 		}
+		currentBefore := state.CurrentMilestone
+		completedBefore := len(state.CompletedMilestones)
 		if err := validatePlanArtifact(state); err != nil {
 			return nil, err
 		}
@@ -652,7 +662,7 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 				continue
 			}
 			stateText, _ := job["state"].(string)
-			if stateText == "FAILED" || stateText == "CANCELLED" || stateText == "TIMED_OUT" {
+			if terminalPlanJob(job, stateText) {
 				planChanged = true
 				continue
 			}
@@ -663,11 +673,17 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 			planChanged = true
 		}
 		state.PendingNextAction = pendingAction(state)
+		advanceAppliedMilestone(root, state)
+		if state.CurrentMilestone != currentBefore || len(state.CompletedMilestones) != completedBefore {
+			planChanged = true
+		}
 		if planChanged {
 			state.Revision++
 			changed = true
 		}
-		unfinished = append(unfinished, state)
+		if state.CurrentMilestone != 0 {
+			unfinished = append(unfinished, state)
+		}
 	}
 	if changed {
 		if err := writePlans(path, states); err != nil {
@@ -724,6 +740,18 @@ func hasAppliedJob(state *PlanState, jobID string) bool {
 	return false
 }
 
+func terminalPlanJob(job map[string]any, state string) bool {
+	if state == "FAILED" || state == "CANCELLED" || state == "TIMED_OUT" {
+		return true
+	}
+	if state != "SUCCEEDED" {
+		return false
+	}
+	reviewed, _ := job["reviewedSnapshot"].(string)
+	baseline, _ := job["baselineSnapshot"].(string)
+	return reviewed != "" && reviewed == baseline
+}
+
 func linkedJobs(state *PlanState) []string {
 	jobs := append([]string(nil), state.LinkedJobs...)
 	if state.LinkedJob != "" && !containsPlanString(jobs, state.LinkedJob) {
@@ -745,6 +773,47 @@ func pendingAction(state *PlanState) string {
 		return "apply"
 	}
 	return "dispatch"
+}
+
+func advanceAppliedMilestone(root string, state *PlanState) {
+	milestone := state.CurrentMilestone
+	if milestone == 0 || containsMilestone(state.CompletedMilestones, milestone) {
+		return
+	}
+	passed := false
+	for _, pass := range state.AppliedPasses {
+		if pass.Milestone == milestone && plainPlanTaskMilestone(state.TaskID, pass.TaskID, milestone) {
+			passed = true
+			break
+		}
+	}
+	if !passed {
+		return
+	}
+	if hasOpenLinkedJob(root, state, milestone) {
+		return
+	}
+	state.CompletedMilestones = append(state.CompletedMilestones, milestone)
+	state.CurrentMilestone = 0
+	for _, accepted := range state.AcceptedMilestones {
+		if !containsMilestone(state.CompletedMilestones, accepted) {
+			state.CurrentMilestone = accepted
+			break
+		}
+	}
+	state.PendingNextAction = pendingAction(state)
+}
+
+func plainPlanTaskMilestone(planID, taskID string, milestone int) bool {
+	if !strings.HasPrefix(taskID, planID+"-m") {
+		return false
+	}
+	match := plainPlanTaskSuffix.FindStringSubmatch(strings.TrimPrefix(taskID, planID+"-m"))
+	if match == nil {
+		return false
+	}
+	value, err := strconv.Atoi(match[1])
+	return err == nil && value == milestone
 }
 
 func hasOpenLinkedJob(root string, state *PlanState, milestone int) bool {

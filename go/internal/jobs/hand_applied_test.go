@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 )
 
@@ -73,6 +74,37 @@ func TestAdmissionReleasesOnlyHandAppliedSucceededBlockers(t *testing.T) {
 				t.Fatalf("blocking job was incorrectly marked applied: %#v", saved)
 			}
 		})
+	}
+}
+
+func TestHandAppliedPlanJobCompletesAndAdvancesMilestone(t *testing.T) {
+	root, repo, worktree, snapshot := handAppliedAdmissionFixture(t, true)
+	artifact := filepath.Join(t.TempDir(), "plan.md")
+	if err := os.WriteFile(artifact, []byte("accepted plan"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := contextio.AcceptPlan(root, repo, "plan-hand-applied", artifact, []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := "plan-hand-applied-m1of2"
+	jobID := strings.Repeat("a", 64)
+	if _, matched, err := contextio.BindPlanJob(root, repo, taskID, jobID); err != nil || !matched {
+		t.Fatalf("bind plan job: matched=%v err=%v", matched, err)
+	}
+	job := map[string]any{"jobId": jobID, "state": "SUCCEEDED", "worktreePath": worktree, "repoRoot": repo, "snapshot": snapshot, "taskId": taskID}
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+	if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHandAppliedJSON(t, jobPath, job)
+	markHandAppliedJob(root, jobID)
+	updated, err := contextio.ReadPlanForTask(root, repo, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.CurrentMilestone != 2 || len(updated.CompletedMilestones) != 1 || updated.CompletedMilestones[0] != 1 || len(updated.AppliedPasses) != 1 || len(updated.LinkedJobs) != 0 {
+		t.Fatalf("hand-applied plan progress = %+v", updated)
 	}
 }
 

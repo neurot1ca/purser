@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
@@ -211,6 +213,8 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		return result(map[string]any{"state": "FAILED", "errorCode": "JOB_WRITE_FAILED", "message": err.Error()})
 	}
 	if applied {
+		values := recordMap(job)
+		recordPlanApply(stateRoot, values, jobID)
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
@@ -241,9 +245,21 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	}
+	recordPlanApply(stateRoot, recordMap(job), jobID)
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	dispatchWorktreeRetirement(stateRoot, jobID)
 	return applyToolResult(value)
+}
+
+func recordPlanApply(stateRoot string, job map[string]any, jobID string) {
+	repository, _ := job["repoRoot"].(string)
+	taskID, _ := job["taskId"].(string)
+	if repository == "" || taskID == "" {
+		return
+	}
+	if err := contextio.RecordPlanApply(stateRoot, repository, taskID, jobID); err != nil {
+		fmt.Fprintf(os.Stderr, "RecordPlanApply failed for job %s: %v\n", jobID, err)
+	}
 }
 
 func applyToolResult(value map[string]any) map[string]any {

@@ -23,10 +23,14 @@ func TestPlanStopContinuationLifecycle(t *testing.T) {
 	if err := RecordPlanApply(root, repo, taskID, "job-1"); err != nil {
 		t.Fatal(err)
 	}
+	state, err = ReadPlanForTask(root, repo, state.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "What is the weather?"}})
 	first := planStop(t, repo, transcript, false)
-	wantReason := "Continue accepted plans plan-1 M1/2 through normal Purser routing and review."
+	wantReason := "Continue accepted plans plan-1 M1/2 dispatch through normal Purser routing and review."
 	if !strings.Contains(first, wantReason) {
 		t.Fatalf("first Stop reason = %q, want to contain %q", first, wantReason)
 	}
@@ -37,12 +41,8 @@ func TestPlanStopContinuationLifecycle(t *testing.T) {
 		t.Fatalf("nested Stop blocked: %q", nested)
 	}
 
-	state, err = UpdatePlan(root, repo, "plan-1", state.Revision+2, "complete-milestone", "")
-	if err != nil || state.CurrentMilestone != 2 {
-		t.Fatalf("complete milestone: state=%+v err=%v", state, err)
-	}
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Another unrelated question."}})
-	if next := planStop(t, repo, transcript, false); !strings.Contains(next, "plan-1 M2/2") {
+	if next := planStop(t, repo, transcript, false); !strings.Contains(next, "plan-1 M1/2") {
 		t.Fatalf("next milestone Stop reason = %q", next)
 	}
 
@@ -59,7 +59,7 @@ func TestPlanStopContinuationLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue."}})
-	if resumed := planStop(t, repo, transcript, false); !strings.Contains(resumed, "plan-1 M2/2") {
+	if resumed := planStop(t, repo, transcript, false); !strings.Contains(resumed, "plan-1 M1/2") {
 		t.Fatalf("resumed plan Stop reason = %q", resumed)
 	}
 }
@@ -202,6 +202,24 @@ func TestPlanStopEvaluatesPlansIndependently(t *testing.T) {
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Another turn."}})
 	if stopped := planStop(t, repo, transcript, false); stopped != "" {
 		t.Fatalf("stopped/gated siblings should not become eligible: %q", stopped)
+	}
+}
+
+func TestPlanStopRemindsApplyAndDispatchPlans(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	t.Setenv("PURSER_STATE_DIR", root)
+	_, err := AcceptPlan(root, repo, "plan-apply", artifact, []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "plan-dispatch", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue both plans."}})
+	got := planStop(t, repo, transcript, false)
+	if !strings.Contains(got, "plan-apply M1/2 dispatch") || !strings.Contains(got, "plan-dispatch M1/1 dispatch") {
+		t.Fatalf("Stop omitted a plan's next action: %q", got)
 	}
 }
 

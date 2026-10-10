@@ -776,7 +776,8 @@ def _active_plan_line(repository: Path) -> str | None:
                 active.append(plan)
 
         parts = [f"{plan['task_id']} M{plan['current_milestone']}/{len(plan['accepted_milestones'])}"
-                 + (f" (gate: {plan['gate']})" if plan.get("gate") else "") for plan in active]
+                 + (f" (gate: {plan['gate']})" if plan.get("gate") else
+                    f" {plan.get('pending_next_action') or 'dispatch'}") for plan in active]
         return "; ".join(parts) or None
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, RecursionError):
         return None

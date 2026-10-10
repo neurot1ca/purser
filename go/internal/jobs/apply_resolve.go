@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
@@ -78,6 +77,7 @@ func applyResolvedJob(stateRoot, dir, jobID string, job *Record, repo, worktree,
 		return applyToolResult(map[string]any{"state": "FAILED", "errorCode": "JOB_WRITE_FAILED", "message": err.Error()})
 	}
 	values = recordMap(job)
+	recordPlanApply(stateRoot, values, jobID)
 	recordScopeOutcome(opt, stateRoot, values, "resolved_by_hand")
 	recordApplyDecision(opt, stateRoot, values, "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
@@ -137,12 +137,6 @@ func recordScopeOutcome(opt ApplyOptions, root string, job map[string]any, actio
 func recordApplyDecision(opt ApplyOptions, root string, job map[string]any, decision, kind, source string, reviewerCounts ...any) {
 	if task, _ := job["taskId"].(string); task == "" {
 		return
-	}
-	if decision == "accepted" && kind == "apply" {
-		if repository, _ := job["repoRoot"].(string); repository != "" {
-			jobID, _ := job["jobId"].(string)
-			_ = contextio.RecordPlanApply(root, repository, nonemptyString(job["taskId"]), jobID)
-		}
 	}
 	defer func() { _ = recover() }()
 	if opt.RecordDecision != nil {

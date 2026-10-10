@@ -300,6 +300,16 @@ func renderActivePlanPointer(repository string) string {
 	if err != nil || len(plans) == 0 {
 		return ""
 	}
+	active := plans[:0]
+	for _, plan := range plans {
+		if !plan.UserStopped {
+			active = append(active, plan)
+		}
+	}
+	plans = active
+	if len(plans) == 0 {
+		return ""
+	}
 	if len(plans) == 1 {
 		state := plans[0]
 		if state.UserStopped || !containsMilestone(state.AcceptedMilestones, state.CurrentMilestone) {
@@ -322,15 +332,16 @@ func renderActivePlanPointer(repository string) string {
 	lines = append(lines, "Unfinished plans:")
 	for _, plan := range plans {
 		action := plan.PendingNextAction
-		if plan.UserStopped {
-			action = "stopped"
-		} else if plan.Gate != "" {
+		if plan.Gate != "" {
 			action = "gate: " + plan.Gate
 		}
 		if !containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) {
 			action = "invalid milestone"
 		}
 		lines = append(lines, fmt.Sprintf("%s M%d/%d %s", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones), action))
+	}
+	if len(lines) == 1 {
+		return ""
 	}
 	lines = append(lines, "Details: purser-hook plan status --task-id <id>.")
 	stateLine := "State: " + path

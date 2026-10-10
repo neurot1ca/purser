@@ -204,12 +204,12 @@ func TestPlanCollectionCoexistence(t *testing.T) {
 	if err != nil || !matched {
 		t.Fatalf("bind B: %+v %v %v", b, matched, err)
 	}
-	if err := RecordPlanApply(root, repo, "plan-b-m1of2-p1", "job-b-apply"); err != nil {
-		t.Fatal(err)
-	}
 	b, matched, err = BindPlanJob(root, repo, "plan-b-m1of2-p2", "job-b-recovery")
 	if err != nil || !matched {
 		t.Fatalf("bind B recovery job: %+v %v %v", b, matched, err)
+	}
+	if err := RecordPlanApply(root, repo, "plan-b-m1of2-p1", "job-b-apply"); err != nil {
+		t.Fatal(err)
 	}
 	jobDir := filepath.Join(root, "codex_exec_mcp", "jobs")
 	if err := os.MkdirAll(jobDir, 0700); err != nil {
@@ -250,45 +250,40 @@ func TestPlanCollectionCoexistence(t *testing.T) {
 	}
 }
 
-func TestPlanPassesRequireExplicitMilestoneCompletion(t *testing.T) {
+func TestPlanPassDoesNotCompleteMilestoneAutomatically(t *testing.T) {
 	root, repo, artifact := planFixture(t)
 	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, task := range []string{"plan-1-m1of2-p1c", "plan-1-m1of2-p2c"} {
-		state, _, err = BindPlanJob(root, repo, task, string(rune('a'+i)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if state.CurrentMilestone != 1 {
-			t.Fatalf("dispatch advanced milestone: %+v", state)
-		}
-		if err = RecordPlanApply(root, repo, task, string(rune('a'+i))); err != nil {
-			t.Fatal(err)
-		}
-		before, err := ReadPlan(root, repo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if before.CurrentMilestone != 1 || len(before.CompletedMilestones) != 0 || before.PendingNextAction != "dispatch" || len(before.LinkedJobs) != 0 {
-			t.Fatalf("apply completed milestone: %+v", before)
-		}
-		if err = RecordPlanApply(root, repo, task, string(rune('a'+i))); err != nil {
-			t.Fatal(err)
-		}
-		after, _ := ReadPlan(root, repo)
-		if after.Revision != before.Revision || len(after.AppliedPasses) != i+1 {
-			t.Fatalf("duplicate apply changed progress: %+v", after)
-		}
-		state = after
+	state, _, err = BindPlanJob(root, repo, "plan-1-m1of2-p1", "job-p1")
+	if err != nil {
+		t.Fatal(err)
 	}
-	state, err = UpdatePlan(root, repo, "plan-1", state.Revision, "complete-milestone", "")
-	if err != nil || state.CurrentMilestone != 2 || len(state.CompletedMilestones) != 1 {
-		t.Fatalf("explicit completion = %+v, %v", state, err)
+	if err = RecordPlanApply(root, repo, "plan-1-m1of2-p1", "job-p1"); err != nil {
+		t.Fatal(err)
 	}
-	if _, err = UpdatePlan(root, repo, "plan-1", state.Revision-1, "complete-milestone", ""); err == nil {
-		t.Fatal("completion replay was accepted")
+	state, err = ReadPlan(root, repo)
+	if err != nil || state.CurrentMilestone != 1 || state.PendingNextAction != "dispatch" || len(state.CompletedMilestones) != 0 {
+		t.Fatalf("pass apply completed milestone: %+v, %v", state, err)
+	}
+}
+
+func TestPlanPlainMilestoneApplyCompletes(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, _, err = BindPlanJob(root, repo, "plan-1-m1of2", "job-milestone"); err != nil {
+		t.Fatal(err)
+	}
+	if err = RecordPlanApply(root, repo, "plan-1-m1of2", "job-milestone"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlan(root, repo)
+	if err != nil || state.CurrentMilestone != 2 || len(state.CompletedMilestones) != 1 || state.CompletedMilestones[0] != 1 {
+		t.Fatalf("plain milestone apply did not complete: %+v, %v", state, err)
 	}
 }
 
@@ -298,7 +293,7 @@ func TestPlanParallelDispatchesBothRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, matched, err := BindPlanJob(root, repo, "plan-1-m1of1", "job-a")
+	_, matched, err := BindPlanJob(root, repo, "plan-1-m1of1-p1", "job-a")
 	if err != nil || !matched {
 		t.Fatalf("first dispatch matched=%v err=%v", matched, err)
 	}
@@ -306,14 +301,14 @@ func TestPlanParallelDispatchesBothRecord(t *testing.T) {
 	if err != nil || !matched || len(state.LinkedJobs) != 2 || state.PendingNextAction != "apply" {
 		t.Fatalf("parallel dispatch was not linked: state=%+v matched=%v err=%v", state, matched, err)
 	}
-	if err = RecordPlanApply(root, repo, "plan-1-m1of1", "job-a"); err != nil {
+	if err = RecordPlanApply(root, repo, "plan-1-m1of1-p1", "job-a"); err != nil {
 		t.Fatal(err)
 	}
 	if err = RecordPlanApply(root, repo, "plan-1-m1of1-p2c", "job-b"); err != nil {
 		t.Fatal(err)
 	}
-	state, err = ReadPlan(root, repo)
-	if err != nil || len(state.LinkedJobs) != 0 || state.CurrentMilestone != 1 || state.PendingNextAction != "dispatch" || len(state.AppliedPasses) != 2 {
+	state, err = ReadPlanForTask(root, repo, "plan-1")
+	if err != nil || len(state.LinkedJobs) != 0 || state.CurrentMilestone != 1 || state.PendingNextAction != "dispatch" || len(state.AppliedPasses) != 2 || len(state.CompletedMilestones) != 0 {
 		t.Fatalf("parallel apply = %+v, %v", state, err)
 	}
 }
@@ -340,7 +335,7 @@ func TestPlanRecoveryRecordsAppliedJobAfterInterruptedWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-applied")
+	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1", "job-applied")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,12 +343,12 @@ func TestPlanRecoveryRecordsAppliedJobAfterInterruptedWrite(t *testing.T) {
 	if err := os.MkdirAll(jobDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	job, _ := json.Marshal(map[string]any{"jobId": "job-applied", "taskId": "plan-1-m1of1-p1c", "state": "SUCCEEDED", "applyState": "applied"})
+	job, _ := json.Marshal(map[string]any{"jobId": "job-applied", "taskId": "plan-1-m1of1", "state": "SUCCEEDED", "applyState": "applied"})
 	if err := os.WriteFile(filepath.Join(jobDir, "job-applied.json"), job, 0600); err != nil {
 		t.Fatal(err)
 	}
 	state, err = ReconcilePlanJob(root, repo)
-	if err != nil || len(state.LinkedJobs) != 0 || state.CurrentMilestone != 1 || state.PendingNextAction != "dispatch" || len(state.AppliedPasses) != 1 {
+	if err != nil || len(state.LinkedJobs) != 0 || state.CurrentMilestone != 0 || state.PendingNextAction != "" || len(state.AppliedPasses) != 1 || len(state.CompletedMilestones) != 1 {
 		t.Fatalf("applied job recovery = %+v, %v", state, err)
 	}
 }
