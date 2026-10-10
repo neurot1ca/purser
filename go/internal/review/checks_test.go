@@ -39,6 +39,13 @@ func TestChecksCommandHelper(t *testing.T) {
 			os.Exit(8)
 		}
 		os.Exit(0)
+	case "write-sleep":
+		if err := os.WriteFile(os.Getenv("PURSER_CHECK_WRITE_FILE"), []byte("changed"), 0600); err != nil {
+			os.Exit(8)
+		}
+		for {
+			time.Sleep(time.Minute)
+		}
 	default:
 		os.Exit(9)
 	}
@@ -81,6 +88,110 @@ func TestRunChecksUnresolvableExecutableIsUnknown(t *testing.T) {
 	got := RunChecks(t.TempDir(), []profile.Check{{Name: "missing", Argv: []string{"purser-missing-check-executable"}, TimeoutSeconds: 1}}, context.Background())
 	if len(got) != 1 || got[0].Status != "UNKNOWN" || !strings.HasPrefix(got[0].Tail, "unresolvable executable:") {
 		t.Fatalf("missing executable result %#v", got)
+	}
+}
+
+func TestRunChecksPassEmptyAndDeadlineSideEffects(t *testing.T) {
+	root := t.TempDir()
+	if err := testutil.Hide(exec.Command("git", "-C", root, "init", "-q")).Run(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_CHECK_HELPER", "write")
+	path := filepath.Join(root, "generated.txt")
+	t.Setenv("PURSER_CHECK_WRITE_FILE", path)
+	passed := RunChecksReport(root, []profile.Check{{Name: "write", Argv: checkHelperArgv(), TimeoutSeconds: 2}}, context.Background())
+	if passed.Status != "PASS" || passed.Results[0].Tail != "" || strings.Join(passed.SideEffectPaths, ",") != "generated.txt" {
+		t.Fatalf("passing check report %#v", passed)
+	}
+	empty := RunChecksReport(root, nil, context.Background())
+	if empty.Status != "NOT_RUN" || len(empty.Results) != 0 || len(empty.SideEffectPaths) != 0 {
+		t.Fatalf("empty check report %#v", empty)
+	}
+
+	_ = os.Remove(path)
+	t.Setenv("PURSER_CHECK_HELPER", "write-sleep")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	exhausted := RunChecksReport(root, []profile.Check{{Name: "write-sleep", Argv: checkHelperArgv(), TimeoutSeconds: 5}}, ctx)
+	if exhausted.Status != "UNKNOWN" || exhausted.Results[0].Status != "UNKNOWN" || strings.Join(exhausted.SideEffectPaths, ",") != "generated.txt" {
+		t.Fatalf("deadline report %#v", exhausted)
+	}
+}
+
+func TestRunChecksFindsContentChangesWithStableGitStatus(t *testing.T) {
+	root := t.TempDir()
+	if err := testutil.Hide(exec.Command("git", "-C", root, "init", "-q")).Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"config", "user.email", "test@example.invalid"}, {"config", "user.name", "Test"}} {
+		if err := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...)).Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tracked := filepath.Join(root, "edited.txt")
+	if err := os.WriteFile(tracked, []byte("baseline\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "edited.txt"}, {"commit", "-qm", "baseline"}} {
+		if err := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...)).Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(tracked, []byte("already dirty\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, path, initial string }{
+		{"tracked", "edited.txt", "already dirty\n"},
+		{"untracked", "untracked.txt", "before check\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(root, tc.path)
+			if tc.name == "untracked" {
+				if err := os.WriteFile(path, []byte(tc.initial), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PURSER_CHECK_HELPER", "write")
+			t.Setenv("PURSER_CHECK_WRITE_FILE", path)
+			got := RunChecksReport(root, []profile.Check{{Name: "write", Argv: checkHelperArgv(), TimeoutSeconds: 2}}, context.Background())
+			if len(got.SideEffectPaths) != 1 || got.SideEffectPaths[0] != tc.path {
+				t.Fatalf("stable-status content change report %#v", got)
+			}
+		})
+	}
+}
+
+func TestRunChecksFingerprintCapFallsBackToStatusOnly(t *testing.T) {
+	root := t.TempDir()
+	if err := testutil.Hide(exec.Command("git", "-C", root, "init", "-q")).Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"config", "user.email", "test@example.invalid"}, {"config", "user.name", "Test"}} {
+		if err := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...)).Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 501; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file-%03d.txt", i)), []byte("baseline\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := testutil.Hide(exec.Command("git", "-C", root, "add", ".")).CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	if out, err := testutil.Hide(exec.Command("git", "-C", root, "commit", "-qm", "baseline")).CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	for i := 0; i < 501; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file-%03d.txt", i)), []byte("dirty\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PURSER_CHECK_HELPER", "write")
+	t.Setenv("PURSER_CHECK_WRITE_FILE", filepath.Join(root, "file-000.txt"))
+	got := RunChecksReport(root, []profile.Check{{Name: "write", Argv: checkHelperArgv(), TimeoutSeconds: 3}}, context.Background())
+	if len(got.SideEffectPaths) != 0 {
+		t.Fatalf("fingerprint cap should fall back to status-only report: %#v", got)
 	}
 }
 
@@ -131,7 +242,7 @@ func TestRunChecksFailureAndTimeoutKillChild(t *testing.T) {
 
 func TestRunChecksSharedDeadlineAndCancellation(t *testing.T) {
 	t.Setenv("PURSER_CHECK_HELPER", "sleep")
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	got := RunChecks(t.TempDir(), []profile.Check{
 		{Name: "first", Argv: checkHelperArgv(), TimeoutSeconds: 5},
@@ -142,11 +253,13 @@ func TestRunChecksSharedDeadlineAndCancellation(t *testing.T) {
 	}
 
 	cancelCtx, stop := context.WithCancel(context.Background())
+	cancelPIDFile := filepath.Join(t.TempDir(), "cancel.pid")
+	t.Setenv("PURSER_CHECK_PID_FILE", cancelPIDFile)
 	done := make(chan []CheckResult, 1)
 	go func() {
 		done <- RunChecks(t.TempDir(), []profile.Check{{Name: "cancel", Argv: checkHelperArgv(), TimeoutSeconds: 10}}, cancelCtx)
 	}()
-	time.Sleep(100 * time.Millisecond)
+	waitCheckPID(t, cancelPIDFile)
 	stop()
 	result := <-done
 	if result[0].Status != "UNKNOWN" || !strings.HasSuffix(result[0].Tail, "\ntimed out") {

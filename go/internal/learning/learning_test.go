@@ -1,11 +1,12 @@
 package learning
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,99 @@ func TestDistillMaxSources(t *testing.T) {
 	}
 }
 
+func TestDistillOverflowCaps(t *testing.T) {
+	root := t.TempDir()
+	sources := make([]Source, 1200)
+	for i := range sources {
+		id := fmt.Sprintf("%064x", i+1)
+		path := filepath.Join(root, id+".json")
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sources[i] = Source{Path: path, Job: map[string]any{
+			"jobId": id, "taskId": fmt.Sprintf("task-%d", i), "state": "SUCCEEDED",
+			"finishedAt": float64(20), "durationMs": float64(1000), "route": fmt.Sprintf("route-%d", i),
+			"jobModel": "model-a", "jobEffort": "high", "reviewerOutcome": "passed",
+		}}
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := DistillJobs(root, sources, 100, MaxDistillPerRun, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	data := ReadSummary(root)
+	records := data["records"].([]any)
+	if len(records) > MaxTaskRecords {
+		t.Fatalf("record cap exceeded: %d", len(records))
+	}
+	for i, value := range records {
+		if got := len(pythonBytes(value)); got > MaxTaskBytes {
+			t.Fatalf("record %d is %d bytes, cap %d", i, got, MaxTaskBytes)
+		}
+	}
+	cohorts := data["cohorts"].(map[string]any)
+	if len(cohorts) > MaxCohorts {
+		t.Fatalf("cohort cap exceeded: %d", len(cohorts))
+	}
+	if _, ok := cohorts["other"]; !ok {
+		t.Fatal("overflow cohort was not aggregated into other")
+	}
+	for name, value := range cohorts {
+		if got := len(value.(map[string]any)["samples"].([]any)); got > MaxSamples {
+			t.Errorf("cohort %q has %d samples, cap %d", name, got, MaxSamples)
+		}
+	}
+	info, err := os.Stat(summaryPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > MaxSummaryBytes {
+		t.Fatalf("summary is %d bytes, cap %d", info.Size(), MaxSummaryBytes)
+	}
+}
+
+func TestDistillCheckpointRetryDoesNotDoubleCount(t *testing.T) {
+	root := t.TempDir()
+	src := fixtureSource(t, root, 1)
+	telemetry := filepath.Join(root, "telemetry")
+	if err := os.WriteFile(telemetry, []byte("blocking directory creation"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DistillJobs(root, []Source{src}, 100, 10, nil); err == nil {
+		t.Fatal("expected checkpoint failure")
+	}
+	if err := os.Remove(telemetry); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := DistillJobs(root, []Source{src}, 100, 10, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	counts := ReadSummary(root)["cohorts"].(map[string]any)["unknown|normal|model-a|high"].(map[string]any)["counts"].(map[string]any)
+	if got := numberFloat(counts["tasks"]); got != 1 {
+		t.Fatalf("checkpoint retry counted task %.0f times", got)
+	}
+}
+
+func TestDistillReviewUnavailableAndSkippedAreDistinct(t *testing.T) {
+	root := t.TempDir()
+	unavailable := fixtureSource(t, root, 1)
+	skipped := fixtureSource(t, root, 2)
+	unavailable.Job["reviewerOutcome"] = "unavailable"
+	skipped.Job["reviewerOutcome"] = "skipped"
+	if _, err := DistillJobs(root, []Source{unavailable, skipped}, 100, 10, nil); err != nil {
+		t.Fatal(err)
+	}
+	cohorts := ReadSummary(root)["cohorts"].(map[string]any)
+	counts := cohorts["unknown|normal|model-a|high"].(map[string]any)["counts"].(map[string]any)
+	review := counts["review"].(map[string]any)
+	if numberFloat(review["passed"]) != 0 || numberFloat(review["unavailable"]) != 1 || numberFloat(review["skipped"]) != 1 {
+		t.Fatalf("review outcomes = %#v", review)
+	}
+}
+
 func TestEncodeGoldenAndByteCapTrimming(t *testing.T) {
 	data := goldenFixture()
 	got, err := encode(data)
@@ -105,29 +199,28 @@ func TestReadCorruptAndOversized(t *testing.T) {
 	}
 }
 
-func TestPythonLockInterop(t *testing.T) {
+func TestLockFileInterop(t *testing.T) {
 	root := t.TempDir()
 	lockPath := filepath.Join(root, "telemetry", LockName)
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0700); err != nil {
-		t.Fatal(err)
-	}
-	var code string
-	if runtime.GOOS == "windows" {
-		code = "import msvcrt,sys,time; f=open(sys.argv[1],'a+b'); f.seek(0,2); f.write(b'0') if f.tell()==0 else None; f.flush(); f.seek(0); msvcrt.locking(f.fileno(),msvcrt.LK_LOCK,1); print('locked',flush=True); time.sleep(.35); f.seek(0); msvcrt.locking(f.fileno(),msvcrt.LK_UNLCK,1)"
-	} else {
-		code = "import fcntl,sys,time; f=open(sys.argv[1],'a+b'); f.seek(0,2); f.write(b'0') if f.tell()==0 else None; f.flush(); fcntl.flock(f,fcntl.LOCK_EX); print('locked',flush=True); time.sleep(.35); fcntl.flock(f,fcntl.LOCK_UN)"
-	}
-	cmd := exec.Command("python", "-c", code, lockPath)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestLockFileInteropChild$", "-test.v")
+	cmd.Env = append(os.Environ(), "PURSER_LOCK_INTEROP_PATH="+lockPath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = cmd.Start(); err != nil {
-		t.Skipf("python unavailable: %v", err)
-	}
-	buf := make([]byte, 7)
-	if _, err = stdout.Read(buf); err != nil {
 		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(stdout)
+	locked := false
+	for scanner.Scan() {
+		if scanner.Text() == "locked" {
+			locked = true
+			break
+		}
+	}
+	if !locked {
+		t.Fatalf("child did not announce lock acquisition: %v", scanner.Err())
 	}
 	started := time.Now()
 	done := make(chan error, 1)
@@ -152,9 +245,25 @@ func TestPythonLockInterop(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("Go did not acquire lock after Python released it")
+		t.Fatal("Go did not acquire lock after child released it")
 	}
 	if err = cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLockFileInteropChild(t *testing.T) {
+	path := os.Getenv("PURSER_LOCK_INTEROP_PATH")
+	if path == "" {
+		return
+	}
+	unlock, err := contextio.LockFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("locked")
+	time.Sleep(350 * time.Millisecond)
+	if err := unlock(); err != nil {
 		t.Fatal(err)
 	}
 }

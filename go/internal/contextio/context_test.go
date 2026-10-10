@@ -596,6 +596,41 @@ func TestCompactionAdviceResolvesPendingOutcomeFromNewBoundary(t *testing.T) {
 	}
 }
 
+func TestStateRootPrecedenceAndDefaults(t *testing.T) {
+	home := t.TempDir()
+	state := filepath.Join(t.TempDir(), "configured-state")
+	claude := filepath.Join(t.TempDir(), "claude-config")
+	local := filepath.Join(t.TempDir(), "local-app-data")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	t.Setenv("LOCALAPPDATA", local)
+
+	if got, want := StateRoot(), state; got != want {
+		t.Fatalf("configured state root = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatalf("resolving configured state root created it or failed unexpectedly: %v", err)
+	}
+
+	t.Setenv("PURSER_STATE_DIR", "")
+	if got, want := StateRoot(), filepath.Join(claude, "purser"); got != want {
+		t.Fatalf("Claude config state root = %q, want %q", got, want)
+	}
+
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if got, want := StateRoot(), filepath.Join(home, ".claude", "purser"); got != want {
+		t.Fatalf("default state root = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "purser")); !os.IsNotExist(err) {
+		t.Fatalf("resolving default state root created it or failed unexpectedly: %v", err)
+	}
+	if got := StateRoot(); got == filepath.Join(local, "purser") {
+		t.Fatalf("LOCALAPPDATA unexpectedly selected state root %q", got)
+	}
+}
+
 func writeAdvisorTranscript(t *testing.T, path string, records []map[string]any) {
 	t.Helper()
 	var data []byte

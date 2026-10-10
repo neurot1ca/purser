@@ -26,9 +26,9 @@ func fakeReviewer(t *testing.T) (string, string) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	source := `package main
-import ("encoding/json"; "io"; "os"; "time")
+import ("encoding/json"; "io"; "os"; "strings"; "time")
 func main() { switch os.Getenv("PURSER_FAKE_MODE") {
-case "success": input, _ := io.ReadAll(os.Stdin); cwd, _ := os.Getwd(); call, _ := json.Marshal(map[string]any{"args":os.Args, "cwd":cwd, "env":os.Getenv("PURSER_REVIEW_TEST_ENV"), "stdin":string(input)}); os.WriteFile(os.Getenv("PURSER_FAKE_CAPTURE"), call, 0600); os.Stdout.Write([]byte(os.Getenv("PURSER_FAKE_OUTPUT")))
+case "success": input, _ := io.ReadAll(os.Stdin); cwd, _ := os.Getwd(); call, _ := json.Marshal(map[string]any{"args":os.Args, "cwd":cwd, "env":os.Getenv("PURSER_REVIEW_TEST_ENV"), "stdin":string(input)}); os.WriteFile(os.Getenv("PURSER_FAKE_CAPTURE"), call, 0600); if path := os.Getenv("PURSER_FAKE_PACKET_CAPTURE"); path != "" { for i, arg := range os.Args { if arg == "--print" && i+1 < len(os.Args) { prompt := os.Args[i+1]; packetPath := prompt[strings.LastIndex(prompt, " ")+1:]; packet, _ := os.ReadFile(packetPath); os.WriteFile(path, packet, 0600) } } }; os.Stdout.Write([]byte(os.Getenv("PURSER_FAKE_OUTPUT")))
 case "failure": os.Exit(7)
 case "timeout": time.Sleep(2*time.Second)
 } }`

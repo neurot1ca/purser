@@ -57,7 +57,7 @@ func (f *fakeJobs) Cancel(_, _ string) map[string]any {
 }
 
 func TestLifecycleOracle(t *testing.T) {
-	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "maintenance_reports_oracle.json")
+	path := filepath.Join("testdata", "maintenance_reports_oracle.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

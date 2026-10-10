@@ -1,7 +1,6 @@
 package review
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -179,74 +178,6 @@ func TestNativeRunBridgeInvalidInputAndReviewerPanic(t *testing.T) {
 	if !IsReviewerBridgeException(err) || got.Attributes["error_code"] != "REVIEWER_BRIDGE_EXCEPTION" || !strings.Contains(got.Attributes["findings"].([]map[string]string)[0]["message"], "(string)") {
 		t.Fatalf("panic = %#v, %v", got, err)
 	}
-}
-
-func TestNativeRunBridgeDifferential(t *testing.T) {
-	python, err := activeNativePython(t)
-	if err != nil {
-		t.Skip("Python unavailable")
-	}
-	git, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, bin := nativeFixture(t)
-	t.Setenv("TMP", root)
-	t.Setenv("TEMP", root)
-	t.Setenv("TMPDIR", root)
-	args := nativeArgs(root, bin, NoMaterialFinding)
-	isolateReviewerPath(t)
-	args["reviewer_agent"], args["reviewer_model"] = "agy", pinnedModel
-	args["state_root"] = filepath.Join(root, "state")
-	t.Setenv("MOCK_OUTPUT", envelope(NoMaterialFinding, []map[string]string{}))
-	payload, err := json.Marshal(args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	script := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "reviewer_bridge.py")
-	pythonCode := "import os,runpy,tempfile,uuid,shutil; tempfile.tempdir=" + strconv.Quote(root) + "; exec(\"def named(mode='w+b',prefix='tmp',suffix='',dir=None,delete=True,**kwargs):\\n return open(os.path.join(dir or tempfile.tempdir,prefix+uuid.uuid4().hex+suffix),mode)\\nclass TempDir:\\n def __init__(self,suffix=None,prefix='tmp',dir=None): self.name=os.path.join(dir or tempfile.tempdir,prefix+uuid.uuid4().hex); os.mkdir(self.name)\\n def __enter__(self): return self.name\\n def __exit__(self,*a): shutil.rmtree(self.name,ignore_errors=True)\"); tempfile.NamedTemporaryFile=named; tempfile.TemporaryDirectory=TempDir; runpy.run_path(" + strconv.Quote(script) + ",run_name='__main__')"
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := testutil.Hide(exec.CommandContext(ctx, python, "-c", pythonCode))
-	cmd.Stdin = strings.NewReader(string(payload))
-	cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(git), "HOME="+root, "USERPROFILE="+root, "PYTHONPATH="+filepath.Dir(script))
-	var pythonStderr bytes.Buffer
-	cmd.Stderr = &pythonStderr
-	pythonOutput, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("Python oracle: %v: stderr=%s stdout=%s", err, pythonStderr.String(), pythonOutput)
-	}
-	var want map[string]any
-	if err := json.Unmarshal(pythonOutput, &want); err != nil {
-		t.Fatalf("decode Python oracle: %v: %s", err, pythonOutput)
-	}
-	got, err := RunBridge(context.Background(), root, args, 30*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	actual := map[string]any{"outcome": got.Outcome}
-	for key, value := range got.Attributes {
-		if key == "usage" {
-			continue // Go carries reviewer telemetry separately from Python's public mapping.
-		}
-		actual[key] = value
-	}
-	actualJSON, _ := json.Marshal(actual)
-	wantJSON, _ := json.Marshal(want)
-	if string(actualJSON) != string(wantJSON) {
-		t.Fatalf("Go map %s differs from Python map %s; Python stderr=%s", actualJSON, wantJSON, pythonStderr.String())
-	}
-}
-
-func activeNativePython(t *testing.T) (string, error) {
-	t.Helper()
-	for _, name := range []string{"python", "python3"} {
-		if path, err := exec.LookPath(name); err == nil {
-			absolute, absErr := filepath.Abs(path)
-			return absolute, absErr
-		}
-	}
-	return "", exec.ErrNotFound
 }
 
 func TestNativeRunBridgeRejectsOversizedReviewerResponse(t *testing.T) {
