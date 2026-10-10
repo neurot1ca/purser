@@ -6066,6 +6066,67 @@ def test_worker_validation_parses_full_report_before_phase_cap(workspace, config
     assert validation_line not in bundle["implementer_report"]
 
 
+_HIDDEN_CAP_TEST_EVIDENCE, _HIDDEN_CAP_TEST_EVIDENCE_FAILED = codex_exec_mcp._codex_test_evidence([
+    {"type": "item.completed", "item": {
+        "type": "command_execution", "command": f"pytest test-{index}",
+        "exit_code": 1 if index == 0 else 0, "aggregated_output": "failed" if index == 0 else "passed",
+    }}
+    for index in range(7)
+])
+
+
+@pytest.mark.parametrize(
+    ("worker_status", "test_evidence", "test_evidence_failed", "expected_status", "expected_source"),
+    [
+        ("UNKNOWN", [{"command": "pytest -q", "exit_code": 0, "output_tail": "passed"}], False,
+         "PASS", "HOST_TEST_EVIDENCE"),
+        ("PASS", [{"command": "pytest -q", "exit_code": 1, "output_tail": "failed"}], False,
+         "FAIL", "HOST_TEST_EVIDENCE"),
+        ("PASS", _HIDDEN_CAP_TEST_EVIDENCE, _HIDDEN_CAP_TEST_EVIDENCE_FAILED,
+         "FAIL", "HOST_TEST_EVIDENCE"),
+        ("PASS", [{"command": "pytest -q", "output_tail": "malformed"}], False,
+         "UNKNOWN", "HOST_TEST_EVIDENCE"),
+        ("PASS", [], False, "PASS", "WORKER_REPORTED"),
+    ],
+)
+def test_worker_validation_uses_host_test_evidence(
+    workspace, config, worker_status, test_evidence, test_evidence_failed, expected_status, expected_source
+):
+    repo, state = workspace
+    prompt = (
+        "ORCH|task=task-1|phase=implementation|route=normal|basis=test fixture design boundary|scope=file0.py\n"
+        "Task Objective: Update file0 with new value\n"
+        "Acceptance Criteria: file0 contains value = 2\n"
+    )
+    call = event(prompt=prompt, tool_use_id="host-test-evidence")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    report = (f'VALIDATION: {{"source":"WORKER_REPORTED","status":"{worker_status}",'
+              '"commands":["pytest -q"],"exit_codes":[0]}')
+    post = {
+        **call,
+        "hook_event_name": "PostToolUse",
+        "test_evidence": test_evidence,
+        "test_evidence_failed": test_evidence_failed,
+        "tool_response": [{"type": "text", "text": json.dumps({
+            "threadId": "thread-host-test-evidence", "content": report,
+        })}],
+    }
+
+    def reviewer(**_kwargs):
+        return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+                "validation": "PASS", "findings": []}
+
+    raw = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
+                              reviewer=reviewer)
+    validation = response_bundle(raw, config)["worker_validation"]
+    assert validation["status"] == expected_status
+    assert validation["source"] == expected_source
+    assert validation["test_evidence"] == test_evidence
+    if test_evidence_failed:
+        assert validation["test_evidence_failed"] is True
+
+
 def test_post_tool_use_ungrounded_contract_forces_full_review_even_on_audit(workspace, config):
     repo, state = workspace
     # Default event() prompt has no Task Objective / Acceptance Criteria

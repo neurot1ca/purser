@@ -68,6 +68,9 @@ if release:
     if not Path(release).exists():
         sys.exit(3)
 print(json.dumps({"type": "turn.started"}), flush=True)
+for item in json.loads(os.environ.get("FAKE_TEST_EVENTS", "[]")):
+    print(json.dumps({"type": "item.completed", "item": {
+        "type": "command_execution", **item}}), flush=True)
 if os.environ.get("FAKE_EVENT_GAP_SECONDS"):
     time.sleep(float(os.environ["FAKE_EVENT_GAP_SECONDS"]))
 if os.environ.get("FAKE_FAIL") == "1":
@@ -1065,6 +1068,32 @@ def test_async_silent_process_gap_is_recorded(area):
         assert record["liveness"]["processAlive"] is False
         assert record["liveness"]["route"] == "implementation"
         assert record["liveness"]["agent"] == record["activeAgent"] == "codex"
+    finally:
+        client.close()
+
+
+def test_async_job_records_latest_completed_test_runs(area):
+    commands = ["go test ./...", "go test ./pkg", "npm test -- --run", "pnpm test -- --run",
+                "cargo test --lib", "pytest -q", "pytest tests/unit", "pytest -q"]
+    events = [{"command": command, "exit_code": 0,
+               "aggregated_output": (f"{command} run {index}\n" * 45)}
+              for index, command in enumerate(commands)]
+    events[2]["aggregated_output"] = ("x" * 200 + "\n") * 45
+    client = Client(area, extra_env={"FAKE_TEST_EVENTS": json.dumps(events)})
+    try:
+        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "record test output",
+                                                    "route": "implementation"})
+        finish(client, started["jobId"], "SUCCEEDED")
+        record_path = area / "root" / "codex_exec_mcp" / "jobs" / f"{started['jobId']}.json"
+        evidence = read_job_record(record_path)["testEvidence"]
+        assert [item["command"] for item in evidence] == [
+            "go test ./pkg", "npm test -- --run", "pnpm test -- --run",
+            "cargo test --lib", "pytest tests/unit", "pytest -q",
+        ]
+        assert evidence[-1]["output_tail"].splitlines()[-1] == "pytest -q run 7"
+        assert len(evidence[-1]["output_tail"].splitlines()) == 40
+        assert len(evidence[1]["output_tail"].encode("utf-8")) == 4096
+        assert all(len(item["output_tail"].encode("utf-8")) <= 4096 for item in evidence)
     finally:
         client.close()
 

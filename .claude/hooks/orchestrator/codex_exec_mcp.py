@@ -804,6 +804,28 @@ def _agent_event(agent: str, event: dict[str, Any]) -> tuple[str | None, bool, s
     return session, kind in ("turn.completed", "turn.failed", "error"), failure, final if isinstance(final, str) else None
 
 
+def _codex_test_evidence(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    runs: dict[str, tuple[int, dict[str, Any]]] = {}
+    for index, event in enumerate(events):
+        if event.get("type") != "item.completed":
+            continue
+        item = event.get("item")
+        if not isinstance(item, dict) or item.get("type") != "command_execution":
+            continue
+        command = item.get("command")
+        exit_code = item.get("exit_code")
+        output = item.get("aggregated_output")
+        if (not isinstance(command, str) or not isinstance(exit_code, int)
+                or isinstance(exit_code, bool) or not isinstance(output, str)
+                or not any(runner in command.casefold() for runner in
+                           ("go test", "pytest", "npm test", "pnpm test", "cargo test"))):
+            continue
+        tail = "\n".join(output.splitlines()[-40:]).encode("utf-8")[-4096:].decode("utf-8", errors="ignore")
+        runs[command] = (index, {"command": command, "exit_code": exit_code, "output_tail": tail})
+    latest = sorted(runs.values(), key=lambda run: run[0])[-6:]
+    return [entry for _, entry in latest], any(entry["exit_code"] != 0 for _, entry in runs.values())
+
+
 def _retry_after_seconds(value: Any) -> float | None:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -2567,6 +2589,16 @@ class Server:
                         if request_id in self.cancelled:
                             return _tool_result(None, error="cancelled")
                 parsed = [_agent_event(agent, event) for event in events]
+                if async_job and agent == "codex":
+                    test_evidence, test_evidence_failed = _codex_test_evidence(events)
+                    if test_evidence:
+                        with self.jobs_lock:
+                            job = self._read_job(request_id)
+                            if job is not None and job["state"] not in TERMINAL:
+                                job["testEvidence"] = test_evidence
+                                if test_evidence_failed:
+                                    job["testEvidenceFailed"] = True
+                                self._write_job(job)
                 started = next((session for session, _, _, _ in parsed if session), None)
                 failures = [failure for _, _, failure, _ in parsed if failure]
                 notes = [note for note in (_opencode_tool_note(event) for event in events) if note]

@@ -3282,7 +3282,13 @@ def _async_post_followup(event: Mapping[str, Any], *, config: Mapping[str, Any] 
             pending = dict(pending, agent=value["servedAgent"], model=value["servedModel"],
                            attempted_models=value.get("attemptedModels", []))
             _atomic_json_write(_pending_path(root, original), pending)
-        synthetic = dict(original, duration_ms=duration)
+        synthetic = dict(
+            original,
+            duration_ms=duration,
+            test_evidence=job.get("testEvidence", []) if isinstance(job, Mapping) else [],
+            test_evidence_failed=(job.get("testEvidenceFailed") is True
+                                  if isinstance(job, Mapping) else False),
+        )
         preparation_error = None
         retryable_preparation_error = False
         if success and worktree_path:
@@ -4333,6 +4339,30 @@ def post_tool_use(
                     bundle["codex_quota"] = None
             if pending.get("phase") != "plan":
                 worker_validation = _parse_worker_validation(report)
+                test_evidence = event.get("test_evidence", [])
+                test_evidence_failed = event.get("test_evidence_failed") is True
+                if isinstance(test_evidence, list):
+                    worker_validation["test_evidence"] = test_evidence
+                    if test_evidence:
+                        worker_validation["source"] = "HOST_TEST_EVIDENCE"
+                        if all(isinstance(entry, Mapping)
+                               and type(entry.get("exit_code")) is int for entry in test_evidence):
+                            worker_validation["status"] = (
+                                "FAIL" if test_evidence_failed
+                                or any(entry["exit_code"] != 0 for entry in test_evidence)
+                                else "PASS"
+                            )
+                        else:
+                            worker_validation["status"] = "UNKNOWN"
+                    elif test_evidence_failed:
+                        worker_validation["source"] = "HOST_TEST_EVIDENCE"
+                        worker_validation["status"] = "FAIL"
+                elif test_evidence:
+                    worker_validation["test_evidence"] = test_evidence
+                    worker_validation["source"] = "HOST_TEST_EVIDENCE"
+                    worker_validation["status"] = "UNKNOWN"
+                if test_evidence_failed:
+                    worker_validation["test_evidence_failed"] = True
                 bundle["worker_validation"] = worker_validation
         except WiringError as error:
             thread_id = None
