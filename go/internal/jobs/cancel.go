@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -128,6 +129,31 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 		return cancelRecordResult(values)
 	}
+	if state == "RUNNING" && deadHostTreeConfirmed(job) {
+		lock, err := AcquireOwnership(dir, id)
+		if err != nil {
+			return processUnconfirmed(id)
+		}
+		current := readJob(dir, id)
+		currentState := ""
+		if current != nil {
+			current.Get("state", &currentState)
+		}
+		if current != nil && currentState == "RUNNING" && deadHostTreeConfirmed(current) {
+			finishCancelled(current)
+			if err = Write(filepath.Join(dir, id+".json"), current); err != nil {
+				_ = lock.Release()
+				return processUnconfirmed(id)
+			}
+			values = recordMap(current)
+			state = "CANCELLED"
+		}
+		_ = lock.Release()
+		if state == "CANCELLED" {
+			dispatchWorktreeRetirement(stateRoot, id)
+			return cancelRecordResult(values)
+		}
+	}
 	port, portOK := values["signalPort"].(float64)
 	token, tokenOK := values["signalToken"].(string)
 	if !portOK || !tokenOK || port <= 0 || port > 65535 {
@@ -165,6 +191,23 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 	}
 	return processUnconfirmed(id)
+}
+
+func deadHostTreeConfirmed(record *Record) bool {
+	pidValue, pidOK := recoveryInteger(record, "hostPid")
+	created, createdOK := recoveryInteger(record, "hostCreatedAt")
+	pid := int(pidValue)
+	if !pidOK || pidValue <= 0 || int64(pid) != pidValue || !createdOK || created < 0 ||
+		(runtime.GOOS == "windows" && !truthy(recordMap(record)["hostContained"])) ||
+		recoveryProcessState(pid, uint64(created)) != "DEAD" {
+		return false
+	}
+	if runtime.GOOS != "windows" {
+		childValue, ok := recoveryInteger(record, "pid")
+		child := int(childValue)
+		return ok && childValue > 0 && int64(child) == childValue && recoveryGroupStopped(child)
+	}
+	return true
 }
 
 func stopRecordedHost(record *Record) bool {

@@ -95,6 +95,13 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 			return "UNCONFIRMED"
 		}
 	}
+	if state == "RUNNING" {
+		if deadline, ok := number(values["deadlineAt"]); ok && now >= deadline {
+			_ = lock.Release()
+			lock = nil
+			return recoverTimedOut(dir, jobID, now)
+		}
+	}
 	if _, hasExitCode := recoveryInteger(job, "exitCode"); state == "RUNNING" && hasExitCode {
 		generation, valid := recoveryInteger(job, "generation")
 		var token string

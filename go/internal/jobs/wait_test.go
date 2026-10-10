@@ -244,6 +244,30 @@ func TestWaitExitCodes(t *testing.T) {
 	}
 }
 
+func TestWaitRecoversDeadHostPastDeadline(t *testing.T) {
+	root := t.TempDir()
+	created, ok := hostProcessIdentity()
+	if !ok {
+		t.Fatal("test process identity unavailable")
+	}
+	createdAt, valid := created.(int64)
+	if !valid {
+		createdAt = int64(created.(uint64))
+	}
+	deadHost := os.Getpid()
+	path := writeWaitJob(t, root, "deadhost", map[string]any{
+		"hostPid": deadHost, "hostCreatedAt": createdAt + 1, "hostContained": true,
+		"pid": deadHost + 1, "generation": 1, "ownershipToken": "owner",
+		"deadlineAt": float64(time.Now().Add(-time.Second).UnixNano()) / 1e9,
+	})
+	got := Wait(root, "deadhost")
+	fields := readWaitFields(t, path)
+	if got.ExitCode != 1 || got.Lines[0] != "purser-wait deadhost TIMED_OUT" ||
+		fields["state"] != "TIMED_OUT" || fields["errorCode"] != "DEADLINE_EXCEEDED" {
+		t.Fatalf("result=%#v record=%#v", got, fields)
+	}
+}
+
 func writeWaitRecord(path, state string, port, generation int, deadline time.Time) error {
 	fields := readWaitFieldsForWrite(path)
 	fields["state"] = state

@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -41,6 +42,7 @@ func Wait(stateRoot, jobID string) WaitResult {
 	if readJobWithRetry(dir, jobID) == nil {
 		return WaitResult{Lines: []string{"purser-wait " + jobID + " UNKNOWN_JOB"}, ExitCode: 2}
 	}
+	recoveryAttempted := false
 	for {
 		job := readJobWithRetry(dir, jobID)
 		if job == nil {
@@ -50,6 +52,17 @@ func Wait(stateRoot, jobID string) WaitResult {
 		state, ok := values["state"].(string)
 		if ok && waitTerminal[state] {
 			return reportWaitRecord(dir, jobID, job)
+		}
+		if state == "RUNNING" && !recoveryAttempted {
+			pid, pidOK := recoveryInteger(job, "hostPid")
+			created, createdOK := recoveryInteger(job, "hostCreatedAt")
+			if pidOK && pid > 0 && int64(int(pid)) == pid && createdOK &&
+				(runtime.GOOS != "windows" || truthy(values["hostContained"])) && created >= 0 &&
+				recoveryProcessState(int(pid), uint64(created)) == "DEAD" {
+				recoveryAttempted = true
+				_ = RecoverJob(stateRoot, jobID, float64(time.Now().UnixNano())/1e9, RecoverOptions{})
+				continue
+			}
 		}
 		if stalled, claimed := surfaceWaitStall(dir, jobID, values); claimed {
 			return WaitResult{Lines: stallWaitLines(jobID, stalled), ExitCode: 4}

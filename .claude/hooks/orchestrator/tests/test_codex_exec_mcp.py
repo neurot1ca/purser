@@ -384,6 +384,36 @@ def test_live_posix_child_group_blocks_dead_host_recovery(tmp_path, monkeypatch)
     assert server._read_job(job_id)["state"] == "RUNNING"
 
 
+def test_dead_host_past_deadline_result_times_out(tmp_path, monkeypatch):
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    job_id = "d" * 64
+    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 1,
+                       "hostPid": 123, "hostCreatedAt": 456, "hostContained": True,
+                       "pid": 789, "acceptedAt": 1, "deadlineAt": 10})
+    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
+
+    result = server._result_job({"jobId": job_id})["structuredContent"]
+
+    assert (result["state"], result["errorCode"]) == ("TIMED_OUT", "DEADLINE_EXCEEDED")
+    assert server._read_job(job_id)["state"] == "TIMED_OUT"
+
+
+def test_cancel_confirms_dead_host_as_cancelled(tmp_path, monkeypatch):
+    server = codex_exec_mcp.Server(job_dir=tmp_path)
+    job_id = "e" * 64
+    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 1,
+                       "hostPid": 123, "hostCreatedAt": 456, "hostContained": True,
+                       "pid": 789, "acceptedAt": 1, "deadlineAt": 100})
+    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
+    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
+
+    result = server._cancel_job({"jobId": job_id})["structuredContent"]
+
+    assert (result["state"], result["errorCode"]) == ("CANCELLED", "CANCELLED")
+    assert server._read_job(job_id)["state"] == "CANCELLED"
+
+
 def test_atomic_job_write_retries_transient_replace_permission_error(area, monkeypatch):
     job_id = "b" * 64
     jobs = area / "root" / "codex_exec_mcp" / "jobs"

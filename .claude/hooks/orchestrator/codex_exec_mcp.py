@@ -1418,6 +1418,9 @@ class Server:
                 if (not isinstance(child_pid, int) or isinstance(child_pid, bool) or child_pid <= 0
                         or not _posix_process_group_stopped(child_pid)):
                     return "UNCONFIRMED"
+            if job.get("state") == "RUNNING" and current >= job["deadlineAt"]:
+                self._finish_job(job_id, "TIMED_OUT", "DEADLINE_EXCEEDED")
+                return "TIMED_OUT"
             attempts = job.get("resumedAfterInterruption", 0)
             if not isinstance(attempts, int) or attempts < 0:
                 return ambiguous("RECOVERY_PROOF_MISSING", "Recovery attempt history is invalid")
@@ -2167,6 +2170,14 @@ class Server:
             if job["state"] in TERMINAL:
                 if job["state"] == "CANCELLED":
                     _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
+                return self._result_job({"jobId": job_id})
+            host_dead = self._classify_host(job) == "DEAD"
+            child_dead = (os.name == "nt" or
+                          isinstance(job.get("pid"), int) and not isinstance(job.get("pid"), bool)
+                          and job["pid"] > 0 and _posix_process_group_stopped(job["pid"]))
+            if job.get("state") == "RUNNING" and host_dead and child_dead:
+                self._finish_job(job_id, "CANCELLED", "CANCELLED")
+                _dispatch_worktree_retirement(self.job_dir.parent.parent, job_id)
                 return self._result_job({"jobId": job_id})
             try:
                 with socket.create_connection(("127.0.0.1", job["signalPort"]), timeout=5) as connection:

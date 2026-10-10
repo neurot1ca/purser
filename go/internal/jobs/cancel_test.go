@@ -244,6 +244,33 @@ func TestCancelWaitsForDelayedTerminalWrite(t *testing.T) {
 	}
 }
 
+func TestCancelFinishesWhenHostIsConfirmedDead(t *testing.T) {
+	root := scratch(t)
+	jobID := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	created, ok := hostProcessIdentity()
+	if !ok {
+		t.Fatal("test process identity unavailable")
+	}
+	createdAt, valid := created.(int64)
+	if !valid {
+		createdAt = int64(created.(uint64))
+	}
+	deadHost := os.Getpid()
+	path := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHostTestJSON(t, path, map[string]any{
+		"jobId": jobID, "state": "RUNNING", "hostPid": deadHost, "hostCreatedAt": createdAt + 1,
+		"hostContained": true, "pid": deadHost + 1, "generation": 1,
+	})
+	got := Cancel(root, map[string]any{"jobId": jobID})
+	value := got["structuredContent"].(map[string]any)
+	if value["state"] != "CANCELLED" || value["errorCode"] != "CANCELLED" {
+		t.Fatalf("cancel result = %#v, want CANCELLED", got)
+	}
+}
+
 func seedCancelLease(t *testing.T, root, jobID string) {
 	t.Helper()
 	project, owner := "0123456789abcdef", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
