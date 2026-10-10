@@ -1,12 +1,11 @@
 package enforce
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/ledger"
 	"strings"
 	"testing"
 )
@@ -64,8 +63,10 @@ func TestPreApplyAcceptanceGate(t *testing.T) {
 	if denied := decision(event(map[string]any{"jobId": id, "acceptOnly": true}, "agent-1")); denied["permissionDecision"] != "deny" {
 		t.Fatalf("subagent acceptOnly was not denied: %#v", denied)
 	}
-	want := sha256.Sum256([]byte(`["tracked.txt"]`))
-	reviewedRevision := hex.EncodeToString(want[:])
+	reviewedRevision, err := ledger.JobChangedPathsSHA256(worktree, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	main := decision(event(map[string]any{"jobId": id, "acceptOnly": true, "revision": reviewedRevision}, nil))
 	updated := mapValue(main["updatedInput"])
 	revision, ok := updated["revision"].(string)

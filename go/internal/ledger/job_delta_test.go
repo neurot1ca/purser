@@ -79,6 +79,35 @@ func TestComputeJobDeltaPythonFixture(t *testing.T) {
 		})
 	}
 }
+
+func TestJobChangedPathsSHA256BindsDiffContent(t *testing.T) {
+	root := initGitRepository(t)
+	path := filepath.Join(root, "tracked.txt")
+	if err := os.WriteFile(path, []byte("base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "add", "--all")
+	git(t, root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture")
+	snapshot := stringsOutput(t, root, "rev-parse", "HEAD^{tree}")
+	if err := os.WriteFile(path, []byte("first content\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := JobChangedPathsSHA256(root, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("different content\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := JobChangedPathsSHA256(root, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("revision did not change with diff content: %s", first)
+	}
+}
+
 func stringsOutput(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", args...)

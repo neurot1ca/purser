@@ -99,7 +99,11 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 		}
 		compact["changed_paths"] = preview
 		compact["changed_path_count"] = len(paths)
-		compact["changed_paths_sha256"] = hex.EncodeToString(sum[:])
+		if digest, ok := bundle["changed_paths_sha256"].(string); ok && digest != "" {
+			compact["changed_paths_sha256"] = digest
+		} else {
+			compact["changed_paths_sha256"] = hex.EncodeToString(sum[:])
+		}
 	}
 	compact["findings"] = copyFindings(bundle["findings"], nil)
 	if size, err := nonReportBytes(compact); err != nil {

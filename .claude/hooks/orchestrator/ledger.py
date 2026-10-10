@@ -728,6 +728,12 @@ def job_patch(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
     return raw.decode("utf-8", "surrogateescape")
 
 
+def job_changed_paths_sha256(worktree_path: str | os.PathLike[str], snapshot: str) -> str:
+    """Bind a job revision to its filtered binary patch content."""
+    patch = job_patch(worktree_path, snapshot).encode("utf-8", "surrogateescape")
+    return hashlib.sha256(patch).hexdigest()
+
+
 def checkout_snapshot(repo_root: str | os.PathLike[str], paths: Sequence[str] | None = None,
                       *, timeout: float = 30.0) -> str:
     """Capture tracked and untracked checkout state without touching its index."""

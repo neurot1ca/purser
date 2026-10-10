@@ -1052,6 +1052,17 @@ def test_job_patch_stages_only_changed_paths(repo, tmp_path, monkeypatch):
     assert set(add_commands[0][3:]) == {":(literal)src/target.py", ":(literal)job-new.txt"}
 
 
+def test_job_changed_paths_sha256_binds_patch_content(repo, tmp_path):
+    result = ledger.create_job_worktree(repo, "c" * 64, tmp_path / "worktrees")
+    worktree = Path(result["path"])
+    target = worktree / "src" / "target.py"
+    target.write_text("value = 9\n", encoding="utf-8")
+    first = ledger.job_changed_paths_sha256(worktree, result["snapshot"])
+    target.write_text("value = 10\n", encoding="utf-8")
+    second = ledger.job_changed_paths_sha256(worktree, result["snapshot"])
+    assert first != second
+
+
 def test_prepare_job_replay_uses_checkout_snapshot_without_touching_checkout(repo, tmp_path):
     (repo / "notes.txt").write_text("staged checkout\n", encoding="utf-8")
     git(repo, "add", "notes.txt")

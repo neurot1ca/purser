@@ -18,6 +18,11 @@ func assemblePostDelta(repoRoot string, pending, bundle map[string]any, protecte
 	if worktree != "" {
 		deltaRoot = worktree
 		bundle["apply"] = "codex_apply"
+		if snapshot, ok := pending["worktree_snapshot"].(string); ok && snapshot != "" {
+			if digest, err := ledger.JobChangedPathsSHA256(worktree, snapshot); err == nil {
+				bundle["changed_paths_sha256"] = digest
+			}
+		}
 	}
 	var delta map[string]any
 	if !scopeOK || !baselineOK {

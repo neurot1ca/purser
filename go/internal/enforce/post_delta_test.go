@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"purser-hook/internal/testutil"
+	"strings"
 	"testing"
 
 	"purser-hook/internal/ledger"
@@ -106,6 +107,39 @@ func TestAssemblePostDeltaPythonFixture(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAssemblePostDeltaKeepsRevisionWhenBaselineIsIncomplete(t *testing.T) {
+	root := postDeltaRepo(t)
+	cmd := testutil.Hide(exec.Command("git", "-C", root, "rev-parse", "HEAD^{tree}"))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := strings.TrimSpace(string(out))
+	if err := os.WriteFile(filepath.Join(root, "scope", "file.txt"), []byte("worker change\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pending := map[string]any{
+		"phase": "implementation", "scope": []string{"scope"},
+		"baseline":      map[string]any{"status": "UNKNOWN", "code": "MANIFEST_BUDGET_EXCEEDED"},
+		"worktree_path": root, "worktree_snapshot": snapshot,
+	}
+	bundle := baseBundle("")
+	if _, err := assemblePostDelta(root, pending, bundle, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	digest, ok := bundle["changed_paths_sha256"].(string)
+	if !ok || len(digest) != 64 {
+		t.Fatalf("incomplete baseline lost readable worktree revision: %#v", bundle["changed_paths_sha256"])
+	}
+	compact, _, err := compactBundle(bundle, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compact["changed_paths_sha256"] != digest {
+		t.Fatalf("compact incomplete packet lost revision: %#v", compact["changed_paths_sha256"])
 	}
 }
 

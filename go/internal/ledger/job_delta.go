@@ -4,34 +4,19 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// JobChangedPathsSHA256 matches the changed_paths_sha256 reported in the
-// compact reviewed bundle.
+// JobChangedPathsSHA256 binds acceptance to the filtered worktree patch.
 func JobChangedPathsSHA256(worktreePath, snapshot string) (string, error) {
-	delta := ComputeJobDelta(worktreePath, snapshot)
-	if delta["status"] != OK {
-		return "", errors.New("job delta unavailable")
-	}
-	filtered, err := FilterJobDeltaChecked(worktreePath, delta)
+	patch, err := JobPatch(worktreePath, snapshot)
 	if err != nil {
 		return "", err
 	}
-	paths, ok := filtered["changed_paths"].([]string)
-	if !ok {
-		return "", errors.New("job paths unavailable")
-	}
-	encoded, err := json.Marshal(paths)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(encoded)
+	sum := sha256.Sum256([]byte(patch))
 	return hex.EncodeToString(sum[:]), nil
 }
 

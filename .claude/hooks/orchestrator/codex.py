@@ -3758,7 +3758,8 @@ def _compact_bundle(bundle: Mapping[str, Any], cap: int) -> tuple[dict[str, Any]
         preview, count, digest = _changed_paths_summary(paths)
         compact["changed_paths"] = preview
         compact["changed_path_count"] = count
-        compact["changed_paths_sha256"] = digest
+        if not isinstance(compact.get("changed_paths_sha256"), str):
+            compact["changed_paths_sha256"] = digest
     compact["findings"] = _copy_findings(bundle.get("findings"))
 
     repair = bundle.get("micro_repair")
@@ -4546,6 +4547,14 @@ def post_tool_use(
         if isinstance(worktree_path, str) and worktree_path:
             delta_repository = Path(worktree_path).resolve()
             bundle["apply"] = "codex_apply"
+            snapshot = pending.get("worktree_snapshot")
+            if isinstance(snapshot, str) and snapshot:
+                try:
+                    bundle["changed_paths_sha256"] = ledger.job_changed_paths_sha256(
+                        delta_repository, snapshot
+                    )
+                except (ledger._InspectionError, OSError):
+                    pass
         scope = pending.get("scope")
         if not isinstance(scope, list) or (pending.get("phase") == "implementation" and not scope):
             raise WiringError("pending call scope is missing")
