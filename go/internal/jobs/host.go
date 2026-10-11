@@ -488,9 +488,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			if evidence := TestEvidence(events); len(evidence) > 0 {
 				_ = job.Set("testEvidence", evidence)
 			}
-			if TestEvidenceFailed(events) {
-				_ = job.Set("testEvidenceFailed", true)
-			}
+			_ = job.Set("testEvidenceFailed", TestEvidenceFailed(events))
 			err = Write(path, job)
 		}
 		if releaseErr := lock.Release(); err == nil {

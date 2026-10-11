@@ -14,6 +14,30 @@ import (
 	"purser-hook/internal/ledger"
 )
 
+func TestHostValidationRedBeforeEditThenGreenFinal(t *testing.T) {
+	stream := jobs.NewEventStream("codex")
+	stream.Write([]byte(`{"type":"item.completed","item":{"type":"command_execution","command":"pytest tests/test_fix.py -k regression","exit_code":1}}
+{"type":"item.completed","item":{"type":"file_change","status":"completed","changes":[{"path":"src/fix.py","kind":"update"}]}}
+{"type":"item.completed","item":{"type":"command_execution","command":"pytest tests/","exit_code":0}}
+`))
+	evidence := jobs.TestEvidence(stream.Events())
+	if len(evidence) != 1 || evidence[0]["exit_code"] != 0 || jobs.TestEvidenceFailed(stream.Events()) {
+		t.Fatalf("pre-fix failure poisoned final validation: %#v", evidence)
+	}
+}
+
+func TestHostValidationFinalFailureAfterLastEdit(t *testing.T) {
+	stream := jobs.NewEventStream("codex")
+	stream.Write([]byte(`{"type":"item.completed","item":{"type":"file_change","status":"completed","changes":[{"path":"src/fix.js","kind":"update"}]}}
+{"type":"item.completed","item":{"type":"command_execution","command":"npm test -- regression","exit_code":1}}
+{"type":"item.completed","item":{"type":"command_execution","command":"npm test -- other","exit_code":0}}
+`))
+	evidence := jobs.TestEvidence(stream.Events())
+	if len(evidence) != 2 || evidence[0]["exit_code"] != 1 || !jobs.TestEvidenceFailed(stream.Events()) {
+		t.Fatalf("final failure was hidden by later unrelated pass: %#v", evidence)
+	}
+}
+
 func TestAsyncReviewRefreshAfterStaleApply(t *testing.T) {
 	root := t.TempDir()
 	repo, worktree := filepath.Join(root, "repo"), filepath.Join(root, "worktree")

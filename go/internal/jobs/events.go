@@ -152,11 +152,15 @@ type testEvidenceRun struct {
 
 func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 	latest := make(map[string]testEvidenceRun)
+	lastEdit, lastRun := -1, -1
 	for i, event := range events {
 		if event["type"] != "item.completed" {
 			continue
 		}
 		item, _ := event["item"].(map[string]any)
+		if item["type"] == "file_change" && item["status"] == "completed" {
+			lastEdit = i
+		}
 		if item["type"] != "command_execution" {
 			continue
 		}
@@ -168,6 +172,7 @@ func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 		if !ok || exitCode != float64(int(exitCode)) {
 			continue
 		}
+		lastRun = i
 		output, _ := item["aggregated_output"].(string)
 		lines := strings.Split(output, "\n")
 		if len(lines) > 40 {
@@ -187,6 +192,11 @@ func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 	runs := make([]testEvidenceRun, 0, len(latest))
 	failed := false
 	for _, item := range latest {
+		// Post-edit checks supersede pre-fix runs, regardless of command or tool.
+		// Without a later check, retain the earlier evidence conservatively.
+		if lastEdit >= 0 && lastRun > lastEdit && item.index < lastEdit {
+			continue
+		}
 		runs = append(runs, item)
 		if item.value["exit_code"].(int) != 0 {
 			failed = true
@@ -197,7 +207,8 @@ func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 }
 
 // TestEvidence returns the latest completed test-runner command for each
-// distinct command string, keeping only the six most recent runs.
+// distinct command string after the last completed file change when checks
+// follow that change, keeping only the six most recent runs.
 func TestEvidence(events []map[string]any) []map[string]any {
 	runs, _ := collectTestEvidence(events)
 	if len(runs) > 6 {
