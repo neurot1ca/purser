@@ -64,7 +64,15 @@ func TestRootAndExitCodes(t *testing.T) {
 	if _, err := resolveRoot(""); err == nil || err.Error() != "project root unresolved: cwd is not inside a git work tree" {
 		t.Fatal(err)
 	}
-	if got, err := resolveRoot("missing"); err != nil || got != filepath.Join(dir, "missing") {
+	canonicalCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err = filepath.Abs(filepath.Join(canonicalCWD, "missing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolveRoot("missing"); err != nil || !filepath.IsAbs(got) || got != want {
 		t.Fatalf("explicit root %q: %v", got, err)
 	}
 	for _, tc := range []struct {

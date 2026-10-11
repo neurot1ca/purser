@@ -123,7 +123,7 @@ def test_go_client_to_python_host(signal_test_binary, tmp_path):
         until = time.monotonic() + 15
         while time.monotonic() < until:
             record = _read_record(record_path)
-            if record.get("signalPort") and record.get("pid"):
+            if record.get("signalPort") and record.get("pid") and record.get("threadId"):
                 break
             if host.poll() is not None:
                 raise AssertionError(f"Python host exited with {host.returncode}")
