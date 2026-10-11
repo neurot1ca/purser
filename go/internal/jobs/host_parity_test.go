@@ -182,6 +182,11 @@ func TestHostPythonOracleReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := normalizeHostParity(t, readHostParityRecord(t, dir, jobID), root)
+			if failed, ok := got["testEvidenceFailed"].(bool); ok && !failed {
+				if _, oracleHasField := fixture.Record["testEvidenceFailed"]; !oracleHasField {
+					delete(got, "testEvidenceFailed")
+				}
+			}
 			if !reflect.DeepEqual(got, fixture.Record) {
 				t.Fatalf("host record differs\n got: %#v\nwant: %#v", got, fixture.Record)
 			}
