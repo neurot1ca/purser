@@ -94,7 +94,7 @@ func TestGitFailureIncludesBoundedStderr(t *testing.T) {
 
 func TestGitLiveOutcome(t *testing.T) {
 	if os.Getenv("PURSER_GIT_LIVE_OUTCOME") == "" {
-		t.Skip("pytest drives live parity")
+		t.Skip("set PURSER_GIT_LIVE_OUTCOME to enable the live outcome check")
 	}
 	root := os.Getenv("PURSER_GIT_LIVE_ROOT")
 	mode := os.Getenv("PURSER_GIT_LIVE_OUTCOME")

@@ -10,7 +10,7 @@ import (
 
 // schedulePostReview performs the PostToolUse check scheduling and Reviewer-1
 // gate after delta assembly. It deliberately stops before reviewer selection or
-// invocation; post.go remains owned by the Python hook during this tranche.
+// invocation; the Go PostToolUse caller handles those steps.
 func schedulePostReview(repoRoot string, pending map[string]any, bundle map[string]any, resolved postProfile, configured []profile.Check, gateConfig map[string]any, checkDeadline time.Duration, reviewerAvailable, routeKnown bool) {
 	delta, _ := bundle["delta"].(map[string]any)
 	phase := stringValue(pending["phase"])

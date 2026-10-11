@@ -29,8 +29,8 @@ var codexTools = map[string]bool{
 var runPreDecision = preDecision
 var writePreBypass = writeBypass
 
-// Pre dispatches Codex PreToolUse and recovers internal failures with Python's
-// synchronous bypass / async-start deny contract. Normal policy remains Python-owned.
+// Pre owns the Go PreToolUse policy and recovers internal failures with the
+// synchronous bypass / async-start deny contract.
 func Pre(event map[string]any, root string) (response map[string]any, failure error) {
 	if event["hook_event_name"] != "PreToolUse" || !codexTools[stringValue(event["tool_name"])] {
 		return nil, nil

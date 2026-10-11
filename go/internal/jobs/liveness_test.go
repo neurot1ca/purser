@@ -41,7 +41,7 @@ func TestLivenessFixtures(t *testing.T) {
 	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_jobs_liveness", "liveness.json")
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
-		t.Fatalf("read Python oracle fixture: %v; run pytest with PURSER_REGEN_GO_JOBS_LIVENESS=1", err)
+		t.Fatalf("read liveness oracle fixture: %v; regenerate it with PURSER_REGEN_GO_JOBS_LIVENESS=1", err)
 	}
 	var fixture struct {
 		Cases      []livenessCase  `json:"cases"`

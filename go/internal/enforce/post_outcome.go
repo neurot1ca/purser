@@ -9,7 +9,7 @@ import (
 )
 
 // applyPostReviewerOutcome maps the shared bridge response into the PostToolUse
-// bundle. The Python hook remains the caller until the post.go migration.
+// bundle. The Go PostToolUse path calls it after receiving the bridge response.
 func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classification map[string]any,
 	bridge review.BridgeOutcome, routeKnown, alwaysFull bool) {
 	attrs := bridge.Attributes

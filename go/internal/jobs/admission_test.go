@@ -25,7 +25,7 @@ func TestAdmissionFixtureReplay(t *testing.T) {
 	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_queued_baseline", "admission.json")
 	wantBytes, err := os.ReadFile(fixturePath)
 	if err != nil {
-		t.Fatalf("missing Python oracle fixture %s (run focused pytest): %v", fixturePath, err)
+		t.Fatalf("missing admission oracle fixture %s (regenerate it from the source project): %v", fixturePath, err)
 	}
 	var want []admissionFixture
 	if err = json.Unmarshal(wantBytes, &want); err != nil {

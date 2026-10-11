@@ -14,9 +14,9 @@ const signalCompleteReadBound = 50 * time.Millisecond
 
 var signalWriteTimeout = 5 * time.Second
 
-// SignalHost serves the loopback protocol used by purser_wait.py and the
-// Python job host. Close it when the host exits. Close terminal only after the
-// terminal job record (and any result output) has been durably written.
+// SignalHost serves the loopback protocol used by the Go job host. Close it when
+// the host exits. Close terminal only after the terminal job record (and any
+// result output) has been durably written.
 type SignalHost struct {
 	listener net.Listener
 	jobID    string

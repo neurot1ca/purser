@@ -17,8 +17,7 @@ import (
 	"purser-hook/internal/review"
 )
 
-// PostToolUse dispatches the Go Post lane. The Python hook remains the process
-// matrix oracle until its caller is migrated in pass 116b.
+// PostToolUse dispatches the Go PostToolUse lane and owns its process matrix.
 func PostToolUse(event map[string]any, root string) (response map[string]any, failure error) {
 	if event["hook_event_name"] != "PostToolUse" {
 		return nil, nil
