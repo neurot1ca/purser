@@ -115,7 +115,7 @@ func (a reviewerAdapter) ValidateModel(model any) error {
 	return nil
 }
 func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, config map[string]any, options CommandOptions) ([]string, error) {
-	executable, err := reviewerExecutable(config, a.provider)
+	executable, err := ReviewerExecutable(config, a.provider)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +216,8 @@ func (a reviewerAdapter) ParseEnvelope(stdout string) (map[string]any, error) {
 	return parsed.Map(), nil
 }
 
-func reviewerExecutable(config map[string]any, provider string) (string, error) {
+// ReviewerExecutable resolves the configured executable or the provider command on PATH.
+func ReviewerExecutable(config map[string]any, provider string) (string, error) {
 	command, ok := reviewerCommands[provider]
 	if !ok {
 		return "", fmt.Errorf("unknown reviewer provider %q", provider)

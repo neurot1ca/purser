@@ -87,7 +87,7 @@ func TestReviewerExecutableUsesConfiguredPathOnlyForMatchingProvider(t *testing.
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	configured := filepath.Join(t.TempDir(), "agy"+executableSuffix())
-	got, err := reviewerExecutable(map[string]any{"reviewer1_executable": configured}, "agy")
+	got, err := ReviewerExecutable(map[string]any{"reviewer1_executable": configured}, "agy")
 	if err != nil || got != configured {
 		t.Fatalf("agy executable = %q, %v; want %q", got, err, configured)
 	}
@@ -98,7 +98,7 @@ func TestReviewerExecutableUsesConfiguredPathOnlyForMatchingProvider(t *testing.
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", pathDir)
-	got, err = reviewerExecutable(map[string]any{
+	got, err = ReviewerExecutable(map[string]any{
 		"reviewer1_executable": configured,
 		"reviewer1_agent":      "claude",
 	}, "claude")

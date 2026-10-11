@@ -23,6 +23,7 @@ import (
 	"purser-hook/internal/hookactivity"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
+	"purser-hook/internal/review"
 )
 
 type Row struct {
@@ -344,6 +345,9 @@ func reviewerCheck(p profile.ResolvedProfile, pluginRoot string) Row {
 		executable, _ = config["reviewer1_executable"].(string)
 	}
 	if executable == "" {
+		if path, err := review.ReviewerExecutable(nil, p.Roles.Reviewer); err == nil {
+			return row("Reviewer", "OK", "PATH reviewer executable exists: "+path, "")
+		}
 		return row("Reviewer", "WARN", "No reviewer1_executable is configured; reviewer unavailable; every call will be FULL review.", "Set reviewer.executable in ~/.orchestrator/config.toml or reviewer1_executable in the engine config.")
 	}
 	path := expandHome(executable)

@@ -55,6 +55,7 @@ func TestReportFixtures(t *testing.T) {
 	_ = os.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", t.TempDir())
 	if err := os.Mkdir(filepath.Join(home, ".claude"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +199,48 @@ func TestMissingReviewerExecutableWarnsAndUsesFullReview(t *testing.T) {
 	got := reviewerCheck(p, pluginRoot)
 	if got.Status != "WARN" || !strings.Contains(got.Detail, "reviewer unavailable") || !strings.Contains(got.Detail, "every call will be FULL review") {
 		t.Fatalf("reviewerCheck = %#v", got)
+	}
+}
+
+func TestReviewerOnPathWithoutExplicitExecutableIsOK(t *testing.T) {
+	pluginRoot := t.TempDir()
+	configPath := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pathDir := t.TempDir()
+	name := "claude"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(pathDir, name), []byte("fake reviewer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir)
+	p := profile.ResolvedProfile{Roles: profile.Roles{Reviewer: "claude"}}
+	got := reviewerCheck(p, pluginRoot)
+	if got.Status != "OK" || !strings.Contains(got.Detail, name) || got.NextStep != nil {
+		t.Fatalf("reviewerCheck = %#v; want PATH-resolved claude reviewer OK", got)
+	}
+}
+
+func TestReviewerWithoutExplicitExecutableOrPathWarns(t *testing.T) {
+	pluginRoot := t.TempDir()
+	configPath := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	p := profile.ResolvedProfile{Roles: profile.Roles{Reviewer: "claude"}}
+	got := reviewerCheck(p, pluginRoot)
+	if got.Status != "WARN" || !strings.Contains(got.Detail, "reviewer unavailable") || !strings.Contains(got.Detail, "every call will be FULL review") || got.NextStep == nil {
+		t.Fatalf("reviewerCheck = %#v; want unavailable reviewer WARN with FULL review", got)
 	}
 }
 
