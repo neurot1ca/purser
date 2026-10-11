@@ -217,9 +217,9 @@ consequential and escalated work. Request repair only for a material defect,
 failed criterion, contract violation, or required validation gap. After repair,
 review the new delta, blocking finding, and newly affected boundaries.
 
-When relevant, Claude runs the full suite once before acceptance. Workers run
-focused validation, never repeated full suites. Repeat an expensive successful
-check only if repair could invalidate it.
+When relevant, Claude runs `go test ./...` and `go vet ./...` from `go/` once
+before acceptance. Workers run focused validation, never repeated full suites.
+Repeat an expensive successful check only if repair could invalidate it.
 
 ### One-turn AUDIT
 

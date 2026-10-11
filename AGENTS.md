@@ -12,8 +12,8 @@ review delegated AI coding work. This file binds every worker in this repository
 
 ## Engine invariants
 
-- The hook imports only the Python standard library. One optional dependency
-  once took the whole enforcement layer down at import time.
+- The hook's enforcement path must not depend on optional Go modules. An
+  optional dependency failure must never take the enforcement layer down.
 - Observability never takes enforcement down. A hook internal failure fails open
   with a visible marker and forces FULL review.
 - A skipped reviewer is never represented as a passing reviewer.
@@ -38,8 +38,9 @@ boundaries.
 - One test per failure direction the change can break, no more; no redundant
   variants or fixtures. Trivial one-liners need no test.
 
-- Run focused tests for what you change, once, green, at the end. Do not run the
-  full suite repeatedly; Claude runs it once before acceptance.
+- Run focused tests for what you change, once, green, at the end. Workers run
+  focused tests only; Claude runs `go test ./...` and `go vet ./...` from `go/`
+  once before acceptance.
 - End implementation reports with the single `VALIDATION:` JSON line the hook
   requests.
 - Test scratch goes under the git-ignored `.tmp/`, never inside
