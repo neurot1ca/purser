@@ -13,6 +13,7 @@ import (
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/policy"
+	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
 
@@ -1229,6 +1230,60 @@ func TestCodexHookPortValidationBeforeReportCap(t *testing.T) {
 	}
 	if got := report[:implementerReportLimit]; strings.Contains(got, line) {
 		t.Fatalf("fixture validation unexpectedly fits in capped report: %q", got)
+	}
+}
+
+func TestCodexHookPortRepairBudgetAndEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		enabled    bool
+		budget     time.Duration
+		wantStatus string
+		wantCalls  int
+	}{
+		{name: "disabled", budget: time.Minute},
+		{name: "insufficient total budget", enabled: true, budget: 10 * time.Second, wantStatus: "SKIPPED_BUDGET", wantCalls: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := map[string]any{"micro_repair": nil, "micro_repair_cleared_review": false}
+			calls := 0
+			_, attempted := attemptPostMicroRepair(bundle, "codex", "CHANGES_REQUIRED", "thread", t.TempDir(),
+				[]postRepairFinding{{Code: "F", Message: "finding"}}, []string{"scope"}, tc.enabled, 60, tc.budget,
+				func(context.Context, []string, []string, string, string, time.Duration) postRepairProcess {
+					calls++
+					return postRepairProcess{stdout: "repaired"}
+				})
+			if tc.wantStatus == "" {
+				if attempted || bundle["micro_repair"] != nil || calls != tc.wantCalls {
+					t.Fatalf("disabled repair attempted=%v calls=%d bundle=%#v", attempted, calls, bundle)
+				}
+				return
+			}
+			if !attempted || calls != tc.wantCalls || mapValue(bundle["micro_repair"])["status"] != tc.wantStatus || mapValue(bundle["micro_repair"])["attempted"] != false {
+				t.Fatalf("budget repair attempted=%v calls=%d bundle=%#v", attempted, calls, bundle)
+			}
+		})
+	}
+}
+
+func TestCodexHookPortReviewerBridgeErrorIsNotRetried(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	calls := 0
+	wantErr := fmt.Errorf("reviewer callback TypeError")
+	postReviewerBridge = func(context.Context, string, map[string]any, time.Duration) (review.BridgeOutcome, error) {
+		calls++
+		return review.BridgeOutcome{}, wantErr
+	}
+	reviewProfile := postProfile{ReviewerCandidates: []profile.ReviewerCandidate{
+		{Agent: "agy", Model: "gemini-3.8-flash-high"},
+		{Agent: "claude", Model: "sonnet"},
+	}}
+	_, err := runPostReviewer("", "", map[string]any{"model": "gpt-5", "fallback_family": "openai"},
+		map[string]any{"findings": []any{}}, reviewProfile,
+		map[string]any{"reviewer1_model_requested": "gemini-3.8-flash-high"}, nil, nil, time.Now(), time.Second)
+	if err != wantErr || calls != 1 {
+		t.Fatalf("reviewer bridge error=%v calls=%d, want one call and original error", err, calls)
 	}
 }
 
