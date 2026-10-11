@@ -24,10 +24,6 @@ passes standalone.
 
 ## Known coupling — the first work here
 
-- The engine derives the project root from its own file location
-  (`parents[3]` / `parents[2]` in `context_io_hook.py`, `obsidian_projection.py`,
-  `install_claude_task_telemetry.py`, `reviewer.py`, `telemetry.py`). It must use
-  the session's git root before Purser can serve any other repository.
 - Protected paths, authority files and the vault project are still the source
   project's. They move into a per-project profile (plan phases P2-P3).
 
