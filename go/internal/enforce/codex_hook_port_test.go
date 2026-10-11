@@ -1187,3 +1187,58 @@ func TestCodexHookPortReleasedLeasePruning(t *testing.T) {
 		t.Fatalf("released lease retention changed: %#v", owners)
 	}
 }
+
+func TestCodexHookPortCallTelemetryFields(t *testing.T) {
+	envelope := map[string]any{"session_id": "telemetry-session"}
+	for _, eventType := range []string{"TASK_ROUTE_SELECTED", "IMPLEMENTER_STARTED", "IMPLEMENTER_FINISHED"} {
+		payload := map[string]any{"eta_minutes": float64(23), "reason": "route_change", "reason_source": "inherited"}
+		if eventType == "TASK_ROUTE_SELECTED" {
+			payload["phase"], payload["route"], payload["model"], payload["effort"] = "implementation", "subtle", "gpt-6-sol", "medium"
+			payload["routing_enforced"], payload["fresh_thread"], payload["reply_call"] = true, true, false
+			payload["previous_route"], payload["new_route"] = "normal", "subtle"
+		}
+		if eventType == "IMPLEMENTER_FINISHED" {
+			payload["duration_ms"] = float64(1250)
+		}
+		event, err := buildObservation(eventType, envelope, payload, "telemetry-task")
+		mustPostTest(t, err)
+		got := mapValue(event["payload"])
+		for key, want := range payload {
+			if got[key] != want {
+				t.Fatalf("%s %s = %#v, want %#v", eventType, key, got[key], want)
+			}
+		}
+	}
+	if _, err := buildObservation("TASK_ROUTE_SELECTED", envelope, map[string]any{
+		"phase": "implementation", "route": "normal", "model": "gpt-6-sol", "effort": "medium",
+		"routing_enforced": true, "fresh_thread": true, "reply_call": false, "eta_minutes": float64(601),
+	}, "telemetry-task"); err == nil {
+		t.Fatal("out-of-range ETA was accepted")
+	}
+}
+
+func TestCodexHookPortValidationBeforeReportCap(t *testing.T) {
+	line := `VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}`
+	report := strings.Repeat("implementation details\n", 60) + line
+	if len(report) <= implementerReportLimit {
+		t.Fatal("fixture report did not exceed the compaction limit")
+	}
+	validation := parseWorkerValidation(report)
+	if validation["status"] != "PASS" || validation["source"] != "WORKER_REPORTED" {
+		t.Fatalf("trailing validation record was lost before report capping: %#v", validation)
+	}
+	if got := report[:implementerReportLimit]; strings.Contains(got, line) {
+		t.Fatalf("fixture validation unexpectedly fits in capped report: %q", got)
+	}
+}
+
+func TestCodexHookPortNonCodexPreToolPassThrough(t *testing.T) {
+	response, err := Pre(map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "mcp__other__tool",
+		"tool_input": map[string]any{"prompt": "leave this call untouched"},
+	}, t.TempDir())
+	mustPostTest(t, err)
+	if response != nil {
+		t.Fatalf("non-Codex PreToolUse returned a response: %#v", response)
+	}
+}
