@@ -66,6 +66,11 @@ func BuildSessionRecord(taskID string, threadID *string, route, model, effort st
 	}
 	for _, key := range []string{"reason", "label", "task_objective", "acceptance_criteria"} {
 		if value, exists := options[key]; exists && value != nil {
+			if key == "label" {
+				if label, ok := value.(string); ok && strings.TrimSpace(label) == "" {
+					continue
+				}
+			}
 			thread[key] = value
 		}
 	}

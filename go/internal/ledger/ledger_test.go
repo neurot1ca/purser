@@ -101,6 +101,20 @@ func TestSessionLookupParityFixture(t *testing.T) {
 	}
 }
 
+func TestBuildSessionRecordOmitsBlankLabel(t *testing.T) {
+	for _, label := range []string{"", "  "} {
+		threadID := "thread"
+		record := BuildSessionRecord("task", &threadID, "route", "model", "effort", map[string]any{"label": label})
+		thread := record["live_thread"].(map[string]any)
+		if _, exists := thread["label"]; exists {
+			t.Errorf("label %q was included in thread: %#v", label, thread)
+		}
+		if !validRecord(record, "task") {
+			t.Errorf("record with label %q is invalid: %#v", label, record)
+		}
+	}
+}
+
 func TestPythonLedgerFixtures(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("testdata", "valid.json"))
 	if err != nil {
