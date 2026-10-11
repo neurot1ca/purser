@@ -81,7 +81,7 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			}
 			deadline := time.Now().Add(30 * time.Second)
 			if fixture.Name == "deadline" {
-				deadline = time.Now().Add(150 * time.Millisecond)
+				deadline = time.Now().Add(2 * time.Second)
 			}
 			job := map[string]any{"jobId": jobID, "call": hostParityCall, "acceptedAt": float64(time.Now().UnixNano()) / 1e9, "state": "QUEUED", "generation": 1,
 				"ownershipToken": "host-owner-token", "signalToken": "host-signal-token", "deadlineAt": float64(deadline.UnixNano()) / 1e9,
@@ -166,6 +166,15 @@ func TestHostPythonOracleReplay(t *testing.T) {
 				if ok, signalErr := SignalCancel("127.0.0.1:"+strconv.Itoa(port), jobID, "host-signal-token", time.Second); signalErr != nil || !ok {
 					t.Fatalf("cancel failed: acknowledged=%v err=%v", ok, signalErr)
 				}
+				if err := <-finished; err != nil {
+					t.Fatal(err)
+				}
+			} else if fixture.Name == "deadline" {
+				go func() {
+					_, runErr := RunHostGeneration(dir, jobID, 1, "host-owner-token", options)
+					finished <- runErr
+				}()
+				waitForHostStateID(t, dir, jobID, "RUNNING")
 				if err := <-finished; err != nil {
 					t.Fatal(err)
 				}

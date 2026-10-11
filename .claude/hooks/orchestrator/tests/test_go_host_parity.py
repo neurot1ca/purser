@@ -147,7 +147,7 @@ def _case(tmp_path, name):
         _queued_state(root, queued=True)
     now = time.time()
     job = {"jobId": JOB_ID, "call": CALL, "acceptedAt": now, "state": "QUEUED", "generation": 1,
-           "ownershipToken": TOKEN, "signalToken": SIGNAL, "deadlineAt": now + (0.25 if name == "deadline" else 30),
+           "ownershipToken": TOKEN, "signalToken": SIGNAL, "deadlineAt": now + (2 if name == "deadline" else 30),
            "leaseQueued": name in ("queued", "cancel_queued")}
     if name == "stale":
         job["generation"] = 2
@@ -229,6 +229,9 @@ def _case(tmp_path, name):
                 outcome["snapshot"] = _normalize(_wait(job_path, lambda item: item.get("errorCode") == "STALLED"), root)
             assert _signal(current, "CANCEL")
             worker.join(5)
+        elif name == "deadline":
+            _wait(job_path, lambda item: item.get("state") == "RUNNING" and item.get("pid", 0) > 0)
+            worker.join(6)
         else:
             worker.join(6)
         assert not worker.is_alive(), f"Python host did not finish {name}"
