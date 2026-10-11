@@ -68,12 +68,27 @@ func TestRootAndExitCodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err = filepath.Abs(filepath.Join(canonicalCWD, "missing"))
+	resolvedCWD, err := filepath.EvalSymlinks(canonicalCWD)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := resolveRoot("missing"); err != nil || !filepath.IsAbs(got) || got != want {
+	want, err = filepath.Abs(filepath.Join(resolvedCWD, "missing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveRoot("missing")
+	if err != nil || !filepath.IsAbs(got) || !strings.HasSuffix(got, "missing") {
 		t.Fatalf("explicit root %q: %v", got, err)
+	}
+	gotDir, err := filepath.EvalSymlinks(filepath.Dir(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err = filepath.Abs(filepath.Join(gotDir, "missing")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(got, want) {
+		t.Fatalf("explicit root %q != %q", got, want)
 	}
 	for _, tc := range []struct {
 		args []string
