@@ -109,13 +109,25 @@ func (s *Store) Acquire(ownerKey, taskID string, scope []string, options Acquire
 				break
 			}
 		}
-		if conflict != nil && !options.AllowOverlap &&
+		olderQueued := false
+		if !options.ReadOnly && options.JobID != nil && *options.JobID != "" {
+			for _, key := range keys {
+				other := owners[key].(map[string]any)
+				queuedAt, ok := pythonFloat(other["queued_at"])
+				if other["state"] == "QUEUED" && ok && queuedAt <= now &&
+					scopesOverlap(toAnyScope(scope), other["scope"].([]any)) {
+					olderQueued = true
+					break
+				}
+			}
+		}
+		if conflict != nil && !olderQueued && !options.AllowOverlap &&
 			!(options.QueueConflict && options.JobID != nil && *options.JobID != "" && !options.ReadOnly) {
 			result = AdmissionResult{"UNKNOWN", "SCOPE_LEASE_CONFLICT", conflict["task_id"].(string)}
 			return changed
 		}
 		state := "ACTIVE"
-		if hotConflict || (conflict != nil && !options.AllowOverlap) {
+		if olderQueued || hotConflict || (conflict != nil && !options.AllowOverlap) {
 			state, result.Code = "QUEUED", "LEASE_QUEUED"
 		}
 		owner := map[string]any{"task_id": taskID, "scope": toAnyScope(scope), "state": state,
@@ -534,23 +546,67 @@ func (o orderedLeaseOwners) MarshalJSON() ([]byte, error) {
 func (s *Store) promote(value map[string]any, now float64) bool {
 	owners := value["owners"].(map[string]any)
 	keys := make([]string, 0, len(owners))
-	for key := range owners {
-		keys = append(keys, key)
+	var order []string
+	switch raw := value[ownerOrderKey].(type) {
+	case []string:
+		order = raw
+	case []any:
+		for _, item := range raw {
+			if key, ok := item.(string); ok {
+				order = append(order, key)
+			}
+		}
 	}
-	sort.Strings(keys)
+	positions := make(map[string]int, len(order))
+	for index, key := range order {
+		positions[key] = index
+	}
+	earlierQueued := func(otherKey, ownerKey string, other, owner map[string]any) bool {
+		otherAt, otherOK := pythonFloat(other["queued_at"])
+		ownerAt, ownerOK := pythonFloat(owner["queued_at"])
+		if !otherOK || !ownerOK {
+			return false
+		}
+		if otherAt != ownerAt {
+			return otherAt < ownerAt
+		}
+		otherOrder, otherExists := positions[otherKey]
+		ownerOrder, ownerExists := positions[ownerKey]
+		return otherExists && ownerExists && otherOrder < ownerOrder
+	}
+	for key, raw := range owners {
+		if raw.(map[string]any)["state"] == "QUEUED" {
+			keys = append(keys, key)
+		}
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		left, _ := pythonFloat(owners[keys[i]].(map[string]any)["queued_at"])
+		right, _ := pythonFloat(owners[keys[j]].(map[string]any)["queued_at"])
+		if left != right {
+			return left < right
+		}
+		leftOrder, leftExists := positions[keys[i]]
+		rightOrder, rightExists := positions[keys[j]]
+		if leftExists != rightExists {
+			return leftExists
+		}
+		if leftExists && leftOrder != rightOrder {
+			return leftOrder < rightOrder
+		}
+		return keys[i] < keys[j]
+	})
 	changed := false
 	for _, key := range keys {
 		owner := owners[key].(map[string]any)
-		if owner["state"] != "QUEUED" {
-			continue
-		}
 		blocked := false
 		if owner["hot_path_queue"] == true {
 			blocked = hotPathOverlap(value, owner["scope"].([]any), now)
 		} else {
-			for _, otherRaw := range owners {
+			for otherKey, otherRaw := range owners {
 				other := otherRaw.(map[string]any)
-				if other["state"] == "ACTIVE" && scopesOverlap(owner["scope"].([]any), other["scope"].([]any)) {
+				if (other["state"] == "ACTIVE" || other["state"] == "QUEUED") &&
+					scopesOverlap(owner["scope"].([]any), other["scope"].([]any)) &&
+					(other["state"] == "ACTIVE" || earlierQueued(otherKey, key, other, owner)) {
 					blocked = true
 					break
 				}

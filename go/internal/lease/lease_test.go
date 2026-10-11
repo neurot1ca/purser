@@ -116,6 +116,69 @@ func TestAdmissionKeepsRecentMissingJobLease(t *testing.T) {
 	}
 }
 
+func TestAcquireQueuesBehindOlderOverlappingQueuedOwner(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	blockerJob, olderJob, newerJob := "blocker", "older", "newer"
+	if got := store.Acquire("blocker", "blocker-task", []string{"scope/occupied"}, AcquireOptions{JobID: &blockerJob}, 100); got.Code != "LEASE_ACQUIRED" {
+		t.Fatalf("seed blocker: %#v", got)
+	}
+	if got := store.Acquire("older", "older-task", []string{"scope"}, AcquireOptions{JobID: &olderJob, QueueConflict: true}, 101); got.Code != "LEASE_QUEUED" {
+		t.Fatalf("queue older broad owner: %#v", got)
+	}
+	got := store.Acquire("newer", "newer-task", []string{"scope/free"}, AcquireOptions{JobID: &newerJob, AllowOverlap: true}, 102)
+	if got.Status != "OK" || got.Code != "LEASE_QUEUED" {
+		t.Fatalf("newer overlapping owner bypassed older queue: %#v", got)
+	}
+}
+
+func TestAcquireAdmitsWhenOlderQueuedScopeDoesNotOverlap(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	blockerJob, olderJob, newerJob := "blocker", "older", "newer"
+	if got := store.Acquire("blocker", "blocker-task", []string{"occupied"}, AcquireOptions{JobID: &blockerJob}, 100); got.Code != "LEASE_ACQUIRED" {
+		t.Fatalf("seed blocker: %#v", got)
+	}
+	if got := store.Acquire("older", "older-task", []string{"occupied"}, AcquireOptions{JobID: &olderJob, QueueConflict: true}, 101); got.Code != "LEASE_QUEUED" {
+		t.Fatalf("seed older queued owner: %#v", got)
+	}
+	got := store.Acquire("newer", "newer-task", []string{"other"}, AcquireOptions{JobID: &newerJob, QueueConflict: true}, 102)
+	if got.Status != "OK" || got.Code != "LEASE_ACQUIRED" {
+		t.Fatalf("non-overlapping owner was unnecessarily queued: %#v", got)
+	}
+}
+
+func TestReleasePromotesOverlappingQueuedOwnersInQueueOrder(t *testing.T) {
+	root := t.TempDir()
+	fixture := `{"version":1,"owners":{"blocker":{"state":"ACTIVE","scope":["scope/occupied"],"task_id":"blocker-task","acquired_at":90},"a-newer":{"state":"QUEUED","scope":["scope/free"],"task_id":"newer-task","job_id":"newer","queued_at":92},"z-older":{"state":"QUEUED","scope":["scope"],"task_id":"older-task","job_id":"older","queued_at":91}}}`
+	if err := os.WriteFile(filepath.Join(root, "scope_leases.json"), []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := New(root)
+	if got := store.Release("blocker", 100); got.Code != "LEASE_RELEASED" {
+		t.Fatalf("release blocker: %#v", got)
+	}
+	value, err := store.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := value["owners"].(map[string]any)
+	if owners["z-older"].(map[string]any)["state"] != "ACTIVE" || owners["a-newer"].(map[string]any)["state"] != "QUEUED" {
+		t.Fatalf("queue did not promote older overlapping owner first: %#v", owners)
+	}
+	if got := store.Release("z-older", 101); got.Code != "LEASE_RELEASED" {
+		t.Fatalf("release older owner: %#v", got)
+	}
+	value, err = store.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners = value["owners"].(map[string]any)
+	if owners["a-newer"].(map[string]any)["state"] != "ACTIVE" {
+		t.Fatalf("newer owner was not promoted after older owner finished: %#v", owners)
+	}
+}
+
 func TestAcquireReportsFirstConflictingOwnerInStoredOrder(t *testing.T) {
 	root := t.TempDir()
 	fixture := `{"version":1,"owners":{"z-first":{"state":"ACTIVE","scope":["src"],"task_id":"z-task","acquired_at":90},"a-second":{"state":"ACTIVE","scope":["src"],"task_id":"a-task","acquired_at":90},"expired":{"state":"ACTIVE","scope":["old"],"task_id":"expired-task","acquired_at":1,"deadline_at":99}}}`
@@ -353,6 +416,44 @@ func TestHotPathPromotionHonorsConflictOverlap(t *testing.T) {
 	after, readErr := os.ReadFile(path)
 	if readErr != nil || string(after) != fixture {
 		t.Fatalf("no-transition reconcile pruned data: %v data=%s", readErr, after)
+	}
+}
+
+func TestHotPathPromotionIgnoresActiveScopeOverlapWithoutConflict(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "scope_leases.json")
+	fixture := `{"version":1,"owners":{"active":{"state":"ACTIVE","scope":["src/sub"],"task_id":"a","acquired_at":80},"queued":{"state":"QUEUED","scope":["src"],"task_id":"b","job_id":"j","queued_at":85,"hot_path_queue":true}}}`
+	if err := os.WriteFile(path, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := New(root).Reconcile(100)
+	if err != nil || !changed {
+		t.Fatalf("hot-path owner was not promoted: changed=%v err=%v", changed, err)
+	}
+	value, err := New(root).read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := value["owners"].(map[string]any)["queued"].(map[string]any)["state"]; state != "ACTIVE" {
+		t.Fatalf("hot-path owner remained blocked by active overlap: %v", state)
+	}
+}
+
+func TestPromoteUsesOwnerOrderFromAnySlice(t *testing.T) {
+	store := New(t.TempDir())
+	value := map[string]any{
+		"owners": map[string]any{
+			"a-newer": map[string]any{"state": "QUEUED", "scope": []any{"scope"}, "task_id": "a", "job_id": "a-job", "queued_at": json.Number("100")},
+			"z-older": map[string]any{"state": "QUEUED", "scope": []any{"scope"}, "task_id": "z", "job_id": "z-job", "queued_at": json.Number("100")},
+		},
+		ownerOrderKey: []any{"z-older", "a-newer"},
+	}
+	if !store.promote(value, 101) {
+		t.Fatal("queued owner was not promoted")
+	}
+	owners := value["owners"].(map[string]any)
+	if owners["z-older"].(map[string]any)["state"] != "ACTIVE" || owners["a-newer"].(map[string]any)["state"] != "QUEUED" {
+		t.Fatalf("owner order from []any was ignored: %#v", owners)
 	}
 }
 
