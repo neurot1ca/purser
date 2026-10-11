@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.132 — 2026-10-12
+
+- **Fixed:** Replay git commands enable core.longpaths, so long paths no longer fail replay preparation on Windows.
+
 ## 0.1.131 — 2026-10-12
 
 - **Fixed:** A codex call without a label writes a valid session ledger record, so its thread continuity and outcome are no longer lost (LEDGER_RECORD_INVALID).
