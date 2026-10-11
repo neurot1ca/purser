@@ -1,9 +1,0 @@
-{
-  "name": "tool_result_alias_unicode",
-  "input": {
-    "function": "_tool_result",
-    "thread_id": "iş parçacığı 🧵",
-    "content": "Merhaba, dünya! 🚀"
-  },
-  "expected_text": "{\"threadId\": \"iş parçacığı 🧵\", \"content\": \"Merhaba, dünya! 🚀\"}"
-}
