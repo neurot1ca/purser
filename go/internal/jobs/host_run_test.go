@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,6 +24,18 @@ func TestHostFakeWorker(t *testing.T) {
 	}
 	output := os.Args[len(os.Args)-1]
 	mode := os.Getenv("PURSER_HOST_FAKE_MODE")
+	if mode == "stdin" {
+		prompt, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = os.Stdout.WriteString("{\"type\": \"thread.started\", \"thread_id\": \"fake-thread\"}\r\n")
+		_, _ = os.Stdout.WriteString("{\"type\": \"turn.completed\"}\r\n")
+		if err := os.WriteFile(output, prompt, 0600); err != nil {
+			t.Fatal(err)
+		}
+		os.Exit(0)
+	}
 	if os.Getenv("PURSER_HOST_FAKE_AGENT") == "opencode" {
 		_, _ = os.Stdout.WriteString("{\"type\": \"step_start\", \"sessionID\": \"fake-session\"}\r\n")
 		if mode == "agent_failure" {
@@ -48,6 +61,46 @@ func TestHostFakeWorker(t *testing.T) {
 		os.Exit(7)
 	}
 	os.Exit(0)
+}
+
+func TestRunHostGenerationPreservesPromptBytesOnStdin(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	prompt := "preserve exact UTF-8: café 雪\n"
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "codex", "args": map[string]any{"cwd": root, "prompt": prompt},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "stdin")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RunHostGeneration(dir, hostTestID, 1, "owner", HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := readJob(dir, hostTestID)
+	var output string
+	if !job.Get("outputFile", &output) {
+		t.Fatal("completed job has no output file")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != prompt {
+		t.Fatalf("worker stdin bytes = %q, want %q", got, prompt)
+	}
 }
 
 func TestFinishedJobThreadRecordAdmitsReply(t *testing.T) {

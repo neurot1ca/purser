@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -106,6 +107,37 @@ func TestInterruptedReplaceLeavesOldRecord(t *testing.T) {
 	}
 	if string(got) != string(old) {
 		t.Fatalf("old record lost: %s", got)
+	}
+}
+
+func TestAtomicWriteRetriesTransientReplaceError(t *testing.T) {
+	path := filepath.Join(scratch(t), "job.json")
+	record, err := Decode([]byte(`{"state": "RUNNING"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := replaceFile
+	attempts := 0
+	replaceFile = func(source, target string) error {
+		if target == path && attempts < 2 {
+			attempts++
+			return syscall.EACCES
+		}
+		return prior(source, target)
+	}
+	t.Cleanup(func() { replaceFile = prior })
+	if err := Write(path, record); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 {
+		t.Fatalf("transient replace attempts = %d, want 2", attempts)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := recordMap(got)["state"]; value != "RUNNING" {
+		t.Fatalf("written state = %v, want RUNNING", value)
 	}
 }
 

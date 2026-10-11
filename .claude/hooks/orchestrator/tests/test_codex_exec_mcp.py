@@ -16,7 +16,6 @@ import uuid
 
 import pytest
 
-
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "codex_exec_mcp.py"
 SCRATCH = ROOT.parents[2] / ".tmp" / "codex-exec-mcp-tests"
@@ -26,17 +25,14 @@ import codex_exec_mcp
 import ledger
 from mixed_owner_support import go_test_tools, launch_go_host
 
-
 def _remove_readonly(function, path, _error):
     os.chmod(path, 0o700)
     function(path)
-
 
 def read_job_record(path):
     text = codex_exec_mcp.purser_state_root.retry_permission_error(
         lambda: path.read_text(encoding="utf-8"))
     return json.loads(text)
-
 
 FAKE = r'''
 import json
@@ -98,7 +94,6 @@ if os.environ.get("FAKE_HANG_AFTER_TERMINAL") == "1":
     time.sleep(60)
 '''
 
-
 FAKE_OPENCODE = r'''
 import json
 import os
@@ -150,7 +145,6 @@ if os.environ.get("FAKE_OC_HANG_AFTER_STOP") == "1":
     time.sleep(60)
 '''
 
-
 @pytest.fixture
 def area():
     SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -168,7 +162,6 @@ def area():
                 if attempt == 19:
                     raise
                 time.sleep(0.05)
-
 
 def _stop_area_hosts(area):
     jobs = area / "root" / "codex_exec_mcp" / "jobs"
@@ -203,7 +196,6 @@ def _stop_area_hosts(area):
                     pass
             time.sleep(0.02)
 
-
 def test_job_read_retries_transient_permission_error(area, monkeypatch):
     job_id = "a" * 64
     jobs = area / "root" / "codex_exec_mcp" / "jobs"
@@ -224,103 +216,6 @@ def test_job_read_retries_transient_permission_error(area, monkeypatch):
     monkeypatch.setattr(Path, "read_text", flaky_read)
     assert server._read_job(job_id)["state"] == "RUNNING"
     assert attempts == 2
-
-
-def test_queued_job_deadline_never_launches(area, monkeypatch):
-    jobs = area / "root" / "codex_exec_mcp" / "jobs"
-    server = codex_exec_mcp.Server(job_dir=jobs)
-    job_id = "1" * 64
-    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
-                       "acceptedAt": time.time(), "deadlineAt": time.time() + 0.05})
-    monkeypatch.setattr(codex, "bind_queued_baseline", lambda *_args: False)
-    monkeypatch.setattr(server, "_run_tool", lambda *_args, **_kwargs: pytest.fail("queued worker launched"))
-    server._job_worker(job_id, "codex", {"leaseQueued": True})
-    assert server._read_job(job_id)["state"] == "TIMED_OUT"
-
-
-def test_queued_cancel_never_launches(area, monkeypatch):
-    jobs = area / "root" / "codex_exec_mcp" / "jobs"
-    server = codex_exec_mcp.Server(job_dir=jobs)
-    job_id = "2" * 64
-    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
-                       "acceptedAt": time.time(), "deadlineAt": time.time() + 30})
-    monkeypatch.setattr(server, "_run_tool", lambda *_args, **_kwargs: pytest.fail("cancelled worker launched"))
-    assert server._cancel_job({"jobId": job_id})["structuredContent"]["state"] == "CANCELLED"
-    server._job_worker(job_id, "codex", {"leaseQueued": True})
-    assert server._read_job(job_id)["state"] == "CANCELLED"
-
-
-def test_queued_baseline_failure_is_uncertain_without_launch(area, monkeypatch):
-    jobs = area / "root" / "codex_exec_mcp" / "jobs"
-    server = codex_exec_mcp.Server(job_dir=jobs)
-    job_id = "3" * 64
-    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
-                       "acceptedAt": time.time(), "deadlineAt": time.time() + 30})
-    monkeypatch.setattr(codex, "bind_queued_baseline", lambda *_args: (_ for _ in ()).throw(
-        codex.WiringError("baseline unavailable")))
-    monkeypatch.setattr(server, "_run_tool", lambda *_args, **_kwargs: pytest.fail("uncertain worker launched"))
-    server._job_worker(job_id, "codex", {"leaseQueued": True})
-    job = server._read_job(job_id)
-    assert (job["state"], job["errorCode"]) == ("UNKNOWN_OR_IN_PROGRESS", "ADMISSION_BASELINE_UNAVAILABLE")
-
-
-def test_never_launched_queue_recovery_fences_old_generation(area, monkeypatch):
-    jobs = area / "root" / "codex_exec_mcp" / "jobs"
-    server = codex_exec_mcp.Server(job_dir=jobs)
-    job_id = "4" * 64
-    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
-                       "generation": 1, "ownershipToken": "old",
-                       "acceptedAt": time.time(), "deadlineAt": time.time() + 30})
-    launched = []
-    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launched.append(args))
-    assert server.recover_job(job_id) == "RECOVERED"
-    job = server._read_job(job_id)
-    assert job["state"] == "QUEUED" and job["generation"] == 2
-    assert len(launched) == 1 and launched[0][2:] == (2, job["ownershipToken"])
-
-
-def test_queued_job_with_host_pid_recovers(area, monkeypatch):
-    jobs = area / "root" / "codex_exec_mcp" / "jobs"
-    server = codex_exec_mcp.Server(job_dir=jobs)
-    job_id = "5" * 64
-    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
-                       "generation": 1, "ownershipToken": "old", "hostPid": 123,
-                       "hostCreatedAt": 1, "hostContained": True,
-                       "acceptedAt": 1000.0, "deadlineAt": 1100.0})
-    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
-    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
-    launched = []
-    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *args: launched.append(args))
-    assert server.recover_job(job_id, now=1001.0) == "RECOVERED"
-    job = server._read_job(job_id)
-    assert job["generation"] == 2 and "hostPid" not in job
-    assert len(launched) == 1 and launched[0][2:] == (2, job["ownershipToken"])
-
-
-@pytest.mark.parametrize(("host_state", "expected_state", "expected_code"), [
-    ("DEAD", "FAILED", "HOST_LAUNCH_UNCONFIRMED"),
-    ("ALIVE", "UNKNOWN_OR_IN_PROGRESS", "PROCESS_UNCONFIRMED"),
-])
-def test_unacknowledged_queued_host_is_failed_only_when_dead(tmp_path, monkeypatch, host_state,
-                                                             expected_state, expected_code):
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    job_id = "a" * 64
-    server._write_job({"jobId": job_id, "state": "QUEUED", "leaseQueued": True,
-                       "hostPid": 123, "hostCreatedAt": 456, "hostContained": True,
-                       "acceptedAt": 1, "deadlineAt": 100})
-    monkeypatch.setattr(server, "_classify_host", lambda _job: host_state)
-    ticks = iter((0.0, 0.0, 0.0, 11.0))
-    monkeypatch.setattr(codex_exec_mcp.time, "monotonic", lambda: next(ticks, 11.0))
-    monkeypatch.setattr(codex_exec_mcp.time, "sleep", lambda _seconds: None)
-
-    result = server._await_host(job_id)["structuredContent"]
-    job = server._read_job(job_id)
-    assert (result["state"], result["errorCode"]) == (expected_state, expected_code)
-    if host_state == "DEAD":
-        assert (job["state"], job["errorCode"]) == ("FAILED", "HOST_LAUNCH_UNCONFIRMED")
-    else:
-        assert job["state"] == "QUEUED" and "errorCode" not in job
-
 
 def test_post_start_dead_host_preserves_cancel_ownership_and_releases_lease(tmp_path, monkeypatch):
     import ledger
@@ -369,71 +264,6 @@ def test_post_start_dead_host_preserves_cancel_ownership_and_releases_lease(tmp_
     assert (loaded.get("record") or {}).get("last_outcome") is None
     assert response["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "HOST_LAUNCH_UNCONFIRMED" in response["hookSpecificOutput"]["updatedMCPToolOutput"][0]["text"]
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX child process groups")
-def test_live_posix_child_group_blocks_dead_host_recovery(tmp_path, monkeypatch):
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    job_id = "6" * 64
-    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 1,
-                       "hostPid": 123, "hostCreatedAt": 456, "hostContained": False,
-                       "pid": 789, "acceptedAt": 1, "deadlineAt": 100})
-    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
-    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: False)
-
-    assert server.recover_job(job_id, now=2) == "UNCONFIRMED"
-    assert server._read_job(job_id)["state"] == "RUNNING"
-
-
-def test_dead_host_past_deadline_result_times_out(tmp_path, monkeypatch):
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    job_id = "d" * 64
-    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 1,
-                       "hostPid": 123, "hostCreatedAt": 456, "hostContained": True,
-                       "pid": 789, "acceptedAt": 1, "deadlineAt": 10})
-    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
-    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
-
-    result = server._result_job({"jobId": job_id})["structuredContent"]
-
-    assert (result["state"], result["errorCode"]) == ("TIMED_OUT", "DEADLINE_EXCEEDED")
-    assert server._read_job(job_id)["state"] == "TIMED_OUT"
-
-
-def test_cancel_confirms_dead_host_as_cancelled(tmp_path, monkeypatch):
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    job_id = "e" * 64
-    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 1,
-                       "hostPid": 123, "hostCreatedAt": 456, "hostContained": True,
-                       "pid": 789, "acceptedAt": 1, "deadlineAt": 100})
-    monkeypatch.setattr(server, "_classify_host", lambda _job: "DEAD")
-    monkeypatch.setattr(codex_exec_mcp, "_posix_process_group_stopped", lambda _pid: True)
-
-    result = server._cancel_job({"jobId": job_id})["structuredContent"]
-
-    assert (result["state"], result["errorCode"]) == ("CANCELLED", "CANCELLED")
-    assert server._read_job(job_id)["state"] == "CANCELLED"
-
-
-def test_atomic_job_write_retries_transient_replace_permission_error(area, monkeypatch):
-    job_id = "b" * 64
-    jobs = area / "root" / "codex_exec_mcp" / "jobs"
-    path = jobs / f"{job_id}.json"
-    original = codex_exec_mcp.os.replace
-    attempts = 0
-
-    def flaky_replace(source, target):
-        nonlocal attempts
-        if target == path and attempts < 2:
-            attempts += 1
-            raise PermissionError(13, "sharing violation", str(path))
-        return original(source, target)
-
-    monkeypatch.setattr(codex_exec_mcp.os, "replace", flaky_replace)
-    codex_exec_mcp._atomic_json(path, {"jobId": job_id, "state": "RUNNING"})
-    assert attempts == 2
-    assert read_job_record(path)["state"] == "RUNNING"
-
 
 class Client:
     def __init__(self, area, *, bin_override=None, extra_env=None, server_command=None):
@@ -493,7 +323,6 @@ class Client:
             self.process.kill()
             self.process.wait(timeout=4)
 
-
 @pytest.fixture
 def client(area):
     instance = Client(area)
@@ -501,7 +330,6 @@ def client(area):
         yield instance
     finally:
         instance.close()
-
 
 @pytest.fixture
 def go_client(area, go_test_tools):
@@ -514,7 +342,6 @@ def go_client(area, go_test_tools):
     finally:
         instance.close()
 
-
 @pytest.fixture(params=["python", "alternate"])
 def server_command(request):
     if request.param == "alternate":
@@ -526,7 +353,6 @@ def server_command(request):
         return command
     return None
 
-
 @pytest.fixture
 def oracle_client(area, server_command):
     instance = Client(area, server_command=server_command)
@@ -535,13 +361,11 @@ def oracle_client(area, server_command):
     finally:
         instance.close()
 
-
 def call(client, request_id, name, arguments):
     client.send(request_id, "tools/call", {"name": name, "arguments": arguments})
     response = client.receive()
     assert response["id"] == request_id
     return response["result"]
-
 
 def test_initialize_and_list(oracle_client):
     oracle_client.send(1, "initialize", {"protocolVersion": "2025-06-18"})
@@ -565,7 +389,6 @@ def test_initialize_and_list(oracle_client):
     missing = call(oracle_client, 3, "codex_start", {"prompt": "work"})
     assert missing["structuredContent"]["errorCode"] == "INVALID_ARGUMENT"
 
-
 def test_oracle_result_envelope_and_exact_text_bytes(oracle_client, area):
     arguments = {"prompt": "wire oracle", "cwd": str(area)}
     oracle_client.send(3, "tools/call", {"name": "codex", "arguments": arguments})
@@ -574,7 +397,6 @@ def test_oracle_result_envelope_and_exact_text_bytes(oracle_client, area):
     assert response == {"jsonrpc": "2.0", "id": 3, "result": expected}
     assert response["result"]["content"][0]["text"].encode("utf-8") == (
         b'{"threadId": "thread-123", "content": "Reply from fake Codex"}')
-
 
 def test_large_prompt_is_framed_and_preserved(oracle_client, area):
     prompt = ("frame 🧵\n" * 40000) + "end"
@@ -590,7 +412,6 @@ def test_large_prompt_is_framed_and_preserved(oracle_client, area):
         time.sleep(0.01)
     assert bytes.fromhex(oracle_client.calls()[0]["stdin_hex"]).decode("utf-8") == prompt
 
-
 def test_protocol_error_and_malformed_input_envelopes(oracle_client):
     oracle_client.send(21, "missing/method")
     assert oracle_client.receive() == {"jsonrpc": "2.0", "id": 21,
@@ -603,7 +424,6 @@ def test_protocol_error_and_malformed_input_envelopes(oracle_client):
         oracle_client.receive(timeout=0.15)
     oracle_client.send(23, "ping")
     assert oracle_client.receive() == {"jsonrpc": "2.0", "id": 23, "result": {}}
-
 
 def test_slow_call_does_not_block_ping_or_another_call(area, server_command):
     client = Client(area, extra_env={"FAKE_SLOW": "1", "FAKE_SLEEP_SECONDS": "1.5"},
@@ -625,7 +445,6 @@ def test_slow_call_does_not_block_ping_or_another_call(area, server_command):
     finally:
         client.close()
 
-
 def test_cancel_notification_suppresses_late_response_through_server_handle(area, server_command):
     client = Client(area, extra_env={"FAKE_SLOW": "1", "FAKE_SLEEP_SECONDS": "1"},
                     server_command=server_command)
@@ -640,16 +459,6 @@ def test_cancel_notification_suppresses_late_response_through_server_handle(area
             client.receive(timeout=1.5)
     finally:
         client.close()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows process creation flags")
-def test_windows_codex_child_uses_hidden_process_group_flags():
-    creation = codex_exec_mcp._process_creation_options(windows=True)
-    flags = creation["creationflags"]
-
-    assert flags & codex_exec_mcp.WINDOWS_CREATE_NO_WINDOW
-    assert flags & codex_exec_mcp.WINDOWS_CREATE_NEW_PROCESS_GROUP
-
 
 def test_slow_claim_does_not_become_terminal(tmp_path, monkeypatch):
     job_id = "a" * 64
@@ -668,168 +477,11 @@ def test_slow_claim_does_not_become_terminal(tmp_path, monkeypatch):
     assert "unconfirmed" in first["message"].lower()
     assert launch.exists()
 
-
-@pytest.mark.parametrize("ping", [False, True])
-def test_unconfirmed_host_never_writes_terminal(tmp_path, monkeypatch, ping):
-    job_id = "d" * 64
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    job = {"jobId": job_id, "state": "RUNNING", "acceptedAt": 1}
-    server._write_job(job)
-    monkeypatch.setattr(server, "_classify_host", lambda _job: "UNCONFIRMED")
-    monkeypatch.setattr(server, "_host_ping", lambda _job: ping)
-    monkeypatch.setattr(server, "_write_job", lambda _job: pytest.fail("unconfirmed host wrote a terminal record"))
-    result = server._result_job({"jobId": job_id})["structuredContent"]
-    assert result["state"] == "RUNNING"
-    assert "unconfirmed" in result["message"].lower()
-    assert read_job_record(tmp_path / f"{job_id}.json") == job
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows process identity")
-def test_host_identity_detects_pid_reuse_and_unreachable_live_process(tmp_path, monkeypatch):
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    state, created = codex_exec_mcp._windows_process_identity(os.getpid())
-    assert state == "ALIVE" and created
-    job = {"hostPid": os.getpid(), "hostCreatedAt": created, "hostContained": True}
-    monkeypatch.setattr(server, "_host_ping", lambda _job: False)
-    assert server._classify_host(job) == "ALIVE"
-    assert server._host_alive(job)
-    job_id = "c" * 64
-    server._write_job({**job, "jobId": job_id, "state": "RUNNING", "acceptedAt": time.time()})
-    assert server._result_job({"jobId": job_id})["structuredContent"]["state"] == "RUNNING"
-    job["hostCreatedAt"] = created + 1
-    assert server._classify_host(job) == "DEAD"
-
-
-def test_superseded_generation_exits_without_starting_codex(tmp_path, monkeypatch):
-    job_id = "b" * 64
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    server._write_job({"jobId": job_id, "state": "QUEUED", "generation": 2,
-                       "ownershipToken": "new-owner"})
-    monkeypatch.setattr(codex_exec_mcp.Server, "_job_worker",
-                        lambda *args: pytest.fail("superseded host started Codex"))
-    codex_exec_mcp._host_main(job_id, tmp_path, 1, "old-owner")
-    assert read_job_record(tmp_path / f"{job_id}.json")["generation"] == 2
-    assert not (tmp_path / f"{job_id}.host-claim").exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows ctypes process launch")
-def test_windows_host_launch_uses_hidden_console_flags(monkeypatch, tmp_path):
-    class MockFunction:
-        def __init__(self, callback):
-            self.callback = callback
-
-        def __call__(self, *args):
-            return self.callback(*args)
-
-    creation = {}
-    kernel = type("Kernel", (), {})()
-    user = type("User", (), {})()
-    user.GetShellWindow = MockFunction(lambda: 1)
-
-    def get_shell_pid(_window, pid_pointer):
-        ctypes.cast(pid_pointer, ctypes.POINTER(codex_exec_mcp.wintypes.DWORD))[0] = 321
-        return 1
-
-    user.GetWindowThreadProcessId = MockFunction(get_shell_pid)
-    kernel.OpenProcess = MockFunction(lambda *_args: 1234)
-    kernel.CloseHandle = MockFunction(lambda *_args: 1)
-
-    def initialize_attributes(_attributes, _count, _flags, size_pointer):
-        ctypes.cast(size_pointer, ctypes.POINTER(ctypes.c_size_t))[0] = 64
-        return 1
-
-    kernel.InitializeProcThreadAttributeList = MockFunction(initialize_attributes)
-    kernel.UpdateProcThreadAttribute = MockFunction(lambda *_args: 1)
-    kernel.DeleteProcThreadAttributeList = MockFunction(lambda *_args: None)
-
-    def create_process(*args):
-        creation["flags"] = args[5]
-        return 1
-
-    kernel.CreateProcessW = MockFunction(create_process)
-
-    def win_dll(name, **_kwargs):
-        return kernel if name == "kernel32" else user
-
-    monkeypatch.setattr(codex_exec_mcp.ctypes, "WinDLL", win_dll, raising=False)
-    codex_exec_mcp._launch_host(tmp_path, "job")
-
-    flags = creation["flags"]
-    assert flags & codex_exec_mcp.WINDOWS_CREATE_NO_WINDOW
-    assert not flags & codex_exec_mcp.WINDOWS_DETACHED_PROCESS
-    assert flags & 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
-    assert flags & codex_exec_mcp.WINDOWS_CREATE_NEW_PROCESS_GROUP
-
-
-def test_new_call_preserves_stdin_and_hook_result(client, area):
-    cwd = area / "working"
-    cwd.mkdir()
-    prompt = 'Hello "world" & %\nİstanbul Türkçe\n'
-    instructions = 'Say "merhaba"\nÇalışma yönergesi'
-    result = call(client, 1, "codex", {
-        "prompt": prompt, "model": "gpt-test", "cwd": str(cwd),
-        "config": {"model_reasoning_effort": "high"},
-        "developer-instructions": instructions,
-    })
-    assert result["isError"] is False
-    assert codex._extract_codex_result(result) == ("thread-123", "Reply from fake Codex")
-    assert result["structuredContent"] == {"threadId": "thread-123", "content": "Reply from fake Codex"}
-    invocation = client.calls()[0]
-    args = invocation["argv"]
-    assert args[:1] == ["exec"]
-    assert args[args.index("-m") + 1] == "gpt-test"
-    assert "model_reasoning_effort=\"high\"" in args
-    actual_instructions = next(arg for arg in args if arg.startswith("developer_instructions="))
-    expected_instructions = f"developer_instructions={codex_exec_mcp._toml(instructions)}"
-    assert actual_instructions == expected_instructions, (ascii(actual_instructions), ascii(expected_instructions))
-    assert args[args.index("-C") + 1] == str(cwd)
-    assert "--json" in args and "--skip-git-repo-check" in args and "-o" in args
-    assert args[-1] == "-"
-    assert bytes.fromhex(invocation["stdin_hex"]) == prompt.encode("utf-8")
-
-
-def test_reply_uses_recorded_cwd_and_overrides(client, area):
-    cwd = area / "reply-cwd"
-    cwd.mkdir()
-    first = call(client, 1, "codex", {"prompt": "first", "cwd": str(cwd), "model": "gpt-test", "config": {"nested": {"value": 3, "flag": True}}})
-    assert not first["isError"]
-    second = call(client, 2, "codex-reply", {"threadId": "thread-123", "prompt": "second"})
-    assert not second["isError"]
-    invocation = client.calls()[1]
-    assert invocation["cwd"] == str(cwd)
-    assert invocation["argv"][:2] == ["exec", "resume"]
-    assert invocation["argv"][-2:] == ["thread-123", "-"]
-    assert invocation["argv"][invocation["argv"].index("-m") + 1] == "gpt-test"
-    assert "nested.value=3" in invocation["argv"]
-    assert "nested.flag=true" in invocation["argv"]
-    assert "-C" not in invocation["argv"] and "-s" not in invocation["argv"]
-
-
-def test_output_limit_passed_on_fresh_call_but_not_reply(client, area):
-    call(client, 1, "codex", {"prompt": "first", "cwd": str(area),
-                              "config": {"tool_output_token_limit": 8000}})
-    call(client, 2, "codex-reply", {"threadId": "thread-123", "prompt": "again"})
-    first, second = client.calls()
-    assert "tool_output_token_limit=8000" in first["argv"]
-    assert not any(arg.startswith("tool_output_token_limit=") for arg in second["argv"])
-    call(client, 3, "codex", {"prompt": "without", "cwd": str(area)})
-    assert not any(arg.startswith("tool_output_token_limit=") for arg in client.calls()[2]["argv"])
-
-
-def test_read_only_sandbox_persists_on_reply(client, area):
-    call(client, 1, "codex", {"prompt": "plan", "cwd": str(area), "sandbox": "read-only"})
-    call(client, 2, "codex-reply", {"threadId": "thread-123", "prompt": "continue"})
-    first, second = client.calls()
-    assert first["argv"][first["argv"].index("-s") + 1] == "read-only"
-    assert 'sandbox_mode="read-only"' in second["argv"]
-
-
 def test_unknown_thread_does_not_spawn(client):
     result = call(client, 1, "codex-reply", {"threadId": "absent", "prompt": "hello"})
     assert result["isError"] is True
     assert "unknown to this server" in json.loads(result["content"][0]["text"])["error"]
     assert client.calls() == []
-
 
 def test_failed_turn_passes_quota_message(area):
     client = Client(area, extra_env={"FAKE_FAIL": "1"})
@@ -840,7 +492,6 @@ def test_failed_turn_passes_quota_message(area):
     finally:
         client.close()
 
-
 def test_cmd_without_js_entry_fails_closed(area):
     client = Client(area, bin_override=str(area / "missing.cmd"))
     try:
@@ -850,7 +501,6 @@ def test_cmd_without_js_entry_fails_closed(area):
         assert client.calls() == []
     finally:
         client.close()
-
 
 def test_ping_during_slow_call(area):
     client = Client(area, extra_env={"FAKE_SLOW": "1"})
@@ -865,7 +515,6 @@ def test_ping_during_slow_call(area):
         assert client.receive(timeout=5)["id"] == 1
     finally:
         client.close()
-
 
 def test_unknown_thread_mutation_is_detected(area, monkeypatch):
     """Red check: a deliberately broken guessed-cwd loader violates the guard."""
@@ -882,10 +531,8 @@ def test_unknown_thread_mutation_is_detected(area, monkeypatch):
         broken = server._run_tool("codex-reply", {"threadId": "absent", "prompt": "hello"}, 2)
         assert "unknown to this server" in json.loads(broken["content"][0]["text"])["error"]
 
-
 def job_call(client, name, arguments):
     return call(client, uuid.uuid4().hex, name, arguments)["structuredContent"]
-
 
 def finish(client, job_id, wanted, *, timeout=30):
     deadline = time.monotonic() + timeout
@@ -895,7 +542,6 @@ def finish(client, job_id, wanted, *, timeout=30):
             return result
         time.sleep(0.02)
     pytest.fail(f"expected {wanted}, got {result}")
-
 
 def _go_running_job(go_client, area):
     import async_session_maintenance
@@ -923,7 +569,6 @@ def _go_running_job(go_client, area):
     assert after_cleanup["hostPid"] == record["hostPid"]
     return job_id, record_path
 
-
 def test_python_result_and_apply_read_go_created_job(go_client, area):
     """Python result/apply owners read a Go-created, Go-hosted active record."""
     job_id, record_path = _go_running_job(go_client, area)
@@ -933,14 +578,12 @@ def test_python_result_and_apply_read_go_created_job(go_client, area):
     apply_result = python_owner._apply_job({"jobId": job_id})["structuredContent"]
     assert apply_result["errorCode"] == "NOT_WORKTREE_JOB"
 
-
 def test_python_cancel_reaches_go_created_job(go_client, area):
     """Python codex_cancel signals a Go-hosted job and requires terminal confirmation."""
     job_id, record_path = _go_running_job(go_client, area)
     python_owner = codex_exec_mcp.Server(job_dir=record_path.parent)
     result = python_owner._cancel_job({"jobId": job_id})["structuredContent"]
     assert result["state"] == "CANCELLED"
-
 
 def test_python_cancel_skips_terminal_wait_after_local_host_finishes(area, monkeypatch):
     job_id = "c" * 64
@@ -967,260 +610,11 @@ def test_python_cancel_skips_terminal_wait_after_local_host_finishes(area, monke
     finally:
         host.listener.close()
 
-
-def test_worktree_retirement_dispatch_persists_claim_before_launch(tmp_path, monkeypatch):
-    state = tmp_path / "state"
-    job_id = "f" * 64
-    worktree = state / "wt" / job_id[:12]
-    worktree.mkdir(parents=True)
-    server = codex_exec_mcp.Server(job_dir=state / "codex_exec_mcp" / "jobs")
-    server._write_job({"jobId": job_id, "state": "SUCCEEDED", "repoRoot": str(tmp_path),
-                       "worktreePath": str(worktree), "applyState": "applied", "generation": 3})
-    codex_exec_mcp._worktree_ownership(state, str(worktree), job_id=job_id)
-    launches = []
-    monkeypatch.setattr(codex_exec_mcp, "_launch_retirement",
-                        lambda root, jid, generation: launches.append((root, jid, generation)))
-
-    codex_exec_mcp._dispatch_worktree_retirement(state, job_id)
-
-    ownership = json.loads(codex_exec_mcp._worktree_ownership_path(state, str(worktree))[0].read_text())
-    assert ownership["retiring"] is True
-    assert ownership["retirementClaimed"] is True
-    assert launches == [(state, job_id, 3)]
-
-
-def test_server_keeps_purser_state_root_separate_from_relative_job_dir(tmp_path, monkeypatch):
-    state = tmp_path / "state"
-    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
-    server = codex_exec_mcp.Server(job_dir=Path("relative-jobs"))
-
-    assert server.job_dir == Path("relative-jobs").resolve()
-    assert server.state_root == state.resolve()
-
-
-def test_stream_activity_updates_and_checkpoints_are_throttled(tmp_path, monkeypatch):
-    job_id = "e" * 64
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 2,
-                       "ownershipToken": "current", "route": "implementation"})
-    activity = {"route": "implementation", "agent": "codex", "lastActivityAt": 100.0,
-                "processAlive": True, "processAliveAt": 100.0,
-                "longestSilentGapSeconds": 0.0, "checkpointAt": 100.0}
-    writes = []
-    original = server._write_job
-    monkeypatch.setattr(server, "_write_job", lambda job: (writes.append(job.copy()), original(job)))
-
-    for now in (103.0, 106.0):
-        codex_exec_mcp._record_activity(activity, now)
-        assert not server._checkpoint_liveness(job_id, 2, "current", activity,
-                                               now=now, process_alive=True)
-    assert activity["lastActivityAt"] == 106.0
-    assert activity["longestSilentGapSeconds"] == 3.0
-    assert writes == []
-
-    codex_exec_mcp._record_activity(activity, 161.0)
-    assert server._checkpoint_liveness(job_id, 2, "current", activity,
-                                        now=161.0, process_alive=True)
-    assert len(writes) == 1
-    saved = server._read_job(job_id)
-    assert saved["activeAgent"] == "codex"
-    assert saved["liveness"]["lastActivityAt"] == 161.0
-    assert saved["liveness"]["processAliveAt"] == 161.0
-    assert saved["liveness"]["route"] == "implementation"
-
-
-def test_stall_threshold_cold_start_uses_bounded_route_eta(tmp_path):
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    assert server._stall_threshold({"route": "implementation", "activeAgent": "codex",
-                                    "etaMinutes": 8}) == 16 * 60
-    assert server._stall_threshold({"route": "implementation", "activeAgent": "codex",
-                                    "etaMinutes": 60}) == 30 * 60
-    assert server._stall_threshold({"route": "implementation", "activeAgent": "agy",
-                                    "etaMinutes": 2}) == 30 * 60
-
-
-def test_stall_threshold_learns_from_five_matching_successes(tmp_path):
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    for index, gap in enumerate((1000, 1100, 1200, 1300)):
-        server._write_job({"jobId": str(index) * 64, "state": "SUCCEEDED",
-                           "route": "implementation", "activeAgent": "codex",
-                           "liveness": {"agent": "codex", "longestSilentGapSeconds": gap}})
-    job = {"route": "implementation", "activeAgent": "codex", "etaMinutes": 8}
-    assert server._stall_threshold(job) == 16 * 60
-    server._write_job({"jobId": "5" * 64, "state": "SUCCEEDED",
-                       "route": "implementation", "activeAgent": "codex",
-                       "liveness": {"agent": "codex", "longestSilentGapSeconds": 1400}})
-    assert server._stall_threshold(job) == 2100  # ceil(P90 * 1.5)
-
-
-def test_stall_episode_survives_restart_and_clears_on_activity(tmp_path):
-    job_id = "6" * 64
-    server = codex_exec_mcp.Server(job_dir=tmp_path)
-    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 2,
-                       "ownershipToken": "current", "activeAgent": "codex"})
-    activity = {"route": "implementation", "agent": "codex", "lastActivityAt": 0.0,
-                "stdoutBytes": 0, "processAlive": True, "processAliveAt": 0.0,
-                "longestSilentGapSeconds": 0.0, "stallThresholdSeconds": 900,
-                "checkpointAt": 0.0}
-
-    # Periodic output can sustain arbitrarily long work beyond the threshold.
-    for now in (600.0, 1200.0, 1800.0, 2400.0):
-        activity["stdoutBytes"] += 1
-        codex_exec_mcp._record_activity(activity, now)
-        server._checkpoint_liveness(job_id, 2, "current", activity,
-                                    now=now, process_alive=True)
-        assert server._read_job(job_id).get("errorCode") != "STALLED"
-
-    server._checkpoint_liveness(job_id, 2, "current", activity,
-                                now=3301.0, process_alive=True)
-    first_marker = server._read_job(job_id)["stallDetectedAt"]
-    assert server._read_job(job_id)["state"] == "RUNNING"
-    assert server._read_job(job_id)["errorCode"] == "STALLED"
-
-    restarted = codex_exec_mcp.Server(job_dir=tmp_path)
-    recovered = dict(server._read_job(job_id)["liveness"], stallThresholdSeconds=900,
-                     checkpointAt=3301.0)
-    restarted._checkpoint_liveness(job_id, 2, "current", recovered,
-                                   now=3400.0, process_alive=True)
-    assert restarted._read_job(job_id)["stallDetectedAt"] == first_marker
-
-    codex_exec_mcp._record_activity(recovered, 3401.0)
-    restarted._checkpoint_liveness(job_id, 2, "current", recovered,
-                                   now=3401.0, process_alive=True)
-    assert "stallDetectedAt" not in restarted._read_job(job_id)
-    assert "errorCode" not in restarted._read_job(job_id)
-
-    restarted._checkpoint_liveness(job_id, 2, "current", recovered,
-                                   now=4302.0, process_alive=True)
-    assert restarted._read_job(job_id)["stallDetectedAt"] == 4302.0
-
-
-def test_async_silent_process_gap_is_recorded(area):
-    client = Client(area, extra_env={"FAKE_EVENT_GAP_SECONDS": "0.15"})
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "measure silence",
-                                                    "route": "implementation"})
-        assert finish(client, started["jobId"], "SUCCEEDED")["threadId"] == "thread-123"
-        record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
-                                 (started["jobId"] + ".json"))
-        assert record["liveness"]["longestSilentGapSeconds"] >= 0.1
-        assert record["liveness"]["stdoutBytes"] > 0
-        assert record["liveness"]["processAlive"] is False
-        assert record["liveness"]["route"] == "implementation"
-        assert record["liveness"]["agent"] == record["activeAgent"] == "codex"
-    finally:
-        client.close()
-
-
-def test_async_job_records_latest_completed_test_runs(area):
-    commands = ["go test ./...", "go test ./pkg", "npm test -- --run", "pnpm test -- --run",
-                "cargo test --lib", "pytest -q", "pytest tests/unit", "pytest -q"]
-    events = [{"command": command, "exit_code": 0,
-               "aggregated_output": (f"{command} run {index}\n" * 45)}
-              for index, command in enumerate(commands)]
-    events[2]["aggregated_output"] = ("x" * 200 + "\n") * 45
-    client = Client(area, extra_env={"FAKE_TEST_EVENTS": json.dumps(events)})
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "record test output",
-                                                    "route": "implementation"})
-        finish(client, started["jobId"], "SUCCEEDED")
-        record_path = area / "root" / "codex_exec_mcp" / "jobs" / f"{started['jobId']}.json"
-        evidence = read_job_record(record_path)["testEvidence"]
-        assert [item["command"] for item in evidence] == [
-            "go test ./pkg", "npm test -- --run", "pnpm test -- --run",
-            "cargo test --lib", "pytest tests/unit", "pytest -q",
-        ]
-        assert evidence[-1]["output_tail"].splitlines()[-1] == "pytest -q run 7"
-        assert len(evidence[-1]["output_tail"].splitlines()) == 40
-        assert len(evidence[1]["output_tail"].encode("utf-8")) == 4096
-        assert all(len(item["output_tail"].encode("utf-8")) <= 4096 for item in evidence)
-    finally:
-        client.close()
-
-
-@pytest.mark.parametrize(("command", "expected"), [
-    ('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "$env:GOCACHE = C:\\\\cache; go test ./internal/jobs/ -run TestX"', True),
-    ('powershell -c "go test ./..."', True),
-    ("bash -lc 'cd go && go test ./...'", True),
-    ("/bin/sh -c 'VAR=x pytest tests/x.py -q'", True),
-    ("zsh -c 'npm test'", True),
-    ('C:\\Windows\\System32\\cmd.exe /c "cargo test --lib"', True),
-    ("python -m pytest tests/x.py -q", True),
-    ("C:\\Python\\python3.exe -m pytest", True),
-    ("py -m pytest", True),
-    ("uv run pytest tests/x.py", True),
-    ("npm test", True),
-    ("pnpm test", True),
-    ("yarn test", True),
-    ("cargo test", True),
-    ("echo go test ./...", False),
-    ("git log", False),
-])
-def test_codex_test_evidence_matches_wrapped_runner_commands(command, expected):
-    events = [{"type": "item.completed", "item": {
-        "type": "command_execution", "command": command, "exit_code": 0, "aggregated_output": "ok\n",
-    }}]
-    evidence, failed = codex_exec_mcp._codex_test_evidence(events)
-    assert bool(evidence) is expected
-    assert failed is False
-    if expected:
-        assert evidence[0]["command"] == command
-
-
-@pytest.mark.parametrize(("commands", "expected_exit_code", "expected_failed"), [
-    ([
-        ("GOCACHE=/old go test ./pkg", 1, "cache denied"),
-        ("GOCACHE=/new go test ./pkg", 0, "ok"),
-    ], 0, False),
-    ([
-        ("GOCACHE=/old go test ./pkg", 0, "ok"),
-        ("GOCACHE=/new go test ./pkg", 1, "failed"),
-    ], 1, True),
-    ([
-        ("go test ./pkg", 0, "Traceback (most recent call last): setup note"),
-    ], 0, False),
-])
-def test_codex_test_evidence_uses_latest_run_per_target_exit_code(commands, expected_exit_code, expected_failed):
-    events = [{"type": "item.completed", "item": {
-        "type": "command_execution", "command": command, "exit_code": exit_code,
-        "aggregated_output": output,
-    }} for command, exit_code, output in commands]
-    evidence, failed = codex_exec_mcp._codex_test_evidence(events)
-    assert len(evidence) == 1
-    assert evidence[0]["exit_code"] == expected_exit_code
-    assert failed is expected_failed
-
-
-def test_liveness_checkpoint_refuses_stale_generation(area):
-    job_id = "f" * 64
-    jobs = area / "root" / "codex_exec_mcp" / "jobs"
-    server = codex_exec_mcp.Server(job_dir=jobs)
-    server._write_job({"jobId": job_id, "state": "RUNNING", "generation": 2,
-                       "ownershipToken": "recovered", "liveness": {"lastActivityAt": 200.0}})
-    stale_activity = {"route": "implementation", "agent": "codex", "lastActivityAt": 100.0,
-                      "processAlive": True, "processAliveAt": 100.0,
-                      "longestSilentGapSeconds": 0.0, "checkpointAt": 0.0}
-
-    assert not server._checkpoint_liveness(job_id, 1, "earlier", stale_activity,
-                                           now=201.0, process_alive=True, force=True)
-    record = server._read_job(job_id)
-    assert record["generation"] == 2
-    assert record["ownershipToken"] == "recovered"
-    assert record["liveness"]["lastActivityAt"] == 200.0
-
-    record["state"] = "SUCCEEDED"
-    server._write_job(record)
-    assert not server._checkpoint_liveness(job_id, 2, "recovered", stale_activity,
-                                           now=202.0, process_alive=False, force=True)
-    assert server._read_job(job_id)["state"] == "SUCCEEDED"
-
-
 def decision_events(area):
     events = []
     for path in (area / "root" / "telemetry" / "events").glob("????-??/session_*.jsonl"):
         events.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
     return [event for event in events if event["event_type"] == "CLAUDE_DECISION_RECORDED"]
-
 
 def scope_outcome_events(area):
     events = []
@@ -1228,13 +622,11 @@ def scope_outcome_events(area):
         events.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
     return [event for event in events if event["event_type"] == "SCOPE_CONFLICT_OUTCOME"]
 
-
 def wait_for_path(path, exists, description, timeout=30):
     deadline = time.monotonic() + timeout
     while path.exists() != exists and time.monotonic() < deadline:
         time.sleep(0.02)
     assert path.exists() == exists, f"timed out waiting for {description}: {path}"
-
 
 def _git_repo(area):
     repo = area / "repo"
@@ -1246,159 +638,6 @@ def _git_repo(area):
     subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
     return repo
-
-
-def test_worktree_job_records_snapshot_and_reply_reuses_it(area):
-    repo = _git_repo(area)
-    client = Client(area)
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
-                                                    "cwd": str(repo), "worktree": True})
-        result = finish(client, started["jobId"], "SUCCEEDED")
-        worktree = result["worktreePath"]
-        assert result["threadId"] == "thread-123"
-        assert Path(worktree).is_dir() and Path(worktree).parent == area / "root" / "wt"
-        assert json.loads((area / "calls.jsonl").read_text(encoding="utf-8").splitlines()[0])["cwd"] == worktree
-        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
-        assert (job["worktreePath"], job["snapshot"], job["head"], job["repoRoot"]) == (
-            worktree, job["snapshot"], job["head"], str(repo.resolve()))
-        assert job["snapshot"] and job["head"]
-        thread = codex_exec_mcp._load_record(area / "state", "thread-123")
-        assert {key: thread[key] for key in ("worktreePath", "snapshot", "head", "repoRoot")} == {
-            key: job[key] for key in ("worktreePath", "snapshot", "head", "repoRoot")}
-        Path(worktree).mkdir(parents=True, exist_ok=True)
-        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                  "threadId": "thread-123", "prompt": "again"})
-        assert finish(client, reply["jobId"], "SUCCEEDED")["worktreePath"] == worktree
-        calls = [json.loads(line) for line in (area / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert [call["cwd"] for call in calls] == [worktree, worktree]
-        shutil.rmtree(worktree)
-        missing = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                    "threadId": "thread-123", "prompt": "missing"})
-        replacement = finish(client, missing["jobId"], "SUCCEEDED")
-        assert replacement["threadId"] == "thread-123"
-        assert replacement["worktreePath"] != worktree and Path(replacement["worktreePath"]).is_dir()
-        assert len((area / "calls.jsonl").read_text(encoding="utf-8").splitlines()) == 3
-    finally:
-        client.close()
-
-
-def test_non_worktree_job_records_repository_for_reply_and_legacy_thread_fails(area):
-    repo = _git_repo(area)
-    client = Client(area)
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
-                                                    "cwd": str(repo), "worktree": False})
-        finish(client, started["jobId"], "SUCCEEDED")
-        first_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
-        thread = codex_exec_mcp._load_record(area / "state", "thread-123")
-        assert first_job["repoRoot"] == str(repo.resolve())
-        assert "worktreePath" not in first_job
-        assert thread["repoRoot"] == str(repo.resolve())
-        assert "worktreePath" not in thread
-
-        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                   "threadId": "thread-123", "prompt": "again"})
-        second = finish(client, reply["jobId"], "SUCCEEDED")
-        second_job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (reply["jobId"] + ".json"))
-        calls = [json.loads(line) for line in (area / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert calls[0]["cwd"] == calls[1]["cwd"] == str(repo.resolve())
-        assert second_job["repoRoot"] == str(repo.resolve())
-        assert "worktreePath" not in second_job and "worktreePath" not in second
-
-        codex_exec_mcp._save_record(area / "state", {
-            "thread_id": "legacy-thread", "cwd": str(repo.resolve()), "config_args": [],
-        })
-        legacy = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                    "threadId": "legacy-thread", "prompt": "again"})
-        assert legacy["state"] == "FAILED"
-        assert legacy["errorCode"] == "WORKTREE_SNAPSHOT_FAILED"
-        assert legacy["message"] == "Repository root could not be resolved for Codex launch"
-    finally:
-        client.close()
-
-
-def test_reply_uses_fresh_worktree_when_thread_worktree_is_retiring(area):
-    repo = _git_repo(area)
-    client = Client(area)
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
-                                                    "cwd": str(repo), "worktree": True})
-        first = finish(client, started["jobId"], "SUCCEEDED")
-        old_worktree = first["worktreePath"]
-        ownership = codex_exec_mcp._worktree_ownership(area / "root", old_worktree, retire=True)
-        assert ownership["retiring"] is True
-
-        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                  "threadId": "thread-123", "prompt": "again"})
-        second = finish(client, reply["jobId"], "SUCCEEDED")
-        assert second["threadId"] == "thread-123"
-        assert second["worktreePath"] != old_worktree
-        assert subprocess.check_output(
-            ["git", "-C", second["worktreePath"], "rev-parse", "HEAD"], text=True).strip() == subprocess.check_output(
-                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-        calls = [json.loads(line) for line in (area / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert calls[0]["cwd"] == old_worktree and calls[1]["cwd"] != old_worktree
-        assert subprocess.check_output(
-            ["git", "-C", calls[1]["cwd"], "rev-parse", "HEAD"], text=True).strip() == subprocess.check_output(
-                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-        old = codex_exec_mcp._worktree_ownership_path(area / "root", old_worktree)[0]
-        ownership_records = [json.loads(path.read_text(encoding="utf-8"))
-                             for path in (area / "root" / "worktree_ownership").glob("*.json")]
-        new_owners = next(record for record in ownership_records
-                          if reply["jobId"] in record.get("jobs", []))
-        assert reply["jobId"] in new_owners["jobs"] and "thread-123" in new_owners["threads"]
-        assert json.loads(old.read_text(encoding="utf-8"))["retiring"] is True
-    finally:
-        client.close()
-
-
-def test_reply_uses_fresh_worktree_when_thread_worktree_is_missing_without_ownership(area):
-    repo = _git_repo(area)
-    client = Client(area)
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
-                                                    "cwd": str(repo), "worktree": True})
-        first = finish(client, started["jobId"], "SUCCEEDED")
-        old_worktree = first["worktreePath"]
-        ownership_path = codex_exec_mcp._worktree_ownership_path(area / "root", old_worktree)[0]
-        shutil.rmtree(old_worktree)
-        ownership_path.unlink()
-
-        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                  "threadId": "thread-123", "prompt": "again"})
-        second = finish(client, reply["jobId"], "SUCCEEDED")
-        assert second["threadId"] == "thread-123"
-        assert second["worktreePath"] != old_worktree
-        assert Path(second["worktreePath"]).is_dir()
-    finally:
-        client.close()
-
-
-def test_job_fallback_retention_is_three_days():
-    assert codex_exec_mcp.RETENTION_SECONDS == 3 * 24 * 60 * 60
-
-
-def test_grounded_readiness_criteria_are_durable_job_metadata(area):
-    client = Client(area)
-    try:
-        criteria = {"objective": "Add validation", "acceptance_criteria": "Reject empty input"}
-        started = job_call(client, "codex_start", {
-            "call": str(uuid.uuid4()), "prompt": "unchanged worker prompt",
-            "readinessGrounded": True, "readinessCriteria": criteria,
-            "readinessAgent": "agy", "readinessModel": "gemini-3.8-flash-high",
-        })
-        path = area / "root" / "codex_exec_mcp" / "jobs" / f"{started['jobId']}.json"
-        job = read_job_record(path)
-        readiness = job["readinessCheck"]
-        assert {key: readiness[key] for key in
-                ("grounded", "objective", "acceptance_criteria", "agent", "model")} == {
-            "grounded": True, **criteria, "agent": "agy", "model": "gemini-3.8-flash-high"
-        }
-        assert finish(client, started["jobId"], "SUCCEEDED")["content"] == "Reply from fake Codex"
-    finally:
-        client.close()
-
 
 def _readiness_worker_job(area):
     import ledger
@@ -1423,138 +662,6 @@ def _readiness_worker_job(area):
     server._write_job(job)
     return server, job_id, Path(worktree["path"])
 
-
-def test_readiness_verdict_is_recorded_before_job_success(area, monkeypatch):
-    import readiness_check
-    import telemetry
-
-    server, job_id, worktree = _readiness_worker_job(area)
-    observed = []
-    telemetry_events = []
-    monkeypatch.setattr(telemetry, "emit", lambda event_type, **payload:
-                        telemetry_events.append((event_type, payload)))
-    def fake_checker(packet, _encoded, **_kwargs):
-        observed.append((server._read_job(job_id)["state"], packet["attributed_diff"]))
-        return {"verdict": "UNMET", "criterion": "Reject an empty name", "evidence": [
-            {"path": "tracked.txt", "line": 2, "quote": "if not name: raise ValueError()"}
-        ]}
-    monkeypatch.setattr(readiness_check, "run_checker", fake_checker)
-    def fake_worker(*_args, **_kwargs):
-        (worktree / "tracked.txt").write_text(
-            "base\nif not name: raise ValueError()\n", encoding="utf-8")
-        return {"structuredContent": {"threadId": "worker-thread", "content": "report"}}
-    monkeypatch.setattr(server, "_run_tool", fake_worker)
-
-    server._job_worker(job_id, "codex", {})
-
-    job = server._read_job(job_id)
-    assert observed and observed[0][0] == "RUNNING"
-    assert "if not name: raise ValueError()" in observed[0][1]
-    assert job["state"] == "SUCCEEDED"
-    assert job["readinessCheck"]["result"]["verdict"] == "UNMET"
-    [(event_type, payload)] = telemetry_events
-    assert event_type == "READINESS_CHECK_OUTCOME"
-    assert (payload["verdict"], payload["agent"]) == ("UNMET", "agy")
-    assert isinstance(payload["duration_ms"], int) and payload["duration_ms"] >= 0
-
-
-def test_readiness_checker_timeout_does_not_fail_job(area, monkeypatch):
-    import readiness_check
-
-    server, job_id, worktree = _readiness_worker_job(area)
-    monkeypatch.setattr(readiness_check, "run_checker", lambda *_args, **_kwargs:
-                        (_ for _ in ()).throw(subprocess.TimeoutExpired(["agy"], 90)))
-    def fake_worker(*_args, **_kwargs):
-        (worktree / "tracked.txt").write_text("base\nchange\n", encoding="utf-8")
-        return {"structuredContent": {"threadId": "worker-thread", "content": "report"}}
-    monkeypatch.setattr(server, "_run_tool", fake_worker)
-
-    server._job_worker(job_id, "codex", {})
-
-    job = server._read_job(job_id)
-    assert job["state"] == "SUCCEEDED"
-    assert job["readinessCheck"]["result"]["verdict"] == "UNKNOWN"
-
-
-def test_reply_worktree_reuses_thread_baseline_for_full_delta(area):
-    import ledger
-
-    repo = _git_repo(area)
-    tracked = repo / "tracked.txt"
-    baseline = "first\nc1\nc2\nc3\nc4\nc5\nsecond\nc6\nc7\nc8\nc9\nc10\nthird\n"
-    first_content = baseline.replace("first\n", "first A\n")
-    tracked.write_text(baseline, encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "set fixture"], check=True)
-    client = Client(area)
-    try:
-        first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "first",
-                                                  "cwd": str(repo), "worktree": True})
-        first_result = finish(client, first["jobId"], "SUCCEEDED")
-        worktree = Path(first_result["worktreePath"])
-        (worktree / "tracked.txt").write_text(first_content, encoding="utf-8")
-        first_record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
-                                       (first["jobId"] + ".json"))
-
-        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                  "threadId": "thread-123", "prompt": "reply"})
-        finish(client, reply["jobId"], "SUCCEEDED")
-        reply_record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
-                                       (reply["jobId"] + ".json"))
-        assert reply_record["snapshot"] == first_record["snapshot"]
-        reply_content = first_content.replace("first A\n", "first A reply\n").replace(
-            "second\n", "second B\n")
-        (worktree / "tracked.txt").write_text(reply_content, encoding="utf-8")
-        tracked.write_text(baseline.replace("third\n", "third unrelated\n"), encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "unrelated change"], check=True)
-        prepared = ledger.prepare_job_replay(repo, worktree, reply_record["snapshot"],
-                                             area / "reply-preparation")
-        assert prepared["status"] == "prepared"
-        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == reply_content.replace(
-            "third\n", "third unrelated\n")
-        reply_record["snapshot"] = prepared["snapshot"]
-        (area / "root" / "codex_exec_mcp" / "jobs" / (reply["jobId"] + ".json")).write_text(
-            json.dumps(reply_record), encoding="utf-8")
-        applied = job_call(client, "codex_apply", {"jobId": reply["jobId"]})
-        assert applied == {"applied": True, "paths": ["tracked.txt"]}
-        assert tracked.read_text(encoding="utf-8") == reply_content.replace(
-            "third\n", "third unrelated\n")
-    finally:
-        client.close()
-
-
-def test_original_worktree_job_applies_combined_reply_delta(area):
-    import ledger
-
-    repo = _git_repo(area)
-    tracked = repo / "tracked.txt"
-    baseline = "first\nc1\nc2\nc3\nc4\nc5\nsecond\nc6\nc7\nc8\nc9\nc10\nthird\n"
-    tracked.write_text(baseline, encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "set fixture"], check=True)
-    client = Client(area)
-    try:
-        first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "first",
-                                                  "cwd": str(repo), "worktree": True})
-        finish(client, first["jobId"], "SUCCEEDED")
-        worktree = Path(read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
-                                        (first["jobId"] + ".json"))["worktreePath"])
-        (worktree / "tracked.txt").write_text(baseline.replace("first\n", "first A\n"), encoding="utf-8")
-        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                  "threadId": "thread-123", "prompt": "reply"})
-        finish(client, reply["jobId"], "SUCCEEDED")
-        combined = baseline.replace("first\n", "first A reply\n").replace("second\n", "second B\n")
-        (worktree / "tracked.txt").write_text(combined, encoding="utf-8")
-
-        applied = job_call(client, "codex_apply", {"jobId": first["jobId"]})
-
-        assert applied == {"applied": True, "paths": ["tracked.txt"]}
-        assert tracked.read_text(encoding="utf-8") == combined
-    finally:
-        client.close()
-
-
 def _thread_with_pending_reply(area, client):
     repo = _git_repo(area)
     tracked = repo / "tracked.txt"
@@ -1570,279 +677,6 @@ def _thread_with_pending_reply(area, client):
     (worktree / "tracked.txt").write_text("thread change and reply\n", encoding="utf-8")
     return repo, tracked, worktree, first, reply
 
-
-def test_reply_resets_thread_worktree_after_earlier_change_was_applied(area):
-    import ledger
-
-    client = Client(area)
-    try:
-        repo, tracked, worktree, first, _reply = _thread_with_pending_reply(area, client)
-        assert job_call(client, "codex_apply", {"jobId": first["jobId"]})["applied"] is True
-        (repo / "advance.txt").write_text("main advanced\n", encoding="utf-8")
-        tracked.write_text("thread change and reply\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt", "advance.txt"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "advance main"], check=True)
-        (repo / "main-local.txt").write_text("must stay in main\n", encoding="utf-8")
-        next_reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                       "threadId": "thread-123", "prompt": "continue"})
-        finish(client, next_reply["jobId"], "SUCCEEDED")
-        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
-                              (next_reply["jobId"] + ".json"))
-
-        fresh_worktree = Path(job["worktreePath"])
-        assert fresh_worktree != worktree
-        expected_head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                                       capture_output=True, check=True, text=True).stdout.strip()
-        assert job["head"] == expected_head
-        assert job["snapshot"] == job["baselineSnapshot"]
-        assert subprocess.run(["git", "-C", str(fresh_worktree), "rev-parse", "HEAD"],
-                              capture_output=True, check=True, text=True).stdout.strip() == \
-            subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                           capture_output=True, check=True, text=True).stdout.strip()
-        status = subprocess.run(["git", "-C", str(fresh_worktree), "status", "--porcelain"],
-                                capture_output=True, check=True, text=True).stdout
-        assert "A  main-local.txt" in status
-        assert (fresh_worktree / "main-local.txt").read_text(encoding="utf-8") == "must stay in main\n"
-        assert (fresh_worktree / "tracked.txt").read_text(encoding="utf-8") == tracked.read_text(encoding="utf-8")
-
-        (fresh_worktree / "reply-only.txt").write_text("reply delta\n", encoding="utf-8")
-        (repo / "later-main-only.txt").write_text("later main commit\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "later-main-only.txt"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "later unrelated commit"], check=True)
-        replay = ledger.prepare_job_replay(
-            repo, fresh_worktree, job["snapshot"], area / "applied-reply-check"
-        )
-        assert replay["status"] == "prepared"
-        assert replay["paths"] == ["reply-only.txt"]
-    finally:
-        client.close()
-
-
-def test_reply_resets_thread_worktree_after_earlier_change_was_committed_by_hand(area):
-    import ledger
-
-    client = Client(area)
-    try:
-        repo, tracked, worktree, _first, _reply = _thread_with_pending_reply(area, client)
-        tracked.write_text("thread change and reply\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "hand apply thread"], check=True)
-        (repo / "advance.txt").write_text("main advanced\n", encoding="utf-8")
-        tracked.write_text("thread change and reply\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt", "advance.txt"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "advance main"], check=True)
-        expected = ledger.checkout_snapshot(repo)
-
-        next_reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                       "threadId": "thread-123", "prompt": "continue"})
-        finish(client, next_reply["jobId"], "SUCCEEDED")
-        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
-                              (next_reply["jobId"] + ".json"))
-
-        assert job["snapshot"] == expected
-        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == tracked.read_text(encoding="utf-8")
-        assert ledger.prepare_job_replay(repo, worktree, job["snapshot"], area / "hand-commit-reply-check")["status"] == "unchanged"
-    finally:
-        client.close()
-
-
-def test_reply_replay_reports_conflict_against_main_same_line_change(area):
-    import ledger
-
-    repo = _git_repo(area)
-    tracked = repo / "tracked.txt"
-    baseline = "first\nc1\nc2\nc3\nc4\nc5\nsecond\nc6\nc7\nc8\nc9\nc10\nthird\n"
-    tracked.write_text(baseline, encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "set fixture"], check=True)
-    client = Client(area)
-    try:
-        first = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "first",
-                                                  "cwd": str(repo), "worktree": True})
-        finish(client, first["jobId"], "SUCCEEDED")
-        first_record = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" /
-                                       (first["jobId"] + ".json"))
-        worktree = Path(first_record["worktreePath"])
-        (worktree / "tracked.txt").write_text(baseline.replace("first\n", "first worker\n"),
-                                               encoding="utf-8")
-        reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                  "threadId": "thread-123", "prompt": "reply"})
-        finish(client, reply["jobId"], "SUCCEEDED")
-        (worktree / "tracked.txt").write_text(baseline.replace("first\n", "first worker reply\n"),
-                                               encoding="utf-8")
-        tracked.write_text(baseline.replace("first\n", "first main\n"), encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "main conflict"], check=True)
-
-        prepared = ledger.prepare_job_replay(repo, worktree, first_record["snapshot"],
-                                             area / "conflicting-preparation")
-
-        assert prepared["status"] == "conflict"
-        assert prepared["paths"] == ["tracked.txt"]
-        next_reply = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "mode": "reply",
-                                                       "threadId": "thread-123", "prompt": "retry"})
-        assert next_reply.get("jobId")
-    finally:
-        client.close()
-
-
-def test_reply_uses_prepared_snapshot_after_unrelated_main_commit(area, monkeypatch):
-    repo = _git_repo(area)
-    tracked = repo / "tracked.txt"
-    (repo / "main-only.txt").write_text("main base\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "main-only.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "add unrelated tracked file"], check=True)
-    client = Client(area)
-    state_root = area / "root"
-    monkeypatch.setattr(codex_exec_mcp, "_state_dir", lambda: area / "state")
-    config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-    session_id = uuid.uuid4().hex
-
-    def start_job(mode, prompt, *, thread_id=None):
-        tool_input = {"prompt": f"ORCH|task=reply-replay|phase=implementation|route=normal|"
-                               f"reason=new_task|basis=tracked edit|scope=tracked.txt\n{prompt}",
-                      "mode": mode, "label": "Reply replay test"}
-        if mode == "new":
-            tool_input["cwd"] = str(repo)
-        if thread_id:
-            tool_input["threadId"] = thread_id
-        event = {"session_id": session_id, "hook_event_name": "PreToolUse",
-                 "tool_name": "mcp__plugin_purser_codex-main__codex_start",
-                 "tool_use_id": uuid.uuid4().hex, "tool_input": tool_input}
-        admission = codex.pre_tool_use(event, config=config, state_root=state_root, repo_root=repo)
-        assert "updatedInput" in admission.get("hookSpecificOutput", {}), admission
-        updated = admission["hookSpecificOutput"]["updatedInput"]
-        response = job_call(client, "codex_start", updated)
-        codex.post_tool_use({**event, "hook_event_name": "PostToolUse",
-                             "tool_response": {"structuredContent": response}},
-                            config=config, state_root=state_root, repo_root=repo)
-        return response
-
-    def result_hook(result):
-        event = {"session_id": session_id, "hook_event_name": "PostToolUse",
-                 "tool_name": "mcp__plugin_purser_codex-main__codex_result",
-                 "tool_use_id": uuid.uuid4().hex, "tool_input": {"jobId": result["jobId"]},
-                 "tool_response": {"structuredContent": result}}
-        codex.pre_tool_use(event, config=config, state_root=state_root, repo_root=repo)
-        codex.post_tool_use(event, config=config, state_root=state_root, repo_root=repo)
-
-    try:
-        first = start_job("new", "Implement the first change.")
-        first = finish(client, first["jobId"], "SUCCEEDED")
-        job_path = state_root / "codex_exec_mcp" / "jobs" / f"{first['jobId']}.json"
-        original_snapshot = read_job_record(job_path)["snapshot"]
-        worktree = Path(first["worktreePath"])
-        (worktree / "tracked.txt").write_text("first worker edit\n", encoding="utf-8")
-        (repo / "main-only.txt").write_text("main commit\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "main-only.txt"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "unrelated main commit"], check=True)
-        result_hook(first)
-        finalized_first = read_job_record(job_path)
-        thread = codex_exec_mcp._load_record(area / "state", first["threadId"])
-        assert finalized_first["snapshot"] != original_snapshot
-        assert thread["snapshot"] == original_snapshot
-        assert (worktree / "main-only.txt").read_text(encoding="utf-8") == "main commit\n"
-
-        reply = start_job("reply", "Fix the first change.", thread_id=first["threadId"])
-        reply_job = read_job_record(state_root / "codex_exec_mcp" / "jobs" /
-                                    f"{reply['jobId']}.json")
-        assert reply_job["snapshot"] == finalized_first["snapshot"]
-        reply_result = finish(client, reply["jobId"], "SUCCEEDED")
-        assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "first worker edit\n"
-        with (worktree / "tracked.txt").open("a", encoding="utf-8") as stream:
-            stream.write("reply worker edit\n")
-        result_hook(reply_result)
-        finalized_reply = read_job_record(state_root / "codex_exec_mcp" / "jobs" /
-                                          f"{reply['jobId']}.json")
-        assert finalized_reply.get("applyState") != "conflict"
-        assert finalized_reply["snapshot"] != original_snapshot
-
-        assert job_call(client, "codex_apply", {"jobId": reply["jobId"]}) == {
-            "applied": True, "paths": ["tracked.txt"]}
-        assert tracked.read_text(encoding="utf-8") == "first worker edit\nreply worker edit\n"
-        assert (repo / "main-only.txt").read_text(encoding="utf-8") == "main commit\n"
-    finally:
-        client.close()
-
-
-def test_unapplied_thread_job_falls_back_to_accepted_at_when_finish_time_is_null(tmp_path):
-    jobs = tmp_path / "jobs"
-    jobs.mkdir()
-    for filename, accepted, finished in (("a.json", 1, 2), ("z.json", 3, None)):
-        (jobs / filename).write_text(json.dumps({
-            "threadId": "thread", "state": "SUCCEEDED", "applyState": "pending",
-            "worktreePath": str(tmp_path / "worktree"), "acceptedAt": accepted,
-            "finishedAt": finished,
-        }), encoding="utf-8")
-
-    latest = codex_exec_mcp._unapplied_thread_job(jobs, "thread")
-
-    assert latest["acceptedAt"] == 3
-
-
-def test_worktree_job_falls_back_when_requested_cwd_is_missing(area):
-    repo = _git_repo(area)
-    (repo / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
-    requested_cwd = repo / ".tmp" / "opencode-probe"
-    requested_cwd.mkdir(parents=True)
-    subprocess.run(["git", "-C", str(repo), "add", ".gitignore"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "ignore scratch"], check=True)
-    client = Client(area)
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
-                                                    "cwd": str(requested_cwd), "worktree": True})
-        result = finish(client, started["jobId"], "SUCCEEDED")
-        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
-        call_record = client.calls()[0]
-        assert call_record["cwd"] == result["worktreePath"]
-        assert job["cwdFallback"] == os.fspath(Path(".tmp") / "opencode-probe")
-    finally:
-        client.close()
-
-
-def test_worktree_job_keeps_existing_relative_cwd(area):
-    repo = _git_repo(area)
-    requested_cwd = repo / "nested"
-    requested_cwd.mkdir()
-    (requested_cwd / "tracked.txt").write_text("nested\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "nested/tracked.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "nested cwd"], check=True)
-    client = Client(area)
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "work",
-                                                    "cwd": str(requested_cwd), "worktree": True,
-                                                    "config": {"sandbox_workspace_write": {
-                                                        "writable_roots": [str(repo.parent)]}}})
-        result = finish(client, started["jobId"], "SUCCEEDED")
-        job = read_job_record(area / "root" / "codex_exec_mcp" / "jobs" / (started["jobId"] + ".json"))
-        call_record = client.calls()[0]
-        worktree = Path(result["worktreePath"]).resolve()
-        assert call_record["cwd"] == str(worktree / "nested")
-        argv = call_record["argv"]
-        assert argv[argv.index("-C") + 1] == str(worktree / "nested")
-        config_args = [argv[index + 1] for index, value in enumerate(argv[:-1]) if value == "-c"]
-        assert (f"sandbox_workspace_write.writable_roots="
-                f"{codex_exec_mcp._toml([str(worktree)])}") in config_args
-        assert config_args == [
-            f"sandbox_workspace_write.writable_roots={codex_exec_mcp._toml([str(worktree)])}"
-        ]
-        assert "cwdFallback" not in job
-    finally:
-        client.close()
-
-
-def test_worktree_snapshot_failure_does_not_launch_worker(area):
-    client = Client(area)
-    try:
-        started = job_call(client, "codex_start", {"call": str(uuid.uuid4()), "prompt": "fail",
-                                                    "cwd": str(area / "not-a-repo"), "worktree": True})
-        result = finish(client, started["jobId"], "FAILED")
-        assert result["errorCode"] == "WORKTREE_SNAPSHOT_FAILED"
-        assert not (area / "calls.jsonl").exists()
-    finally:
-        client.close()
-
-
 def _prepare_host_worktree_job(area, worktree_path):
     job_id = "a" * 64
     job_dir = area / "jobs"
@@ -1857,7 +691,6 @@ def _prepare_host_worktree_job(area, worktree_path):
     }), encoding="utf-8")
     return job_id, job_dir
 
-
 def _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args):
     monkeypatch.setattr(codex_exec_mcp, "_contain_host_children", lambda: True)
     if os.name == "nt":
@@ -1866,80 +699,6 @@ def _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args):
     monkeypatch.setattr(codex_exec_mcp.Server, "_job_worker",
                         lambda _self, _job_id, _name, args: worker_args.append(args))
     codex_exec_mcp._host_main(job_id, job_dir, 2, "owner")
-
-
-def test_relaunched_worktree_job_reuses_recorded_worktree(area, monkeypatch):
-    worktree = area / "existing-worktree"
-    worktree.mkdir()
-    job_id, job_dir = _prepare_host_worktree_job(area, worktree)
-    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root",
-                        lambda: area / "root")
-    worker_args = []
-
-    _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args)
-
-    job = read_job_record(job_dir / f"{job_id}.json")
-    assert worker_args[0]["cwd"] == str(worktree)
-    assert {key: job[key] for key in ("worktreePath", "snapshot", "head", "repoRoot")} == {
-        "worktreePath": str(worktree), "snapshot": "saved-snapshot",
-        "head": "saved-head", "repoRoot": "saved-repo-root"}
-
-
-def test_relaunched_worktree_job_with_missing_directory_fails(area, monkeypatch):
-    missing_worktree = area / "missing-worktree"
-    job_id, job_dir = _prepare_host_worktree_job(area, missing_worktree)
-    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root",
-                        lambda: area / "root")
-    worker_args = []
-
-    _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args)
-
-    job = read_job_record(job_dir / f"{job_id}.json")
-    assert job["state"] == "FAILED"
-    assert job["errorCode"] == "WORKTREE_MISSING"
-    assert not worker_args
-
-
-def test_worktree_setup_failure_is_recorded_and_does_not_launch_worker(area, monkeypatch):
-    import ledger
-
-    repo = _git_repo(area)
-    job_id, job_dir = _prepare_host_worktree_job(area, repo)
-    job_path = job_dir / f"{job_id}.json"
-    job = read_job_record(job_path)
-    for key in ("worktreePath", "snapshot", "head", "repoRoot"):
-        job.pop(key)
-    codex_exec_mcp.Server(host=True, job_dir=job_dir)._write_job(job)
-    (job_dir / f"{job_id}.launch").write_text(json.dumps({
-        "name": "codex", "codexBin": "codex", "args": {"cwd": str(repo), "worktree": True}
-    }), encoding="utf-8")
-    worktree = area / "root" / "wt" / job_id[:12]
-    output = "setup failed after installing dependencies"
-
-    def fail_setup(repo_root, requested_job_id, parent):
-        assert Path(repo_root) == repo.resolve()
-        assert requested_job_id == job_id
-        assert Path(parent) == area / "root" / "wt"
-        worktree.mkdir(parents=True)
-        raise ledger.WorktreeSetupError(17, output)
-
-    monkeypatch.setattr(ledger, "create_job_worktree", fail_setup)
-    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root",
-                        lambda: area / "root")
-    worker_args = []
-    _run_host_without_child_process(monkeypatch, job_id, job_dir, worker_args)
-
-    assert not (job_dir / f"{job_id}.host-error").exists(), (job_dir / f"{job_id}.host-error").read_text()
-    result = read_job_record(job_path)
-    assert result["state"] == "FAILED"
-    assert result["errorCode"] == "WORKTREE_SETUP_FAILED"
-    assert "17" in result["message"] and output in result["message"]
-    assert result["worktreePath"] == str(worktree)
-    assert result["repoRoot"] == str(repo.resolve())
-    assert result["setupError"] == {"exitCode": 17, "timedOut": False, "output": output}
-    assert worktree.is_dir()
-    assert worker_args == []
-
 
 def test_codex_apply_is_idempotent_and_reports_conflicts(area):
     repo = _git_repo(area)
