@@ -40,7 +40,7 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 	if validation != "PASS" && validation != "FAIL" && validation != "UNKNOWN" {
 		validation = "UNKNOWN"
 	}
-	bundle["validation"] = validation
+	bundle["validation"] = postReviewerValidation(bundle, validation)
 
 	findings := postReviewerFindings(attrs["findings"])
 	if code := stringValue(attrs["error_code"]); code == "REVIEWER_RESPONSE_INVALID" {
@@ -107,6 +107,21 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 		mode = review.Full
 	}
 	bundle["claude_review_mode"] = mode
+}
+
+func postReviewerValidation(bundle map[string]any, validation string) string {
+	worker := mapValue(bundle["worker_validation"])
+	if worker["source"] != "HOST_TEST_EVIDENCE" {
+		return validation
+	}
+	hostStatus := stringValue(worker["status"])
+	if hostStatus == "FAIL" || validation == "FAIL" {
+		return "FAIL"
+	}
+	if hostStatus == "PASS" {
+		return "PASS"
+	}
+	return "UNKNOWN"
 }
 
 func reviewerOutputName(event map[string]any) string {

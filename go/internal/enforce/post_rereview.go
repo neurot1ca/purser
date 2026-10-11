@@ -46,7 +46,7 @@ func setPostRereview(bundle map[string]any, outcome review.BridgeOutcome) {
 	if validation == "" {
 		validation = "UNKNOWN"
 	}
-	bundle["validation"] = validation
+	bundle["validation"] = postReviewerValidation(bundle, validation)
 	if status == "UNAVAILABLE" || result == "REVIEWER1_UNAVAILABLE" {
 		bundle["reviewer1_skipped_reason"] = "REVIEWER1_UNAVAILABLE"
 	}

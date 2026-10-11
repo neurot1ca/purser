@@ -62,3 +62,39 @@ func TestPostReviewerOutcomeKeepsStringMapFindings(t *testing.T) {
 		t.Fatalf("findings=%#v", bundle["findings"])
 	}
 }
+
+func TestPostReviewerValidationPrecedence(t *testing.T) {
+	tests := []struct {
+		name, hostStatus, reviewerValidation, want string
+	}{
+		{name: "host pass and reviewer fail", hostStatus: "PASS", reviewerValidation: "FAIL", want: "FAIL"},
+		{name: "host fail and reviewer pass", hostStatus: "FAIL", reviewerValidation: "PASS", want: "FAIL"},
+		{name: "host pass and reviewer unknown", hostStatus: "PASS", reviewerValidation: "UNKNOWN", want: "PASS"},
+		{name: "reviewer pass without host evidence", reviewerValidation: "PASS", want: "PASS"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bundle := map[string]any{}
+			if tt.hostStatus != "" {
+				bundle["worker_validation"] = map[string]any{"source": "HOST_TEST_EVIDENCE", "status": tt.hostStatus}
+			}
+			outcome := review.BridgeOutcome{Outcome: "completed", Attributes: map[string]any{
+				"result": "CHANGES_REQUIRED", "review_status": "COMPLETED", "validation": tt.reviewerValidation,
+			}}
+			applyPostReviewerOutcome(t.TempDir(), map[string]any{"session_id": "fixture", "tool_use_id": tt.name},
+				map[string]any{}, bundle, map[string]any{}, map[string]any{}, outcome, true, false)
+			if got := bundle["validation"]; got != tt.want {
+				t.Fatalf("post outcome validation = %v; want %s", got, tt.want)
+			}
+
+			bundle = map[string]any{}
+			if tt.hostStatus != "" {
+				bundle["worker_validation"] = map[string]any{"source": "HOST_TEST_EVIDENCE", "status": tt.hostStatus}
+			}
+			setPostRereview(bundle, outcome)
+			if got := bundle["validation"]; got != tt.want {
+				t.Fatalf("post rereview validation = %v; want %s", got, tt.want)
+			}
+		})
+	}
+}
