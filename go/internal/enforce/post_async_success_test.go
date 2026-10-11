@@ -310,6 +310,10 @@ func TestAsyncSuccessValidationUsesRecordedTestEvidence(t *testing.T) {
 			map[string]any{"command": "go test ./pkg5", "exit_code": float64(0)},
 		}, evidenceFailed: true},
 		{name: "malformed", wantWorker: "UNKNOWN", wantBundle: "UNKNOWN", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./..."}}},
+		{name: "malformed_command_does_not_hide_failed_command", wantWorker: "FAIL", wantBundle: "FAIL", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{
+			map[string]any{"command": "command A", "exit_code": "malformed"},
+			map[string]any{"command": "command B", "exit_code": float64(1)},
+		}},
 		{name: "latest_same_command_passes", wantWorker: "PASS", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{
 			map[string]any{"command": "go test ./...", "exit_code": float64(1)},
 			map[string]any{"command": "go test ./...", "exit_code": float64(0)},

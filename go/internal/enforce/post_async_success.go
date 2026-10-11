@@ -108,7 +108,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			}
 			if !ok || code != float64(int(code)) {
 				malformed = true
-				break
+				continue
 			}
 			if code != 0 {
 				failed = true
