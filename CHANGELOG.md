@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.126 — 2026-10-11
+
+- **Fixed:** Scheduled cleanup and test-gap reports run again; the quiet-period wait no longer leaves them reading a stale clock.
+- **Changed:** The mechanical shadow check runs at most once every 70 delegated completions and logs when it starts and finishes.
+
 ## 0.1.125 — 2026-10-11
 
 - **Fixed:** A regression test run red before the fix no longer marks the job's validation FAIL; runs after the job's last edit decide.
