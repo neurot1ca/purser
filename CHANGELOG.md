@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.125 — 2026-10-11
+
+- **Fixed:** A regression test run red before the fix no longer marks the job's validation FAIL; runs after the job's last edit decide.
+- **Fixed:** A finished job no longer holds its scope lock, a job applied by hand closes itself, and a queued job names the job it waits on.
+
 ## 0.1.124 — 2026-10-11
 
 - **Fixed:** `check` no longer warns about the supported `[mechanical]` setting and finds a reviewer on PATH the way reviews do.
