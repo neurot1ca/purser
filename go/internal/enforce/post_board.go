@@ -36,6 +36,16 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 		}
 		job := readBoardJSON(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"))
 		if job != nil && job["jobId"] == id && job["call"] == index["call"] {
+			if label, _ := job["label"].(string); job["state"] == "QUEUED" && strings.TrimSpace(label) == "" {
+				label, _ = job["taskId"].(string)
+				if strings.TrimSpace(label) == "" {
+					label, _ = job["task_id"].(string)
+				}
+				if strings.TrimSpace(label) == "" {
+					label = id
+				}
+				job["label"] = label
+			}
 			jobs = append(jobs, boardJob{job, index})
 		}
 	}
@@ -228,6 +238,9 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 			default:
 				state = "in review"
 			}
+		}
+		if applied {
+			state = "done"
 		}
 		if j["discarded"] == true {
 			state, review, apply = "discarded", "—", "—"

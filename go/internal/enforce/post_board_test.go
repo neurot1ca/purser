@@ -123,3 +123,51 @@ func TestRefreshCachedBoardReplacesStaleSnapshot(t *testing.T) {
 		t.Fatalf("refreshed context = %q", context)
 	}
 }
+
+func TestPostBoardTerminalAndQueuedStates(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	tests := []struct {
+		name   string
+		job    map[string]any
+		want   string
+		unwant string
+	}{
+		{name: "cancelled", job: map[string]any{"state": "SUCCEEDED", "label": "Task cancelled", "discarded": true, "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "| Task cancelled | — | discarded |", unwant: "fetching result"},
+		{name: "failed", job: map[string]any{"state": "FAILED", "label": "Task failed", "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "| Task failed | — | failed |", unwant: "coding"},
+		{name: "applied while running", job: map[string]any{"state": "RUNNING", "label": "Task applied", "applyState": "applied"}, want: "| Task applied | — | done |", unwant: "coding"},
+		{name: "running coded", job: map[string]any{"state": "SUCCEEDED", "label": "Task coded", "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "coded · fetching result"},
+		{name: "queued without label", job: map[string]any{"state": "QUEUED", "taskId": "task-queued"}, want: "| task-queued | — | queued |"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			index := map[string]any{"project_key": "fixture", "jobId": id, "call": "call-1", "call_key": "key-1"}
+			job := map[string]any{"jobId": id, "call": "call-1"}
+			for key, value := range tc.job {
+				job[key] = value
+			}
+			write := func(path string, value any) {
+				data, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(filepath.Join(root, "async_jobs", "job.json"), index)
+			write(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), job)
+
+			board, _ := PostProjectJobBoard(root, "fixture", time.Unix(1800000000, 0))
+			if board == "" || !strings.Contains(board, tc.want) {
+				t.Fatalf("board=%q want it to contain %q", board, tc.want)
+			}
+			if tc.unwant != "" && strings.Contains(board, tc.unwant) {
+				t.Fatalf("board=%q must not contain %q", board, tc.unwant)
+			}
+		})
+	}
+}
