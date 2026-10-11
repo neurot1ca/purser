@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.131 — 2026-10-12
+
+- **Fixed:** A codex call without a label writes a valid session ledger record, so its thread continuity and outcome are no longer lost (LEDGER_RECORD_INVALID).
+- **Fixed:** Detected hand applies record an accepted decision, and send-back and redispatch decisions name the job that was decided.
+
 ## 0.1.130 — 2026-10-12
 
 - **Fixed:** A codex_start that fails before launching a job no longer marks its task id finished, so the same task id can be started again.
