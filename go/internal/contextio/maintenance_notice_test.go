@@ -140,7 +140,7 @@ func TestMaintenanceNoticeCoverageTargetAndFindingOrder(t *testing.T) {
 		reportType string
 		first      string
 		second     string
-	}{{"test-gaps", "a.py:1 first", "b.py:2 second"}, {"cleanup", "b.py:2 second", "a.py:1 first"}} {
+	}{{"test-gaps", "b.py:2 second", "a.py:1 first"}, {"cleanup", "b.py:2 second", "a.py:1 first"}} {
 		text := formatMaintenanceNotice(map[string]any{"report_type": test.reportType, "finding_count": 2, "findings": findings})
 		first, second := strings.Index(text, test.first), strings.Index(text, test.second)
 		if first < 0 || second < 0 || first > second {
@@ -155,8 +155,8 @@ func TestMaintenanceNoticeWhyColumnsAndLegacyFindings(t *testing.T) {
 		reportType string
 		header     string
 	}{
-		{"cleanup", "> | Finding | Why clean it | Evidence |"},
-		{"test-gaps", "> | Gap | Why it matters | Evidence |"},
+		{"cleanup", "> | Severity | Finding | Why clean it | Evidence |"},
+		{"test-gaps", "> | Severity | Gap | Why it matters | Evidence |"},
 	} {
 		t.Run(test.reportType+" legacy", func(t *testing.T) {
 			text := formatMaintenanceNotice(map[string]any{
@@ -164,7 +164,7 @@ func TestMaintenanceNoticeWhyColumnsAndLegacyFindings(t *testing.T) {
 				"finding_count": 1,
 				"findings":      []any{map[string]any{"path_line": "a.py:1", "symbol": "a", "evidence": "e", "confidence": "high"}},
 			})
-			if !strings.Contains(text, test.header) || !strings.Contains(text, "reported as unused by the cleanup scan") || strings.Contains(text, "| a.py:1 a | — | e |") || !strings.Contains(text, master) {
+			if !strings.Contains(text, test.header) || !strings.Contains(text, "> | high | a.py:1 a | reported as unused by the cleanup scan | e |") || strings.Contains(text, "| a.py:1 a | — | e |") || !strings.Contains(text, master) {
 				t.Fatalf("legacy notice missing reason column or master instruction: %s", text)
 			}
 		})
@@ -176,7 +176,7 @@ func TestMaintenanceNoticeWhyColumnsAndLegacyFindings(t *testing.T) {
 				"finding_count": 1,
 				"findings":      []any{map[string]any{"path_line": "a.py:1", "symbol": "a", "why": why, "evidence": evidence, "confidence": "high"}},
 			})
-			row := "| a.py:1 a | " + strings.Repeat("界", 64) + " | " + strings.Repeat("e", 47) + "… |"
+			row := "| high | a.py:1 a | " + strings.Repeat("界", 64) + " | " + strings.Repeat("e", 47) + "… |"
 			if !strings.Contains(text, row) {
 				t.Fatalf("notice did not apply rune limits: %s", text)
 			}

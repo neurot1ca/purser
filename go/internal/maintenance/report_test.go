@@ -36,11 +36,13 @@ func TestReportPromptBytes(t *testing.T) {
 		"and distinguish uncertain candidates from confirmed facts.\n" +
 		"For each finding include why removing it benefits the repository or reduces a risk,\n" +
 		"in one short sentence of at most 80 characters.\n" +
+		"Order findings from most to least important. Every finding must include severity (high,\n" +
+		"medium, or low), meaning its impact if left, separately from confidence.\n" +
 		"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n" +
 		"continue consuming resources once it needs the machine. End your report with this\n" +
 		"machine-readable list, using one object per finding and an empty list for no findings:\n" +
 		"```purser-findings-json\n" +
-		"[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason to remove it\",\"evidence\":\"short evidence\",\"confidence\":\"high|medium|low\"}]\n```\n"
+		"[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason to remove it\",\"evidence\":\"short evidence\",\"severity\":\"high|medium|low\",\"confidence\":\"high|medium|low\"}]\n```\n"
 	if cleanup != wantCleanup {
 		t.Fatalf("cleanup prompt mismatch\n got: %q\nwant: %q", cleanup, wantCleanup)
 	}
@@ -61,6 +63,8 @@ func TestReportPromptBytes(t *testing.T) {
 		"level. Include a compact contract evidence section covering documented requirements,\n" +
 		"invariants, boundaries, and affected callers, cite each item to a source path:line,\n" +
 		"and write \"unknown\" where evidence is absent.\n" +
+		"Order findings from most to least important. Every finding must include severity (high,\n" +
+		"medium, or low), meaning its impact if left, separately from confidence.\n" +
 		"For each finding include why the missing test matters in one short sentence\n" +
 		"of at most 80 characters.\n" +
 		"Measure each language with existing local tools/data: Go existing coverprofile or\n" +
@@ -77,7 +81,7 @@ func TestReportPromptBytes(t *testing.T) {
 		"continue consuming resources once it needs the machine. End with one JSON object in\n" +
 		"this machine-readable block. Findings use the cleanup shape; line_coverage_pct must\n" +
 		"be the overall percentage or null:\n```purser-findings-json\n" +
-		"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n```\n"
+		"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"severity\":\"high|medium|low\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n```\n"
 	if testGaps != wantTestGaps {
 		t.Fatalf("test-gaps prompt mismatch\n got: %q\nwant: %q", testGaps, wantTestGaps)
 	}
@@ -128,11 +132,38 @@ func TestFindingsParsingOracle(t *testing.T) {
 		})
 	}
 	body := "```purser-findings-json\n{\"findings\":[{\"path_line\":\"a.py:1\",\"symbol\":\"a\",\"evidence\":\"e\",\"confidence\":\"low\"},{\"path_line\":\"b.py:2\",\"symbol\":\"b\",\"evidence\":\"e\",\"confidence\":\"high\"}],\"line_coverage_pct\":80}\n```"
-	if got := ParseFindings(body, "test-gaps"); got[0]["symbol"] != "a" {
-		t.Fatalf("test-gaps worker order = %#v", got)
+	if got := ParseFindings(body, "test-gaps"); got[0]["symbol"] != "b" {
+		t.Fatalf("test-gaps order = %#v", got)
 	}
 	if got := ParseFindings(body, "cleanup"); got[0]["symbol"] != "b" {
 		t.Fatalf("cleanup confidence order = %#v", got)
+	}
+}
+
+func TestFindingsSortBySeverityThenConfidence(t *testing.T) {
+	body := "```purser-findings-json\n[" +
+		`{"path_line":"a:1","symbol":"medium-low","evidence":"e","severity":"medium","confidence":"low"},` +
+		`{"path_line":"b:1","symbol":"high-low","evidence":"e","severity":"high","confidence":"low"},` +
+		`{"path_line":"c:1","symbol":"medium-high","evidence":"e","severity":"medium","confidence":"high"},` +
+		`{"path_line":"d:1","symbol":"high-high","evidence":"e","severity":"high","confidence":"high"},` +
+		`{"path_line":"e:1","symbol":"high-high-later","evidence":"e","severity":"high","confidence":"high"}]` + "\n```"
+	got := ParseFindings(body)
+	want := []string{"high-high", "high-high-later", "high-low", "medium-high", "medium-low"}
+	if len(got) != len(want) {
+		t.Fatalf("findings=%#v", got)
+	}
+	for i, symbol := range want {
+		if got[i]["symbol"] != symbol {
+			t.Fatalf("finding[%d]=%v, want %s", i, got[i]["symbol"], symbol)
+		}
+	}
+}
+
+func TestFindingSeverityFallsBackToConfidence(t *testing.T) {
+	body := "```purser-findings-json\n[{\"path_line\":\"a:1\",\"symbol\":\"a\",\"evidence\":\"e\",\"confidence\":\"medium\"}]\n```"
+	got := ParseFindings(body)
+	if len(got) != 1 || got[0]["severity"] != "medium" {
+		t.Fatalf("findings=%#v, want confidence-derived severity medium", got)
 	}
 }
 

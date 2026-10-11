@@ -50,11 +50,13 @@ func BuildReportPrompt(repository, reportType string, coverageTargetPct float64)
 			"and distinguish uncertain candidates from confirmed facts.\n"+
 			"For each finding include why removing it benefits the repository or reduces a risk,\n"+
 			"in one short sentence of at most 80 characters.\n"+
+			"Order findings from most to least important. Every finding must include severity (high,\n"+
+			"medium, or low), meaning its impact if left, separately from confidence.\n"+
 			"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n"+
 			"continue consuming resources once it needs the machine. End your report with this\n"+
 			"machine-readable list, using one object per finding and an empty list for no findings:\n"+
 			"```purser-findings-json\n"+
-			"[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason to remove it\",\"evidence\":\"short evidence\",\"confidence\":\"high|medium|low\"}]\n"+
+			"[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason to remove it\",\"evidence\":\"short evidence\",\"severity\":\"high|medium|low\",\"confidence\":\"high|medium|low\"}]\n"+
 			"```\n", repository), nil
 	case "test-gaps":
 		return fmt.Sprintf("Produce a test-gaps report for the repository at %s.\n"+
@@ -70,6 +72,8 @@ func BuildReportPrompt(repository, reportType string, coverageTargetPct float64)
 			"level. Include a compact contract evidence section covering documented requirements,\n"+
 			"invariants, boundaries, and affected callers, cite each item to a source path:line,\n"+
 			"and write \"unknown\" where evidence is absent.\n"+
+			"Order findings from most to least important. Every finding must include severity (high,\n"+
+			"medium, or low), meaning its impact if left, separately from confidence.\n"+
 			"For each finding include why the missing test matters in one short sentence\n"+
 			"of at most 80 characters.\n"+
 			"Measure each language with existing local tools/data: Go existing coverprofile or\n"+
@@ -87,7 +91,7 @@ func BuildReportPrompt(repository, reportType string, coverageTargetPct float64)
 			"this machine-readable block. Findings use the cleanup shape; line_coverage_pct must\n"+
 			"be the overall percentage or null:\n"+
 			"```purser-findings-json\n"+
-			"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n"+
+			"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"severity\":\"high|medium|low\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n"+
 			"```\n", repository, coverageTargetPct), nil
 	default:
 		return "", fmt.Errorf("unsupported maintenance report type: %s", reportType)
@@ -115,15 +119,17 @@ func ParseFindings(body string, reportTypes ...string) []map[string]any {
 	result := make([]map[string]any, 0, len(list))
 	for _, raw := range list {
 		item, ok := raw.(map[string]any)
-		if !ok || (len(item) != 4 && len(item) != 5) {
+		if !ok || len(item) < 4 || len(item) > 6 {
 			return nil
 		}
 		pathLine, pathOK := item["path_line"].(string)
 		symbol, symbolOK := item["symbol"].(string)
 		evidence, evidenceOK := item["evidence"].(string)
 		confidence, confidenceOK := item["confidence"].(string)
+		severity, _ := item["severity"].(string)
+		_, hasSeverity := item["severity"]
 		why, hasWhy := item["why"]
-		if len(item) == 5 && !hasWhy {
+		if len(item) == 5 && !hasWhy && !hasSeverity {
 			return nil
 		}
 		if hasWhy {
@@ -138,16 +144,24 @@ func ParseFindings(body string, reportTypes ...string) []map[string]any {
 		if rank == 0 {
 			return nil
 		}
-		finding := map[string]any{"path_line": pathLine, "symbol": symbol, "evidence": evidence, "confidence": confidence, "confidence_rank": rank}
+		severityRank := confidenceRank(severity)
+		if severityRank == 0 {
+			severity = confidence
+			severityRank = rank
+		}
+		finding := map[string]any{"path_line": pathLine, "symbol": symbol, "evidence": evidence, "confidence": confidence, "confidence_rank": rank, "severity": strings.ToLower(severity), "severity_rank": severityRank}
 		if hasWhy {
 			finding["why"] = why
 		}
 		result = append(result, finding)
 	}
-	if len(reportTypes) == 0 || reportTypes[0] != "test-gaps" {
-		// Stable sort preserves worker order for equal confidence, as Python does.
-		sort.SliceStable(result, func(i, j int) bool { return result[i]["confidence_rank"].(int) > result[j]["confidence_rank"].(int) })
-	}
+	// Stable sorting preserves worker order when both importance and confidence tie.
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i]["severity_rank"].(int) != result[j]["severity_rank"].(int) {
+			return result[i]["severity_rank"].(int) > result[j]["severity_rank"].(int)
+		}
+		return result[i]["confidence_rank"].(int) > result[j]["confidence_rank"].(int)
+	})
 	return result
 }
 

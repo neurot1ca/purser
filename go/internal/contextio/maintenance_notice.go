@@ -283,9 +283,9 @@ func formatMaintenanceNotice(notice map[string]any) string {
 		if !findingsOK {
 			lines = append(lines, "> *The findings could not be parsed; report: `"+path+"`.*")
 		} else {
-			lines = append(lines, "> *The table below shows each gap, why it matters, and its evidence; the full report is at `"+path+"`.*", "> | Gap | Why it matters | Evidence |", "> | --- | --- | --- |")
-			for _, item := range rankMaintenanceFindings(findings, 5, true) {
-				lines = append(lines, fmt.Sprintf("> | %s | %s | %s |", truncateRunes(maintenanceCandidate(item), 48), maintenanceWhy(item), truncateMaintenanceEvidence(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)))
+			lines = append(lines, "> *The table below shows each gap, why it matters, and its evidence; the full report is at `"+path+"`.*", "> | Severity | Gap | Why it matters | Evidence |", "> | --- | --- | --- | --- |")
+			for _, item := range rankMaintenanceFindings(findings, 5) {
+				lines = append(lines, fmt.Sprintf("> | %s | %s | %s | %s |", maintenanceSeverity(item), truncateRunes(maintenanceCandidate(item), 48), maintenanceWhy(item), truncateMaintenanceEvidence(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)))
 			}
 		}
 		if notice["pending_cycle"] != nil && notice["pending_cycle"] != "no-window" && number(notice["pending_show"]) == 1 && notice["pending_skip_second"] != true {
@@ -301,16 +301,16 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	if !findingsOK {
 		return "> " + intro + "\n> *The findings could not be parsed; report: `" + path + "`.*"
 	}
-	ranked := rankMaintenanceFindings(findings, 5, false)
+	ranked := rankMaintenanceFindings(findings, 5)
 	instruction := "The table below lists each finding, why to clean it, and its evidence. Just say \"clean up\" to have them cleaned."
 	if len(findings) > 5 {
 		instruction = "The table below lists the top 5 findings, why to clean them, and their evidence. Just say \"clean up\" to have them cleaned. The other findings are in this file to save tokens: `" + path + "`"
 	}
-	lines := []string{"> " + intro, "> *" + instruction + "*", "> | Finding | Why clean it | Evidence |", "> | --- | --- | --- |"}
+	lines := []string{"> " + intro, "> *" + instruction + "*", "> | Severity | Finding | Why clean it | Evidence |", "> | --- | --- | --- | --- |"}
 	for _, item := range ranked {
 		candidate := truncateRunes(maintenanceCandidate(item), 48)
 		evidence := truncateMaintenanceEvidence(strings.Join(strings.Fields(fmt.Sprint(item["evidence"])), " "), 48)
-		lines = append(lines, fmt.Sprintf("> | %s | %s | %s |", candidate, maintenanceWhy(item), evidence))
+		lines = append(lines, fmt.Sprintf("> | %s | %s | %s | %s |", maintenanceSeverity(item), candidate, maintenanceWhy(item), evidence))
 	}
 	if notice["pending_cycle"] != nil && notice["pending_cycle"] != "no-window" && number(notice["pending_show"]) == 1 && notice["pending_skip_second"] != true {
 		lines = append(lines, "> *Skip showing this again in this cycle?*")
@@ -319,10 +319,11 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	return strings.Join(lines, "\n")
 }
 
-func rankMaintenanceFindings(findings []any, limit int, preserveOrder bool) []map[string]any {
+func rankMaintenanceFindings(findings []any, limit int) []map[string]any {
 	type rankedFinding struct {
-		item map[string]any
-		rank int
+		item           map[string]any
+		severityRank   int
+		confidenceRank int
 	}
 	ranked := []rankedFinding{}
 	for _, raw := range findings {
@@ -330,22 +331,22 @@ func rankMaintenanceFindings(findings []any, limit int, preserveOrder bool) []ma
 		if !ok {
 			continue
 		}
-		rank := number(item["confidence_rank"])
-		if rank == 0 {
-			switch strings.ToLower(str(item["confidence"])) {
-			case "high":
-				rank = 3
-			case "medium":
-				rank = 2
-			case "low":
-				rank = 1
-			}
+		confidenceRank := maintenanceRank(str(item["confidence"]))
+		severityRank := maintenanceRank(maintenanceSeverity(item))
+		if rank := number(item["confidence_rank"]); rank > 0 {
+			confidenceRank = rank
 		}
-		ranked = append(ranked, rankedFinding{item, rank})
+		if rank := number(item["severity_rank"]); rank > 0 {
+			severityRank = rank
+		}
+		ranked = append(ranked, rankedFinding{item, severityRank, confidenceRank})
 	}
-	if !preserveOrder {
-		sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].rank > ranked[j].rank })
-	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].severityRank != ranked[j].severityRank {
+			return ranked[i].severityRank > ranked[j].severityRank
+		}
+		return ranked[i].confidenceRank > ranked[j].confidenceRank
+	})
 	if len(ranked) > limit {
 		ranked = ranked[:limit]
 	}
@@ -354,6 +355,30 @@ func rankMaintenanceFindings(findings []any, limit int, preserveOrder bool) []ma
 		result = append(result, entry.item)
 	}
 	return result
+}
+
+func maintenanceSeverity(item map[string]any) string {
+	severity := strings.ToLower(strings.TrimSpace(str(item["severity"])))
+	if maintenanceRank(severity) == 0 {
+		severity = strings.ToLower(strings.TrimSpace(str(item["confidence"])))
+	}
+	if maintenanceRank(severity) == 0 {
+		return "—"
+	}
+	return severity
+}
+
+func maintenanceRank(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func maintenanceCandidate(item map[string]any) string {
