@@ -81,8 +81,12 @@ func schedulePostReview(repoRoot string, pending map[string]any, bundle map[stri
 	}
 
 	gate := review.Gate(phase, stringValue(pending["route"]), routeKnown, files, lines, maxFiles, maxLines, reviewerAvailable)
+	implementationNoDelta := phase == "implementation" && files == 0 && lines == 0
 	if files == 0 && lines == 0 {
 		gate = review.GateDecision{Reason: review.NoDelta}
+	}
+	if implementationNoDelta {
+		bundle["findings"] = appendPostFinding(bundle["findings"], "IMPLEMENTATION_NO_DELTA", "Implementation job produced no change in its worktree; check whether the worker wrote outside the tracked files.")
 	}
 	if phase == "plan" {
 		gate = review.GateDecision{Reason: review.PhasePlan}
@@ -122,7 +126,7 @@ func schedulePostReview(repoRoot string, pending map[string]any, bundle map[stri
 			mode = review.Audit
 		}
 	}
-	if phase == "plan" || resolved.ForceFullReview || bundle["force_full_review"] == true {
+	if phase == "plan" || implementationNoDelta || resolved.ForceFullReview || bundle["force_full_review"] == true {
 		mode = review.Full
 	}
 	if phase != "plan" && pending["task_contract_grounded"] != true {
