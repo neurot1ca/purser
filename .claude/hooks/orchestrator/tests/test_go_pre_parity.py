@@ -11,6 +11,7 @@ FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_policy" / "pre.json"
 DECISIONS_FIXTURE = ORCHESTRATOR / "tests" / "fixtures" / "go_policy" / "pre_decisions.json"
 sys.path.insert(0, str(ORCHESTRATOR))
 import codex
+import code_map
 import ledger
 import project_root
 
@@ -159,6 +160,7 @@ def test_python_oracle_matches_pre_decisions_p63(tmp_path, monkeypatch):
                  "tool_input": {key: str(repo) if value == "__REPO__" else value
                                 for key, value in case["input"].items()},
                  "session_id": "session-p63", "tool_use_id": "use-p63"}
+        code_map.refresh(repo, state=runtime, budget_seconds=10.0)
         actual = codex.pre_tool_use(event, state_root=runtime, repo_root=repo)
         normalized = _replace_fixture_roots(actual, case_root)
         if update:

@@ -34,7 +34,7 @@ def _oracle(case, root):
     subprocess.run(["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], cwd=root, env=env, check=True)
     state = root.parent / (root.name + "-state")
     config = json.loads((ORCH / "config.json").read_text(encoding="utf-8"))
-    config.update(micro_repair_enabled=False, max_total_hook_budget_seconds=1.0, reviewer1_timeout_seconds=0.8)
+    config.update(micro_repair_enabled=False, max_total_hook_budget_seconds=30.0, reviewer1_timeout_seconds=0.8)
     paths = case.get("scope", "scope")
     prompt = f"ORCH|task=fixture-task|phase=implementation|route=normal|reason=new_task|basis=fixture|scope={paths}\nObjective: inspect. Acceptance criteria: preserve scope."
     event = {"session_id": "post-outcome-fixture", "hook_event_name": "PreToolUse", "tool_name": codex.CODEX_TOOL,

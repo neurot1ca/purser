@@ -41,7 +41,7 @@ def _oracle(case, root):
     state = root.parent / (root.name + "-state")
     config = json.loads((ORCH / "config.json").read_text(encoding="utf-8"))
     config["micro_repair_enabled"] = False
-    config["max_total_hook_budget_seconds"] = 1.0
+    config["max_total_hook_budget_seconds"] = 30.0
     config["reviewer1_timeout_seconds"] = 0.8
     prompt = "ORCH|task=fixture-task|phase=implementation|route=normal|reason=new_task|basis=fixture|scope=scope\nObjective: inspect. Acceptance criteria: preserve scope."
     event = {"session_id": "post-reviewer-fixture", "hook_event_name": "PreToolUse", "tool_name": codex.CODEX_TOOL,

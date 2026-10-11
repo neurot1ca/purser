@@ -10,6 +10,7 @@ ORCH = ROOT / ".claude" / "hooks" / "orchestrator"
 FIXTURE = ORCH / "tests" / "fixtures" / "go_policy" / "pre_success.json"
 sys.path.insert(0, str(ORCH))
 import codex
+import code_map
 import ledger
 import project_root
 
@@ -141,8 +142,8 @@ def _capture(case, tmp_path, monkeypatch):
                 return {"status": ledger.UNKNOWN, "code": "LEDGER_WRITE_FAILED", "message": "fixture failure"}
             return original(self, record)
         monkeypatch.setattr(ledger.SessionLedger, "save", fail_save)
+    code_map.refresh(repo, state=runtime, budget_seconds=10.0)
     result = codex.pre_tool_use(event, config=config, state_root=runtime, repo_root=repo)
-    monkeypatch.undo()
     output = result.get("hookSpecificOutput", {})
     call_key = codex._call_key(event)
     pending_path = codex._pending_path(runtime, event)
