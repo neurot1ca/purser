@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.129 — 2026-10-11
+
+- **Fixed:** Codex workers get a shared, writable Go build cache under the Purser state root, so Go builds inside the sandbox no longer fail.
+- **Added:** After three Reviewer-1 timeouts in a row a reviewer is skipped to its fallback for two hours, then probed again.
+- **Added:** An implementation job that changes nothing is flagged IMPLEMENTATION_NO_DELTA and always gets a full review.
+
 ## 0.1.128 — 2026-10-11
 
 - **Changed:** A job's ETA comes from this project's measured median for its route, so estimates correct themselves as jobs finish.
