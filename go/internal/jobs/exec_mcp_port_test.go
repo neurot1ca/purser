@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"purser-hook/internal/retention"
 )
 
-func TestUnappliedThreadJobFallsBackToAcceptedAt(t *testing.T) {
+func TestExecMcpPortUnappliedThreadJobFallsBackToAcceptedAt(t *testing.T) {
 	jobsDir := t.TempDir()
 	worktree := filepath.Join(t.TempDir(), "worktree")
 	if err := os.MkdirAll(worktree, 0700); err != nil {
@@ -27,7 +28,7 @@ func TestUnappliedThreadJobFallsBackToAcceptedAt(t *testing.T) {
 	}
 }
 
-func TestStartReplyUsesFreshWorktreeWhenThreadWorktreeIsRetiring(t *testing.T) {
+func TestExecMcpPortStartReplyUsesFreshWorktreeWhenThreadWorktreeIsRetiring(t *testing.T) {
 	repo := t.TempDir()
 	gitStart(t, repo, "init", "-q")
 	gitStart(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base")
@@ -71,7 +72,7 @@ func TestStartReplyUsesFreshWorktreeWhenThreadWorktreeIsRetiring(t *testing.T) {
 	}
 }
 
-func TestRunHostGenerationMapsRequestedWorktreeCWD(t *testing.T) {
+func TestExecMcpPortRunHostGenerationMapsRequestedWorktreeCWD(t *testing.T) {
 	for _, tc := range []struct {
 		name, requested string
 		createNested    bool
@@ -152,5 +153,47 @@ func TestRunHostGenerationMapsRequestedWorktreeCWD(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExecMcpPortApplyDropsInvalidReviewerCounts(t *testing.T) {
+	jobID := strings.Repeat("c", 64)
+	state, _, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), jobID)
+	jobPath := filepath.Join(state, "codex_exec_mcp", "jobs", jobID+".json")
+	jobBytes, err := os.ReadFile(jobPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job map[string]any
+	if err := json.Unmarshal(jobBytes, &job); err != nil {
+		t.Fatal(err)
+	}
+	job["taskId"] = "invalid-counts"
+	writeHostTestJSON(t, jobPath, job)
+	args := map[string]any{"jobId": jobID, "reviewer1Valid": json.Number("-1"), "reviewer1False": true}
+	if got := Apply(state, args)["structuredContent"].(map[string]any)["applied"]; got != true {
+		t.Fatalf("apply failed: %#v", got)
+	}
+	paths, err := filepath.Glob(filepath.Join(state, "telemetry", "events", "by_task", "*.jsonl"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("telemetry files = %v, err=%v", paths, err)
+	}
+	data, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "reviewer1_valid_count") || strings.Contains(string(data), "reviewer1_false_count") {
+		t.Fatalf("invalid reviewer counts were persisted: %s", data)
+	}
+}
+
+func TestExecMcpPortApplyTelemetryFailureDoesNotBreakApply(t *testing.T) {
+	jobID := strings.Repeat("d", 64)
+	state, _, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), jobID)
+	result := Apply(state, map[string]any{"jobId": jobID}, ApplyOptions{
+		RecordScopeConflictOutcome: func(map[string]any, string) { panic("telemetry unavailable") },
+	})["structuredContent"].(map[string]any)
+	if result["applied"] != true {
+		t.Fatalf("telemetry failure broke apply: %#v", result)
 	}
 }
