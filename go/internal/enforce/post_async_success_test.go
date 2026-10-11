@@ -367,6 +367,33 @@ func TestAsyncSuccessValidationUsesRecordedTestEvidence(t *testing.T) {
 	}
 }
 
+func TestAsyncSuccessReviewerKeepsHostValidationInArtifact(t *testing.T) {
+	state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, "host_validation_review")
+	if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// worker delta\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	job["testEvidence"] = []any{map[string]any{"command": "go test ./internal/ledger/", "exit_code": 0}}
+	if err := writeAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	configureNativeReviewer(t, state, &resolved, "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "UNKNOWN")
+	response, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := responseBundle(t, response)
+	artifact, err := readAsyncObject(stringValue(compact["full_bundle_path"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := mapValue(artifact["worker_validation"])
+	if artifact["reviewer1_result"] != "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE" || artifact["reviewer1_skipped_reason"] != nil ||
+		worker["source"] != "HOST_TEST_EVIDENCE" || worker["status"] != "PASS" || artifact["validation"] != "PASS" || compact["validation"] != "PASS" {
+		t.Fatalf("reviewed artifact lost host validation: artifact=%#v compact validation=%v", artifact, compact["validation"])
+	}
+}
+
 func TestPostAsyncPlanCompletionStoresCompleteArtifact(t *testing.T) {
 	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
