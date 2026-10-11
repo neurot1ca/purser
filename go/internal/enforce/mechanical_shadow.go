@@ -56,6 +56,7 @@ func runMechanicalShadowJob(ctx context.Context, jobPath, executable string, tim
 	if err != nil || json.Unmarshal(data, &job) != nil {
 		return false
 	}
+	emitMechanicalShadowObservation(job.StateRoot, job.ProjectKey, "MECHANICAL_SHADOW_STARTED", nil)
 	lock := filepath.Join(filepath.Dir(jobPath), "running.lock")
 	_ = os.WriteFile(lock, []byte(strconv.Itoa(os.Getpid())), 0600)
 	outcome, err := runMechanicalShadow(ctx, mechanicalShadowJob{Model: job.Model, Prompt: job.Prompt, Repository: job.Repository, Scratch: job.Scratch}, executable, timeout)
@@ -69,7 +70,12 @@ func runMechanicalShadowJob(ctx context.Context, jobPath, executable string, tim
 	_ = os.RemoveAll(job.Scratch)
 	_ = os.Remove(jobPath)
 	_ = os.Remove(lock)
+	emitMechanicalShadowObservation(job.StateRoot, job.ProjectKey, "MECHANICAL_SHADOW_FINISHED", map[string]any{"success": success})
 	return success
+}
+
+func emitMechanicalShadowObservation(root, project, eventType string, payload map[string]any) {
+	preEmit(root, map[string]any{}, nil, "", project, eventType, payload)
 }
 
 func mechanicalShadowRecordSample(root, model string, success bool) ([2]int, error) {

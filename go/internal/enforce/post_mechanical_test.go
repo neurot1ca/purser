@@ -97,7 +97,7 @@ func TestStartMechanicalShadowLaunchFailureRemovesLock(t *testing.T) {
 	writeMechanicalInventory(t, root)
 	startMechanicalShadowDetached = func([]string, []string, string) error { return os.ErrNotExist }
 	t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
-	err := startMechanicalShadow(root, "project", "repo", "prompt", "report", "served")
+	_, err := startMechanicalShadow(root, "project", "repo", "prompt", "report", "served")
 	if err == nil {
 		t.Fatal("startMechanicalShadow() error = nil, want launch error")
 	}
@@ -110,6 +110,7 @@ func TestStartMechanicalShadowLaunchFailureRemovesLock(t *testing.T) {
 func TestStartMechanicalShadowLaunchesBundledCommand(t *testing.T) {
 	root := t.TempDir()
 	writeMechanicalInventory(t, root)
+	writeMechanicalCadence(t, root, "project", 69, 0)
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +168,7 @@ func TestPostMechanicalAcceptanceUsesWorkerValidationAndReviewer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeMechanicalInventory(t, root)
+			writeMechanicalCadence(t, root, "project", 69, 0)
 			launches := 0
 			startMechanicalShadowDetached = func([]string, []string, string) error { launches++; return nil }
 			t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
@@ -199,6 +201,45 @@ func TestPostMechanicalAcceptanceUsesWorkerValidationAndReviewer(t *testing.T) {
 			}
 			t.Fatal("served candidate missing")
 		})
+	}
+}
+
+func TestMechanicalShadowCadence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		turnCount int
+		want      bool
+	}{
+		{name: "69 turns after last shadow", turnCount: 69, want: false},
+		{name: "70 turns after last shadow", turnCount: 70, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeMechanicalCadence(t, root, "project", tc.turnCount, 1)
+			_, eligible, unlock, err := advanceMechanicalShadowTurn(root, "project")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unlock()
+			if eligible != tc.want {
+				t.Fatalf("eligible = %v, want %v", eligible, tc.want)
+			}
+		})
+	}
+}
+
+func writeMechanicalCadence(t *testing.T, root, project string, turns, lastShadow int) {
+	t.Helper()
+	path := filepath.Join(root, "projects", project, "telemetry", "mechanical_shadow_cadence.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]int{"turn_count": turns, "last_shadow_turn": lastShadow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 

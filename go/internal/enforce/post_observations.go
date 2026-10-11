@@ -8,6 +8,9 @@ import (
 
 func init() {
 	observationFields["IMPLEMENTER_FINISHED"] = mergeFields(fields(`duration_ms longest_silent_gap_seconds implementer served_model served_route served_effort served_agent served_provider route phase task_type has_code_map suspected_route_mismatch changed_paths_count known_concurrent_scopes validation worker_validation_status thread_id claude_review_mode routing_enforced codex_usage_known claude_continuation_turn_count reason reason_source previous_route new_route eta_minutes codex_input_tokens codex_cached_input_tokens codex_output_tokens codex_reasoning_output_tokens`), claudeUsagePayloadFields)
+	observationFields["MECHANICAL_SHADOW_STARTED"] = fields("")
+	observationFields["MECHANICAL_SHADOW_FINISHED"] = fields("success")
+	setObservationRule("bool", "success")
 	setObservationRule("bool", "has_code_map codex_usage_known")
 	setObservationRule("int", "changed_paths_count claude_continuation_turn_count")
 	setObservationRule("id", "implementer served_agent served_provider thread_id")
