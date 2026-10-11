@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.123 — 2026-10-11
+
+- **Fixed:** Job results now really show the PASS or FAIL from Purser's own test capture; an async review step was still resetting it.
+- **Fixed:** Replaying a finished job no longer times out on large build caches inside the job folder.
+
 ## 0.1.122 — 2026-10-11
 
 - **Fixed:** A queued job is no longer overtaken by newer jobs whose scope overlaps it.
