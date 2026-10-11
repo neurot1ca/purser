@@ -274,6 +274,10 @@ func TestCodexHookPortCodeMapPromptPreservedWithoutDuplication(t *testing.T) {
 }
 
 func TestCodexHookPortCodeMapInjectedForImplementationAndPlan(t *testing.T) {
+	// Prompt injection should not depend on the production deadline under load.
+	oldBudget := codeMapPreBudget
+	codeMapPreBudget = codeMapMaxSeconds
+	t.Cleanup(func() { codeMapPreBudget = oldBudget })
 	for _, phase := range []string{"implementation", "plan"} {
 		repo, state := codexHookPortWorkspace(t)
 		route := "subtle"

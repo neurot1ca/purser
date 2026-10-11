@@ -28,9 +28,10 @@ const (
 )
 
 var startCodeMapCompletionDetached = proc.StartDetached
+var codeMapPreBudget = 200 * time.Millisecond
 
 func refreshCodeMapForPre(repo, stateRoot string) (string, string) {
-	return refreshCodeMapForPreWith(repo, stateRoot, 200*time.Millisecond, nil, nil, startCodeMapCompletionDetached)
+	return refreshCodeMapForPreWith(repo, stateRoot, codeMapPreBudget, nil, nil, startCodeMapCompletionDetached)
 }
 
 func refreshCodeMapForPreWith(repo, stateRoot string, budget time.Duration, extractors map[string]codeMapSymbolExtractor, write func(string, []byte) error, start func([]string, []string, string) error) (string, string) {
