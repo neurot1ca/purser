@@ -126,9 +126,33 @@ func TestAcquireQueuesBehindOlderOverlappingQueuedOwner(t *testing.T) {
 	if got := store.Acquire("older", "older-task", []string{"scope"}, AcquireOptions{JobID: &olderJob, QueueConflict: true}, 101); got.Code != "LEASE_QUEUED" {
 		t.Fatalf("queue older broad owner: %#v", got)
 	}
-	got := store.Acquire("newer", "newer-task", []string{"scope/free"}, AcquireOptions{JobID: &newerJob, AllowOverlap: true}, 102)
+	got := store.Acquire("newer", "newer-task", []string{"scope/free"}, AcquireOptions{JobID: &newerJob, QueueConflict: true, AllowOverlap: true}, 102)
 	if got.Status != "OK" || got.Code != "LEASE_QUEUED" {
 		t.Fatalf("newer overlapping owner bypassed older queue: %#v", got)
+	}
+}
+
+func TestAcquireOlderQueuedOwnerOnlyQueuesWhenRequested(t *testing.T) {
+	fixture := `{"version":1,"owners":{"active":{"state":"ACTIVE","scope":["scope/live"],"task_id":"active-task","acquired_at":100},"queued":{"state":"QUEUED","scope":["scope"],"task_id":"queued-task","job_id":"queued","queued_at":101}}}`
+	for _, test := range []struct {
+		name          string
+		queueConflict bool
+		wantCode      string
+	}{
+		{name: "non-queueing caller conflicts with active owner", wantCode: "SCOPE_LEASE_CONFLICT"},
+		{name: "queueing caller queues", queueConflict: true, wantCode: "LEASE_QUEUED"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "scope_leases.json"), []byte(fixture), 0600); err != nil {
+				t.Fatal(err)
+			}
+			jobID := "request"
+			got := New(root).Acquire("request", "request-task", []string{"scope/file"}, AcquireOptions{JobID: &jobID, QueueConflict: test.queueConflict}, 102)
+			if got.Code != test.wantCode {
+				t.Fatalf("Acquire() = %#v, want code %s", got, test.wantCode)
+			}
+		})
 	}
 }
 

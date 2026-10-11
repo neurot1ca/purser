@@ -110,7 +110,7 @@ func (s *Store) Acquire(ownerKey, taskID string, scope []string, options Acquire
 			}
 		}
 		olderQueued := false
-		if !options.ReadOnly && options.JobID != nil && *options.JobID != "" {
+		if options.QueueConflict && !options.ReadOnly && options.JobID != nil && *options.JobID != "" {
 			for _, key := range keys {
 				other := owners[key].(map[string]any)
 				queuedAt, ok := pythonFloat(other["queued_at"])
