@@ -38,7 +38,7 @@ passes standalone.
 - [Profile plan v2](docs/ORCHESTRATOR_PROFILE_PLAN.md) — design decisions and sequence
 - [Operations reference](docs/ORCHESTRATOR_OPERATIONS.md) — transport, recovery, and what moved out of the skill
 - [Research](docs/research/) — surveys of open-source orchestrators and a Codex review of the plan
-- `scripts/orchestration_token_audit_0.py` — measures tokens and the tool-batching ratio from transcripts
+- `go run ./go/cmd/purser-audit [--sessions N] [--transcripts GLOB] [--project-root PATH] [--json PATH]` — measures tokens and the tool-batching ratio from transcripts
 
 ## Commands
 
