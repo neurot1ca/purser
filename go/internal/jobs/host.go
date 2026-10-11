@@ -195,6 +195,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			return nil, lockErr
 		}
 	}
+	var childEnv []string
 	if worktreePath != "" || argsMap["worktree"] == true {
 		stateRoot := opt.StateRoot
 		if stateRoot == "" {
@@ -296,6 +297,20 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 		args.Cwd = mapped
 		if agent == "codex" {
+			var writableRoots []any = []any{worktreePath}
+			for _, variable := range []struct{ name, directory string }{
+				{"GOCACHE", filepath.Join(stateRoot, "cache", "go-build")},
+				{"GOTMPDIR", filepath.Join(stateRoot, "cache", "go-tmp")},
+			} {
+				if os.Getenv(variable.name) != "" {
+					continue
+				}
+				if err = os.MkdirAll(variable.directory, 0700); err != nil {
+					return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Codex Go cache directory is unavailable")
+				}
+				writableRoots = append(writableRoots, variable.directory)
+				childEnv = append(childEnv, variable.name+"="+variable.directory)
+			}
 			config := map[string]any{}
 			if ordered, ok := args.Config.(OrderedObject); ok {
 				for _, entry := range ordered {
@@ -309,7 +324,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 					delete(config, key)
 				}
 			}
-			config["sandbox_workspace_write"] = map[string]any{"writable_roots": []any{worktreePath}}
+			config["sandbox_workspace_write"] = map[string]any{"writable_roots": writableRoots}
 			args.Config = config
 		}
 	}
@@ -399,6 +414,23 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		return nil, err
 	}
 	command := exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...)
+	if len(childEnv) != 0 {
+		command.Env = os.Environ()
+		for _, override := range childEnv {
+			key, _, _ := strings.Cut(override, "=")
+			found := false
+			for index, entry := range command.Env {
+				entryKey, _, _ := strings.Cut(entry, "=")
+				if strings.EqualFold(entryKey, key) {
+					command.Env[index] = override
+					found = true
+				}
+			}
+			if !found {
+				command.Env = append(command.Env, override)
+			}
+		}
+	}
 	command.Dir = args.Cwd
 	command.Stdin = strings.NewReader(prompt)
 	stream := NewEventStream(agent)

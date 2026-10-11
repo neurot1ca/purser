@@ -56,7 +56,13 @@ func TestHostFakeWorker(t *testing.T) {
 		_, _ = os.Stdout.WriteString("{\"type\": \"item.completed\", \"item\": {\"type\": \"command_execution\", \"command\": \"go test ./...\", \"exit_code\": 0, \"aggregated_output\": \"ok\\n\"}}\r\n")
 	}
 	_, _ = os.Stdout.WriteString("{\"type\": \"turn.completed\"}\r\n")
-	_ = os.WriteFile(output, []byte("fake answer"), 0600)
+	result := []byte("fake answer")
+	if mode == "environment" {
+		result, _ = json.Marshal(map[string]string{"GOCACHE": os.Getenv("GOCACHE"), "GOTMPDIR": os.Getenv("GOTMPDIR")})
+		_ = os.WriteFile(os.Getenv("PURSER_HOST_FAKE_ENV_CAPTURE"), result, 0600)
+		result = []byte("fake answer")
+	}
+	_ = os.WriteFile(output, result, 0600)
 	if mode == "nonzero" {
 		os.Exit(7)
 	}
@@ -666,7 +672,9 @@ func mustRecordJSON(t *testing.T, record *Record) string {
 	return string(data)
 }
 
-func TestHostReplacesDottedSandboxWorkspaceWriteKeys(t *testing.T) {
+func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
+	t.Setenv("GOCACHE", "")
+	t.Setenv("GOTMPDIR", "")
 	root := t.TempDir()
 	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
 	worktree := filepath.Join(root, "worktree")
@@ -692,12 +700,16 @@ func TestHostReplacesDottedSandboxWorkspaceWriteKeys(t *testing.T) {
 		},
 	})
 	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
-	t.Setenv("PURSER_HOST_FAKE_MODE", "")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "environment")
+	environmentCapture := filepath.Join(root, "child-environment.json")
+	t.Setenv("PURSER_HOST_FAKE_ENV_CAPTURE", environmentCapture)
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+	cacheDir := filepath.Join(root, "cache", "go-build")
+	tmpDir := filepath.Join(root, "cache", "go-tmp")
+	options := HostOptions{StateRoot: root, WorkerCommand: func(args LaunchArgs) ([]string, error) {
 		config, ok := args.Config.(map[string]any)
 		if !ok {
 			t.Fatalf("config has type %T", args.Config)
@@ -712,13 +724,85 @@ func TestHostReplacesDottedSandboxWorkspaceWriteKeys(t *testing.T) {
 			t.Errorf("unrelated config was lost: %#v", config)
 		}
 		workspace, _ := config["sandbox_workspace_write"].(map[string]any)
-		if roots, _ := workspace["writable_roots"].([]any); len(roots) != 1 || roots[0] != worktree {
-			t.Errorf("writable root = %#v, want %q", roots, worktree)
+		if roots, _ := workspace["writable_roots"].([]any); len(roots) != 3 || roots[0] != worktree || roots[1] != cacheDir || roots[2] != tmpDir {
+			t.Errorf("writable roots = %#v, want [%q %q %q]", roots, worktree, cacheDir, tmpDir)
 		}
 		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
 	}}
 	if _, err := RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
 		t.Fatal(err)
+	}
+	for _, directory := range []string{cacheDir, tmpDir} {
+		if info, err := os.Stat(directory); err != nil || !info.IsDir() {
+			t.Errorf("cache directory %q was not created: %v", directory, err)
+		}
+	}
+	var childEnvironment map[string]string
+	childOutput, err := os.ReadFile(environmentCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(childOutput, &childEnvironment); err != nil {
+		t.Fatal(err)
+	}
+	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir {
+		t.Errorf("child Go environment = %#v, want GOCACHE=%q GOTMPDIR=%q", childEnvironment, cacheDir, tmpDir)
+	}
+}
+
+func TestHostPreservesExplicitGoCacheEnvironment(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	worktree := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(root, "user-cache")
+	tmpDir := filepath.Join(root, "user-tmp")
+	t.Setenv("GOCACHE", cacheDir)
+	t.Setenv("GOTMPDIR", tmpDir)
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "environment")
+	environmentCapture := filepath.Join(root, "child-environment.json")
+	t.Setenv("PURSER_HOST_FAKE_ENV_CAPTURE", environmentCapture)
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9, "worktreePath": worktree, "repoRoot": worktree,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "codex", "args": map[string]any{"cwd": worktree, "prompt": "hello"},
+	})
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RunHostGeneration(dir, hostTestID, 1, "owner", HostOptions{StateRoot: root, WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		config := args.Config.(map[string]any)
+		workspace := config["sandbox_workspace_write"].(map[string]any)
+		if roots, _ := workspace["writable_roots"].([]any); len(roots) != 1 || roots[0] != worktree {
+			t.Errorf("writable roots = %#v, want only %q", roots, worktree)
+		}
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var childEnvironment map[string]string
+	childOutput, err := os.ReadFile(environmentCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(childOutput, &childEnvironment); err != nil {
+		t.Fatal(err)
+	}
+	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir {
+		t.Errorf("child Go environment = %#v, want explicit parent values", childEnvironment)
+	}
+	if _, err := os.Stat(filepath.Join(root, "cache")); !os.IsNotExist(err) {
+		t.Errorf("Purser cache roots should not be created for explicit environment, stat error = %v", err)
 	}
 }
 
