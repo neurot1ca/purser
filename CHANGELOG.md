@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.127 — 2026-10-11
+
+- **Changed:** Cleanup and test-gap notices list findings from most to least important and show a Severity column.
+
 ## 0.1.126 — 2026-10-11
 
 - **Fixed:** Scheduled cleanup and test-gap reports run again; the quiet-period wait no longer leaves them reading a stale clock.
