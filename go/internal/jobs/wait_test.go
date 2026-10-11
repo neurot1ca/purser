@@ -93,6 +93,35 @@ func TestWaitReturnsStillWaitingAtConfiguredBound(t *testing.T) {
 	}
 }
 
+func TestWaitDoesNotSleepAfterSignalExhaustsBound(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
+	terminal := make(chan struct{})
+	host, err := StartSignalHost("bounded", "secret", terminal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close()
+	defer close(terminal)
+	root := t.TempDir()
+	writeWaitJob(t, root, "bounded", map[string]any{
+		"signalPort": host.Addr().(*net.TCPAddr).Port,
+		"deadlineAt": float64(time.Now().Add(time.Hour).UnixNano()) / 1e9,
+	})
+	previousSleep := waitSleep
+	defer func() { waitSleep = previousSleep }()
+	started := time.Now()
+	waitSleep = func(duration time.Duration) {
+		if time.Since(started) >= time.Second && duration > 0 {
+			t.Errorf("Wait sleeps %s after its configured bound", duration)
+		}
+		time.Sleep(duration)
+	}
+	got := Wait(root, "bounded")
+	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait bounded STILL_WAITING" {
+		t.Fatalf("Wait = %#v, want STILL_WAITING with exit code 5", got)
+	}
+}
+
 func TestWaitObservesTerminalDuringSignalWait(t *testing.T) {
 	root := t.TempDir()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

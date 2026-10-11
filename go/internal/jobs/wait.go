@@ -84,10 +84,11 @@ func Wait(stateRoot, jobID string) WaitResult {
 		if port != 0 {
 			wait := time.Duration(math.Min(1, math.Min(remainingSeconds, remainingWaitSeconds)) * float64(time.Second))
 			_, _ = SignalWait("127.0.0.1:"+strconv.Itoa(port), jobID, token, wait)
-			pause := math.Min(0.1, math.Min(remainingSeconds, remainingWaitSeconds))
-			waitSleep(time.Duration(pause * float64(time.Second)))
-		} else {
-			pause := math.Min(0.1, math.Min(remainingSeconds, remainingWaitSeconds))
+		}
+		remainingSeconds = deadline - float64(time.Now().UnixNano())/1e9
+		remainingWaitSeconds = float64(maxWaitSeconds) - time.Since(started).Seconds()
+		pause := math.Min(0.1, math.Min(remainingSeconds, remainingWaitSeconds))
+		if pause > 0 {
 			waitSleep(time.Duration(pause * float64(time.Second)))
 		}
 	}
