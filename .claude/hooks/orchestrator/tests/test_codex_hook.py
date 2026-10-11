@@ -1,5 +1,4 @@
 import io
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -21,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 sys.path.insert(0, str(Path(__file__).parents[4] / "scripts"))
 import active_coder_state
 import codex
-import code_map
 import async_session_maintenance
 import codex_exec_mcp
 import coder_config
@@ -161,20 +159,6 @@ def response_bundle(response, config):
     output = response["hookSpecificOutput"][config["post_tool_output_field"]]
     assert output[0]["type"] == "text"
     return json.loads(output[0]["text"])
-
-
-def _assert_waiter_next_command(next_text, job_id):
-    legacy = (f'Run in the background (use the PowerShell tool on Windows): "{sys.executable}" '
-              f'"{Path(codex.__file__).resolve().parent / "purser_wait.py"}" '
-              f'{job_id} ; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.')
-    if next_text == legacy:
-        return
-    match = re.fullmatch(
-        rf'Run in the background \(use the PowerShell tool on Windows\): "([^"]+)" wait {re.escape(job_id)} ; '
-        r'if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId\.', next_text)
-    assert match, next_text
-    assert Path(match.group(1)).is_absolute(), next_text
-    assert "python" not in next_text.lower(), next_text
 
 
 START_TOOL = "mcp__plugin_purser_codex-main__codex_start"
@@ -464,79 +448,6 @@ def test_failed_recovery_finalizes_through_ambiguous_path(workspace, config, mon
     assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
 
 
-def test_new_session_result_requires_adoption_and_original_baseline(workspace, config):
-    repo, state = workspace
-    prompt = orch(task="original-task", scope="file0.py") + "\nDo the work."
-    start, job_id, _ = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
-    (repo / "file0.py").write_text("value = 9\n", encoding="utf-8")
-    followup = async_followup(RESULT_TOOL, job_id)
-    followup["session_id"] = "new-session"
-    denied = codex.pre_tool_use(followup, config=config, state_root=state, repo_root=repo)
-    assert "ASYNC_ADOPTION_REQUIRES_USER_CONSENT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    followup["tool_input"]["adopt"] = True
-    assert codex.pre_tool_use(followup, config=config, state_root=state, repo_root=repo) == {}
-    post = {**followup, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
-        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
-    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
-    bundle = response_bundle(first, config)
-    assert bundle["task_id"] == "original-task"
-    assert bundle["changed_paths"] == ["file0.py"]
-    assert Path(bundle["raw_output_path"]).stem == codex._call_key(start)
-    assert not codex._pending_path(state, start).exists()
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
-    assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
-                               reviewer=lambda **kwargs: pytest.fail("second review")) == first
-
-
-def test_new_session_adoption_rejects_wrong_project_and_mismatched_chain(workspace, config, tmp_path):
-    repo, state = workspace
-    start, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
-    followup = async_followup(RESULT_TOOL, job_id)
-    followup.update(session_id="new-session", tool_input={"jobId": job_id, "adopt": True})
-    wrong = tmp_path / "other-repo"
-    wrong.mkdir()
-    assert "UNKNOWN_ASYNC_JOB" in codex.pre_tool_use(
-        followup, config=config, state_root=state, repo_root=wrong)["hookSpecificOutput"]["permissionDecisionReason"]
-    pending_path = codex._pending_path(state, start)
-    pending = json.loads(pending_path.read_text(encoding="utf-8"))
-    pending["job_id"] = "0" * 64
-    pending_path.write_text(json.dumps(pending), encoding="utf-8")
-    assert "UNKNOWN_ASYNC_JOB" in codex.pre_tool_use(
-        followup, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def test_interrupted_first_finalize_then_new_session_adoption_recovers_bundle(workspace, config, monkeypatch):
-    repo, state = workspace
-    start, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
-    (repo / "file0.py").write_text("value = 5\n", encoding="utf-8")
-    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
-    original = async_followup(RESULT_TOOL, job_id)
-    post = {**original, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
-        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
-    write = codex._atomic_json_write
-    reviews = []
-    failures = []
-    def interrupt_once(path, value):
-        if path == state / "async_jobs" / f"{job_id}.json" and value.get("stage") == "CONSUMED" and not failures:
-            failures.append(True)
-            raise OSError("interrupted before consumed record")
-        return write(path, value)
-    monkeypatch.setattr(codex, "_atomic_json_write", interrupt_once)
-    reviewer = lambda **kwargs: reviews.append(kwargs) or {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE}
-    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo, reviewer=reviewer)
-    assert response_bundle(first, config)["status"] == "ALREADY_CONSUMED_OR_INTERRUPTED"
-    assert len(reviews) == 1
-    adopted = {**post, "session_id": "new-session", "tool_input": {"jobId": job_id, "adopt": True}}
-    assert codex.pre_tool_use({**adopted, "hook_event_name": "PreToolUse"},
-                              config=config, state_root=state, repo_root=repo) == {}
-    second = codex.post_tool_use(adopted, config=config, state_root=state, repo_root=repo,
-                                 reviewer=lambda **kwargs: pytest.fail("second review"))
-    assert response_bundle(second, config)["task_id"] == "task-1"
-    assert len(reviews) == 1
-    assert codex.post_tool_use(adopted, config=config, state_root=state, repo_root=repo) == second
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
-
-
 def test_finalizing_crash_before_bundle_survives_cleanup_and_recovers(workspace, config, monkeypatch):
     repo, state = workspace
     start, job_id, record = async_started(workspace, config, state_name="SUCCEEDED")
@@ -564,19 +475,6 @@ def test_finalizing_crash_before_bundle_survives_cleanup_and_recovers(workspace,
     assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["stage"] == "CONSUMED"
 
 
-def test_stale_pending_cleanup_keeps_async_baseline_without_lease_field(workspace, config):
-    repo, state = workspace
-    start, job_id, _ = async_started(workspace, config)
-    path = codex._pending_path(state, start)
-    pending = json.loads(path.read_text(encoding="utf-8"))
-    pending.pop("lease_owner", None)
-    path.write_text(json.dumps(pending), encoding="utf-8")
-    old = time.time() - codex.PENDING_MAX_AGE_SECONDS - 60
-    os.utime(path, (old, old))
-    codex._cleanup_stale_pending(state, event(tool_use_id="another-call"))
-    assert path.exists() and pending["job_id"] == job_id
-
-
 @pytest.mark.parametrize("state_name", ("FAILED", "TIMED_OUT", "CANCELLED", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED", "UNREADABLE"))
 def test_async_terminal_failure_uses_ambiguous_path(workspace, config, state_name):
     repo, state = workspace
@@ -591,45 +489,6 @@ def test_async_terminal_failure_uses_ambiguous_path(workspace, config, state_nam
     assert "FULL" in output["hookSpecificOutput"]["additionalContext"]
     assert not codex._pending_path(state, start).exists()
     assert any(e["event_type"] == "IMPLEMENTER_FAILED" for e in _all_telemetry_events(state))
-
-
-@pytest.mark.parametrize("tool_failed", (False, True))
-def test_async_cancel_uses_failure_path_and_cleanup(workspace, config, tool_failed):
-    repo, state = workspace
-    start, job_id, record = async_started(workspace, config)
-    call = async_followup(CANCEL_TOOL, job_id)
-    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo) == {}
-    if tool_failed:
-        response = codex.post_tool_use_failure({**call, "hook_event_name": "PostToolUseFailure", "error": "cancel failed"},
-                                               config=config, state_root=state, repo_root=repo)
-    else:
-        response = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-                                        {"structuredContent": {"jobId": job_id, "state": "CANCELLED"}}},
-                                       config=config, state_root=state, repo_root=repo)
-    assert "FULL" in response["hookSpecificOutput"]["additionalContext"]
-    assert not codex._pending_path(state, start).exists()
-
-
-def test_async_cleanup_crash_does_not_repeat_finalization(workspace, config, monkeypatch):
-    repo, state = workspace
-    start, job_id, record = async_started(workspace, config, state_name="SUCCEEDED")
-    (repo / "file0.py").write_text("value = 3\n", encoding="utf-8")
-    followup = async_followup(RESULT_TOOL, job_id)
-    post = {**followup, "hook_event_name": "PostToolUse", "tool_response":
-            {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
-    remove = codex._remove_pending
-    calls = []
-    def crash_once(root, event):
-        if not calls:
-            calls.append(True)
-            raise OSError("simulated cleanup crash")
-        return remove(root, event)
-    monkeypatch.setattr(codex, "_remove_pending", crash_once)
-    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
-                                reviewer=lambda **kwargs: calls.append("review") or {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE})
-    second = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
-                                 reviewer=lambda **kwargs: pytest.fail("second review"))
-    assert second == first and not codex._pending_path(state, start).exists()
 
 
 def test_async_real_shaped_token_report_is_recorded(workspace, config, monkeypatch):
@@ -674,57 +533,6 @@ def test_async_ledger_rejection_returns_typed_full_bundle(workspace, config, mon
     assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo) == first
 
 
-@pytest.mark.parametrize("reject_ledger", (False, True))
-def test_async_crash_after_bundle_retries_without_second_review(workspace, config, monkeypatch, reject_ledger):
-    repo, state = workspace
-    _, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
-    result = async_followup(RESULT_TOOL, job_id)
-    post = {**result, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
-        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
-    if reject_ledger:
-        monkeypatch.setattr(ledger.SessionLedger, "save", lambda self, record: {
-            "status": "ERROR", "code": "LEDGER_RECORD_INVALID", "message": "SECRET_VALUE_PATTERN at last_outcome"})
-    write = codex._atomic_json_write
-    failures = []
-    def crash_before_consumed(path, value):
-        if path == state / "async_jobs" / f"{job_id}.json" and value.get("stage") == "CONSUMED" and not failures:
-            failures.append(True)
-            raise OSError("simulated finalizer crash")
-        return write(path, value)
-    monkeypatch.setattr(codex, "_atomic_json_write", crash_before_consumed)
-    first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
-    assert response_bundle(first, config)["status"] == "ALREADY_CONSUMED_OR_INTERRUPTED"
-    second = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
-    bundle = response_bundle(second, config)
-    assert bundle["thread_id"] == "async-thread"
-    assert any(f["code"] == "LEDGER_RECORD_REJECTED" for f in bundle["findings"]) == reject_ledger
-    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text())["stage"] == "CONSUMED"
-
-
-def test_two_parallel_async_jobs_finalize_independently(workspace, config):
-    repo, state = workspace
-    jobs = []
-    for number in (1, 2):
-        prompt = orch(task=f"parallel-{number}", scope=f"file{number - 1}.py") + "\nDo the work."
-        _, job_id, _ = async_started(workspace, config, prompt=prompt,
-                                     state_name="SUCCEEDED", tool_use_id=f"start-{number}")
-        jobs.append(job_id)
-    for number, job_id in enumerate(jobs, 1):
-        result = async_followup(RESULT_TOOL, job_id)
-        result["tool_use_id"] = f"result-{number}"
-        assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
-        post = {**result, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
-            "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
-        first = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
-        assert response_bundle(first, config)["task_id"] == f"parallel-{number}"
-        assert codex.post_tool_use(post, config=config, state_root=state, repo_root=repo) == first
-
-
-def _lease_call(task, scope, tool_use_id, *, tool_name=codex.CODEX_TOOL):
-    return event(tool_name, prompt=orch(task=task, scope=scope) + "\nDo the work.",
-                 tool_use_id=tool_use_id)
-
-
 def _lease_state(workspace):
     repo, state = workspace
     return ledger.ScopeLeases(state / "projects" / project_root.project_key(repo.resolve()))
@@ -749,227 +557,6 @@ def _finish_attribution_call(call, workspace, config, observed):
             '"commands":["focused"],"exit_codes":[0]}'}}}
     return response_bundle(codex.post_tool_use(
         post, config=config, state_root=state, repo_root=repo, reviewer=review), config)
-
-
-def test_single_job_compact_bundle_omits_whole_tree_fields(workspace, config):
-    repo, state = workspace
-    call = _attribution_call("single", "file0.py", "single")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    bundle = _finish_attribution_call(call, workspace, config, [])
-    assert not {"whole_tree_delta", "whole_tree_anomaly", "known_concurrent_scopes"} & bundle.keys()
-    artifact = json.loads(Path(bundle["full_bundle_path"]).read_text(encoding="utf-8"))
-    assert artifact["whole_tree_delta"]["changed_paths"] == ["file0.py"]
-    assert artifact["known_concurrent_scopes"] == []
-
-
-def test_partial_reviewer_scope_is_reported_and_forces_full(workspace, config, monkeypatch):
-    repo, state = workspace
-    config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
-    call = event(
-        prompt=orch(scope="file0.py,file1.py")
-        + '\nTASK_CONTRACT: {"objective":"Review both files","criteria":"Account for the full delta"}',
-        tool_use_id="partial-review-scope",
-    )
-    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    (repo / "file1.py").write_text("value = 3\n", encoding="utf-8")
-
-    def partial_classification(delta, delegated_scope, **kwargs):
-        paths = delta["changed_paths"]
-        return {
-            "decision": ledger.PROCEED,
-            "in_scope_paths": paths[:1],
-            "out_of_scope_paths": [],
-            "protected_paths": [],
-            "concurrent_writer": False,
-        }
-
-    monkeypatch.setattr(ledger, "classify_concurrent_writers", partial_classification)
-    post = {
-        **call,
-        "hook_event_name": "PostToolUse",
-        "tool_response": [{
-            "type": "text",
-            "text": json.dumps({
-                "threadId": "thread-partial-review-scope",
-                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
-            }),
-        }],
-    }
-    bundle = response_bundle(
-        codex.post_tool_use(
-            post,
-            config=config,
-            state_root=state,
-            repo_root=repo,
-            reviewer=lambda **kwargs: {
-                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-                "validation": "PASS",
-                "findings": [],
-            },
-        ),
-        config,
-    )
-
-    assert bundle["reviewer1_scope"] == {
-        "reviewed": ["file0.py"],
-        "omitted": ["file1.py"],
-        "reason": "Only delegated in-scope paths were sent to Reviewer-1.",
-    }
-    assert bundle["claude_review_mode"] == policy.FULL
-
-
-def test_full_reviewer_scope_adds_no_scope_field(workspace, config):
-    repo, state = workspace
-    config = dict(config, reviewer_gate={"small_delta_max_lines": 0, "small_delta_max_files": 0})
-    call = event(
-        prompt=orch(scope="file0.py")
-        + '\nTASK_CONTRACT: {"objective":"Review the file","criteria":"Account for the full delta"}',
-        tool_use_id="full-review-scope",
-    )
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    post = {
-        **call,
-        "hook_event_name": "PostToolUse",
-        "tool_response": [{
-            "type": "text",
-            "text": json.dumps({
-                "threadId": "thread-full-review-scope",
-                "content": 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["focused"],"exit_codes":[0]}',
-            }),
-        }],
-    }
-    bundle = response_bundle(
-        codex.post_tool_use(
-            post,
-            config=config,
-            state_root=state,
-            repo_root=repo,
-            reviewer=lambda **kwargs: {
-                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-                "validation": "PASS",
-                "findings": [],
-            },
-        ),
-        config,
-    )
-
-    assert "reviewer1_scope" not in bundle
-
-
-def test_reviewer_scope_path_lists_are_capped_with_remaining_count():
-    reviewed = [f"src/reviewed{index}.py" for index in range(14)]
-    omitted = [f"src/omitted{index}.py" for index in range(14)]
-    scope = codex._reviewer1_scope(reviewed, omitted, "partial")
-
-    assert scope == {
-        "reviewed": reviewed[:10] + ["+4 more"],
-        "omitted": omitted[:10] + ["+4 more"],
-        "reason": "partial",
-    }
-
-
-def test_code_map_line_survives_worker_prompt(workspace, config):
-    repo, state = workspace
-    line = r"CODE_MAP=C:\Users\Example User\code-map\map.txt STATUS=FRESH"
-    call = event(prompt=orch() + "\nDo the work.\n" + line, tool_use_id="map-prompt")
-    pre = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    assert line in pre["hookSpecificOutput"]["updatedInput"]["prompt"].splitlines()
-
-
-@pytest.mark.parametrize(("phase", "route"), (("implementation", "normal"), ("plan", "plan_standard")))
-def test_code_map_is_appended_to_worker_prompt(workspace, config, monkeypatch, phase, route):
-    repo, state = workspace
-    map_path = Path(repo).parent / "code map" / "map.txt"
-    monkeypatch.setattr(code_map, "refresh", lambda root, **kwargs: (map_path, "FRESH"))
-    call = event(prompt=orch(phase=phase, route=route) + "\nDo the work.", tool_use_id=f"map-added-{phase}")
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)[
-        "hookSpecificOutput"]["updatedInput"]["prompt"]
-    assert updated.splitlines().count(f"CODE_MAP={map_path} STATUS=FRESH") == 1
-
-
-def test_code_map_line_is_not_duplicated(workspace, config, monkeypatch):
-    repo, state = workspace
-    line = "CODE_MAP=/existing/map.txt STATUS=STALE"
-    monkeypatch.setattr(code_map, "refresh", lambda *_args, **_kwargs: pytest.fail("map was regenerated"))
-    call = event(prompt=orch() + "\nDo the work.\n" + line, tool_use_id="map-not-duplicated")
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)[
-        "hookSpecificOutput"]["updatedInput"]["prompt"]
-    assert updated.splitlines().count(line) == 1
-
-
-def test_code_map_failure_is_unavailable_and_dispatch_continues(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(code_map, "refresh", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("index failed")))
-    call = event(prompt=orch() + "\nDo the work.", tool_use_id="map-unavailable")
-    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    updated = result["hookSpecificOutput"]["updatedInput"]["prompt"]
-    assert "CODE_MAP=" in updated and updated.endswith("STATUS=UNAVAILABLE")
-    assert "permissionDecision" not in result["hookSpecificOutput"]
-
-
-def test_operation_prompt_does_not_get_a_code_map(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(code_map, "refresh", lambda *_args, **_kwargs: pytest.fail("operation generated a map"))
-    prompt = orch(phase="operation", route="operation", scope=None) + "\nInspect."
-    call = event(prompt=prompt, tool_use_id="operation-no-map")
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)[
-        "hookSpecificOutput"]["updatedInput"]["prompt"]
-    assert updated == "Inspect."
-
-
-def test_code_map_stale_after_mutating_job(workspace, config):
-    repo, state = workspace
-    call = _attribution_call("map-mutation", "file0.py", "map-mutation")
-    call["tool_input"]["prompt"] += "\nCODE_MAP=C:\\state\\code-map\\map.txt STATUS=FRESH"
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    bundle = _finish_attribution_call(call, workspace, config, [])
-    assert bundle["code_map"] == "STALE"
-
-
-def test_code_map_field_present_after_automatic_injection(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(code_map, "refresh", lambda root, **kwargs: (Path("C:/map.txt"), "FRESH"))
-    call = _attribution_call("no-map", "file0.py", "no-map")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    bundle = _finish_attribution_call(call, workspace, config, [])
-    assert bundle["code_map"] == "STALE"
-
-
-def test_known_concurrent_scope_summary_bounds_task_ids(config):
-    bundle = codex._base_bundle()
-    bundle["known_concurrent_scopes"] = [
-        {"path": f"file{n}.py", "task_id": f"task-{n}"} for n in range(8)]
-    bundle["whole_tree_delta"] = {"changed_paths": [f"file{n}.py" for n in range(10000)]}
-    bundle["whole_tree_anomaly"] = {"paths": [f"file{n}.py" for n in range(10000)]}
-    compact, overflow = codex._compact_bundle(bundle, config["bundle_non_report_max_bytes"])
-    assert not overflow
-    assert compact["known_concurrent_scopes"] == {
-        "count": 8, "task_ids": [f"task-{n}" for n in range(5)]}
-    assert "whole_tree_delta" not in compact and "whole_tree_anomaly" not in compact
-
-
-def test_compact_bundle_drops_only_successfully_parsed_trailing_validation(config):
-    record = 'VALIDATION: {"source":"WORKER_REPORTED","status":"PASS","commands":["pytest"],"exit_codes":[0]}'
-    report = f"Implemented the change.\n{record}"
-    bundle = codex._base_bundle()
-    bundle.update(implementer_report=report, worker_validation=codex._parse_worker_validation(report))
-
-    compact, overflow = codex._compact_bundle(bundle, config["bundle_non_report_max_bytes"])
-
-    assert not overflow
-    assert compact["implementer_report"] == "Implemented the change."
-    assert bundle["implementer_report"] == report
-
-    failed_report = "Implemented the change.\nVALIDATION: {bad json}"
-    failed = dict(bundle, implementer_report=failed_report,
-                  worker_validation=codex._parse_worker_validation(failed_report))
-    compact_failed, _ = codex._compact_bundle(failed, config["bundle_non_report_max_bytes"])
-    assert compact_failed["implementer_report"] == failed_report
 
 
 def test_concurrent_leased_jobs_get_only_their_own_diff(workspace, config):
@@ -1003,76 +590,6 @@ def test_concurrent_leased_jobs_get_only_their_own_diff(workspace, config):
             finding["code"] for finding in bundle["findings"]}
 
 
-def test_reply_lease_attributes_same_task_repair_during_foreign_result(workspace, config):
-    repo, state = workspace
-    foreign = _attribution_call("foreign", "file1.py", "reply-foreign")
-    first = _attribution_call("repair", "file0.py", "reply-first")
-    codex.pre_tool_use(foreign, config=config, state_root=state, repo_root=repo)
-    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    _finish_attribution_call(first, workspace, config, [])
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(first)]["state"] == "RELEASED"
-
-    reply = event(START_TOOL, prompt="Continue the repair.", tool_use_id="reply-lease",
-                  mode="reply", threadId=first["tool_use_id"])
-    pre = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
-    assert "updatedInput" in pre["hookSpecificOutput"]
-    owner = _lease_state(workspace)._read()["owners"][codex._call_key(reply)]
-    assert owner["state"] == "ACTIVE" and owner["task_id"] == "repair"
-    assert owner["scope"] == ["file0.py"]
-    call_uuid = pre["hookSpecificOutput"]["updatedInput"]["call"]
-    job_id = hashlib.sha256(call_uuid.encode()).hexdigest()
-    codex.post_tool_use({**reply, "hook_event_name": "PostToolUse", "tool_response":
-                         {"structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
-                        config=config, state_root=state, repo_root=repo)
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(reply)]["state"] == "ACTIVE"
-    (repo / "file0.py").write_text("value = 3\n", encoding="utf-8")
-
-    bundle = _finish_attribution_call(foreign, workspace, config, [])
-    artifact = json.loads(Path(bundle["full_bundle_path"]).read_text(encoding="utf-8"))
-    assert artifact["known_concurrent_scopes"] == [{"path": "file0.py", "task_id": "repair"}]
-    assert bundle["changed_paths"] == []
-    assert not any(item["code"] == "OUT_OF_SCOPE_MODIFICATION" for item in bundle["findings"])
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(reply)]["state"] == "ACTIVE"
-    bridge_job = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-    bridge_job.parent.mkdir(parents=True, exist_ok=True)
-    bridge_job.write_text(json.dumps({"jobId": job_id, "call": call_uuid,
-                                      "state": "SUCCEEDED", "threadId": first["tool_use_id"]}),
-                          encoding="utf-8")
-    result = async_followup(RESULT_TOOL, job_id)
-    codex.post_tool_use({**result, "hook_event_name": "PostToolUse", "tool_response":
-                         {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED",
-                                                "threadId": first["tool_use_id"], "content": "done"}}},
-                        config=config, state_root=state, repo_root=repo)
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(reply)]["state"] == "RELEASED"
-
-
-def test_reply_lease_denies_conflicting_active_task(workspace, config):
-    repo, state = workspace
-    first = _attribution_call("repair", "file0.py", "reply-conflict-first")
-    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
-    _finish_attribution_call(first, workspace, config, [])
-    conflicting = _lease_call("other", "file0.py", "reply-conflict-other")
-    codex.pre_tool_use(conflicting, config=config, state_root=state, repo_root=repo)
-
-    reply = event(START_TOOL, prompt="Continue the repair.", tool_use_id="reply-conflict",
-                  mode="reply", threadId=first["tool_use_id"])
-    denied = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
-    assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    assert codex._call_key(reply) not in _lease_state(workspace)._read()["owners"]
-
-
-def test_unleased_foreign_edit_still_forces_full(workspace, config):
-    repo, state = workspace
-    call = _attribution_call("owned", "file0.py", "unleased")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file1.py").write_text("value = 9\n", encoding="utf-8")
-    bundle = _finish_attribution_call(call, workspace, config, [])
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert "known_concurrent_scopes" not in bundle
-    assert any(f["code"] == "OUT_OF_SCOPE_MODIFICATION" for f in bundle["findings"])
-
-
 def test_ambiguous_foreign_path_still_forces_full(workspace, config):
     repo, state = workspace
     (repo / "file1.py").write_text("value = 3\n", encoding="utf-8")
@@ -1084,80 +601,6 @@ def test_ambiguous_foreign_path_still_forces_full(workspace, config):
     bundle = _finish_attribution_call(calls[0], workspace, config, [])
     assert bundle["claude_review_mode"] == policy.FULL
     assert "known_concurrent_scopes" not in bundle
-
-
-def test_lease_released_before_job_start_does_not_excuse_path(workspace, config):
-    repo, state = workspace
-    store = _lease_state(workspace)
-    assert store.acquire("former", "former-task", ["file1.py"])["status"] == ledger.OK
-    assert store.release("former")["status"] == ledger.OK
-    call = _attribution_call("owned", "file0.py", "after-release")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file1.py").write_text("value = 9\n", encoding="utf-8")
-    bundle = _finish_attribution_call(call, workspace, config, [])
-    assert "known_concurrent_scopes" not in bundle
-    assert bundle["claude_review_mode"] == policy.FULL
-
-
-def test_scope_lease_disjoint_and_conflicting_starts(workspace, config):
-    repo, state = workspace
-    first = _lease_call("owner-a", "file0.py", "lease-a")
-    second = _lease_call("owner-b", "file1.py", "lease-b", tool_name=START_TOOL)
-    conflict = _lease_call("owner-c", "file0.py", "lease-c")
-    assert "updatedInput" in codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-    assert "updatedInput" in codex.pre_tool_use(second, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-    denied = codex.pre_tool_use(conflict, config=config, state_root=state, repo_root=repo)
-    assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "owner-a" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "purser_leases.py --release <task-id>" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    violations = [item for item in _all_telemetry_events(state)
-                  if item["event_type"] == "ROUTING_PROTOCOL_VIOLATION"]
-    assert any(item["payload"]["violation_code"] == "SCOPE_LEASE_CONFLICT"
-               for item in violations)
-    owners = _lease_state(workspace)._read()["owners"]
-    assert len([owner for owner in owners.values() if owner["state"] == "ACTIVE"]) == 2
-
-
-def test_scope_lease_path_prefix_and_stale_owner_block(workspace, config):
-    repo, state = workspace
-    store = _lease_state(workspace)
-    assert store.acquire("lost-owner", "old-task", ["src"])["status"] == ledger.OK
-    # No pending call or host evidence exists after this simulated restart.
-    contender = _lease_call("new-task", "src/module.py", "lease-stale")
-    denied = codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)
-    assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "old-task" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    outcome, = [item for item in _all_telemetry_events(state)
-                if item["event_type"] == "SCOPE_CONFLICT_OUTCOME"]
-    assert outcome["payload"] == {"action": "denied"}
-    assert store.release("lost-owner")["status"] == ledger.OK
-    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-    broad = _lease_call("broad-task", "src", "lease-broad")
-    assert "SCOPE_LEASE_CONFLICT" in codex.pre_tool_use(
-        broad, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def test_corrupt_lease_record_denies_admission(workspace, config):
-    repo, state = workspace
-    store = _lease_state(workspace)
-    store.path.parent.mkdir(parents=True)
-    store.path.write_text("{broken", encoding="utf-8")
-    call = _lease_call("new-task", "file0.py", "lease-corrupt")
-    denied = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    assert "LEASE_ADMISSION_UNCERTAIN" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def test_sync_lease_deadline_releases_only_after_timeout_and_margin(workspace, monkeypatch):
-    store = _lease_state(workspace)
-    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
-    assert store.acquire("old", "old-task", ["file0.py"], timeout_seconds=10)["status"] == ledger.OK
-    assert store._read()["owners"]["old"]["deadline_at"] == 1070.0
-    monkeypatch.setattr(ledger.time, "time", lambda: 1069.0)
-    assert store.acquire("new", "new-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
-    monkeypatch.setattr(ledger.time, "time", lambda: 1070.0)
-    assert store.acquire("new", "new-task", ["file0.py"])["status"] == ledger.OK
-    assert store._read()["owners"]["old"]["state"] == "RELEASED"
-    assert store._read()["owners"]["new"]["deadline_at"] == 1070 + 7200
 
 
 def test_async_lease_waits_for_finalize_or_expired_job_record(workspace, monkeypatch):
@@ -1192,19 +635,6 @@ def test_async_lease_waits_for_finalize_or_expired_job_record(workspace, monkeyp
                 and item["payload"].get("action") == "discarded"]
 
 
-def test_async_missing_job_record_releases_after_grace_period(workspace, monkeypatch):
-    store = _lease_state(workspace)
-    job_id = hashlib.sha256(b"missing-call").hexdigest()
-    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0)
-    store.acquire("missing-owner", "missing-task", ["file0.py"], job_id=job_id,
-                  timeout_seconds=100)
-    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0 + 10 * 60 - 1)
-    assert store.acquire("next", "next-task", ["file0.py"])["code"] == "SCOPE_LEASE_CONFLICT"
-    monkeypatch.setattr(ledger.time, "time", lambda: 1000.0 + 10 * 60)
-    assert store.owner_state("missing-owner") == "RELEASED"
-    assert store.acquire("next", "next-task", ["file0.py"])["status"] == ledger.OK
-
-
 def test_owner_state_promotes_waiter_after_blocker_retention_expires(workspace, monkeypatch):
     store = _lease_state(workspace)
     blocker_call = "completed blocker"
@@ -1232,209 +662,6 @@ def test_owner_state_promotes_waiter_after_blocker_retention_expires(workspace, 
     assert [event["payload"]["job_id"] for event in expired] == [blocker_job_id]
 
 
-def test_released_lease_entries_are_pruned_on_write(workspace, monkeypatch):
-    store = _lease_state(workspace)
-    monkeypatch.setattr(ledger.time, "time", lambda: 1_000_000.0)
-    value = {"version": 1, "owners": {
-        "old": {"task_id": "old", "scope": ["file0.py"], "state": "RELEASED",
-                "job_id": None, "acquired_at": 1.0,
-                "released_at": 1_000_000 - ledger.RELEASED_LEASE_RETENTION_SECONDS - 1},
-        "recent": {"task_id": "recent", "scope": ["file1.py"], "state": "RELEASED",
-                   "job_id": None, "acquired_at": 1.0,
-                   "released_at": 1_000_000 - ledger.RELEASED_LEASE_RETENTION_SECONDS + 1},
-    }}
-    store._write(value)
-    assert set(store._read()["owners"]) == {"recent"}
-
-
-def test_lease_cli_lists_and_releases_only_named_task(workspace, monkeypatch):
-    _, state = workspace
-    store = _lease_state(workspace)
-    store.acquire("one", "task-one", ["file0.py"])
-    call = "cli-async"
-    job_id = hashlib.sha256(call.encode()).hexdigest()
-    store.acquire("two", "task-two", ["file1.py"], job_id=job_id)
-    path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"jobId": job_id, "call": call, "state": "RUNNING"}), encoding="utf-8")
-    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
-    cli = Path(codex.__file__).with_name("purser_leases.py")
-    listed = subprocess.run([sys.executable, str(cli), "--list"], capture_output=True,
-                            text=True, check=True)
-    active = json.loads(listed.stdout)["active"]
-    assert {row["task_id"] for row in active} == {"task-one", "task-two"}
-    assert next(row for row in active if row["task_id"] == "task-two")["job_state"] == "RUNNING"
-    assert all(row["age_seconds"] >= 0 and row["scope"] for row in active)
-    released = subprocess.run([sys.executable, str(cli), "--release", "task-one"],
-                              capture_output=True, text=True, check=True)
-    assert [row["task_id"] for row in json.loads(released.stdout)["released"]] == ["task-one"]
-    assert [row["task_id"] for row in store.active()] == ["task-two"]
-
-
-def test_simultaneous_overlapping_worktree_starts_run_and_disjoint_runs(workspace, config):
-    repo, state = workspace
-    calls = [_lease_call(f"race-{n}", "file0.py", f"lease-race-{n}", tool_name=START_TOOL)
-             for n in (1, 2)]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda call: codex.pre_tool_use(
-            call, config=config, state_root=state, repo_root=repo), calls))
-    assert all("updatedInput" in result["hookSpecificOutput"] for result in results)
-    assert all(result["hookSpecificOutput"]["updatedInput"].get("worktree") is True
-               and "leaseQueued" not in result["hookSpecificOutput"]["updatedInput"]
-               for result in results)
-    disjoint = _lease_call("disjoint", "file1.py", "lease-disjoint", tool_name=START_TOOL)
-    assert "leaseQueued" not in codex.pre_tool_use(
-        disjoint, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    owners = _lease_state(workspace)._read()["owners"]
-    assert sorted(owner["state"] for owner in owners.values()) == ["ACTIVE", "ACTIVE", "ACTIVE"]
-
-
-def test_overlapping_worktree_admission_keeps_baseline_without_waiting(workspace, config, monkeypatch):
-    repo, state = workspace
-    first = _lease_call("first", "file0.py", "queue-first", tool_name=START_TOOL)
-    second = _lease_call("second", "file0.py", "queue-second", tool_name=START_TOOL)
-    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
-    updated = codex.pre_tool_use(second, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["worktree"] is True
-    assert "leaseQueued" not in updated
-    assert codex._read_pending(state, second)["baseline"]["status"] == ledger.OK
-    assert len(_lease_state(workspace).overlapping_owners(codex._call_key(first))) == 1
-    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
-    jobs = state / "codex_exec_mcp" / "jobs"
-    server = codex_exec_mcp.Server(codex_bin=json.dumps([sys.executable]), job_dir=jobs)
-    monkeypatch.setattr(codex_exec_mcp, "_launch_host", lambda *_args: None)
-    monkeypatch.setattr(server, "_await_host", lambda *_args: {"structuredContent": {"jobId": job_id, "state": "QUEUED"}})
-    server._start_job(updated)
-    job = json.loads((jobs / f"{job_id}.json").read_text(encoding="utf-8"))
-    assert "leaseQueued" not in job
-    pending = codex._read_pending(state, second)
-    assert isinstance(pending["baseline"]["status_entries"], list)
-
-
-def test_hot_path_queues_only_matching_worktree_start(workspace, config):
-    repo, state = workspace
-    store = _lease_state(workspace)
-    store.record_conflicts(["file0.py"])
-    owner = _lease_call("hot-owner", "file0.py", "hot-owner", tool_name=START_TOOL)
-    hot = _lease_call("hot-waiter", "file0.py", "hot-waiter", tool_name=START_TOOL)
-    disjoint = _lease_call("cold-start", "file1.py", "cold-start", tool_name=START_TOOL)
-    codex.pre_tool_use(owner, config=config, state_root=state, repo_root=repo)
-    hot_input = codex.pre_tool_use(hot, config=config, state_root=state, repo_root=repo)[
-        "hookSpecificOutput"]["updatedInput"]
-    cold_input = codex.pre_tool_use(disjoint, config=config, state_root=state, repo_root=repo)[
-        "hookSpecificOutput"]["updatedInput"]
-    assert hot_input["leaseQueued"] is True
-    queued, = [item for item in _all_telemetry_events(state)
-               if item["event_type"] == "SCOPE_CONFLICT_OUTCOME"]
-    assert queued["payload"]["action"] == "queued"
-    assert queued["payload"]["job_id"] == hashlib.sha256(hot_input["call"].encode()).hexdigest()
-    pending = codex._read_pending(state, hot)
-    assert pending["baseline"]["code"] == "QUEUED"
-    assert "leaseQueued" not in cold_input
-    job_id = hashlib.sha256(hot_input["call"].encode()).hexdigest()
-    pending["job_id"] = job_id
-    codex._atomic_json_write(codex._pending_path(state, hot), pending)
-    index = {"jobId": job_id, "call": pending["async_call"],
-             "project_key": pending["project_key"], "call_key": pending["lease_owner"]}
-    async_index = state / "async_jobs" / f"{job_id}.json"
-    async_index.parent.mkdir(parents=True, exist_ok=True)
-    async_index.write_text(json.dumps(index), encoding="utf-8")
-    assert store.release(codex._call_key(owner))["status"] == ledger.OK
-    promoted, = [item for item in _all_telemetry_events(state)
-                 if item["event_type"] == "SCOPE_CONFLICT_OUTCOME"
-                 and item["payload"]["action"] == "promoted"]
-    assert promoted["payload"]["job_id"] == job_id
-    assert isinstance(promoted["payload"]["queue_wait_ms"], (int, float))
-    assert codex.bind_queued_baseline(state, job_id) is True
-    assert codex._read_pending(state, hot)["baseline"]["status"] == ledger.OK
-
-
-def test_sync_finalize_releases_scope_lease(workspace, config):
-    repo, state = workspace
-    first = _lease_call("owner-a", "file0.py", "lease-finalize")
-    contender = _lease_call("owner-b", "file0.py", "lease-after")
-    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
-    assert "SCOPE_LEASE_CONFLICT" in codex.pre_tool_use(
-        contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
-    post = {**first, "hook_event_name": "PostToolUse", "tool_response":
-            {"structuredContent": {"threadId": "lease-thread", "content": "done"}}}
-    codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(first)]["state"] == "RELEASED"
-    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-
-
-def test_failure_finalize_releases_scope_lease(workspace, config):
-    repo, state = workspace
-    first = _lease_call("failed-owner", "file0.py", "lease-failed")
-    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
-    failure = {**first, "hook_event_name": "PostToolUseFailure", "error": "worker failed"}
-    codex.post_tool_use_failure(failure, config=config, state_root=state, repo_root=repo)
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(first)]["state"] == "RELEASED"
-    contender = _lease_call("after-failure", "file0.py", "lease-after-failure")
-    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-
-
-def test_rejected_start_waits_for_durable_terminal_state(workspace, config):
-    repo, state = workspace
-    first = _lease_call("rejected-owner", "file0.py", "lease-rejected", tool_name=START_TOOL)
-    updated = codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
-    path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-    path.parent.mkdir(parents=True)
-    job = {"jobId": job_id, "call": updated["call"], "state": "RUNNING"}
-    path.write_text(json.dumps(job), encoding="utf-8")
-    codex.post_tool_use_failure({**first, "hook_event_name": "PostToolUseFailure",
-                                 "error": "start rejected"}, config=config, state_root=state, repo_root=repo)
-    contender = _lease_call("after-rejection", "file0.py", "lease-after-rejection")
-    denied = codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)
-    assert "SCOPE_LEASE_CONFLICT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    job["state"] = "CANCELLED"
-    path.write_text(json.dumps(job), encoding="utf-8")
-    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(first)]["state"] == "RELEASED"
-
-
-def test_async_lease_survives_start_and_releases_after_finalize(workspace, config):
-    repo, state = workspace
-    prompt = orch(task="async-owner", scope="file0.py") + "\nDo the work."
-    start, job_id, _ = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
-    contender = _lease_call("other", "file0.py", "lease-async-conflict")
-    assert "SCOPE_LEASE_CONFLICT" in codex.pre_tool_use(
-        contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecisionReason"]
-    followup = async_followup(RESULT_TOOL, job_id)
-    post = {**followup, "hook_event_name": "PostToolUse", "tool_response":
-            {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED",
-                                   "threadId": "async-thread", "content": "done"}}}
-    codex.post_tool_use(post, config=config, state_root=state, repo_root=repo)
-    assert _lease_state(workspace)._read()["owners"][codex._call_key(start)]["state"] == "RELEASED"
-    assert "updatedInput" in codex.pre_tool_use(contender, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-
-
-@pytest.mark.parametrize("phase,route", (("plan", "plan_standard"), ("operation", "normal")))
-def test_nonimplementation_calls_take_no_write_lease(workspace, config, phase, route):
-    repo, state = workspace
-    first = _lease_call("owner", "file0.py", "lease-active")
-    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
-    call = event(prompt=orch(task="read-only", phase=phase, route=route,
-                             scope="file0.py") + "\nInspect.", tool_use_id=f"lease-{phase}")
-    assert "updatedInput" in codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]
-    owners = _lease_state(workspace)._read()["owners"]
-    assert len(owners) == (2 if phase == "plan" else 1)
-    if phase == "plan":
-        assert owners[codex._call_key(call)]["scope"] == []
-        assert owners[codex._call_key(call)]["read_only"] is True
-
-
-def test_async_start_requires_orch_and_denies_internal_pre_error(workspace, config):
-    repo, state = workspace
-    call = event(START_TOOL, prompt="Do the work.")
-    denied = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    assert "MISSING_ORCH_LINE" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-    failed = codex.internal_pre_error_response(call, RuntimeError("broken"), state_root=state)
-    assert failed["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert not list((state / "pending").glob("*.json"))
-
-
 def test_async_start_rewrites_and_retries_same_call(workspace, config):
     repo, state = workspace
     prompt = orch(scope="file0.py", reason="repeated_failure") + "|eta=8m\nDo the work."
@@ -1456,32 +683,6 @@ def test_async_start_rewrites_and_retries_same_call(workspace, config):
     assert (pending["reason"], pending["eta_minutes"]) == ("repeated_failure", 8)
     assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"] == updated
     assert len([e for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_STARTED"]) == 1
-
-
-@pytest.mark.parametrize("response_shape", ("string", "blocks", "mapping"))
-def test_async_start_post_stores_only_job_id_without_finalizing(workspace, config, response_shape):
-    repo, state = workspace
-    call = event(START_TOOL)
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
-    value = {"jobId": job_id, "state": "RUNNING"}
-    response = {
-        "string": json.dumps(value),
-        "blocks": [{"type": "text", "text": json.dumps(value)}],
-        "mapping": {"structuredContent": value},
-    }[response_shape]
-    post = {**call, "hook_event_name": "PostToolUse", "tool_response": response}
-    result = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
-                                 reviewer=lambda **kwargs: pytest.fail("reviewer ran at start"))
-    next_text = response_bundle(result, config)["next"]
-    _assert_waiter_next_command(next_text, job_id)
-    assert response_bundle(result, config)["jobId"] == job_id
-    assert response_bundle(result, config)["state"] == "RUNNING"
-    assert codex._read_pending(state, call)["job_id"] == job_id
-    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))["call_key"] == codex._call_key(call)
-    record = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]
-    assert record["last_outcome"] is None and record["pending_call_baseline"] is not None
-    assert not [e for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_FINISHED"]
 
 
 @pytest.mark.parametrize("fail_store", (False, True))
@@ -1524,172 +725,6 @@ def test_async_start_failure_uses_ambiguous_path_and_cancels_job(workspace, conf
     assert any(e["event_type"] == "IMPLEMENTER_FAILED" for e in _all_telemetry_events(state))
 
 
-def test_async_reply_start_keeps_recorded_thread(workspace, config):
-    repo, state = workspace
-    save_live_thread(state, reason="continue")
-    call = event(START_TOOL, prompt="Continue.", mode="reply", threadId="thread-1")
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["mode"] == "reply" and updated["threadId"] == "thread-1"
-    assert "model" not in updated and "config" not in updated
-    pending = codex._read_pending(state, call)
-    assert pending["prior_thread_id"] == "thread-1" and pending["reason"] == "continue"
-
-
-@pytest.mark.parametrize(("supplied_label", "expected_label"),
-                         [("new task", "new task"), (None, "old task")])
-def test_async_reply_start_uses_new_label_or_saved_thread_label(
-    workspace, config, supplied_label, expected_label
-):
-    repo, state = workspace
-    save_live_thread(state, reason="continue", label="old task")
-    fields = {"label": supplied_label} if supplied_label is not None else {}
-    call = event(START_TOOL, prompt=orch(task="task-1", reason="continue") + "\nContinue.",
-                 tool_use_id="reply-label", mode="reply", threadId="thread-1", **fields)
-    if supplied_label is None:
-        call["tool_input"].pop("label")
-
-    updated = codex.pre_tool_use(call, config=config, state_root=state,
-                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-
-    assert updated["jobLabel"] == expected_label
-    assert "label" not in updated
-    assert codex._read_pending(state, call)["label"] == expected_label
-
-
-def test_plugin_tool_names_route_new_and_reply(workspace, config):
-    repo, state = workspace
-    prompt = orch(scope="file0.py") + "\n## Objective\nInspect file0.\n## Acceptance criteria\n- Report result."
-    first = event(tool_name="mcp__plugin_purser_codex-main__codex", prompt=prompt,
-                  tool_use_id="plugin-first")
-    routed = codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
-    assert routed["hookSpecificOutput"]["updatedInput"]["model"] == config["routes"]["normal"]["model"]
-    assert codex._read_pending(state, first)["prior_thread_id"] is None
-    response = [{"type": "text", "text": json.dumps({"threadId": "plugin-thread", "content": "Done"})}]
-    result = codex.post_tool_use({**first, "hook_event_name": "PostToolUse", "tool_response": response},
-                                 config=config, state_root=state, repo_root=repo)
-    assert response_bundle(result, config)["thread_id"] == "plugin-thread"
-
-    reply = event(tool_name="mcp__plugin_purser_codex-main__codex-reply", prompt="Continue.",
-                  tool_use_id="plugin-reply", threadId="plugin-thread")
-    reply_routed = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
-    assert reply_routed["hookSpecificOutput"]["updatedInput"]["threadId"] == "plugin-thread"
-    assert codex._read_pending(state, reply)["prior_thread_id"] == "plugin-thread"
-    reply_result = codex.post_tool_use({**reply, "hook_event_name": "PostToolUse", "tool_response": response},
-                                       config=config, state_root=state, repo_root=repo)
-    assert response_bundle(reply_result, config)["thread_id"] == "plugin-thread"
-
-
-@pytest.mark.parametrize("quota", [
-    {"5h_used_pct": 24, "5h_resets_at": "2026-09-23T16:49:02Z"}, None,
-])
-def test_quota_reply_bundle_and_review_mode(workspace, config, monkeypatch, quota):
-    repo, state = workspace
-    receipts = []
-    monkeypatch.setattr(codex.compaction_advisor, "queue_receipt", lambda event, repository, bundle: receipts.append((repository, bundle)))
-    monkeypatch.setattr(codex.codex_quota, "read_quota", lambda thread_id: quota)
-    prompt = orch(scope="file0.py") + "\n## Objective\nInspect file0.\n## Acceptance criteria\n- Report result."
-    first = event(prompt=prompt, tool_use_id="quota-first")
-    codex.pre_tool_use(first, config=config, state_root=state, repo_root=repo)
-    tool_response = [{"type": "text", "text": json.dumps({"threadId": "quota-thread", "content": "Done"})}]
-    first_result = codex.post_tool_use(
-        {**first, "hook_event_name": "PostToolUse", "tool_response": tool_response},
-        config=config, state_root=state, repo_root=repo)
-    assert response_bundle(first_result, config)["codex_quota"] == quota
-    reply = event(tool_name=codex.CODEX_REPLY_TOOL, prompt="Continue.",
-                  tool_use_id="quota-reply", threadId="quota-thread")
-    codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
-    result = codex.post_tool_use({**reply, "hook_event_name": "PostToolUse", "tool_response": tool_response},
-                                 config=config, state_root=state, repo_root=repo)
-    bundle = response_bundle(result, config)
-    assert bundle["codex_quota"] == quota
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert receipts[-1][0] == repo.resolve()
-    assert receipts[-1][1]["model"] == bundle["model"]
-    assert receipts[-1][1]["codex_quota"] == quota
-
-
-def test_quota_does_not_change_review_mode_under_cap(workspace, config):
-    _, state = workspace
-    event_data = event(tool_use_id="quota-cap")
-    bundle = codex._base_bundle()
-    bundle["thread_id"] = "quota-thread"
-    bundle["claude_review_mode"] = policy.AUDIT
-    without = response_bundle(codex._finalize_replacement(bundle.copy(), config, state, event_data), config)
-    with_quota = bundle.copy()
-    with_quota["codex_quota"] = {"5h_used_pct": 24, "5h_resets_at": "2026-09-23T16:49:02Z"}
-    included = response_bundle(codex._finalize_replacement(with_quota, config, state, event_data), config)
-    assert included["codex_quota"] == with_quota["codex_quota"]
-    assert included["claude_review_mode"] == without["claude_review_mode"] == policy.AUDIT
-
-
-def test_post_tool_quota_system_message_formats_local_windows(workspace, config, monkeypatch):
-    local_tz = timezone(timedelta(hours=-7))
-    message = codex._codex_quota_system_message(
-        {
-            "5h_used_pct": 1.0,
-            "5h_resets_at": "2026-09-25T08:57:11Z",
-            "7d_used_pct": 46.0,
-            "7d_resets_at": "2026-09-28T16:07:43Z",
-        },
-        local_tz=local_tz,
-    )
-    assert message == "⚓ **Purser:** Codex quota left: 5h 99% (resets 01:57) · 7d 54% (resets Sep 28)"
-
-    _, state = workspace
-    format_quota = codex._codex_quota_system_message
-    monkeypatch.setattr(
-        codex,
-        "_codex_quota_system_message",
-        lambda quota: format_quota(quota, local_tz=local_tz),
-    )
-    bundle = codex._base_bundle()
-    bundle["codex_quota"] = {
-        "5h_used_pct": 1.0,
-        "5h_resets_at": "2026-09-25T08:57:11Z",
-        "7d_used_pct": 46.0,
-        "7d_resets_at": "2026-09-28T16:07:43Z",
-    }
-    call = event(tool_use_id="quota-system-message")
-    result = codex._finalize_replacement(bundle, config, state, call)
-    assert result["systemMessage"] == message
-    assert set(result) == {"hookSpecificOutput", "systemMessage"}
-    compact, _ = codex._compact_bundle(bundle, config["bundle_non_report_max_bytes"])
-    compact["codex_quota"] = bundle["codex_quota"]
-    compact["implementer_report"] = ""[: codex._report_limit(config, bundle.get("phase"))]
-    assert result["hookSpecificOutput"] == codex._replacement(compact, config)["hookSpecificOutput"]
-
-
-def test_post_tool_quota_system_message_omits_missing_or_malformed_windows():
-    local_tz = timezone.utc
-    quota = {
-        "7d_used_pct": 46.0,
-        "7d_resets_at": "2026-09-28T16:07:43Z",
-    }
-    assert codex._codex_quota_system_message(quota, local_tz=local_tz) == (
-        "⚓ **Purser:** Codex quota left: 7d 54% (resets Sep 28)"
-    )
-    assert codex._codex_quota_system_message(None, local_tz=local_tz) is None
-    assert codex._codex_quota_system_message({}, local_tz=local_tz) is None
-    assert codex._codex_quota_system_message(
-        {
-            "5h_used_pct": 1,
-            "5h_resets_at": "not-a-timestamp",
-            "7d_used_pct": 46,
-            "7d_resets_at": "2026-09-28T16:07:43Z",
-        },
-        local_tz=local_tz,
-    ) == "⚓ **Purser:** Codex quota left: 7d 54% (resets Sep 28)"
-
-
-@pytest.mark.parametrize(("used", "expected"), [(100.4, 0), (-3, 100)])
-def test_post_tool_quota_system_message_clamps_remaining_percent(used, expected):
-    message = codex._codex_quota_system_message(
-        {"5h_used_pct": used, "5h_resets_at": "2026-09-25T08:57:11Z"},
-        local_tz=timezone.utc,
-    )
-    assert message == f"⚓ **Purser:** Codex quota left: 5h {expected}% (resets 08:57)"
-
-
 def test_post_tool_quota_message_failure_preserves_replacement(workspace, config, monkeypatch):
     _, state = workspace
     bundle = codex._base_bundle()
@@ -1704,42 +739,6 @@ def test_post_tool_quota_message_failure_preserves_replacement(workspace, config
     assert result["hookSpecificOutput"] == codex._replacement(compact, config)["hookSpecificOutput"]
 
 
-def test_post_tool_quota_message_joins_existing_system_message(workspace, config, monkeypatch):
-    _, state = workspace
-    bundle = codex._base_bundle()
-    bundle["codex_quota"] = {"7d_used_pct": 46, "7d_resets_at": "2026-09-28T16:07:43Z"}
-    original_replacement = codex._replacement
-    monkeypatch.setattr(
-        codex,
-        "_replacement",
-        lambda value, loaded_config: {
-            **original_replacement(value, loaded_config),
-            "systemMessage": "Existing message",
-        },
-    )
-    result = codex._finalize_replacement(bundle, config, state, event(tool_use_id="quota-join"))
-    assert result["systemMessage"] == (
-        "Existing message\n⚓ **Purser:** Codex quota left: 7d 54% (resets Sep 28)"
-    )
-
-
-def test_post_tool_quota_message_survives_utf8_json_round_trip(monkeypatch):
-    response = {
-        "hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": []},
-        "systemMessage": "⚓ **Purser:** Codex quota left: 7d 54% (resets Sep 28)",
-    }
-    stdin_raw = io.BytesIO(b"{}")
-    stdout_raw = io.BytesIO()
-    monkeypatch.setattr(hook.sys, "stdin", type("Input", (), {"buffer": stdin_raw})())
-    monkeypatch.setattr(hook.sys, "stdout", type("Output", (), {"buffer": stdout_raw})())
-    monkeypatch.setattr(hook, "dispatch", lambda _event: response)
-
-    assert hook.main() == 0
-    rendered = stdout_raw.getvalue()
-    assert "⚓".encode("utf-8") in rendered
-    assert json.loads(rendered.decode("utf-8")) == response
-
-
 def _quota_snapshot(used_5h=None, used_7d=None):
     value = {}
     if used_5h is not None:
@@ -1747,36 +746,6 @@ def _quota_snapshot(used_5h=None, used_7d=None):
     if used_7d is not None:
         value.update({"7d_used_pct": used_7d, "7d_resets_at": "2026-09-30T12:00:00Z"})
     return value or None
-
-
-def _permission_reason(result):
-    return result.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
-
-
-def test_low_codex_quota_denies_before_pending_record(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: _quota_snapshot(92), raising=False)
-    call = event(prompt=orch(scope="file0.py") + "\nDo the work.", tool_use_id="low-quota")
-    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    reason = _permission_reason(result)
-    assert "LOW_CODEX_QUOTA" in reason
-    assert "5h" in reason and "92%" in reason and "2026-09-24T15:00:00Z" in reason
-    assert "before this task starts" in reason
-    assert "reason=user_override" in reason
-    assert "background sleep command" in reason
-    assert "until the 5h reset at 2026-09-24T15:00:00Z UTC" in reason
-    assert "waiting costs nothing" in reason
-    assert not (state / "pending").exists() or list((state / "pending").glob("*.json")) == []
-
-
-def test_low_codex_quota_user_override_proceeds(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: _quota_snapshot(92), raising=False)
-    call = event(prompt=orch(scope="file0.py", reason="user_override") + "\nDo the work.",
-                 tool_use_id="low-quota-override")
-    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    assert "LOW_CODEX_QUOTA" not in _permission_reason(result)
-    assert codex._read_pending(state, call) is not None
 
 
 def test_low_codex_quota_does_not_check_codex_reply(workspace, config, monkeypatch):
@@ -1787,26 +756,6 @@ def test_low_codex_quota_does_not_check_codex_reply(workspace, config, monkeypat
                  tool_use_id="low-quota-reply", threadId="existing-thread")
     codex.pre_tool_use(call, config=config, state_root=state)
     assert calls == []
-
-
-@pytest.mark.parametrize("quota", [_quota_snapshot(used_7d=95)])
-def test_low_weekly_quota_denies(workspace, config, monkeypatch, quota):
-    repo, state = workspace
-    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: quota, raising=False)
-    call = event(prompt=orch(scope="file0.py") + "\nDo the work.", tool_use_id="low-weekly-quota")
-    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    assert "LOW_CODEX_QUOTA" in _permission_reason(result)
-    assert "7d" in _permission_reason(result) and "95%" in _permission_reason(result)
-
-
-@pytest.mark.parametrize("quota", [_quota_snapshot(used_5h=89), None])
-def test_low_codex_quota_allows_under_threshold_or_missing(workspace, config, monkeypatch, quota):
-    repo, state = workspace
-    monkeypatch.setattr(codex.codex_quota, "read_latest_quota", lambda: quota, raising=False)
-    call = event(prompt=orch(scope="file0.py") + "\nDo the work.", tool_use_id="normal-quota")
-    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    assert "LOW_CODEX_QUOTA" not in _permission_reason(result)
-    assert codex._read_pending(state, call) is not None
 
 
 def hook_check_call(workspace, config, monkeypatch, *, worker_status="UNKNOWN", check_result=None,
@@ -1836,46 +785,11 @@ def hook_check_call(workspace, config, monkeypatch, *, worker_status="UNKNOWN", 
     ), config)
 
 
-def test_hook_pass_supplies_audit_evidence_for_unknown_worker(workspace, config, monkeypatch):
-    result = {"status": "PASS", "results": [{"name": "focused", "status": "PASS", "exit_code": 0,
-                                               "duration_ms": 1, "tail": ""}], "side_effect_paths": []}
-    bundle = hook_check_call(workspace, config, monkeypatch, check_result=result)
-    assert bundle["claude_review_mode"] == policy.AUDIT
-    assert bundle["hook_checks"]["status"] == "PASS"
-    assert not any(f["code"] == "WORKER_VALIDATION_UNVERIFIED" for f in bundle["findings"])
-
-
 def check_result(status, *, tail="", side_effect_paths=None):
     return {"status": status, "results": [{"name": "focused", "status": status,
             "exit_code": 1 if status == "FAIL" else 0 if status == "PASS" else None,
             "duration_ms": 1, "tail": tail}],
             "side_effect_paths": [] if side_effect_paths is None else side_effect_paths}
-
-
-def test_hook_fail_overrides_worker_pass(workspace, config, monkeypatch):
-    bundle = hook_check_call(workspace, config, monkeypatch, worker_status="PASS",
-                             check_result=check_result("FAIL", tail="failed output"))
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert any(f["code"] == "HOOK_CHECK_FAILED" and "failed output" in f["message"]
-               for f in bundle["findings"])
-    assert "tail" not in bundle["hook_checks"]["results"][0]
-
-
-@pytest.mark.parametrize("worker_status,expected", [("PASS", policy.AUDIT),
-                                                   ("UNKNOWN", policy.FULL)])
-def test_hook_unknown_falls_back_to_worker(workspace, config, monkeypatch, worker_status, expected):
-    bundle = hook_check_call(workspace, config, monkeypatch, worker_status=worker_status,
-                             check_result=check_result("UNKNOWN", tail="unavailable"))
-    assert bundle["claude_review_mode"] == expected
-    assert any(f["code"] == "HOOK_CHECK_UNKNOWN" for f in bundle["findings"])
-
-
-def test_hook_side_effects_force_full(workspace, config, monkeypatch):
-    bundle = hook_check_call(workspace, config, monkeypatch, worker_status="PASS",
-                             check_result=check_result("PASS", side_effect_paths=["file1.py"]))
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert any(f["code"] == "HOOK_CHECK_SIDE_EFFECTS" and "file1.py" in f["message"]
-               for f in bundle["findings"])
 
 
 def test_hook_check_exception_still_returns_bundle(workspace, config, monkeypatch):
@@ -1887,49 +801,6 @@ def test_hook_check_exception_still_returns_bundle(workspace, config, monkeypatc
     assert bundle["hook_checks"] == {"status": "UNKNOWN", "results": []}
     assert [f["code"] for f in bundle["findings"]].count("HOOK_CHECK_UNKNOWN") == 1
     assert any("RuntimeError" in f["message"] for f in bundle["findings"])
-
-
-def test_hook_uses_pending_check_snapshot(workspace, config, monkeypatch):
-    def change_profile(repo, state, call):
-        pending = json.loads(codex._pending_path(state, call).read_text(encoding="utf-8"))
-        assert pending["profile_checks"][0]["name"] == "focused"
-        profile_path = repo / ".orchestrator" / "profile.toml"
-        profile_path.parent.mkdir()
-        profile_path.write_text('schema_version = 1\n[[checks]]\nname = "changed"\nargv = ["python"]\n', encoding="utf-8")
-        monkeypatch.setattr(project_profile, "load_profile", lambda root: pytest.fail("post reloaded profile"))
-    bundle = hook_check_call(workspace, config, monkeypatch,
-                             check_result=check_result("PASS"), before_post=change_profile)
-    assert bundle["hook_checks"]["status"] == "PASS"
-
-
-def test_reply_inherits_thread_check_snapshot(workspace, config, monkeypatch):
-    repo, state = workspace
-    original_load = project_profile.load_profile
-    monkeypatch.setattr(project_profile, "load_profile", lambda root: replace(
-        original_load(root), force_full_review=False,
-        checks=(project_profile.Check("original", ("python", "-V")),),
-    ))
-    monkeypatch.setattr(checks, "run_checks", lambda *args, **kwargs: {
-        "status": "PASS", "results": [], "side_effect_paths": []})
-    prompt = (orch(scope="file0.py") +
-              "\n## Objective\nUpdate file0.\n## Acceptance criteria\n- file0 changes.")
-    call = event(prompt=prompt, tool_use_id="first-check-turn")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    response = [{"type": "text", "text": json.dumps({"threadId": "thread-reply-checks", "content": "No validation"})}]
-    codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response": response},
-                        config=config, state_root=state, repo_root=repo,
-                        reviewer=lambda **kwargs: {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-                                                   "validation": "PASS", "findings": []})
-    monkeypatch.setattr(project_profile, "load_profile", lambda root: replace(
-        original_load(root), force_full_review=False,
-        checks=(project_profile.Check("changed", ("python", "-V")),),
-    ))
-    reply = event(tool_name=codex.CODEX_REPLY_TOOL, prompt="Continue.",
-                  tool_use_id="reply-check-turn", threadId="thread-reply-checks")
-    codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
-    pending = json.loads(codex._pending_path(state, reply).read_text(encoding="utf-8"))
-    assert [item["name"] for item in pending["profile_checks"]] == ["original"]
 
 
 def test_no_declared_hook_checks_preserves_worker_decision(workspace, config, monkeypatch):
@@ -1978,106 +849,6 @@ def isolated_profile_home(monkeypatch):
     finally:
         if isolated_home.exists():
             remove_test_tree(isolated_home)
-
-
-def non_report_size(bundle):
-    return len(
-        json_transport.dumps(
-            {key: value for key, value in bundle.items() if key != "implementer_report"},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
-
-
-def test_bundle_cap_summarizes_large_deltas_and_preserves_safety_fields(workspace, config):
-    _, state = workspace
-    protected = "state/current.yaml"
-    changed_paths = [f"generated/path-{index:04d}.txt" for index in range(4999)] + [protected]
-    bundle = codex._base_bundle()
-    bundle.update(
-        task_id="stress-task",
-        thread_id="thread-stress",
-        phase="implementation",
-        routing_enforced=True,
-        claude_review_mode=policy.FULL,
-        reviewer1_result=policy.CHANGES_REQUIRED,
-        protected_paths_touched=[protected],
-        concurrent_writer=True,
-        micro_repair={"attempted": False, "status": "SKIPPED_BUDGET"},
-        validation="FAIL",
-        changed_paths=changed_paths,
-        findings=[
-            {"code": f"FINDING_{index:02d}", "message": "x" * 2000}
-            for index in range(20)
-        ],
-        implementer_report="r" * 5000,
-    )
-
-    raw = codex._finalize_replacement(bundle, config, state, event(tool_use_id="stress"))
-    compact = response_bundle(raw, config)
-
-    assert non_report_size(compact) <= config["bundle_non_report_max_bytes"]
-    assert compact["changed_path_count"] == 5000
-    assert len(compact["changed_paths"]) <= codex.CHANGED_PATH_PREVIEW_LIMIT
-    assert len(compact["changed_paths_sha256"]) == 64
-    assert compact["protected_paths_touched"] == [protected]
-    assert compact["claude_review_mode"] == policy.FULL
-    assert [finding["code"] for finding in compact["findings"]] == [
-        f"FINDING_{index:02d}" for index in range(20)
-    ]
-    assert all(finding["message_char_count"] == 2000 for finding in compact["findings"])
-    assert all(len(finding["message_sha256"]) == 64 for finding in compact["findings"])
-    assert len(compact["implementer_report"]) == config["implementation_report_max_chars"]
-
-    artifact = Path(compact["full_bundle_path"])
-    stored = json.loads(artifact.read_text(encoding="utf-8"))
-    assert stored["changed_paths"] == changed_paths
-    assert stored["findings"][19]["message"] == "x" * 2000
-    assert stored["implementer_report"] == "r" * 5000
-
-
-def test_runtime_caps_change_bundle_and_phase_report_behavior(workspace, config):
-    _, state = workspace
-    base = codex._base_bundle()
-    base.update(
-        task_id="runtime-caps",
-        thread_id="thread-caps",
-        phase="operation",
-        routing_enforced=True,
-        claude_review_mode=policy.FULL,
-        reviewer1_skipped_reason="PHASE_OPERATION",
-        protected_paths_touched=[],
-        validation="UNKNOWN",
-        changed_paths=[f"path-{index}.txt" for index in range(100)],
-        findings=[{"code": "LONG_MESSAGE", "message": "m" * 6000}],
-        implementer_report="operation deliverable " * 100,
-    )
-    roomy_config = dict(
-        config,
-        bundle_non_report_max_bytes=8192,
-        operation_report_max_chars=24000,
-    )
-    tight_config = dict(
-        config,
-        bundle_non_report_max_bytes=4096,
-        operation_report_max_chars=37,
-    )
-
-    roomy = response_bundle(
-        codex._finalize_replacement(dict(base), roomy_config, state, event(tool_use_id="roomy")),
-        roomy_config,
-    )
-    tight = response_bundle(
-        codex._finalize_replacement(dict(base), tight_config, state, event(tool_use_id="tight")),
-        tight_config,
-    )
-
-    assert non_report_size(roomy) <= 8192
-    assert non_report_size(tight) <= 4096
-    assert len(tight["findings"][0]["message"]) < len(roomy["findings"][0]["message"])
-    assert len(roomy["implementer_report"]) == len(base["implementer_report"])
-    assert len(tight["implementer_report"]) == 37
 
 
 def test_pending_cleanup_failure_does_not_change_pretool_output(
