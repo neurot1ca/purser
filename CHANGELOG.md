@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.130 — 2026-10-12
+
+- **Fixed:** A codex_start that fails before launching a job no longer marks its task id finished, so the same task id can be started again.
+
 ## 0.1.129 — 2026-10-11
 
 - **Fixed:** Codex workers get a shared, writable Go build cache under the Purser state root, so Go builds inside the sandbox no longer fail.
