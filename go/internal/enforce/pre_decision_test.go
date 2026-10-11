@@ -525,6 +525,81 @@ func TestPreCodexStartRejectsFinishedTaskID(t *testing.T) {
 	}
 }
 
+func TestPreCodexStartUsesMeasuredRouteETA(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		samples  int
+		orchETA  string
+		inputETA int
+		wantETA  int
+	}{
+		{name: "measured median", samples: 10, wantETA: 6},
+		{name: "too few samples", samples: 9, wantETA: 5},
+		{name: "explicit ORCH eta", samples: 10, orchETA: "|eta=4m", wantETA: 4},
+		{name: "explicit input eta", samples: 10, inputETA: 7, wantETA: 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scratch := preTempDir(t)
+			repo, state := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+			if err := os.MkdirAll(repo, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v %s", err, out)
+			}
+			home := filepath.Join(scratch, "home")
+			if err := os.MkdirAll(home, 0700); err != nil {
+				t.Fatal(err)
+			}
+			pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range map[string]string{"HOME": home, "USERPROFILE": home, "HOMEDRIVE": "", "HOMEPATH": "", "PURSER_STATE_DIR": state, "CLAUDE_PLUGIN_ROOT": pluginRoot, "CODEX_HOME": filepath.Join(scratch, "codex")} {
+				t.Setenv(key, value)
+			}
+			if tc.samples > 0 {
+				stamp := time.Now().UTC().Format(time.RFC3339Nano)
+				path := filepath.Join(state, "telemetry", "events", time.Now().UTC().Format("2006-01"), "session_eta.jsonl")
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				file, err := os.Create(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				encoder := json.NewEncoder(file)
+				for i := 1; i <= tc.samples; i++ {
+					item := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": projectKey(&repo), "ts_utc": stamp,
+						"payload": map[string]any{"route": "normal", "implementer": "codex-main", "duration_ms": i * 60000}}
+					if err := encoder.Encode(item); err != nil {
+						file.Close()
+						t.Fatal(err)
+					}
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			prompt := "ORCH|task=eta-task|phase=implementation|route=normal|reason=new_task|basis=bounded change|scope=src/a.go" + tc.orchETA + "\nImplement."
+			input := map[string]any{"mode": "new", "cwd": repo, "prompt": prompt}
+			if tc.inputETA != 0 {
+				input["etaMinutes"] = tc.inputETA
+			}
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start", "tool_use_id": "eta-" + tc.name,
+				"session_id": "eta-session", "cwd": repo, "tool_input": input}
+			got, err := Pre(event, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated := mapValue(mapValue(got["hookSpecificOutput"])["updatedInput"])
+			if gotETA, ok := intValue(updated["etaMinutes"]); !ok || gotETA != tc.wantETA {
+				t.Fatalf("start ETA = %v, want %d; response %#v", updated["etaMinutes"], tc.wantETA, got)
+			}
+		})
+	}
+}
+
 func TestPreInvalidOrchWithoutTask(t *testing.T) {
 	scratch := preTempDir(t)
 	plugin, _ := filepath.Abs("../../..")

@@ -182,9 +182,44 @@ func RouteDurationSamples(root, key, route string) []DurationSample {
 	return groups[route]
 }
 
+// RouteMedianMinutes returns the measured route median once the same sample
+// sufficiency rules used by SessionStart's duration hint are met.
+func RouteMedianMinutes(root, key, route, implementer string) (int, bool) {
+	groups := map[string][]DurationSample{}
+	readRouteDurationSamples(root, key, groups)
+	median, _, ok := routeMedian(groups[route], implementer, "")
+	if !ok {
+		return 0, false
+	}
+	return max(1, int(math.Ceil(median/60000))), true
+}
+
 // RouteP90 uses the SessionStart duration hint's sample sufficiency and p90 rule.
 // The current job is excluded by ID before choosing implementer-specific samples.
 func RouteP90(samples []DurationSample, implementer, excludeJobID string) (float64, int, bool) {
+	values, ok := routeDurationValues(samples, implementer, excludeJobID)
+	if !ok {
+		return 0, 0, false
+	}
+	return values[int(math.Ceil(.9*float64(len(values))))-1], len(values), true
+}
+
+func routeMedian(samples []DurationSample, implementer, excludeJobID string) (float64, int, bool) {
+	values, ok := routeDurationValues(samples, implementer, excludeJobID)
+	if !ok {
+		return 0, 0, false
+	}
+	median := values[len(values)/2]
+	if len(values)%2 == 0 {
+		median = (values[len(values)/2-1] + median) / 2
+	}
+	return median, len(values), true
+}
+
+func routeDurationValues(samples []DurationSample, implementer, excludeJobID string) ([]float64, bool) {
+	if implementer == "codex" {
+		implementer = "codex-main"
+	}
 	var own, all []float64
 	for _, sample := range samples {
 		if sample.JobID != "" && sample.JobID == excludeJobID || sample.DurationMS <= 0 || math.IsNaN(sample.DurationMS) || math.IsInf(sample.DurationMS, 0) {
@@ -195,16 +230,15 @@ func RouteP90(samples []DurationSample, implementer, excludeJobID string) (float
 			own = append(own, sample.DurationMS)
 		}
 	}
-	values := own
-	ready := len(own) >= 5
-	if !ready {
-		values = all
+	values, minimum := own, 5
+	if len(own) < minimum {
+		values, minimum = all, 10
 	}
-	if len(values) < map[bool]int{true: 5, false: 10}[ready] {
-		return 0, 0, false
+	if len(values) < minimum {
+		return nil, false
 	}
 	sort.Float64s(values)
-	return values[int(math.Ceil(.9*float64(len(values))))-1], len(values), true
+	return values, true
 }
 
 func durationHint(root, key, implementer string) string {
@@ -216,23 +250,7 @@ func durationHint(root, key, implementer string) string {
 		if !ok {
 			continue
 		}
-		var values []float64
-		for _, sample := range groups[route] {
-			if sample.Implementer == implementer {
-				values = append(values, sample.DurationMS)
-			}
-		}
-		if len(values) < 5 {
-			values = values[:0]
-			for _, sample := range groups[route] {
-				values = append(values, sample.DurationMS)
-			}
-		}
-		sort.Float64s(values)
-		median := values[len(values)/2]
-		if len(values)%2 == 0 {
-			median = (values[len(values)/2-1] + median) / 2
-		}
+		median, _, _ := routeMedian(groups[route], implementer, "")
 		parts = append(parts, fmt.Sprintf("%s %d/%d min (n=%d)", route, roundedMinutes(median), roundedMinutes(p90), count))
 	}
 	if len(parts) == 0 {
