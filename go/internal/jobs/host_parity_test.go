@@ -49,6 +49,8 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg-config"))
 			t.Setenv("APPDATA", filepath.Join(root, "appdata"))
 			t.Setenv("LOCALAPPDATA", filepath.Join(root, "localappdata"))
+			t.Setenv("GOCACHE", filepath.Join(root, "go-cache"))
+			t.Setenv("GOTMPDIR", filepath.Join(root, "go-tmp"))
 			if fixture.Name != "worktree_success" && fixture.Name != "worktree_create_failure" && fixture.Name != "worktree_setup_failure" {
 				cmd := exec.Command("git", "init", "-q", root)
 				if output, err := cmd.CombinedOutput(); err != nil {
