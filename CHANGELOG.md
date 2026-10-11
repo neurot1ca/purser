@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.120 — 2026-10-11
+
+- **Fixed:** When Purser captures a job's test runs itself, the result now shows PASS or FAIL instead of UNKNOWN; the last run of each test command decides, so a test shown failing before the fix no longer marks the job failed.
+
 ## 0.1.119 — 2026-10-11
 
 - **Removed:** The Python implementation and its tests; the plugin, release tooling and CI run only Go, so Purser no longer needs Python installed.
