@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.119 — 2026-10-11
+
+- **Removed:** The Python implementation and its tests; the plugin, release tooling and CI run only Go, so Purser no longer needs Python installed.
+
 ## 0.1.118 — 2026-10-11
 
 - **Changed:** After a failed luna attempt, Purser routes the next attempt of the same task to normal (sol, medium) instead of consequential; a higher route you choose is kept.
