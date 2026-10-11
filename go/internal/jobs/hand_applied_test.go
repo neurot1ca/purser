@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
@@ -25,7 +26,7 @@ func TestAdmissionReleasesOnlyHandAppliedSucceededBlockers(t *testing.T) {
 	}{
 		{name: "matching hand-applied owner", state: "SUCCEEDED", matching: true, wantOld: "RELEASED", wantNext: "ACTIVE"},
 		{name: "patch-unavailable job applied by hand", state: "FAILED", matching: true, wantOld: "RELEASED", wantNext: "ACTIVE"},
-		{name: "differing file", state: "SUCCEEDED", wantOld: "ACTIVE", wantNext: "QUEUED"},
+		{name: "differing file", state: "SUCCEEDED", wantOld: "RELEASED", wantNext: "ACTIVE"},
 		{name: "running owner", state: "RUNNING", matching: true, wantOld: "ACTIVE", wantNext: "QUEUED"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,9 +55,22 @@ func TestAdmissionReleasesOnlyHandAppliedSucceededBlockers(t *testing.T) {
 			if err := os.MkdirAll(indexDir, 0700); err != nil {
 				t.Fatal(err)
 			}
-			writeHandAppliedJSON(t, filepath.Join(indexDir, jobID+".json"), map[string]any{"jobId": jobID, "project_key": projectKey, "call_key": ownerKey})
+			writeHandAppliedJSON(t, filepath.Join(indexDir, jobID+".json"), map[string]any{"jobId": jobID, "project_key": projectKey, "call_key": ownerKey, "call": call})
 
-			ReleaseHandAppliedBlockers(root, projectRoot, []string{"src"})
+			// A committed manual apply must be recognised on admission or board refresh even
+			// after admission reconciliation has already released the lease.
+			if tc.matching && tc.state != "RUNNING" {
+				handAppliedGit(t, repo, "add", "src/file.txt")
+				handAppliedGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "manual apply")
+			}
+			if _, err := store.Reconcile(now + 1); err != nil {
+				t.Fatal(err)
+			}
+			if tc.state == "SUCCEEDED" && tc.matching {
+				ReleaseHandAppliedBlockers(root, projectRoot, []string{"src"})
+			} else {
+				enforce.PostProjectJobBoard(root, projectKey, time.Now())
+			}
 			nextID := strings.Repeat("d", 64)
 			got := store.Acquire(strings.Repeat("e", 64), "next-task", []string{"src"}, lease.AcquireOptions{JobID: &nextID, QueueConflict: true}, now+1)
 			if got.Status != "OK" || (got.Code == "LEASE_QUEUED") != (tc.wantNext == "QUEUED") {
@@ -71,7 +85,7 @@ func TestAdmissionReleasesOnlyHandAppliedSucceededBlockers(t *testing.T) {
 			if err != nil || json.Unmarshal(data, &saved) != nil {
 				t.Fatalf("hand-applied job record unreadable: %#v (%v)", saved, err)
 			}
-			if tc.wantOld == "RELEASED" {
+			if tc.matching && tc.state != "RUNNING" {
 				if saved["applyState"] != "applied" || saved["applyReason"] != "hand_applied_detected" || saved["decisionRecorded"] != nil {
 					t.Fatalf("hand-applied job was not recorded without a decision: %#v", saved)
 				}

@@ -18,6 +18,7 @@ import (
 
 func init() {
 	enforce.ReleaseHandAppliedBlockers = ReleaseHandAppliedBlockers
+	enforce.RefreshHandAppliedJob = markHandAppliedJob
 }
 
 // ReleaseHandAppliedBlockers marks succeeded jobs applied when their worktree
@@ -60,7 +61,7 @@ func handAppliedOwners(projectRoot string, scope []string) []handAppliedOwner {
 	}
 	owners := make([]handAppliedOwner, 0, len(state.Owners))
 	for _, owner := range state.Owners {
-		if owner.State == "ACTIVE" && owner.JobID != "" && lease.ScopesOverlap(owner.Scope, requested) {
+		if owner.JobID != "" && lease.ScopesOverlap(owner.Scope, requested) {
 			owners = append(owners, owner)
 		}
 	}
@@ -78,6 +79,13 @@ func markHandAppliedJob(stateRoot, jobID string) {
 	path := filepath.Join(dir, jobID+".json")
 	prior := readJob(dir, jobID)
 	if prior == nil {
+		return
+	}
+	var priorState, priorApply, priorError string
+	prior.Get("state", &priorState)
+	prior.Get("applyState", &priorApply)
+	prior.Get("errorCode", &priorError)
+	if priorApply == "applied" || (priorState != "SUCCEEDED" && !(priorState == "FAILED" && priorError == "PATCH_UNAVAILABLE")) {
 		return
 	}
 	var repo string

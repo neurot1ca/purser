@@ -9,8 +9,45 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 )
+
+func TestQueuedBoardNamesUnlabelledBlocker(t *testing.T) {
+	root := t.TempDir()
+	project := "project-one"
+	id := strings.Repeat("a", 64)
+	store := lease.New(filepath.Join(root, "projects", project))
+	if got := store.Acquire("running", "running-task", []string{"src/occupied"}, lease.AcquireOptions{}, 100); got.Status != "OK" {
+		t.Fatal(got)
+	}
+	olderID := strings.Repeat("b", 64)
+	if got := store.Acquire("older", "older-task", []string{"src"}, lease.AcquireOptions{JobID: &olderID, QueueConflict: true}, 101); got.Code != "LEASE_QUEUED" {
+		t.Fatal(got)
+	}
+	if got := store.Acquire("queued", "queued-task", []string{"src/free"}, lease.AcquireOptions{JobID: &id, QueueConflict: true}, 102); got.Code != "LEASE_QUEUED" {
+		t.Fatal(got)
+	}
+	for path, value := range map[string]any{
+		filepath.Join(root, "async_jobs", id+".json"):             map[string]any{"jobId": id, "project_key": project, "call": "queued"},
+		filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"): map[string]any{"jobId": id, "call": "queued", "state": "QUEUED", "label": "waiting-task"},
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	board, _ := enforce.PostProjectJobBoard(root, project, time.Unix(102, 0))
+	if !strings.Contains(board, "queued behind older-task") {
+		t.Fatalf("board does not name blocker: %s", board)
+	}
+}
 
 func TestLeasesList(t *testing.T) {
 	state := t.TempDir()

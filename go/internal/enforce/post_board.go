@@ -19,6 +19,8 @@ import (
 
 type boardJob struct{ job, index map[string]any }
 
+var RefreshHandAppliedJob func(stateRoot, jobID string)
+
 // PostProjectJobBoard reads the same durable state as codex._project_job_board_details.
 func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []string) {
 	defer func() {}()
@@ -33,6 +35,9 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 		id, ok := index["jobId"].(string)
 		if !ok || !idPattern.MatchString(id) {
 			continue
+		}
+		if RefreshHandAppliedJob != nil {
+			RefreshHandAppliedJob(root, id)
 		}
 		job := readBoardJSON(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"))
 		if job != nil && job["jobId"] == id && job["call"] == index["call"] {
@@ -72,7 +77,8 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 			}
 			for _, activeRaw := range owners {
 				active, ok := activeRaw.(map[string]any)
-				if !ok || active["state"] != "ACTIVE" {
+				if !ok || (active["state"] != "ACTIVE" &&
+					!(active["state"] == "QUEUED" && boardNumber(active["queued_at"]) < boardNumber(queued["queued_at"]))) {
 					continue
 				}
 				qs, _ := queued["scope"].([]any)
@@ -84,6 +90,8 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 					queuedBehind[qid] = label
 					break
 				}
+				queuedBehind[qid] = fmt.Sprint(active["task_id"])
+				break
 			}
 		}
 	}

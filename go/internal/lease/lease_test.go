@@ -46,11 +46,13 @@ func TestAdmissionReleasesStaleJobLease(t *testing.T) {
 		name     string
 		jobState string
 		missing  bool
+		retained bool
 		seedNow  float64
 		retryNow float64
 	}{
 		{name: "missing_job", missing: true, seedNow: 100, retryNow: 100 + missingJobOrphanSeconds + 1},
 		{name: "terminal_job_worktree_gone", jobState: "SUCCEEDED", seedNow: 100, retryNow: 101},
+		{name: "terminal_job_awaiting_acceptance", jobState: "SUCCEEDED", retained: true, seedNow: 100, retryNow: 101},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -58,6 +60,11 @@ func TestAdmissionReleasesStaleJobLease(t *testing.T) {
 			call := "terminal fixture"
 			jobID := fmt.Sprintf("%x", sha256.Sum256([]byte(call)))
 			if !tc.missing {
+				if tc.retained {
+					if err := os.Mkdir(filepath.Join(root, "removed-worktree"), 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
 				jobs := filepath.Join(root, "codex_exec_mcp", "jobs")
 				if err := os.MkdirAll(jobs, 0700); err != nil {
 					t.Fatal(err)

@@ -16,6 +16,26 @@ import (
 	"purser-hook/internal/ledger"
 )
 
+func TestLaterApplyPreservesNewerConflictingCommit(t *testing.T) {
+	root, repo, worktree, snapshot := handAppliedAdmissionFixture(t, false)
+	handAppliedGit(t, repo, "add", "src/file.txt")
+	handAppliedGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "newer job")
+	id := strings.Repeat("8", 64)
+	path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHandAppliedJSON(t, path, map[string]any{"jobId": id, "state": "SUCCEEDED", "repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot})
+	result := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	if result["applied"] != false || len(result["conflicts"].([]string)) == 0 {
+		t.Fatalf("stale patch was not rejected: %#v", result)
+	}
+	content, err := os.ReadFile(filepath.Join(repo, "src", "file.txt"))
+	if err != nil || string(content) != "different\n" {
+		t.Fatalf("newer content changed: %q, %v", content, err)
+	}
+}
+
 func TestApplyPythonOracle(t *testing.T) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_jobs_apply", "oracle.json")
 	b, err := os.ReadFile(path)

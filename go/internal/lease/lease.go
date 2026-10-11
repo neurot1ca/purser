@@ -3,7 +3,6 @@ package lease
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -303,7 +302,7 @@ func (s *Store) expire(value map[string]any, now float64) bool {
 			}
 			orphaned := state == "MISSING" && hasStarted && now >= started+missingJobOrphanSeconds
 			cutoff, hasCutoff := pythonFloat(owner["retention_after"])
-			expired = orphaned || s.staleJobLease(id, owner, now) || state == "JOB_EXPIRED" ||
+			expired = orphaned || oneOf(state, "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED", "SUPERSEDED", "JOB_EXPIRED") ||
 				(state != "UNREADABLE" && state != "QUEUED" && state != "RUNNING" && hasCutoff && now >= cutoff)
 		}
 		if expired {
@@ -312,37 +311,6 @@ func (s *Store) expire(value map[string]any, now float64) bool {
 		}
 	}
 	return changed
-}
-
-func (s *Store) staleJobLease(jobID string, owner map[string]any, now float64) bool {
-	if len(jobID) != sha256.Size*2 {
-		return false
-	}
-	if _, err := hex.DecodeString(jobID); err != nil {
-		return false
-	}
-	raw, err := os.ReadFile(filepath.Join(s.jobsRoot, jobID+".json"))
-	if err != nil {
-		return false
-	}
-	var job map[string]any
-	if !utf8.Valid(raw) || json.Unmarshal(raw, &job) != nil || job == nil || job["jobId"] != jobID {
-		return false
-	}
-	call, ok := job["call"].(string)
-	if !ok || fmt.Sprintf("%x", sha256.Sum256([]byte(call))) != jobID {
-		return false
-	}
-	state, ok := job["state"].(string)
-	if !ok || !oneOf(state, "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED") {
-		return false
-	}
-	worktree, _ := job["worktreePath"].(string)
-	if worktree == "" {
-		return true
-	}
-	_, err = os.Stat(worktree)
-	return errors.Is(err, os.ErrNotExist)
 }
 
 func (s *Store) mutate(now float64, apply func(map[string]any) bool) error {
