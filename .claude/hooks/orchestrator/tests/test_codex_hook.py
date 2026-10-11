@@ -177,623 +177,6 @@ def _assert_waiter_next_command(next_text, job_id):
     assert "python" not in next_text.lower(), next_text
 
 
-def test_opencode_start_and_cross_agent_reply_denied(workspace, config):
-    repo, state = workspace
-    config["coder_agent"] = "opencode"
-    for entry in config["routes"].values():
-        entry.update(model="opencode/big-pickle", effort="none")
-    start = event(START_TOOL, tool_use_id="opencode-start")
-    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["model"] == "opencode/big-pickle"
-    assert updated["config"] == {}
-    assert "developer-instructions" not in updated
-    record = ledger.build_session_record("task-2", "foreign-thread", "normal", "gpt-6-sol", "medium",
-                                         phase="implementation", scope=["file0.py"], agent="codex")
-    assert ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).save(record)["status"] == ledger.OK
-    reply = event(codex.CODEX_REPLY_TOOL, prompt=orch(task="task-2", scope="file0.py") + "\nContinue.",
-                  threadId="foreign-thread", tool_use_id="foreign-reply")
-    denied = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "different coding agent" in denied["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def test_mechanical_empty_candidates_keep_configured_opencode_binding(workspace, config):
-    repo, state = workspace
-    config["coder_agent"] = "opencode"
-    for entry in config["routes"].values():
-        entry.update(model="provider/global", effort="none")
-    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the small change.")
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert "agent" not in updated
-    assert updated["model"] == "provider/global"
-    assert "model_reasoning_effort" not in updated["config"]
-    pending = codex._read_pending(state, call)
-    assert (pending["agent"], pending["model"], pending["effort"]) == ("opencode", "provider/global", "none")
-    codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-                         {"structuredContent": {"threadId": "mechanical-cold", "content": "Done"}}},
-                        config=config, state_root=state, repo_root=repo)
-    stored = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]["live_thread"]
-    assert (stored["agent"], stored["model"], stored["effort"]) == ("opencode", "provider/global", "none")
-
-
-def test_nonmechanical_route_binding_is_unchanged(workspace, config):
-    repo, state = workspace
-    config["coder_agent"] = "opencode"
-    for entry in config["routes"].values():
-        entry.update(model="provider/global", effort="none")
-    call = event(route="normal", scope="file0.py")
-    updated = codex.pre_tool_use(call, config=config, state_root=state,
-                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["model"] == "provider/global"
-    pending = codex._read_pending(state, call)
-    assert pending["agent"] == "opencode"
-
-
-def test_mechanical_candidate_binds_opencode_per_job(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(coder_config, "opencode_candidates", lambda: ["provider/model-candidate"])
-    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the change.")
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["agent"] == "opencode"
-    assert updated["model"] == "provider/model-candidate"
-    assert updated["config"] == {}
-    pending = codex._read_pending(state, call)
-    assert (pending["agent"], pending["model"]) == ("opencode", "provider/model-candidate")
-    codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-                         {"structuredContent": {"threadId": "mechanical-opencode", "content": "Done"}}},
-                        config=config, state_root=state, repo_root=repo)
-    stored = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]["live_thread"]
-    assert (stored["agent"], stored["model"]) == ("opencode", "provider/model-candidate")
-
-
-@pytest.mark.parametrize("passed,selected", [(5, True), (4, False)])
-def test_seeded_benchmark_score_controls_next_mechanical_job(workspace, config, monkeypatch, passed, selected):
-    repo, state = workspace
-    candidate = "vendor/seeded-free"
-    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
-    inventory = state / "opencode" / "candidates.json"
-    inventory.parent.mkdir(parents=True, exist_ok=True)
-    inventory.write_text(json.dumps({"candidates": [{
-        "id": candidate, "status": "unmeasured", "added_at": "now",
-        "benchmarks": {"1": {"passed_count": passed, "total": 6}},
-    }]}), encoding="utf-8")
-    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the small change.")
-    updated = codex.pre_tool_use(call, config=config, state_root=state,
-                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert (updated.get("agent") == "opencode" and updated["model"] == candidate) is selected
-
-
-def test_current_qualified_nemotron_candidate_binds_fresh_mechanical_job(workspace, config, monkeypatch):
-    repo, state = workspace
-    candidate = "opencode/nemotron-3-ultra-free"
-    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
-    inventory = state / "opencode"
-    inventory.mkdir(parents=True, exist_ok=True)
-    (inventory / "candidates.json").write_text(json.dumps({"candidates": [{
-        "id": candidate, "status": "unmeasured", "added_at": "2026-09-28T09:22:51.190774Z",
-        "benchmarks": {"1": {"passed_count": 5, "total": 6}},
-    }]}), encoding="utf-8")
-    (inventory / "leader.json").write_text(json.dumps({
-        "announced": True, "model": candidate, "sample_count": 6, "successes": 5,
-    }), encoding="utf-8")
-
-    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the small change.")
-    updated = codex.pre_tool_use(call, config=config, state_root=state,
-                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-
-    assert "mechanical_opencode_enabled" not in config
-    assert updated["agent"] == "opencode"
-    assert updated["model"] == candidate
-    assert updated["mechanicalFallback"] is True
-    assert updated["fallbackAgent"] == "codex"
-
-
-def test_mechanical_opencode_opt_out_keeps_configured_coder(workspace, config, monkeypatch):
-    repo, state = workspace
-    config["mechanical_opencode_enabled"] = False
-    monkeypatch.setattr(coder_config, "opencode_candidates", lambda: ["provider/model-candidate"])
-    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the change.")
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["model"] == config["routes"]["mechanical"]["model"]
-    assert "agent" not in updated
-    assert "fallbackAgent" not in updated
-
-
-def test_served_model_updates_ledger_and_finished_telemetry(workspace, config, monkeypatch):
-    repo, state = workspace
-    candidate = "vendor/mechanical-free"
-    monkeypatch.setattr(coder_config, "opencode_candidates", lambda: [candidate])
-    config["coder_family"] = "gemini"
-    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
-    call = event(prompt=orch(route="mechanical", scope="file0.py") + "\nMake the change.")
-    updated = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["fallbackAgent"] == config["coder_agent"]
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    observed_pending = []
-    original_observations = codex._post_observations
-    def capture(*args, **kwargs):
-        observed_pending.append(dict(args[2]))
-        return original_observations(*args, **kwargs)
-    monkeypatch.setattr(codex, "_post_observations", capture)
-    reviewed = []
-    response = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response": {
-        "structuredContent": {"threadId": "served-thread", "content": "Done", "servedAgent": "codex",
-                               "servedModel": "gpt-6-sol", "attemptedModels": [candidate]}}},
-        config=config, state_root=state, repo_root=repo,
-        reviewer=lambda **kw: reviewed.append(kw) or {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-                                                      "validation": "PASS", "findings": []})
-    bundle = response_bundle(response, config)
-    record = ledger.SessionLedger(state / "projects" / project_root.project_key(repo.resolve())).load("task-1")["record"]
-    assert observed_pending[0]["model"] == "gpt-6-sol"
-    assert observed_pending[0]["mechanical_opencode"] is True
-    assert observed_pending[0]["shadow_prompt"] == updated["prompt"]
-    assert record["live_thread"]["model"] == "gpt-6-sol"
-    assert bundle["model"] == "gpt-6-sol"
-    assert reviewed and reviewed[0]["model"] == "gpt-6-sol"
-    assert policy.vendor_family(policy.model_family(reviewed[0]["reviewer_model"])) != \
-        policy.vendor_family(policy.model_family(bundle["model"]))
-    finished = [item["payload"] for item in _all_telemetry_events(state)
-                if item["event_type"] == "IMPLEMENTER_FINISHED"]
-    assert finished[-1]["served_model"] == "gpt-6-sol"
-    assert finished[-1]["implementer"] == "codex-main"
-
-
-def test_agy_start_passes_route_effort_to_bridge(workspace, config):
-    repo, state = workspace
-    config["coder_agent"] = "agy"
-    for entry in config["routes"].values():
-        entry.update(model="gemini-3.8-flash", effort="medium")
-    start = event(START_TOOL, tool_use_id="agy-start")
-    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert updated["model"] == "gemini-3.8-flash"
-    assert updated["config"] == {"model_reasoning_effort": "medium"}
-
-
-def test_unknown_model_family_still_reviews(workspace, config):
-    repo, state = workspace
-    config["coder_agent"] = "opencode"
-    for entry in config["routes"].values():
-        entry.update(model="unknown/mystery", effort="none")
-    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
-    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    invoked = []
-    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-        {"structuredContent": {"threadId": "mystery-thread", "content": "Done"}}},
-        config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
-    bundle = response_bundle(result, config)
-    assert invoked
-    assert bundle["reviewer1_skipped_reason"] is None
-    assert bundle["reviewer1_result"] == policy.UNCERTAIN
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert bundle["implementer"] == "opencode-main"
-
-
-def test_same_vendor_stored_family_skips_reviewer_and_forces_full(workspace, config):
-    repo, state = workspace
-    config["coder_agent"] = "opencode"
-    config["coder_family"] = "google"
-    for entry in config["routes"].values():
-        entry.update(model="opencode/big-pickle", effort="none")
-    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
-    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    invoked = []
-    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-        {"structuredContent": {"threadId": "stored-family-thread", "content": "Done"}}},
-        config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
-    bundle = response_bundle(result, config)
-    assert not invoked
-    assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
-    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
-    assert bundle["claude_review_mode"] == policy.FULL
-
-
-def test_stored_gemini_subfamily_matches_gemini_reviewer(workspace, config):
-    repo, state = workspace
-    config["coder_agent"] = "agy"
-    config["coder_family"] = "gemini-flash"
-    for entry in config["routes"].values():
-        entry.update(model="gemini-3.8-flash", effort="medium")
-    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
-    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    invoked = []
-    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-        {"structuredContent": {"threadId": "gemini-subfamily-thread", "content": "Done"}}},
-        config=config, state_root=state, repo_root=repo, reviewer=lambda **kw: invoked.append(kw))
-    bundle = response_bundle(result, config)
-    assert not invoked
-    assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
-    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
-    assert bundle["claude_review_mode"] == policy.FULL
-
-
-def test_different_stored_family_runs_reviewer(workspace, config):
-    repo, state = workspace
-    config["coder_agent"] = "opencode"
-    config["coder_family"] = "opencode"
-    for entry in config["routes"].values():
-        entry.update(model="opencode/big-pickle", effort="none")
-    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
-    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    invoked = []
-    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-        {"structuredContent": {"threadId": "different-family-thread", "content": "Done"}}},
-        config=config, state_root=state, repo_root=repo,
-        reviewer=lambda **kw: invoked.append(kw) or {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-                                                    "validation": "PASS", "findings": []})
-    bundle = response_bundle(result, config)
-    assert invoked
-    assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
-
-
-class _RegisteredReviewerFixture:
-    def validate_model(self, model):
-        return None
-
-    def build_command(self, *args, **kwargs):
-        return []
-
-    def invoke(self, *args, **kwargs):
-        return None
-
-    def parse(self, *args, **kwargs):
-        return None
-
-
-def _post_with_reviewer_candidates(workspace, config, candidates, reviewer, monkeypatch=None,
-                                  coder_family="unknown"):
-    repo, state = workspace
-    config["coder_agent"] = "opencode"
-    config["coder_family"] = coder_family
-    for entry in config["routes"].values():
-        entry.update(model="opencode/big-pickle", effort="none")
-    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
-    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    pending_path = codex._pending_path(state, call)
-    pending = json.loads(pending_path.read_text(encoding="utf-8"))
-    pending["reviewer_candidates"] = candidates
-    codex._atomic_json_write(pending_path, pending)
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    if monkeypatch is not None:
-        monkeypatch.setitem(reviewer_module.REVIEWER_ADAPTERS, "codex", _RegisteredReviewerFixture())
-    result = codex.post_tool_use(
-        {**call, "hook_event_name": "PostToolUse", "tool_response":
-         {"structuredContent": {"threadId": "reviewer-fallback-thread", "content": "Done"}}},
-        config=config, state_root=state, repo_root=repo, reviewer=reviewer,
-    )
-    return response_bundle(result, config)
-
-
-def test_primary_reviewer_success_reports_selected_provider_and_no_attempt_list(workspace, config):
-    report = {
-        "review_status": "COMPLETED", "provider": "agy",
-        "reviewer1_model_requested": "gemini-3.8-flash-high",
-        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-        "validation": "PASS", "findings": [],
-    }
-    bundle = _post_with_reviewer_candidates(
-        workspace, config, [{"agent": "agy", "model": "gemini-3.8-flash-high"}],
-        lambda **kwargs: report,
-    )
-    assert bundle["reviewer1_provider"] == "agy"
-    assert bundle["reviewer1_model_requested"] == "gemini-3.8-flash-high"
-    assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
-    assert "reviewer1_attempts" not in bundle
-
-
-def test_unavailable_primary_falls_back_and_records_attempts(workspace, config, monkeypatch):
-    calls = []
-    def reviewer(**kwargs):
-        calls.append(kwargs)
-        if kwargs["reviewer_agent"] == "agy":
-            return {"review_status": "UNAVAILABLE", "provider": "agy",
-                    "reviewer1_model_requested": kwargs["reviewer_model"],
-                    "result": policy.REVIEWER1_UNAVAILABLE, "validation": "UNKNOWN",
-                    "error_code": "AGY_DOWN", "findings": [{"code": "AGY_DOWN", "message": "provider unavailable"}]}
-        command = reviewer_module.CLAUDE_ADAPTER.build_command(
-            "review", reviewer_module.REVIEW_SCHEMA,
-            {"reviewer1_executable": str(Path.cwd() / "claude"),
-             "reviewer1_model_requested": kwargs["reviewer_model"],
-             "reviewer1_effort": kwargs["reviewer_effort"]},
-            cwd=Path.cwd(),
-        )
-        assert command[command.index("--effort") + 1] == "medium"
-        return {"review_status": "COMPLETED", "provider": "claude",
-                "reviewer1_model_requested": kwargs["reviewer_model"],
-                "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-                "validation": "PASS", "findings": []}
-    bundle = _post_with_reviewer_candidates(
-        workspace, config,
-        [{"agent": "agy", "model": "gemini-3.8-flash-high"},
-         {"agent": "claude", "model": "claude-haiku-5-5"}], reviewer, monkeypatch,
-    )
-    assert [call["reviewer_agent"] for call in calls] == ["agy", "claude"]
-    assert calls[1]["reviewer_effort"] == "medium"
-    assert bundle["reviewer1_provider"] == "claude"
-    assert bundle["reviewer1_model_requested"] == "claude-haiku-5-5"
-    assert bundle["reviewer1_attempts"] == [
-        {"agent": "agy", "model": "gemini-3.8-flash-high", "outcome": "UNAVAILABLE",
-         "reason": "AGY_DOWN: provider unavailable"},
-        {"agent": "claude", "model": "claude-haiku-5-5", "outcome": "COMPLETED"},
-    ]
-
-
-def test_opencode_selection_reaches_reviewer_adapter_with_fake_runner(workspace, config, tmp_path):
-    packet_response = {
-        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-        "validation": "PASS",
-        "findings": [],
-    }
-    stream = "\n".join(json.dumps(event) for event in (
-        {"type": "step_start", "providerID": "vendor", "modelID": "review-model"},
-        {"type": "text", "part": {"text": json.dumps(packet_response)}},
-        {"type": "step_finish", "part": {"reason": "stop"}},
-    ))
-
-    class FakeRunner:
-        def __init__(self):
-            self.calls = []
-
-        def __call__(self, command, **kwargs):
-            self.calls.append((command, kwargs))
-            return subprocess.CompletedProcess(command, 0, stdout=stream, stderr="")
-
-    runner = FakeRunner()
-    caller_workdir = tmp_path / "opencode-caller"
-    caller_workdir.mkdir()
-    executable = r"C:\tools\opencode.exe" if os.name == "nt" else "/tools/opencode"
-
-    def selected_reviewer(**kwargs):
-        selected_config = {
-            **reviewer_module._load_config(config),
-            "reviewer1_executable": executable,
-        }
-        return reviewer_module.review_materials(
-            {
-                "objective": "Review the delegated change.",
-                "acceptance_criteria": "The adapter returns a valid review.",
-                "authority_contract": "Use only the supplied packet.",
-                "delegated_diff": "diff --git a/a.py b/a.py\n-old\n+new\n",
-                "validation_summary": "Focused tests requested.",
-            },
-            config=selected_config,
-            runner=runner,
-            cwd=caller_workdir,
-            repo_root=Path("C:/reviewed-repo"),
-            reviewer_agent=kwargs["reviewer_agent"],
-            reviewer_model=kwargs["reviewer_model"],
-            reviewer_timeout_seconds=kwargs["reviewer_timeout_seconds"],
-        )
-
-    candidate_model = "vendor/review-model"
-    bundle = _post_with_reviewer_candidates(
-        workspace,
-        config,
-        [{"agent": "opencode", "model": candidate_model}],
-        selected_reviewer,
-        coder_family="unknown",
-    )
-
-    assert len(runner.calls) == 1
-    command, run_kwargs = runner.calls[0]
-    assert command[:2] == [executable, "run"]
-    assert command[command.index("--model") + 1] == candidate_model
-    agent = command[command.index("--agent") + 1]
-    assert agent == "opencode"
-    permissions = json.loads(run_kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
-    confined = {"edit", "write", "bash", "webfetch", "task", "external_directory"}
-    assert all(permissions["permission"][key] == "ask" for key in confined)
-    assert all(permissions["agent"][agent]["permission"][key] == "ask" for key in confined)
-    assert bundle["reviewer1_provider"] == "opencode"
-    assert bundle["reviewer1_model_requested"] == candidate_model
-    assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
-
-
-def test_all_reviewer_candidates_exhausted_forces_full(workspace, config, monkeypatch):
-    def unavailable(**kwargs):
-        return {"review_status": "UNAVAILABLE", "provider": kwargs["reviewer_agent"],
-                "reviewer1_model_requested": kwargs["reviewer_model"],
-                "result": policy.REVIEWER1_UNAVAILABLE, "validation": "UNKNOWN", "findings": []}
-    bundle = _post_with_reviewer_candidates(
-        workspace, config,
-        [{"agent": "agy", "model": "gemini-3.8-flash-high"},
-         {"agent": "codex", "model": "gpt-6-sol"}], unavailable, monkeypatch,
-    )
-    assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert [item["outcome"] for item in bundle["reviewer1_attempts"]] == ["UNAVAILABLE", "UNAVAILABLE"]
-
-
-def test_same_unaliased_vendor_reviewer_is_refused(workspace, config):
-    invoked = []
-    bundle = _post_with_reviewer_candidates(
-        workspace, config, [{"agent": "agy", "model": "qwen3-32b"}],
-        lambda **kwargs: invoked.append(kwargs), coder_family="qwen",
-    )
-    assert not invoked
-    assert bundle["reviewer1_result"] == policy.REVIEWER1_UNAVAILABLE
-    assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
-    assert bundle["claude_review_mode"] == policy.FULL
-
-
-@pytest.mark.parametrize(("phase", "route", "reason"), [
-    ("operation", "operation", policy.PHASE_OPERATION),
-    ("implementation", "normal", policy.NO_DELTA),
-])
-def test_unknown_family_keeps_original_reviewer_skip(workspace, config, phase, route, reason):
-    repo, state = workspace
-    config["coder_agent"] = "opencode"
-    for entry in config["routes"].values():
-        entry.update(model="unknown/mystery", effort="none")
-    call = event(prompt=orch(phase=phase, route=route, scope="file0.py") + "\nInspect.")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    result = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-        {"structuredContent": {"threadId": "unchanged-thread", "content": "Done"}}},
-        config=config, state_root=state, repo_root=repo)
-    bundle = response_bundle(result, config)
-    assert bundle["reviewer1_skipped_reason"] == reason
-    assert bundle["claude_review_mode"] == policy.FULL
-
-
-def test_plan_sync_read_only_artifact_and_mutation(workspace, config):
-    repo, state = workspace
-    call = event(prompt=orch(phase="plan", route="plan_standard", scope="file0.py") + "\nPlan this.",
-                 sandbox="danger-full-access", **{"approval-policy": "on-request"})
-    pre = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    updated = pre["hookSpecificOutput"]["updatedInput"]
-    assert updated["model"] == config["routes"]["plan_standard"]["model"]
-    assert updated["config"]["model_reasoning_effort"] == "high"
-    assert updated["sandbox"] == "read-only" and updated["approval-policy"] == "never"
-    (repo / "file1.py").write_text("value = 2\n", encoding="utf-8")
-    (repo / "new.py").write_text("new = True\n", encoding="utf-8")
-    content = "# Plan\n\nSummary:\n" + "A" * 4300 + "\n## Milestones\nFinish."
-    post = {**call, "hook_event_name": "PostToolUse", "tool_response":
-            {"structuredContent": {"threadId": "plan-thread", "content": content}}}
-    bundle = response_bundle(codex.post_tool_use(post, config=config, state_root=state, repo_root=repo), config)
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert bundle["reviewer1_skipped_reason"] == "PHASE_PLAN"
-    assert bundle["reviewer1_result"] is None
-    mutation = next(f for f in bundle["findings"] if f["code"] == "PLAN_MUTATED_REPO")
-    assert "concurrent writer may be the cause" in mutation["message"]
-    assert "file1.py" in mutation["message"]
-    assert not {"TASK_CONTRACT_NOT_GROUNDED", "WORKER_VALIDATION_UNVERIFIED"} & {
-        f["code"] for f in bundle["findings"]
-    }
-    assert bundle["worker_validation"] is None
-    stored = ledger.SessionLedger(
-        state / "projects" / project_root.project_key(repo.resolve())
-    ).load("task-1")
-    assert stored["status"] == ledger.OK
-    assert stored["record"]["live_thread"]["phase"] == "plan"
-    assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == content
-    assert state in Path(bundle["plan_path"]).parents
-    assert bundle["plan_summary"] == "A" * 4300
-
-
-def test_plan_async_result(workspace, config):
-    repo, state = workspace
-    prompt = orch(phase="plan", route="plan_standard", scope=None) + "\nPlan."
-    start, job_id, _ = async_started(workspace, config, prompt=prompt, state_name="SUCCEEDED")
-    pending = codex._read_pending(state, start)
-    assert pending["async_updated_input"]["sandbox"] == "read-only"
-    result = async_followup(RESULT_TOOL, job_id)
-    assert codex.pre_tool_use(result, config=config, state_root=state, repo_root=repo) == {}
-    post = {**result, "hook_event_name": "PostToolUse", "tool_response":
-            {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
-                                   "content": "Summary:\nAsync plan."}}}
-    bundle = response_bundle(codex.post_tool_use(post, config=config, state_root=state, repo_root=repo), config)
-    assert bundle["phase"] == "plan" and bundle["plan_summary"] == "Async plan."
-    assert bundle["reviewer1_skipped_reason"] == "PHASE_PLAN"
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert bundle["worker_validation"] is None
-    assert not {"TASK_CONTRACT_NOT_GROUNDED", "WORKER_VALIDATION_UNVERIFIED"} & {
-        f["code"] for f in bundle["findings"]
-    }
-    finished = [e["payload"] for e in _all_telemetry_events(state) if e["event_type"] == "IMPLEMENTER_FINISHED"]
-    assert len(finished) == 1 and finished[0]["phase"] == "plan"
-
-
-@pytest.mark.parametrize("unleased", (False, True))
-def test_plan_attributes_only_foreign_leased_changes(workspace, config, unleased):
-    repo, state = workspace
-    plan = event(prompt=orch(phase="plan", route="plan_standard", scope=None) + "\nPlan.",
-                 tool_use_id="plan-with-foreign")
-    codex.pre_tool_use(plan, config=config, state_root=state, repo_root=repo)
-    foreign = _attribution_call("foreign-plan-writer", "file1.py", "plan-foreign")
-    codex.pre_tool_use(foreign, config=config, state_root=state, repo_root=repo)
-    (repo / "file1.py").write_text("value = 2\n", encoding="utf-8")
-    if unleased:
-        (repo / "file2.py").write_text("value = 3\n", encoding="utf-8")
-    post = {**plan, "hook_event_name": "PostToolUse", "tool_response": {
-        "structuredContent": {"threadId": "plan-foreign-thread", "content": "Summary:\nPlan."}}}
-    bundle = response_bundle(codex.post_tool_use(post, config=config, state_root=state,
-                                                   repo_root=repo), config)
-    assert bundle["claude_review_mode"] == policy.FULL
-    artifact = json.loads(Path(bundle["full_bundle_path"]).read_text(encoding="utf-8"))
-    assert artifact["known_concurrent_scopes"] == [
-        {"path": "file1.py", "task_id": "foreign-plan-writer"}]
-    mutations = [finding for finding in bundle["findings"]
-                 if finding["code"] == "PLAN_MUTATED_REPO"]
-    assert bool(mutations) == unleased
-    if unleased:
-        assert "file2.py" in mutations[0]["message"]
-        assert "file1.py" not in mutations[0]["message"]
-
-
-def test_plan_file_and_summary_caps(workspace):
-    _, state = workspace
-    report = "Summary:\n" + "界🙂" * 13000
-    bundle = {"findings": []}
-    codex._store_plan(state, event(), "long-plan", report, bundle)
-    assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == report
-    assert bundle["plan_summary"] == "界🙂" * 13000
-    assert [finding["code"] for finding in bundle["findings"]] == ["PLAN_SHAPE_MISSING"]
-
-
-def test_plan_empty_summary_points_to_complete_artifact(workspace):
-    _, state = workspace
-    report = "# Summary:\n\n# Milestones\n- Complete the plan"
-    bundle = {"findings": []}
-    codex._store_plan(state, event(), "empty-summary", report, bundle)
-    assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == report
-    assert bundle["plan_summary"] == (
-        f"Plan summary is empty; complete plan is available at {bundle['plan_path']}."
-    )
-    compact, overflow = codex._compact_bundle(bundle, 10000)
-    assert not overflow
-    assert compact["plan_summary"] == bundle["plan_summary"]
-    assert compact["plan_path"] == bundle["plan_path"]
-
-
-@pytest.mark.parametrize("name", ("codex_result", "codex_cancel"))
-def test_async_unknown_and_foreign_jobs_are_denied(workspace, config, name):
-    repo, state = workspace
-    call = event(tool_name=f"mcp__plugin_purser_codex-main__{name}")
-    call["tool_input"] = {"jobId": "0" * 64}
-    result = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert not list((state / "pending").glob("*.json"))
-    start, job_id, record = async_started(workspace, config)
-    call["tool_input"]["jobId"] = job_id
-    call["session_id"] = "other-session"
-    assert codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_codex_start_posttooluse_returns_dispatch_guidance(workspace, config):
-    repo, state = workspace
-    start = event(START_TOOL, prompt=orch(task="early-receipt") + "\nWork.", cwd=str(repo))
-    updated = codex.pre_tool_use(start, config=config, state_root=state,
-                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
-
-    response = codex.post_tool_use({**start, "hook_event_name": "PostToolUse", "tool_response": {
-        "structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
-        config=config, state_root=state, repo_root=repo)
-
-    context = response["hookSpecificOutput"]["additionalContext"]
-    assert "Write one line in the user's language as `> ⚓ **Codex: ...**`" in context
-    assert "> ⚓ **Codex:" in context
-
-
-def test_plan_milestone_label():
-    assert codex._plan_milestone_label("ci-go-plan-m5of5", "CI green on 3 OSes") == (
-        "CI green on 3 OSes [ci-go-plan-5/5]"
-    )
-    assert codex._plan_milestone_label("ci-go", "CI green on 3 OSes") == "CI green on 3 OSes"
-    assert codex._plan_milestone_label(
-        "ci-go-plan-m5of5", "CI green on 3 OSes [ci-go-plan-5/5]"
-    ) == "CI green on 3 OSes [ci-go-plan-5/5]"
-    assert codex._plan_milestone_label("ci-go-plan-m5of5", "") == ""
-
-
 START_TOOL = "mcp__plugin_purser_codex-main__codex_start"
 RESULT_TOOL = "mcp__plugin_purser_codex-main__codex_result"
 CANCEL_TOOL = "mcp__plugin_purser_codex-main__codex_cancel"
@@ -821,650 +204,6 @@ def async_followup(name, job_id):
     return call
 
 
-def _admitted_start_response(workspace, config, *, task_id, tool_use_id, label=None):
-    repo, state = workspace
-    start = event(START_TOOL, prompt=orch(task=task_id, scope="file0.py") + "\nWork.",
-                  tool_use_id=tool_use_id, label=label or task_id)
-    updated = codex.pre_tool_use(start, config=config, state_root=state,
-                                 repo_root=repo)["hookSpecificOutput"]["updatedInput"]
-    assert "label" not in updated
-    job_id = hashlib.sha256(updated["call"].encode()).hexdigest()
-    response = codex.post_tool_use({**start, "hook_event_name": "PostToolUse", "tool_response": {
-        "structuredContent": {"jobId": job_id, "state": "RUNNING"}}},
-        config=config, state_root=state, repo_root=repo)
-    return start, response
-
-
-def _seed_live_thread(workspace, task_id):
-    repo, state = workspace
-    route = policy.resolve_route("normal", json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-    record = ledger.build_session_record(
-        task_id, f"thread-{task_id}", "normal", route.model, route.effort,
-        phase="implementation", scope=["file0.py"], reason="new_task", label="existing task",
-    )
-    session_ledger = ledger.SessionLedger(
-        codex._project_state_root(state, project_root.project_key(repo.resolve()))
-    )
-    assert session_ledger.save(record)["status"] == ledger.OK
-    return session_ledger
-
-
-def test_denied_fresh_start_does_not_poison_new_task_id(workspace, config):
-    repo, state = workspace
-    session_ledger = _seed_live_thread(workspace, "denied-task")
-    before = session_ledger.load("denied-task")["record"]
-    denied = event(
-        START_TOOL, prompt=orch(task="denied-task", scope="file0.py") + "\nWork.",
-        tool_use_id="denied-fresh-start", mode="new",
-    )
-
-    response = codex.pre_tool_use(denied, config=config, state_root=state, repo_root=repo)
-
-    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert session_ledger.load("denied-task")["record"] == before
-    retry = event(
-        START_TOOL, prompt=orch(task="brand-new-task", scope="file0.py") + "\nWork.",
-        tool_use_id="brand-new-after-denial", mode="new",
-    )
-    allowed = codex.pre_tool_use(retry, config=config, state_root=state, repo_root=repo)
-    assert "updatedInput" in allowed["hookSpecificOutput"]
-
-
-@pytest.mark.parametrize("reason", ["user_override", "reanchor"])
-def test_fresh_start_override_reason_allows_compatible_live_thread(workspace, config, reason):
-    repo, state = workspace
-    _seed_live_thread(workspace, f"override-{reason}")
-    call = event(
-        START_TOOL,
-        prompt=orch(task=f"override-{reason}", reason=reason, scope="file0.py") + "\nWork.",
-        tool_use_id=f"override-fresh-{reason}", mode="new",
-    )
-
-    response = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-
-    assert "updatedInput" in response["hookSpecificOutput"]
-
-
-def test_plain_new_task_fresh_start_still_denies_compatible_live_thread(workspace, config):
-    repo, state = workspace
-    _seed_live_thread(workspace, "plain-new-task")
-    call = event(
-        START_TOOL,
-        prompt=orch(task="plain-new-task", reason="new_task", scope="file0.py") + "\nWork.",
-        tool_use_id="plain-new-task-fresh", mode="new",
-    )
-
-    response = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-
-    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "USE_CODEX_REPLY" in response["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def test_dispatch_receipt_renders_english_in_approved_format(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:
-        "Purser: typical Codex durations here (median/p90, n): normal 5/8 min (n=10).")
-    queued = []
-    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
-                        lambda event, repository, **kwargs: queued.append(kwargs))
-    codex._append_dispatch_receipt({}, {
-        "task_id": "task-1", "label": "OpenCode and Codex reviewer adapters",
-        "model": "gpt-6-luna", "effort": "high", "route": "normal",
-        "project_key": "project", "repo_root": str(repo), "agent": "codex",
-        "eta_minutes": 7,
-    }, state, event())
-    assert queued[0]["line"] == (
-        "> ⚓ **Codex: New session · model: gpt-6-luna (high) · task: OpenCode and Codex reviewer adapters · "
-        "estimated completion: 7 min**"
-    )
-
-
-def test_dispatch_receipt_uses_continuing_session_wording(workspace, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
-    queued = []
-    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
-                        lambda event, repository, **kwargs: queued.append(kwargs))
-    codex._append_dispatch_receipt({}, {
-        "task_id": "task-1", "label": "Keep working", "model": "gpt-6-luna",
-        "effort": "high", "route": "normal", "project_key": "project",
-        "repo_root": str(repo), "agent": "codex", "prior_thread_id": "thread-1",
-    }, state, event())
-    assert queued[0]["line"] == (
-        "> ⚓ **Codex: Continuing session · model: gpt-6-luna (high) · task: Keep working · "
-        "estimated completion: 5 min**"
-    )
-
-
-@pytest.mark.parametrize(("route", "expected"), (("mechanical", 3), ("plan_standard", 8)))
-def test_dispatch_receipt_uses_route_default_without_duration_history(workspace, monkeypatch, route, expected):
-    repo, state = workspace
-    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
-    queued = []
-    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
-                        lambda event, repository, **kwargs: queued.append(kwargs))
-    codex._append_dispatch_receipt({}, {
-        "task_id": "task-1", "label": "First run", "model": "gpt-6-luna",
-        "effort": "high", "route": route, "project_key": "project",
-        "repo_root": str(repo), "agent": "codex",
-    }, state, event())
-    assert queued[0]["line"] == (
-        f"> ⚓ **Codex: New session · model: gpt-6-luna (high) · task: First run · "
-        f"estimated completion: {expected} min**"
-    )
-
-
-def test_codex_start_dispatch_notices_cached_model_and_cli_once(workspace, monkeypatch):
-    repo, state = workspace
-    cache_home = state / "codex-home"
-    cache_home.mkdir(parents=True)
-    monkeypatch.setenv("CODEX_HOME", str(cache_home))
-    config = codex.coder_config.load(codex._CONFIG_PATH)
-    current = config["sol_model"]
-    match = re.fullmatch(r"(.*?)(\d+)(-sol)", current)
-    assert match
-    newer = f"{match.group(1)}{int(match.group(2)) + 1}{match.group(3)}"
-    hidden = f"{match.group(1)}{int(match.group(2)) + 2}{match.group(3)}"
-    (cache_home / "models_cache.json").write_text(json.dumps({
-        "client_version": "0.159.0",
-        "models": [
-            {"slug": newer, "visibility": "list"},
-            {"slug": hidden, "visibility": "hidden"},
-        ],
-    }), encoding="utf-8")
-    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
-    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k: pytest.fail("cached CLI version must avoid subprocess"))
-    (state / "codex-cli-version.json").write_text(json.dumps({
-        "checked_on": datetime.now(timezone.utc).date().isoformat(), "installed_version": "0.156.1",
-    }), encoding="utf-8")
-
-    def notice():
-        response = codex._append_dispatch_receipt({}, {
-            "task_id": "task-1", "label": "First run", "model": current,
-            "effort": "high", "route": "normal", "project_key": "project",
-            "repo_root": str(repo), "agent": "codex",
-        }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
-        return response["hookSpecificOutput"]["additionalContext"]
-
-    first = notice()
-    assert f"> ⚓ **New Codex model {newer} is available (current: {current}). Adopt it for these routes? (1/yes)**" in first
-    assert f"--adopt-model-version {newer}" in first
-    assert "> ⚓ **Codex CLI 0.159.0 is available (installed: 0.156.1). Update it? (1/yes)**" in first
-    codex.model_version_notice.mark_shown(newer)
-    assert "> ⚓ **New Codex model" not in notice()
-    assert "> ⚓ **Codex CLI" not in notice()
-
-
-@pytest.mark.parametrize(("client_version", "installed_version"), (("0.159.0", "0.160.0"), ("0.159.0", "0.159.0")))
-def test_codex_start_dispatch_ignores_hidden_models_and_older_or_equal_cli(
-        workspace, monkeypatch, client_version, installed_version):
-    repo, state = workspace
-    cache_home = state / "codex-home"
-    cache_home.mkdir(parents=True)
-    monkeypatch.setenv("CODEX_HOME", str(cache_home))
-    (cache_home / "models_cache.json").write_text(json.dumps({
-        "client_version": client_version,
-        "models": [{"slug": "gpt-6.1-sol", "visibility": "hidden"}],
-    }), encoding="utf-8")
-    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
-    (state / "codex-cli-version.json").write_text(json.dumps({
-        "checked_on": datetime.now(timezone.utc).date().isoformat(), "installed_version": installed_version,
-    }), encoding="utf-8")
-    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k: pytest.fail("cached CLI version must avoid subprocess"))
-    response = codex._append_dispatch_receipt({}, {
-        "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
-        "effort": "high", "route": "normal", "project_key": "project",
-        "repo_root": str(repo), "agent": "codex",
-    }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
-    context = response["hookSpecificOutput"]["additionalContext"]
-    assert "New Codex model" not in context and "Codex CLI" not in context
-
-
-@pytest.mark.parametrize("cache_contents", (None, "{bad json"))
-def test_codex_start_dispatch_skips_missing_or_malformed_model_cache(
-        workspace, monkeypatch, cache_contents):
-    repo, state = workspace
-    cache_home = state / "codex-home"
-    cache_home.mkdir(parents=True)
-    monkeypatch.setenv("CODEX_HOME", str(cache_home))
-    if cache_contents is not None:
-        (cache_home / "models_cache.json").write_text(cache_contents, encoding="utf-8")
-    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
-    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k: pytest.fail("cache absence must skip version checks"))
-    response = codex._append_dispatch_receipt({}, {
-        "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
-        "effort": "high", "route": "normal", "project_key": "project",
-        "repo_root": str(repo), "agent": "codex",
-    }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
-    context = response["hookSpecificOutput"]["additionalContext"]
-    assert "> ⚓ **Codex:" in context
-    assert "New Codex model" not in context and "Codex CLI" not in context
-
-
-def test_codex_start_dispatch_caches_installed_cli_version_for_the_day(workspace, monkeypatch):
-    repo, state = workspace
-    cache_home = state / "codex-home"
-    cache_home.mkdir(parents=True)
-    monkeypatch.setenv("CODEX_HOME", str(cache_home))
-    (cache_home / "models_cache.json").write_text(json.dumps({
-        "client_version": "0.159.0", "models": [],
-    }), encoding="utf-8")
-    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
-    calls = []
-    monkeypatch.setattr(codex.shutil, "which", lambda _name: "codex")
-    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k:
-                        calls.append(True) or subprocess.CompletedProcess([], 0, "codex-cli 0.156.1", ""))
-
-    for _ in range(2):
-        codex._append_dispatch_receipt({}, {
-            "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
-            "effort": "high", "route": "normal", "project_key": "project",
-            "repo_root": str(repo), "agent": "codex",
-        }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
-    assert calls == [True]
-
-
-def test_two_admitted_codex_starts_emit_two_dispatch_receipts(workspace, config, monkeypatch):
-    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:
-        "Purser: typical Codex durations here (median/p90, n): normal 2/6 min (n=10).")
-    lines = []
-    original_queue = codex.compaction_advisor.queue_dispatch
-    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
-                        lambda event, repository, **kwargs: lines.append(kwargs["line"]) if kwargs.get("line") else None)
-    first = _admitted_start_response(
-        workspace, config, task_id="receipt-first", tool_use_id="receipt-first-start")[1]
-    second = _admitted_start_response(
-        workspace, config, task_id="receipt-second", tool_use_id="receipt-second-start")[1]
-    assert original_queue
-    assert "systemMessage" not in first and "systemMessage" not in second
-    assert len(lines) == 2
-    assert "task: receipt-first · estimated completion: 2 min**" in lines[0]
-    assert "task: receipt-second · estimated completion: 2 min**" in lines[1]
-
-
-def test_async_start_records_default_eta_for_job(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
-    start = event(START_TOOL, prompt=orch(task="mechanical-eta", route="mechanical", scope="file0.py")
-                  + "\nMake the small change.", tool_use_id="mechanical-eta")
-
-    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)[
-        "hookSpecificOutput"]["updatedInput"]
-    pending = codex._read_pending(state, start)
-
-    assert updated["etaMinutes"] == 3
-    assert pending["eta_minutes"] == updated["etaMinutes"]
-
-
-def test_async_start_preserves_explicit_eta_minutes(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs:
-        "Purser: typical Codex durations here (median/p90, n): subtle 5/20 min (n=31).")
-    start = event(START_TOOL, prompt=orch(task="subtle-eta", route="subtle", scope="file0.py")
-                  + "\nMake the change.", tool_use_id="subtle-eta", etaMinutes=12)
-
-    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)[
-        "hookSpecificOutput"]["updatedInput"]
-    pending = codex._read_pending(state, start)
-
-    assert updated["etaMinutes"] == 12
-    assert pending["eta_minutes"] == 12
-
-
-def test_denied_codex_start_emits_no_dispatch_receipt(workspace, config):
-    repo, state = workspace
-    start = event(START_TOOL, prompt=orch(scope="file0.py") + "\nWork.",
-                  tool_use_id="receipt-denied")
-    start["tool_input"].pop("label")
-    response = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)
-    assert response["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "label" in response["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "fix" in response["hookSpecificOutput"]["permissionDecisionReason"].casefold()
-
-
-def test_async_implementation_starts_with_overlapping_scope_are_admitted(workspace, config):
-    repo, state = workspace
-    nested = repo / "tests"
-    nested.mkdir()
-    starts = [event(START_TOOL, prompt=orch(task=f"overlap-{n}", scope="tests/") + "\nWork.",
-                    tool_use_id=f"overlap-start-{n}", cwd=str(nested)) for n in range(2)]
-    updated = [codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)
-               ["hookSpecificOutput"]["updatedInput"] for start in starts]
-    assert all(item["worktree"] is True and "leaseQueued" not in item for item in updated)
-    assert all(Path(item["cwd"]) == nested for item in updated)
-    leases = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))
-    assert len(leases.overlapping_owners(codex._call_key(starts[0]))) == 1
-    assert all(owner["state"] == "ACTIVE" for owner in leases._read()["owners"].values())
-
-
-def test_async_worktree_delta_and_apply_use_only_job_changes(workspace, config):
-    repo, state = workspace
-    start, job_id, job_path = async_started(
-        workspace, config, prompt=orch(task="worktree-delta", scope="file1.py") + "\nWork."
-    )
-    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
-    (Path(snapshot["path"]) / "file1.py").write_text("job = True\n", encoding="utf-8")
-    (repo / "file0.py").write_text("shared = True\n", encoding="utf-8")
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"], snapshot=snapshot["snapshot"],
-               head=snapshot["head"], repoRoot=str(repo))
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    followup = async_followup(RESULT_TOOL, job_id)
-    response = codex.post_tool_use({**followup, "hook_event_name": "PostToolUse", "tool_response": {
-        "structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
-                              "content": "done", "worktreePath": snapshot["path"]}}},
-        config=config, state_root=state, repo_root=repo)
-    bundle = response_bundle(response, config)
-    assert bundle["changed_paths"] == ["file1.py"]
-    assert bundle["apply"] == "codex_apply"
-    assert "codex_apply" in response["systemMessage"]
-
-
-def test_dirty_worktree_snapshot_reviews_only_worker_diff(workspace, config, monkeypatch):
-    repo, state = workspace
-    (repo / "file0.py").write_text("preexisting = True\n", encoding="utf-8")
-    start, job_id, job_path = async_started(
-        workspace, config, prompt=orch(task="dirty-snapshot", scope="file1.py") + "\nWork."
-    )
-    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
-    worktree = Path(snapshot["path"])
-    (worktree / "file1.py").write_text("worker = True\n", encoding="utf-8")
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
-               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo))
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
-    packets = []
-    def reviewer(**kwargs):
-        packets.append(reviewer_module._delegated_diff(kwargs["repo_root"], kwargs["delta"]))
-        return {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"}
-    followup = async_followup(RESULT_TOOL, job_id)
-    response = codex.post_tool_use({**followup, "hook_event_name": "PostToolUse", "tool_response": {
-        "structuredContent": {"jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
-                              "content": "done", "worktreePath": snapshot["path"]}}},
-        config=config, state_root=state, repo_root=repo, reviewer=reviewer)
-    bundle = response_bundle(response, config)
-    assert bundle["changed_paths"] == ["file1.py"]
-    assert bundle["delta_files"] == 1 and bundle["delta_lines"] == 2
-    assert packets and packets[0][0] == ["file1.py"]
-    assert "preexisting" not in packets[0][1]
-    assert not {"OUT_OF_SCOPE_MODIFICATION", "UNKNOWN_CONCURRENT_WRITER", "REVIEW_PACKET_INCOMPLETE"} & {
-        finding["code"] for finding in bundle["findings"]}
-
-
-def test_stale_apply_reprepares_on_next_result_and_reviews_new_snapshot(workspace, config, monkeypatch):
-    repo, state = workspace
-    (repo / "file1.py").write_text("first = 1\nmiddle = 1\nlast = 1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "file1.py"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "--amend", "-qm", "three lines"], cwd=repo, check=True)
-    _, job_id, job_path = async_started(
-        workspace, config, prompt=orch(task="stale-review-refresh", scope="file1.py") + "\nWork."
-    )
-    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
-    worktree = Path(snapshot["path"])
-    (worktree / "file1.py").write_text(
-        "first = 1\nmiddle = 1\nlast = 1\njob = True\n", encoding="utf-8")
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
-               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo),
-               finishedAt=time.time())
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    monkeypatch.setattr(policy, "reviewer1_gate",
-                        lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
-    reviewer_calls = []
-    reviewer = lambda **kwargs: reviewer_calls.append(kwargs) or {
-        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"}
-    tool_response = {"structuredContent": {"jobId": job_id, "state": "SUCCEEDED",
-                     "threadId": "async-thread", "content": "done", "worktreePath": snapshot["path"]}}
-    codex.post_tool_use({**async_followup(RESULT_TOOL, job_id), "hook_event_name": "PostToolUse",
-                         "tool_response": tool_response}, config=config, state_root=state,
-                        repo_root=repo, reviewer=reviewer)
-    reviewed_job = json.loads(job_path.read_text(encoding="utf-8"))
-    reviewed = reviewed_job["reviewedSnapshot"]
-    index = json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
-    leases = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))
-    assert leases._read()["owners"][index["call_key"]]["retention_after"] == (
-        reviewed_job["finishedAt"] + ledger.UNAPPLIED_WORKTREE_LEASE_SECONDS)
-    (repo / "file1.py").write_text(
-        "first = 1\ncheckout = True\nmiddle = 1\nlast = 1\n", encoding="utf-8")
-    monkeypatch.setattr(codex_exec_mcp.purser_state_root, "default_state_root", lambda: state)
-    apply_server = codex_exec_mcp.Server(host=True, job_dir=job_path.parent)
-
-    refused = apply_server._apply_job({"jobId": job_id})
-    second = codex.post_tool_use({**async_followup(RESULT_TOOL, job_id), "hook_event_name": "PostToolUse",
-                                  "tool_response": tool_response}, config=config, state_root=state,
-                                 repo_root=repo, reviewer=reviewer)
-
-    refreshed = json.loads(job_path.read_text(encoding="utf-8"))
-    bundle = response_bundle(second, config)
-    assert json.loads(refused["content"][0]["text"])["errorCode"] == "REVIEW_STALE_REPREPARE_REQUIRED"
-    assert refreshed["snapshot"] != reviewed
-    assert refreshed["reviewedSnapshot"] == refreshed["snapshot"]
-    assert (worktree / "file1.py").read_text(encoding="utf-8") == (
-        "first = 1\ncheckout = True\nmiddle = 1\nlast = 1\njob = True\n")
-    assert len(reviewer_calls) == 2
-    assert bundle["changed_paths"] == ["file1.py"]
-    assert "codex_apply" in second["systemMessage"]
-
-
-def test_async_worktree_replay_conflict_blocks_reviewer_and_forces_full(workspace, config):
-    repo, state = workspace
-    _, job_id, job_path = async_started(
-        workspace, config, prompt=orch(task="worktree-replay-conflict", scope="file1.py") + "\nWork."
-    )
-    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
-    worktree = Path(snapshot["path"])
-    (worktree / "file1.py").write_text("worker = True\n", encoding="utf-8")
-    (repo / "file1.py").write_text("checkout = True\n", encoding="utf-8")
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
-               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo))
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    reviewer_calls = []
-    response = codex.post_tool_use({**async_followup(RESULT_TOOL, job_id),
-        "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
-            "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
-            "content": "done", "worktreePath": snapshot["path"],
-            "servedAgent": "opencode", "servedModel": "test-model"}}},
-        config=config, state_root=state, repo_root=repo,
-        reviewer=lambda **kwargs: reviewer_calls.append(kwargs),
-        micro_repair=lambda *_args, **_kwargs: pytest.fail("non-Codex resolver called"))
-    bundle = response_bundle(response, config)
-    assert bundle["claude_review_mode"] == policy.FULL
-    assert reviewer_calls == []
-    replay_events = [item for item in _all_telemetry_events(state)
-                     if item["event_type"] == "WORKER_REPLAY_CONFLICT"]
-    assert len(replay_events) == 1
-    assert replay_events[0]["payload"] == {"paths_count": 1}
-    learned = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))._read()["conflicts"]
-    assert any(item["path"] == "file1.py" for item in learned)
-
-
-def test_async_worktree_replay_resolves_same_codex_thread_before_review(workspace, config, monkeypatch):
-    repo, state = workspace
-    _, job_id, job_path = async_started(
-        workspace, config, prompt=orch(task="worktree-replay-resolver", scope="file1.py") + "\nWork."
-    )
-    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
-    worktree = Path(snapshot["path"])
-    (worktree / "file1.py").write_text("worker = True\n", encoding="utf-8")
-    (repo / "file1.py").write_text("checkout = True\n", encoding="utf-8")
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
-               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo),
-               liveness={"longestSilentGapSeconds": 91.5})
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    monkeypatch.setattr(policy, "reviewer1_gate",
-                        lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
-    resolver_calls, reviewer_calls = [], []
-
-    def resolve(thread_id, _findings, root, **kwargs):
-        resolver_calls.append((thread_id, kwargs))
-        assert Path(root) == worktree
-        (worktree / "file1.py").write_text("worker = True\ncheckout = True\n", encoding="utf-8")
-        return {"repaired": True}
-
-    response = codex.post_tool_use({**async_followup(RESULT_TOOL, job_id),
-        "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
-            "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
-            "content": "done", "worktreePath": snapshot["path"]}}},
-        config=config, state_root=state, repo_root=repo,
-        reviewer=lambda **kwargs: reviewer_calls.append(kwargs) or {
-            "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE, "provider": "agy"},
-        micro_repair=resolve)
-    bundle = response_bundle(response, config)
-    assert resolver_calls and resolver_calls[0][0] == "async-thread"
-    assert "file1.py" in resolver_calls[0][1]["prompt"]
-    prepared_state = json.loads((state / "preparations" / job_id / "state.json").read_text(encoding="utf-8"))
-    assert prepared_state["snapshot"] in resolver_calls[0][1]["prompt"]
-    assert reviewer_calls
-    assert bundle["changed_paths"] == ["file1.py"]
-    finished, = [item for item in _all_telemetry_events(state)
-                 if item["event_type"] == "IMPLEMENTER_FINISHED"]
-    assert finished["payload"]["longest_silent_gap_seconds"] == 91.5
-    learned = ledger.ScopeLeases(codex._project_state_root(state, project_root.project_key(repo)))._read()["conflicts"]
-    assert any(item["path"] == "file1.py" for item in learned)
-
-
-def test_job_conflict_resolver_skips_missing_thread_id():
-    calls = []
-    assert not codex._resolve_job_conflicts(
-        None, ["file1.py"], "snapshot-id", Path.cwd(),
-        lambda *args, **kwargs: calls.append((args, kwargs)),
-    )
-    assert calls == []
-
-
-def test_async_worktree_replay_resolver_timeout_blocks_and_restores_worker(workspace, config):
-    repo, state = workspace
-    _, job_id, job_path = async_started(
-        workspace, config, prompt=orch(task="worktree-replay-timeout", scope="file1.py") + "\nWork."
-    )
-    snapshot = ledger.create_job_worktree(repo, job_id, state / "wt")
-    worktree = Path(snapshot["path"])
-    (worktree / "file1.py").write_text("worker = True\n", encoding="utf-8")
-    original_patch = ledger.job_patch(worktree, snapshot["snapshot"])
-    (repo / "file1.py").write_text("checkout = True\n", encoding="utf-8")
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.update(state="SUCCEEDED", threadId="async-thread", worktreePath=snapshot["path"],
-               snapshot=snapshot["snapshot"], head=snapshot["head"], repoRoot=str(repo))
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    reviewer_calls = []
-
-    def timeout(*_args, **_kwargs):
-        raise subprocess.TimeoutExpired("codex-reply", 60)
-
-    response = codex.post_tool_use({**async_followup(RESULT_TOOL, job_id),
-        "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
-            "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread",
-            "content": "done", "worktreePath": snapshot["path"]}}},
-        config=config, state_root=state, repo_root=repo,
-        reviewer=lambda **kwargs: reviewer_calls.append(kwargs), micro_repair=timeout)
-    assert response_bundle(response, config)["claude_review_mode"] == policy.FULL
-    assert reviewer_calls == []
-    assert ledger.job_patch(worktree, snapshot["snapshot"]) == original_patch
-    reply = event(codex.CODEX_REPLY_TOOL, prompt="Resolve the replay conflict.",
-                  threadId="async-thread", tool_use_id="retry-replay-conflict")
-    admitted = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
-    assert "updatedInput" in admitted["hookSpecificOutput"]
-
-
-def test_operation_concurrent_commit_is_not_worker_delta(workspace, config):
-    repo, state = workspace
-    call = event(prompt=orch(phase="operation", route="operation", scope=None) + "\nInspect.")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("external = True\n", encoding="utf-8")
-    subprocess.run(["git", "add", "file0.py"], cwd=repo, check=True, timeout=10)
-    subprocess.run(["git", "commit", "-qm", "external"], cwd=repo, check=True, timeout=10)
-    response = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-        {"structuredContent": {"threadId": "operation-thread", "content": "done"}}},
-        config=config, state_root=state, repo_root=repo)
-    bundle = response_bundle(response, config)
-    assert bundle["changed_paths"] is None and bundle["delta_files"] is None
-    assert any(f["code"] == "EXTERNAL_REPOSITORY_CHANGE" for f in bundle["findings"])
-
-
-def test_clean_sync_implementation_delta_unchanged(workspace, config):
-    repo, state = workspace
-    call = event(prompt=orch(scope="file0.py") + "\nUpdate file0.")
-    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
-    (repo / "file0.py").write_text("worker = True\n", encoding="utf-8")
-    response = codex.post_tool_use({**call, "hook_event_name": "PostToolUse", "tool_response":
-        {"structuredContent": {"threadId": "sync-thread", "content": "done"}}},
-        config=config, state_root=state, repo_root=repo)
-    bundle = response_bundle(response, config)
-    assert bundle["changed_paths"] == ["file0.py"]
-    assert bundle["delta_files"] == 1 and bundle["delta_lines"] == 2
-    assert not any(f["code"] == "EXTERNAL_REPOSITORY_CHANGE" for f in bundle["findings"])
-
-
-def test_async_worktree_reply_is_admitted_during_overlapping_job(workspace, config, monkeypatch):
-    repo, state = workspace
-    async_started(
-        workspace, config, prompt=orch(task="active-worktree", scope="tests/") + "\nWork."
-    )
-    worktree = state / "wt" / "reply-thread"
-    worktree.mkdir(parents=True)
-    bridge_threads = state / "bridge-threads"
-    monkeypatch.setattr(codex_exec_mcp, "_state_dir", lambda: bridge_threads)
-    codex_exec_mcp._save_record(bridge_threads, {"thread_id": "worktree-thread", "cwd": str(worktree),
-        "config_args": [], "worktreePath": str(worktree), "snapshot": "snapshot", "head": "head",
-        "repoRoot": str(repo)})
-    route = policy.resolve_route("normal", config)
-    saved = ledger.SessionLedger(codex._project_state_root(state, project_root.project_key(repo))).save(
-        ledger.build_session_record("worktree-reply", "worktree-thread", "normal", route.model,
-                                    route.effort, phase="implementation", scope=["tests/"],
-                                    reason="new_task"))
-    assert saved["status"] == ledger.OK
-    _lease_state(workspace).record_conflicts(["tests/hot.py"])
-    reply = event(START_TOOL, prompt=orch(task="worktree-reply", scope="tests/") + "\nContinue.",
-                  tool_use_id="worktree-reply-start", mode="reply", threadId="worktree-thread")
-    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
-    updated = result["hookSpecificOutput"]["updatedInput"]
-    assert updated["mode"] == "reply"
-    assert updated["leaseQueued"] is True
-    disjoint = event(START_TOOL, prompt=orch(task="worktree-reply", scope="docs/") + "\nContinue.",
-                     tool_use_id="worktree-reply-disjoint", mode="reply", threadId="worktree-thread")
-    disjoint_input = codex.pre_tool_use(disjoint, config=config, state_root=state, repo_root=repo)[
-        "hookSpecificOutput"]["updatedInput"]
-    assert "leaseQueued" not in disjoint_input
-
-
-def test_worktree_flag_does_not_change_sync_plan_or_operation_calls(workspace, config):
-    repo, state = workspace
-    sync = codex.pre_tool_use(event(prompt=orch(task="sync-worktree", scope="file0.py") + "\nWork."),
-                              config=config, state_root=state, repo_root=repo)
-    plan = codex.pre_tool_use(event(START_TOOL,
-        prompt=orch(task="plan-worktree", phase="plan", route="plan_standard", scope=None) + "\nPlan.",
-        tool_use_id="plan-worktree"), config=config, state_root=state, repo_root=repo)
-    operation = codex.pre_tool_use(event(START_TOOL,
-        prompt=orch(task="operation-worktree", phase="operation", route="operation", scope=None) + "\nInspect.",
-        tool_use_id="operation-worktree"), config=config, state_root=state, repo_root=repo)
-    assert "worktree" not in sync["hookSpecificOutput"]["updatedInput"]
-    assert "worktree" not in plan["hookSpecificOutput"]["updatedInput"]
-    assert "worktree" not in operation["hookSpecificOutput"]["updatedInput"]
-
-
-def test_async_result_uses_indexed_project_when_event_cwd_is_nested_repo(workspace, config, monkeypatch):
-    repo, state = workspace
-    _, job_id, _ = async_started(workspace, config, state_name="SUCCEEDED")
-    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
-    nested = repo / ".tmp" / "nested-repo"
-    nested.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=nested, check=True, timeout=10)
-    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs: policy.RunReviewerDecision("run reviewer", "TEST", "test"))
-    followup = async_followup(RESULT_TOOL, job_id)
-    followup["cwd"] = str(nested)
-    assert codex.pre_tool_use(followup, config=config, state_root=state) == {}
-    post = {**followup, "hook_event_name": "PostToolUse", "tool_response": {"structuredContent": {
-        "jobId": job_id, "state": "SUCCEEDED", "threadId": "async-thread", "content": "done"}}}
-    result = codex.post_tool_use(post, config=config, state_root=state,
-                                 reviewer=lambda **kwargs: {"result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-                                                            "provider": "agy"})
-    assert response_bundle(result, config)["changed_paths"] == ["file0.py"]
-    assert json.loads((state / "async_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))["stage"] == "CONSUMED"
-
-
 def _board_job(state_root, name, status="RUNNING", **values):
     job_id = hashlib.sha256(name.encode()).hexdigest()
     call_key = hashlib.sha256((name + "-call").encode()).hexdigest()
@@ -1483,136 +222,6 @@ def _board_job(state_root, name, status="RUNNING", **values):
     return job_id, call_key
 
 
-def test_project_job_board_is_omitted_with_one_job(workspace):
-    _, state = workspace
-    _board_job(state, "only")
-    assert "| only |" in codex._project_job_board(state, "project")
-
-
-@pytest.mark.parametrize(("name", "values", "bundle", "expected"), [
-    ("fetching", {}, None, "coded · fetching result"),
-    ("review", {}, {"apply": "codex_apply", "changed_paths": ["src/a"]}, "in review"),
-    ("accepted", {"acceptance": {}},
-     {"apply": "codex_apply", "changed_paths": ["src/a"]}, "accepted"),
-    ("applied", {"applyState": "applied"}, None, "done"),
-    ("not_applicable", {"phase": "operation"}, {"phase": "operation"}, "done"),
-    ("no_change", {}, {"apply": "codex_apply", "changed_paths": []}, "done"),
-])
-def test_project_job_board_succeeded_stages(workspace, name, values, bundle, expected):
-    _, state = workspace
-    _, call_key = _board_job(state, name, "SUCCEEDED", **values)
-    if bundle is not None:
-        bundle_dir = state / "bundle_artifacts"
-        bundle_dir.mkdir(exist_ok=True)
-        (bundle_dir / f"{call_key}.json").write_text(json.dumps(bundle), encoding="utf-8")
-
-    board = codex._project_job_board(state, "project")
-
-    assert f"| {name} | gpt-6-sol (medium) | {expected} |" in board
-
-
-def test_project_job_board_marks_only_stalled_job(workspace):
-    _, state = workspace
-    _board_job(state, "stalled", "RUNNING", errorCode="STALLED", stallDetectedAt=1234.0)
-    _board_job(state, "healthy", "RUNNING")
-
-    message = codex._project_job_board(state, "project")
-
-    assert "| stalled | gpt-6-sol (medium) | stalled |" in message
-    assert "| healthy | gpt-6-sol (medium) | coding |" in message
-
-
-def test_project_job_board_explains_queued_scope_lease(workspace):
-    _, state = workspace
-    holder_id, _ = _board_job(state, "lease-holder", "RUNNING", label="Current task")
-    queued_id, _ = _board_job(state, "lease-queued", "QUEUED", label="Waiting task")
-    leases = ledger.ScopeLeases(state / "projects" / "project")
-    leases.acquire("holder", "holder-task", ["src"], job_id=holder_id)
-    leases.acquire("queued", "queued-task", ["src/file.py"], job_id=queued_id, queue_conflict=True)
-
-    message = codex._project_job_board(state, "project")
-
-    assert "queued behind Current task" in message
-
-
-def test_pre_hook_allows_resolved_replay_conflict_apply(workspace, config):
-    repo, state = workspace
-    job_id, _ = _board_job(state, "conflicted-job", "SUCCEEDED", applyState="conflict",
-                           applyResult={"applied": False})
-    apply_event = event("mcp__plugin_purser_codex-main__codex_apply", jobId=job_id,
-                        cwd=str(repo), resolved=True)
-
-    assert codex.pre_tool_use(apply_event, config=config, state_root=state) == {}
-
-
-def test_project_job_board_stops_demanding_when_only_seen_terminal_remains(workspace, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
-    _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time())
-    event_value = {"session_id": "board-idle", "cwd": str(repo)}
-    codex._append_project_job_status({}, state, "project", event_value)
-    pending_path = compaction_advisor._state_directory(repo) / "compaction_advisor.json"
-    pending = compaction_advisor._read_state(pending_path, "board-idle")["dispatch_pending"]
-    assert "| finished |" in pending["board"]
-    assert compaction_advisor.stop({**event_value, "last_assistant_message": pending["board"]}, repo) is None
-    assert codex._project_job_board(state, "project") is None
-    compaction_advisor.queue_dispatch(event_value, repo, board="stale board")
-    codex._append_project_job_status({}, state, "project", event_value)
-    assert compaction_advisor._read_state(pending_path, "board-idle")["dispatch_pending"] is None
-    assert compaction_advisor.stop({**event_value, "last_assistant_message": "Done."}, repo) is None
-
-
-def test_project_job_board_orders_attention_running_queued_and_applied(workspace):
-    _, state = workspace
-    now = time.time()
-    rows = [
-        ("applied", "SUCCEEDED", {"applyState": "applied", "appliedAt": now - 1}),
-        ("queued", "QUEUED", {}),
-        ("running", "RUNNING", {}),
-        ("done", "SUCCEEDED", {"finishedAt": now - 2}),
-        ("conflict", "SUCCEEDED", {"applyState": "conflict", "finishedAt": now - 3}),
-        ("failed", "FAILED", {"finishedAt": now - 4}),
-    ]
-    for label, state_name, values in rows:
-        _, call_key = _board_job(state, label, state_name, **values)
-        (state / "bundle_artifacts").mkdir(exist_ok=True)
-        (state / "bundle_artifacts" / f"{call_key}.json").write_text(json.dumps({
-            "phase": "implementation", "apply": "codex_apply",
-            "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
-        }), encoding="utf-8")
-    message = codex._project_job_board(state, "project")
-    tasks = [line.removeprefix("> ").strip("|").split("|")[0].strip() for line in message.splitlines()
-             if line.startswith("> | ") and not line.startswith("> | ⚓ Task |") and "---" not in line]
-    assert tasks == ["running", "done", "conflict", "queued", "applied", "failed"]
-    assert "> | ⚓ Task | Model | State | ETA | Review | Apply |" in message
-
-
-def test_project_job_board_keeps_all_in_progress_and_finished_jobs(workspace):
-    _, state = workspace
-    now = time.time()
-    for offset in range(5):
-        _board_job(state, f"finished-{offset}", "SUCCEEDED", finishedAt=now - offset - 1)
-    _board_job(state, "running", "RUNNING")
-
-    message = codex._project_job_board(state, "project")
-
-    tasks = [line.removeprefix("> ").strip("|").split("|")[0].strip() for line in message.splitlines()
-             if line.startswith("> | ") and not line.startswith("> | ⚓ Task |") and "---" not in line]
-    assert tasks == ["running", "finished-0", "finished-1", "finished-2", "finished-3", "finished-4"]
-
-
-def test_project_job_board_hides_superseded_and_refreshes_cached_board(workspace):
-    _, state = workspace
-    _board_job(state, "superseded", "SUPERSEDED")
-    response = {"hookSpecificOutput": {"additionalContext": "kept guidance\nPurser jobs:\n> | old board |\nlater guidance"}}
-
-    board = codex._project_job_board(state, "project")
-    codex._refresh_cached_job_board(response, board)
-
-    assert board is None
-    assert response["hookSpecificOutput"]["additionalContext"] == "kept guidance\nlater guidance"
-
-
 def _show_project_board(repo, state, session_id="board-display-session"):
     board, job_ids = codex._project_job_board_details(state, "project")
     assert board is not None
@@ -1620,377 +229,6 @@ def _show_project_board(repo, state, session_id="board-display-session"):
     compaction_advisor.queue_dispatch(payload, repo, board=board, board_job_ids=job_ids)
     assert compaction_advisor.stop(payload, repo) is None
     return board
-
-
-def test_finished_job_is_removed_after_two_displayed_boards(workspace, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
-    finished_id, _ = _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time())
-    running_ids = [_board_job(state, name, "RUNNING")[0]
-                   for name in ("running-one", "running-two")]
-    for job_id in running_ids:
-        job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-        job = json.loads(job_path.read_text(encoding="utf-8"))
-        job["boardDisplayCount"] = 2
-        job_path.write_text(json.dumps(job), encoding="utf-8")
-
-    assert "| finished |" in _show_project_board(repo, state)
-    assert json.loads((state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json").read_text())[
-        "boardDisplayCount"] == 1
-    assert "| finished |" in _show_project_board(repo, state)
-    finished = json.loads((state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json").read_text())
-    assert finished["boardDisplayCount"] == 2
-    third = _show_project_board(repo, state)
-    assert "finished" not in third
-    assert "running-one" in third and "running-two" in third
-
-
-def test_board_only_stop_demand_counts_each_terminal_display(workspace, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
-    job_id, _ = _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time())
-    _board_job(state, "running", "RUNNING")
-    job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-    event_value = {"session_id": "board-only", "cwd": str(repo)}
-    for count in (1, 2):
-        codex._append_project_job_status({}, state, "project", event_value)
-        pending = compaction_advisor._read_state(
-            compaction_advisor._state_directory(repo) / "compaction_advisor.json", "board-only"
-        )["dispatch_pending"]
-        assert "| finished |" in pending["board"]
-        assert compaction_advisor.stop({**event_value, "last_assistant_message": pending["board"]}, repo) is None
-        assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == count
-    assert "finished" not in codex._project_job_board(state, "project")
-
-
-def test_finished_operation_job_without_repo_root_counts_board_display(workspace, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
-    job_id, _ = _board_job(state, "operation", "SUCCEEDED", phase="operation")
-    job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.pop("repoRoot")
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    _board_job(state, "running-one", "RUNNING")
-    _board_job(state, "running-two", "RUNNING")
-
-    assert "| operation |" in _show_project_board(repo, state)
-
-    assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == 1
-
-
-def test_operation_without_reviewer_result_shows_skipped_review(workspace):
-    _, state = workspace
-    _, call_key = _board_job(state, "operation-review", "SUCCEEDED", phase="operation")
-    _board_job(state, "running-one", "RUNNING")
-    (state / "bundle_artifacts").mkdir(exist_ok=True)
-    (state / "bundle_artifacts" / f"{call_key}.json").write_text(json.dumps({
-        "phase": "operation", "claude_review_mode": policy.FULL,
-        "findings": [{"code": "EXTERNAL_REPOSITORY_CHANGE"}],
-    }), encoding="utf-8")
-
-    message = codex._project_job_board(state, "project")
-
-    assert "| operation-review | gpt-6-sol (medium) | done | — | skipped | n/a |" in message
-
-
-def test_reply_job_shows_applied_when_thread_apply_covers_reply_delta(workspace):
-    _, state = workspace
-    _board_job(state, "continued-applied", "SUCCEEDED", label="continued",
-               threadId="thread-board", applyState="applied",
-               applyResult={"applied": True, "paths": ["file.py"]},
-               changed_paths=["file.py"], appliedAt=time.time())
-    _board_job(state, "continued-reply", "SUCCEEDED", label="continued",
-               threadId="thread-board", acceptedAt=time.time() + 1,
-               applyState="conflict", changed_paths=["file.py"])
-    _board_job(state, "independent", "RUNNING")
-
-    message = codex._project_job_board(state, "project")
-
-    assert "| continued | gpt-6-sol (medium) | done | — | — | applied |" in message
-
-
-def test_queued_and_refreshed_job_board_does_not_count_until_shown(workspace, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
-    finished_id, _ = _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time(),
-                                applyState="conflict", applyResult={"applied": False})
-    job_path = state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json"
-    _board_job(state, "running-one", "RUNNING")
-    _board_job(state, "running-two", "RUNNING")
-    payload = {"session_id": "board-refresh-session"}
-    board, job_ids = codex._project_job_board_details(state, "project")
-    compaction_advisor.queue_dispatch(payload, repo, board=board, board_job_ids=job_ids)
-    compaction_advisor.refresh_dispatch_board(payload, repo, board, board_job_ids=job_ids)
-
-    assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == 0
-    shown = {**payload, "last_assistant_message": board}
-    assert compaction_advisor.stop(shown, repo) is None
-    updated = json.loads(job_path.read_text(encoding="utf-8"))
-    assert updated["boardDisplayCount"] == 1
-    assert updated["applyState"] == "conflict" and updated["applyResult"] == {"applied": False}
-
-
-def test_project_job_board_uses_route_default_without_history(workspace, monkeypatch):
-    _, state = workspace
-    monkeypatch.setattr(async_session_maintenance, "duration_hint", lambda *args, **kwargs: None)
-    _board_job(state, "overdue", etaMinutes=2, acceptedAt=time.time() - 300)
-    _board_job(state, "unknown", etaMinutes=None, acceptedAt=time.time() - 10)
-    _board_job(state, "mechanical", route="mechanical", acceptedAt=time.time())
-    message = codex._project_job_board(state, "project")
-    assert "| overdue | gpt-6-sol (medium) | coding | — |" in message
-    assert "| coding | overdue |" not in message
-    assert "| unknown | gpt-6-sol (medium) | coding | ~5 min |" in message
-    assert "| mechanical | gpt-6-sol (medium) | coding | ~3 min |" in message
-
-
-def test_project_job_board_queued_job_eta_ignores_time_waiting_for_lease(workspace):
-    _, state = workspace
-    _board_job(state, "queued-old", "QUEUED", etaMinutes=5, acceptedAt=time.time() - 3600)
-
-    board = codex._project_job_board(state, "project")
-
-    assert "| queued-old | gpt-6-sol (medium) | queued | — |" in board
-    assert "| queued-old | gpt-6-sol (medium) | queued | overdue |" not in board
-
-
-def test_project_job_board_running_eta_uses_started_at_when_present(workspace):
-    _, state = workspace
-    _board_job(state, "running-recent", "RUNNING", etaMinutes=5,
-               acceptedAt=time.time() - 3600, startedAt=time.time() - 30)
-
-    board = codex._project_job_board(state, "project")
-
-    assert "| running-recent | gpt-6-sol (medium) | coding | ~5 min |" in board
-
-
-def test_project_job_board_waits_for_route_p90_before_overdue(workspace, monkeypatch):
-    _, state = workspace
-    now = time.time()
-    monkeypatch.setattr(async_session_maintenance, "duration_hint",
-                        lambda *args, **kwargs: "Purser: typical Codex durations here (median/p90, n): normal 5/12 min (n=10).")
-    job_id, _ = _board_job(state, "within-p90", route="normal", etaMinutes=5, acceptedAt=now - 7 * 60)
-    _board_job(state, "second-running")
-    board = codex._project_job_board(state, "project")
-    assert "| within-p90 | gpt-6-sol (medium) | coding | ~0 min |" in board
-    receipt = json.loads((state / "codex_exec_mcp" / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
-    assert receipt["etaMinutes"] == 5
-
-
-def test_project_job_board_expires_terminal_jobs_after_one_hour(workspace):
-    _, state = workspace
-    _board_job(state, "old-applied", "SUCCEEDED", applyState="applied",
-               appliedAt=time.time() - 3601, boardDisplayCount=0)
-    _board_job(state, "old-failed", "FAILED", finishedAt=time.time() - 3601,
-               boardDisplayCount=0)
-    _board_job(state, "active-one")
-    _board_job(state, "active-two")
-    message = codex._project_job_board(state, "project")
-    assert "old-applied" not in message
-    assert "old-failed" not in message
-    assert "active-one" in message and "active-two" in message
-
-
-def test_project_job_board_requires_two_display_count_for_finished_jobs(workspace):
-    _, state = workspace
-    now = time.time()
-    legacy_old, _ = _board_job(state, "legacy-old", "SUCCEEDED", finishedAt=now - 3601)
-    legacy_recent, _ = _board_job(state, "legacy-recent", "FAILED", finishedAt=now - 60)
-    for job_id in (legacy_old, legacy_recent):
-        path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-        job = json.loads(path.read_text(encoding="utf-8"))
-        job.pop("boardDisplayCount")
-        path.write_text(json.dumps(job), encoding="utf-8")
-    _board_job(state, "count-zero", "SUCCEEDED", finishedAt=now - 120, boardDisplayCount=0)
-    _board_job(state, "count-one", "CANCELLED", finishedAt=now - 120, boardDisplayCount=1)
-    _board_job(state, "count-two", "SUCCEEDED", finishedAt=now, boardDisplayCount=2)
-    _board_job(state, "active-one")
-    _board_job(state, "active-two")
-
-    message = codex._project_job_board(state, "project")
-
-    assert "legacy-old" not in message
-    assert "legacy-recent" not in message
-    assert "| count-zero |" in message
-    assert "| count-one |" in message
-    assert "count-two" not in message
-
-
-def test_project_job_board_hides_unlabelled_jobs(workspace):
-    _, state = workspace
-    _board_job(state, "labelled-one")
-    _board_job(state, "labelled-two")
-    _board_job(state, "unlabelled", label="")
-
-    message = codex._project_job_board(state, "project")
-
-    assert "| labelled-one |" in message
-    assert "| labelled-two |" in message
-    assert "unlabelled" not in message
-
-
-def test_project_job_board_keeps_newest_job_for_thread(workspace):
-    _, state = workspace
-    _, old_call_key = _board_job(state, "continued-old", "RUNNING", label="continued",
-                                 threadId="thread-board", acceptedAt=time.time() - 60)
-    new_job_id, new_call_key = _board_job(
-        state, "continued-new", "SUCCEEDED", label="continued", threadId="thread-board", applyState="conflict",
-        finishedAt=time.time(), acceptedAt=time.time(),
-    )
-    _board_job(state, "independent")
-    (state / "bundle_artifacts").mkdir(exist_ok=True)
-    (state / "bundle_artifacts" / f"{new_call_key}.json").write_text(json.dumps({
-        "phase": "implementation", "apply": "codex_apply", "changed_paths": ["file.py"],
-        "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
-    }), encoding="utf-8")
-    (state / "bundle_artifacts" / f"{old_call_key}.json").write_text(json.dumps({
-        "phase": "implementation", "apply": "codex_apply",
-    }), encoding="utf-8")
-
-    message = codex._project_job_board(state, "project")
-
-    assert message.count("| continued |") == 1
-    assert "| continued | gpt-6-sol (medium) | in review | — | reviewed | conflict |" in message
-
-    job_path = state / "codex_exec_mcp" / "jobs" / f"{new_job_id}.json"
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.update(applyState="applied", applyResult={"applied": True, "resolvedByHand": True,
-                                                    "paths": ["file.py"]}, appliedAt=time.time())
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    message = codex._project_job_board(state, "project")
-    assert "| continued | gpt-6-sol (medium) | done | — | reviewed | applied |" in message
-
-
-def test_project_job_board_shows_no_change_and_pending_apply(workspace):
-    _, state = workspace
-    _, no_change_key = _board_job(state, "no-change", "SUCCEEDED", finishedAt=time.time())
-    _, changed_key = _board_job(state, "changed", "SUCCEEDED", finishedAt=time.time())
-    (state / "bundle_artifacts").mkdir(exist_ok=True)
-    for call_key, paths in ((no_change_key, []), (changed_key, ["file.py"])):
-        (state / "bundle_artifacts" / f"{call_key}.json").write_text(json.dumps({
-            "phase": "implementation", "apply": "codex_apply", "changed_paths": paths,
-        }), encoding="utf-8")
-
-    message = codex._project_job_board(state, "project")
-
-    assert "| no-change | gpt-6-sol (medium) | done | — | — | no change |" in message
-    assert "| changed | gpt-6-sol (medium) | in review | — | — | — |" in message
-
-
-def test_project_job_board_retains_undisplayed_terminal_and_active_jobs(workspace):
-    _, state = workspace
-    _board_job(state, "terminal-61m", "SUCCEEDED", finishedAt=time.time() - 61 * 60)
-    _board_job(state, "terminal-59m", "CANCELLED", finishedAt=time.time() - 59 * 60)
-    _board_job(state, "running-over-hour", "RUNNING", acceptedAt=time.time() - 90 * 60)
-    _board_job(state, "queued-over-hour", "QUEUED", acceptedAt=time.time() - 90 * 60)
-
-    message = codex._project_job_board(state, "project")
-
-    assert message is not None
-    assert "| terminal-61m |" not in message
-    assert "| terminal-59m |" in message
-    assert "| running-over-hour |" in message
-    assert "| queued-over-hour |" in message
-
-
-def test_async_dispatch_receipt_is_followed_by_project_job_board(workspace):
-    _, state = workspace
-    _board_job(state, "dispatch-one")
-    _board_job(state, "dispatch-two")
-    response = codex._append_dispatch_receipt({"systemMessage": "accepted"}, {
-        "label": "new work", "model": "gpt-6-sol", "effort": "medium",
-        "route": "normal", "async_call": "call", "project_key": "project",
-    }, state)
-    assert response["systemMessage"] == "accepted"
-
-
-def test_async_result_response_appends_project_job_board(workspace, config, monkeypatch):
-    repo, state = workspace
-    monkeypatch.setattr(policy, "reviewer1_gate", lambda **kwargs:
-                        policy.RunReviewerDecision("run reviewer", "TEST", "test"))
-    jobs = []
-    for number, job_state in ((1, "SUCCEEDED"), (2, "RUNNING")):
-        _, job_id, path = async_started(workspace, config, prompt=orch(task=f"board-result-{number}") + "\nWork.",
-                                         state_name=job_state, tool_use_id=f"board-result-{number}")
-        record = json.loads(path.read_text(encoding="utf-8"))
-        record.update(label=f"result-{number}", model="gpt-6-sol", effort="medium",
-                      route="normal", etaMinutes=5, finishedAt=time.time())
-        if job_state in ("SUCCEEDED", "FAILED", "CANCELLED"):
-            record["boardDisplayCount"] = 0
-        path.write_text(json.dumps(record), encoding="utf-8")
-        jobs.append(job_id)
-    queued_dispatches = []
-    monkeypatch.setattr(codex.compaction_advisor, "queue_dispatch",
-                        lambda event, repository, **kwargs: queued_dispatches.append(kwargs))
-    followup = async_followup(RESULT_TOOL, jobs[0])
-    followup["cwd"] = str(repo)
-    assert codex.pre_tool_use(followup, config=config, state_root=state, repo_root=repo) == {}
-    post = {**followup, "hook_event_name": "PostToolUse", "tool_response": {
-        "structuredContent": {"jobId": jobs[0], "state": "SUCCEEDED",
-                              "threadId": "async-thread", "content": "done"}}}
-    response = codex.post_tool_use(post, config=config, state_root=state, repo_root=repo,
-                                   reviewer=lambda **kwargs: {
-                                       "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
-                                       "provider": "agy"})
-    assert "systemMessage" not in response
-    assert "Write one line in the user's language as `> ⚓ **Codex done: ...**`" in response["hookSpecificOutput"]["additionalContext"]
-    assert queued_dispatches and all("line" not in queued for queued in queued_dispatches), response
-
-
-def test_codex_apply_replaces_pending_board_with_applied_status(workspace, config):
-    repo, state = workspace
-    job_id, _ = _board_job(state, "applied-job", "SUCCEEDED", applyState="applied",
-                           appliedAt=time.time())
-    _board_job(state, "still-running")
-    event_value = event("mcp__plugin_purser_codex-main__codex_apply", jobId=job_id,
-                        cwd=str(repo), resolved=True)
-    assert codex.pre_tool_use(event_value, config=config, state_root=state) == {}
-    codex.compaction_advisor.queue_dispatch(event_value, repo, board="outdated board")
-    response = codex.post_tool_use(event_value, config=config, state_root=state)
-    assert "systemMessage" not in response
-    assert "Include this latest job board verbatim:" in response["hookSpecificOutput"]["additionalContext"]
-    assert "| applied-job |" in response["hookSpecificOutput"]["additionalContext"]
-    pending = codex.compaction_advisor._read_state(
-        codex.compaction_advisor._state_directory(repo) / "compaction_advisor.json", "session-1"
-    )["dispatch_pending"]
-    assert pending["board"] is not None
-    assert "| applied-job |" in pending["board"]
-    assert "outdated board" not in pending["board"]
-
-    advisor_path = codex.compaction_advisor._state_directory(repo) / "compaction_advisor.json"
-    advisor_state = codex.compaction_advisor._read_state(advisor_path, "session-1")
-    advisor_state["dispatch_pending"] = None
-    codex.compaction_advisor._atomic_write(advisor_path, json.dumps(advisor_state).encode("utf-8"))
-    codex.post_tool_use(event_value, config=config, state_root=state)
-    assert codex.compaction_advisor._read_state(advisor_path, "session-1")["dispatch_pending"] is None
-
-
-def test_hook_dispatch_refreshes_result_board_after_apply(workspace, monkeypatch):
-    repo, state = workspace
-    job_id, _ = _board_job(state, "applied-after-result", "SUCCEEDED", finishedAt=time.time())
-    _board_job(state, "other-job", "RUNNING")
-    advisor_state = repo / "advisor-state"
-    monkeypatch.setattr(codex, "_state_root", lambda _root: state)
-    monkeypatch.setattr(codex.compaction_advisor, "_state_directory", lambda _repo: advisor_state)
-
-    result_event = event("mcp__plugin_purser_codex-main__codex_result", cwd=str(repo))
-    codex._append_project_job_status({}, state, "project", result_event)
-    pending_path = advisor_state / "compaction_advisor.json"
-    pending = codex.compaction_advisor._read_state(pending_path, "session-1")["dispatch_pending"]
-    assert "| applied-after-result | gpt-6-sol (medium) | coded · fetching result | — | — | — |" in pending["board"]
-
-    job_path = state / "codex_exec_mcp" / "jobs" / f"{job_id}.json"
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job.update(applyState="applied", appliedAt=time.time())
-    job_path.write_text(json.dumps(job), encoding="utf-8")
-    apply_event = event("mcp__plugin_purser_codex-main__codex_apply", cwd=str(repo), jobId=job_id)
-    apply_event.update(hook_event_name="PostToolUse")
-
-    response = hook.dispatch(apply_event)
-    assert "Include this latest job board verbatim:" in response["hookSpecificOutput"]["additionalContext"]
-    assert "| applied-after-result |" in response["hookSpecificOutput"]["additionalContext"]
-    pending = codex.compaction_advisor._read_state(pending_path, "session-1")["dispatch_pending"]
-    assert "| applied-after-result | gpt-6-sol (medium) | done | — | — | applied |" in pending["board"]
 
 
 def test_async_result_waits_for_terminal_and_internal_error_fails_open(workspace, config):
@@ -6555,7 +4793,6 @@ def test_post_tool_use_micro_repair_out_of_scope_inspection_failure_forces_full_
     assert any(f["code"] == "OUT_OF_SCOPE_INSPECTION_FAILED" for f in bundle["findings"])
 
 
-
 def test_post_tool_use_micro_repair_honors_configured_total_budget(workspace, config):
     repo, state = workspace
     call = event()
@@ -8984,3 +7221,181 @@ def test_fallback_active_sync_async_reply_and_reviewer_attribution(workspace, co
     bundle = response_bundle(post, config)
     assert not invoked
     assert bundle["reviewer1_skipped_reason"] == "REVIEWER_VENDOR_CONFLICT"
+
+
+def test_agy_start_passes_route_effort_to_bridge(workspace, config):
+    repo, state = workspace
+    config["coder_agent"] = "agy"
+    for entry in config["routes"].values():
+        entry.update(model="gemini-3.8-flash", effort="medium")
+    start = event(START_TOOL, tool_use_id="agy-start")
+    updated = codex.pre_tool_use(start, config=config, state_root=state, repo_root=repo)["hookSpecificOutput"]["updatedInput"]
+    assert updated["model"] == "gemini-3.8-flash"
+    assert updated["config"] == {"model_reasoning_effort": "medium"}
+
+
+class _RegisteredReviewerFixture:
+    def validate_model(self, model):
+        return None
+
+    def build_command(self, *args, **kwargs):
+        return []
+
+    def invoke(self, *args, **kwargs):
+        return None
+
+    def parse(self, *args, **kwargs):
+        return None
+
+
+def _post_with_reviewer_candidates(workspace, config, candidates, reviewer, monkeypatch=None,
+                                  coder_family="unknown"):
+    repo, state = workspace
+    config["coder_agent"] = "opencode"
+    config["coder_family"] = coder_family
+    for entry in config["routes"].values():
+        entry.update(model="opencode/big-pickle", effort="none")
+    config["reviewer_gate"].update(small_delta_max_lines=0, small_delta_max_files=0)
+    call = event(prompt=orch(scope="file0.py") + "\nChange it.")
+    codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    pending_path = codex._pending_path(state, call)
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending["reviewer_candidates"] = candidates
+    codex._atomic_json_write(pending_path, pending)
+    (repo / "file0.py").write_text("value = 2\n", encoding="utf-8")
+    if monkeypatch is not None:
+        monkeypatch.setitem(reviewer_module.REVIEWER_ADAPTERS, "codex", _RegisteredReviewerFixture())
+    result = codex.post_tool_use(
+        {**call, "hook_event_name": "PostToolUse", "tool_response":
+         {"structuredContent": {"threadId": "reviewer-fallback-thread", "content": "Done"}}},
+        config=config, state_root=state, repo_root=repo, reviewer=reviewer,
+    )
+    return response_bundle(result, config)
+
+
+def test_primary_reviewer_success_reports_selected_provider_and_no_attempt_list(workspace, config):
+    report = {
+        "review_status": "COMPLETED", "provider": "agy",
+        "reviewer1_model_requested": "gemini-3.8-flash-high",
+        "result": policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE,
+        "validation": "PASS", "findings": [],
+    }
+    bundle = _post_with_reviewer_candidates(
+        workspace, config, [{"agent": "agy", "model": "gemini-3.8-flash-high"}],
+        lambda **kwargs: report,
+    )
+    assert bundle["reviewer1_provider"] == "agy"
+    assert bundle["reviewer1_model_requested"] == "gemini-3.8-flash-high"
+    assert bundle["reviewer1_result"] == policy.NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE
+    assert "reviewer1_attempts" not in bundle
+
+
+def test_plan_sync_read_only_artifact_and_mutation(workspace, config):
+    repo, state = workspace
+    call = event(prompt=orch(phase="plan", route="plan_standard", scope="file0.py") + "\nPlan this.",
+                 sandbox="danger-full-access", **{"approval-policy": "on-request"})
+    pre = codex.pre_tool_use(call, config=config, state_root=state, repo_root=repo)
+    updated = pre["hookSpecificOutput"]["updatedInput"]
+    assert updated["model"] == config["routes"]["plan_standard"]["model"]
+    assert updated["config"]["model_reasoning_effort"] == "high"
+    assert updated["sandbox"] == "read-only" and updated["approval-policy"] == "never"
+    (repo / "file1.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "new.py").write_text("new = True\n", encoding="utf-8")
+    content = "# Plan\n\nSummary:\n" + "A" * 4300 + "\n## Milestones\nFinish."
+    post = {**call, "hook_event_name": "PostToolUse", "tool_response":
+            {"structuredContent": {"threadId": "plan-thread", "content": content}}}
+    bundle = response_bundle(codex.post_tool_use(post, config=config, state_root=state, repo_root=repo), config)
+    assert bundle["claude_review_mode"] == policy.FULL
+    assert bundle["reviewer1_skipped_reason"] == "PHASE_PLAN"
+    assert bundle["reviewer1_result"] is None
+    mutation = next(f for f in bundle["findings"] if f["code"] == "PLAN_MUTATED_REPO")
+    assert "concurrent writer may be the cause" in mutation["message"]
+    assert "file1.py" in mutation["message"]
+    assert not {"TASK_CONTRACT_NOT_GROUNDED", "WORKER_VALIDATION_UNVERIFIED"} & {
+        f["code"] for f in bundle["findings"]
+    }
+    assert bundle["worker_validation"] is None
+    stored = ledger.SessionLedger(
+        state / "projects" / project_root.project_key(repo.resolve())
+    ).load("task-1")
+    assert stored["status"] == ledger.OK
+    assert stored["record"]["live_thread"]["phase"] == "plan"
+    assert Path(bundle["plan_path"]).read_text(encoding="utf-8") == content
+    assert state in Path(bundle["plan_path"]).parents
+    assert bundle["plan_summary"] == "A" * 4300
+
+
+def test_codex_start_dispatch_caches_installed_cli_version_for_the_day(workspace, monkeypatch):
+    repo, state = workspace
+    cache_home = state / "codex-home"
+    cache_home.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(cache_home))
+    (cache_home / "models_cache.json").write_text(json.dumps({
+        "client_version": "0.159.0", "models": [],
+    }), encoding="utf-8")
+    monkeypatch.setattr(codex.purser_state_root, "default_state_root", lambda: state)
+    calls = []
+    monkeypatch.setattr(codex.shutil, "which", lambda _name: "codex")
+    monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_k:
+                        calls.append(True) or subprocess.CompletedProcess([], 0, "codex-cli 0.156.1", ""))
+
+    for _ in range(2):
+        codex._append_dispatch_receipt({}, {
+            "task_id": "task-1", "label": "First run", "model": "gpt-6-sol",
+            "effort": "high", "route": "normal", "project_key": "project",
+            "repo_root": str(repo), "agent": "codex",
+        }, state, {"tool_name": START_TOOL, "session_id": "notice-session"})
+    assert calls == [True]
+
+
+def test_async_worktree_reply_is_admitted_during_overlapping_job(workspace, config, monkeypatch):
+    repo, state = workspace
+    async_started(
+        workspace, config, prompt=orch(task="active-worktree", scope="tests/") + "\nWork."
+    )
+    worktree = state / "wt" / "reply-thread"
+    worktree.mkdir(parents=True)
+    bridge_threads = state / "bridge-threads"
+    monkeypatch.setattr(codex_exec_mcp, "_state_dir", lambda: bridge_threads)
+    codex_exec_mcp._save_record(bridge_threads, {"thread_id": "worktree-thread", "cwd": str(worktree),
+        "config_args": [], "worktreePath": str(worktree), "snapshot": "snapshot", "head": "head",
+        "repoRoot": str(repo)})
+    route = policy.resolve_route("normal", config)
+    saved = ledger.SessionLedger(codex._project_state_root(state, project_root.project_key(repo))).save(
+        ledger.build_session_record("worktree-reply", "worktree-thread", "normal", route.model,
+                                    route.effort, phase="implementation", scope=["tests/"],
+                                    reason="new_task"))
+    assert saved["status"] == ledger.OK
+    _lease_state(workspace).record_conflicts(["tests/hot.py"])
+    reply = event(START_TOOL, prompt=orch(task="worktree-reply", scope="tests/") + "\nContinue.",
+                  tool_use_id="worktree-reply-start", mode="reply", threadId="worktree-thread")
+    result = codex.pre_tool_use(reply, config=config, state_root=state, repo_root=repo)
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    assert updated["mode"] == "reply"
+    assert updated["leaseQueued"] is True
+    disjoint = event(START_TOOL, prompt=orch(task="worktree-reply", scope="docs/") + "\nContinue.",
+                     tool_use_id="worktree-reply-disjoint", mode="reply", threadId="worktree-thread")
+    disjoint_input = codex.pre_tool_use(disjoint, config=config, state_root=state, repo_root=repo)[
+        "hookSpecificOutput"]["updatedInput"]
+    assert "leaseQueued" not in disjoint_input
+
+
+def test_queued_and_refreshed_job_board_does_not_count_until_shown(workspace, monkeypatch):
+    repo, state = workspace
+    monkeypatch.setenv("PURSER_STATE_DIR", str(state))
+    finished_id, _ = _board_job(state, "finished", "SUCCEEDED", finishedAt=time.time(),
+                                applyState="conflict", applyResult={"applied": False})
+    job_path = state / "codex_exec_mcp" / "jobs" / f"{finished_id}.json"
+    _board_job(state, "running-one", "RUNNING")
+    _board_job(state, "running-two", "RUNNING")
+    payload = {"session_id": "board-refresh-session"}
+    board, job_ids = codex._project_job_board_details(state, "project")
+    compaction_advisor.queue_dispatch(payload, repo, board=board, board_job_ids=job_ids)
+    compaction_advisor.refresh_dispatch_board(payload, repo, board, board_job_ids=job_ids)
+
+    assert json.loads(job_path.read_text(encoding="utf-8"))["boardDisplayCount"] == 0
+    shown = {**payload, "last_assistant_message": board}
+    assert compaction_advisor.stop(shown, repo) is None
+    updated = json.loads(job_path.read_text(encoding="utf-8"))
+    assert updated["boardDisplayCount"] == 1
+    assert updated["applyState"] == "conflict" and updated["applyResult"] == {"applied": False}
