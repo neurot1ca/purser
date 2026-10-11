@@ -14,6 +14,16 @@ import (
 	"time"
 )
 
+var verifyDistributionRuntime = func(binary, root, name string) error {
+	if err := verifyMCP(binary); err != nil {
+		return err
+	}
+	if err := verifyEvents(binary, root); err != nil {
+		return err
+	}
+	return verifyMissingBinary(root, name)
+}
+
 func DistributionSmoke(artifactDir string) error {
 	archives, err := filepath.Glob(filepath.Join(artifactDir, "purser-*.zip"))
 	if err != nil {
@@ -62,13 +72,7 @@ func DistributionSmoke(artifactDir string) error {
 	if err = verifyHookRegistration(root); err != nil {
 		return err
 	}
-	if err = verifyMCP(binary); err != nil {
-		return err
-	}
-	if err = verifyEvents(binary, root); err != nil {
-		return err
-	}
-	if err = verifyMissingBinary(root, name); err != nil {
+	if err = verifyDistributionRuntime(binary, root, name); err != nil {
 		return err
 	}
 	b, _ := os.ReadFile(filepath.Join(artifactDir, "SHA256SUMS"))
