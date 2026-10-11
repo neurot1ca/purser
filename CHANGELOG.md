@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.128 — 2026-10-11
+
+- **Changed:** A job's ETA comes from this project's measured median for its route, so estimates correct themselves as jobs finish.
+- **Fixed:** Briefs with a Required change, Done when or Definition of done section count as a grounded task contract and no longer force a full review.
+
 ## 0.1.127 — 2026-10-11
 
 - **Changed:** Cleanup and test-gap notices list findings from most to least important and show a Severity column.
