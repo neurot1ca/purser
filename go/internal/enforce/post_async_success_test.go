@@ -224,7 +224,22 @@ func TestPostAsyncSuccessRemainingFixtureCases(t *testing.T) {
 			want := fixture.Cases[name]
 			wantMode := want["mode"]
 			if name == "success_no_delta" {
-				wantMode = want["response_state"]
+				wantMode = "FULL"
+				phase := stringValue(pending["phase"])
+				if phase == "implementation" {
+					found := false
+					findings := bundle["findings"].([]any)
+					for _, raw := range findings {
+						finding := mapValue(raw)
+						if finding["code"] == "IMPLEMENTATION_NO_DELTA" {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Fatalf("success_no_delta: expected IMPLEMENTATION_NO_DELTA finding in bundle: %#v", findings)
+					}
+				}
 			}
 			if wantMode != nil && bundle["claude_review_mode"] != wantMode {
 				t.Fatalf("mode=%v want %v", bundle["claude_review_mode"], wantMode)
