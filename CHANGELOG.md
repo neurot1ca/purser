@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.124 — 2026-10-11
+
+- **Fixed:** `check` no longer warns about the supported `[mechanical]` setting and finds a reviewer on PATH the way reviews do.
+- **Fixed:** A manually registered codex-main server now gets the same post-call processing as the plugin one; unused config keys are gone.
+- **Fixed:** The job waiter no longer sleeps past its time bound.
+
 ## 0.1.123 — 2026-10-11
 
 - **Fixed:** Job results now really show the PASS or FAIL from Purser's own test capture; an async review step was still resetting it.
