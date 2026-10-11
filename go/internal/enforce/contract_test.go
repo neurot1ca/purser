@@ -21,8 +21,20 @@ func TestTaskContractRequirementsLabelAndMissingCriteria(t *testing.T) {
 			wantGround: true,
 		},
 		{
+			name:       "required change label collects numbered criteria",
+			prompt:     "Goal: Update parser\nVerified context: Existing brief\nRequired change:\n1. Parse required changes\n2. Preserve JSON behavior\nTests: run focused tests",
+			wantCrit:   "Parse required changes; Preserve JSON behavior",
+			wantGround: true,
+		},
+		{
 			name:       "without criteria label stays ungrounded",
 			prompt:     "Goal: Update parser\n- a\n- b\nValidation: run focused tests",
+			wantCrit:   "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+			wantGround: false,
+		},
+		{
+			name:       "goal only stays ungrounded",
+			prompt:     "Goal: Update parser",
 			wantCrit:   "Verify correct implementation within declared scope () with no material regression or scope expansion.",
 			wantGround: false,
 		},
