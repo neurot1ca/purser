@@ -300,8 +300,8 @@ func TestAsyncSuccessValidationUsesRecordedTestEvidence(t *testing.T) {
 		evidenceFailed                           bool
 	}{
 		{name: "pass", wantWorker: "PASS", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(0)}}},
-		{name: "fail", wantWorker: "FAIL", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(1)}}},
-		{name: "capped_out_failure", wantWorker: "FAIL", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{
+		{name: "fail", wantWorker: "FAIL", wantBundle: "FAIL", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(1)}}},
+		{name: "capped_out_failure", wantWorker: "FAIL", wantBundle: "FAIL", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{
 			map[string]any{"command": "go test ./pkg0", "exit_code": float64(0)},
 			map[string]any{"command": "go test ./pkg1", "exit_code": float64(0)},
 			map[string]any{"command": "go test ./pkg2", "exit_code": float64(0)},
@@ -309,9 +309,17 @@ func TestAsyncSuccessValidationUsesRecordedTestEvidence(t *testing.T) {
 			map[string]any{"command": "go test ./pkg4", "exit_code": float64(0)},
 			map[string]any{"command": "go test ./pkg5", "exit_code": float64(0)},
 		}, evidenceFailed: true},
-		{name: "malformed", wantWorker: "UNKNOWN", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./..."}}},
-		{name: "worker_fail_overridden", wantWorker: "PASS", wantBundle: "FAIL", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(0)}}},
-		{name: "no_evidence_fallback", wantWorker: "PASS", wantBundle: "PASS", wantSource: "WORKER_REPORTED"},
+		{name: "malformed", wantWorker: "UNKNOWN", wantBundle: "UNKNOWN", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./..."}}},
+		{name: "latest_same_command_passes", wantWorker: "PASS", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{
+			map[string]any{"command": "go test ./...", "exit_code": float64(1)},
+			map[string]any{"command": "go test ./...", "exit_code": float64(0)},
+		}},
+		{name: "latest_same_command_fails", wantWorker: "FAIL", wantBundle: "FAIL", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{
+			map[string]any{"command": "command A", "exit_code": float64(0)},
+			map[string]any{"command": "command A", "exit_code": float64(1)},
+		}},
+		{name: "worker_fail_overridden", wantWorker: "PASS", wantBundle: "PASS", wantSource: "HOST_TEST_EVIDENCE", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(0)}}},
+		{name: "no_evidence_fallback", wantWorker: "PASS", wantBundle: "UNKNOWN", wantSource: "WORKER_REPORTED"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, tc.name)
