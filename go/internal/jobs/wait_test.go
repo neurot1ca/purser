@@ -245,6 +245,7 @@ func TestWaitExitCodes(t *testing.T) {
 }
 
 func TestWaitFinishesDeadHostBeforeDeadline(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
 	root := t.TempDir()
 	created, ok := hostProcessIdentity()
 	if !ok {
@@ -264,6 +265,38 @@ func TestWaitFinishesDeadHostBeforeDeadline(t *testing.T) {
 	fields := readWaitFields(t, path)
 	if got.ExitCode != 1 || got.Lines[0] != "purser-wait deadhost FAILED" ||
 		fields["state"] != "FAILED" || fields["errorCode"] != "HOST_DIED" {
+		t.Fatalf("result=%#v record=%#v", got, fields)
+	}
+}
+
+func TestWaitLiveHostBeforeDeadlineStillWaiting(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
+	created, ok := hostProcessIdentity()
+	if !ok {
+		t.Fatal("test process identity unavailable")
+	}
+	root := t.TempDir()
+	path := writeWaitJob(t, root, "livehost", map[string]any{
+		"hostPid": os.Getpid(), "hostCreatedAt": created, "hostContained": true,
+		"deadlineAt": float64(time.Now().Add(time.Hour).UnixNano()) / 1e9,
+	})
+	got := Wait(root, "livehost")
+	fields := readWaitFields(t, path)
+	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait livehost STILL_WAITING" || fields["state"] != "RUNNING" {
+		t.Fatalf("result=%#v record=%#v", got, fields)
+	}
+}
+
+func TestWaitUnknownHostLivenessBeforeDeadlineStillWaiting(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
+	root := t.TempDir()
+	path := writeWaitJob(t, root, "unknownhost", map[string]any{
+		"hostPid": os.Getpid(), "hostCreatedAt": "unknown", "hostContained": true,
+		"deadlineAt": float64(time.Now().Add(time.Hour).UnixNano()) / 1e9,
+	})
+	got := Wait(root, "unknownhost")
+	fields := readWaitFields(t, path)
+	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait unknownhost STILL_WAITING" || fields["state"] != "RUNNING" {
 		t.Fatalf("result=%#v record=%#v", got, fields)
 	}
 }
