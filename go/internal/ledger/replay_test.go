@@ -46,10 +46,14 @@ func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
 	}
 }
 
-func TestPrepareJobReplayRetryFromAppliedPreparingState(t *testing.T) {
+func TestPrepareJobReplayRetryFromAppliedPreparingStatePreservesIgnoredFiles(t *testing.T) {
 	base := t.TempDir()
 	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
-	snapshot := initReplayRepository(t, repo, "")
+	initReplayRepository(t, repo, "")
+	writePatchTestFile(t, filepath.Join(repo, ".gitignore"), []byte(".tmp/\n"))
+	git(t, repo, "add", ".gitignore")
+	git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "ignore worker cache")
+	snapshot := stringsOutput(t, repo, "rev-parse", "HEAD^{tree}")
 	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
 	if err := os.WriteFile(filepath.Join(worker, "tracked.txt"), []byte("job result\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -75,6 +79,17 @@ func TestPrepareJobReplayRetryFromAppliedPreparingState(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(recovery, "state.json"), state, 0600); err != nil {
 		t.Fatal(err)
 	}
+	ignoredFile := filepath.Join(worker, ".tmp", "go-build-cache", "cache.bin")
+	if err = os.MkdirAll(filepath.Dir(ignoredFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(ignoredFile, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	untrackedFile := filepath.Join(worker, "scratch.txt")
+	if err = os.WriteFile(untrackedFile, []byte("scratch"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	restored := false
 	runner := func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
 		if operation == "restoring worker index" {
@@ -94,6 +109,12 @@ func TestPrepareJobReplayRetryFromAppliedPreparingState(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(worker, "tracked.txt")); err != nil || string(got) != "job result\n" {
 		t.Fatalf("retry produced wrong worker tree: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(ignoredFile); err != nil || string(got) != "cache" {
+		t.Fatalf("ignored cache file did not survive restore: got %q, err %v", got, err)
+	}
+	if _, err := os.Stat(untrackedFile); !os.IsNotExist(err) {
+		t.Fatalf("non-ignored untracked file survived restore: err %v", err)
 	}
 }
 

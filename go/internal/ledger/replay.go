@@ -65,7 +65,7 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 		if _, err := git(worktree, []string{"read-tree", "--reset", base}, nil, "restoring worker index"); err != nil {
 			return err
 		}
-		if _, err := git(worktree, []string{"clean", "-fdx"}, nil, "clearing replay worktree"); err != nil {
+		if _, err := git(worktree, []string{"clean", "-fd"}, nil, "clearing replay worktree"); err != nil {
 			return err
 		}
 		if _, err := git(worktree, []string{"checkout-index", "--all", "--force"}, nil, "restoring worker baseline"); err != nil {
@@ -222,7 +222,7 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 	if _, err := git(worktree, []string{"read-tree", "--reset", current}, nil, "resetting replay index"); err != nil {
 		return nil, err
 	}
-	if _, err := git(worktree, []string{"clean", "-fdx"}, nil, "clearing replay worktree"); err != nil {
+	if _, err := git(worktree, []string{"clean", "-fd"}, nil, "clearing replay worktree"); err != nil {
 		return nil, err
 	}
 	if _, err := git(worktree, []string{"checkout-index", "--all", "--force"}, nil, "restoring current checkout snapshot"); err != nil {
