@@ -103,6 +103,8 @@ func validateTier(tier string, data map[string]any, order *tierKeyOrder) Tier {
 	}
 	if tier == "project" {
 		known["checks"] = true
+	} else {
+		known["mechanical"] = true
 	}
 	for _, key := range orderedKeys(data, order, "") {
 		if !known[key] {

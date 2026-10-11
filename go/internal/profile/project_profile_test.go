@@ -187,6 +187,13 @@ func TestProjectProfileUnknownTopLevelKeyWarns(t *testing.T) {
 	}
 }
 
+func TestProjectProfileUserMechanicalSectionKnown(t *testing.T) {
+	result := loadProjectProfileTest(t, "schema_version = 1\n", "schema_version = 1\n[mechanical]\nopencode_enabled = true\n")
+	if result.UserStatus != "ok" || len(result.Warnings) != 0 {
+		t.Fatalf("user mechanical section: status=%q warnings=%v", result.UserStatus, result.Warnings)
+	}
+}
+
 func TestProjectProfileRoleDefaultsAndReviewerChain(t *testing.T) {
 	result := loadProjectProfileTest(t, "schema_version = 1\n", "")
 	wantRoles := Roles{Orchestrator: "claude-code", Coder: "codex", Reviewer: "agy"}
