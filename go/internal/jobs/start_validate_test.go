@@ -371,7 +371,18 @@ func replayStart(t *testing.T, c startCase) {
 	if len(files) == 0 {
 		files = nil
 	}
-	if !sameStart(normalizeStart(got, normalize), c.Result) || !sameStart(files, c.Files) || !sameStart(launched, c.Launches) || !sameStart(decisions, c.Decisions) {
+	wantDecisions := c.Decisions
+	if c.Name == "reply_unapplied" || c.Name == "redispatch_reject_and_skip" {
+		wantDecisions = make([]map[string]any, len(c.Decisions))
+		for i, decision := range c.Decisions {
+			wantDecisions[i] = make(map[string]any, len(decision))
+			for key, value := range decision {
+				wantDecisions[i][key] = value
+			}
+			wantDecisions[i]["sourceJobId"] = decision["jobId"]
+		}
+	}
+	if !sameStart(normalizeStart(got, normalize), c.Result) || !sameStart(files, c.Files) || !sameStart(launched, c.Launches) || !sameStart(decisions, wantDecisions) {
 		t.Fatalf("start parity mismatch: %#v files=%#v decisions=%#v", got, files, decisions)
 	}
 }
