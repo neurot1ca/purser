@@ -307,7 +307,7 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 			if e == nil {
 				m := recordMap(earlier)
 				if m["state"] == "SUCCEEDED" && m["taskId"] == job["taskId"] && nonemptyString(m["worktreePath"]) != "" && m["applyState"] != "applied" && !truthy(m["decisionRecorded"]) {
-					recordStartDecision(opt, m, "rejected", "redispatch", req.JobID)
+					recordStartDecision(opt, m, "rejected", "redispatch", nonemptyString(m["jobId"]))
 					if e = earlier.Set("decisionRecorded", true); e == nil {
 						if e = Write(filepath.Join(dir, name), earlier); e != nil {
 							_ = lock.Release()
@@ -336,7 +336,7 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 				current := readJob(dir, oldID)
 				if current != nil {
 					m := recordMap(current)
-					recordStartDecision(opt, m, "send_back", "reply", req.JobID)
+					recordStartDecision(opt, m, "send_back", "reply", oldID)
 					if nonemptyString(m["taskId"]) != "" {
 						_ = current.Set("decisionRecorded", true)
 						_ = Write(filepath.Join(dir, oldID+".json"), current)

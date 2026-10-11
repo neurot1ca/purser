@@ -86,8 +86,13 @@ func TestAdmissionReleasesOnlyHandAppliedSucceededBlockers(t *testing.T) {
 				t.Fatalf("hand-applied job record unreadable: %#v (%v)", saved, err)
 			}
 			if tc.matching && tc.state != "RUNNING" {
-				if saved["applyState"] != "applied" || saved["applyReason"] != "hand_applied_detected" || saved["decisionRecorded"] != nil {
-					t.Fatalf("hand-applied job was not recorded without a decision: %#v", saved)
+				if saved["applyState"] != "applied" || saved["applyReason"] != "hand_applied_detected" || saved["decisionRecorded"] != true {
+					t.Fatalf("hand-applied job was not marked decision-recorded: %#v", saved)
+				}
+				eventsPath := filepath.Join(root, "telemetry", "events", "by_task", "prior-task.jsonl")
+				data, err := os.ReadFile(eventsPath)
+				if err != nil || !strings.Contains(string(data), `"event_type":"CLAUDE_DECISION_RECORDED"`) || !strings.Contains(string(data), `"job_id":"`+jobID+`"`) {
+					t.Fatalf("hand-applied decision outcome missing job attribution: %s (%v)", data, err)
 				}
 			} else if saved["applyState"] == "applied" {
 				t.Fatalf("blocking job was incorrectly marked applied: %#v", saved)

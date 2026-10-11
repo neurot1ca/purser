@@ -235,8 +235,12 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 	_ = job.Set("appliedAt", float64(time.Now().UnixNano())/1e9)
 	if applyReason != "" {
 		_ = job.Set("applyReason", applyReason)
-	} else if task, _ := recordMap(job)["taskId"].(string); task != "" {
-		_ = job.Set("decisionRecorded", true)
+	}
+	acceptedApply := applyReason == "" || applyReason == "hand_applied_detected"
+	if acceptedApply {
+		if task, _ := recordMap(job)["taskId"].(string); task != "" {
+			_ = job.Set("decisionRecorded", true)
+		}
 	}
 	if err := Write(filepath.Join(dir, jobID+".json"), job); err != nil {
 		return applyToolResult(map[string]any{"state": "FAILED", "errorCode": "JOB_WRITE_FAILED", "message": err.Error()})
@@ -245,6 +249,8 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 	job.Get("worktreePath", &worktree)
 	if applyReason == "" {
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
+	}
+	if acceptedApply {
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	}
 	recordPlanApply(stateRoot, recordMap(job), jobID)

@@ -69,8 +69,10 @@ func TestStartAttemptSendBackReplayAndCancelRecovery(t *testing.T) {
 	})
 	args := map[string]any{"call": "00000000-0000-4000-8000-000000000001", "prompt": "reply", "mode": "reply",
 		"threadId": threadID, "taskId": "task-1", "route": "mechanical", "model": "gpt-6-luna", "phase": "implementation"}
+	var decisionSources []string
 	opt := StartOptions{StateRoot: root, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true,
-		ValidateAgent: func(string) error { return nil }}, Launch: func(string, int64, string) error { return nil }}
+		ValidateAgent: func(string) error { return nil }}, Launch: func(string, int64, string) error { return nil },
+		RecordDecision: func(_ map[string]any, _, _, source string) { decisionSources = append(decisionSources, source) }}
 	started, _, err := Start(root, args, opt)
 	if err != nil {
 		t.Fatal(err)
@@ -78,11 +80,15 @@ func TestStartAttemptSendBackReplayAndCancelRecovery(t *testing.T) {
 	if started["structuredContent"].(map[string]any)["state"] == "FAILED" {
 		t.Fatalf("start failed: %#v", started)
 	}
+	if len(decisionSources) != 1 || decisionSources[0] != priorID {
+		t.Errorf("send-back decision sources = %#v, want old job %q", decisionSources, priorID)
+	}
 	record, status, err := enforce.LoadTaskAttempt(root, contextio.ProjectKey(repo), "task-1")
 	if err != nil || status != enforce.TaskAttemptOK || !record.SendBackUsed || record.PredecessorJobID != priorID {
 		t.Fatalf("replayed send-back record = %#v status=%s err=%v", record, status, err)
 	}
 	childID := started["structuredContent"].(map[string]any)["jobId"].(string)
+	decisionSources = nil
 	writeHostTestJSON(t, filepath.Join(jobsDir, childID+".json"), map[string]any{
 		"jobId": childID, "taskId": "task-1", "state": "SUCCEEDED", "worktreePath": worktree, "repoRoot": repo,
 		"route": "mechanical", "model": "gpt-6-luna", "phase": "implementation",
@@ -90,6 +96,9 @@ func TestStartAttemptSendBackReplayAndCancelRecovery(t *testing.T) {
 	if _, _, err := Start(root, map[string]any{"call": "00000000-0000-4000-8000-000000000002", "prompt": "redispatch", "mode": "new",
 		"cwd": repo, "taskId": "task-1", "route": "mechanical", "model": "gpt-6-luna", "phase": "implementation"}, opt); err != nil {
 		t.Fatal(err)
+	}
+	if len(decisionSources) != 1 || decisionSources[0] != childID {
+		t.Errorf("redispatch decision sources = %#v, want decided job %q", decisionSources, childID)
 	}
 	record, _, err = enforce.LoadTaskAttempt(root, contextio.ProjectKey(repo), "task-1")
 	if err != nil || record.Failure == nil || record.Failure.Category != "rejected_after_sendback" {
