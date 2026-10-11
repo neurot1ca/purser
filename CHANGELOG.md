@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.122 — 2026-10-11
+
+- **Fixed:** A queued job is no longer overtaken by newer jobs whose scope overlaps it.
+
 ## 0.1.121 — 2026-10-11
 
 - **Fixed:** The PASS or FAIL from Purser's own test capture is no longer reset to UNKNOWN when the reviewer finishes; a FAIL from either side wins.
