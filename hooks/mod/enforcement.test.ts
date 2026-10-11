@@ -212,7 +212,7 @@ test('Post mod skips an event already handled by an earlier hook', options, asyn
   expect(calls).toEqual([])
 })
 
-test('PostToolUse routes six registered Codex tools without an env gate and excludes non-Codex tools', options, async ($, on) => {
+test('PostToolUse routes both identities of six Codex tools without an env gate and excludes non-Codex tools', options, async ($, on) => {
   const calls: string[] = []
   const toasts: string[] = []
   stubGo(on, postOutput, calls, toasts)
@@ -220,6 +220,9 @@ test('PostToolUse routes six registered Codex tools without an env gate and excl
   on('classic.PostToolUseFailure', () => ({}))
 
   for (const tool of [
+    'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
+    'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result',
+    'mcp__codex-main__codex_cancel', 'mcp__codex-main__codex_apply',
     'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
     'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
     'mcp__plugin_purser_codex-main__codex_cancel', 'mcp__plugin_purser_codex-main__codex_apply',
@@ -231,15 +234,18 @@ test('PostToolUse routes six registered Codex tools without an env gate and excl
   }
   const excluded = { ...postEvent('PostToolUse'), tool_name: 'mcp__plugin_purser_codex-main__other' }
   await expect($.classic.PostToolUse(excluded)).resolves.toEqual({})
-  expect(calls).toHaveLength(6)
+  expect(calls).toHaveLength(12)
   expect(calls.map(call => JSON.parse(call).tool_name)).toEqual([
+    'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
+    'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result',
+    'mcp__codex-main__codex_cancel', 'mcp__codex-main__codex_apply',
     'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
     'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
     'mcp__plugin_purser_codex-main__codex_cancel', 'mcp__plugin_purser_codex-main__codex_apply',
   ])
 })
 
-test('PostToolUseFailure routes five Codex tools without the Post gate and excludes codex_apply', options, async ($, on) => {
+test('PostToolUseFailure routes both identities of five Codex tools without the Post gate and excludes codex_apply', options, async ($, on) => {
   const calls: string[] = []
   const toasts: string[] = []
   stubGo(on, JSON.stringify({ hookSpecificOutput: {
@@ -249,6 +255,9 @@ test('PostToolUseFailure routes five Codex tools without the Post gate and exclu
   on('classic.PostToolUseFailure', () => ({}))
 
   for (const tool of [
+    'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
+    'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result',
+    'mcp__codex-main__codex_cancel',
     'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
     'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
     'mcp__plugin_purser_codex-main__codex_cancel',
@@ -258,8 +267,11 @@ test('PostToolUseFailure routes five Codex tools without the Post gate and exclu
   }
   const excluded = { ...postEvent('PostToolUseFailure'), tool_name: 'mcp__plugin_purser_codex-main__codex_apply' }
   await expect($.classic.PostToolUseFailure(excluded)).resolves.toEqual({})
-  expect(calls).toHaveLength(5)
+  expect(calls).toHaveLength(10)
   expect(calls.map(call => JSON.parse(call).tool_name)).toEqual([
+    'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
+    'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result',
+    'mcp__codex-main__codex_cancel',
     'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
     'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
     'mcp__plugin_purser_codex-main__codex_cancel',

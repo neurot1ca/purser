@@ -1,20 +1,4 @@
 {
-  "codex_tool_names": [
-    "mcp__codex-main__codex",
-    "mcp__plugin_purser_codex-main__codex"
-  ],
-  "codex_reply_tool_names": [
-    "mcp__codex-main__codex-reply",
-    "mcp__plugin_purser_codex-main__codex-reply"
-  ],
-  "codex_async_tool_names": [
-    "mcp__codex-main__codex_start",
-    "mcp__codex-main__codex_result",
-    "mcp__codex-main__codex_cancel",
-    "mcp__plugin_purser_codex-main__codex_start",
-    "mcp__plugin_purser_codex-main__codex_result",
-    "mcp__plugin_purser_codex-main__codex_cancel"
-  ],
   "allowed_phases": [
     "implementation",
     "operation",
@@ -78,7 +62,6 @@
       "effort": "high"
     }
   },
-  "sol_model": "gpt-6.1-sol",
   "always_full_routes": [
     "consequential",
     "escalated",

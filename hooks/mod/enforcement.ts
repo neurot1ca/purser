@@ -1,10 +1,16 @@
 type PostEvent = 'PostToolUse' | 'PostToolUseFailure'
 const postToolUseFailureTools = new Set([
+  'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
+  'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result',
+  'mcp__codex-main__codex_cancel',
   'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
   'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
   'mcp__plugin_purser_codex-main__codex_cancel',
 ])
 const postToolUseTools = new Set([
+  'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
+  'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result',
+  'mcp__codex-main__codex_cancel', 'mcp__codex-main__codex_apply',
   'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
   'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
   'mcp__plugin_purser_codex-main__codex_cancel', 'mcp__plugin_purser_codex-main__codex_apply',
