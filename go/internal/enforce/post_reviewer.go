@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
@@ -68,6 +70,14 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	if worktree := stringValue(pending["worktree_path"]); worktree != "" {
 		repoRoot = worktree
 	}
+	projectKey := stringValue(pending["project_key"])
+	if !reviewerProjectKey.MatchString(projectKey) && repoRoot != "" {
+		projectKey = contextio.ProjectKey(repoRoot)
+	}
+	circuitDir := ""
+	if stateRoot != "" && projectKey != "" {
+		circuitDir = filepath.Join(stateRoot, "projects", projectKey, "telemetry")
+	}
 	args := map[string]any{
 		"task_id": stringValue(pending["task_id"]), "phase": stringValue(pending["phase"]),
 		"route": stringValue(pending["route"]), "model": stringValue(pending["model"]),
@@ -96,6 +106,11 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		}
 		if !postReviewerAdapters[candidate.Agent] {
 			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_ADAPTER_UNREGISTERED"})
+			continue
+		}
+		if circuitDir != "" && time.Until(deadline) > 0 && hasEligibleReviewer(candidates[index+1:], implementer) &&
+			review.ReviewerCircuitOpen(circuitDir, candidate.Agent, candidate.Model, time.Now()) {
+			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "UNAVAILABLE", Reason: "REVIEWER_CIRCUIT_OPEN"})
 			continue
 		}
 		budget := time.Until(deadline)
@@ -143,6 +158,9 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 			attempt.Reason = postReviewerReason(last.Attributes)
 		}
 		attempts = append(attempts, attempt)
+		if circuitDir != "" {
+			review.RecordReviewerCircuitOutcome(circuitDir, candidate.Agent, candidate.Model, stringValue(last.Attributes["error_code"]), time.Now())
+		}
 		if outcome != "UNAVAILABLE" {
 			break
 		}
@@ -172,7 +190,18 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	return last, nil
 }
 
+func hasEligibleReviewer(candidates []profile.ReviewerCandidate, implementer string) bool {
+	for _, candidate := range candidates {
+		vendor := vendorFamily(modelFamily(candidate.Model))
+		if postReviewerAdapters[candidate.Agent] && (implementer == "" || vendor == "" || implementer != vendor) {
+			return true
+		}
+	}
+	return false
+}
+
 var reviewerEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+var reviewerProjectKey = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 func postReviewerReason(attributes map[string]any) string {
 	code := stringValue(attributes["error_code"])

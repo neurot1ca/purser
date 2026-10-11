@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
@@ -158,6 +159,66 @@ func TestPostReviewerClaudeFallbackEffortAndReason(t *testing.T) {
 	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
 	if !ok || len(attempts) != 2 || attempts[0].Reason != "AGY_DOWN: provider unavailable" {
 		t.Fatalf("attempts=%#v, want bounded unavailable reason", bundle["reviewer1_attempts"])
+	}
+}
+
+func TestPostReviewerCircuitSkipRecordsUnavailableAttempt(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	stateRoot := t.TempDir()
+	repoRoot := t.TempDir()
+	projectKey := contextio.ProjectKey(repoRoot)
+	circuitDir := filepath.Join(stateRoot, "projects", projectKey, "telemetry")
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		review.RecordReviewerCircuitOutcome(circuitDir, "agy", "gemini-3.8-flash-high", "REVIEWER_TIMEOUT", now)
+	}
+
+	var agents []string
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		agents = append(agents, args["reviewer_agent"].(string))
+		return review.BridgeOutcome{Outcome: "completed"}, nil
+	}
+	candidates := []profile.ReviewerCandidate{
+		{Agent: "agy", Model: "gemini-3.8-flash-high"},
+		{Agent: "claude", Model: "claude-haiku-5-5"},
+	}
+	bundle := map[string]any{"findings": []any{}}
+	_, err := runPostReviewer("", stateRoot,
+		map[string]any{"model": "gpt-6-luna", "fallback_family": "openai", "repo_root": repoRoot, "project_key": projectKey},
+		bundle, postProfile{ReviewerCandidates: candidates}, map[string]any{}, nil, nil, time.Now(), time.Minute)
+	if err != nil || len(agents) != 1 || agents[0] != "claude" {
+		t.Fatalf("circuit fallback agents=%v err=%v, want [claude]", agents, err)
+	}
+	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
+	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || attempts[0].Reason != "REVIEWER_CIRCUIT_OPEN" || attempts[1].Outcome != "COMPLETED" {
+		t.Fatalf("circuit attempts=%#v", bundle["reviewer1_attempts"])
+	}
+
+}
+
+func TestPostReviewerCircuitRunsWhenLastReviewer(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	stateRoot := t.TempDir()
+	repoRoot := t.TempDir()
+	projectKey := contextio.ProjectKey(repoRoot)
+	circuitDir := filepath.Join(stateRoot, "projects", projectKey, "telemetry")
+	for i := 0; i < 3; i++ {
+		review.RecordReviewerCircuitOutcome(circuitDir, "agy", "gemini-3.8-flash-high", "REVIEWER_TIMEOUT", time.Now())
+	}
+	called := false
+	postReviewerBridge = func(_ context.Context, _ string, _ map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		called = true
+		return review.BridgeOutcome{Outcome: "completed"}, nil
+	}
+	_, err := runPostReviewer("", stateRoot,
+		map[string]any{"model": "gpt-6-luna", "fallback_family": "openai", "repo_root": repoRoot, "project_key": projectKey},
+		map[string]any{"findings": []any{}},
+		postProfile{ReviewerCandidates: []profile.ReviewerCandidate{{Agent: "agy", Model: "gemini-3.8-flash-high"}}},
+		map[string]any{}, nil, nil, time.Now(), time.Minute)
+	if err != nil || !called {
+		t.Fatalf("last reviewer called=%t err=%v, want it to run", called, err)
 	}
 }
 
