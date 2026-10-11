@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.118 — 2026-10-11
+
+- **Changed:** After a failed luna attempt, Purser routes the next attempt of the same task to normal (sol, medium) instead of consequential; a higher route you choose is kept.
+
 ## 0.1.117 — 2026-10-11
 
 - **Added:** When a luna implementation attempt is rejected after its send-back or cancelled as failed, Purser routes the next attempt of the same task to consequential (sol, high) itself, with the failed attempt as basis.
