@@ -17,8 +17,7 @@ import (
 	"purser-hook/internal/jobs"
 )
 
-func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
-	python := activePythonInterpreter(t)
+func TestSynchronousToolsReplayGolden(t *testing.T) {
 	_, source, _, _ := runtime.Caller(0)
 	fixturePath := filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json")
 	data, err := os.ReadFile(fixturePath)
@@ -26,9 +25,7 @@ func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fixture struct {
-		Python    string `json:"python"`
-		FakeCodex string `json:"fakeCodex"`
-		Cases     []struct {
+		Cases []struct {
 			Name         string         `json:"name"`
 			Tool         string         `json:"tool"`
 			Arguments    map[string]any `json:"arguments"`
@@ -44,11 +41,10 @@ func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
 	if len(fixture.Cases) != 6 {
 		t.Fatalf("fixture cases=%d, want 6", len(fixture.Cases))
 	}
-	fixture.Python = python
 	binary := buildPurserHook(t)
 	isolateSynchronousEnvironment(t)
 	tempRoot := t.TempDir()
-	bin, err := json.Marshal([]string{fixture.Python, "-c", fixture.FakeCodex})
+	bin, err := synchronousFakeCodexPrefix()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,16 +127,13 @@ func TestSynchronousToolsReplayPythonFixture(t *testing.T) {
 }
 
 func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
-	python := activePythonInterpreter(t)
 	_, source, _, _ := runtime.Caller(0)
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var fixture struct {
-		Python    string `json:"python"`
-		FakeCodex string `json:"fakeCodex"`
-		Cases     []struct {
+		Cases []struct {
 			Name      string         `json:"name"`
 			Tool      string         `json:"tool"`
 			Arguments map[string]any `json:"arguments"`
@@ -165,7 +158,6 @@ func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
 	if selected == nil {
 		t.Fatal("Python fixture has no new_success case")
 	}
-	fixture.Python = python
 	isolateSynchronousEnvironment(t)
 	root := t.TempDir()
 	args := replaceFixtureRoot(selected.Arguments, root)
@@ -173,7 +165,7 @@ func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
 	if err := os.MkdirAll(cwd, 0700); err != nil {
 		t.Fatal(err)
 	}
-	bin, err := json.Marshal([]string{fixture.Python, "-c", fixture.FakeCodex})
+	bin, err := synchronousFakeCodexPrefix()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,29 +185,12 @@ func TestDispatchOperationMatchesSynchronousFixtureText(t *testing.T) {
 }
 
 func TestDispatchOperationReadsUsageAfterDelayedCompletion(t *testing.T) {
-	python := activePythonInterpreter(t)
-	_, source, _, _ := runtime.Caller(0)
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fixture struct {
-		FakeCodex string `json:"fakeCodex"`
-	}
-	if err = json.Unmarshal(data, &fixture); err != nil {
-		t.Fatal(err)
-	}
-	fixture.FakeCodex = strings.Replace(fixture.FakeCodex,
-		`print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}}), flush=True)`,
-		`time.sleep(0.05)`+"\n"+`print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}}), flush=True)`, 1)
-	if !strings.Contains(fixture.FakeCodex, "time.sleep(0.05)") {
-		t.Fatal("fake Codex script has no turn.completed event to delay")
-	}
-	bin, err := json.Marshal([]string{python, "-c", fixture.FakeCodex})
+	bin, err := synchronousFakeCodexPrefix()
 	if err != nil {
 		t.Fatal(err)
 	}
 	isolateSynchronousEnvironment(t)
+	t.Setenv("PURSER_SYNC_ORACLE_DELAY", "1")
 	root := t.TempDir()
 	cwd := filepath.Join(root, "repo")
 	if err := os.MkdirAll(cwd, 0700); err != nil {
@@ -236,25 +211,11 @@ func TestDispatchOperationReadsUsageAfterDelayedCompletion(t *testing.T) {
 }
 
 func TestDispatchOperationContextCancellationStopsChild(t *testing.T) {
-	python := activePythonInterpreter(t)
-	_, source, _, _ := runtime.Caller(0)
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fixture struct {
-		Python    string `json:"python"`
-		FakeCodex string `json:"fakeCodex"`
-	}
-	if err = json.Unmarshal(data, &fixture); err != nil {
-		t.Fatal(err)
-	}
-	fixture.Python = python
 	isolateSynchronousEnvironment(t)
 	root := t.TempDir()
 	args := map[string]any{"prompt": "cancel", "cwd": root}
 	started := filepath.Join(root, "child-started")
-	bin, err := json.Marshal([]string{fixture.Python, "-c", fixture.FakeCodex})
+	bin, err := synchronousFakeCodexPrefix()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,19 +252,48 @@ func TestDispatchOperationContextCancellationStopsChild(t *testing.T) {
 	}
 }
 
-func activePythonInterpreter(t *testing.T) string {
-	t.Helper()
-	for _, name := range []string{"python", "python3"} {
-		if path, err := exec.LookPath(name); err == nil {
-			absolute, absErr := filepath.Abs(path)
-			if absErr != nil {
-				t.Fatal(absErr)
-			}
-			return absolute
+func synchronousFakeCodexPrefix() ([]byte, error) {
+	return json.Marshal([]string{os.Args[0], "-test.run=^TestSynchronousFakeCodexProcess$"})
+}
+
+func TestSynchronousFakeCodexProcess(t *testing.T) {
+	if os.Getenv("PURSER_SYNC_FAKE_CODEX") != "1" {
+		return
+	}
+	if marker := os.Getenv("PURSER_SYNC_ORACLE_STARTED"); marker != "" {
+		if err := os.WriteFile(marker, []byte("started"), 0600); err != nil {
+			os.Exit(2)
 		}
 	}
-	t.Fatal("Python interpreter is unavailable on PATH")
-	return ""
+	mode := os.Getenv("PURSER_SYNC_ORACLE_MODE")
+	thread := os.Getenv("PURSER_SYNC_ORACLE_THREAD")
+	if mode == "cancel" {
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
+	write := func(value map[string]any) {
+		data, _ := json.Marshal(value)
+		_, _ = os.Stdout.Write(append(data, '\n'))
+	}
+	write(map[string]any{"type": "thread.started", "thread_id": thread})
+	if mode == "failure" {
+		write(map[string]any{"type": "turn.failed", "message": "oracle worker failure"})
+		os.Exit(1)
+	}
+	content := "oracle final text"
+	if mode == "unicode" {
+		content = "Türkçe İstanbul: \u2028 separator \u2029 separator \b backspace \f formfeed literal \\u2028"
+	}
+	outputPath := os.Args[len(os.Args)-1]
+	if err := os.WriteFile(outputPath, []byte(content), 0600); err != nil {
+		os.Exit(2)
+	}
+	write(map[string]any{"type": "item.completed", "item": map[string]any{"type": "agent_message", "text": content}})
+	if os.Getenv("PURSER_SYNC_ORACLE_DELAY") == "1" {
+		time.Sleep(50 * time.Millisecond)
+	}
+	write(map[string]any{"type": "turn.completed", "usage": map[string]any{"input_tokens": 3, "output_tokens": 2}})
+	os.Exit(0)
 }
 
 func isolateSynchronousEnvironment(t *testing.T) {
@@ -312,10 +302,11 @@ func isolateSynchronousEnvironment(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("PURSER_AGENT", "codex")
+	t.Setenv("PURSER_SYNC_FAKE_CODEX", "1")
 	t.Setenv("PATH", t.TempDir())
 }
 
-func TestPythonToolJSONUnicodeEscapeParity(t *testing.T) {
+func TestToolJSONUnicodeEscapeGolden(t *testing.T) {
 	_, source, _, _ := runtime.Caller(0)
 	fixturePath := filepath.Join(filepath.Dir(source), "testdata", "synchronous_python.json")
 	data, err := os.ReadFile(fixturePath)

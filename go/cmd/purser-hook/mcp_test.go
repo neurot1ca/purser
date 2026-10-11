@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"purser-hook/internal/testutil"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -190,21 +189,6 @@ func TestMCPDiscoveryProtocol(t *testing.T) {
 	}
 	if string(gotList.Result.Tools) != mcpSchemas {
 		t.Fatal("tools/list schema differs from embedded oracle")
-	}
-}
-
-func TestMCPToolSchemasMatchPythonOracle(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	repo := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := testutil.Python(t)
-	code := `import importlib.util,json,sys; sys.path.insert(0,sys.argv[1]); s=importlib.util.spec_from_file_location("oracle",sys.argv[2]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(json.dumps(m.TOOL_SCHEMAS,ensure_ascii=False,separators=(",",":")))`
-	cmd := testutil.Hide(exec.Command(python, "-c", code, filepath.Join(repo, ".claude", "hooks", "orchestrator"), filepath.Join(repo, ".claude", "hooks", "orchestrator", "codex_exec_mcp.py")))
-	data, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("load Python MCP oracle: %v", err)
-	}
-	if strings.TrimSpace(string(data)) != mcpSchemas {
-		t.Fatal("embedded MCP schemas drifted from Python TOOL_SCHEMAS")
 	}
 }
 
