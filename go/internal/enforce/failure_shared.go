@@ -134,6 +134,9 @@ func saveFailureSession(root string, event, pending map[string]any, outcome map[
 		"task_objective": pending["task_objective"], "acceptance_criteria": pending["acceptance_criteria"],
 		"task_contract_grounded": pending["task_contract_grounded"] == true,
 		"pending_call_baseline":  nil, "last_outcome": outcome}
+	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") && stringValue(pending["job_id"]) == "" {
+		delete(options, "last_outcome")
+	}
 	if agent := stringValue(pending["agent"]); agent != "" {
 		options["agent"] = agent
 	}

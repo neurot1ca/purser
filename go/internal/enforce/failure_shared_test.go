@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/testutil"
 )
 
 func TestFailureSharedParityFixture(t *testing.T) {
@@ -171,6 +173,49 @@ func TestFailureSharedParityFixture(t *testing.T) {
 	}
 	if err := cleanupFailureTail(root, pendingPath, nil, map[string]any{}, false); err == nil {
 		t.Fatal("non-empty pending directory removal succeeded")
+	}
+}
+
+func TestPrelaunchStartFailureLeavesTaskStartable(t *testing.T) {
+	scratch := preTempDir(t)
+	repo, runtimeRoot := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"HOME": scratch, "USERPROFILE": scratch, "HOMEDRIVE": "", "HOMEPATH": "", "PURSER_STATE_DIR": runtimeRoot, "CLAUDE_PLUGIN_ROOT": pluginRoot, "CODEX_HOME": scratch} {
+		t.Setenv(key, value)
+	}
+	project := projectKey(&repo)
+	pending := map[string]any{"task_id": "prelaunch-task", "project_key": project, "route": "normal",
+		"model": "gpt-6-sol", "effort": "medium", "phase": "implementation", "scope": []any{"src/a.go"}}
+	event := map[string]any{"hook_event_name": "PostToolUseFailure", "tool_name": "mcp__codex-main__codex_start"}
+	evidencePath, err := persistFailureEvidence(runtimeRoot, "prelaunch-call", failureEvidence(event, pending))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveFailureSession(runtimeRoot, event, pending, map[string]any{"status": "AMBIGUOUS_TOOL_FAILURE", "evidence_path": evidencePath}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(evidencePath); err != nil {
+		t.Fatalf("failure evidence was not persisted: %v", err)
+	}
+	prompt := "ORCH|task=prelaunch-task|phase=implementation|route=normal|reason=new_task|basis=retry after rejected start|scope=src/a.go\nImplement."
+	got, err := Pre(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_use_id": "prelaunch-retry", "session_id": "prelaunch-session", "cwd": repo,
+		"tool_input": map[string]any{"mode": "new", "prompt": prompt, "label": "prelaunch retry"}}, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := mapValue(got["hookSpecificOutput"])
+	if output["permissionDecision"] == "deny" {
+		t.Fatalf("prelaunch failure locked task id: %#v", output)
 	}
 }
 
