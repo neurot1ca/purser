@@ -1882,7 +1882,7 @@ def pre_tool_use(
                 return {"hookSpecificOutput": {
                     "hookEventName": "PreToolUse", "permissionDecision": "deny",
                     "permissionDecisionReason": (
-                        "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back."
+                        "Start a fresh job for this task with route=normal and basis=prior luna attempt failed after send-back."
                     ),
                 }}
             if failed_task:
@@ -1890,7 +1890,7 @@ def pre_tool_use(
                 basis = (f"Prior luna implementation attempt {failed_attempt.get('job_id')} was cancelled as failed."
                          if category == "failed_abandonment" else
                          f"Prior luna implementation attempt {failed_attempt.get('job_id')} was rejected after send-back.")
-                effective_route = parsed.route if parsed.route in {"consequential", "escalated"} else "consequential"
+                effective_route = parsed.route if parsed.route in {"normal", "consequential", "escalated"} else "normal"
                 header = (f"ORCH|task={parsed.task_id}|phase={parsed.phase}|route={effective_route}"
                           f"|reason=repeated_failure|basis={basis}|scope={','.join(parsed.scope)}")
                 if parsed.eta_minutes is not None:

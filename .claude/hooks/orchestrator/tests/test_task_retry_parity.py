@@ -137,12 +137,16 @@ def test_python_matches_go_task_retry_dispatch(scratch, go_hook, name):
     assert responses[0] == responses[1]
     if name in {"override", "consequential"}:
         dispatch = responses[0]["dispatch"]
-        assert dispatch["route"] == "consequential"
-        assert dispatch["jobModel"] != "gpt-6-luna" and dispatch["jobEffort"] == "high"
+        if name == "consequential":
+            assert dispatch["route"] == "consequential"
+            assert dispatch["jobModel"] != "gpt-6-luna" and dispatch["jobEffort"] == "high"
+        else:
+            assert dispatch["route"] == "normal"
+            assert dispatch["jobModel"] != "gpt-6-luna" and dispatch["jobEffort"] == "medium"
     elif name == "sync_reply":
         assert responses[0]["permissionDecision"] == "deny"
         assert responses[0]["permissionDecisionReason"] == (
-            "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back.")
+            "Start a fresh job for this task with route=normal and basis=prior luna attempt failed after send-back.")
     elif name == "cancelled_reuse":
         assert "dispatch" in responses[0]
     elif name == "duplicate":

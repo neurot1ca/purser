@@ -119,8 +119,8 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if reply {
 			mode, reply, live = "new", false, nil
 		}
-		if *parsed.Route != "escalated" && *parsed.Route != "consequential" {
-			*parsed.Route = "consequential"
+		if *parsed.Route != "normal" && *parsed.Route != "consequential" && *parsed.Route != "escalated" {
+			*parsed.Route = "normal"
 		}
 		reason := "repeated_failure"
 		basis := fmt.Sprintf("Prior luna implementation attempt %s was rejected after send-back.", attempt.Failure.JobID)
@@ -482,7 +482,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 
 func failedTaskReplyDenial() map[string]any {
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "permissionDecision": "deny",
-		"permissionDecisionReason": "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back."}}
+		"permissionDecisionReason": "Start a fresh job for this task with route=normal and basis=prior luna attempt failed after send-back."}}
 }
 
 func persistPreSuccess(event map[string]any, runtimeRoot string, repository *string, live map[string]any,

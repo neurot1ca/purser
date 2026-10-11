@@ -550,7 +550,7 @@ func TestPreTaskRetryDispatch(t *testing.T) {
 	}{
 		{name: "first", route: "subtle"},
 		{name: "luna override", category: "rejected_after_sendback", route: "subtle", model: "gpt-6-luna", effort: "low"},
-		{name: "consequential floor", category: "rejected_after_sendback", route: "consequential", model: "gpt-6-sol", effort: "medium"},
+		{name: "requested consequential preserved", category: "rejected_after_sendback", route: "consequential", model: "gpt-6-luna", effort: "low"},
 		{name: "escalated floor", category: "rejected_after_sendback", route: "escalated", model: "gpt-6.1-sol", effort: "high"},
 		{name: "corrupt dispatch", route: "subtle", corrupt: true},
 		{name: "corrupt reuse", route: "subtle", corrupt: true, finished: true, deny: "TASK_ALREADY_FINISHED:"},
@@ -562,7 +562,7 @@ func TestPreTaskRetryDispatch(t *testing.T) {
 		{name: "applied protected", route: "subtle", disposition: "applied", finished: true, deny: "TASK_ALREADY_FINISHED:"},
 		{name: "unresolved protected", route: "subtle", disposition: "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", finished: true, deny: "TASK_ALREADY_FINISHED:"},
 		{name: "async reply fresh", route: "consequential", category: "rejected_after_sendback", mode: "reply"},
-		{name: "sync reply denied", route: "subtle", category: "rejected_after_sendback", mode: "reply", sync: true, deny: "Start a fresh job for this task with route=consequential and basis=prior luna attempt failed after send-back."},
+		{name: "sync reply denied", route: "subtle", category: "rejected_after_sendback", mode: "reply", sync: true, deny: "Start a fresh job for this task with route=normal and basis=prior luna attempt failed after send-back."},
 		{name: "duplicate denied", route: "subtle", disposition: "applied", finished: true, duplicate: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -655,8 +655,10 @@ func TestPreTaskRetryDispatch(t *testing.T) {
 				wantModel = "gpt-6.1-sol"
 				if tc.route == "escalated" {
 					wantEffort = "xhigh"
+				} else if tc.route == "consequential" {
+					wantEffort = "high"
 				} else {
-					wantRoute = "consequential"
+					wantRoute, wantEffort = "normal", "medium"
 				}
 				basis := "Prior luna implementation attempt prior-job was rejected after send-back."
 				if tc.category == "failed_abandonment" {
