@@ -30,6 +30,7 @@ type InspectionError = inspectionError
 func (e *inspectionError) Error() string { return e.Code + ": " + e.Message }
 
 func runGit(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+	args = append([]string{"-c", "core.longpaths=true"}, args...)
 	commandPath := ""
 	if env != nil {
 		if pathValue, ok := env["PATH"]; ok {

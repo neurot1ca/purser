@@ -92,6 +92,18 @@ func TestGitFailureIncludesBoundedStderr(t *testing.T) {
 	}
 }
 
+func TestRunGitEnablesLongPaths(t *testing.T) {
+	root := t.TempDir()
+	got, err := runGit(root, []string{"config", "--get", "core.longpaths"}, time.Second,
+		"checking Git long path configuration", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "true" {
+		t.Fatalf("core.longpaths = %q, want true", got)
+	}
+}
+
 func TestGitLiveOutcome(t *testing.T) {
 	if os.Getenv("PURSER_GIT_LIVE_OUTCOME") == "" {
 		t.Skip("set PURSER_GIT_LIVE_OUTCOME to enable the live outcome check")
