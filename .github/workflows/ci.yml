@@ -50,7 +50,4 @@ jobs:
         run: python -m pytest tests/ -q -n auto
         working-directory: .claude/hooks/orchestrator
 
-      - name: Test release script
-        run: python -m pytest scripts/test_release.py -q
-
       # Claude Code CLI is not installed in CI, so plugin test/validate are omitted.

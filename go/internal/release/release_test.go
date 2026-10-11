@@ -4,10 +4,12 @@ import (
 	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -37,6 +39,41 @@ func TestVerifyTreeRequiresRuntimeAndRejectsPythonArtifacts(t *testing.T) {
 	_ = os.Remove(filepath.Join(root, "bin/purser-launcher.js"))
 	if err := VerifyTree(root, false); err == nil || !strings.Contains(err.Error(), "bin/purser-launcher.js") {
 		t.Fatalf("missing runtime asset accepted: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin/purser-launcher.js"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range modSources {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := VerifyTree(root, false); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("missing mod source %s accepted: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, target := range Targets {
+		name := "bin/" + binaryName(target[0], target[1])
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("binary"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := VerifyTree(root, true); err != nil {
+		t.Fatalf("complete staged tree rejected: %v", err)
+	}
+	missingBinary := "bin/" + binaryName(Targets[0][0], Targets[0][1])
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash(missingBinary))); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyTree(root, true); err == nil || !strings.Contains(err.Error(), missingBinary) {
+		t.Fatalf("missing target binary accepted: %v", err)
 	}
 }
 
@@ -119,6 +156,86 @@ func TestFailedExportPreservesMarketplaceTree(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), "purser-export-") {
 			t.Fatalf("staging directory leaked: %s", entry.Name())
 		}
+	}
+}
+
+func TestExportMarketplaceUsesCommittedTreeAndLocalManifest(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, data string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range append(append(append([]string{}, modSources...), runtimeFiles...), commandFiles...) {
+		write(name, "asset\n")
+	}
+	write(".claude-plugin/plugin.json", "{\"name\":\"purser\",\"version\":\"0.1.12\"}\n")
+	write("go/internal/enforce/code_map_grammar_tags.go", "package enforce\nconst codeMapGrammarTags = \"release_test\"\n")
+	write("base.txt", "committed\n")
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "core.autocrlf", "false")
+	runGit("add", ".")
+	runGit("-c", "user.name=Release Test", "-c", "user.email=release@example.test", "commit", "-qm", "fixture")
+	write("base.txt", "working copy edit\n")
+	write("ignored.txt", "must not ship\n")
+
+	fakeGoSource := filepath.Join(t.TempDir(), "fake-go.go")
+	fakeGo := filepath.Join(filepath.Dir(fakeGoSource), "go")
+	if runtime.GOOS == "windows" {
+		fakeGo += ".exe"
+	}
+	program := "package main\nimport \"os\"\nfunc main() { args := os.Args[1:]; for i, arg := range args { if arg == \"-o\" && i+1 < len(args) { if err := os.WriteFile(args[i+1], []byte(\"fake binary\"), 0700); err != nil { os.Exit(2) }; return } }; if len(args) > 0 && args[0] == \"version\" { println(\"go version fake\") ; return }; os.Exit(2) }\n"
+	if err := os.WriteFile(fakeGoSource, []byte(program), 0644); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", fakeGo, fakeGoSource)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build fake go: %v: %s", err, out)
+	}
+	binDir := filepath.Dir(fakeGo)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	market := filepath.Join(t.TempDir(), "marketplace")
+	if err := ExportMarketplace(root, "HEAD", market); err != nil {
+		t.Fatal(err)
+	}
+	exported := filepath.Join(market, "purser")
+	if b, err := os.ReadFile(filepath.Join(exported, "base.txt")); err != nil || string(b) != "committed\n" {
+		t.Fatalf("export used working tree instead of committed tree: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(exported, "ignored.txt")); !os.IsNotExist(err) {
+		t.Fatalf("uncommitted file was exported: %v", err)
+	}
+	for _, target := range Targets {
+		if _, err := os.Stat(filepath.Join(exported, "bin", binaryName(target[0], target[1]))); err != nil {
+			t.Errorf("export missing hook binary for %s/%s: %v", target[0], target[1], err)
+		}
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(market, ".claude-plugin", "marketplace.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err = json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest["name"] != "purser-local" || manifest["description"] != "Local marketplace for the Purser plugin." {
+		t.Fatalf("unexpected marketplace manifest: %s", manifestBytes)
+	}
+	plugins, ok := manifest["plugins"].([]any)
+	if !ok || len(plugins) != 1 || plugins[0].(map[string]any)["source"] != "./purser" {
+		t.Fatalf("unexpected marketplace plugin list: %s", manifestBytes)
 	}
 }
 

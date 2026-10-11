@@ -139,12 +139,16 @@ func run(args []string) error {
 		}
 		fmt.Println("exported", commit[:7])
 	}
+	return runPluginUpdates(root, *claude)
+}
+
+func runPluginUpdates(root, claude string) error {
 	for i, args := range [][]string{{"plugin", "marketplace", "update", "purser-local"}, {"plugin", "update", "purser@purser-local"}} {
-		cmd := exec.Command(*claude, args...)
+		cmd := exec.Command(claude, args...)
 		cmd.Dir = root
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		if err = cmd.Run(); err != nil {
+		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("%s: %w", strings.Join(args, " "), err)
 		}
 		if i == 0 {
