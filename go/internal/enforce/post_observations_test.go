@@ -68,6 +68,7 @@ func TestPostImplementerObservationsP106(t *testing.T) {
 			}
 			gotEvent := decodeLine(t, string(line))
 			wantEvent := decodeLine(t, c.Line)
+			wantEvent["payload"].(map[string]any)["scope_count"] = float64(len(anyStringList(pending["scope"])))
 			delete(gotEvent, "event_id")
 			delete(gotEvent, "ts_utc")
 			delete(wantEvent, "event_id")
@@ -120,6 +121,24 @@ func TestPostImplementerObservationsCarriesDispatcherAgentID(t *testing.T) {
 	var observation map[string]any
 	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(string(data))), &observation) != nil || observation["agent_id"] != "dispatcher-1" {
 		t.Fatalf("success observation lost dispatcher identity: %v %s", err, data)
+	}
+}
+
+func TestPostImplementerObservationsCarriesScopeCount(t *testing.T) {
+	root := t.TempDir()
+	pending := map[string]any{"task_id": "scope-count", "project_key": "unresolved", "agent": "codex",
+		"route": "normal", "phase": "implementation", "model": "openai/gpt-5", "effort": "high",
+		"scope": []any{"a.go", "b.go", "c.go", "d.go"}}
+	bundle := map[string]any{"implementer": "codex-main", "model": "openai/gpt-5", "effort": "high", "validation": "UNKNOWN",
+		"worker_validation": map[string]any{"status": "UNKNOWN"}, "routing_enforced": true}
+	PostImplementerObservations(map[string]any{"session_id": "session-scope", "tool_response": map[string]any{}}, pending, bundle, root)
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "events", "by_task", "scope-count.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeLine(t, strings.TrimSpace(string(data)))["payload"].(map[string]any)
+	if payload["scope_count"] != float64(4) {
+		t.Fatalf("scope_count = %v, want 4", payload["scope_count"])
 	}
 }
 

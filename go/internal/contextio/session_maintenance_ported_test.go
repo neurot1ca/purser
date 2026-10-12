@@ -76,6 +76,111 @@ func TestSessionDurationHintPythonParity(t *testing.T) {
 	}
 }
 
+func TestRouteMedianMinutesUsesScopeAndReasonBucket(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "telemetry", "events", time.Now().UTC().Format("2006-01"), "session_eta.jsonl")
+	var lines []string
+	add := func(scope any, reason string, minutes int) {
+		t.Helper()
+		payload := map[string]any{"route": "normal", "duration_ms": minutes * 60000, "implementer": "codex-main", "reason": reason}
+		if scope != nil {
+			payload["scope_count"] = scope
+		}
+		data, err := json.Marshal(map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": "project",
+			"ts_utc": time.Now().UTC().Format(time.RFC3339), "payload": payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(data))
+	}
+	for i := 0; i < 5; i++ {
+		add(float64(4), "new_task", 9)
+	}
+	for i := 0; i < 5; i++ {
+		add(float64(2), "fix", 2)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := RouteMedianMinutes(root, "project", "normal", "codex-main", 5, "new_task")
+	if !ok || got != 9 {
+		t.Fatalf("matching bucket median = %d, %v; want 9, true", got, ok)
+	}
+}
+
+func TestRouteMedianMinutesFallsBackWhenBucketIsInsufficient(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "telemetry", "events", time.Now().UTC().Format("2006-01"), "session_eta.jsonl")
+	var lines []string
+	for i := 0; i < 10; i++ {
+		payload := map[string]any{"route": "normal", "duration_ms": 2 * 60000, "implementer": "codex-main"}
+		if i == 0 {
+			payload["scope_count"], payload["reason"] = float64(4), "new_task"
+		}
+		data, err := json.Marshal(map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": "project",
+			"ts_utc": time.Now().UTC().Format(time.RFC3339), "payload": payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(data))
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := RouteMedianMinutes(root, "project", "normal", "codex-main", 4, "new_task")
+	if !ok || got != 2 {
+		t.Fatalf("fallback route median = %d, %v; want 2, true", got, ok)
+	}
+}
+
+func TestRouteDurationSamplesPreferNewestLinesUnderCap(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "telemetry", "events", time.Now().UTC().Format("2006-01"), "session_long.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	write := func(minutes int) {
+		t.Helper()
+		item := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": "project", "ts_utc": now,
+			"payload": map[string]any{"route": "normal", "duration_ms": minutes * 60000, "implementer": "codex-main"}}
+		data, e := json.Marshal(item)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = f.Write(append(data, '\n')); e != nil {
+			t.Fatal(e)
+		}
+	}
+	for i := 0; i < 4096; i++ {
+		write(1)
+	}
+	write(17)
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	samples := RouteDurationSamples(root, "project", "normal")
+	if len(samples) != 4096 {
+		t.Fatalf("sample count = %d, want 4096", len(samples))
+	}
+	if samples[0].DurationMS != 17*60000 {
+		t.Fatalf("first retained sample = %v ms, want newest 17 minute sample", samples[0].DurationMS)
+	}
+}
+
 func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 	root := t.TempDir()
 	project := "project"
@@ -104,7 +209,7 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	statePath := filepath.Join(root, "projects", project, "duration_accuracy.json")
-	writeSessionMaintenanceJSON(t, statePath, map[string]any{"compacts": 4, "errors": map[string]any{"claude": 75}})
+	writeSessionMaintenanceJSON(t, statePath, map[string]any{"version": 2, "compacts": 4, "errors": map[string]any{"claude": 75}})
 	if got := compactAccuracyHint(root, project); !strings.Contains(got, "Claude's task duration estimates have improved") || !strings.Contains(got, "50%") {
 		t.Fatalf("accuracy improvement hint = %q", got)
 	}
@@ -127,9 +232,41 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 	if err := os.WriteFile(path, append(unknownData, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
-	writeSessionMaintenanceJSON(t, statePath, map[string]any{"compacts": 4, "errors": map[string]any{"agent-x": 75}})
+	writeSessionMaintenanceJSON(t, statePath, map[string]any{"version": 2, "compacts": 4, "errors": map[string]any{"agent-x": 75}})
 	if got := compactAccuracyHint(root, project); !strings.Contains(got, "agent-x's task duration estimates have improved") {
 		t.Fatalf("unknown implementer possessive hint = %q", got)
+	}
+}
+
+func TestSessionCompactAccuracyHintUnversionedStateSetsBaseline(t *testing.T) {
+	root := t.TempDir()
+	project := "project"
+	now := time.Now().UTC().Truncate(time.Second)
+	path := filepath.Join(root, "telemetry", "events", now.Format("2006-01"), "session_accuracy.jsonl")
+	item := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": project, "ts_utc": now.Format(time.RFC3339),
+		"payload": map[string]any{"implementer": "codex-main", "duration_ms": 120000, "eta_minutes": 3}}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, "projects", project, "duration_accuracy.json")
+	writeSessionMaintenanceJSON(t, statePath, map[string]any{"compacts": 4, "errors": map[string]any{"codex-main": 8871198}})
+	if got := compactAccuracyHint(root, project); got != "" {
+		t.Fatalf("unversioned accuracy state announced improvement: %q", got)
+	}
+	stateData, err := os.ReadFile(statePath)
+	var state map[string]any
+	if err != nil || json.Unmarshal(stateData, &state) != nil {
+		t.Fatalf("read accuracy state: %v", err)
+	}
+	if state["version"] != float64(2) || state["errors"].(map[string]any)["codex-main"] != float64(50) {
+		t.Fatalf("accuracy state = %#v, want version 2 baseline error 50", state)
 	}
 }
 

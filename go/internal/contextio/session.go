@@ -172,6 +172,9 @@ type DurationSample struct {
 	DurationMS  float64
 	Implementer string
 	JobID       string
+	ScopeCount  int
+	HasScope    bool
+	NewTask     bool
 }
 
 // RouteDurationSamples returns the recent completion samples used by the
@@ -184,10 +187,21 @@ func RouteDurationSamples(root, key, route string) []DurationSample {
 
 // RouteMedianMinutes returns the measured route median once the same sample
 // sufficiency rules used by SessionStart's duration hint are met.
-func RouteMedianMinutes(root, key, route, implementer string) (int, bool) {
+func RouteMedianMinutes(root, key, route, implementer string, scopeCount int, reason string) (int, bool) {
 	groups := map[string][]DurationSample{}
 	readRouteDurationSamples(root, key, groups)
-	median, _, ok := routeMedian(groups[route], implementer, "")
+	samples := groups[route]
+	bucket := scopeCount >= 4
+	var scoped []DurationSample
+	for _, sample := range samples {
+		if sample.HasScope && (sample.ScopeCount >= 4) == bucket && sample.NewTask == (reason == "new_task") {
+			scoped = append(scoped, sample)
+		}
+	}
+	if median, _, ok := routeMedian(scoped, implementer, ""); ok {
+		return max(1, int(math.Ceil(median/60000))), true
+	}
+	median, _, ok := routeMedian(samples, implementer, "")
 	if !ok {
 		return 0, false
 	}
@@ -269,17 +283,25 @@ func readRouteDurationSamples(root, key string, groups map[string][]DurationSamp
 		if err != nil {
 			continue
 		}
-		if len(data) > (2<<20)-bytesRead {
-			data = data[:(2<<20)-bytesRead]
+		remainingBytes := (2 << 20) - bytesRead
+		if len(data) > remainingBytes {
+			data = data[len(data)-remainingBytes:]
+			if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
+				data = data[newline+1:]
+			}
 		}
 		bytesRead += len(data)
-		for _, line := range bytes.Split(data, []byte{'\n'}) {
+		linesInFile := bytes.Split(data, []byte{'\n'})
+		for i := len(linesInFile) - 1; i >= 0; i-- {
+			if len(bytes.TrimSpace(linesInFile[i])) == 0 {
+				continue
+			}
 			if lines >= 4096 {
 				break
 			}
 			lines++
 			var item map[string]any
-			if json.Unmarshal(line, &item) != nil || item["event_type"] != "IMPLEMENTER_FINISHED" || item["project_key"] != key {
+			if json.Unmarshal(linesInFile[i], &item) != nil || item["event_type"] != "IMPLEMENTER_FINISHED" || item["project_key"] != key {
 				continue
 			}
 			stamp, err := time.Parse(time.RFC3339Nano, fmt.Sprint(item["ts_utc"]))
@@ -297,8 +319,11 @@ func readRouteDurationSamples(root, key string, groups map[string][]DurationSamp
 				agent = "codex-main"
 			}
 			jobID, _ := item["job_id"].(string)
+			scopeCount, hasScope := numeric(p["scope_count"])
+			reason, _ := p["reason"].(string)
 			groups[route] = append(groups[route], DurationSample{DurationMS: duration, Implementer: agent,
-				JobID: jobID})
+				JobID: jobID, ScopeCount: int(scopeCount), HasScope: hasScope && scopeCount >= 0 && math.Trunc(scopeCount) == scopeCount,
+				NewTask: reason == "new_task"})
 		}
 		if bytesRead >= 2<<20 || lines >= 4096 {
 			break
@@ -494,7 +519,12 @@ func compactAccuracyHint(root, key string) string {
 	defer unlock(lock)
 	state, ok := readSmallObject(path)
 	if !ok {
-		state = map[string]any{"compacts": float64(0), "errors": map[string]any{}}
+		state = map[string]any{"version": float64(2), "compacts": float64(0), "errors": map[string]any{}}
+	}
+	version, versionOK := numeric(state["version"])
+	if !versionOK || version != 2 {
+		state["version"] = float64(2)
+		state["errors"] = map[string]any{}
 	}
 	countf, ok := numeric(state["compacts"])
 	errors, ok2 := state["errors"].(map[string]any)

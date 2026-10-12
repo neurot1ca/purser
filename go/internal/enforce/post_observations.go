@@ -8,12 +8,12 @@ import (
 )
 
 func init() {
-	observationFields["IMPLEMENTER_FINISHED"] = mergeFields(fields(`duration_ms longest_silent_gap_seconds implementer served_model served_route served_effort served_agent served_provider route phase task_type has_code_map suspected_route_mismatch changed_paths_count known_concurrent_scopes validation worker_validation_status thread_id claude_review_mode routing_enforced codex_usage_known claude_continuation_turn_count reason reason_source previous_route new_route eta_minutes codex_input_tokens codex_cached_input_tokens codex_output_tokens codex_reasoning_output_tokens`), claudeUsagePayloadFields)
+	observationFields["IMPLEMENTER_FINISHED"] = mergeFields(fields(`duration_ms longest_silent_gap_seconds implementer served_model served_route served_effort served_agent served_provider route phase task_type has_code_map suspected_route_mismatch changed_paths_count known_concurrent_scopes validation worker_validation_status thread_id claude_review_mode routing_enforced codex_usage_known claude_continuation_turn_count reason reason_source previous_route new_route eta_minutes scope_count codex_input_tokens codex_cached_input_tokens codex_output_tokens codex_reasoning_output_tokens`), claudeUsagePayloadFields)
 	observationFields["MECHANICAL_SHADOW_STARTED"] = fields("")
 	observationFields["MECHANICAL_SHADOW_FINISHED"] = fields("success")
 	setObservationRule("bool", "success")
 	setObservationRule("bool", "has_code_map codex_usage_known")
-	setObservationRule("int", "changed_paths_count claude_continuation_turn_count")
+	setObservationRule("int", "changed_paths_count claude_continuation_turn_count scope_count")
 	setObservationRule("id", "implementer served_agent served_provider thread_id")
 	setObservationRule("model", "served_model")
 	setObservationRule("enum:mechanical subtle normal consequential escalated operation plan_standard", "served_route")
@@ -99,7 +99,8 @@ func PostImplementerObservations(event, pending, bundle map[string]any, root str
 		"claude_continuation_turn_count": pending["claude_continuation_turn_count"],
 		"eta_minutes":                    pending["eta_minutes"], "reason": pending["reason"],
 		"reason_source": pending["reason_source"], "previous_route": pending["previous_route"],
-		"new_route": pending["new_route"],
+		"new_route":   pending["new_route"],
+		"scope_count": len(anyStringList(pending["scope"])),
 	}
 	if gap, ok := pending["longest_silent_gap_seconds"].(float64); ok && gap >= 0 && !math.IsInf(gap, 0) && !math.IsNaN(gap) {
 		payload["longest_silent_gap_seconds"] = gap

@@ -419,7 +419,11 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			pendingETA = &supplied
 		}
 		if pendingETA == nil {
-			if median, ok := contextio.RouteMedianMinutes(defaultPreStateRoot(runtimeRoot), projectKey(root), stringValue(route.Route), selection.Agent); ok {
+			etaReason := reason(parsed)
+			if etaReason == "" && reply && live != nil {
+				etaReason = stringValue(live["reason"])
+			}
+			if median, ok := contextio.RouteMedianMinutes(defaultPreStateRoot(runtimeRoot), projectKey(root), stringValue(route.Route), selection.Agent, len(parsed.Scope), etaReason); ok {
 				pendingETA = &median
 			} else if fallback := routeDurationDefault(pointerValue(parsed.Route)); fallback > 0 {
 				pendingETA = &fallback
