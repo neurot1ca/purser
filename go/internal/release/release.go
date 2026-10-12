@@ -21,7 +21,7 @@ import (
 var Targets = [][2]string{{"windows", "amd64"}, {"windows", "arm64"}, {"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}}
 var modSources = []string{"hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts", "hooks/mod/board.ts", "hooks/mod/usage.ts", "hooks/mod/enforcement.ts", "hooks/mod/autocompact.ts"}
 var runtimeFiles = []string{"bin/purser-launcher.js", "plugin/mcp.json", "hooks/hooks.json", ".claude/hooks/orchestrator/config.json", ".claude/hooks/orchestrator/model_catalog_bootstrap.json"}
-var commandFiles = []string{"commands/check.md", "commands/gear-down.md", "commands/gear-up.md", "commands/init.md", "commands/optimize.md", "commands/plan.md"}
+var commandFiles = []string{"commands/check.md", "commands/gear-down.md", "commands/gear-up.md", "commands/init.md", "commands/optimize.md", "commands/plan.md", "commands/reviewer.md"}
 
 type Manifest struct {
 	PluginVersion string            `json:"plugin_version"`
