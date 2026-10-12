@@ -53,6 +53,20 @@ func TestResultsGolden(t *testing.T) {
 	}
 }
 
+func TestCodexEventStreamParsesFinalAgentReview(t *testing.T) {
+	stdout := "{\"type\":\"thread.started\",\"thread_id\":\"01a12f70-f454-7ba0-9ccb-259e58d05bcd\"}\n" +
+		"{\"type\":\"turn.started\"}\n" +
+		"{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"{\\\"result\\\":\\\"UNCERTAIN\\\",\\\"validation\\\":\\\"UNKNOWN\\\",\\\"findings\\\":[{\\\"code\\\":\\\"SCOPE\\\",\\\"message\\\":\\\"The packet does not include enough context to assess the change.\\\"}]}\"}}\n" +
+		"{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":18850,\"output_tokens\":73}}\n"
+	parsed, err := ParseCodexEnvelope([]byte(stdout), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.ConversationID != "01a12f70-f454-7ba0-9ccb-259e58d05bcd" || parsed.Response["result"] != Uncertain {
+		t.Fatalf("parsed Codex review = %#v", parsed)
+	}
+}
+
 func TestResultMappingsGolden(t *testing.T) {
 	data, err := os.ReadFile("testdata/results/mappings.json")
 	if err != nil {

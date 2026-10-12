@@ -46,12 +46,12 @@ func TestAdapterGoldens(t *testing.T) {
 				}
 				command, err = adapter.BuildCommand(prompt, schema, config, CommandOptions{RepositoryRoot: repository})
 			} else {
-				cwd, err := filepath.Abs(filepath.Join("tmp", "worker"))
-				if err != nil {
-					t.Fatal(err)
-				}
+				cwd := t.TempDir()
 				command, err = adapter.BuildCommand(prompt, schema, config, CommandOptions{WorkingDirectory: cwd})
 				want.Argv[9] = cwd
+				if name == "codex" {
+					want.Argv[11] = filepath.Join(cwd, "reviewer1-output-schema.json")
+				}
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -201,6 +201,35 @@ func TestCodexReviewerLaunchCarriesAndValidatesEffort(t *testing.T) {
 	config["reviewer1_effort"] = "unbounded"
 	if _, err := adapter.BuildCommand("review", map[string]any{"type": "object"}, config, CommandOptions{WorkingDirectory: cwd}); err == nil {
 		t.Fatal("unsupported Codex reviewer effort was accepted")
+	}
+}
+
+func TestCodexReviewerLaunchCarriesOutputSchema(t *testing.T) {
+	adapter, err := ReviewerAdapter("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	command, err := adapter.BuildCommand("review", reviewSchema, map[string]any{
+		"reviewer1_executable": filepath.Join(cwd, "codex"), "reviewer1_model_requested": "gpt-6-luna",
+	}, CommandOptions{WorkingDirectory: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := flagValue(command, "--output-schema")
+	if path == "" {
+		t.Fatalf("Codex reviewer command omitted output schema: %#v", command)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema["additionalProperties"] != false || len(schema["required"].([]any)) != len(schema["properties"].(map[string]any)) {
+		t.Fatalf("Codex output schema is not strict: %#v", schema)
 	}
 }
 

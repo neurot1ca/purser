@@ -3,6 +3,7 @@ package review
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -164,7 +165,15 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 		if err != nil {
 			return nil, err
 		}
-		command := []string{executable, "exec", "--json", "--skip-git-repo-check", "-s", "read-only", "-c", `approval_policy="never"`, "-C", cwd}
+		encoded, err := canonicalJSON(schema)
+		if err != nil {
+			return nil, err
+		}
+		schemaPath := filepath.Join(cwd, "reviewer1-output-schema.json")
+		if err := os.WriteFile(schemaPath, encoded, 0600); err != nil {
+			return nil, err
+		}
+		command := []string{executable, "exec", "--json", "--skip-git-repo-check", "-s", "read-only", "-c", `approval_policy="never"`, "-C", cwd, "--output-schema", schemaPath}
 		if model != nil && model != "" {
 			command = append(command, "-m", model.(string))
 		}
