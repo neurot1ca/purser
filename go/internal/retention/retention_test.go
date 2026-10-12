@@ -53,6 +53,48 @@ func TestRemoveOldPrefixedEntries(t *testing.T) {
 	}
 }
 
+func TestRemoveOldPrefixedEntriesKeepsRecentNestedFile(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	dir := filepath.Join(root, "go-build-active")
+	buildDir := filepath.Join(dir, "b001")
+	putFile(t, filepath.Join(buildDir, "jobs.test"), []byte("running"), now.Unix())
+	old := now.Add(-48 * time.Hour)
+	for _, path := range []string{dir, buildDir} {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	RemoveOldPrefixedEntries(root, now.Add(23*time.Hour), 24*time.Hour, []string{"go-build"})
+	if _, err := os.Stat(filepath.Join(dir, "b001", "jobs.test")); err != nil {
+		t.Fatalf("recent nested file removed: %v", err)
+	}
+}
+
+func TestRemoveOldPrefixedEntriesDoesNotFollowSymlink(t *testing.T) {
+	root := t.TempDir()
+	external := filepath.Join(t.TempDir(), "fresh")
+	entry := filepath.Join(root, "go-build-stale")
+	link := filepath.Join(entry, "external")
+	if err := os.MkdirAll(entry, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(external, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	now := time.Now().Add(48 * time.Hour)
+	if err := os.Chtimes(external, now.Add(time.Hour), now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	RemoveOldPrefixedEntries(root, now, 24*time.Hour, []string{"go-build"})
+	if _, err := os.Stat(entry); !os.IsNotExist(err) {
+		t.Fatalf("stale entry was kept by a fresh symlink target: %v", err)
+	}
+}
+
 func TestSafeRootAllowsSymlinkedTempAncestor(t *testing.T) {
 	base := t.TempDir()
 	real := filepath.Join(base, "real")

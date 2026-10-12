@@ -70,11 +70,35 @@ func RemoveOldPrefixedEntries(root string, now time.Time, age time.Duration, pre
 		if !matched {
 			continue
 		}
-		info, err := entry.Info()
-		if err == nil && now.Sub(info.ModTime()) >= age {
-			_ = os.RemoveAll(filepath.Join(root, entry.Name()))
+		path := filepath.Join(root, entry.Name())
+		newest, err := newestTreeMtime(path)
+		if err == nil && now.Sub(newest) >= age {
+			_ = os.RemoveAll(path)
 		}
 	}
+}
+
+func newestTreeMtime(root string) (time.Time, error) {
+	var newest time.Time
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		var info fs.FileInfo
+		if entry.Type()&fs.ModeSymlink != 0 {
+			info, err = os.Lstat(path)
+		} else {
+			info, err = entry.Info()
+		}
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		return nil
+	})
+	return newest, err
 }
 
 func PrunePluginCache(executable string) {

@@ -41,6 +41,10 @@ type worktreeListing struct {
 
 // CleanupJobs performs MCP startup maintenance without requiring Python.
 func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr error) {
+	return cleanupJobs(stateRoot, os.TempDir(), now, checkCeiling)
+}
+
+func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (cleanupErr error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			cleanupErr = fmt.Errorf("panic: %v", recovered)
@@ -60,7 +64,7 @@ func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr
 	}
 	sweepTemporaryDirectories(root, now)
 	retention.RemoveOldPrefixedEntries(filepath.Join(root, "cache", "go-tmp"), now, 24*time.Hour, []string{""})
-	retention.RemoveOldPrefixedEntries(os.TempDir(), now, 24*time.Hour, []string{"purser-", "reviewer1-", "readiness-check-", "go-build"})
+	retention.RemoveOldPrefixedEntries(tempRoot, now, 24*time.Hour, []string{"purser-", "reviewer1-", "readiness-check-", "go-build"})
 	trimPurserGoCache(root)
 	if err = recoverRetiringWorktrees(root); err != nil {
 		return fmt.Errorf("recover retiring worktrees: %w", err)
