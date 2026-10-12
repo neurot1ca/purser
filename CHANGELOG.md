@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.139 — 2026-10-12
+
+- **New:** `/purser:reviewer` lists the reviewers installed on this machine (Codex luna, Claude Haiku, agy, a DeepSeek model through OpenCode) and lets you switch Reviewer-1 or turn it off without rerunning init.
+
 ## 0.1.138 — 2026-10-12
 
 - **Fixed:** a Codex Reviewer-1 receives the review packet in its prompt, so it can no longer answer REVIEWER1_UNAVAILABLE without reading the packet.
