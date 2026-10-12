@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.136 — 2026-10-12
+
+- **Fixed:** agy as Reviewer-1 receives the review packet in its prompt instead of having to read a file it was not allowed to read, so it returns a review instead of timing out; a denied tool now fails fast as REVIEWER_TOOL_DENIED.
+
 ## 0.1.135 — 2026-10-12
 
 - **Fixed:** A Codex Reviewer-1 receives the review schema, so its answer is no longer rejected as REVIEWER_RESPONSE_INVALID.
