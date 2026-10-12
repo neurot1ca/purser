@@ -88,7 +88,7 @@ Every implementation and operation job runs through a `purser:dispatcher`
 agent: start one fresh dispatcher (a new Agent call) per job, after main
 Claude fixes the design, route, scope, authority, and acceptance criteria.
 Pass the exact worker prompt, including its `ORCH` line, and the exact tool
-arguments. Keep dispatcher instructions outside the worker prompt. The
+arguments. Keep dispatcher instructions outside the worker prompt. Name background work for the user: the Agent description is the job's label in the user's language, and a host test run's description is `Tests: <label>` in the user's language; never a job ID. The
 dispatcher runs in the background; keep talking with the user meanwhile.
 
 Main Claude keeps routing, semantic review, disagreement resolution,
