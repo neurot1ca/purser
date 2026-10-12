@@ -70,8 +70,8 @@ func nativeFixture(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	source := `package main
-import ("fmt"; "os"; "strings"; "time")
-func main() { if d := os.Getenv("MOCK_SLEEP_MS"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); time.Sleep(time.Duration(n)*time.Millisecond) }; output := os.Getenv("MOCK_OUTPUT"); if d := os.Getenv("MOCK_OUTPUT_SIZE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); output = strings.Repeat("x", n) }; fmt.Print(output); if d := os.Getenv("MOCK_EXIT_CODE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); os.Exit(n) } }`
+import ("fmt"; "io"; "os"; "strings"; "time")
+func main() { if path := os.Getenv("MOCK_CAPTURE_STDIN"); path != "" { b, _ := io.ReadAll(os.Stdin); _ = os.WriteFile(path, b, 0600) }; if d := os.Getenv("MOCK_SLEEP_MS"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); time.Sleep(time.Duration(n)*time.Millisecond) }; output := os.Getenv("MOCK_OUTPUT"); if d := os.Getenv("MOCK_OUTPUT_SIZE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); output = strings.Repeat("x", n) }; fmt.Print(output); if d := os.Getenv("MOCK_EXIT_CODE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); os.Exit(n) } }`
 	src := filepath.Join(dir, "mock.go")
 	if err := os.WriteFile(src, []byte(source), 0600); err != nil {
 		t.Fatal(err)
@@ -158,6 +158,67 @@ func TestNativeRunBridgeInvalidResponseAndIncompletePacket(t *testing.T) {
 	got, err = RunBridge(context.Background(), root, args, 30*time.Second)
 	if err != nil || got.Outcome != "incomplete" || got.Attributes["review_status"] != "NOT_RUN_INCOMPLETE_PACKET" {
 		t.Fatalf("incomplete packet = %#v, %v", got, err)
+	}
+}
+
+func TestAgyCommandCarriesPacketWithoutToolRead(t *testing.T) {
+	root, bin := nativeFixture(t)
+	packet := []byte(`{"task":"review this"}`)
+	prompt := reviewerPromptWithPacket(packet)
+	adapter, err := ReviewerAdapter("agy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := adapter.BuildCommand(prompt, reviewSchema, map[string]any{
+		"reviewer1_executable": bin, "reviewer1_model_requested": pinnedModel,
+	}, CommandOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(command, " "), "REVIEW_PACKET_PATH=") || !strings.Contains(strings.Join(command, " "), string(packet)) {
+		t.Fatalf("agy command does not carry packet content inline: %#v", command)
+	}
+	large := strings.Repeat("x", agyInlinePromptLimit)
+	largePrompt := reviewerPromptWithPacket([]byte(large))
+	largeCommand, err := adapter.BuildCommand(largePrompt, reviewSchema, map[string]any{
+		"reviewer1_executable": bin, "reviewer1_model_requested": pinnedModel,
+	}, CommandOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFlag(largeCommand, "--input-format", "stream-json") || hasFlag(largeCommand, "--output-format", "json") {
+		t.Fatalf("large agy prompt must use stream-json stdin: %#v", largeCommand)
+	}
+	stdinPath := filepath.Join(root, "agy-stdin.jsonl")
+	t.Setenv("MOCK_CAPTURE_STDIN", stdinPath)
+	t.Setenv("MOCK_OUTPUT", envelope(NoMaterialFinding, []map[string]string{}))
+	if _, _, _, _, callErr, _, _ := invokePacket(context.Background(), adapter, largeCommand, largePrompt, root, 3*time.Second); callErr != "" {
+		t.Fatalf("large prompt invocation failed: %s", callErr)
+	}
+	stdin, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message struct {
+		Event   string `json:"event"`
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(stdin, &message); err != nil || message.Event != "user" || message.Message.Content != largePrompt {
+		t.Fatalf("stream-json stdin did not carry the full packet prompt: event=%q content_bytes=%d err=%v", message.Event, len(message.Message.Content), err)
+	}
+}
+
+func TestNativeAgyEmptyResponseWithDeniedActionsFailsFast(t *testing.T) {
+	root, bin := nativeFixture(t)
+	args := nativeArgs(root, bin, NoMaterialFinding)
+	isolateReviewerPath(t)
+	t.Setenv("MOCK_OUTPUT", `{"conversation_id":"mock-1","status":"SUCCESS","response":"","duration_seconds":0.01,"num_turns":1,"usage":{},"structured_output":"","denied_actions":[{"action":"command","display_name":"RunCommand"}]}`)
+	started := time.Now()
+	got, err := RunBridge(context.Background(), root, args, 30*time.Second)
+	if err != nil || got.Outcome != "unavailable" || got.Attributes["error_code"] != "REVIEWER_TOOL_DENIED" || time.Since(started) > 3*time.Second {
+		t.Fatalf("denied tool response = %#v, %v, elapsed %s", got, err, time.Since(started))
 	}
 }
 

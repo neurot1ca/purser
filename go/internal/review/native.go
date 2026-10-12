@@ -358,7 +358,11 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer-1 response or configuration was invalid (ValueError): "+err.Error(), config, provider))
 	}
 	options := CommandOptions{WorkingDirectory: working, RepositoryRoot: root}
-	command, err := adapter.BuildCommand(ReviewPrompt(packetPath), reviewSchema, config, options)
+	prompt := ReviewPrompt(packetPath)
+	if provider == "agy" {
+		prompt = reviewerPromptWithPacket(ready.Encoded)
+	}
+	command, err := adapter.BuildCommand(prompt, reviewSchema, config, options)
 	if err != nil {
 		code := ResponseInvalid
 		var refused *CommandRefused
@@ -367,7 +371,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		}
 		return bridgeOutcome(Unavailable(code, "Reviewer-1 response or configuration was invalid ("+errorType(err)+"): "+err.Error(), config, provider))
 	}
-	stdout, stderr, elapsed, retries, callErr, exitCode, evidence := invokePacket(ctx, adapter, command, working, remaining)
+	stdout, stderr, elapsed, retries, callErr, exitCode, evidence := invokePacket(ctx, adapter, command, prompt, working, remaining)
 	if callErr != "" {
 		unavailable := Unavailable(callErr, reviewerFailureMessage(callErr, retries, exitCode), config, provider)
 		unavailable.ElapsedSeconds = nativeFloatPtr(elapsed.Seconds())
@@ -386,7 +390,13 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	}
 	parsed, err := adapter.ParseEnvelope(string(stdout))
 	if err != nil {
-		unavailable := Unavailable(ResponseInvalid, fmt.Sprintf("Reviewer-1 response or configuration was invalid (%s): %s", errorType(err), err.Error())+retrySuffix(retries), config, provider)
+		code := ResponseInvalid
+		message := fmt.Sprintf("Reviewer-1 response or configuration was invalid (%s): %s", errorType(err), err.Error())
+		if errors.Is(err, errAgyToolDenied) {
+			code = "REVIEWER_TOOL_DENIED"
+			message = "Reviewer-1 could not produce a review because a required tool was denied."
+		}
+		unavailable := Unavailable(code, message+retrySuffix(retries), config, provider)
 		unavailable.RawStdout = textPtr(lastBytes(stdout, 262144))
 		detail := err.Error()
 		if len(detail) > 200 {
@@ -488,7 +498,7 @@ func diagnosticReviewerArgv(command []string) []string {
 	return argv
 }
 
-func invokePacket(parent context.Context, adapter Adapter, command []string, cwd string, timeout time.Duration) ([]byte, string, time.Duration, int, string, int, map[string]any) {
+func invokePacket(parent context.Context, adapter Adapter, command []string, prompt, cwd string, timeout time.Duration) ([]byte, string, time.Duration, int, string, int, map[string]any) {
 	started := time.Now()
 	retried := 0
 	for {
@@ -500,6 +510,10 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, cwd
 		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 		cmd.Dir = cwd
 		cmd.Env = os.Environ()
+		if adapter.Provider() == "agy" && hasFlag(command, "--input-format", "stream-json") {
+			input, _ := json.Marshal(map[string]any{"event": "user", "message": map[string]string{"content": prompt}})
+			cmd.Stdin = bytes.NewReader(append(input, '\n'))
+		}
 		for key, value := range adapter.Environment(command) {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}

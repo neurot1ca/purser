@@ -23,6 +23,7 @@ const (
 
 var completedResults = map[string]bool{NoMaterialFinding: true, ChangesRequired: true, Uncertain: true}
 var allResults = map[string]bool{NoMaterialFinding: true, ChangesRequired: true, Uncertain: true, Reviewer1Unavailable: true}
+var errAgyToolDenied = errors.New("agy denied a required tool and returned an empty response")
 var envelopeFields = []string{"conversation_id", "status", "response", "duration_seconds", "num_turns", "usage"}
 var usageTokenFields = map[string]bool{
 	"input_tokens": true, "output_tokens": true, "total_tokens": true, "prompt_tokens": true,
@@ -218,7 +219,18 @@ func ParseEnvelope(adapter string, stdout []byte, includeMetadata bool) (ParsedE
 func ParseAgyEnvelope(stdout []byte, includeMetadata bool) (ParsedEnvelope, error) {
 	var envelope map[string]any
 	if err := decodeJSON(stdout, &envelope); err != nil {
-		return ParsedEnvelope{}, err
+		result, streamErr := agyStreamResult(stdout)
+		if streamErr != nil {
+			return ParsedEnvelope{}, err
+		}
+		return ParseAgyEnvelope(result, includeMetadata)
+	}
+	if envelope["event"] == "result" {
+		result, ok := envelope["result"].(map[string]any)
+		if !ok {
+			return ParsedEnvelope{}, errors.New("agy stream result has an unexpected shape")
+		}
+		envelope = result
 	}
 	for _, key := range envelopeFields {
 		if _, ok := envelope[key]; !ok {
@@ -239,6 +251,11 @@ func ParseAgyEnvelope(stdout []byte, includeMetadata bool) (ParsedEnvelope, erro
 	if !dok || duration < 0 || math.IsInf(duration, 0) || math.IsNaN(duration) || !tok || turns < 1 || !uok {
 		return ParsedEnvelope{}, errors.New("agy envelope metadata has an unexpected shape")
 	}
+	if response, ok := envelope["response"].(string); ok && response == "" {
+		if denied, ok := envelope["denied_actions"].([]any); ok && len(denied) > 0 {
+			return ParsedEnvelope{}, errAgyToolDenied
+		}
+	}
 	payload, err := structuredPayload(envelope)
 	if err != nil {
 		return ParsedEnvelope{}, err
@@ -254,6 +271,23 @@ func ParseAgyEnvelope(stdout []byte, includeMetadata bool) (ParsedEnvelope, erro
 		parsed.Usage = usageTokens(usage)
 	}
 	return parsed, nil
+}
+
+func agyStreamResult(stdout []byte) ([]byte, error) {
+	var result json.RawMessage
+	for _, line := range bytes.Split(stdout, []byte("\n")) {
+		var event struct {
+			Event  string          `json:"event"`
+			Result json.RawMessage `json:"result"`
+		}
+		if json.Unmarshal(line, &event) == nil && event.Event == "result" && len(event.Result) > 0 {
+			result = event.Result
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("agy stream has no result event")
+	}
+	return result, nil
 }
 
 // ParseAgyStructuredPayload validates the common agy envelope while leaving

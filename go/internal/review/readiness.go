@@ -112,7 +112,8 @@ func RunReadiness(ctx context.Context, pluginRoot string, request ReadinessReque
 			}
 		}
 	}
-	command, err := adapter.BuildCommand(readinessPrompt(packetPath), readinessSchema, config, CommandOptions{WorkingDirectory: working, RepositoryRoot: repository})
+	prompt := readinessPrompt(packetPath)
+	command, err := adapter.BuildCommand(prompt, readinessSchema, config, CommandOptions{WorkingDirectory: working, RepositoryRoot: repository})
 	if err != nil {
 		return unknownReadiness(), err
 	}
@@ -127,7 +128,7 @@ func RunReadiness(ctx context.Context, pluginRoot string, request ReadinessReque
 	if !modelBound {
 		return unknownReadiness(), errors.New("readiness model could not be bound to the checker command")
 	}
-	stdout, _, _, _, callErr, _, _ := invokePacket(ctx, adapter, command, working, timeout)
+	stdout, _, _, _, callErr, _, _ := invokePacket(ctx, adapter, command, prompt, working, timeout)
 	if callErr != "" {
 		return unknownReadiness(), &BridgeError{Code: callErr}
 	}

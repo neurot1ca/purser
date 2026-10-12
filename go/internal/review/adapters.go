@@ -14,6 +14,9 @@ import (
 )
 
 var reviewerCommands = map[string]string{"agy": "agy", "opencode": "opencode", "codex": "codex", "claude": "claude"}
+
+const agyInlinePromptLimit = 12 * 1024
+
 var openCodePermissions = map[string]string{"edit": "ask", "write": "ask", "bash": "ask", "webfetch": "ask", "task": "ask", "external_directory": "ask"}
 
 const (
@@ -133,7 +136,13 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 		if err != nil {
 			return nil, err
 		}
-		command := []string{executable, "--print", prompt, "--output-format", "json", "--json-schema", string(encoded), "--model", model.(string), "--mode", "plan", "--sandbox"}
+		command := []string{executable}
+		if len(prompt) > agyInlinePromptLimit {
+			command = append(command, "--input-format", "stream-json", "--output-format", "stream-json")
+		} else {
+			command = append(command, "--print", prompt, "--output-format", "json")
+		}
+		command = append(command, "--json-schema", string(encoded), "--model", model.(string), "--mode", "plan", "--sandbox")
 		for _, dir := range options.AddDirs {
 			resolved, err := resolveReviewerPath(dir)
 			if err != nil {
@@ -330,4 +339,8 @@ func flagValue(command []string, name string) string {
 }
 func ReviewPrompt(path string) string {
 	return "You are Reviewer-1. Read and review only the JSON packet at the exact path below. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + path
+}
+
+func reviewerPromptWithPacket(packet []byte) string {
+	return "You are Reviewer-1. Review only the complete JSON packet included below. Do not inspect files or run commands. Do not infer hidden reasoning or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_JSON:\n" + string(packet)
 }
