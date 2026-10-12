@@ -359,7 +359,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	}
 	options := CommandOptions{WorkingDirectory: working, RepositoryRoot: root}
 	prompt := ReviewPrompt(packetPath)
-	if provider == "agy" {
+	if provider == "agy" || provider == "codex" {
 		prompt = reviewerPromptWithPacket(ready.Encoded)
 	}
 	command, err := adapter.BuildCommand(prompt, reviewSchema, config, options)
@@ -513,6 +513,8 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, pro
 		if adapter.Provider() == "agy" && hasFlag(command, "--input-format", "stream-json") {
 			input, _ := json.Marshal(map[string]any{"event": "user", "message": map[string]string{"content": prompt}})
 			cmd.Stdin = bytes.NewReader(append(input, '\n'))
+		} else if adapter.Provider() == "codex" && len(command) > 1 && command[len(command)-1] == "-" {
+			cmd.Stdin = bytes.NewReader([]byte(prompt))
 		}
 		for key, value := range adapter.Environment(command) {
 			cmd.Env = append(cmd.Env, key+"="+value)

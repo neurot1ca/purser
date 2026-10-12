@@ -210,6 +210,46 @@ func TestAgyCommandCarriesPacketWithoutToolRead(t *testing.T) {
 	}
 }
 
+func TestCodexCommandCarriesPacketOnStdin(t *testing.T) {
+	root, bin := nativeFixture(t)
+	codexBin := filepath.Join(root, "codex"+filepath.Ext(bin))
+	mock, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexBin, mock, 0700); err != nil {
+		t.Fatal(err)
+	}
+	packet := []byte(`{"task":"review this"}`)
+	prompt := reviewerPromptWithPacket(packet)
+	adapter, err := ReviewerAdapter("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := adapter.BuildCommand(prompt, reviewSchema, map[string]any{
+		"reviewer1_executable": codexBin, "reviewer1_model_requested": "gpt-6-luna",
+	}, CommandOptions{WorkingDirectory: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command[len(command)-1] != "-" {
+		t.Fatalf("codex prompt argument = %q, want stdin marker -", command[len(command)-1])
+	}
+	stdinPath := filepath.Join(root, "codex-stdin.txt")
+	t.Setenv("MOCK_CAPTURE_STDIN", stdinPath)
+	t.Setenv("MOCK_OUTPUT", envelope(NoMaterialFinding, []map[string]string{}))
+	if _, stderr, _, _, callErr, exitCode, _ := invokePacket(context.Background(), adapter, command, prompt, root, 3*time.Second); callErr != "" {
+		t.Fatalf("codex invocation failed: %s (exit %d, stderr %q)", callErr, exitCode, stderr)
+	}
+	stdin, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stdin) != prompt || !strings.Contains(string(stdin), string(packet)) {
+		t.Fatalf("codex stdin does not carry the complete packet prompt: got %q", stdin)
+	}
+}
+
 func TestNativeAgyEmptyResponseWithDeniedActionsFailsFast(t *testing.T) {
 	root, bin := nativeFixture(t)
 	args := nativeArgs(root, bin, NoMaterialFinding)

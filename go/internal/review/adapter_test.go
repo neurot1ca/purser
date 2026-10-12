@@ -51,6 +51,7 @@ func TestAdapterGoldens(t *testing.T) {
 				want.Argv[9] = cwd
 				if name == "codex" {
 					want.Argv[11] = filepath.Join(cwd, "reviewer1-output-schema.json")
+					want.Argv[len(want.Argv)-1] = "-"
 				}
 			}
 			if err != nil {

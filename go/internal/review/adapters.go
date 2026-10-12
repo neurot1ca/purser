@@ -193,7 +193,7 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 			}
 			command = append(command, "-c", `model_reasoning_effort="`+effort+`"`)
 		}
-		return append(command, prompt), nil
+		return append(command, "-"), nil
 	case "claude":
 		effort, _ := config["reviewer1_effort"].(string)
 		if !claudeReviewerEfforts[effort] {
