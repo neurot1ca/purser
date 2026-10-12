@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.133 — 2026-10-12
+
+- **Fixed:** Asynchronous job finishes record the job's real run time instead of the result call's few milliseconds, so the duration-accuracy notice no longer reports absurd error rates.
+- **Fixed:** Codex jobs without a worktree also get the shared, writable Go build cache.
+
 ## 0.1.132 — 2026-10-12
 
 - **Fixed:** Replay git commands enable core.longpaths, so long paths no longer fail replay preparation on Windows.
