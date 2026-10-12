@@ -193,6 +193,8 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
   }
 }
 
+const projectKeys = new Map<string, string>()
+
 async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
   const os = await $.env.get('OS')
   const [purserState, claudeConfig, home] = await Promise.all([
@@ -202,9 +204,14 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
   ])
   const runtime = stateRoot({ purserState, claudeConfig, home })
   if (!runtime) throw new Error('home directory unavailable')
-  const rootResult = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 1000 })
-  if (rootResult.exitCode !== 0) throw new Error('project root unavailable')
-  const key = await projectKeyFromRoot(rootResult.stdout.trim(), os)
+  let key = projectKeys.get(cwd)
+  if (key === undefined) {
+    // A busy machine can take seconds to start git; the key is cached so it runs once per folder.
+    const rootResult = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 10_000 })
+    if (rootResult.exitCode !== 0) throw new Error('project root unavailable')
+    key = await projectKeyFromRoot(rootResult.stdout.trim(), os)
+    projectKeys.set(cwd, key)
+  }
   let entries
   try { entries = await $.fs.list(`${runtime}/async_jobs`) }
   catch (error) {
@@ -262,8 +269,15 @@ export function registerBoard(on) {
         $.clock.every(5000, () => $.ui.invalidate('ui.render'))
       }
       const target = await $.session.cwd()
-      const board = await readBoard($, target)
-      latestBoard = board
+      let board: JobBoard | undefined
+      try {
+        board = await readBoard($, target)
+        latestBoard = board
+      } catch {
+        // A failed refresh keeps the last board on screen instead of hiding it.
+        await reportOnce($, 'Purser job board refresh failed; turn continued unchanged.')
+        board = latestBoard
+      }
       if (!board) return prior
       const { Box, Text, Button } = $.ui.resolve(e)
       const content = board.summary.map((part, index) => Text({
