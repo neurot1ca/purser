@@ -3,6 +3,18 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.142 — 2026-10-12
+
+- **New:** Purser shows the Codex completion receipt itself, in the user's language; Claude no longer writes it.
+- **New:** accepted plan milestones launch as soon as their declared dependencies are done, and `plan complete-milestone --milestone N` completes only the named milestone.
+- **New:** large FULL reviews get a file and hunk index first, and fix send-backs record which Reviewer-1 findings they answer.
+- **New:** Reviewer-1 packets include out-of-scope changes as whole-file excerpts with a partial-coverage marker; weakened tests are flagged in the bundle.
+- **Changed:** a confirmed pre-work capacity failure retries the same launch up to two times; an empty waiter exit re-observes the job instead of relaunching.
+- **Changed:** background task names use the job label in the user's language, never a job ID.
+- **Fixed:** Purser no longer fills the disk: each Codex job gets its own temp folder removed at job end, its own temp folders live under the state root, stale Purser and Go temp leftovers are swept, and the Go cache is trimmed above 2 GiB.
+- **Fixed:** Codex workers' Go tests can write Go telemetry, so they no longer fail with access denied.
+- **Fixed:** a maintenance notice drops findings whose file or test changed since the report, and is hidden when none remain.
+
 ## 0.1.141 — 2026-10-12
 
 - **New:** `/purser:coder-effort low|medium|high|xhigh|auto` sets the Codex coder's thinking effort for new jobs in a project, keeping the routed model.
