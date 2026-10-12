@@ -6,6 +6,7 @@ import { registerUsage } from './mod/usage.js'
 import { register as registerEnforcement } from './mod/enforcement.js'
 import { registerAutoCompact } from './mod/autocompact.js'
 import { registerLanguage } from './mod/language.js'
+import { registerQuotaWake } from './mod/quotawake.js'
 
 const reported = new Set<string>()
 const lifecycleReported = new Set<string>()
@@ -66,6 +67,7 @@ export function register(on) {
   registerEnforcement(on)
   registerAutoCompact(on)
   registerLanguage(on)
+  registerQuotaWake(on)
 
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     let sessionId = ''
