@@ -55,6 +55,45 @@ func SameFamily(a, b string) bool {
 	return a == b || newerVersion(a, []string{b}) != "" || newerVersion(b, []string{a}) != ""
 }
 
+// CodexSupportsEffort checks an effort against the installed Codex model listing.
+func CodexSupportsEffort(model, effort string) bool {
+	binary, args := listingCommand("codex")
+	if binary == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, args...)
+	output, err := runListingCommand(command)
+	if err != nil {
+		return false
+	}
+	var listing struct {
+		Models []struct {
+			Slug       string `json:"slug"`
+			Visibility string `json:"visibility"`
+			Levels     []struct {
+				Effort string `json:"effort"`
+			} `json:"supported_reasoning_levels"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(output, &listing) != nil || listing.Models == nil {
+		return false
+	}
+	for _, item := range listing.Models {
+		if item.Slug != model || item.Visibility != "list" {
+			continue
+		}
+		for _, level := range item.Levels {
+			if level.Effort == effort {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
 // AtLeast accepts the floor or a newer ID in its family.
 func AtLeast(floor, model string) bool {
 	return model == floor || newerVersion(floor, []string{model}) != ""

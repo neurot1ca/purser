@@ -24,6 +24,7 @@ import (
 )
 
 var afterPreMetadata = func() {}
+var supportsPreCoderEffort = models.CodexSupportsEffort
 var planMilestoneTaskID = regexp.MustCompile(`^(.+)-m([0-9]+)of([0-9]+)$`)
 
 func init() {
@@ -172,6 +173,12 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		*route.Model = models.ResolveLatest(stringValue(config["coder_agent"]), *route.Model)
 	} else if liveModel := stringValue(live["model"]); models.SameFamily(*route.Model, liveModel) {
 		*route.Model = liveModel
+	}
+	if !reply && root != nil && config["coder_agent"] == "codex" {
+		if effort, effortErr := contextio.CoderEffort(defaultPreStateRoot(runtimeRoot), projectKey(root)); effortErr == nil && effort != "" &&
+			supportsPreCoderEffort(*route.Model, effort) {
+			*route.Effort = effort
+		}
 	}
 	bypassMetadata["task_id"], bypassMetadata["phase"], bypassMetadata["route"] = *parsed.TaskID, *parsed.Phase, *parsed.Route
 	bypassMetadata["model"], bypassMetadata["effort"], bypassMetadata["scope"] = *route.Model, *route.Effort, stringSliceAny(parsed.Scope)

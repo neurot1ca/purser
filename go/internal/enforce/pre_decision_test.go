@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/testutil"
 	"strings"
 	"testing"
@@ -404,6 +405,86 @@ func TestPreWorktreeReplyQueuesOnlyOnHotOverlap(t *testing.T) {
 			}
 			if queued := updated["leaseQueued"] == true; queued != tc.wantQueued {
 				t.Fatalf("leaseQueued=%v, want %v; input=%#v", queued, tc.wantQueued, updated)
+			}
+		})
+	}
+}
+
+func TestPreCoderEffortOverrideOnlyForSupportedNewCodexStarts(t *testing.T) {
+	oldSupport := supportsPreCoderEffort
+	t.Cleanup(func() { supportsPreCoderEffort = oldSupport })
+	for _, tc := range []struct {
+		name, override, wantEffort string
+		supported, reply           bool
+	}{
+		{name: "supported start keeps routed model", override: "xhigh", wantEffort: "xhigh", supported: true},
+		{name: "unsupported falls back", override: "xhigh", wantEffort: "medium"},
+		{name: "reply ignores override", override: "low", wantEffort: "high", reply: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scratch := preTempDir(t)
+			repo, state := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+			if err := os.MkdirAll(repo, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v %s", err, out)
+			}
+			home := filepath.Join(scratch, "home")
+			if err := os.MkdirAll(home, 0700); err != nil {
+				t.Fatal(err)
+			}
+			pluginRoot := filepath.Join(scratch, "plugin")
+			configSource, err := filepath.Abs(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range map[string]string{"HOME": home, "USERPROFILE": home, "HOMEDRIVE": "", "HOMEPATH": "", "PURSER_STATE_DIR": state, "CLAUDE_PLUGIN_ROOT": pluginRoot, "CODEX_HOME": filepath.Join(scratch, "codex")} {
+				t.Setenv(key, value)
+			}
+			if err := contextio.SetCoderEffort(state, projectKey(&repo), tc.override); err != nil {
+				t.Fatal(err)
+			}
+			configData, err := os.ReadFile(configSource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json")
+			if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(configPath, configData, 0600); err != nil {
+				t.Fatal(err)
+			}
+			tool, task, route, thread := "mcp__codex-main__codex_start", "effort-task", "normal", ""
+			mode := "new"
+			if tc.reply {
+				seedPreThread(t, repo, state)
+				tool, task, route, thread, mode = "mcp__codex-main__codex-reply", "task-recorded", "subtle", "thread-p63", "reply"
+			}
+			prompt := "ORCH|task=" + task + "|phase=implementation|route=" + route + "|reason=new_task|basis=bounded effort test|scope=src/a.go\nImplement."
+			input := map[string]any{"mode": mode, "cwd": repo, "prompt": prompt}
+			if thread != "" {
+				input["threadId"] = thread
+			}
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": "effort-" + tc.name,
+				"session_id": "effort-session", "cwd": repo, "tool_input": input}
+			supportsPreCoderEffort = func(model, effort string) bool {
+				return tc.supported && model != "" && effort == tc.override
+			}
+			got, err := Pre(event, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := mapValue(got["hookSpecificOutput"])
+			if output["permissionDecision"] == "deny" {
+				t.Fatalf("effort case denied: %#v", got)
+			}
+			if !strings.Contains(stringValue(got["systemMessage"]), " / "+tc.wantEffort) {
+				t.Fatalf("dispatch effort = %q, want %q: %#v", got["systemMessage"], tc.wantEffort, got)
+			}
+			if !tc.reply && mapValue(output["updatedInput"])["model"] != "gpt-6.1-sol" {
+				t.Fatalf("effort override changed routed model: %#v", output["updatedInput"])
 			}
 		})
 	}

@@ -69,3 +69,22 @@ func TestGearStateValidationFailureAndConcurrentUpdates(t *testing.T) {
 		t.Fatalf("gear down did not restore normal routing: %v, %v", up, err)
 	}
 }
+
+func TestCoderEffortStateSetAndAutoClear(t *testing.T) {
+	root, key := t.TempDir(), "0123456789abcdef"
+	if effort, err := CoderEffort(root, key); err != nil || effort != "" {
+		t.Fatalf("missing effort = %q, %v", effort, err)
+	}
+	if err := SetCoderEffort(root, key, "xhigh"); err != nil {
+		t.Fatal(err)
+	}
+	if effort, err := CoderEffort(root, key); err != nil || effort != "xhigh" {
+		t.Fatalf("set effort = %q, %v", effort, err)
+	}
+	if err := SetCoderEffort(root, key, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if effort, err := CoderEffort(root, key); err != nil || effort != "" {
+		t.Fatalf("auto effort = %q, %v", effort, err)
+	}
+}
