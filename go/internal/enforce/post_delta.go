@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/review"
 )
 
 // assemblePostDelta mirrors the delta selection and attribution block in
@@ -110,6 +111,17 @@ func assemblePostDelta(repoRoot string, pending, bundle map[string]any, protecte
 	}
 	if delta["status"] == ledger.OK {
 		changed, _ := postStringList(delta["changed_paths"])
+		if len(changed) > 0 {
+			if _, diff, diffErr := review.DelegatedDiff(deltaRoot, delta); diffErr == nil {
+				for _, candidate := range review.TestWeakeningCandidates(diff) {
+					code := "TEST_ASSERTION_REMOVED_CANDIDATE"
+					if strings.Contains(candidate, "TEST_SKIP_ADDED") {
+						code = "TEST_SKIP_ADDED_CANDIDATE"
+					}
+					bundle["findings"] = appendPostFinding(bundle["findings"], code, candidate+"; inspect manually, not a confirmed weakening.")
+				}
+			}
+		}
 		lines, _ := delta["changed_line_count"].(int)
 		files, _ := delta["changed_file_count"].(int)
 		bundle["changed_paths"], bundle["changed_path_count"], bundle["delta_lines"], bundle["delta_files"] = changed, len(changed), lines, files

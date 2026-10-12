@@ -76,6 +76,19 @@ func BuildMaterials(taskID, repoRoot string, delta, classification map[string]an
 	if err != nil {
 		return nil, err
 	}
+	changed, coverage := reviewCoverage(delta, paths)
+	if coverage.unknown {
+		// Keep the material packet usable for the attributable diff, but make the
+		// loss of a trustworthy coverage comparison explicit to the next reviewer.
+		changed = nil
+	}
+	if len(changed) > 0 {
+		outsideDiff, outsideErr := outOfScopeDiff(repoRoot, delta, changed, paths)
+		if outsideErr != nil {
+			return nil, outsideErr
+		}
+		diff += outsideDiff
+	}
 	var decision any = "UNKNOWN"
 	if classification != nil {
 		if value, ok := classification["decision"]; ok {
@@ -103,6 +116,15 @@ func BuildMaterials(taskID, repoRoot string, delta, classification map[string]an
 	if acceptanceCriteria != nil && strings.TrimSpace(*acceptanceCriteria) != "" {
 		criteria += " Specific Task Criteria: " + strings.TrimSpace(*acceptanceCriteria)
 	}
+	if coverage.unknown {
+		validationEvidence += " REVIEW COVERAGE UNKNOWN: changed paths could not be safely compared with the reviewed paths. FULL Claude review is required."
+	} else if len(coverage.outside) > 0 {
+		validationEvidence += " PARTIAL REVIEW COVERAGE: Reviewer-1 receives in-scope paths and the out-of-scope diff marked [[OUT OF SCOPE]] for: " + strings.Join(coverage.outside, ", ") + ". FULL Claude review is required."
+	}
+	weakening := TestWeakeningCandidates(diff)
+	if len(weakening) > 0 {
+		validationEvidence += " Test-change candidates (unconfirmed; inspect the cited diff hunk): " + strings.Join(weakening, "; ")
+	}
 	authority, err := authoritySlice(repoRoot, paths, authoritySources)
 	if err != nil {
 		return nil, err
@@ -114,6 +136,178 @@ func BuildMaterials(taskID, repoRoot string, delta, classification map[string]an
 		"delegated_diff":      diff,
 		"validation_summary":  fmt.Sprintf("%s Ledger delta: %s files, %s changed lines; concurrent-writer decision: %s. Raw agent output and full success logs were not forwarded.", validationEvidence, pythonValueString(delta["changed_file_count"]), pythonValueString(delta["changed_line_count"]), pythonValueString(decision)),
 	}, nil
+}
+
+type reviewCoverageResult struct {
+	outside []string
+	unknown bool
+}
+
+func reviewCoverage(delta map[string]any, reviewed []string) ([]string, reviewCoverageResult) {
+	changed, err := safeDeltaPaths(delta)
+	if err != nil {
+		return nil, reviewCoverageResult{unknown: true}
+	}
+	changedSet := map[string]bool{}
+	for _, path := range changed {
+		changedSet[path] = true
+	}
+	reviewedSet := map[string]bool{}
+	for _, path := range reviewed {
+		if !changedSet[path] {
+			return nil, reviewCoverageResult{unknown: true}
+		}
+		reviewedSet[path] = true
+	}
+	var outside []string
+	for _, path := range changed {
+		if !reviewedSet[path] {
+			outside = append(outside, path)
+		}
+	}
+	return changed, reviewCoverageResult{outside: outside}
+}
+
+func outOfScopeDiff(repo string, delta map[string]any, changed, reviewed []string) (string, error) {
+	_, coverage := reviewCoverage(map[string]any{"changed_paths": changed}, reviewed)
+	if coverage.unknown || len(coverage.outside) == 0 {
+		return "", nil
+	}
+	baseline, ok := delta["baseline_head"].(string)
+	if !ok || baseline == "" {
+		return "", fmt.Errorf("out-of-scope changed files have no baseline head")
+	}
+	diff, err := completePathDiff(repo, baseline, coverage.outside)
+	if err != nil {
+		return "", err
+	}
+	return markOutOfScopeDiff(diff), nil
+}
+
+func completePathDiff(repo, baseline string, paths []string) (string, error) {
+	pathspecs := make([]string, len(paths))
+	for i, path := range paths {
+		pathspecs[i] = ":(literal)" + path
+	}
+	args := append([]string{"diff", "--name-only", "--no-renames", "--no-ext-diff", "--no-textconv", baseline, "--"}, pathspecs...)
+	stdout, err := runGit(repo, args...)
+	if err != nil {
+		return "", err
+	}
+	names := linesSet(stdout)
+	args = append([]string{"diff", "--binary", "--no-renames", "--no-ext-diff", "--no-textconv", baseline, "--"}, pathspecs...)
+	tracked, err := runGit(repo, args...)
+	if err != nil {
+		return "", err
+	}
+	var additions strings.Builder
+	for _, path := range paths {
+		if !names[path] {
+			addition, err := newFileDiff(repo, path)
+			if err != nil {
+				return "", err
+			}
+			additions.WriteString(addition)
+		}
+	}
+	diff := tracked + additions.String()
+	if diff == "" {
+		return "", fmt.Errorf("the out-of-scope changed files produced no reviewable diff")
+	}
+	return diff, nil
+}
+
+func markOutOfScopeDiff(diff string) string {
+	var marked strings.Builder
+	for _, line := range strings.SplitAfter(diff, "\n") {
+		marked.WriteString(line)
+		if strings.HasPrefix(line, "diff --git ") {
+			marked.WriteString("[[OUT OF SCOPE]]\n")
+		}
+	}
+	return marked.String()
+}
+
+// TestWeakeningCandidates reports narrow textual candidates in test-file diffs.
+// It deliberately does not infer weakening when an assertion is replaced or relocated.
+func TestWeakeningCandidates(diff string) []string {
+	type change struct{ removed, added, hunks []string }
+	files := map[string]*change{}
+	path, hunk := "", ""
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "diff --git a/") {
+			parts := strings.SplitN(strings.TrimPrefix(line, "diff --git a/"), " b/", 2)
+			path, hunk = "", ""
+			if len(parts) == 2 {
+				path = parts[1]
+			}
+			if isTestDiffPath(path) {
+				files[path] = &change{}
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "@@") {
+			hunk = strings.Fields(line)[0]
+			continue
+		}
+		current := files[path]
+		if current == nil || len(line) == 0 {
+			continue
+		}
+		if line[0] == '-' && !strings.HasPrefix(line, "--- ") {
+			current.removed = append(current.removed, line[1:])
+			current.hunks = append(current.hunks, hunk)
+		} else if line[0] == '+' && !strings.HasPrefix(line, "+++ ") {
+			current.added = append(current.added, line[1:])
+		}
+	}
+	var findings []string
+	for name, current := range files {
+		for i, removed := range current.removed {
+			if assertionLine(removed) && !containsAssertion(current.added) && !containsExactLine(current.added, removed) {
+				findings = append(findings, "TEST_ASSERTION_REMOVED candidate at "+name+" "+current.hunks[i])
+				break
+			}
+		}
+		for _, added := range current.added {
+			lower := strings.ToLower(added)
+			if strings.Contains(lower, "skip(") || strings.Contains(lower, ".skip") || strings.Contains(lower, "xfail") || strings.Contains(lower, "expectedfailure") {
+				findings = append(findings, "TEST_SKIP_ADDED candidate at "+name)
+				break
+			}
+		}
+	}
+	sort.Strings(findings)
+	return findings
+}
+
+func isTestDiffPath(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+	return strings.HasSuffix(name, "_test.go") || strings.HasPrefix(name, "test_") || strings.Contains(name, ".test.") || strings.Contains(name, ".spec.")
+}
+
+func assertionLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "assert") || strings.Contains(lower, "assert.") || strings.Contains(lower, "t.error") || strings.Contains(lower, "t.fatal") || strings.Contains(lower, "require.")
+}
+
+func containsAssertion(lines []string) bool {
+	for _, line := range lines {
+		if assertionLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExactLine(lines []string, target string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) == strings.TrimSpace(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func authoritySlice(repoRoot string, changed []string, sources []any) (string, error) {
@@ -457,12 +651,9 @@ func sourcePaths(delta map[string]any, source string) (map[string]bool, error) {
 }
 
 func reviewPaths(delta, classification map[string]any) ([]string, error) {
-	changed, err := safeDeltaPaths(delta)
-	if err != nil {
-		return nil, err
-	}
+	changed, changedErr := safeDeltaPaths(delta)
 	if classification == nil {
-		return changed, nil
+		return changed, changedErr
 	}
 	raw, ok := classification["in_scope_paths"].([]any)
 	if !ok {
@@ -480,6 +671,9 @@ func reviewPaths(delta, classification map[string]any) ([]string, error) {
 	selected, err := safeDeltaPaths(map[string]any{"changed_paths": raw})
 	if err != nil {
 		return nil, err
+	}
+	if changedErr != nil {
+		return selected, nil
 	}
 	allowed := map[string]bool{}
 	for _, p := range changed {

@@ -141,6 +141,27 @@ func TestPacketRedactsSensitiveNELLine(t *testing.T) {
 	}
 }
 
+func TestPacketUsesBoundedExcerptWhenCompleteDiffExceedsBudget(t *testing.T) {
+	const fileSection = "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n"
+	materials := map[string]any{
+		"objective": "Review change", "acceptance_criteria": "Correct behavior",
+		"authority_contract": "Review only", "delegated_diff": strings.Repeat(fileSection, 100),
+		"validation_summary": "Focused validation passed",
+	}
+	got := BuildReviewPacket(materials, 1200)
+	ready, ok := got.(PacketReady)
+	if !ok || !ready.PartialCoverage {
+		t.Fatalf("BuildReviewPacket() = %#v, want bounded partial packet", got)
+	}
+	if len(ready.Encoded) > 1200 || !strings.Contains(ready.Packet["delegated_diff"], "[[PARTIAL COVERAGE:") || !strings.Contains(ready.Packet["delegated_diff"], "FULL review required") {
+		t.Fatalf("partial packet is not bounded and marked: bytes=%d diff tail=%q", len(ready.Encoded), ready.Packet["delegated_diff"])
+	}
+	prefix := strings.TrimSuffix(ready.Packet["delegated_diff"], "\n\n[[PARTIAL COVERAGE: bounded diff excerpt; remaining delegated changes omitted. FULL review required.]]")
+	if prefix == ready.Packet["delegated_diff"] || prefix != strings.Repeat(fileSection, strings.Count(prefix, "diff --git ")) {
+		t.Fatalf("partial packet cuts a file section: %q", prefix)
+	}
+}
+
 func equalPacketMap(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false

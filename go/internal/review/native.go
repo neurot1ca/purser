@@ -426,7 +426,12 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	}
 	result, _ := response["result"].(string)
 	findings, _ := response["findings"].([]any)
-	return bridgeOutcome(CompletedReview{Result: result, Validation: response["validation"].(string), Findings: findingsFromAny(findings), ConversationID: parsed["conversation_id"].(string), Reviewer1ModelRequested: RequestedModel(config), DurationSeconds: parsed["duration_seconds"].(*float64), Usage: parsed["usage"].(map[string]any), Provider: provider, ServedModelAttestation: fmt.Sprint(parsed["served_model_attestation"]), RetryCount: retries, RetryRecovered: retries > 0})
+	completed := CompletedReview{Result: result, Validation: response["validation"].(string), Findings: findingsFromAny(findings), ConversationID: parsed["conversation_id"].(string), Reviewer1ModelRequested: RequestedModel(config), DurationSeconds: parsed["duration_seconds"].(*float64), Usage: parsed["usage"].(map[string]any), Provider: provider, ServedModelAttestation: fmt.Sprint(parsed["served_model_attestation"]), RetryCount: retries, RetryRecovered: retries > 0}
+	if ready.PartialCoverage {
+		completed.Result, completed.Validation = Uncertain, "UNKNOWN"
+		completed.Findings = append(completed.Findings, Finding{Code: "REVIEW_PACKET_PARTIAL_COVERAGE", Message: "Reviewer-1 received a bounded diff excerpt; the complete delegated change requires FULL Claude review."})
+	}
+	return bridgeOutcome(completed)
 }
 
 func reviewerDiagnostics(evidence map[string]any, failure string, elapsed time.Duration, exitCode int, parseError string) map[string]any {

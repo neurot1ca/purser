@@ -28,6 +28,7 @@ type PacketReady struct {
 	Encoded             []byte
 	AddedRedactionCount int
 	AddedAffectedFiles  []string
+	PartialCoverage     bool
 }
 
 type PacketOmitted struct {
@@ -114,13 +115,58 @@ func BuildReviewPacket(materials map[string]any, maxBytes int) PacketBuild {
 	}
 	if len(encoded) > maxBytes {
 		diffBytes := len([]byte(materials["delegated_diff"].(string)))
+		if partial, ok := boundedPartialPacket(packet, maxBytes); ok {
+			return partial
+		}
 		omitted := append([]string(nil), packetFields...)
 		if diffBytes > maxBytes {
 			omitted = []string{"delegated_diff (complete diff exceeds packet budget; not truncated)"}
 		}
 		return PacketOmitted{"REVIEW_PACKET_TOO_LARGE", fmt.Sprintf("The complete %d-byte packet exceeds the %d-byte budget. Omitted: %s. No partial diff was sent and no model call was made.", len(encoded), maxBytes, strings.Join(omitted, ", ")), omitted}
 	}
-	return PacketReady{packet, encoded, addedRedactionCount, addedAffectedFiles}
+	return PacketReady{Packet: packet, Encoded: encoded, AddedRedactionCount: addedRedactionCount, AddedAffectedFiles: addedAffectedFiles}
+}
+
+func boundedPartialPacket(packet map[string]string, maxBytes int) (PacketReady, bool) {
+	const marker = "\n\n[[PARTIAL COVERAGE: bounded diff excerpt; remaining delegated changes omitted. FULL review required.]]"
+	sections := diffFileSections(packet["delegated_diff"])
+	var best PacketReady
+	var selected strings.Builder
+	for _, section := range sections {
+		candidate := make(map[string]string, len(packet))
+		for key, value := range packet {
+			candidate[key] = value
+		}
+		candidate["delegated_diff"] = selected.String() + section + marker
+		encoded, err := packetCanonicalJSON(candidate)
+		if err == nil && len(encoded) <= maxBytes {
+			best = PacketReady{Packet: candidate, Encoded: encoded, PartialCoverage: true}
+			selected.WriteString(section)
+		}
+	}
+	return best, best.Packet != nil
+}
+
+func diffFileSections(diff string) []string {
+	var sections []string
+	var section strings.Builder
+	inSection := false
+	for _, line := range strings.SplitAfter(diff, "\n") {
+		if strings.HasPrefix(line, "diff --git ") {
+			if inSection {
+				sections = append(sections, section.String())
+				section.Reset()
+			}
+			inSection = true
+		}
+		if inSection {
+			section.WriteString(line)
+		}
+	}
+	if inSection {
+		sections = append(sections, section.String())
+	}
+	return sections
 }
 
 type diffRedaction struct {
