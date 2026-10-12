@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, RESUME_PROMPT, thresholdFrom } from './autocompact.js'
+import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, RESUME_PROMPT, thresholdFrom, WAKE_MARKER, wakeContext } from './autocompact.js'
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 const normalized = (path: string) => path.replace(/\\/g, '/').replace(/(^|:)[A-Za-z]:(?=\/)/g, '$1')
@@ -142,11 +142,15 @@ test('recognises the SDK-host refusal that needs a /compact prompt', () => {
   expect(needsCompactPrompt(new Error('a turn is running'))).toBe(false)
 })
 
-test('compact notice reports the measured saving; the wake prompt stays short', () => {
+test('compact notice reports the measured saving; the visible wake line stays language-neutral', () => {
   const text = compactNotice(415_943, 83_000)
-  expect(text).toContain('⚓ Purser · Context passed 415K, so Purser ran /compact. Every later message is now ~80% cheaper.')
+  expect(text).toContain('**Context passed 415K, so Purser ran /compact.**')
+  expect(text).toContain('Every later message is now ~80% cheaper')
   expect(text).toContain('Nothing is lost.')
   expect(compactNotice(415_943, undefined)).not.toContain('cheaper')
-  expect(RESUME_PROMPT).toContain('Continue the task in progress')
-  expect(RESUME_PROMPT).not.toContain('cheaper')
+  expect(WAKE_MARKER).toBe('⚓ /compact ✓')
+  const context = wakeContext(text)
+  expect(context).toContain("in the user's language")
+  expect(context).toContain(text)
+  expect(context).toContain(RESUME_PROMPT)
 })

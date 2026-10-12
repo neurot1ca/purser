@@ -64,16 +64,24 @@ async function log($, text: string) {
   try { await $.ui.log(`Purser auto-compact: ${text}`) } catch { /* as above */ }
 }
 
-// The person's notice, submitted as Purser's own message: an SDK host (the desktop
-// Code tab) does not draw $.ui.log lines. English, because the mod cannot know
-// the user's language.
+// The visible wake line is language-neutral; the explanation rides along as
+// hidden context, and the model renders the notice in the user's language.
+export const WAKE_MARKER = '⚓ /compact ✓'
+
+// The English master of the notice the woken turn writes, plus what to do next.
 export function compactNotice(before: number, after: number | undefined): string {
   const saving = after !== undefined && after < before ? Math.round((1 - after / before) * 100) : undefined
-  return `⚓ Purser · Context passed ${Math.floor(before / 1000)}K, so Purser ran /compact.${saving !== undefined ? ` Every later message is now ~${saving}% cheaper.` : ''} Decisions and the next step were carried over from the handoff Purser prepared. Nothing is lost.`
+  return `> ⚓ **Context passed ${Math.floor(before / 1000)}K, so Purser ran /compact.** *${saving !== undefined ? `Every later message is now ~${saving}% cheaper; d` : 'D'}ecisions and the next step were carried over from the handoff Purser prepared. Nothing is lost.*`
 }
 
-// Appended to the notice so the woken turn carries on with the work.
-export const RESUME_PROMPT = 'Continue the task in progress; if nothing was in progress, reply with one line.'
+export const RESUME_PROMPT = 'Continue the task in progress; if nothing was in progress, stop after that line.'
+
+export function wakeContext(notice: string): string {
+  return `Purser's automatic /compact just ran and submitted "${WAKE_MARKER}" to wake this session. Tell the user in the user's language exactly one line, translated from: "${notice}" ${RESUME_PROMPT}`
+}
+
+// The context for the next wake marker Purser submits.
+let pendingWake: string | undefined
 
 // /compact leaves the session idle, so wake it: the next turn carries on with
 // the work that was running.
@@ -85,7 +93,8 @@ async function resume($, before: number) {
       try { after = (await $.session.usage()).context.tokens } catch { /* message without the saving */ }
     }
     await trace($, `submitting resume (${after ?? 'unknown'} tokens)`)
-    await $.prompt.submit({ text: `${compactNotice(before, after)} ${RESUME_PROMPT}` })
+    pendingWake = wakeContext(compactNotice(before, after))
+    await $.prompt.submit({ text: WAKE_MARKER })
     await trace($, `resumed after compact (${after ?? 'unknown'} tokens)`)
   } catch (error) {
     await log($, `resume failed: ${String(error)}`)
@@ -125,6 +134,12 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
 }
 
 export function registerAutoCompact(on) {
+  on('prompt.submit', async ($, e, next) => {
+    if (pendingWake === undefined || e.text !== WAKE_MARKER || e.origin?.kind !== 'plugin') return next(e)
+    const context = pendingWake
+    pendingWake = undefined
+    return next({ ...e, context: [...(e.context ?? []), context] })
+  })
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     if (!e.agentId && e.trigger !== 'precompute' && result && 'tokensAfter' in result) compactedTokens = result.tokensAfter
