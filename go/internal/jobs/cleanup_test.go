@@ -21,6 +21,55 @@ func cleanupGit(t *testing.T, dir string, args ...string) string {
 	}
 	return strings.TrimSpace(string(b))
 }
+
+func TestSweepTemporaryDirectoriesKeepsLiveAndRemovesTerminal(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	tmpRoot := filepath.Join(root, "cache", "tmp")
+	jobsRoot := filepath.Join(root, "codex_exec_mcp", "jobs")
+	for id, state := range map[string]string{"live": "RUNNING", "done": "SUCCEEDED"} {
+		dir := filepath.Join(tmpRoot, id)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(jobsRoot, 0700); err != nil {
+			t.Fatal(err)
+		}
+		writeHostTestJSON(t, filepath.Join(jobsRoot, id+".json"), map[string]any{"jobId": id, "state": state})
+	}
+	sweepTemporaryDirectories(root, now)
+	if _, err := os.Stat(filepath.Join(tmpRoot, "live")); err != nil {
+		t.Fatalf("live job temp directory removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmpRoot, "done")); !os.IsNotExist(err) {
+		t.Fatalf("terminal job temp directory remains: %v", err)
+	}
+}
+
+func TestTrimPurserGoCacheSkippedWhileCodexJobRuns(t *testing.T) {
+	t.Setenv("GOCACHE", "")
+	root := t.TempDir()
+	cache := filepath.Join(root, "cache", "go-build")
+	if err := os.MkdirAll(cache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(cache, "keep")
+	if err := os.WriteFile(marker, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	jobsRoot := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobsRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHostTestJSON(t, filepath.Join(jobsRoot, "running.json"), map[string]any{"jobId": "running", "state": "RUNNING"})
+	trimPurserGoCache(root)
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("cache marker removed while a Codex job runs: %v", err)
+	}
+}
 func cleanupRepo(t *testing.T, state string) string {
 	t.Helper()
 	repo := filepath.Join(state, "repo")

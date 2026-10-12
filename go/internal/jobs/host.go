@@ -114,6 +114,18 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 	}
 	defer os.Remove(args.OutputPath)
+	jobTempDir := ""
+	workerAlive := false
+	defer func() {
+		if jobTempDir == "" || workerAlive {
+			return
+		}
+		finished, readErr := Read(path)
+		var finalState string
+		if readErr == nil && finished.Get("state", &finalState) && terminalJobs[finalState] {
+			_ = os.RemoveAll(jobTempDir)
+		}
+	}()
 	agent := launch.Agent
 	if agent == "" {
 		agent = "codex"
@@ -305,11 +317,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if stateRoot == "" {
 			stateRoot = filepath.Dir(filepath.Dir(dir))
 		}
+		jobTempDir = filepath.Join(stateRoot, "cache", "tmp", jobID)
 		var writableRoots []any
 		if worktreePath != "" {
 			writableRoots = append(writableRoots, worktreePath)
 		}
-		if err = configureCodexGoCache(&args, &childEnv, stateRoot, writableRoots); err != nil {
+		if err = configureCodexGoCache(&args, &childEnv, stateRoot, jobTempDir, writableRoots); err != nil {
 			return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Codex Go cache directory is unavailable")
 		}
 	}
@@ -451,6 +464,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				}
 				return finishHostStartError(dir, jobID, generation, token, cancelled.Load(), contextErr, err)
 			}
+			workerAlive = true
 			_ = job.Set("pid", command.Process.Pid)
 			err = Write(path, job)
 		}
@@ -460,6 +474,8 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if err != nil {
 			if command.Process != nil {
 				_ = command.Process.Kill()
+				_ = command.Wait()
+				workerAlive = false
 			}
 			return nil, err
 		}
@@ -468,6 +484,8 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		activityMu.Unlock()
 		if checkpointErr != nil {
 			_ = command.Process.Kill()
+			_ = command.Wait()
+			workerAlive = false
 			return nil, checkpointErr
 		}
 		done := make(chan error, 1)
@@ -485,10 +503,13 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				activityMu.Unlock()
 				if checkpointErr != nil {
 					_ = command.Process.Kill()
+					<-done
+					workerAlive = false
 					return nil, checkpointErr
 				}
 			}
 		}
+		workerAlive = false
 		checkTicker.Stop()
 		if !cancelled.Load() {
 			activityMu.Lock()
@@ -635,7 +656,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	return map[string]any{"status": "ok"}, nil
 }
 
-func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot string, writableRoots []any) error {
+func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobTempDir string, writableRoots []any) error {
 	config := map[string]any{}
 	switch existing := args.Config.(type) {
 	case OrderedObject:
@@ -674,9 +695,14 @@ func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot strin
 			writableRoots = append(writableRoots, telemetryDir)
 		}
 	}
+	if err := os.MkdirAll(jobTempDir, 0700); err != nil {
+		return err
+	}
+	for _, name := range []string{"TEMP", "TMP", "TMPDIR"} {
+		*childEnv = append(*childEnv, name+"="+jobTempDir)
+	}
 	for _, variable := range []struct{ name, directory string }{
 		{"GOCACHE", filepath.Join(stateRoot, "cache", "go-build")},
-		{"GOTMPDIR", filepath.Join(stateRoot, "cache", "go-tmp")},
 	} {
 		if os.Getenv(variable.name) != "" {
 			continue
@@ -686,6 +712,10 @@ func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot strin
 		}
 		writableRoots = append(writableRoots, variable.directory)
 		*childEnv = append(*childEnv, variable.name+"="+variable.directory)
+	}
+	writableRoots = append(writableRoots, jobTempDir)
+	if os.Getenv("GOTMPDIR") == "" {
+		*childEnv = append(*childEnv, "GOTMPDIR="+jobTempDir)
 	}
 	for key := range config {
 		if strings.HasPrefix(key, "sandbox_workspace_write.") {

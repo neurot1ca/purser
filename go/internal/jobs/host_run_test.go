@@ -58,7 +58,10 @@ func TestHostFakeWorker(t *testing.T) {
 	_, _ = os.Stdout.WriteString("{\"type\": \"turn.completed\"}\r\n")
 	result := []byte("fake answer")
 	if mode == "environment" {
-		result, _ = json.Marshal(map[string]string{"GOCACHE": os.Getenv("GOCACHE"), "GOTMPDIR": os.Getenv("GOTMPDIR")})
+		result, _ = json.Marshal(map[string]string{
+			"GOCACHE": os.Getenv("GOCACHE"), "GOTMPDIR": os.Getenv("GOTMPDIR"),
+			"TEMP": os.Getenv("TEMP"), "TMP": os.Getenv("TMP"), "TMPDIR": os.Getenv("TMPDIR"),
+		})
 		_ = os.WriteFile(os.Getenv("PURSER_HOST_FAKE_ENV_CAPTURE"), result, 0600)
 		result = []byte("fake answer")
 	}
@@ -693,7 +696,8 @@ func TestConfigureCodexGoCacheWritableRootsIncludeTelemetryWhenPresent(t *testin
 
 			var childEnv []string
 			args := LaunchArgs{}
-			if err := configureCodexGoCache(&args, &childEnv, configRoot, nil); err != nil {
+			jobTempDir := filepath.Join(configRoot, "cache", "tmp", hostTestID)
+			if err := configureCodexGoCache(&args, &childEnv, configRoot, jobTempDir, nil); err != nil {
 				t.Fatal(err)
 			}
 			config := args.Config.(map[string]any)
@@ -702,11 +706,11 @@ func TestConfigureCodexGoCacheWritableRootsIncludeTelemetryWhenPresent(t *testin
 				roots, _ = workspace["writable_roots"].([]any)
 			}
 			if exists {
-				if len(roots) != 1 || roots[0] != telemetryDir {
-					t.Errorf("writable roots = %#v, want [%q]", roots, telemetryDir)
+				if len(roots) != 2 || roots[0] != telemetryDir || roots[1] != jobTempDir {
+					t.Errorf("writable roots = %#v, want [%q %q]", roots, telemetryDir, jobTempDir)
 				}
-			} else if len(roots) != 0 {
-				t.Errorf("writable roots = %#v, want no telemetry root", roots)
+			} else if len(roots) != 1 || roots[0] != jobTempDir {
+				t.Errorf("writable roots = %#v, want [%q]", roots, jobTempDir)
 			}
 		})
 	}
@@ -748,7 +752,7 @@ func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	cacheDir := filepath.Join(root, "cache", "go-build")
-	tmpDir := filepath.Join(root, "cache", "go-tmp")
+	tmpDir := filepath.Join(root, "cache", "tmp", hostTestID)
 	options := HostOptions{StateRoot: root, WorkerCommand: func(args LaunchArgs) ([]string, error) {
 		config, ok := args.Config.(map[string]any)
 		if !ok {
@@ -772,7 +776,7 @@ func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 	if _, err := RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
 		t.Fatal(err)
 	}
-	for _, directory := range []string{cacheDir, tmpDir} {
+	for _, directory := range []string{cacheDir} {
 		if info, err := os.Stat(directory); err != nil || !info.IsDir() {
 			t.Errorf("cache directory %q was not created: %v", directory, err)
 		}
@@ -785,8 +789,11 @@ func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 	if err := json.Unmarshal(childOutput, &childEnvironment); err != nil {
 		t.Fatal(err)
 	}
-	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir {
-		t.Errorf("child Go environment = %#v, want GOCACHE=%q GOTMPDIR=%q", childEnvironment, cacheDir, tmpDir)
+	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir || childEnvironment["TEMP"] != tmpDir || childEnvironment["TMP"] != tmpDir || childEnvironment["TMPDIR"] != tmpDir {
+		t.Errorf("child Go environment = %#v, want per-job temp %q and GOCACHE=%q", childEnvironment, tmpDir, cacheDir)
+	}
+	if _, err := os.Stat(tmpDir); !os.IsNotExist(err) {
+		t.Errorf("terminal job temp directory remains: %v", err)
 	}
 }
 
@@ -819,7 +826,7 @@ func TestHostAddsSharedGoCacheWithoutWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	cacheDir := filepath.Join(root, "cache", "go-build")
-	tmpDir := filepath.Join(root, "cache", "go-tmp")
+	tmpDir := filepath.Join(root, "cache", "tmp", hostTestID)
 	options := HostOptions{StateRoot: root, WorkerCommand: func(args LaunchArgs) ([]string, error) {
 		config := map[string]any{}
 		switch ordered := args.Config.(type) {
@@ -849,8 +856,8 @@ func TestHostAddsSharedGoCacheWithoutWorktree(t *testing.T) {
 	if err := json.Unmarshal(childOutput, &childEnvironment); err != nil {
 		t.Fatal(err)
 	}
-	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir {
-		t.Errorf("child Go environment = %#v, want GOCACHE=%q GOTMPDIR=%q", childEnvironment, cacheDir, tmpDir)
+	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir || childEnvironment["TEMP"] != tmpDir || childEnvironment["TMP"] != tmpDir || childEnvironment["TMPDIR"] != tmpDir {
+		t.Errorf("child Go environment = %#v, want per-job temp %q and GOCACHE=%q", childEnvironment, tmpDir, cacheDir)
 	}
 }
 
@@ -886,8 +893,8 @@ func TestHostPreservesExplicitGoCacheEnvironment(t *testing.T) {
 	_, err = RunHostGeneration(dir, hostTestID, 1, "owner", HostOptions{StateRoot: root, WorkerCommand: func(args LaunchArgs) ([]string, error) {
 		config := args.Config.(map[string]any)
 		workspace := config["sandbox_workspace_write"].(map[string]any)
-		if roots, _ := workspace["writable_roots"].([]any); len(roots) != 1 || roots[0] != worktree {
-			t.Errorf("writable roots = %#v, want only %q", roots, worktree)
+		if roots, _ := workspace["writable_roots"].([]any); len(roots) != 2 || roots[0] != worktree || roots[1] != filepath.Join(root, "cache", "tmp", hostTestID) {
+			t.Errorf("writable roots = %#v, want %q and per-job temp", roots, worktree)
 		}
 		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
 	}})
@@ -902,11 +909,12 @@ func TestHostPreservesExplicitGoCacheEnvironment(t *testing.T) {
 	if err := json.Unmarshal(childOutput, &childEnvironment); err != nil {
 		t.Fatal(err)
 	}
-	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir {
-		t.Errorf("child Go environment = %#v, want explicit parent values", childEnvironment)
+	jobTempDir := filepath.Join(root, "cache", "tmp", hostTestID)
+	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir || childEnvironment["TEMP"] != jobTempDir || childEnvironment["TMP"] != jobTempDir || childEnvironment["TMPDIR"] != jobTempDir {
+		t.Errorf("child Go environment = %#v, want explicit Go cache values and per-job temp %q", childEnvironment, jobTempDir)
 	}
-	if _, err := os.Stat(filepath.Join(root, "cache")); !os.IsNotExist(err) {
-		t.Errorf("Purser cache roots should not be created for explicit environment, stat error = %v", err)
+	if _, err := os.Stat(filepath.Join(root, "cache", "go-build")); !os.IsNotExist(err) {
+		t.Errorf("Purser GOCACHE root should not be created for explicit GOCACHE, stat error = %v", err)
 	}
 }
 

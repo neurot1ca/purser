@@ -25,6 +25,34 @@ func putFile(t *testing.T, path string, data []byte, stamp int64) {
 
 func unixTime(seconds int64) time.Time { return time.Unix(seconds, 0) }
 
+func TestRemoveOldPrefixedEntries(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	for _, name := range []string{"purser-young", "purser-old", "other-old"} {
+		path := filepath.Join(root, name)
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		stamp := now.Add(-48 * time.Hour)
+		if name == "purser-young" {
+			stamp = now.Add(-time.Hour)
+		}
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	RemoveOldPrefixedEntries(root, now, 24*time.Hour, []string{"purser-"})
+	for name, wantPresent := range map[string]bool{"purser-young": true, "purser-old": false, "other-old": true} {
+		_, err := os.Stat(filepath.Join(root, name))
+		if wantPresent && err != nil {
+			t.Errorf("%s was removed: %v", name, err)
+		}
+		if !wantPresent && !os.IsNotExist(err) {
+			t.Errorf("old matching entry %s remains: %v", name, err)
+		}
+	}
+}
+
 func TestSafeRootAllowsSymlinkedTempAncestor(t *testing.T) {
 	base := t.TempDir()
 	real := filepath.Join(base, "real")

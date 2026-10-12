@@ -51,6 +51,32 @@ func aged(days, files int, bytes int64) policy {
 
 func byteLimit(bytes int64) policy { return policy{maxAgeDays: -1, maxFiles: -1, maxBytes: bytes} }
 
+// RemoveOldPrefixedEntries removes top-level temporary entries matching a name
+// prefix once their modification time is older than age. Failures are retried
+// by the next maintenance pass.
+func RemoveOldPrefixedEntries(root string, now time.Time, age time.Duration, prefixes []string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		matched := false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(entry.Name(), prefix) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil && now.Sub(info.ModTime()) >= age {
+			_ = os.RemoveAll(filepath.Join(root, entry.Name()))
+		}
+	}
+}
+
 func PrunePluginCache(executable string) {
 	executable, err := filepath.Abs(executable)
 	if err != nil || filepath.Base(filepath.Dir(executable)) != "bin" {

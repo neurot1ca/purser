@@ -58,6 +58,10 @@ func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr
 	if err != nil {
 		return fmt.Errorf("resolve state root: %w", err)
 	}
+	sweepTemporaryDirectories(root, now)
+	retention.RemoveOldPrefixedEntries(filepath.Join(root, "cache", "go-tmp"), now, 24*time.Hour, []string{""})
+	retention.RemoveOldPrefixedEntries(os.TempDir(), now, 24*time.Hour, []string{"purser-", "reviewer1-", "readiness-check-", "go-build"})
+	trimPurserGoCache(root)
 	if err = recoverRetiringWorktrees(root); err != nil {
 		return fmt.Errorf("recover retiring worktrees: %w", err)
 	}
@@ -313,6 +317,85 @@ func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr
 	}
 	retention.PruneState(root, current, checkCeiling)
 	return nil
+}
+
+func sweepTemporaryDirectories(root string, now time.Time) {
+	base := filepath.Join(root, "cache", "tmp")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	for _, entry := range entries {
+		path := filepath.Join(base, entry.Name())
+		info, err := entry.Info()
+		if err != nil || !info.IsDir() || now.Sub(info.ModTime()) < time.Hour {
+			continue
+		}
+		job := readCleanupJSON(filepath.Join(jobsDir, entry.Name()+".json"))
+		if job != nil {
+			state, _ := job["state"].(string)
+			if !cleanupTerminal[state] {
+				continue
+			}
+		}
+		_ = os.RemoveAll(path)
+	}
+}
+
+func trimPurserGoCache(root string) {
+	if os.Getenv("GOCACHE") != "" || hasRunningCodexJob(root) {
+		return
+	}
+	cache := filepath.Join(root, "cache", "go-build")
+	var size int64
+	_ = filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !entry.IsDir() {
+			if info, err := entry.Info(); err == nil && info.Mode().IsRegular() {
+				size += info.Size()
+			}
+		}
+		return nil
+	})
+	if size <= 2*1024*1024*1024 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "clean", "-cache")
+	command.Env = os.Environ()
+	found := false
+	for index, entry := range command.Env {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(key, "GOCACHE") {
+			command.Env[index] = "GOCACHE=" + cache
+			found = true
+		}
+	}
+	if !found {
+		command.Env = append(command.Env, "GOCACHE="+cache)
+	}
+	proc.ConfigureNoWindow(command)
+	_ = command.Run()
+}
+
+func hasRunningCodexJob(root string) bool {
+	entries, err := os.ReadDir(filepath.Join(root, "codex_exec_mcp", "jobs"))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		if job := readCleanupJSON(filepath.Join(root, "codex_exec_mcp", "jobs", entry.Name())); job != nil && job["state"] == "RUNNING" {
+			return true
+		}
+	}
+	return false
 }
 
 func recoverRetiringWorktrees(root string) error {
