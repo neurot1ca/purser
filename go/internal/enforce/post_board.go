@@ -508,12 +508,18 @@ func appendPostApplyGuidance(response map[string]any, jobID string) {
 	}
 }
 
-// PostReceiptAdvice mirrors compaction_advisor._receipt_advice.
+// PostReceiptAdvice renders the completion line displayed by the host.
 func PostReceiptAdvice(receipt map[string]any, now time.Time) string {
-	parts := []string{"model " + fmt.Sprint(receipt["model"]), "effort " + fmt.Sprint(receipt["effort"])}
-	if receipt["gear"] == "up" {
-		parts = append(parts, "gear up")
+	turkish := false
+	switch strings.ToLower(strings.TrimSpace(stringValue(receipt["language"]))) {
+	case "turkish", "türkçe", "turkce", "tr", "tr-tr":
+		turkish = true
 	}
+	prefix, hour, minute, day := "⚓ Codex done: ", "h", "m", "d"
+	if turkish {
+		prefix, hour, minute, day = "⚓ Codex bitti: ", "s", "dk", "g"
+	}
+	parts := []string{prefix + fmt.Sprint(receipt["model"]) + " (" + fmt.Sprint(receipt["effort"]) + ")"}
 	current := true
 	if captured, ok := receipt["snapshot_at"].(string); ok {
 		if parsed, err := parseBoardTime(captured); err == nil && !parsed.IsZero() && now.Sub(parsed) > time.Hour {
@@ -526,34 +532,47 @@ func PostReceiptAdvice(receipt map[string]any, now time.Time) string {
 		}
 	}
 	if !current {
-		return "The quota snapshot is stale. Write one line in the user's language as `> ⚓ **Codex done: ...**`, in the user's language, showing " + strings.Join(parts, ", ") + "."
+		return strings.Join(parts, " · ")
 	}
 	for _, entry := range []struct {
 		key, label, used string
 		weekly           bool
-	}{{"5h_resets_at", "5h", "5h_used_pct", false}, {"7d_resets_at", "7d", "7d_used_pct", true}} {
-		if value, ok := receipt[entry.used]; ok {
-			parts = append(parts, entry.label+" used "+fmt.Sprint(value)+"%")
+	}{{"5h_resets_at", "5" + hour, "5h_used_pct", false}, {"7d_resets_at", "7" + day, "7d_used_pct", true}} {
+		quota := ""
+		if value, ok := receipt[entry.used]; ok && value != nil {
+			quota = entry.label + " " + fmt.Sprint(value) + "% used"
+			if turkish {
+				quota = entry.label + " %" + fmt.Sprint(value) + " kullanıldı"
+			}
 		}
 		raw, ok := receipt[entry.key].(string)
-		if !ok {
-			continue
-		}
 		parsed, err := parseBoardTime(raw)
-		if err != nil || parsed.IsZero() {
+		if !ok || err != nil || parsed.IsZero() {
+			if quota != "" {
+				parts = append(parts, quota)
+			}
 			continue
 		}
 		mins := int(now.Sub(parsed) * -1 / time.Minute)
 		if mins < 0 {
 			mins = 0
 		}
+		remaining := fmt.Sprintf("%d%s %d%s", mins/60, hour, mins%60, minute)
 		if entry.weekly && mins >= 24*60 {
-			parts = append(parts, fmt.Sprintf("time until 7d reset %dd %dh", mins/(24*60), mins%(24*60)/60))
-		} else {
-			parts = append(parts, fmt.Sprintf("time until %s reset %dh %dm", entry.label, mins/60, mins%60))
+			remaining = fmt.Sprintf("%d%s %d%s", mins/(24*60), day, mins%(24*60)/60, hour)
 		}
+		reset := "resets in " + remaining
+		if turkish {
+			reset = "sıfırlanmaya " + remaining
+		}
+		if quota != "" {
+			quota += ", " + reset
+		} else {
+			quota = entry.label + " " + reset
+		}
+		parts = append(parts, quota)
 	}
-	return "Write one line in the user's language as `> ⚓ **Codex done: ...**`, showing " + strings.Join(parts, ", ") + "."
+	return strings.Join(parts, " · ")
 }
 
 func parseBoardTime(value string) (time.Time, error) {

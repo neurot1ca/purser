@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,25 @@ import (
 
 	"purser-hook/internal/contextio"
 )
+
+func TestCompletionReceiptTurkishLine(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	event := map[string]any{"session_id": "turkish-session", "tool_use_id": "turkish-call"}
+	path := postReceiptStatePath(root, repo)
+	state := readPostReceiptState(path, "turkish-session")
+	state["last_context_language"] = "English"
+	mustPostTest(t, writePostReceiptState(path, state))
+	mustPostTest(t, os.WriteFile(filepath.Join(filepath.Dir(path), "purser-handoff.md"), []byte("## Goal\nUser language: Türkçe\n"), 0600))
+	now := time.Now().UTC()
+	quota := map[string]any{"5h_used_pct": 24, "7d_used_pct": 61, "snapshot_at": now.Format(time.RFC3339), "5h_resets_at": now.Add(29 * time.Minute).Format(time.RFC3339), "7d_resets_at": now.Add(134*time.Hour + time.Minute).Format(time.RFC3339)}
+	receipt := queuePostCompletionReceipt(root, event, repo, map[string]any{"model": "model", "effort": "high", "codex_quota": quota})
+	response := map[string]any{"completion_receipt": receipt, "systemMessage": "existing quota"}
+	deliverPostCompletionReceipt(response, root)
+	want := "existing quota\n⚓ Codex bitti: model (high) · 5s %24 kullanıldı, sıfırlanmaya 0s 28dk · 7g %61 kullanıldı, sıfırlanmaya 5g 14s"
+	if response["systemMessage"] != want {
+		t.Fatalf("Turkish receipt=%q want %q", response["systemMessage"], want)
+	}
+}
 
 func TestCompletionReceiptDurableSnapshotAndSingleUIDelivery(t *testing.T) {
 	root, repo := t.TempDir(), t.TempDir()
@@ -23,16 +43,26 @@ func TestCompletionReceiptDurableSnapshotAndSingleUIDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state := readPostReceiptState(postReceiptStatePath(root, repo), "completion-session")
+	if state["receipt_delivered"] == true || strings.Contains(postPendingGuidance(root, event, repo), "Codex done") {
+		t.Fatal("queued completion marked delivered or added to Claude guidance")
+	}
 	deliverPostCompletionReceipt(cached, root)
 	message := stringValue(cached["systemMessage"])
-	for _, field := range []string{"existing quota", "> ⚓ **Codex done:", "model model", "effort high", "5h used 24%", "7d used 61%", "time until 5h reset", "time until 7d reset"} {
-		if !strings.Contains(message, field) {
-			t.Fatalf("receipt omitted %q: %s", field, message)
-		}
+	want := "existing quota\n⚓ Codex done: model (high) · 5h 24% used, resets in 1h 19m · 7d 61% used, resets in 3d 1h"
+	if message != want {
+		t.Fatalf("receipt=%q want %q", message, want)
 	}
-	state := readPostReceiptState(postReceiptStatePath(root, repo), "completion-session")
-	if mapValue(state["receipt_pending"])["7d_resets_at"] != quota["7d_resets_at"] {
-		t.Fatal("durable quota discarded")
+	state = readPostReceiptState(postReceiptStatePath(root, repo), "completion-session")
+	if state["receipt_delivered"] != true || mapValue(state["receipt_pending"])["7d_resets_at"] != quota["7d_resets_at"] {
+		t.Fatal("durable delivery or quota discarded")
+	}
+	if _, err := os.Stat(filepath.Join(root, "receipt_deliveries", stringValue(receipt["id"])+".json")); err != nil {
+		t.Fatalf("delivered without durable record: %v", err)
+	}
+	t.Setenv("PURSER_STATE_DIR", root)
+	if guidance := string(contextio.UserPromptSubmit(map[string]any{"session_id": "completion-session", "cwd": repo, "prompt": "Continue."}, time.Now())); strings.Contains(guidance, "Codex done") || strings.Contains(guidance, "Write one line") {
+		t.Fatalf("completion in UserPromptSubmit guidance: %s", guidance)
 	}
 	var replay map[string]any
 	if err := json.Unmarshal(encoded, &replay); err != nil {
@@ -44,6 +74,26 @@ func TestCompletionReceiptDurableSnapshotAndSingleUIDelivery(t *testing.T) {
 	}
 	if strings.Contains(postPendingGuidance(root, event, repo), "Codex done") {
 		t.Fatal("completion requires a feedback turn")
+	}
+}
+
+func TestCompletionReceiptFailedDeliveryWriteKeepsPending(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	event := map[string]any{"session_id": "failed-session", "tool_use_id": "failed-call"}
+	receipt := queuePostCompletionReceipt(root, event, repo, map[string]any{"model": "model", "effort": "high"})
+	// Force delivery record serialization to fail after the delivery lock is acquired.
+	receipt["invalid"] = math.NaN()
+	response := map[string]any{"completion_receipt": receipt}
+	deliverPostCompletionReceipt(response, root)
+	state := readPostReceiptState(postReceiptStatePath(root, repo), "failed-session")
+	if response["systemMessage"] != nil || state["receipt_delivered"] == true || mapValue(state["receipt_pending"])["model"] != "model" {
+		t.Fatalf("failed delivery suppressed pending receipt: %#v %#v", response, state)
+	}
+	delete(receipt, "invalid")
+	response["completion_receipt"] = receipt
+	deliverPostCompletionReceipt(response, root)
+	if response["systemMessage"] != "⚓ Codex done: model (high)" || readPostReceiptState(postReceiptStatePath(root, repo), "failed-session")["receipt_delivered"] != true {
+		t.Fatalf("pending receipt did not recover: %#v", response)
 	}
 }
 
@@ -123,7 +173,7 @@ func TestPostDispatchReceiptDoesNotMarkLifecycleDelivered(t *testing.T) {
 	}
 }
 
-func TestCompletionReceiptShowsEnforcedPairAndGearIndicator(t *testing.T) {
+func TestCompletionReceiptEnglishFallback(t *testing.T) {
 	root, repo := t.TempDir(), t.TempDir()
 	key := projectKey(&repo)
 	if err := contextio.SetGear(root, key, "up"); err != nil {
@@ -131,11 +181,19 @@ func TestCompletionReceiptShowsEnforcedPairAndGearIndicator(t *testing.T) {
 	}
 	event := map[string]any{"session_id": "receipt-gear-session", "tool_use_id": "completed-call"}
 	bundle := map[string]any{"model": "configured-sol", "effort": "medium", "codex_quota": nil}
-	response := map[string]any{"completion_receipt": queuePostCompletionReceipt(root, event, repo, bundle)}
-	deliverPostCompletionReceipt(response, root)
-	guidance := stringValue(response["systemMessage"])
-	want := "Write one line in the user's language as `> ⚓ **Codex done: ...**`, showing model configured-sol, effort medium, gear up."
-	if guidance != want {
-		t.Fatalf("receipt guidance %q want %q", guidance, want)
+	for _, language := range []string{"", "French"} {
+		t.Run(language, func(t *testing.T) {
+			event["tool_use_id"] = "completed-call-" + language
+			path := postReceiptStatePath(root, repo)
+			state := readPostReceiptState(path, "receipt-gear-session")
+			state["last_context_language"] = language
+			mustPostTest(t, writePostReceiptState(path, state))
+			response := map[string]any{"completion_receipt": queuePostCompletionReceipt(root, event, repo, bundle)}
+			deliverPostCompletionReceipt(response, root)
+			want := "⚓ Codex done: configured-sol (medium)"
+			if response["systemMessage"] != want {
+				t.Fatalf("receipt=%q want %q", response["systemMessage"], want)
+			}
+		})
 	}
 }

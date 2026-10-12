@@ -33,11 +33,12 @@ func readPostReceiptState(path, session string) map[string]any {
 	return state
 }
 
-func writePostReceiptState(path string, state map[string]any) {
+func writePostReceiptState(path string, state map[string]any) error {
 	data, err := json.Marshal(state)
-	if err == nil {
-		_ = atomicWrite(path, data)
+	if err != nil {
+		return err
 	}
+	return atomicWrite(path, data)
 }
 
 // queuePostCompletionReceipt stores the finalized completion receipt for the session.
@@ -76,19 +77,27 @@ func queuePostCompletionReceipt(root string, event map[string]any, repository st
 	}
 	defer unlock()
 	state := readPostReceiptState(path, session)
+	language := stringValue(state["last_context_language"])
+	if data, err := os.ReadFile(filepath.Join(filepath.Dir(path), "purser-handoff.md")); err == nil {
+		if recorded := contextio.HandoffUserLanguage(string(data)); recorded != "" {
+			language = recorded
+		}
+	}
+	if language != "" {
+		receipt["language"] = language
+	}
 	state["receipt_pending"] = receipt
-	writePostReceiptState(path, state)
-	if stringValue(event["tool_use_id"]) == "" {
-		return nil
-	}
-	advice := PostReceiptAdvice(receipt, time.Now().UTC())
 	id, err := callKey(event)
-	if err != nil {
+	if err == nil {
+		if state["receipt_id"] != id {
+			state["receipt_delivered"] = false
+		}
+		state["receipt_id"] = id
+	}
+	if writePostReceiptState(path, state) != nil || err != nil {
 		return nil
 	}
-	state["receipt_delivered"] = true
-	writePostReceiptState(path, state)
-	return map[string]any{"id": id, "message": advice}
+	return map[string]any{"id": id, "message": PostReceiptAdvice(receipt, time.Now().UTC()), "repository": repository, "session_id": session}
 }
 
 // queuePostReceipt adds a visible dispatch receipt to the next-turn queue.
@@ -135,7 +144,7 @@ func markPostGuidanceDelivered(root string, event map[string]any, repository str
 	}
 }
 
-// postPendingGuidance renders pending receipt and dispatch instructions.
+// postPendingGuidance renders pending dispatch instructions.
 func postPendingGuidance(root string, event map[string]any, repository string) string {
 	session := stringValue(event["session_id"])
 	if repository == "" || session == "" {
@@ -143,9 +152,6 @@ func postPendingGuidance(root string, event map[string]any, repository string) s
 	}
 	state := readPostReceiptState(postReceiptStatePath(root, repository), session)
 	parts := []string{}
-	if receipt, ok := state["receipt_pending"].(map[string]any); ok && state["receipt_delivered"] != true {
-		parts = append(parts, PostReceiptAdvice(receipt, time.Now().UTC()))
-	}
 	if pending, ok := state["dispatch_pending"].(map[string]any); ok {
 		if lines, ok := pending["lines"].([]any); ok && len(lines) > 0 {
 			valid, rendered := true, make([]string, 0, len(lines))
@@ -184,6 +190,15 @@ func deliverPostCompletionReceipt(response map[string]any, root string) {
 	}
 	if atomicAdmissionJSON(path, receipt) != nil {
 		return
+	}
+	statePath := postReceiptStatePath(root, stringValue(receipt["repository"]))
+	if release, err := contextio.LockFile(statePath + ".lock"); err == nil {
+		state := readPostReceiptState(statePath, stringValue(receipt["session_id"]))
+		if state["receipt_id"] == id {
+			state["receipt_delivered"] = true
+			writePostReceiptState(statePath, state)
+		}
+		release()
 	}
 	if prior := stringValue(response["systemMessage"]); prior != "" {
 		message = prior + "\n" + message

@@ -53,7 +53,7 @@
           "effort": "high",
           "model": "gpt-6-sol"
         },
-        "guidance": "Write one line in the user's language as `> ⚓ **Codex done: ...**`, showing model gpt-6-sol, effort high.\nWrite one line in the user's language as `> ⚓ **Codex: ...**`, including every exact dispatch receipt line below verbatim:\n> ⚓ **Codex: first**\n> ⚓ **Codex: second**"
+        "guidance": "Write one line in the user's language as `> ⚓ **Codex: ...**`, including every exact dispatch receipt line below verbatim:\n> ⚓ **Codex: first**\n> ⚓ **Codex: second**"
       }
     },
     {
@@ -130,7 +130,7 @@
       },
       "bundle": null,
       "expected": {
-        "guidance": "Write one line in the user's language as `> ⚓ **Codex done: ...**`, showing model gpt-6-sol, effort high.\nWrite one line in the user's language as `> ⚓ **Codex: ...**`, including every exact dispatch receipt line below verbatim:\n> ⚓ **Codex: finished job**"
+        "guidance": "Write one line in the user's language as `> ⚓ **Codex: ...**`, including every exact dispatch receipt line below verbatim:\n> ⚓ **Codex: finished job**"
       }
     },
     {

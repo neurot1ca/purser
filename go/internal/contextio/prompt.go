@@ -22,7 +22,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 		key = repositoryProjectKey(repository)
 		handoff := filepath.Join(stateRoot(), "projects", key, "telemetry", "purser-handoff.md")
 		if data, err := os.ReadFile(handoff); err == nil {
-			language = handoffUserLanguage(string(data))
+			language = HandoffUserLanguage(string(data))
 		}
 		statePath = filepath.Join(filepath.Dir(handoff), "compaction_advisor.json")
 		recordMaintenanceActivity(stateRoot(), repository, key)

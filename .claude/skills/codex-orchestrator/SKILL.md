@@ -105,12 +105,8 @@ original job's dispatcher; never replace a dispatcher mid-lifecycle.
 
 Runtime configuration owns capability; never pass `sandbox` or
 `approval-policy`. Fail over on typed quota/credit exhaustion, never route
-proactively by quota. After each call, report bundle model and effort plus
-`codex_quota` 5h/7d used percentages and reset times when present; show the
-5h reset as time remaining (e.g. "resets in 1h 20m") and the 7d reset as
-time remaining (e.g. "resets in 3d 2h", or "resets in 6h 37m" when under a day).
-Format the completion receipt as one line `> ⚓ **Codex done: ...**` in the
-user's language; explain below in plain text.
+proactively by quota. Purser shows the completion receipt; do not repeat it.
+Explain the result in plain text.
 Pass `label` on every `codex_start`, `codex`, and `codex-reply` call: a short
 human description of the task in the user's language, at most 80 characters.
 A reply may omit it only when the existing thread has a saved label. Purser

@@ -49,7 +49,7 @@ func SessionStart(event map[string]any) []byte {
 		contentBytes, _ = os.ReadFile(handoff)
 	}
 	content := strings.ReplaceAll(strings.ReplaceAll(string(contentBytes), "\r\n", "\n"), "\r", "\n")
-	language := handoffUserLanguage(string(content))
+	language := HandoffUserLanguage(string(content))
 	session, _ := event["session_id"].(string)
 	source, _ := event["source"].(string)
 	validSession := session != ""
@@ -591,7 +591,8 @@ func compactAccuracyHint(root, key string) string {
 	return strings.Join(messages, "\n")
 }
 
-func handoffUserLanguage(content string) string {
+// HandoffUserLanguage reads the user language recorded in the Purser handoff.
+func HandoffUserLanguage(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		match := handoffLanguage.FindStringSubmatch(strings.TrimSuffix(line, "\r"))
 		if len(match) == 2 {
@@ -644,7 +645,7 @@ func restoreHandoff(source, path, content, transcriptPath string) string {
 			}
 		}
 	}
-	language := handoffUserLanguage(content)
+	language := HandoffUserLanguage(content)
 	instruction := ""
 	if language != "" && !strings.EqualFold(language, "English") {
 		instruction = "Reply to the user in " + language + "; everything else stays as the project rules say.\n"
