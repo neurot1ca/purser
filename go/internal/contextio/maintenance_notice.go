@@ -49,12 +49,22 @@ func queueMaintenanceNotice(statePath, repository, key, session string) {
 			}
 		}
 		if findings, ok := notice["findings"].([]any); ok {
-			if reverifyMaintenanceFindings(repository, notice) == 0 {
-				notice["done"], notice["resolved"], notice["pending"] = true, true, false
-				_ = writeJSONAtomically(path, notice)
-				continue
-			} else if updated, ok := notice["findings"].([]any); ok && len(updated) != len(findings) {
-				_ = writeJSONAtomically(path, notice)
+			staleCount, verified := dropStaleMaintenanceFindings(repository, notice)
+			if verified {
+				if staleCount == 0 {
+					notice["done"], notice["resolved"], notice["pending"] = true, true, false
+					_ = writeJSONAtomically(path, notice)
+					continue
+				} else if updated, ok := notice["findings"].([]any); ok && len(updated) != len(findings) {
+					_ = writeJSONAtomically(path, notice)
+				}
+				if reverifyMaintenanceFindings(repository, notice) == 0 {
+					notice["done"], notice["resolved"], notice["pending"] = true, true, false
+					_ = writeJSONAtomically(path, notice)
+					continue
+				} else if updated, ok := notice["findings"].([]any); ok && len(updated) != len(findings) {
+					_ = writeJSONAtomically(path, notice)
+				}
 			}
 		}
 		show, cycle, skipSecond := maintenanceShow(notice, quota, window)
@@ -97,6 +107,92 @@ func queueMaintenanceNotice(statePath, repository, key, session string) {
 		_ = writeAdvisorState(statePath, state)
 		return
 	}
+}
+
+func dropStaleMaintenanceFindings(repository string, notice map[string]any) (int, bool) {
+	rawFindings, ok := notice["findings"].([]any)
+	if !ok {
+		return 0, false
+	}
+	reportPath := str(notice["report_path"])
+	if reportPath == "" {
+		return len(rawFindings), false
+	}
+	report, err := os.ReadFile(reportPath)
+	if err != nil || len(report) > 1<<20 {
+		return len(rawFindings), false
+	}
+	const sourcePrefix = "- Source commit: `"
+	var source string
+	for _, line := range strings.Split(string(report), "\n") {
+		if strings.HasPrefix(line, sourcePrefix) && strings.HasSuffix(line, "`") {
+			source = strings.TrimSuffix(strings.TrimPrefix(line, sourcePrefix), "`")
+			break
+		}
+	}
+	if len(source) < 40 || len(source) > 64 {
+		return len(rawFindings), false
+	}
+	for _, r := range source {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return len(rawFindings), false
+		}
+	}
+	changed, err := gitOutput(repository, "diff", "--name-only", source+"..HEAD")
+	if err != nil {
+		return len(rawFindings), false
+	}
+	changedPaths := map[string]struct{}{}
+	for _, path := range strings.Split(strings.ReplaceAll(string(changed), "\\", "/"), "\n") {
+		if path != "" {
+			changedPaths[path] = struct{}{}
+		}
+	}
+	remaining := make([]any, 0, len(rawFindings))
+	for _, raw := range rawFindings {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			remaining = append(remaining, raw)
+			continue
+		}
+		pathLine := str(item["path_line"])
+		rel := strings.TrimSpace(strings.SplitN(pathLine, ":", 2)[0])
+		if rel != "" && maintenanceFindingOrTestChanged(filepath.ToSlash(filepath.Clean(rel)), changedPaths) {
+			continue
+		}
+		remaining = append(remaining, raw)
+	}
+	notice["findings"] = remaining
+	notice["finding_count"] = len(remaining)
+	if len(remaining) == 0 {
+		notice["done"], notice["resolved"], notice["pending"] = true, true, false
+	}
+	return len(remaining), true
+}
+
+func maintenanceFindingOrTestChanged(path string, changed map[string]struct{}) bool {
+	if _, ok := changed[path]; ok {
+		return true
+	}
+	dir, name := filepath.ToSlash(filepath.Dir(path)), filepath.Base(path)
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	testNames := []string{base + ".test" + ext, base + "_test" + ext}
+	if ext == ".go" {
+		for _, platform := range []string{"_windows", "_linux", "_darwin", "_freebsd", "_openbsd", "_netbsd", "_amd64", "_arm64"} {
+			testNames = append(testNames, base+platform+"_test"+ext)
+		}
+	}
+	for _, testName := range testNames {
+		testPath := testName
+		if dir != "." {
+			testPath = dir + "/" + testName
+		}
+		if _, ok := changed[testPath]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func latestMaintenanceQuota() (map[string]any, *[3]any, bool) {

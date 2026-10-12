@@ -76,15 +76,116 @@ func TestMaintenanceNoticeKeepsFindingWhenGitReverificationFails(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, ".git"), []byte("gitdir: C:\\does-not-exist"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	notice := map[string]any{"finding_count": 1, "findings": []any{
+	notice := map[string]any{"report_path": filepath.Join(repo, "report.md"), "finding_count": 1, "findings": []any{
 		map[string]any{"path_line": "artifact.db:1", "evidence": "tracked database"},
 	}}
-	if got := reverifyMaintenanceFindings(repo, notice); got != 1 {
-		t.Fatalf("remaining findings=%d, want 1", got)
+	if err := os.WriteFile(str(notice["report_path"]), []byte("- Source commit: `0123456789012345678901234567890123456789`\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if notice["done"] == true || notice["resolved"] == true {
-		t.Fatalf("Git failure marked report resolved: %#v", notice)
+	before := append([]any(nil), notice["findings"].([]any)...)
+	if _, ok := dropStaleMaintenanceFindings(repo, notice); ok {
+		t.Fatal("invalid repository unexpectedly verified a diff")
 	}
+	remaining, _ := notice["findings"].([]any)
+	unchanged := len(remaining) == 1 && remaining[0].(map[string]any)["path_line"] == before[0].(map[string]any)["path_line"]
+	if notice["finding_count"] != 1 || notice["done"] == true || notice["resolved"] == true || !unchanged {
+		t.Fatalf("Git failure changed notice: %#v", notice)
+	}
+}
+
+func TestMaintenanceNoticeDropsAllStaleFindings(t *testing.T) {
+	repo := maintenanceNoticeGitRepo(t)
+	maintenanceNoticeWrite(t, repo, "hooks/mod/state-root.ts", "source")
+	maintenanceNoticeWrite(t, repo, "go/internal/release/smoke.go", "source")
+	maintenanceNoticeCommit(t, repo, "baseline")
+	source := maintenanceNoticeHead(t, repo)
+	maintenanceNoticeWrite(t, repo, "hooks/mod/state-root.test.ts", "test")
+	maintenanceNoticeWrite(t, repo, "go/internal/release/smoke_test.go", "test")
+	maintenanceNoticeCommit(t, repo, "tests")
+	notice := maintenanceNoticeFixture(t, repo, source, []string{"hooks/mod/state-root.ts:1", "go/internal/release/smoke.go:1"})
+	if got, ok := dropStaleMaintenanceFindings(repo, notice); !ok || got != 0 {
+		t.Fatalf("remaining=%d verified=%v, want 0,true", got, ok)
+	}
+	if len(notice["findings"].([]any)) != 0 || notice["finding_count"] != 0 || notice["done"] != true || notice["resolved"] != true {
+		t.Fatalf("stale findings remain: %#v", notice)
+	}
+}
+
+func TestMaintenanceNoticeFiltersSomeStaleFindings(t *testing.T) {
+	repo := maintenanceNoticeGitRepo(t)
+	maintenanceNoticeWrite(t, repo, "go/internal/contextio/lock.go", "source")
+	maintenanceNoticeWrite(t, repo, "go/internal/contextio/maintenance_pid_windows.go", "source")
+	maintenanceNoticeWrite(t, repo, "go/internal/contextio/untouched.go", "source")
+	maintenanceNoticeCommit(t, repo, "baseline")
+	source := maintenanceNoticeHead(t, repo)
+	maintenanceNoticeWrite(t, repo, "go/internal/contextio/lock_windows_test.go", "test")
+	maintenanceNoticeCommit(t, repo, "add test")
+	notice := maintenanceNoticeFixture(t, repo, source, []string{
+		"go/internal/contextio/lock.go:1",
+		"go/internal/contextio/maintenance_pid_windows.go:1",
+		"go/internal/contextio/untouched.go:1",
+	})
+	if got, ok := dropStaleMaintenanceFindings(repo, notice); !ok || got != 2 {
+		t.Fatalf("remaining=%d verified=%v, want 2,true", got, ok)
+	}
+	findings := notice["findings"].([]any)
+	if notice["finding_count"] != 2 || findings[0].(map[string]any)["path_line"] != "go/internal/contextio/maintenance_pid_windows.go:1" || findings[1].(map[string]any)["path_line"] != "go/internal/contextio/untouched.go:1" {
+		t.Fatalf("remaining rows/count mismatch: %#v", notice)
+	}
+}
+
+func maintenanceNoticeGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	command := exec.Command("git", "-C", repo, "init", "-q")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	return repo
+}
+
+func maintenanceNoticeWrite(t *testing.T, repo, name, value string) {
+	t.Helper()
+	path := filepath.Join(repo, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func maintenanceNoticeCommit(t *testing.T, repo, message string) {
+	t.Helper()
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message, "-q"}} {
+		command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+}
+
+func maintenanceNoticeHead(t *testing.T, repo string) string {
+	t.Helper()
+	command := exec.Command("git", "-C", repo, "rev-parse", "HEAD")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func maintenanceNoticeFixture(t *testing.T, repo, source string, paths []string) map[string]any {
+	t.Helper()
+	findings := make([]any, 0, len(paths))
+	for _, path := range paths {
+		findings = append(findings, map[string]any{"path_line": path, "evidence": "missing test"})
+	}
+	reportPath := filepath.Join(repo, "report.md")
+	if err := os.WriteFile(reportPath, []byte("- Source commit: `"+source+"`\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{"report_path": reportPath, "finding_count": len(findings), "findings": findings}
 }
 
 func TestMaintenanceNoticeLegacyFindingHasReason(t *testing.T) {
