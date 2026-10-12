@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"math"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -90,8 +91,8 @@ func LaunchFailureEvidence(agent string, events []map[string]any, stderr string,
 	if !work && creditError.MatchString(text) {
 		return evidence("CREDIT_EXHAUSTED", nil, false)
 	}
-	if !work && rateError.MatchString(text) {
-		return evidence("RATE_LIMITED", after, false)
+	if rateError.MatchString(text) {
+		return evidence("RATE_LIMITED", after, !work && !stdout && !output)
 	}
 	if agent == "opencode" && !work {
 		for _, e := range events {
@@ -111,6 +112,55 @@ func LaunchFailureEvidence(agent string, events []map[string]any, stderr string,
 		return e
 	}
 	return evidence("AMBIGUOUS", nil, false)
+}
+
+// reserveCapacityRetry consumes the durable budget before waiting or starting
+// another worker. The current host keeps the launch intent and generation.
+func reserveCapacityRetry(path, id string, generation int64, token string, evidence map[string]any) (time.Duration, bool, error) {
+	if evidence["type"] != "RATE_LIMITED" || evidence["noWorkProof"] != true {
+		return 0, false, nil
+	}
+	lock, err := AcquireOwnership(filepath.Dir(path), id)
+	if err != nil {
+		return 0, false, err
+	}
+	defer lock.Release()
+	job, err := Read(path)
+	if err != nil {
+		return 0, false, err
+	}
+	actual, valid := recoveryInteger(job, "generation")
+	var owner, state string
+	job.Get("ownershipToken", &owner)
+	job.Get("state", &state)
+	attempts := int64(0)
+	if _, exists := job.values["capacityRetryAttempts"]; exists {
+		var ok bool
+		attempts, ok = recoveryInteger(job, "capacityRetryAttempts")
+		valid = valid && ok
+	}
+	if !valid || actual != generation || owner != token || state != "RUNNING" || attempts < 0 || attempts >= 2 {
+		return 0, false, nil
+	}
+	delay := time.Duration(1<<attempts) * time.Second
+	if after, ok := evidence["retryAfterSeconds"].(*float64); ok && after != nil {
+		if math.IsNaN(*after) || math.IsInf(*after, 0) || *after < 0 {
+			return 0, false, nil
+		}
+		delay = max(delay, time.Duration(math.Min(*after, 30)*float64(time.Second)))
+	}
+	deadline, valid := numericDeadline(job)
+	if !valid || delay >= time.Until(time.Unix(0, int64(deadline*1e9))) {
+		return 0, false, nil
+	}
+	if err = job.Set("capacityRetryAttempts", attempts+1); err != nil {
+		return 0, false, err
+	}
+	job.Delete("exitCode")
+	if err = Write(path, job); err != nil {
+		return 0, false, err
+	}
+	return delay, true, nil
 }
 
 func RunWithResponsivenessRetries(run func() map[string]any, clock func() time.Duration, sleep func(time.Duration)) map[string]any {

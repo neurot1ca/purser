@@ -94,6 +94,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		prompt = value
 	}
 	args.Name = launch.Name
+	if args.ThreadID == "" {
+		args.ThreadID, _ = argsMap["threadId"].(string)
+	}
 	args.OutputPath = filepath.Join(dir, jobID+".host-output")
 	if args.Cwd == "" {
 		job.Get("repoRoot", &args.Cwd)
@@ -395,124 +398,168 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if err != nil {
 		return nil, err
 	}
-	command := exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...)
-	if len(childEnv) != 0 {
-		command.Env = os.Environ()
-		for _, override := range childEnv {
-			key, _, _ := strings.Cut(override, "=")
-			found := false
-			for index, entry := range command.Env {
-				entryKey, _, _ := strings.Cut(entry, "=")
-				if strings.EqualFold(entryKey, key) {
-					command.Env[index] = override
-					found = true
+	var result EventResult
+	var failureEvidence map[string]any
+	for {
+		command := exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...)
+		if len(childEnv) != 0 {
+			command.Env = os.Environ()
+			for _, override := range childEnv {
+				key, _, _ := strings.Cut(override, "=")
+				found := false
+				for index, entry := range command.Env {
+					entryKey, _, _ := strings.Cut(entry, "=")
+					if strings.EqualFold(entryKey, key) {
+						command.Env[index] = override
+						found = true
+					}
+				}
+				if !found {
+					command.Env = append(command.Env, override)
 				}
 			}
-			if !found {
-				command.Env = append(command.Env, override)
-			}
 		}
-	}
-	command.Dir = args.Cwd
-	command.Stdin = strings.NewReader(prompt)
-	stream := NewEventStream(agent)
-	activity := NewLivenessActivity(job, agent, StallThreshold(dir, job), now)
-	activityMu := &sync.Mutex{}
-	command.Stdout = eventWriter{stream: stream, activity: activity, activityMu: activityMu}
-	stderr := &tailBuffer{limit: 4000}
-	command.Stderr = stderr
-	proc.ConfigureProcessTreeKill(command)
-	if err = command.Start(); err != nil {
-		close(terminal)
-		contextErr := ctx.Err()
-		if contextErr == nil && float64(time.Now().UnixNano())/1e9 >= deadline {
-			contextErr = context.DeadlineExceeded
+		command.Dir = args.Cwd
+		command.Stdin = strings.NewReader(prompt)
+		stream := NewEventStream(agent)
+		activity := NewLivenessActivity(job, agent, StallThreshold(dir, job), now)
+		activityMu := &sync.Mutex{}
+		command.Stdout = eventWriter{stream: stream, activity: activity, activityMu: activityMu}
+		stderr := &tailBuffer{limit: 4000}
+		command.Stderr = stderr
+		proc.ConfigureProcessTreeKill(command)
+		lock, err = AcquireOwnership(dir, jobID)
+		if err != nil {
+			return nil, err
 		}
-		return finishHostStartError(dir, jobID, generation, token, cancelled.Load(), contextErr, err)
-	}
-	lock, err = AcquireOwnership(dir, jobID)
-	if err == nil {
 		job, err = Read(path)
 		if err == nil {
+			job.Get("generation", &recordedGeneration)
+			job.Get("ownershipToken", &recordedToken)
+			job.Get("state", &state)
+			if recordedGeneration != generation || recordedToken != token || state != "RUNNING" {
+				_ = lock.Release()
+				return map[string]any{"status": "stale"}, nil
+			}
+			err = command.Start()
+			if err != nil {
+				_ = lock.Release()
+				close(terminal)
+				contextErr := ctx.Err()
+				if contextErr == nil && float64(time.Now().UnixNano())/1e9 >= deadline {
+					contextErr = context.DeadlineExceeded
+				}
+				return finishHostStartError(dir, jobID, generation, token, cancelled.Load(), contextErr, err)
+			}
 			_ = job.Set("pid", command.Process.Pid)
 			err = Write(path, job)
 		}
 		if releaseErr := lock.Release(); err == nil {
 			err = releaseErr
 		}
-	}
-	if err != nil {
-		_ = command.Process.Kill()
-		return nil, err
-	}
-	activityMu.Lock()
-	_, checkpointErr := CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, true, true)
-	activityMu.Unlock()
-	if checkpointErr != nil {
-		_ = command.Process.Kill()
-		return nil, checkpointErr
-	}
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
-	checkTicker := time.NewTicker(100 * time.Millisecond)
-	defer checkTicker.Stop()
-	var runErr error
-	for running := true; running; {
-		select {
-		case runErr = <-done:
-			running = false
-		case <-checkTicker.C:
+		if err != nil {
+			if command.Process != nil {
+				_ = command.Process.Kill()
+			}
+			return nil, err
+		}
+		activityMu.Lock()
+		_, checkpointErr := CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, true, true)
+		activityMu.Unlock()
+		if checkpointErr != nil {
+			_ = command.Process.Kill()
+			return nil, checkpointErr
+		}
+		done := make(chan error, 1)
+		go func() { done <- command.Wait() }()
+		checkTicker := time.NewTicker(100 * time.Millisecond)
+		defer checkTicker.Stop()
+		var runErr error
+		for running := true; running; {
+			select {
+			case runErr = <-done:
+				running = false
+			case <-checkTicker.C:
+				activityMu.Lock()
+				_, checkpointErr := CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, true, false)
+				activityMu.Unlock()
+				if checkpointErr != nil {
+					_ = command.Process.Kill()
+					return nil, checkpointErr
+				}
+			}
+		}
+		checkTicker.Stop()
+		if !cancelled.Load() {
 			activityMu.Lock()
-			_, checkpointErr := CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, true, false)
+			lastActivity := numberOr(activity["lastActivityAt"], float64(time.Now().UnixNano())/1e9)
+			activity["longestSilentGapSeconds"] = math.Max(numberOr(activity["longestSilentGapSeconds"], 0), math.Max(0, float64(time.Now().UnixNano())/1e9-lastActivity))
+			_, checkpointErr = CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, false, true)
 			activityMu.Unlock()
 			if checkpointErr != nil {
-				_ = command.Process.Kill()
 				return nil, checkpointErr
 			}
 		}
-	}
-	if !cancelled.Load() {
-		activityMu.Lock()
-		lastActivity := numberOr(activity["lastActivityAt"], float64(time.Now().UnixNano())/1e9)
-		activity["longestSilentGapSeconds"] = math.Max(numberOr(activity["longestSilentGapSeconds"], 0), math.Max(0, float64(time.Now().UnixNano())/1e9-lastActivity))
-		_, checkpointErr = CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, false, true)
-		activityMu.Unlock()
-		if checkpointErr != nil {
-			return nil, checkpointErr
+		exitCode := 0
+		if runErr != nil {
+			var exit *exec.ExitError
+			if errors.As(runErr, &exit) {
+				exitCode = exit.ExitCode()
+			} else {
+				exitCode = 1
+			}
 		}
-	}
-	exitCode := 0
-	if runErr != nil {
-		var exit *exec.ExitError
-		if errors.As(runErr, &exit) {
-			exitCode = exit.ExitCode()
-		} else {
+		if cancelled.Load() || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			exitCode = 1
 		}
-	}
-	if cancelled.Load() || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		exitCode = 1
-	}
-	lock, err = AcquireOwnership(dir, jobID)
-	if err == nil {
-		job, err = Read(path)
+		lock, err = AcquireOwnership(dir, jobID)
 		if err == nil {
-			_ = job.Set("exitCode", exitCode)
-			events := stream.Events()
-			if evidence := TestEvidence(events); len(evidence) > 0 {
-				_ = job.Set("testEvidence", evidence)
+			job, err = Read(path)
+			if err == nil {
+				_ = job.Set("exitCode", exitCode)
+				events := stream.Events()
+				if evidence := TestEvidence(events); len(evidence) > 0 {
+					_ = job.Set("testEvidence", evidence)
+				}
+				_ = job.Set("testEvidenceFailed", TestEvidenceFailed(events))
+				err = Write(path, job)
 			}
-			_ = job.Set("testEvidenceFailed", TestEvidenceFailed(events))
-			err = Write(path, job)
+			if releaseErr := lock.Release(); err == nil {
+				err = releaseErr
+			}
 		}
-		if releaseErr := lock.Release(); err == nil {
-			err = releaseErr
+		if err != nil {
+			return nil, err
+		}
+		result = stream.Result(cancelled.Load() || ctx.Err() != nil, exitCode, stderr.String())
+		if cancelled.Load() || ctx.Err() != nil {
+			break
+		}
+		failureEvidence = LaunchFailureEvidence(agent, stream.Events(), stderr.String(), true,
+			numberOr(activity["stdoutBytes"], 0) > 0, hostOutputHasData(args.OutputPath), &exitCode)
+		if err = saveHostAttemptFields(path, jobID, generation, token, result.Status != "success" || result.ThreadID == "", failureEvidence); err != nil {
+			return nil, err
+		}
+		if result.Status == "success" {
+			break
+		}
+		delay, retry, retryErr := reserveCapacityRetry(path, jobID, generation, token, failureEvidence)
+		if retryErr != nil {
+			return nil, retryErr
+		}
+		if !retry {
+			break
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		if cancelled.Load() || ctx.Err() != nil {
+			break
 		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	result := stream.Result(cancelled.Load() || ctx.Err() != nil, exitCode, stderr.String())
 	if result.ThreadID != "" {
 		configArgs, configErr := FlattenConfig(args.Config)
 		if configErr != nil {
@@ -546,12 +593,6 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			return nil, err
 		}
 	}
-	if !cancelled.Load() && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		if err = saveHostAttemptFields(path, jobID, generation, token, result.Status != "success" || result.ThreadID == "",
-			LaunchFailureEvidence(agent, stream.Events(), stderr.String(), true, numberOr(activity["stdoutBytes"], 0) > 0, hostOutputHasData(args.OutputPath), &exitCode)); err != nil {
-			return nil, err
-		}
-	}
 	finished := float64(time.Now().UnixNano()) / 1e9
 	switch {
 	case cancelled.Load():
@@ -564,7 +605,13 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			message = "Codex completion event missing"
 		}
 		message = "Codex failed: " + message
-		err = finishJob(dir, jobID, "FAILED", "CODEX_FAILED", nil, message, finished, hostFinishOptions(generation, token))
+		code := "CODEX_FAILED"
+		if attempts, valid := recoveryInteger(job, "capacityRetryAttempts"); valid && attempts >= 2 &&
+			failureEvidence["type"] == "RATE_LIMITED" && failureEvidence["noWorkProof"] == true {
+			code = "CAPACITY_RETRIES_EXHAUSTED"
+			message += "; automatic capacity retries exhausted"
+		}
+		err = finishJob(dir, jobID, "FAILED", code, nil, message, finished, hostFinishOptions(generation, token))
 	default:
 		content := result.Final
 		if data, readErr := os.ReadFile(args.OutputPath); readErr == nil {
@@ -680,9 +727,12 @@ func saveHostAttemptFields(path, id string, generation int64, token string, fail
 		job.Get("ownershipToken", &owner)
 		job.Get("state", &state)
 		if actual == generation && owner == token && state == "RUNNING" {
-			_ = job.Set("responsivenessAttempts", 1)
+			attempts, _ := recoveryInteger(job, "capacityRetryAttempts")
+			_ = job.Set("responsivenessAttempts", attempts+1)
 			if failed {
 				_ = job.Set("launchFailureEvidence", evidence)
+			} else {
+				job.Delete("launchFailureEvidence")
 			}
 			err = Write(path, job)
 		}
@@ -695,7 +745,7 @@ func saveHostAttemptFields(path, id string, generation int64, token string, fail
 
 func hostOutputHasData(path string) bool {
 	data, err := os.ReadFile(path)
-	return err == nil && len(data) > 0
+	return len(data) > 0 || err != nil && !errors.Is(err, os.ErrNotExist)
 }
 
 type eventWriter struct {
