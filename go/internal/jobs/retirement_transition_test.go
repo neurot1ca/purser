@@ -178,7 +178,7 @@ func TestDiscardedCancelRetiresWorktreeWhenChildCompletes(t *testing.T) {
 
 func retirementApplyJob(t *testing.T, id string) (string, string) {
 	t.Helper()
-	base := t.TempDir()
+	base := jobsScratchDir(t, "apply-retirement-")
 	state, repo := filepath.Join(base, "state"), filepath.Join(base, "repo")
 	worktree := filepath.Join(state, "wt", id)
 	if err := os.MkdirAll(filepath.Dir(worktree), 0700); err != nil {

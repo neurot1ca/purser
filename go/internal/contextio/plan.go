@@ -19,6 +19,11 @@ import (
 const planSchemaVersion = 1
 const planCollectionVersion = 2
 
+var knownPlanValidationStates = map[string]struct{}{
+	"PENDING": {}, "PASS": {}, "FAILED": {}, "FAIL": {}, "UNKNOWN": {},
+	"STALE": {}, "LAUNCH_ERROR": {}, "INTERRUPTED": {}, "TIMEOUT": {}, "SKIPPED": {},
+}
+
 type PlanState struct {
 	Version             int              `json:"version"`
 	Revision            int              `json:"revision"`
@@ -718,12 +723,73 @@ func RecordPlanApply(root, repository, taskID, jobID string) error {
 		return errors.New("applied job is not linked to the current plan action")
 	}
 	state.AppliedPasses = append(state.AppliedPasses, PlanPass{Milestone: milestone, TaskID: taskID, JobID: jobID})
+	for i := range state.Milestones {
+		if milestoneNumber(state.Milestones[i].ID) == milestone {
+			state.Milestones[i].ValidationState = "PENDING"
+		}
+	}
 	linked = removeString(linked, jobID)
 	setLinkedJobs(state, linked)
 	state.PendingNextAction = pendingAction(state)
 	advanceAppliedMilestone(root, state)
 	state.Revision++
 	return writePlans(path, states)
+}
+
+// RecordPlanValidation updates the M3 readiness predicate for an applied pass.
+func RecordPlanValidation(root, repository, taskID, jobID, status string) error {
+	if _, ok := knownPlanValidationStates[status]; !ok {
+		return fmt.Errorf("invalid plan validation status %q", status)
+	}
+	path, canonical, err := planPath(root, repository)
+	if err != nil {
+		return err
+	}
+	unlock, err := LockFile(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	states, err := readPlans(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return err
+	}
+	state, _, matches, err := resolvePlanOwner(states, taskID)
+	if err != nil || !matches {
+		return err
+	}
+	if !hasAppliedJob(state, jobID) {
+		return nil
+	}
+	changed := false
+	for i := range state.Milestones {
+		if milestoneNumber(state.Milestones[i].ID) == milestoneForPass(state, jobID) && state.Milestones[i].ValidationState != status {
+			state.Milestones[i].ValidationState = status
+			changed = true
+		}
+	}
+	if changed {
+		advanceAppliedMilestone(root, state)
+		state.ReadyMilestones = readyMilestones(root, state)
+		state.Revision++
+		return writePlans(path, states)
+	}
+	return nil
+}
+
+func milestoneForPass(state *PlanState, jobID string) int {
+	for _, pass := range state.AppliedPasses {
+		if pass.JobID == jobID {
+			return pass.Milestone
+		}
+	}
+	return 0
 }
 
 // ReconcilePlanJob clears a missing or failed link and recovers an applied pass
@@ -1053,6 +1119,23 @@ func planDependenciesDone(state *PlanState, n int) bool {
 	return false
 }
 
+func appliedMilestoneAwaitingValidation(state *PlanState, n int) bool {
+	if len(state.Milestones) == 0 {
+		return false
+	}
+	for _, pass := range state.AppliedPasses {
+		if pass.Milestone != n {
+			continue
+		}
+		for _, milestone := range state.Milestones {
+			if milestoneNumber(milestone.ID) == n {
+				return milestone.ValidationState != "PASS"
+			}
+		}
+	}
+	return false
+}
+
 func readyMilestones(root string, state *PlanState) []ReadyMilestone {
 	if state.UserStopped || state.Gate != "" {
 		return nil
@@ -1063,6 +1146,9 @@ func readyMilestones(root string, state *PlanState) []ReadyMilestone {
 			continue
 		}
 		if containsMilestone(state.CompletedMilestones, n) || len(state.Milestones) > 0 && !planDependenciesDone(state, n) {
+			continue
+		}
+		if appliedMilestoneAwaitingValidation(state, n) {
 			continue
 		}
 		// Any linked pass (including a result awaiting apply) prevents duplicate dispatch.
@@ -1129,7 +1215,8 @@ func advanceAppliedMilestone(root string, state *PlanState) {
 				break
 			}
 		}
-		if passed && !hasOpenLinkedJob(root, state, n) {
+		validationPassed := len(state.Milestones) == 0 || !appliedMilestoneAwaitingValidation(state, n)
+		if passed && validationPassed && !hasOpenLinkedJob(root, state, n) {
 			state.CompletedMilestones = append(state.CompletedMilestones, n)
 			if len(state.Milestones) == 0 {
 				break

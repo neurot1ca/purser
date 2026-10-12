@@ -223,6 +223,23 @@ func resultJob(dir, id string, now float64, opt ResultOptions) map[string]any {
 	}
 	value := map[string]any{"jobId": m["jobId"], "state": m["state"]}
 	keys := []string{"jobId", "state"}
+	root := opt.StateRoot
+	if root == "" {
+		root = filepath.Dir(filepath.Dir(dir))
+	}
+	var validation any
+	if repository := nonemptyString(m["repoRoot"]); repository != "" {
+		if result := ApplyValidationResult(root, repository, id); result != nil {
+			validation = result
+		}
+	}
+	if validation == nil {
+		validation = m["applyValidation"]
+	}
+	if validation != nil {
+		value["validation"] = validation
+		keys = append(keys, "validation")
+	}
 	for _, key := range []string{"attemptedModels", "servedAgent", "servedModel"} {
 		if v, ok := m[key]; ok {
 			value[key] = v

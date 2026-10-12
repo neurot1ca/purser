@@ -34,7 +34,23 @@ func privateMain() (code int) {
 	if os.Args[1] == "retire-worktree" {
 		return retireWorktreeMain(os.Args[2:])
 	}
+	if os.Args[1] == "validate-apply" {
+		return validateApplyMain(os.Args[2:])
+	}
 	return operationMain(os.Args[2:])
+}
+
+func validateApplyMain(argv []string) int {
+	if len(argv) != 3 {
+		privateError(errors.New("usage: purser-hook validate-apply <stateRoot> <repositoryKey> <jobId>"))
+		return 2
+	}
+	if err := jobs.RunApplyValidation(argv[0], argv[1], argv[2]); err != nil {
+		privateError(err)
+		return 1
+	}
+	writePrivateJSON(map[string]any{"status": "ok"})
+	return 0
 }
 
 func retireWorktreeMain(argv []string) int {

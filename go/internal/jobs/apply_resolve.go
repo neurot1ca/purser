@@ -79,6 +79,8 @@ func applyResolvedJob(stateRoot, dir, jobID string, job *Record, repo, worktree,
 	values = recordMap(job)
 	supersedeEarlierTaskJobs(stateRoot, jobID, values)
 	recordPlanApply(stateRoot, values, jobID)
+	enqueueAppliedValidation(stateRoot, values, value)
+	addReadyPlanMilestones(stateRoot, values, value)
 	recordScopeOutcome(opt, stateRoot, values, "resolved_by_hand")
 	recordApplyDecision(opt, stateRoot, values, "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)

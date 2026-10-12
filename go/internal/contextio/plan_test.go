@@ -107,9 +107,29 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 	if err := RecordPlanApply(root, repo, "graph-m1of3", "first"); err != nil {
 		t.Fatal(err)
 	}
+	if err := RecordPlanValidation(root, repo, "graph-m1of3", "first", "PENDING"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlanForTask(root, repo, "graph")
+	if err != nil || len(state.ReadyMilestones) != 0 || containsMilestone(state.CompletedMilestones, 1) {
+		t.Fatalf("pending host validation released dependent: %+v %v", state, err)
+	}
+	if err := RecordPlanValidation(root, repo, "graph-m1of3", "first", "SKIPPED"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlanForTask(root, repo, "graph")
+	if err != nil || len(state.ReadyMilestones) != 0 || containsMilestone(state.CompletedMilestones, 1) {
+		t.Fatalf("skipped host validation completed prerequisite: %+v %v", state, err)
+	}
+	if err := RecordPlanValidation(root, repo, "graph-m1of3", "first", "PASS"); err != nil {
+		t.Fatal(err)
+	}
 	state, err = ReadPlanForTask(root, repo, "graph")
 	if err != nil || state.CurrentMilestone == 0 || len(state.ReadyMilestones) != 1 || state.ReadyMilestones[0].ID != "M3" || len(state.LinkedJobs) != 1 {
 		t.Fatalf("dependent not released alongside independent work: %+v %v", state, err)
+	}
+	if !containsMilestone(state.CompletedMilestones, 1) {
+		t.Fatalf("passing host validation did not complete prerequisite: %+v", state)
 	}
 	if state.ReadyMilestones[0].ArtifactRef != state.ArtifactPath+"#M3" {
 		t.Fatal("missing artifact pointer")
@@ -126,7 +146,7 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 	// The validation seam blocks dependent release whenever a state is present
 	// and not PASS; absence retains existing completion behavior.
 	path, _, _ := planPath(root, repo)
-	for _, validation := range []string{"PENDING", "FAIL", "UNKNOWN"} {
+	for _, validation := range []string{"PENDING", "FAIL", "UNKNOWN", "SKIPPED"} {
 		state.Milestones[0].ValidationState = validation
 		if err := writePlans(path, []*PlanState{state}); err != nil {
 			t.Fatal(err)
@@ -151,6 +171,26 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+}
+
+func TestRecordPlanValidationRejectsUnknownStatus(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "graph", artifact, []int{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPlanValidation(root, repo, "graph-m1of3", "missing", "NOT_A_STATUS"); err == nil {
+		t.Fatal("unknown validation status was accepted")
+	}
+	state, err := ReadPlanForTask(root, repo, "graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Milestones[0].ValidationState != "" {
+		t.Fatalf("unknown validation status was stored: %+v", state.Milestones[0])
 	}
 }
 

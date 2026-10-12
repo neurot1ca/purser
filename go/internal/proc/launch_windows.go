@@ -26,3 +26,10 @@ func ConfigureProcessTreeKill(command *exec.Cmd) {
 		return command.Process.Kill()
 	}
 }
+
+func ConfigureBelowNormalPriority(command *exec.Cmd) {
+	if command.SysProcAttr == nil {
+		command.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	command.SysProcAttr.CreationFlags |= 0x00004000
+}

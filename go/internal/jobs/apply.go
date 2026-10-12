@@ -19,6 +19,7 @@ import (
 // Apply applies a succeeded worktree job to its repository. stateRoot is the
 // Purser state directory that contains codex_exec_mcp/jobs.
 func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[string]any {
+	RecoverApplyValidations(stateRoot)
 	var opt ApplyOptions
 	if len(options) != 0 {
 		opt = options[0]
@@ -111,6 +112,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	var saved map[string]any
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
 		recordPlanApply(stateRoot, recordMap(job), jobID)
+		enqueueAppliedValidation(stateRoot, recordMap(job), saved)
 		addReadyPlanMilestones(stateRoot, recordMap(job), saved)
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
@@ -219,6 +221,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		values := recordMap(job)
 		supersedeEarlierTaskJobs(stateRoot, jobID, values)
 		recordPlanApply(stateRoot, values, jobID)
+		enqueueAppliedValidation(stateRoot, values, value)
 		addReadyPlanMilestones(stateRoot, values, value)
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
@@ -257,6 +260,7 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	}
 	recordPlanApply(stateRoot, recordMap(job), jobID)
+	enqueueAppliedValidation(stateRoot, recordMap(job), value)
 	addReadyPlanMilestones(stateRoot, recordMap(job), value)
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	dispatchWorktreeRetirement(stateRoot, jobID)

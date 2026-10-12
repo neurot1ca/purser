@@ -114,6 +114,7 @@ func TestApplyResolvedPythonOracle(t *testing.T) {
 			gotRaw, _ := json.Marshal(Apply(state, map[string]any{"jobId": c.JobID, "resolved": true}, options)["structuredContent"])
 			var got map[string]any
 			_ = json.Unmarshal(gotRaw, &got)
+			delete(got, "validation")
 			if !reflect.DeepEqual(got, c.Result) {
 				t.Errorf("result got %#v want %#v", got, c.Result)
 			}

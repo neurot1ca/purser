@@ -18,3 +18,5 @@ func ConfigureProcessTreeKill(command *exec.Cmd) {
 		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 	}
 }
+
+func ConfigureBelowNormalPriority(_ *exec.Cmd) {}

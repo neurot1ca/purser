@@ -40,10 +40,21 @@ func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
 	}
 	result := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
 	ready, ok := result["ready_milestones"].([]contextio.ReadyMilestone)
-	if result["applied"] != true || !ok || len(ready) != 1 || ready[0].ID != "M2" {
-		t.Fatalf("apply omitted ready dependent: %#v", result)
+	if result["applied"] != true || ok || result["validation"].(map[string]any)["status"] != "pending" {
+		t.Fatalf("apply released dependent before host validation: %#v", result)
 	}
 	state, err := contextio.ReadPlanForTask(root, repo, "plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := contextio.RecordPlanValidation(root, repo, "plan-m1of2", id, "PASS"); err != nil {
+		t.Fatal(err)
+	}
+	ready, err = contextio.PlanReadiness(root, repo, "plan-m1of2")
+	if err != nil || len(ready) != 1 || ready[0].ID != "M2" {
+		t.Fatalf("passing host validation did not release dependent: %v %v", ready, err)
+	}
+	state, err = contextio.ReadPlanForTask(root, repo, "plan")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +161,7 @@ func TestApplyPythonOracle(t *testing.T) {
 			if got["worktreePath"] != nil {
 				got["worktreePath"] = "WORKTREE"
 			}
+			delete(got, "validation")
 			if !reflect.DeepEqual(got, c.Result) {
 				t.Errorf("result got %#v want %#v", got, c.Result)
 			}
@@ -162,6 +174,7 @@ func TestApplyPythonOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			delete(record, "appliedAt")
+			delete(record, "applyValidation")
 			record["repoRoot"] = "REPO"
 			record["worktreePath"] = "WORKTREE"
 			if apply, ok := record["applyResult"].(map[string]any); ok && apply["worktreePath"] != nil {
