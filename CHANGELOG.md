@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.143 — 2026-10-12
+
+- **New:** after an apply, Purser validates the applied revision on the host in a hidden, low-priority run (go vet, go test, plugin test) and binds the result to that revision.
+- **New:** when Codex work is held for quota, Purser records the reset time and the session wakes itself with "⚓ Codex quota renewed ✓" once it passes.
+- **Changed:** reruns and same-thread replies mark earlier unapplied jobs superseded, cancelling a finished unapplied job rejects it, and the job board shows both as done.
+- **Changed:** background shell calls get a description in the user's language, and the dispatcher names its waiter in that language.
+- **Fixed:** Purser never flashes console windows: every Windows launch is hidden, and a guard test rejects unhidden launches.
+- **Fixed:** cancelled jobs' worktrees are cleaned up, and the Linux temp sweep no longer follows symlinks.
 ## 0.1.142 — 2026-10-12
 
 - **New:** Purser shows the Codex completion receipt itself, in the user's language; Claude no longer writes it.
