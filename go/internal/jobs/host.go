@@ -296,36 +296,18 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			}
 		}
 		args.Cwd = mapped
-		if agent == "codex" {
-			var writableRoots []any = []any{worktreePath}
-			for _, variable := range []struct{ name, directory string }{
-				{"GOCACHE", filepath.Join(stateRoot, "cache", "go-build")},
-				{"GOTMPDIR", filepath.Join(stateRoot, "cache", "go-tmp")},
-			} {
-				if os.Getenv(variable.name) != "" {
-					continue
-				}
-				if err = os.MkdirAll(variable.directory, 0700); err != nil {
-					return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Codex Go cache directory is unavailable")
-				}
-				writableRoots = append(writableRoots, variable.directory)
-				childEnv = append(childEnv, variable.name+"="+variable.directory)
-			}
-			config := map[string]any{}
-			if ordered, ok := args.Config.(OrderedObject); ok {
-				for _, entry := range ordered {
-					config[entry.Key] = entry.Value
-				}
-			} else if existing, ok := args.Config.(map[string]any); ok {
-				config = existing
-			}
-			for key := range config {
-				if strings.HasPrefix(key, "sandbox_workspace_write.") {
-					delete(config, key)
-				}
-			}
-			config["sandbox_workspace_write"] = map[string]any{"writable_roots": writableRoots}
-			args.Config = config
+	}
+	if agent == "codex" {
+		stateRoot := opt.StateRoot
+		if stateRoot == "" {
+			stateRoot = filepath.Dir(filepath.Dir(dir))
+		}
+		var writableRoots []any
+		if worktreePath != "" {
+			writableRoots = append(writableRoots, worktreePath)
+		}
+		if err = configureCodexGoCache(&args, &childEnv, stateRoot, writableRoots); err != nil {
+			return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Codex Go cache directory is unavailable")
 		}
 	}
 	if launch.CodexBin != nil {
@@ -604,6 +586,64 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		return nil, err
 	}
 	return map[string]any{"status": "ok"}, nil
+}
+
+func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot string, writableRoots []any) error {
+	config := map[string]any{}
+	switch existing := args.Config.(type) {
+	case OrderedObject:
+		for _, entry := range existing {
+			config[entry.Key] = entry.Value
+		}
+	case map[string]any:
+		config = existing
+	}
+	workspaceValue := config["sandbox_workspace_write"]
+	var existingRoots any
+	switch workspace := workspaceValue.(type) {
+	case map[string]any:
+		existingRoots = workspace["writable_roots"]
+	case []ConfigEntry:
+		for _, entry := range workspace {
+			if entry.Key == "writable_roots" {
+				existingRoots = entry.Value
+				break
+			}
+		}
+	case OrderedObject:
+		for _, entry := range workspace {
+			if entry.Key == "writable_roots" {
+				existingRoots = entry.Value
+				break
+			}
+		}
+	}
+	if existing, ok := existingRoots.([]any); ok {
+		writableRoots = append(writableRoots, existing...)
+	}
+	for _, variable := range []struct{ name, directory string }{
+		{"GOCACHE", filepath.Join(stateRoot, "cache", "go-build")},
+		{"GOTMPDIR", filepath.Join(stateRoot, "cache", "go-tmp")},
+	} {
+		if os.Getenv(variable.name) != "" {
+			continue
+		}
+		if err := os.MkdirAll(variable.directory, 0700); err != nil {
+			return err
+		}
+		writableRoots = append(writableRoots, variable.directory)
+		*childEnv = append(*childEnv, variable.name+"="+variable.directory)
+	}
+	for key := range config {
+		if strings.HasPrefix(key, "sandbox_workspace_write.") {
+			delete(config, key)
+		}
+	}
+	if len(writableRoots) > 0 {
+		config["sandbox_workspace_write"] = map[string]any{"writable_roots": writableRoots}
+	}
+	args.Config = config
+	return nil
 }
 
 func finishHostStartError(dir, id string, generation int64, token string, cancelled bool, contextErr, startErr error) (map[string]any, error) {
