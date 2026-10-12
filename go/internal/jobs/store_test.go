@@ -141,6 +141,51 @@ func TestAtomicWriteRetriesTransientReplaceError(t *testing.T) {
 	}
 }
 
+func TestAtomicWriteRetriesAccessDeniedForTransientWindow(t *testing.T) {
+	path := filepath.Join(scratch(t), "job.json")
+	prior := replaceFile
+	started := time.Now()
+	accessDeniedFor := 500 * time.Millisecond
+	attempts := 0
+	replaceFile = func(source, target string) error {
+		if target == path && time.Since(started) < accessDeniedFor {
+			attempts++
+			return syscall.EACCES
+		}
+		return prior(source, target)
+	}
+	t.Cleanup(func() { replaceFile = prior })
+	if err := atomicWrite(path, []byte(`{"state":"RUNNING"}`)); err != nil {
+		t.Fatalf("atomicWrite after transient access denied: %v", err)
+	}
+	if attempts == 0 {
+		t.Fatal("replace stub did not return access denied")
+	}
+}
+
+func TestAtomicWriteReturnsImmediatelyForNonTransientReplaceError(t *testing.T) {
+	path := filepath.Join(scratch(t), "job.json")
+	want := errors.New("permanent replacement failure")
+	prior := replaceFile
+	attempts := 0
+	replaceFile = func(string, string) error {
+		attempts++
+		return want
+	}
+	t.Cleanup(func() { replaceFile = prior })
+	started := time.Now()
+	err := atomicWrite(path, []byte(`{"state":"RUNNING"}`))
+	if !errors.Is(err, want) {
+		t.Fatalf("atomicWrite error = %v, want %v", err, want)
+	}
+	if attempts != 1 {
+		t.Fatalf("replace attempts = %d, want 1", attempts)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("non-transient replacement took %s, want immediate return", elapsed)
+	}
+}
+
 func TestConcurrentGenerationClaimsAreFenced(t *testing.T) {
 	path := filepath.Join(scratch(t), strings.Repeat("a", 64)+".json")
 	if err := os.WriteFile(path, []byte(`{"state": "QUEUED", "generation": 4, "ownershipToken": "owner"}`), 0600); err != nil {

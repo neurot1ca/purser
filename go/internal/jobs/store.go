@@ -190,12 +190,25 @@ func atomicWrite(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	for attempt := 0; ; attempt++ {
+	deadline := time.Now().Add(2 * time.Second)
+	delay := 25 * time.Millisecond
+	for {
 		err = replaceFile(tmp, path)
-		if err == nil || !transientReplace(err) || attempt == 4 {
+		if err == nil || !transientReplace(err) {
 			return err
 		}
-		time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return err
+		}
+		if delay > remaining {
+			delay = remaining
+		}
+		time.Sleep(delay)
+		delay *= 2
+		if delay > 250*time.Millisecond {
+			delay = 250 * time.Millisecond
+		}
 	}
 }
 
