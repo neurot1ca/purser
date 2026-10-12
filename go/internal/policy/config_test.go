@@ -103,6 +103,25 @@ func TestClaudeFallbackAndReviewerChoicesValidateAndPersist(t *testing.T) {
 	}
 }
 
+func TestReviewerModelValidationFollowsSelectedAgent(t *testing.T) {
+	testRoot := t.TempDir()
+	configPath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json")
+	userPath := filepath.Join(testRoot, "config.toml")
+	if err := os.WriteFile(userPath, []byte("[coding]\nreviewer1_agent = \"codex\"\nreviewer1_model_requested = \"gpt-6-luna\"\nreviewer1_effort = \"medium\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadCoderConfig(configPath, userPath)
+	if err != nil || loaded["reviewer1_agent"] != "codex" || loaded["reviewer1_model_requested"] != "gpt-6-luna" || loaded["reviewer1_effort"] != "medium" {
+		t.Fatalf("Codex reviewer settings = %#v, %v", loaded, err)
+	}
+	if err := os.WriteFile(userPath, []byte("[coding]\nreviewer1_agent = \"agy\"\nreviewer1_model_requested = \"gpt-6-luna\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCoderConfig(configPath, userPath); err == nil {
+		t.Fatal("invalid AGY reviewer model was accepted")
+	}
+}
+
 func TestClaudeCoderUsesTierAliasesAndRequiresClaudeRole(t *testing.T) {
 	testRoot := filepath.Join("..", "..", "..", ".tmp", "claude-coder-config")
 	if err := os.MkdirAll(filepath.Join(testRoot, ".orchestrator"), 0700); err != nil {

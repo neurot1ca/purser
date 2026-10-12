@@ -70,7 +70,18 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 			if agent == "" {
 				agent = "agy"
 			}
-			if !valid || (agent == "claude" && !claudeModel.MatchString(text)) || (agent != "claude" && !agyModel.MatchString(text)) {
+			validModel := valid && text != ""
+			switch agent {
+			case "claude":
+				validModel = validModel && claudeModel.MatchString(text)
+			case "agy":
+				validModel = validModel && agyModel.MatchString(text)
+			case "codex":
+				validModel = validModel && strings.TrimSpace(text) != ""
+			case "opencode":
+				validModel = validModel && opencodeModel.MatchString(text)
+			}
+			if !validModel {
 				return nil, fmt.Errorf("[coding] reviewer1_model_requested is invalid")
 			}
 			config["reviewer1_model_requested"] = text
@@ -84,7 +95,11 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 		}
 		if raw, exists := table["reviewer1_effort"]; exists {
 			effort, valid := raw.(string)
-			if !valid || !claudeEfforts[effort] {
+			allowed := claudeEfforts[effort]
+			if table["reviewer1_agent"] == "codex" {
+				allowed = codexReviewerEfforts[effort]
+			}
+			if !valid || !allowed {
 				return nil, fmt.Errorf("[coding] reviewer1_effort is invalid")
 			}
 			config["reviewer1_effort"] = effort
@@ -366,9 +381,10 @@ func containsString(values []any, want string) bool {
 }
 
 var (
-	opencodeModel  = regexp.MustCompile(`\A[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z`)
-	agyModel       = regexp.MustCompile(`\Agemini-[A-Za-z0-9._-]+\z`)
-	opencodeEffort = regexp.MustCompile(`\A[A-Za-z0-9._-]+\z`)
+	opencodeModel        = regexp.MustCompile(`\A[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z`)
+	agyModel             = regexp.MustCompile(`\Agemini-[A-Za-z0-9._-]+\z`)
+	opencodeEffort       = regexp.MustCompile(`\A[A-Za-z0-9._-]+\z`)
+	codexReviewerEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true}
 )
 
 func hasStringKeys(values map[string]any, keys []string) bool {

@@ -184,6 +184,26 @@ func TestClaudeReviewerLaunchCarriesModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestCodexReviewerLaunchCarriesAndValidatesEffort(t *testing.T) {
+	adapter, err := ReviewerAdapter("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	config := map[string]any{"reviewer1_executable": filepath.Join(cwd, "codex"), "reviewer1_model_requested": "gpt-6-luna", "reviewer1_effort": "medium"}
+	command, err := adapter.BuildCommand("review", map[string]any{"type": "object"}, config, CommandOptions{WorkingDirectory: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(command, "\x00"), "-c\x00model_reasoning_effort=\"medium\"") {
+		t.Fatalf("Codex reviewer command did not carry reasoning effort: %#v", command)
+	}
+	config["reviewer1_effort"] = "unbounded"
+	if _, err := adapter.BuildCommand("review", map[string]any{"type": "object"}, config, CommandOptions{WorkingDirectory: cwd}); err == nil {
+		t.Fatal("unsupported Codex reviewer effort was accepted")
+	}
+}
+
 func TestClaudePromptPrecedesVariadicTools(t *testing.T) {
 	adapter, err := ReviewerAdapter("claude")
 	if err != nil {

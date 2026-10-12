@@ -168,6 +168,13 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 		if model != nil && model != "" {
 			command = append(command, "-m", model.(string))
 		}
+		if raw, exists := config["reviewer1_effort"]; exists && raw != nil {
+			effort, ok := raw.(string)
+			if !ok || !codexReviewerEfforts[effort] {
+				return nil, errors.New("reviewer1_effort must be low, medium, high or xhigh")
+			}
+			command = append(command, "-c", `model_reasoning_effort="`+effort+`"`)
+		}
 		return append(command, prompt), nil
 	case "claude":
 		effort, _ := config["reviewer1_effort"].(string)
@@ -186,6 +193,7 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 
 var claudeReviewerModel = regexp.MustCompile(`^(claude-[A-Za-z0-9._-]+|haiku|sonnet|opus)$`)
 var claudeReviewerEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+var codexReviewerEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true}
 
 func (a reviewerAdapter) Environment(command []string) map[string]string {
 	if a.provider != "opencode" {
