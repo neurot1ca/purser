@@ -1,5 +1,7 @@
 package main
 
+import "purser-hook/internal/testutil"
+
 import (
 	"os"
 	"os/exec"
@@ -14,7 +16,7 @@ func releaseFixture(t *testing.T) string {
 	root := t.TempDir()
 	commands := [][]string{{"init", "-q"}, {"config", "user.name", "Release Test"}, {"config", "user.email", "release@example.test"}, {"config", "core.autocrlf", "false"}}
 	for _, args := range commands {
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...))
 		if b, e := cmd.CombinedOutput(); e != nil {
 			t.Fatalf("git %v: %v: %s", args, e, b)
 		}
@@ -33,11 +35,11 @@ func releaseFixture(t *testing.T) string {
 	write("CHANGELOG.md", "# Changelog\n\n## 0.1.12 — 2026-09-24\n\n- Existing (`aaaaaaa`).\n")
 	write("change.txt", "before\n")
 	write("other.txt", "other\n")
-	cmd := exec.Command("git", "-C", root, "add", ".")
+	cmd := testutil.Hide(exec.Command("git", "-C", root, "add", "."))
 	if b, e := cmd.CombinedOutput(); e != nil {
 		t.Fatalf("git add: %v: %s", e, b)
 	}
-	cmd = exec.Command("git", "-C", root, "-c", "user.name=Release Test", "-c", "user.email=release@example.test", "commit", "-qm", "base")
+	cmd = testutil.Hide(exec.Command("git", "-C", root, "-c", "user.name=Release Test", "-c", "user.email=release@example.test", "commit", "-qm", "base"))
 	if b, e := cmd.CombinedOutput(); e != nil {
 		t.Fatalf("git commit: %v: %s", e, b)
 	}
@@ -45,7 +47,7 @@ func releaseFixture(t *testing.T) string {
 }
 func gitOutput(t *testing.T, root string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+	cmd := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...))
 	b, e := cmd.CombinedOutput()
 	if e != nil {
 		t.Fatalf("git %v: %v: %s", args, e, b)
@@ -90,7 +92,7 @@ func TestReleasePathsCommitOnlyListedChangeAndResumeAfterReleaseCommit(t *testin
 	if got := gitOutput(t, root, "log", "-1", "--format=%s"); got != "purser: release 0.1.13 (add change)" {
 		t.Fatalf("unexpected release commit: %s", got)
 	}
-	check := exec.Command("git", "-C", root, "diff", "--quiet", "--", "other.txt")
+	check := testutil.Hide(exec.Command("git", "-C", root, "diff", "--quiet", "--", "other.txt"))
 	if err := check.Run(); err == nil {
 		t.Fatal("unlisted edit was committed")
 	}
@@ -119,7 +121,7 @@ func TestReleaseRejectsUnrelatedStagedFileWithoutChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "unrelated.txt"), []byte("staged elsewhere\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "-C", root, "add", "--", "unrelated.txt").CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "-C", root, "add", "--", "unrelated.txt")).CombinedOutput(); err != nil {
 		t.Fatalf("stage unrelated file: %v: %s", err, out)
 	}
 	beforeHead := gitOutput(t, root, "rev-parse", "HEAD")
@@ -161,7 +163,7 @@ func TestFailedPluginUpdateResumesWithoutNewCommits(t *testing.T) {
 	if err := os.WriteFile(source, []byte(program), 0644); err != nil {
 		t.Fatal(err)
 	}
-	build := exec.Command("go", "build", "-o", claude, source)
+	build := testutil.Hide(exec.Command("go", "build", "-o", claude, source))
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fake claude: %v: %s", err, out)
 	}

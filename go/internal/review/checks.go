@@ -97,7 +97,7 @@ func runCheck(repoRoot string, check profile.Check, deadline context.Context) Ch
 	}
 	ctx, cancel := context.WithTimeout(deadline, time.Duration(check.TimeoutSeconds)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, executable, check.Argv[1:]...)
+	cmd := proc.Hide(exec.CommandContext(ctx, executable, check.Argv[1:]...))
 	cmd.Dir = repoRoot
 	for _, value := range cmd.Environ() {
 		if !strings.HasPrefix(value, "CI=") {
@@ -142,7 +142,7 @@ type fileFingerprint struct {
 func checkStatus(repoRoot string) map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	cmd := proc.Hide(exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z", "--untracked-files=all"))
 	cmd.Dir, cmd.Stderr = repoRoot, io.Discard
 	proc.ConfigureNoWindow(cmd)
 	data, err := cmd.Output()

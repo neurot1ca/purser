@@ -1,5 +1,7 @@
 package ledger
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -34,7 +36,7 @@ func TestApplyJobPatchLeavesNewFileIntentToAdd(t *testing.T) {
 
 func gitApplyPatchTest(t *testing.T, root string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testutil.Hide(exec.Command("git", args...))
 	cmd.Dir = root
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
@@ -43,7 +45,7 @@ func gitApplyPatchTest(t *testing.T, root string, args ...string) {
 
 func gitApplyPatchOutput(t *testing.T, root string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testutil.Hide(exec.Command("git", args...))
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -1,5 +1,7 @@
 package enforce
 
+import "purser-hook/internal/testutil"
+
 import (
 	"context"
 	"encoding/json"
@@ -273,7 +275,7 @@ func TestPostReviewerClaudeFallbackRunsWithDefaultEffortFakeExecutable(t *testin
 	if err := os.WriteFile(filepath.Join(repo, "change.txt"), []byte("changed after baseline\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	baseline, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	baseline, err := testutil.Hide(exec.Command("git", "-C", repo, "rev-parse", "HEAD")).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +294,7 @@ func main() {
 	if runtime.GOOS == "windows" {
 		executable += ".exe"
 	}
-	if err := exec.Command("go", "build", "-o", executable, sourcePath).Run(); err != nil {
+	if err := testutil.Hide(exec.Command("go", "build", "-o", executable, sourcePath)).Run(); err != nil {
 		t.Fatal(err)
 	}
 	home := t.TempDir()

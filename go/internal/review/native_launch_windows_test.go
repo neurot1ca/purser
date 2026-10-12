@@ -2,6 +2,8 @@
 
 package review
 
+import "purser-hook/internal/testutil"
+
 import (
 	"os/exec"
 	"testing"
@@ -21,7 +23,7 @@ func TestNativeLaunchOptionsPreserveTreeCancel(t *testing.T) {
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			adapter := reviewerAdapter{provider: tc.provider}
-			command := exec.Command("reviewer")
+			command := testutil.Hide(exec.Command("reviewer"))
 			proc.ConfigureProcessTreeKill(command)
 			configureNativeLaunch(command, adapter.LaunchOptions())
 			if command.SysProcAttr == nil || command.SysProcAttr.CreationFlags != tc.flags || !command.SysProcAttr.HideWindow {

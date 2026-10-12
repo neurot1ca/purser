@@ -2,6 +2,8 @@
 
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"bufio"
 	"fmt"
@@ -119,7 +121,7 @@ func startHost(t *testing.T) (*exec.Cmd, *bufio.Scanner, io.WriteCloser, int) {
 	return host, reader, stdin, readPID(t, reader, "ROOT")
 }
 func helper(mode string) *exec.Cmd {
-	cmd := exec.Command(os.Args[0], "-test.run=^TestContainmentHelper$")
+	cmd := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestContainmentHelper$"))
 	env := os.Environ()
 	for i := len(env) - 1; i >= 0; i-- {
 		if strings.HasPrefix(env[i], "PURSER_CONTAIN_HELPER=") {

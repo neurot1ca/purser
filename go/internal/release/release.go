@@ -1,5 +1,7 @@
 package release
 
+import "purser-hook/internal/proc"
+
 import (
 	"archive/tar"
 	"archive/zip"
@@ -47,7 +49,7 @@ func binaryName(goos, arch string) string {
 }
 func digest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 func run(root string, env []string, name string, args ...string) ([]byte, error) {
-	c := exec.Command(name, args...)
+	c := proc.Hide(exec.Command(name, args...))
 	c.Dir = root
 	c.Env = env
 	var out, errout bytes.Buffer
@@ -236,7 +238,7 @@ func buildHooks(root string) error {
 		if e = os.MkdirAll(filepath.Dir(out), 0755); e != nil {
 			return e
 		}
-		cmd := exec.Command("go", "build", "-tags", tags, "-trimpath", "-ldflags", "-s -w", "-o", out, "./cmd/purser-hook")
+		cmd := proc.Hide(exec.Command("go", "build", "-tags", tags, "-trimpath", "-ldflags", "-s -w", "-o", out, "./cmd/purser-hook"))
 		cmd.Dir = filepath.Join(root, "go")
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+t[0], "GOARCH="+t[1])
 		var stderr bytes.Buffer

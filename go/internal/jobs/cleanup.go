@@ -314,7 +314,7 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 	enforceArtifactSizeLimit(root, current, loaded, protected, listings, prune)
 	for _, repo := range prune {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		command := exec.CommandContext(ctx, "git", "-C", repo, "worktree", "prune")
+		command := proc.Hide(exec.CommandContext(ctx, "git", "-C", repo, "worktree", "prune"))
 		proc.ConfigureNoWindow(command)
 		_ = command.Run()
 		cancel()
@@ -369,7 +369,7 @@ func trimPurserGoCache(root string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "clean", "-cache")
+	command := proc.Hide(exec.CommandContext(ctx, "go", "clean", "-cache"))
 	command.Env = os.Environ()
 	found := false
 	for index, entry := range command.Env {
@@ -719,7 +719,7 @@ func worktreeKey(v any) string {
 func gitWorktreeListing(repo string) *worktreeListing {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, "git", "-C", repo, "worktree", "list", "--porcelain")
+	c := proc.Hide(exec.CommandContext(ctx, "git", "-C", repo, "worktree", "list", "--porcelain"))
 	proc.ConfigureNoWindow(c)
 	b, e := c.Output()
 	if e != nil {
@@ -776,7 +776,7 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "git", "-C", l.command, "worktree", "remove", "--force", target)
+	command := proc.Hide(exec.CommandContext(ctx, "git", "-C", l.command, "worktree", "remove", "--force", target))
 	proc.ConfigureNoWindow(command)
 	if command.Run() != nil {
 		if !makeCleanupWritable(target) || command.Run() != nil {
@@ -1041,7 +1041,7 @@ func enforceWorktreeCount(root string, current float64, protected map[string]boo
 func cleanupGitOutput(dir string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd := proc.Hide(exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...))
 	proc.ConfigureNoWindow(cmd)
 	b, e := cmd.Output()
 	if e != nil {

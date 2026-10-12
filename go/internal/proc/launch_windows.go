@@ -18,7 +18,7 @@ func ConfigureProcessTreeKill(command *exec.Cmd) {
 		if command.Process == nil {
 			return nil
 		}
-		kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(command.Process.Pid))
+		kill := Hide(exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(command.Process.Pid)))
 		kill.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 		if err := kill.Run(); err == nil {
 			return nil

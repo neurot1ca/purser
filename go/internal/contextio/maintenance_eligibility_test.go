@@ -1,5 +1,7 @@
 package contextio
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -55,7 +57,7 @@ func TestMaintenanceEligibilityPythonOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			// A real git root is needed to exercise the same canonical-root gate.
-			if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v: %s", err, out)
 			}
 			maintenance := filepath.Join(state, "projects", ProjectKey(repo), "maintenance")
@@ -116,7 +118,7 @@ func TestMaintenanceEligibilityPythonOracle(t *testing.T) {
 func TestMaintenanceEligibilityJobDeadlines(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	repo, state := t.TempDir(), t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	root, err := canonicalMaintenanceRoot(repo)
@@ -155,7 +157,7 @@ func TestMaintenanceEligibilityJobDeadlines(t *testing.T) {
 func TestMaintenanceEligibilityNonNumericCompletionIsNotDue(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	repo, state := t.TempDir(), t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	root, err := canonicalMaintenanceRoot(repo)
@@ -176,7 +178,7 @@ func TestMaintenanceEligibilityNonNumericCompletionIsNotDue(t *testing.T) {
 func TestMaintenanceEligibilityTimingBoundaries(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	repo, state := t.TempDir(), t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	root, err := canonicalMaintenanceRoot(repo)
@@ -212,7 +214,7 @@ func TestMaintenanceEligibilityTimingBoundaries(t *testing.T) {
 
 func TestCanonicalMaintenanceRootUsesResolvedPath(t *testing.T) {
 	repo := t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	nested := filepath.Join(repo, "nested")

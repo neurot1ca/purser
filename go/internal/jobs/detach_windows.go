@@ -2,6 +2,8 @@
 
 package jobs
 
+import "purser-hook/internal/proc"
+
 import (
 	"errors"
 	"fmt"
@@ -44,7 +46,7 @@ func LaunchDetached(argv, env []string, dir string) (pid int, identity int64, er
 	}
 	defer syscall.CloseHandle(parent)
 
-	command := exec.Command(argv[0], argv[1:]...)
+	command := proc.Hide(exec.Command(argv[0], argv[1:]...))
 	command.Env = env
 	command.Dir = dir
 	command.SysProcAttr = &syscall.SysProcAttr{

@@ -23,13 +23,16 @@ import (
 )
 
 const baseline, target, idleGap = 1.08, 1.5, 600.0
+
 func main() {
 	if err := run(os.Args[1:]); exitCode(err) != 0 {
 		fmt.Fprint(os.Stderr, nativeText(err.Error()+"\n"))
 		os.Exit(exitCode(err))
 	}
 }
+
 type argumentError struct{ error }
+
 func (e argumentError) Unwrap() error { return e.error }
 func exitCode(err error) int {
 	if err == nil || errors.Is(err, flag.ErrHelp) {
@@ -47,6 +50,7 @@ func projectSlug(root string) string {
 func transcriptGlob(root, home string) string {
 	return filepath.Join(home, ".claude", "projects", projectSlug(root), "*.jsonl")
 }
+
 type session struct {
 	name     string
 	requests int
@@ -69,6 +73,7 @@ type summary struct {
 	weighted map[string]float64
 	contexts []int64
 }
+
 func emptySession() session {
 	return session{totals: map[string]int64{"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}, tools: map[int]int{}, names: map[string]int{}, amp: map[string]float64{}}
 }
@@ -76,6 +81,7 @@ func number(v any) int64          { n, _ := v.(json.Number); x, _ := n.Int64(); 
 func str(v any) string            { s, _ := v.(string); return s }
 func object(v any) map[string]any { m, _ := v.(map[string]any); return m }
 func list(v any) []any            { a, _ := v.([]any); return a }
+
 // Only serialized length matters; object key order cannot affect it.
 func payloadSize(v any, nested bool) int {
 	switch x := v.(type) {

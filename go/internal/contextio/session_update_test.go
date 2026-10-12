@@ -1,5 +1,7 @@
 package contextio
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -15,7 +17,7 @@ func updateSessionTestRepo(t *testing.T) string {
 	if err := os.MkdirAll(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("git", "init", "--quiet", repo).CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command("git", "init", "--quiet", repo)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
 	return repo

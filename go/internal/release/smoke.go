@@ -1,5 +1,7 @@
 package release
 
+import "purser-hook/internal/proc"
+
 import (
 	"bufio"
 	"bytes"
@@ -153,7 +155,7 @@ func verifyMissingBinary(root, selected string) error {
 	if err = os.WriteFile(filepath.Join(isolated, "purser-launcher.js"), launcher, 0755); err != nil {
 		return err
 	}
-	cmd := exec.Command(node, filepath.Join(isolated, "purser-launcher.js"), "go-mcp")
+	cmd := proc.Hide(exec.Command(node, filepath.Join(isolated, "purser-launcher.js"), "go-mcp"))
 	cmd.Dir = root
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -182,7 +184,7 @@ func verifyMCP(binary string) error {
 	input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n"
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "mcp")
+	cmd := proc.Hide(exec.CommandContext(ctx, binary, "mcp"))
 	cmd.Stdin = strings.NewReader(input)
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
@@ -224,7 +226,7 @@ func verifyEvents(binary, root string) error {
 		data string
 	}{{nil, `{"hook_event_name":"UserPromptSubmit","session_id":"distribution-smoke","cwd":"","prompt":"distribution smoke"}`}, {[]string{"enforce"}, fmt.Sprintf(`{"hook_event_name":"PreToolUse","session_id":"distribution-smoke","cwd":%q,"tool_name":"Bash","tool_input":{"command":"true"}}`, root)}}
 	for _, e := range events {
-		cmd := exec.Command(binary, e.args...)
+		cmd := proc.Hide(exec.Command(binary, e.args...))
 		cmd.Dir = root
 		cmd.Env = append(os.Environ(), "PURSER_STATE_DIR="+state, "HTTP_PROXY=http://127.0.0.1:9", "HTTPS_PROXY=http://127.0.0.1:9", "http_proxy=http://127.0.0.1:9", "https_proxy=http://127.0.0.1:9", "NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost")
 		cmd.Stdin = strings.NewReader(e.data)

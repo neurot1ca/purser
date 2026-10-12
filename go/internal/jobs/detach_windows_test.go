@@ -2,6 +2,8 @@
 
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"errors"
@@ -63,7 +65,7 @@ func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
 	dir := t.TempDir()
 	release := filepath.Join(dir, "release")
 	consoleMarker := filepath.Join(dir, "console-window")
-	launcher := exec.Command(os.Args[0], "-test.run=^TestDetachedHelper$")
+	launcher := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestDetachedHelper$"))
 	launcher.Env = append(os.Environ(),
 		"PURSER_DETACH_LAUNCHER=1",
 		"PURSER_DETACH_RELEASE="+release,

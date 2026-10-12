@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"fmt"
@@ -14,7 +16,7 @@ import (
 
 func cleanupGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testutil.Hide(exec.Command("git", append([]string{"-C", dir}, args...)...))
 	b, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, b)

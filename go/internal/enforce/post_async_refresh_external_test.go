@@ -1,5 +1,7 @@
 package enforce_test
 
+import "purser-hook/internal/testutil"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -136,7 +138,7 @@ func refreshHash(value string) string {
 }
 func gitRefresh(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testutil.Hide(exec.Command("git", append([]string{"-C", dir}, args...)...))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}

@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -52,7 +54,7 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			t.Setenv("GOCACHE", filepath.Join(root, "go-cache"))
 			t.Setenv("GOTMPDIR", filepath.Join(root, "go-tmp"))
 			if fixture.Name != "worktree_success" && fixture.Name != "worktree_create_failure" && fixture.Name != "worktree_setup_failure" {
-				cmd := exec.Command("git", "init", "-q", root)
+				cmd := testutil.Hide(exec.Command("git", "init", "-q", root))
 				if output, err := cmd.CombinedOutput(); err != nil {
 					t.Fatalf("git init: %v: %s", err, output)
 				}
@@ -206,7 +208,7 @@ func setupHostParityAdmission(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"init", "-q"}, {"add", "src/file"}, {"commit", "-qm", "baseline"}} {
-		cmd := exec.Command("git", args...)
+		cmd := testutil.Hide(exec.Command("git", args...))
 		cmd.Dir = repo
 		cmd.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z",
 			"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid")
@@ -257,7 +259,7 @@ func setupHostParityRepo(t *testing.T, repo string, setupFailure bool) {
 		}
 	}
 	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"commit", "-qm", "baseline"}} {
-		cmd := exec.Command("git", args...)
+		cmd := testutil.Hide(exec.Command("git", args...))
 		cmd.Dir = repo
 		cmd.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z",
 			"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid")

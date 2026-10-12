@@ -2,6 +2,8 @@
 
 package proc
 
+import "purser-hook/internal/testutil"
+
 import (
 	"os/exec"
 	"syscall"
@@ -9,7 +11,7 @@ import (
 )
 
 func TestHideMergesProcessAttributes(t *testing.T) {
-	command := exec.Command("git")
+	command := testutil.Hide(exec.Command("git"))
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x10}
 
 	if got := Hide(command); got != command {

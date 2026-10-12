@@ -1,5 +1,7 @@
 package review
 
+import "purser-hook/internal/proc"
+
 import (
 	"bytes"
 	"context"
@@ -238,7 +240,7 @@ func invoke(command []string, cwd string, timeout time.Duration) ([]byte, string
 	started, remaining, retried := time.Now(), timeout, false
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), remaining)
-		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+		cmd := proc.Hide(exec.CommandContext(ctx, command[0], command[1:]...))
 		cmd.Dir = cwd
 		cmd.Env = os.Environ()
 		cmd.Stdin = os.Stdin

@@ -234,7 +234,7 @@ func agent(name string) map[string]any {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, p, "--version")
+	cmd := proc.Hide(exec.CommandContext(ctx, p, "--version"))
 	proc.ConfigureNoWindow(cmd)
 	proc.ConfigureProcessTreeKill(cmd)
 	var b bytes.Buffer
@@ -415,7 +415,7 @@ func discoverModels(name string, providers map[string]map[string]map[string]any)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, arg...)
+	cmd := proc.Hide(exec.CommandContext(ctx, binary, arg...))
 	proc.ConfigureNoWindow(cmd)
 	proc.ConfigureProcessTreeKill(cmd)
 	raw, e := cmd.Output()
@@ -986,7 +986,7 @@ func gitProjectKey(root string) (string, error) {
 func gitProjectRoot(root string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	cmd := proc.Hide(exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel"))
 	proc.Hide(cmd)
 	cmd.Dir = root
 	out, e := cmd.Output()

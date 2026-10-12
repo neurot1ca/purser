@@ -129,7 +129,7 @@ func codeMapInventory(repo string, deadline time.Time) ([]string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remaining)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "ls-files", "-co", "--exclude-standard", "-z")
+	cmd := proc.Hide(exec.CommandContext(ctx, "git", "ls-files", "-co", "--exclude-standard", "-z"))
 	proc.Hide(cmd)
 	cmd.Dir = repo
 	data, err := cmd.Output()

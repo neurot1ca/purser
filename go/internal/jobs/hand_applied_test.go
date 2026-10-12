@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -260,7 +262,7 @@ func handAppliedAdmissionFixture(t *testing.T, matching bool) (root, repo, workt
 
 func handAppliedGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testutil.Hide(exec.Command("git", args...))
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {

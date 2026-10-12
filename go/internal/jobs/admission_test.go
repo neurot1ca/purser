@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -68,7 +70,7 @@ func setupAdmission(t *testing.T, root, name string) {
 	}
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := testutil.Hide(exec.Command("git", args...))
 		cmd.Dir = repo
 		cmd.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z", "GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid")
 		if out, err := cmd.CombinedOutput(); err != nil {

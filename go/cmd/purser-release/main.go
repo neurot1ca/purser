@@ -1,5 +1,7 @@
 package main
 
+import "purser-hook/internal/proc"
+
 import (
 	"bytes"
 	"encoding/json"
@@ -95,7 +97,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	b, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	b, err := proc.Hide(exec.Command("git", "rev-parse", "HEAD")).Output()
 	if err != nil {
 		return err
 	}
@@ -144,7 +146,7 @@ func run(args []string) error {
 
 func runPluginUpdates(root, claude string) error {
 	for i, args := range [][]string{{"plugin", "marketplace", "update", "purser-local"}, {"plugin", "update", "purser@purser-local"}} {
-		cmd := exec.Command(claude, args...)
+		cmd := proc.Hide(exec.Command(claude, args...))
 		cmd.Dir = root
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -186,7 +188,7 @@ var headingRE = regexp.MustCompile(`(?m)^## (\d+\.\d+\.\d+) — (\d{4}-\d{2}-\d{
 var releaseSubjectRE = regexp.MustCompile(`^purser: release (\d+\.\d+\.\d+) \((.*)\)$`)
 
 func releaseVersion(root, requested, entry, title string, dry bool, target string, paths []string, message string) (string, error) {
-	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	head, err := proc.Hide(exec.Command("git", "-C", root, "rev-parse", "HEAD")).Output()
 	if err != nil {
 		return "", err
 	}
@@ -213,7 +215,7 @@ func releaseVersion(root, requested, entry, title string, dry bool, target strin
 		pathSet[normalized] = true
 		validated = append(validated, normalized)
 	}
-	status, err := exec.Command("git", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all").Output()
+	status, err := proc.Hide(exec.Command("git", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all")).Output()
 	if err != nil {
 		return "", err
 	}
@@ -253,7 +255,7 @@ func releaseVersion(root, requested, entry, title string, dry bool, target strin
 	if !versionRE.MatchString(current) {
 		return "", fmt.Errorf("invalid semantic version: %s", current)
 	}
-	headInfo, err := exec.Command("git", "-C", root, "show", "-s", "--format=%H%x00%P%x00%s", "HEAD").Output()
+	headInfo, err := proc.Hide(exec.Command("git", "-C", root, "show", "-s", "--format=%H%x00%P%x00%s", "HEAD")).Output()
 	if err != nil {
 		return "", err
 	}
@@ -319,7 +321,7 @@ func releaseVersion(root, requested, entry, title string, dry bool, target strin
 		section := changelog[headerEnd:sectionEnd]
 		resumable := len(releaseMatch) == 3 && releaseMatch[1] == version && releaseMatch[2] == title && current == version && parent != ""
 		if resumable {
-			shortParent, err := exec.Command("git", "-C", root, "rev-parse", "--short=7", parent).Output()
+			shortParent, err := proc.Hide(exec.Command("git", "-C", root, "rev-parse", "--short=7", parent)).Output()
 			if err != nil {
 				return "", err
 			}
@@ -355,14 +357,14 @@ func releaseVersion(root, requested, entry, title string, dry bool, target strin
 	}
 	if len(validated) > 0 {
 		addArgs := append([]string{"-C", root, "--literal-pathspecs", "add", "-f", "--"}, validated...)
-		if out, err := exec.Command("git", addArgs...).CombinedOutput(); err != nil {
+		if out, err := proc.Hide(exec.Command("git", addArgs...)).CombinedOutput(); err != nil {
 			return "", fmt.Errorf("change commit git add failed: %s", strings.TrimSpace(string(out)))
 		}
 		commitArgs := append([]string{"-C", root, "--literal-pathspecs", "commit", "--only", "-m", message, "--"}, validated...)
-		if out, err := exec.Command("git", commitArgs...).CombinedOutput(); err != nil {
+		if out, err := proc.Hide(exec.Command("git", commitArgs...)).CombinedOutput(); err != nil {
 			return "", fmt.Errorf("change commit failed: %s", strings.TrimSpace(string(out)))
 		}
-		b, err := exec.Command("git", "-C", root, "rev-parse", "--short=7", "HEAD").Output()
+		b, err := proc.Hide(exec.Command("git", "-C", root, "rev-parse", "--short=7", "HEAD")).Output()
 		if err != nil {
 			return "", err
 		}
@@ -395,16 +397,16 @@ func releaseVersion(root, requested, entry, title string, dry bool, target strin
 	if err = os.WriteFile(pluginPath, []byte(pluginText), 0644); err != nil {
 		return "", err
 	}
-	if _, err = exec.Command("git", "-C", root, "add", "--", "CHANGELOG.md", ".claude-plugin/plugin.json").CombinedOutput(); err != nil {
+	if _, err = proc.Hide(exec.Command("git", "-C", root, "add", "--", "CHANGELOG.md", ".claude-plugin/plugin.json")).CombinedOutput(); err != nil {
 		return "", err
 	}
 	msg := fmt.Sprintf("purser: release %s (%s)", version, title)
-	cmd := exec.Command("git", "-C", root, "commit", "-m", msg)
+	cmd := proc.Hide(exec.Command("git", "-C", root, "commit", "-m", msg))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("release commit failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	b, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	b, err := proc.Hide(exec.Command("git", "-C", root, "rev-parse", "HEAD")).Output()
 	if err != nil {
 		return "", err
 	}

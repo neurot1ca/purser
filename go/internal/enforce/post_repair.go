@@ -99,7 +99,7 @@ func runPostRepairProcess(parent context.Context, argv []string, env []string, c
 }
 
 func newPostRepairCommand(ctx context.Context, argv ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := proc.Hide(exec.CommandContext(ctx, argv[0], argv[1:]...))
 	proc.ConfigureProcessTreeKill(cmd)
 	return proc.Hide(cmd)
 }

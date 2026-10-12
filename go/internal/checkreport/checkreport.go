@@ -297,7 +297,7 @@ var lookPath = exec.LookPath
 var runCodex = func(executable string) (string, string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, executable, "--version")
+	cmd := proc.Hide(exec.CommandContext(ctx, executable, "--version"))
 	proc.Hide(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

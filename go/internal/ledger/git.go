@@ -1,5 +1,7 @@
 package ledger
 
+import "purser-hook/internal/proc"
+
 import (
 	"bytes"
 	"context"
@@ -48,7 +50,7 @@ func runGit(root string, args []string, timeout time.Duration, operation string,
 	if env != nil && env["PATH"] != "" {
 		gitPath = commandPath
 	}
-	command := exec.CommandContext(ctx, gitPath, args...)
+	command := proc.Hide(exec.CommandContext(ctx, gitPath, args...))
 	command.Dir = root
 	if input != nil {
 		command.Stdin = bytes.NewReader(input)

@@ -1,5 +1,7 @@
 package enforce
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -91,7 +93,7 @@ func TestPreApplyAcceptanceGate(t *testing.T) {
 
 func gitOutput(t *testing.T, dir string, args ...string) []byte {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testutil.Hide(exec.Command("git", append([]string{"-C", dir}, args...)...))
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("git %v: %v", args, err)

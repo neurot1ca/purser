@@ -27,7 +27,7 @@ func CanonicalRepository(repository string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	command := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel")
+	command := proc.Hide(exec.Command("git", "-C", root, "rev-parse", "--show-toplevel"))
 	proc.ConfigureNoWindow(command)
 	data, err := command.Output()
 	if err != nil {
@@ -42,8 +42,13 @@ func MaintenanceDirectory(state, root string) string {
 
 func RequireOptIn(state, root string) error {
 	data, err := os.ReadFile(filepath.Join(MaintenanceDirectory(state, root), "opt-in.json"))
-	if err != nil { return fmt.Errorf("Maintenance is not opted in for %s; run opt-in explicitly first.", root) }
-	var marker struct { Enabled bool `json:"enabled"`; ProjectRoot string `json:"project_root"` }
+	if err != nil {
+		return fmt.Errorf("Maintenance is not opted in for %s; run opt-in explicitly first.", root)
+	}
+	var marker struct {
+		Enabled     bool   `json:"enabled"`
+		ProjectRoot string `json:"project_root"`
+	}
 	if json.Unmarshal(data, &marker) != nil || !marker.Enabled || marker.ProjectRoot != root {
 		return fmt.Errorf("Maintenance is not opted in for %s; run opt-in explicitly first.", root)
 	}

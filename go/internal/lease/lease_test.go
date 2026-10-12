@@ -1,5 +1,7 @@
 package lease
 
+import "purser-hook/internal/testutil"
+
 import (
 	"crypto/sha256"
 	"encoding/json"
@@ -317,7 +319,7 @@ func TestLockContentionAcrossProcesses(t *testing.T) {
 		return
 	}
 	path := filepath.Join(t.TempDir(), "scope_leases.lock")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestLockContentionAcrossProcesses$")
+	cmd := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestLockContentionAcrossProcesses$"))
 	cmd.Env = append(os.Environ(), "PURSER_LEASE_LOCK_HELPER="+path)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

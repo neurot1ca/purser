@@ -1,5 +1,7 @@
 package contextio
 
+import "purser-hook/internal/testutil"
+
 import (
 	"os"
 	"os/exec"
@@ -10,7 +12,7 @@ import (
 
 func TestMaintenanceNoticeDropsResolvedFindings(t *testing.T) {
 	repo := t.TempDir()
-	command := exec.Command("git", "-C", repo, "init", "-q")
+	command := testutil.Hide(exec.Command("git", "-C", repo, "init", "-q"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
@@ -19,13 +21,13 @@ func TestMaintenanceNoticeDropsResolvedFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"add", "artifact.db"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "baseline", "-q"}} {
-		command = exec.Command("git", append([]string{"-C", repo}, args...)...)
+		command = testutil.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...))
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
 	}
 	for _, args := range [][]string{{"rm", "--cached", "artifact.db", "-q"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "untrack artifact", "-q"}} {
-		command = exec.Command("git", append([]string{"-C", repo}, args...)...)
+		command = testutil.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...))
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
@@ -44,7 +46,7 @@ func TestMaintenanceNoticeDropsResolvedFindings(t *testing.T) {
 
 func TestMaintenanceNoticeKeepsPresentUntrackedDirectoryFinding(t *testing.T) {
 	repo := t.TempDir()
-	command := exec.Command("git", "-C", repo, "init", "-q")
+	command := testutil.Hide(exec.Command("git", "-C", repo, "init", "-q"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
@@ -137,7 +139,7 @@ func TestMaintenanceNoticeFiltersSomeStaleFindings(t *testing.T) {
 func maintenanceNoticeGitRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
-	command := exec.Command("git", "-C", repo, "init", "-q")
+	command := testutil.Hide(exec.Command("git", "-C", repo, "init", "-q"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
@@ -158,7 +160,7 @@ func maintenanceNoticeWrite(t *testing.T, repo, name, value string) {
 func maintenanceNoticeCommit(t *testing.T, repo, message string) {
 	t.Helper()
 	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message, "-q"}} {
-		command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		command := testutil.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...))
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
@@ -167,7 +169,7 @@ func maintenanceNoticeCommit(t *testing.T, repo, message string) {
 
 func maintenanceNoticeHead(t *testing.T, repo string) string {
 	t.Helper()
-	command := exec.Command("git", "-C", repo, "rev-parse", "HEAD")
+	command := testutil.Hide(exec.Command("git", "-C", repo, "rev-parse", "HEAD"))
 	output, err := command.Output()
 	if err != nil {
 		t.Fatal(err)

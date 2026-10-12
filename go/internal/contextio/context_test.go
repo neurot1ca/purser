@@ -1,5 +1,7 @@
 package contextio
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"errors"
@@ -98,7 +100,7 @@ func TestP33ConcurrentProcessWritersSerialize(t *testing.T) {
 	}
 	var commands []*exec.Cmd
 	for i := 0; i < 8; i++ {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestP33ProcessWriter$")
+		cmd := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestP33ProcessWriter$"))
 		cmd.Env = append(os.Environ(), "P33_CHILD=1", "P33_PATH="+path)
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -214,7 +216,7 @@ func TestP34FallbackQuestionShownThenAnswerable(t *testing.T) {
 	if err := os.MkdirAll(project, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("git", "init", "--quiet", project).CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command("git", "init", "--quiet", project)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
 	event := map[string]any{"session_id": "session-1", "cwd": project, "prompt": "Continue."}
@@ -425,7 +427,7 @@ func TestProjectRootWalk(t *testing.T) {
 	}
 	base := t.TempDir()
 	repo := filepath.Join(base, "repo")
-	if out, err := exec.Command("git", "init", "--quiet", repo).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "init", "--quiet", repo)).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	nested := filepath.Join(repo, "one", "two")
@@ -435,11 +437,11 @@ func TestProjectRootWalk(t *testing.T) {
 	if got := projectRoot(map[string]any{"cwd": nested}); got != resolve(repo) {
 		t.Fatalf("nested root = %q, want %q", got, resolve(repo))
 	}
-	if out, err := exec.Command("git", "-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "seed").CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "seed")).CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %v: %s", err, out)
 	}
 	worktree := filepath.Join(base, "linked")
-	if out, err := exec.Command("git", "-C", repo, "worktree", "add", "--quiet", "--detach", worktree).CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "-C", repo, "worktree", "add", "--quiet", "--detach", worktree)).CombinedOutput(); err != nil {
 		t.Fatalf("git worktree add: %v: %s", err, out)
 	}
 	if info, err := os.Stat(filepath.Join(worktree, ".git")); err != nil || !info.Mode().IsRegular() {
@@ -487,7 +489,7 @@ func TestProjectRootCwdPrecedence(t *testing.T) {
 	toolRepo := filepath.Join(base, "tool-repo")
 	eventRepo := filepath.Join(base, "event-repo")
 	for _, repo := range []string{toolRepo, eventRepo} {
-		if out, err := exec.Command("git", "init", "--quiet", repo).CombinedOutput(); err != nil {
+		if out, err := testutil.Hide(exec.Command("git", "init", "--quiet", repo)).CombinedOutput(); err != nil {
 			t.Fatalf("git init %q: %v: %s", repo, err, out)
 		}
 	}
@@ -570,7 +572,7 @@ func TestSessionStartFailsOpenWhenAdvisorStateCannotBeWritten(t *testing.T) {
 	if err := os.MkdirAll(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("git", "init", "--quiet", repo)
+	command := testutil.Hide(exec.Command("git", "init", "--quiet", repo))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}

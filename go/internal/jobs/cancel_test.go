@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"net"
@@ -35,7 +37,7 @@ func TestCancelQueuedStopsOnlyMatchingHostProcess(t *testing.T) {
 	for _, mismatch := range []bool{false, true} {
 		t.Run(map[bool]string{false: "matching_identity", true: "identity_mismatch"}[mismatch], func(t *testing.T) {
 			marker := filepath.Join(t.TempDir(), "host.json")
-			command := exec.Command(os.Args[0], "-test.run=^TestCancelHostProcessHelper$")
+			command := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestCancelHostProcessHelper$"))
 			command.Env = append(os.Environ(), "PURSER_CANCEL_HOST_MARKER="+marker)
 			if err := command.Start(); err != nil {
 				t.Fatal(err)

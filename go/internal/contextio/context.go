@@ -172,7 +172,7 @@ func projectRoot(event map[string]any) string {
 func gitTopLevel(directory string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	cmd := proc.Hide(exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel"))
 	cmd.Dir = directory
 	proc.ConfigureNoWindow(cmd)
 	out, err := cmd.Output()

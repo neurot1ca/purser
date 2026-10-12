@@ -1,5 +1,7 @@
 package ledger
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/hex"
 	"encoding/json"
@@ -110,7 +112,7 @@ func TestJobChangedPathsSHA256BindsDiffContent(t *testing.T) {
 
 func stringsOutput(t *testing.T, root string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", args...)
+	command := testutil.Hide(exec.Command("git", args...))
 	command.Dir = root
 	output, err := command.Output()
 	if err != nil {

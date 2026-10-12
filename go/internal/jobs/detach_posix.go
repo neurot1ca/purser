@@ -2,6 +2,8 @@
 
 package jobs
 
+import "purser-hook/internal/proc"
+
 import (
 	"errors"
 	"fmt"
@@ -13,7 +15,7 @@ func LaunchDetached(argv, env []string, dir string) (pid int, identity int64, er
 	if len(argv) == 0 || argv[0] == "" {
 		return 0, 0, errors.New("detached command is empty")
 	}
-	command := exec.Command(argv[0], argv[1:]...)
+	command := proc.Hide(exec.Command(argv[0], argv[1:]...))
 	command.Env = env
 	command.Dir = dir
 	ConfigureDetachedSession(command)

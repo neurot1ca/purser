@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -236,7 +238,7 @@ func assertReadinessCheckerNotCalled(t *testing.T, marker string) {
 
 func readinessGit(t *testing.T, executable, root string, args ...string) string {
 	t.Helper()
-	command := exec.Command(executable, args...)
+	command := testutil.Hide(exec.Command(executable, args...))
 	command.Dir = root
 	out, err := command.CombinedOutput()
 	if err != nil {

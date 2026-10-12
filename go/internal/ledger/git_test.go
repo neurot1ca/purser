@@ -1,5 +1,7 @@
 package ledger
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"fmt"
@@ -159,7 +161,7 @@ func gitTempDir(t *testing.T) string {
 
 func git(t *testing.T, root string, args ...string) {
 	t.Helper()
-	command := exec.Command("git", args...)
+	command := testutil.Hide(exec.Command("git", args...))
 	command.Dir = root
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)

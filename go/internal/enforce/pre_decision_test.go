@@ -306,10 +306,12 @@ func TestPreTelemetryEnvelopeIdentityAndRepositoryBranch(t *testing.T) {
 
 func TestPreTelemetryDetachedOrUnreadableBranchIsNull(t *testing.T) {
 	for _, tc := range []struct {
-		name string
+		name  string
 		setup func(string) error
 	}{
-		{name: "detached", setup: func(path string) error { return os.WriteFile(path, []byte("1e85bd1f4fa2d73c1ae011388c3504663a892db5\n"), 0600) }},
+		{name: "detached", setup: func(path string) error {
+			return os.WriteFile(path, []byte("1e85bd1f4fa2d73c1ae011388c3504663a892db5\n"), 0600)
+		}},
 		{name: "unreadable", setup: func(path string) error { return os.Mkdir(path, 0700) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

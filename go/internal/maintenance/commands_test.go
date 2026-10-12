@@ -1,5 +1,7 @@
 package maintenance
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -20,7 +22,7 @@ func TestDelayedCheckUsesPostDelayActivityAndQuota(t *testing.T) {
 	maintenanceClock = func() time.Time { return finished }
 
 	repo, state, quotaHome := t.TempDir(), t.TempDir(), t.TempDir()
-	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+	if out, err := testutil.Hide(exec.Command("git", "-C", repo, "init", "-q")).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	root, err := CanonicalRepository(repo)

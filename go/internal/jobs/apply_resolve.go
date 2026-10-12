@@ -36,7 +36,7 @@ func applyResolvedJob(stateRoot, dir, jobID string, job *Record, repo, worktree,
 	if len(paths) == 0 {
 		return fail("Job has no changed paths.")
 	}
-	command := exec.Command("git", "diff", "--name-only", "--diff-filter=U", "-z")
+	command := proc.Hide(exec.Command("git", "diff", "--name-only", "--diff-filter=U", "-z"))
 	command.Dir = repo
 	proc.ConfigureNoWindow(command)
 	unmerged, err := command.Output()

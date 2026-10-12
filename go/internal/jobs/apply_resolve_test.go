@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"os"
@@ -69,11 +71,11 @@ func TestApplyResolvedPythonOracle(t *testing.T) {
 				write(t, filepath.Join(repo, "tracked.txt"), "main change\n")
 				git(t, repo, "add", "tracked.txt")
 				git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "main")
-				cmd := exec.Command("git", "merge", "side")
+				cmd := testutil.Hide(exec.Command("git", "merge", "side"))
 				cmd.Dir = repo
 				cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid")
 				_ = cmd.Run() // A conflict is the expected nonzero result.
-				unmerged := exec.Command("git", "diff", "--name-only", "--diff-filter=U", "-z")
+				unmerged := testutil.Hide(exec.Command("git", "diff", "--name-only", "--diff-filter=U", "-z"))
 				unmerged.Dir = repo
 				if output, err := unmerged.Output(); err != nil || len(output) == 0 {
 					t.Fatalf("merge fixture did not create unmerged paths: %q, %v", output, err)
@@ -166,7 +168,7 @@ func TestResolvedJobPathAllowsSymlinkedTempAncestor(t *testing.T) {
 
 func gitOutput(t *testing.T, dir string, args ...string) []byte {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testutil.Hide(exec.Command("git", args...))
 	cmd.Dir = dir
 	b, err := cmd.CombinedOutput()
 	if err != nil {

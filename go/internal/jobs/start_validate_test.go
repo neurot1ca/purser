@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"errors"
@@ -148,7 +150,7 @@ func TestValidateStartAcceptsMechanicalOpenCodeArguments(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		executable += ".exe"
 	}
-	if output, err := exec.Command("go", "build", "-o", executable, source).CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command("go", "build", "-o", executable, source)).CombinedOutput(); err != nil {
 		t.Fatalf("build fake OpenCode: %v: %s", err, output)
 	}
 	home := t.TempDir()
@@ -389,7 +391,7 @@ func replayStart(t *testing.T, c startCase) {
 
 func gitStart(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	c := exec.Command("git", args...)
+	c := testutil.Hide(exec.Command("git", args...))
 	c.Dir = dir
 	b, e := c.CombinedOutput()
 	if e != nil {

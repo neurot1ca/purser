@@ -123,7 +123,7 @@ func resolveRepositoryRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	command := exec.Command("git", "-C", workingDir, "rev-parse", "--show-toplevel")
+	command := proc.Hide(exec.Command("git", "-C", workingDir, "rev-parse", "--show-toplevel"))
 	proc.Hide(command)
 	root, err := command.Output()
 	if err != nil || strings.TrimSpace(string(root)) == "" {

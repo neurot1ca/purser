@@ -70,7 +70,7 @@ func RunWorktreeSetup(worktreePath string, setup profile.WorktreeSetup) Worktree
 		shell = "/bin/sh"
 		args = []string{"-c", *setup.Setup}
 	}
-	command := exec.CommandContext(ctx, shell, args...)
+	command := proc.Hide(exec.CommandContext(ctx, shell, args...))
 	command.Dir = worktreePath
 	proc.ConfigureProcessTreeKill(command)
 	if runtime.GOOS == "windows" {

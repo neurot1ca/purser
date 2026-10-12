@@ -279,7 +279,7 @@ func runMechanicalShadow(ctx context.Context, job mechanicalShadowJob, executabl
 	argv := []string{"run", "--format", "json", "--model", job.Model, "--agent", "purser-shadow", "--dir", scratch, job.Prompt}
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(commandCtx, executable, argv...)
+	cmd := proc.Hide(exec.CommandContext(commandCtx, executable, argv...))
 	cmd.Dir = scratch
 	cmd.Env = append(os.Environ(), "OPENCODE_CONFIG_CONTENT="+string(config))
 	cmd.Stdin, cmd.Stderr = nil, io.Discard

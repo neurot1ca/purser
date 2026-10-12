@@ -347,7 +347,7 @@ func recordApplyValidationProcess(path string, pid int, identity int64) error {
 }
 
 func checkoutRevision(repo string) (string, string, error) {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd := proc.Hide(exec.Command("git", "rev-parse", "HEAD"))
 	cmd.Dir = repo
 	head, err := cmd.Output()
 	if err != nil {
@@ -356,7 +356,7 @@ func checkoutRevision(repo string) (string, string, error) {
 	revision := string(bytes.TrimSpace(head))
 	h := sha256.New()
 	writeValidationHashFrame(h, []byte(revision))
-	cmd = exec.Command("git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	cmd = proc.Hide(exec.Command("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"))
 	cmd.Dir = repo
 	status, err := cmd.Output()
 	if err != nil {
@@ -420,7 +420,7 @@ func validationPackageSnapshot(repo string, packages []string) (string, error) {
 	sort.Strings(ordered)
 	h := sha256.New()
 	for _, root := range ordered {
-		cmd := exec.Command("git", "-C", repo, "ls-files", "-z", "--", root)
+		cmd := proc.Hide(exec.Command("git", "-C", repo, "ls-files", "-z", "--", root))
 		files, err := cmd.Output()
 		if err != nil {
 			return "", err
@@ -881,7 +881,7 @@ func selectValidationPackages(stateRoot, repo string, paths []string) (string, [
 					packages = append(packages, mod+"|"+pkg)
 				}
 			} else {
-				cmd := exec.Command("go", "list", "./...")
+				cmd := proc.Hide(exec.Command("go", "list", "./..."))
 				cmd.Dir = mod
 				cmd.Env = validationEnvironment(stateRoot)
 				out, err := cmd.Output()

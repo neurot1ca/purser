@@ -1,5 +1,7 @@
 package main
 
+import "purser-hook/internal/testutil"
+
 import (
 	"bytes"
 	"encoding/json"
@@ -191,7 +193,7 @@ func planCLIFixture(t *testing.T) (string, string, string) {
 	if err := os.MkdirAll(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+	if output, err := testutil.Hide(exec.Command("git", "-C", repo, "init", "-q")).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
 	artifact := filepath.Join(t.TempDir(), "plan.md")

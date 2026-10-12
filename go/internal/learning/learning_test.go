@@ -1,5 +1,7 @@
 package learning
 
+import "purser-hook/internal/testutil"
+
 import (
 	"bufio"
 	"bytes"
@@ -202,7 +204,7 @@ func TestReadCorruptAndOversized(t *testing.T) {
 func TestLockFileInterop(t *testing.T) {
 	root := t.TempDir()
 	lockPath := filepath.Join(root, "telemetry", LockName)
-	cmd := exec.Command(os.Args[0], "-test.run=^TestLockFileInteropChild$", "-test.v")
+	cmd := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestLockFileInteropChild$", "-test.v"))
 	cmd.Env = append(os.Environ(), "PURSER_LOCK_INTEROP_PATH="+lockPath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

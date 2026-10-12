@@ -7,7 +7,7 @@ func StartDetached(argv, env []string, dir string) error {
 	if len(argv) == 0 || argv[0] == "" {
 		return exec.ErrNotFound
 	}
-	command := exec.Command(argv[0], argv[1:]...)
+	command := Hide(exec.Command(argv[0], argv[1:]...))
 	command.Env = env
 	command.Dir = dir
 	command.Stdin, command.Stdout, command.Stderr = nil, nil, nil

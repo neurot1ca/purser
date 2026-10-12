@@ -2,6 +2,8 @@
 
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"os"
 	"os/exec"
@@ -10,7 +12,7 @@ import (
 )
 
 func TestDetachedProcessGroupCanBeKilledAndConfirmedStopped(t *testing.T) {
-	command := exec.Command("/bin/sh", "-c", "exec sleep 60")
+	command := testutil.Hide(exec.Command("/bin/sh", "-c", "exec sleep 60"))
 	ConfigureDetachedSession(command)
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
@@ -35,7 +37,7 @@ func TestDetachedProcessGroupCanBeKilledAndConfirmedStopped(t *testing.T) {
 }
 
 func TestPlatformProcessIdentityContract(t *testing.T) {
-	command := exec.Command("/bin/sh", "-c", "exit 0")
+	command := testutil.Hide(exec.Command("/bin/sh", "-c", "exit 0"))
 	ConfigureDetachedSession(command)
 	if err := command.Start(); err != nil {
 		t.Fatal(err)

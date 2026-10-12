@@ -63,7 +63,7 @@ func CodexSupportsEffort(model, effort string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, binary, args...)
+	command := proc.Hide(exec.CommandContext(ctx, binary, args...))
 	output, err := runListingCommand(command)
 	if err != nil {
 		return false
@@ -433,7 +433,7 @@ func installedCodexVersion() *string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	command := exec.CommandContext(ctx, executable, "--version")
+	command := proc.Hide(exec.CommandContext(ctx, executable, "--version"))
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if command.Run() != nil {
 		return nil
@@ -607,7 +607,7 @@ var listModels = func(agent string, providers map[string]map[string]json.RawMess
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, binary, args...)
+	command := proc.Hide(exec.CommandContext(ctx, binary, args...))
 	output, err := runListingCommand(command)
 	if err != nil {
 		return listingResult{}

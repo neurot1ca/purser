@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"encoding/json"
 	"errors"
@@ -244,7 +246,7 @@ func TestOwnershipLockSerializesGoProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	started, acquired := filepath.Join(dir, "started"), filepath.Join(dir, "acquired")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestOwnershipLockSubprocessHelper$")
+	cmd := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestOwnershipLockSubprocessHelper$"))
 	cmd.Env = append(os.Environ(), "PURSER_LOCK_HELPER=1", "PURSER_LOCK_DIR="+dir, "PURSER_LOCK_STARTED="+started, "PURSER_LOCK_ACQUIRED="+acquired)
 	if err := cmd.Start(); err != nil {
 		_ = lock.Release()

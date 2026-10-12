@@ -427,7 +427,7 @@ func replaceRecentTurns(content, recent string) string {
 func runGit(repository string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "git", args...)
+	command := proc.Hide(exec.CommandContext(ctx, "git", args...))
 	command.Dir = repository
 	proc.ConfigureNoWindow(command)
 	output, err := command.Output()

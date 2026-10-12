@@ -138,7 +138,7 @@ func TestTestEvidenceFailedUsesLatestRunPerTargetExitCode(t *testing.T) {
 				{"command": "GOCACHE=/new go test ./pkg", "exit_code": float64(0), "aggregated_output": "ok"},
 			},
 			latestExitCode: 0,
-			failed: false,
+			failed:         false,
 		},
 		{
 			name: "later failure overrides earlier pass",
@@ -147,7 +147,7 @@ func TestTestEvidenceFailedUsesLatestRunPerTargetExitCode(t *testing.T) {
 				{"command": "GOCACHE=/new go test ./pkg", "exit_code": float64(1), "aggregated_output": "failed"},
 			},
 			latestExitCode: 1,
-			failed: true,
+			failed:         true,
 		},
 		{
 			name: "traceback text does not override zero exit",

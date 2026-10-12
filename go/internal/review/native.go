@@ -517,7 +517,7 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, pro
 			return nil, "", time.Since(started), retried, "REVIEWER_TIMEOUT", 0, nil
 		}
 		ctx, cancel := context.WithTimeout(parent, remaining)
-		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+		cmd := proc.Hide(exec.CommandContext(ctx, command[0], command[1:]...))
 		cmd.Dir = cwd
 		cmd.Env = os.Environ()
 		if adapter.Provider() == "agy" && hasFlag(command, "--input-format", "stream-json") {

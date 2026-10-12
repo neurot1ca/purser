@@ -1,5 +1,7 @@
 package jobs
 
+import "purser-hook/internal/testutil"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -588,7 +590,7 @@ func TestApplyFreshSuccessPersistsReviewerDecisionCountsOnce(t *testing.T) {
 
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	c := exec.Command("git", args...)
+	c := testutil.Hide(exec.Command("git", args...))
 	c.Dir = dir
 	c.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2000-01-01T00:00:00+00:00", "GIT_COMMITTER_DATE=2000-01-01T00:00:00+00:00")
 	if b, err := c.CombinedOutput(); err != nil {

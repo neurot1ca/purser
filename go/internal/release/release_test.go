@@ -1,5 +1,7 @@
 package release
 
+import "purser-hook/internal/testutil"
+
 import (
 	"archive/zip"
 	"crypto/sha256"
@@ -121,7 +123,7 @@ func TestFailedExportPreservesMarketplaceTree(t *testing.T) {
 	root := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()
-		c := exec.Command("git", append([]string{"-C", root}, args...)...)
+		c := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...))
 		if b, e := c.CombinedOutput(); e != nil {
 			t.Fatalf("git %v: %v: %s", args, e, b)
 		}
@@ -179,7 +181,7 @@ func TestExportMarketplaceUsesCommittedTreeAndLocalManifest(t *testing.T) {
 	write("base.txt", "committed\n")
 	runGit := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd := testutil.Hide(exec.Command("git", append([]string{"-C", root}, args...)...))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
@@ -200,7 +202,7 @@ func TestExportMarketplaceUsesCommittedTreeAndLocalManifest(t *testing.T) {
 	if err := os.WriteFile(fakeGoSource, []byte(program), 0644); err != nil {
 		t.Fatal(err)
 	}
-	build := exec.Command("go", "build", "-o", fakeGo, fakeGoSource)
+	build := testutil.Hide(exec.Command("go", "build", "-o", fakeGo, fakeGoSource))
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fake go: %v: %s", err, out)
 	}

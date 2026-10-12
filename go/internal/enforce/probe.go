@@ -34,7 +34,7 @@ func RunProbe(prefix []string, model string, timeout time.Duration) map[string]a
 	command := ProbeCommand(prefix, cwd, model, outputPath)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd := proc.Hide(exec.CommandContext(ctx, command[0], command[1:]...))
 	cmd.Dir = cwd
 	cmd.Stdin = strings.NewReader("Reply with OK.")
 	proc.ConfigureProcessTreeKill(cmd)

@@ -2,6 +2,8 @@
 
 package contextio
 
+import "purser-hook/internal/testutil"
+
 import (
 	"os"
 	"os/exec"
@@ -16,7 +18,7 @@ func TestMaintenancePidAlive(t *testing.T) {
 	})
 
 	t.Run("exited process", func(t *testing.T) {
-		cmd := exec.Command("cmd", "/c", "exit 0")
+		cmd := testutil.Hide(exec.Command("cmd", "/c", "exit 0"))
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}

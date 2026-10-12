@@ -47,7 +47,7 @@ func TestChecksCommandHelper(t *testing.T) {
 			time.Sleep(time.Minute)
 		}
 	case "spawn-child-sleep":
-		child := exec.Command(os.Args[0], "-test.run=^TestChecksCommandHelper$")
+		child := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestChecksCommandHelper$"))
 		child.Env = append(os.Environ(), "PURSER_CHECK_HELPER=write-after-delay")
 		if err := child.Start(); err != nil {
 			os.Exit(8)
@@ -355,7 +355,7 @@ func waitCheckPID(t *testing.T, path string) string {
 
 func processExists(pid string) bool {
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", "$p=Get-Process -Id "+pid+" -ErrorAction SilentlyContinue; if ($p) { exit 0 }; exit 1")
+		cmd := testutil.Hide(exec.Command("powershell.exe", "-NoProfile", "-Command", "$p=Get-Process -Id "+pid+" -ErrorAction SilentlyContinue; if ($p) { exit 0 }; exit 1"))
 		err := cmd.Run()
 		if err == nil {
 			return true
