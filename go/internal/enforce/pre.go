@@ -88,6 +88,7 @@ func preApply(event map[string]any, runtimeRoot string) map[string]any {
 		if sessionID == "" || !valid || revision == "" || revision != current {
 			return denyPre("ACCEPTANCE_REVISION_UNAVAILABLE", "reviewed revision is unavailable")
 		}
+		recordReviewIntervalDecision(stateRoot, jobID, "accepted")
 		updated := make(map[string]any, len(input)+2)
 		for key, value := range input {
 			updated[key] = value

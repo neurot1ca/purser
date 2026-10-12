@@ -73,8 +73,20 @@ func recordPostReviewerObservations(root string, event map[string]any, repositor
 		payload["failure_code"] = "REVIEWER1_UNAVAILABLE"
 	} else if result.Outcome == "completed" {
 		payload["reviewer1_result"] = attrs["result"]
+		if id := stringValue(attrs["review_job_id"]); id != "" {
+			payload["reviewer1_job_id"] = id
+		}
 		if initialFindingCount >= 0 {
 			payload["reviewer1_initial_finding_count"] = initialFindingCount
+		}
+		refs := []any{}
+		for _, finding := range postReviewerFindings(attrs["findings"]) {
+			if reference := stringValue(finding["reference"]); reference != "" {
+				refs = append(refs, reference)
+			}
+		}
+		if len(refs) > 0 {
+			payload["reviewer1_finding_refs"] = refs
 		}
 		preEmit(root, event, repository, taskID, project, "REVIEWER1_FINISHED", payload)
 		return

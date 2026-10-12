@@ -163,6 +163,26 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 				"message": "No eligible registered Reviewer-1 adapter was available; FULL review required."}},
 		}}
 	}
+	if last.Outcome == "completed" {
+		if last.Attributes == nil {
+			last.Attributes = map[string]any{}
+		}
+		findings := postReviewerFindings(last.Attributes["findings"])
+		encoded, _ := canonicalJSON(findings)
+		revision := stringValue(pending["task_id"]) + "\x00" + stringValue(pending["lease_owner"]) + "\x00" + stringValue(pending["job_id"]) + "\x00" + stringValue(pending["worktree_snapshot"]) + "\x00" + stringValue(last.Attributes["review_diff"]) + "\x00" + string(encoded)
+		for i, ref := range review.FindingReferences(revision, len(findings)) {
+			findings[i]["reference"] = ref
+		}
+		last.Attributes["findings"] = findings
+		id := stringValue(pending["job_id"])
+		if id == "" {
+			id = stringValue(pending["lease_owner"])
+		}
+		last.Attributes["review_job_id"], bundle["_review_job_id"] = id, id
+	}
+	if diff, ok := last.Attributes["review_diff"].(string); ok {
+		bundle["_review_diff"] = diff
+	}
 	return last, nil
 }
 

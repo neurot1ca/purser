@@ -131,6 +131,10 @@ func finalizePostArtifacts(root string, event, bundle map[string]any, cap, repor
 	// exceeded the response cap. Keep that decision in the caller's bundle.
 	bundle["claude_review_mode"] = artifactBundle["claude_review_mode"]
 	bundle["audit_receipt"] = artifactBundle["audit_receipt"]
+	if metadata, ok := artifactBundle["review_navigation"]; ok {
+		bundle["review_navigation"] = metadata
+	}
+	delete(bundle, "_review_diff")
 	compact, _, err := compactBundle(bundle, cap)
 	if err != nil {
 		return nil, "", err
@@ -166,6 +170,7 @@ func finalizePostArtifacts(root string, event, bundle map[string]any, cap, repor
 			}
 		}
 	}
+	applyReviewNavigationPreview(compact, bundle)
 	return compact, path, nil
 }
 

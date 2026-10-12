@@ -61,7 +61,7 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 		findings = []map[string]any{{"code": code, "message": message}}
 	}
 	for _, finding := range findings {
-		bundle["findings"] = appendPostFinding(bundle["findings"], stringValue(finding["code"]), stringValue(finding["message"]))
+		bundle["findings"] = appendPostFinding(bundle["findings"], stringValue(finding["code"]), stringValue(finding["message"]), stringValue(finding["reference"]))
 	}
 
 	jobPaths, ok := postStringList(mapValue(bundle["whole_tree_delta"])["changed_paths"])
@@ -151,7 +151,7 @@ func postReviewerFindings(value any) []map[string]any {
 		}
 	case []map[string]string:
 		for _, finding := range findings {
-			items = append(items, map[string]any{"code": finding["code"], "message": finding["message"]})
+			items = append(items, map[string]any{"code": finding["code"], "message": finding["message"], "reference": finding["reference"]})
 		}
 	default:
 		return nil
@@ -163,7 +163,7 @@ func postReviewerFindings(value any) []map[string]any {
 		if code == "" || message == "" || utf8.RuneCountInString(code) > 120 {
 			continue
 		}
-		result = append(result, map[string]any{"code": code, "message": message})
+		result = append(result, map[string]any{"code": code, "message": message, "reference": stringValue(finding["reference"])})
 		if len(result) == 20 {
 			break
 		}

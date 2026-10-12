@@ -103,6 +103,8 @@ func TestObservationRetiredPythonSchemaAssertions(t *testing.T) {
 		{"legacy started", "IMPLEMENTER_STARTED", map[string]any{"phase": "implementation", "route": "normal", "model": "gpt-6-sol", "effort": "medium", "routing_enforced": true, "fresh_thread": true, "reply_call": false}},
 		{"legacy finished", "IMPLEMENTER_FINISHED", map[string]any{"duration_ms": 1000, "changed_paths_count": 1, "validation": "PASS", "thread_id": "thread-1", "claude_review_mode": "FULL", "routing_enforced": true, "codex_usage_known": false}},
 		{"decision", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "accepted", "task_type": "implementation", "source": map[string]any{"kind": "apply", "job_id": "job-1"}}},
+		{"fix attributed", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "send_back", "task_type": "implementation", "source": map[string]any{"kind": "reply", "job_id": "job-2"}, "review_attribution": "REVIEWER1_REFERENCED", "review_finding_refs": []any{"F0123456789abcdef-0001"}}},
+		{"fix unattributed", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "send_back", "task_type": "implementation", "source": map[string]any{"kind": "reply", "job_id": "job-3"}, "review_attribution": "NON_REVIEWER1_OR_UNATTRIBUTED"}},
 		{"route mismatch", "TASK_ROUTE_SELECTED", map[string]any{"phase": "implementation", "route": "subtle", "task_type": "counting_status", "suspected_route_mismatch": map[string]any{"declared_route": "subtle", "derived_type": "counting_status"}}},
 	}
 	for _, tc := range valid {
@@ -119,6 +121,7 @@ func TestObservationRetiredPythonSchemaAssertions(t *testing.T) {
 		{"readiness pass", "READINESS_CHECK_OUTCOME", map[string]any{"verdict": "PASS", "agent": "agy", "duration_ms": 0}},
 		{"decision value", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "maybe", "task_type": "implementation", "source": map[string]any{"kind": "apply", "job_id": "job-1"}}},
 		{"decision source", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "accepted", "task_type": "implementation", "source": map[string]any{"kind": "manual", "job_id": "job-1"}}},
+		{"duplicate finding refs", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "send_back", "task_type": "implementation", "source": map[string]any{"kind": "reply", "job_id": "job-2"}, "review_attribution": "REVIEWER1_REFERENCED", "review_finding_refs": []any{"F0123456789abcdef-0001", "F0123456789abcdef-0001"}}},
 	}
 	for _, tc := range invalid {
 		t.Run(tc.name, func(t *testing.T) {
@@ -126,6 +129,47 @@ func TestObservationRetiredPythonSchemaAssertions(t *testing.T) {
 				t.Fatal("invalid Python schema case was accepted")
 			}
 		})
+	}
+}
+
+func TestReviewerFindingAttributionCountsOnlyCurrentUniqueReferences(t *testing.T) {
+	refs := []any{"F0123456789abcdef-0001", "F0123456789abcdef-0002"}
+	decision := func(id, job string, findingRefs []any, attribution string) map[string]any {
+		payload := map[string]any{"decision": "send_back", "task_type": "implementation",
+			"source": map[string]any{"kind": "reply", "job_id": job}, "review_attribution": attribution}
+		if findingRefs != nil {
+			payload["review_finding_refs"] = findingRefs
+		}
+		event, err := buildObservation("CLAUDE_DECISION_RECORDED", map[string]any{}, payload, "task-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		event["event_id"], event["ts_utc"] = id, "2026-10-12T10:00:00Z"
+		return event
+	}
+	events := []map[string]any{
+		{"event_type": "REVIEWER1_FINISHED", "event_id": "review", "ts_utc": "2026-10-12T09:59:00Z", "payload": map[string]any{"reviewer1_job_id": "job-1", "reviewer1_finding_refs": refs}},
+		decision("reply-1", "job-1", refs[:1], "REVIEWER1_REFERENCED"),
+		decision("reply-2", "job-1", refs, "REVIEWER1_REFERENCED"),
+		decision("reply-duplicate", "job-1", refs, "REVIEWER1_REFERENCED"),
+		decision("reply-stale", "job-1", []any{"Faaaaaaaaaaaaaaaa-0001"}, "STALE_OR_CROSS_JOB"),
+		decision("reply-cross-job", "job-2", refs, "REVIEWER1_REFERENCED"),
+		decision("reply-unattributed", "job-3", nil, "NON_REVIEWER1_OR_UNATTRIBUTED"),
+		decision("reply-unattributed-duplicate", "job-3", nil, "NON_REVIEWER1_OR_UNATTRIBUTED"),
+	}
+	got, _ := foldObservationAggregate(nil, "task-1", "0123456789abcdef", events, false)
+	if got["reviewer1_answered_finding_count"] != 2 {
+		t.Fatalf("answered count: %#v", got)
+	}
+	sources := mapValue(got["claude_acceptance"])["sources"].([]any)
+	if len(sources) != 5 || mapValue(sources[3])["review_attribution"] != "STALE_OR_CROSS_JOB" || mapValue(sources[4])["review_attribution"] != "NON_REVIEWER1_OR_UNATTRIBUTED" {
+		t.Fatalf("send-back attribution: %#v", sources)
+	}
+	if err := validateObservationAcceptance(got["claude_acceptance"]); err != nil {
+		t.Fatal(err)
+	}
+	if got["reviewer1_valid_count"] != nil || got["reviewer1_false_count"] != nil {
+		t.Fatal("answered became adjudicated")
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"purser-hook/internal/review"
 )
 
 func nonReportBytes(bundle map[string]any) (int, error) {
@@ -38,6 +40,9 @@ func copyFindings(value any, limit *int) []any {
 			message = ""
 		}
 		copy := map[string]any{"code": finding["code"], "message": message}
+		if reference, ok := finding["reference"].(string); ok && reference != "" {
+			copy["reference"] = reference
+		}
 		if limit != nil {
 			runes := []rune(message)
 			if len(runes) > *limit {
@@ -58,7 +63,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 	for key, value := range bundle {
 		compact[key] = value
 	}
-	for _, key := range []string{"hook_checks_full", "codex_quota", "whole_tree_delta", "whole_tree_anomaly", "known_concurrent_scopes"} {
+	for _, key := range []string{"hook_checks_full", "codex_quota", "whole_tree_delta", "whole_tree_anomaly", "known_concurrent_scopes", "_review_diff", "_review_job_id", "review_navigation"} {
 		delete(compact, key)
 	}
 	if scopes, ok := bundle["known_concurrent_scopes"].([]any); ok && len(scopes) > 0 {
@@ -285,6 +290,38 @@ func finalizeBundle(root string, event map[string]any, bundle map[string]any, ca
 			compact["implementer_report"] = string(runes[:reportLimit])
 		}
 	}
+	if bundle["claude_review_mode"] == review.Full && numberOr(bundle["delta_lines"], 0) > 500 {
+		diff, available := bundle["_review_diff"].(string)
+		if !available {
+			prior := mapValue(bundle["review_navigation"])
+			if raw, readErr := os.ReadFile(stringValue(prior["raw_diff_path"])); readErr == nil {
+				index, indexed := review.NavigationIndex(string(raw))
+				if indexed && index == prior["index"] {
+					diff, available = string(raw), true
+				}
+			}
+		}
+		metadata := map[string]any{"presentation": "fallback", "status": "UNAVAILABLE"}
+		if available {
+			index, indexed := review.NavigationIndex(diff)
+			sum := sha256.Sum256([]byte(diff))
+			name := fmt.Sprintf("%x.diff", sum)
+			if indexed {
+				rawPath, pathErr := filepath.Abs(filepath.Join(root, "review_diffs", name))
+				if pathErr == nil && atomicWrite(rawPath, []byte(diff)) == nil {
+					metadata = map[string]any{"presentation": "navigator", "status": "READY", "raw_diff_path": rawPath, "index": index}
+				}
+			}
+		}
+		// The pilot uses stable call-key cohorts. Control retains its presentation.
+		if metadata["status"] == "READY" && key[len(key)-1]%2 == 0 {
+			metadata["presentation"] = "existing"
+		}
+		bundle["review_navigation"] = metadata
+
+	}
+	applyReviewNavigationPreview(compact, bundle)
+	delete(bundle, "_review_diff")
 	encoded, err := canonicalJSON(bundle)
 	if err != nil {
 		return nil, "", err
@@ -293,6 +330,33 @@ func finalizeBundle(root string, event map[string]any, bundle map[string]any, ca
 		return nil, "", err
 	}
 	return compact, absolute, nil
+}
+
+// Apply only at the final response boundary, after validation stripping and
+// quota compaction. The entire index remains in the full artifact.
+func applyReviewNavigationPreview(compact, bundle map[string]any) {
+	metadata := mapValue(bundle["review_navigation"])
+	if metadata == nil || metadata["presentation"] == "existing" {
+		return
+	}
+	preview := "REVIEW NAVIGATION UNAVAILABLE; inspect the full change.\n"
+	if metadata["status"] == "READY" {
+		preview = "Review navigation; raw diff: " + stringValue(metadata["raw_diff_path"]) + "\n" + stringValue(metadata["index"])
+	}
+	report := stringValue(compact["implementer_report"])
+	budget, _ := canonicalJSON(report)
+	candidate := []rune(preview + report)
+	if len(candidate) > len(budget) {
+		candidate = candidate[:len(budget)]
+	}
+	for len(candidate) > 0 {
+		encoded, _ := canonicalJSON(string(candidate))
+		if len(encoded) <= len(budget) {
+			break
+		}
+		candidate = candidate[:len(candidate)-1]
+	}
+	compact["implementer_report"] = string(candidate)
 }
 
 func atomicWrite(path string, data []byte) error {

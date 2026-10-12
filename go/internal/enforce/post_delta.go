@@ -194,12 +194,16 @@ func postPathInScope(path string, scope []string) bool {
 	return false
 }
 
-func appendPostFinding(value any, code, message string) []any {
+func appendPostFinding(value any, code, message string, reference ...string) []any {
 	findings, ok := value.([]any)
 	if !ok {
 		findings = []any{}
 	}
-	return append(findings, map[string]any{"code": code, "message": message})
+	finding := map[string]any{"code": code, "message": message}
+	if len(reference) > 0 && reference[0] != "" {
+		finding["reference"] = reference[0]
+	}
+	return append(findings, finding)
 }
 
 func postKnownPaths(value any) map[string]bool {

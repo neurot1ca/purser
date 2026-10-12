@@ -252,7 +252,12 @@ func nativeReview(ctx context.Context, pluginRoot string, args map[string]any) (
 		omitted := PacketOmitted{"REVIEW_PACKET_INCOMPLETE", "The complete delegated review packet could not be built (" + errorType(err) + ": " + trimError(err) + "); no model call was made.", []string{"delegated_diff"}}
 		return bridgeOutcome(IncompletePacket(omitted, config, agent))
 	}
-	return reviewMaterials(ctx, materials, config, kwargs)
+	outcome, err := reviewMaterials(ctx, materials, config, kwargs)
+	if outcome.Attributes != nil {
+		// Host-only metadata; it never enters the reviewer packet or worker prompt.
+		outcome.Attributes["review_diff"] = materials["delegated_diff"]
+	}
+	return outcome, err
 }
 
 func loadNativeConfig(pluginRoot string) (map[string]any, error) {

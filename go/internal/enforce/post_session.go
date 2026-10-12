@@ -25,12 +25,14 @@ func finishPostSession(root string, event, pending, bundle map[string]any, threa
 		project = "unresolved"
 	}
 	taskID := stringValue(pending["task_id"])
+	ledgerBundle := clonePostMap(bundle)
+	delete(ledgerBundle, "_review_diff")
 	if pending["kind"] == "pretool_bypass" {
 		if taskID != "" && stringValue(pending["route"]) != "" && stringValue(pending["model"]) != "" && stringValue(pending["effort"]) != "" {
 			record := ledger.BuildSessionRecord(taskID, optionalThread(threadID), stringValue(pending["route"]),
 				stringValue(pending["model"]), stringValue(pending["effort"]), map[string]any{
 					"agent": pendingAgent(pending), "phase": pending["phase"], "scope": pendingScope(pending),
-					"pending_call_baseline": nil, "last_outcome": bundle, "label": pending["label"],
+					"pending_call_baseline": nil, "last_outcome": ledgerBundle, "label": pending["label"],
 				})
 			if saved := ledger.Save(filepath.Join(root, "projects", project), record); saved.Status != ledger.OK {
 				message := "Bypass outcome ledger update failed."
@@ -50,7 +52,7 @@ func finishPostSession(root string, event, pending, bundle map[string]any, threa
 	}
 	options := map[string]any{
 		"agent": pendingAgent(pending), "phase": pending["phase"], "scope": pendingScope(pending),
-		"pending_call_baseline": nil, "last_outcome": bundle,
+		"pending_call_baseline": nil, "last_outcome": ledgerBundle,
 		"task_objective": pending["task_objective"], "acceptance_criteria": pending["acceptance_criteria"],
 		"task_contract_grounded": pending["task_contract_grounded"], "reason": pending["reason"],
 		"profile_checks": pending["profile_checks"], "label": pending["label"],

@@ -349,8 +349,10 @@ func observationAllUsageKeys() []string {
 var observationContextKeys = strings.Fields(`read_count full_read_count targeted_read_count unknown_read_count observed_bytes_total exact_line_read_count exact_line_count_total lower_bound_line_read_count lower_bound_line_count_total oversized_read_count binary_suspected_read_count threshold_200_known_count threshold_200_candidate_count threshold_350_known_count threshold_350_candidate_count threshold_500_known_count threshold_500_candidate_count repeat_count repeat_known pre_codex_read_count post_codex_read_count task_association_known hook_sample_count internal_processing_us_total internal_processing_us_max hook_wall_time_us_total hook_wall_time_us_max unknown_reason`)
 
 var observationRunOptionalBooleans = strings.Fields("first_pass first_pass_success repair repair_attempted repaired accepted blocked")
-var observationRunOptionalCounts = []string{"repair_count"}
+var observationRunOptionalCounts = []string{"repair_count", "reviewer1_answered_finding_count"}
+var observationRunOptionalFindingLists = []string{"reviewer1_answered_finding_refs"}
 var observationSafeText = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+var observationFindingID = regexp.MustCompile(`^F[0-9a-f]{16}-[0-9]{4}$`)
 var observationRunFrontmatterKeys = strings.Fields("type schema_version projection_schema_version task_id repo branch timezone started_at started_at_utc ended_at ended_at_utc status phase route model effort fresh_threads reply_calls routing_enforced validation duration_ms thread_id reviewer1_provider reviewer1_model_requested reviewer1_result reviewer1_skipped_reason served_model_attestation claude_review_mode changed_paths_count routing_protocol_violations thread_continuity_violations concurrent_writer policy_fingerprint first_pass first_pass_success repair repair_attempted repaired accepted blocked repair_count")
 var observationRunBaseFrontmatterKeys = strings.Fields("repo branch started_at started_at_utc ended_at ended_at_utc status phase route model effort fresh_threads reply_calls routing_enforced validation duration_ms thread_id reviewer1_provider reviewer1_model_requested reviewer1_result reviewer1_skipped_reason served_model_attestation claude_review_mode changed_paths_count routing_protocol_violations thread_continuity_violations concurrent_writer policy_fingerprint")
 
@@ -540,6 +542,14 @@ func prepareObservationRun(a map[string]any) (observationRun, error) {
 			v[key] = z
 		}
 	}
+	for _, key := range observationRunOptionalFindingLists {
+		if raw, ok := a[key]; ok {
+			if err := validateObservationValue(key, raw); err != nil {
+				return bad(key, "is invalid")
+			}
+			v[key] = raw
+		}
+	}
 	usage, _ := a["usage"].(map[string]any)
 	if a["usage"] != nil && usage == nil {
 		return bad("usage", "is not an object")
@@ -665,8 +675,28 @@ func validateObservationAcceptance(value any) error {
 	}
 	for _, item := range sources {
 		src, ok := item.(map[string]any)
-		if !ok || len(src) != 5 || !oneOf(src["kind"], "apply reply discard") || !oneOf(src["decision"], "accepted send_back rejected") {
+		if !ok || (len(src) != 5 && len(src) != 7) || !oneOf(src["kind"], "apply reply discard") || !oneOf(src["decision"], "accepted send_back rejected") {
 			return fmt.Errorf("invalid")
+		}
+		if len(src) == 7 {
+			if !oneOf(src["review_attribution"], "REVIEWER1_REFERENCED NON_REVIEWER1_OR_UNATTRIBUTED STALE_OR_CROSS_JOB") {
+				return fmt.Errorf("invalid")
+			}
+			refs, ok := src["review_finding_refs"].([]any)
+			if !ok && src["review_attribution"] != "REVIEWER1_REFERENCED" && src["review_finding_refs"] == nil {
+				ok = true
+			}
+			if !ok || len(refs) > 20 || (src["review_attribution"] == "REVIEWER1_REFERENCED" && len(refs) == 0) || (src["review_attribution"] == "NON_REVIEWER1_OR_UNATTRIBUTED" && len(refs) != 0) || (src["review_attribution"] == "STALE_OR_CROSS_JOB" && len(refs) == 0) {
+				return fmt.Errorf("invalid")
+			}
+			seen := map[string]bool{}
+			for _, raw := range refs {
+				ref, ok := raw.(string)
+				if !ok || !observationFindingID.MatchString(ref) || seen[ref] {
+					return fmt.Errorf("invalid")
+				}
+				seen[ref] = true
+			}
 		}
 		if id := src["job_id"]; id != nil {
 			s, ok := id.(string)
@@ -729,6 +759,13 @@ func observationRunFrontmatter(p observationRun) string {
 			}
 		}
 		lines = append(lines, k+": "+observationYAMLScalar(x))
+		if k == "served_model_attestation" {
+			for _, optional := range []string{"reviewer1_answered_finding_count", "reviewer1_answered_finding_refs"} {
+				if x, ok := v[optional]; ok {
+					lines = append(lines, optional+": "+observationYAMLScalar(x))
+				}
+			}
+		}
 	}
 	lines = append(lines, "usage:")
 	u := v["usage"].(map[string]any)
@@ -1005,10 +1042,14 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 		case "REVIEWER1_STARTED", "REVIEWER1_FINISHED", "REVIEWER1_FAILED":
 			if event["event_type"] == "REVIEWER1_STARTED" {
 				aggregate["reviewer1_result"], aggregate["reviewer1_initial_finding_count"], aggregate["reviewer1_skipped_reason"] = nil, nil, nil
+				delete(aggregate, "reviewer1_finding_refs")
+				delete(aggregate, "reviewer1_job_id")
+				delete(aggregate, "reviewer1_answered_finding_refs")
+				delete(aggregate, "reviewer1_answered_finding_count")
 			} else {
 				aggregate["reviewer1_skipped_reason"] = nil
 			}
-			for _, field := range []string{"reviewer1_provider", "reviewer1_model_requested", "served_model_attestation", "reviewer1_result", "reviewer1_initial_finding_count"} {
+			for _, field := range []string{"reviewer1_provider", "reviewer1_model_requested", "served_model_attestation", "reviewer1_result", "reviewer1_initial_finding_count", "reviewer1_finding_refs", "reviewer1_job_id"} {
 				if value, ok := payload[field]; ok {
 					aggregate[field] = value
 				}
@@ -1027,6 +1068,10 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 			}
 		case "REVIEWER1_SKIPPED":
 			aggregate["reviewer1_provider"], aggregate["reviewer1_result"], aggregate["reviewer1_initial_finding_count"] = nil, nil, nil
+			delete(aggregate, "reviewer1_finding_refs")
+			delete(aggregate, "reviewer1_job_id")
+			delete(aggregate, "reviewer1_answered_finding_refs")
+			delete(aggregate, "reviewer1_answered_finding_count")
 			aggregate["reviewer1_skipped_reason"] = payload["reviewer1_skipped_reason"]
 			aggregate["reviewer1_model_requested"] = payload["reviewer1_model_requested"]
 		case "ROUTING_PROTOCOL_VIOLATION":
@@ -1041,7 +1086,8 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 			sources, _ := acceptance["sources"].([]any)
 			duplicate := false
 			for _, raw := range sources {
-				if item, ok := raw.(map[string]any); ok && item["kind"] == source["kind"] && item["job_id"] == source["job_id"] {
+				if item, ok := raw.(map[string]any); ok && item["kind"] == source["kind"] && item["job_id"] == source["job_id"] && item["review_attribution"] == payload["review_attribution"] &&
+					(item["review_finding_refs"] == nil && payload["review_finding_refs"] == nil || postSameStrings(item["review_finding_refs"], payload["review_finding_refs"])) {
 					duplicate = true
 					break
 				}
@@ -1060,6 +1106,20 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 			}
 			decision := payload["decision"]
 			entry := map[string]any{"kind": source["kind"], "job_id": source["job_id"], "decision": decision, "task_type": payload["task_type"], "ts_utc": event["ts_utc"]}
+			if attribution, ok := payload["review_attribution"].(string); ok {
+				refs := payload["review_finding_refs"]
+				if refs == nil {
+					refs = []any{}
+				}
+				if attribution == "REVIEWER1_REFERENCED" && (source["job_id"] != aggregate["reviewer1_job_id"] || !reviewFindingRefsMatch(refs, aggregate["reviewer1_finding_refs"])) {
+					attribution = "STALE_OR_CROSS_JOB"
+				} else if attribution == "REVIEWER1_REFERENCED" {
+					aggregate["reviewer1_answered_finding_refs"] = mergeFindingReferences(aggregate["reviewer1_answered_finding_refs"], refs)
+					answered, _ := aggregate["reviewer1_answered_finding_refs"].([]any)
+					aggregate["reviewer1_answered_finding_count"] = len(answered)
+				}
+				entry["review_attribution"], entry["review_finding_refs"] = attribution, refs
+			}
 			sources = append(sources, entry)
 			acceptance["sources"] = sources
 			aggregate["claude_decision"] = map[string]any{"decision": decision, "task_type": payload["task_type"], "source": source, "ts_utc": event["ts_utc"]}
@@ -1249,6 +1309,49 @@ func numberOrZero(value any) int {
 	return 0
 }
 
+func reviewFindingRefsMatch(value, current any) bool {
+	refs, ok := value.([]any)
+	if !ok || len(refs) == 0 {
+		return false
+	}
+	available := map[string]bool{}
+	switch items := current.(type) {
+	case []any:
+		for _, item := range items {
+			if ref, ok := item.(string); ok {
+				available[ref] = true
+			}
+		}
+	case []string:
+		for _, ref := range items {
+			available[ref] = true
+		}
+	}
+	for _, item := range refs {
+		ref, ok := item.(string)
+		if !ok || !available[ref] {
+			return false
+		}
+	}
+	return true
+}
+
+func mergeFindingReferences(existing, added any) []any {
+	result := []any{}
+	seen := map[string]bool{}
+	for _, values := range []any{existing, added} {
+		items, _ := values.([]any)
+		for _, item := range items {
+			ref, ok := item.(string)
+			if ok && !seen[ref] {
+				seen[ref] = true
+				result = append(result, ref)
+			}
+		}
+	}
+	return result
+}
+
 func fields(names string) map[string]bool {
 	out := map[string]bool{}
 	for _, name := range strings.Fields(names) {
@@ -1260,7 +1363,7 @@ func fields(names string) map[string]bool {
 var (
 	callObservationFields  = fields("phase route model model_source effort routing_enforced fresh_thread reply_call reason reason_source previous_route new_route eta_minutes worker_prompt_chars scope_path_count task_type suspected_route_mismatch agent provider")
 	startObservationFields = fields("implementer claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
-	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CODEX_RESULT_UNFETCHED": fields("route code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source reviewer1_valid_count reviewer1_false_count"), "READINESS_CHECK_OUTCOME": fields("verdict agent duration_ms"), "PLAN_REDIRECT": fields("route non_test_scope_count"), "MAINTENANCE_REPORT_FINISHED": fields("report_id report_type outcome reason_code elapsed_seconds quota_change_active_window_pct findings_high_count findings_medium_count findings_low_count line_coverage_pct")}
+	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CODEX_RESULT_UNFETCHED": fields("route code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source reviewer1_valid_count reviewer1_false_count review_attribution review_finding_refs"), "READINESS_CHECK_OUTCOME": fields("verdict agent duration_ms"), "PLAN_REDIRECT": fields("route non_test_scope_count"), "MAINTENANCE_REPORT_FINISHED": fields("report_id report_type outcome reason_code elapsed_seconds quota_change_active_window_pct findings_high_count findings_medium_count findings_low_count line_coverage_pct")}
 	observationID          = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	observationUUID        = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	unsafeObservationID    = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -1941,7 +2044,7 @@ func mergeFields(sets ...map[string]bool) map[string]bool {
 var observationRules = map[string]string{}
 
 var reviewerObservationFields = fields("reviewer1_retry_count reviewer1_retry_recovered reviewer1_provider reviewer1_model_requested served_model_attestation duration_ms gemini_usage_known gemini_input_tokens gemini_cached_input_tokens gemini_output_tokens gemini_reasoning_output_tokens gemini_total_tokens gemini_prompt_tokens gemini_completion_tokens gemini_cached_tokens gemini_cache_read_tokens gemini_cache_write_tokens gemini_thinking_tokens")
-var reviewerFinishedObservationFields = mergeFields(reviewerObservationFields, fields("reviewer1_result reviewer1_initial_finding_count"))
+var reviewerFinishedObservationFields = mergeFields(reviewerObservationFields, fields("reviewer1_result reviewer1_initial_finding_count reviewer1_finding_refs reviewer1_job_id"))
 var reviewerFailedObservationFields = mergeFields(reviewerObservationFields, fields("failure_code reviewer1_error_code reviewer1_result reviewer_stdout reviewer_stderr reviewer_exit reviewer_parse_error"))
 
 var observationEventTypes = fields("TASK_ROUTE_SELECTED IMPLEMENTER_STARTED IMPLEMENTER_FINISHED IMPLEMENTER_FAILED REVIEWER1_STARTED REVIEWER1_FINISHED COMPACTION_ADVICE_OUTCOME STOP_BLOCKED SCOPE_CONFLICT_OUTCOME REVIEWER1_SKIPPED REVIEWER1_FAILED ROUTING_PROTOCOL_VIOLATION THREAD_CONTINUITY_VIOLATION UNKNOWN_CONCURRENT_WRITER WORKFLOW_VERDICT_RECORDED TELEMETRY_WARNING CLAUDE_TASK_USAGE_RECORDED CONTEXT_IO_TURN_RECORDED CODEX_RESULT_UNFETCHED CLAUDE_DECISION_RECORDED WORKER_REPLAY_CONFLICT MECHANICAL_EDIT_OBSERVED MAINTENANCE_REPORT_FINISHED MAINTENANCE_REPORT_ACTED READINESS_CHECK_OUTCOME PLAN_REDIRECT")
@@ -2051,9 +2154,14 @@ func init() {
 	setObservationRule("enum:explicit inherited", "reason_source")
 	setObservationRule("enum:implementation operation plan unknown counting_status", "task_type")
 	setObservationRule("enum:accepted send_back rejected unknown", "decision")
+	setObservationRule("enum:REVIEWER1_REFERENCED NON_REVIEWER1_OR_UNATTRIBUTED STALE_OR_CROSS_JOB", "review_attribution")
+	setObservationRule("finding_refs", "review_finding_refs")
+	setObservationRule("finding_refs", "reviewer1_finding_refs")
+	setObservationRule("finding_refs", "reviewer1_answered_finding_refs")
+	setObservationRule("int", "reviewer1_answered_finding_count")
 	setObservationRule("enum:UNMET NO_UNMET_FOUND UNKNOWN UNAVAILABLE", "verdict")
 	setObservationRule("id", "code")
-	setObservationRule("id", "implementer agent provider claude_usage_session_id job_id")
+	setObservationRule("id", "implementer agent provider claude_usage_session_id job_id reviewer1_job_id")
 	setObservationRule("enum:denied queued promoted applied resolved_by_hand discarded expired", "action")
 	setObservationRule("time", "claude_usage_captured_at claude_5h_resets_at claude_7d_resets_at")
 	setObservationRule("scope", "claude_rate_limit_delta_scope")
@@ -2144,6 +2252,15 @@ func buildObservationAtStateRoot(eventType string, envelope, payload map[string]
 		}
 		clean[name] = value
 	}
+	if attribution, ok := clean["review_attribution"].(string); ok {
+		refs, _ := clean["review_finding_refs"].([]any)
+		if attribution == "NON_REVIEWER1_OR_UNATTRIBUTED" && len(refs) != 0 || attribution != "NON_REVIEWER1_OR_UNATTRIBUTED" && len(refs) == 0 {
+			return nil, fmt.Errorf("review attribution does not match finding references")
+		}
+		if refs == nil {
+			clean["review_finding_refs"] = []any{}
+		}
+	}
 	project := envelope["project_key"]
 	if project == nil && taskID != nil {
 		project = "unresolved"
@@ -2214,6 +2331,18 @@ func validateObservationValue(name string, value any) error {
 	case rule == "id":
 		s, ok := value.(string)
 		valid = ok && observationID.MatchString(s)
+	case rule == "finding_refs":
+		items, ok := value.([]any)
+		valid = ok && (name == "reviewer1_answered_finding_refs" || len(items) <= 20)
+		seen := map[string]bool{}
+		for _, item := range items {
+			s, ok := item.(string)
+			if !ok || !observationFindingID.MatchString(s) || seen[s] {
+				valid = false
+				break
+			}
+			seen[s] = true
+		}
 	case rule == "model":
 		s, ok := value.(string)
 		valid = ok && modelValue.MatchString(s)

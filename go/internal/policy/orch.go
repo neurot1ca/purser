@@ -22,23 +22,25 @@ const (
 )
 
 var (
-	orchKeys        = map[string]bool{"task": true, "phase": true, "route": true, "reason": true, "basis": true, "scope": true, "eta": true}
+	orchKeys        = map[string]bool{"task": true, "phase": true, "route": true, "reason": true, "basis": true, "scope": true, "eta": true, "review_findings": true}
 	orchDrivePrefix = regexp.MustCompile(`^[A-Za-z]:`)
 	solRoutes       = map[string]bool{"normal": true, "consequential": true, "escalated": true}
+	reviewFindingID = regexp.MustCompile(`^F[0-9a-f]{16}-[0-9]{4}$`)
 )
 
 type OrchParseResult struct {
-	Valid      bool     `json:"valid"`
-	Code       string   `json:"code"`
-	Message    string   `json:"message"`
-	Prompt     string   `json:"prompt"`
-	TaskID     *string  `json:"task_id"`
-	Phase      *string  `json:"phase"`
-	Route      *string  `json:"route"`
-	Reason     *string  `json:"reason"`
-	Basis      *string  `json:"basis"`
-	Scope      []string `json:"scope"`
-	ETAMinutes *int     `json:"eta_minutes"`
+	Valid          bool     `json:"valid"`
+	Code           string   `json:"code"`
+	Message        string   `json:"message"`
+	Prompt         string   `json:"prompt"`
+	TaskID         *string  `json:"task_id"`
+	Phase          *string  `json:"phase"`
+	Route          *string  `json:"route"`
+	Reason         *string  `json:"reason"`
+	Basis          *string  `json:"basis"`
+	Scope          []string `json:"scope"`
+	ETAMinutes     *int     `json:"eta_minutes"`
+	ReviewFindings []string `json:"review_findings,omitempty"`
 }
 
 func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
@@ -175,12 +177,26 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 		}
 		return orchFailure(remainder, orchNeedsBasis, message, values)
 	}
+	reviewFindings := []string{}
+	if raw, present := values["review_findings"]; present {
+		if values["reason"] != "fix" {
+			return orchFailure(remainder, orchMalformedLine, "ORCH review_findings may only accompany reason=fix.", values)
+		}
+		seen := map[string]bool{}
+		for _, reference := range strings.Split(raw, ",") {
+			if !reviewFindingID.MatchString(reference) || seen[reference] || len(seen) == 20 {
+				return orchFailure(remainder, orchMalformedLine, "ORCH review_findings must be unique, comma-separated Reviewer-1 finding references.", values)
+			}
+			seen[reference] = true
+			reviewFindings = append(reviewFindings, reference)
+		}
+	}
 
 	return OrchParseResult{
 		Valid: true, Code: orchValid, Message: "ORCH metadata is valid.", Prompt: remainder,
 		TaskID: stringPointer(values["task"]), Phase: stringPointer(values["phase"]), Route: stringPointer(values["route"]),
 		Reason: optionalStringPointer(values, "reason"), Basis: optionalStringPointer(values, "basis"),
-		Scope: scope, ETAMinutes: etaMinutes,
+		Scope: scope, ETAMinutes: etaMinutes, ReviewFindings: reviewFindings,
 	}
 }
 

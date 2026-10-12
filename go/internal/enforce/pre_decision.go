@@ -97,6 +97,8 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			return denyPre(recovery.Code, recovery.Message), nil
 		}
 		parsed, root, live = recovery.Parsed, recovery.Root, recovery.LiveThread
+		live = clonePostMap(live)
+		live["_last_outcome"] = recovery.Record["last_outcome"]
 	} else {
 		root, rootReason = resolveProjectRoot(event, nil)
 	}
@@ -604,6 +606,9 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	var jobID *string
 	if isStart {
 		pending["async_call"], pending["async_mode"], pending["async_input_hash"] = callID, stringValue(updated["mode"]), inputHash
+		if pointerValue(reason) == "fix" {
+			updated["reviewFindingRefs"] = stringSliceAny(parsed.ReviewFindings)
+		}
 		pending["async_updated_input"], pending["async_ready"] = updated, false
 		pending["job_id"] = nil
 		pending["session_id"], pending["tool_use_id"] = event["session_id"], event["tool_use_id"]
@@ -742,9 +747,28 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 	}
 	contextio.AssociateTurn(runtimeRoot, stringValue(event["session_id"]), taskID, project)
 	if reply && !isStart {
-		preEmit(runtimeRoot, event, repository, taskID, project, "CLAUDE_DECISION_RECORDED", map[string]any{
+		decision := map[string]any{
 			"decision": "send_back", "task_type": observationTaskType, "source": map[string]any{"kind": "reply", "job_id": owner},
-		})
+		}
+		if pointerValue(reason) == "fix" {
+			decision["review_attribution"] = "NON_REVIEWER1_OR_UNATTRIBUTED"
+			if len(parsed.ReviewFindings) > 0 {
+				decision["review_attribution"] = "STALE_OR_CROSS_JOB"
+				decision["review_finding_refs"] = stringSliceAny(parsed.ReviewFindings)
+				prior := mapValue(live["_last_outcome"])
+				available := []any{}
+				for _, finding := range postReviewerFindings(prior["findings"]) {
+					if ref := stringValue(finding["reference"]); ref != "" {
+						available = append(available, ref)
+					}
+				}
+				if id := stringValue(prior["_review_job_id"]); id != "" && prior["task_id"] == taskID && reviewFindingRefsMatch(decision["review_finding_refs"], available) {
+					decision["source"] = map[string]any{"kind": "reply", "job_id": id}
+					decision["review_attribution"] = "REVIEWER1_REFERENCED"
+				}
+			}
+		}
+		preEmit(runtimeRoot, event, repository, taskID, project, "CLAUDE_DECISION_RECORDED", decision)
 	}
 	pendingWritten = false
 	leased = false
@@ -924,6 +948,16 @@ func RecordClaudeDecision(root string, job map[string]any, decision, kind, sourc
 	}
 	envelope := map[string]any{"session_id": nil, "project_key": project, "repo": nil, "branch": nil, "agent_id": nil, "agent_type": nil}
 	payload := map[string]any{"decision": decision, "task_type": phase, "source": map[string]any{"kind": kind, "job_id": sourceJobID}}
+	if decision == "send_back" {
+		payload["review_attribution"] = "NON_REVIEWER1_OR_UNATTRIBUTED"
+		if refs, ok := job["fixFindingRefs"].([]any); ok && len(refs) > 0 {
+			payload["review_finding_refs"] = refs
+			payload["review_attribution"] = "STALE_OR_CROSS_JOB"
+			if sourceJobID == stringValue(job["jobId"]) && reviewFindingRefsMatch(refs, job["reviewFindingRefs"]) {
+				payload["review_attribution"] = "REVIEWER1_REFERENCED"
+			}
+		}
+	}
 	for i, field := range []string{"reviewer1_valid_count", "reviewer1_false_count"} {
 		if i >= len(reviewerCounts) {
 			break
@@ -935,6 +969,7 @@ func RecordClaudeDecision(root string, job map[string]any, decision, kind, sourc
 	if event, err := buildObservationAtStateRoot("CLAUDE_DECISION_RECORDED", envelope, payload, task, root); err == nil {
 		_, _ = persistObservation(filepath.Join(root, "telemetry"), event)
 	}
+	recordReviewIntervalDecision(root, sourceJobID, decision)
 }
 
 func nonnegativeInteger(value any) (int64, bool) {

@@ -78,6 +78,7 @@ func recoverAsyncFinalizing(root string, event, index, pending map[string]any, c
 	if bundle["apply"] == "codex_apply" && job != nil {
 		appendPostApplyGuidance(response, stringValue(index["jobId"]))
 	}
+	recordReviewIntervalDelivery(root, event, stringValue(index["jobId"]), stringValue(pending["task_id"]), bundle)
 	delete(index, "review_refresh_required")
 	index["stage"], index["bundle_path"], index["response"] = "CONSUMED", path, response
 	encoded, err := canonicalJSON(index)

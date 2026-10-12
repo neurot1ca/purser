@@ -336,6 +336,7 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 				current := readJob(dir, oldID)
 				if current != nil {
 					m := recordMap(current)
+					m["fixFindingRefs"] = args["reviewFindingRefs"]
 					recordStartDecision(opt, m, "send_back", "reply", oldID)
 					if nonemptyString(m["taskId"]) != "" {
 						_ = current.Set("decisionRecorded", true)

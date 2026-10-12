@@ -215,7 +215,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			}
 			bundle["reviewer1_result"] = attrs["result"]
 			for _, finding := range postReviewerFindings(attrs["findings"]) {
-				bundle["findings"] = appendPostFinding(bundle["findings"], stringValue(finding["code"]), stringValue(finding["message"]))
+				bundle["findings"] = appendPostFinding(bundle["findings"], stringValue(finding["code"]), stringValue(finding["message"]), stringValue(finding["reference"]))
 			}
 			mode := review.ReviewMode(true, routeInList(gateConfig["always_full_routes"], stringValue(pending["route"])), "", stringValue(attrs["result"]))
 			if resolved.ForceFullReview || bundle["force_full_review"] == true || pending["task_contract_grounded"] != true {
@@ -228,12 +228,18 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			false, "", stringValue(loaded["reviewer1_model_requested"]), reason, review.BridgeOutcome{}, nil, 0, -1)
 	}
 	job["reviewedOutcome"] = bundle["reviewer1_result"]
+	job["reviewFindingRefs"] = []any{}
+	for _, finding := range postReviewerFindings(bundle["findings"]) {
+		if ref := stringValue(finding["reference"]); ref != "" {
+			job["reviewFindingRefs"] = append(job["reviewFindingRefs"].([]any), ref)
+		}
+	}
 	if worktree != "" {
 		job["reviewedSnapshot"] = job["snapshot"]
 		delete(job, "reviewRefreshPending")
-		if err = writeAsyncObject(filepath.Join(root, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
-			return nil, err
-		}
+	}
+	if err = writeAsyncObject(filepath.Join(root, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		return nil, err
 	}
 	if taskID := stringValue(pending["task_id"]); taskID != "" {
 		if err = SaveTaskAttempt(root, TaskAttempt{ProjectKey: pendingProjectKey(pending), TaskID: taskID,
@@ -266,6 +272,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	if bundle["apply"] == "codex_apply" {
 		appendPostApplyGuidance(response, stringValue(index["jobId"]))
 	}
+	recordReviewIntervalDelivery(root, event, stringValue(index["jobId"]), stringValue(pending["task_id"]), bundle)
 	index["terminal_failure"] = false
 	if err = consumeAsyncResult(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index, artifact, response); err != nil {
 		return nil, err
