@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.138 — 2026-10-12
+
+- **Fixed:** a Codex Reviewer-1 receives the review packet in its prompt, so it can no longer answer REVIEWER1_UNAVAILABLE without reading the packet.
+
 ## 0.1.137 — 2026-10-12
 
 - **Improved:** a job's start ETA comes from past jobs of the same route, scope size (up to 3 paths or 4+) and reason when there are enough of them, and from the newest telemetry; the estimate-accuracy notice no longer reports a false improvement after the duration fix.
