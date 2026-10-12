@@ -34,7 +34,9 @@
       "threadConfig": {
         "cwd": "__ROOT__",
         "model": null,
-        "config_args": [],
+        "config_args": [
+          "sandbox_workspace_write.writable_roots=[\"__ROOT__/cache/tmp/20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3\"]"
+        ],
         "sandbox": null,
         "agent": "codex",
         "repoRoot": "__ROOT__"
@@ -81,7 +83,9 @@
       "threadConfig": {
         "cwd": "__ROOT__",
         "model": null,
-        "config_args": [],
+        "config_args": [
+          "sandbox_workspace_write.writable_roots=[\"__ROOT__/cache/tmp/20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3\"]"
+        ],
         "sandbox": null,
         "agent": "codex",
         "repoRoot": "__ROOT__"
@@ -225,7 +229,9 @@
       "threadConfig": {
         "cwd": "__ROOT__",
         "model": null,
-        "config_args": [],
+        "config_args": [
+          "sandbox_workspace_write.writable_roots=[\"__ROOT__/cache/tmp/20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3\"]"
+        ],
         "sandbox": null,
         "agent": "codex",
         "repoRoot": "__ROOT__"
@@ -371,7 +377,7 @@
         "cwd": "__ROOT__/wt/20a269724f0b",
         "model": null,
         "config_args": [
-          "sandbox_workspace_write.writable_roots=[\"__ROOT__/wt/20a269724f0b\"]"
+          "sandbox_workspace_write.writable_roots=[\"__ROOT__/wt/20a269724f0b\", \"__ROOT__/cache/tmp/20a269724f0b04802f855e07aaa61be3384ef99adbf9cd023f7adca1c0df1bc3\"]"
         ],
         "sandbox": null,
         "agent": "codex",

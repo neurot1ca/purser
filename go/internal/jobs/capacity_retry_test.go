@@ -116,9 +116,11 @@ func TestRunHostCapacityRetries(t *testing.T) {
 				until := time.Now().Add(5 * time.Second)
 				for {
 					job := readJob(dir, hostTestID)
-					attempts, _ := recoveryInteger(job, "capacityRetryAttempts")
-					if attempts == 1 {
-						break
+					if job != nil {
+						attempts, _ := recoveryInteger(job, "capacityRetryAttempts")
+						if attempts == 1 {
+							break
+						}
 					}
 					if time.Now().After(until) {
 						t.Fatal("retry was not reserved")
