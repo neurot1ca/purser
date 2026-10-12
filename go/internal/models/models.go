@@ -60,6 +60,17 @@ func AtLeast(floor, model string) bool {
 	return model == floor || newerVersion(floor, []string{model}) != ""
 }
 
+// NewestVersion selects the newest ID using the model version comparison, with lexical order for unrelated IDs.
+func NewestVersion(ids []string) string {
+	best := ""
+	for _, id := range ids {
+		if best == "" || newerVersion(best, []string{id}) != "" || newerVersion(id, []string{best}) == "" && id > best {
+			best = id
+		}
+	}
+	return best
+}
+
 type resolutionCache struct {
 	CheckedOn string              `json:"checked_on"`
 	Agents    map[string][]string `json:"agents"`

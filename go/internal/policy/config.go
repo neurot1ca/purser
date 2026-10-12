@@ -64,6 +64,26 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 		if !valid {
 			return nil, fmt.Errorf("[coding] must be a table")
 		}
+	}
+	if reviewer, ok := user["reviewer"].(map[string]any); ok {
+		if selected, ok := reviewer["selected"].(map[string]any); ok {
+			role := ""
+			if roles, valid := user["roles"].(map[string]any); valid {
+				role, _ = roles["reviewer"].(string)
+			}
+			if role != "none" {
+				for target, source := range map[string]string{"reviewer1_agent": "agent", "reviewer1_model_requested": "model", "reviewer1_effort": "effort"} {
+					if value, present := selected[source]; present {
+						table[target] = value
+					}
+				}
+			}
+		}
+		if executable, present := reviewer["executable"]; present {
+			table["reviewer1_executable"] = executable
+		}
+	}
+	if len(table) > 0 {
 		if model, exists := table["reviewer1_model_requested"]; exists && model != nil {
 			text, valid := model.(string)
 			agent, _ := table["reviewer1_agent"].(string)

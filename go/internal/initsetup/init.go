@@ -24,9 +24,9 @@ import (
 )
 
 type options struct {
-	detect, list, plan, apply, concise, trust, scaffold, jsonOutput                   bool
-	coder, model, fallbackAgent, fallbackModel, mode, effort, reviewer, reviewerModel string
-	maintenance, mechanical, autoCompact                                              *bool
+	detect, list, plan, apply, concise, trust, scaffold, jsonOutput                                   bool
+	coder, model, fallbackAgent, fallbackModel, mode, effort, reviewer, reviewerModel, reviewerEffort string
+	maintenance, mechanical, autoCompact                                                              *bool
 }
 
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -1052,44 +1052,16 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 		before["roles"] = roles
 	}
 	for _, k := range []string{"orchestrator", "coder", "reviewer"} {
-		v := map[string]any{"orchestrator": "claude-code", "coder": o.coder, "reviewer": o.reviewer}[k]
+		v := map[string]any{"orchestrator": "claude-code", "coder": o.coder}[k]
+		if k == "reviewer" {
+			v = o.reviewer
+			if err := editReviewerConfig(text, before, o.reviewer, o.reviewerModel, o.reviewerEffort, nl); err != nil {
+				return err
+			}
+			continue
+		}
 		roles[k] = v
 		*text = upsert(*text, "roles", k, tomlString(fmt.Sprint(v)), nl)
-	}
-	if o.reviewer != "none" && o.reviewerModel != "" {
-		reviewer, ok := before["reviewer"].(map[string]any)
-		if !ok {
-			reviewer = map[string]any{}
-			before["reviewer"] = reviewer
-		}
-		reviewer["selected"] = map[string]any{"agent": o.reviewer, "model": o.reviewerModel}
-		*text = upsert(*text, "reviewer", "selected", fmt.Sprintf("{ agent = %s, model = %s }", tomlString(o.reviewer), tomlString(o.reviewerModel)), nl)
-		if exe := reviewerExecutable(o.reviewer); exe != "" {
-			reviewer["executable"] = exe
-			*text = upsert(*text, "reviewer", "executable", tomlString(exe), nl)
-			if o.reviewer == "claude" {
-				c, ok := before["coding"].(map[string]any)
-				if !ok {
-					c = map[string]any{}
-					before["coding"] = c
-				}
-				c["reviewer1_executable"] = exe
-				*text = upsert(*text, "coding", "reviewer1_executable", tomlString(exe), nl)
-			}
-		}
-		if o.reviewer == "claude" {
-			c, ok := before["coding"].(map[string]any)
-			if !ok {
-				c = map[string]any{}
-				before["coding"] = c
-			}
-			c["reviewer1_agent"] = "claude"
-			c["reviewer1_model_requested"] = o.reviewerModel
-			c["reviewer1_effort"] = "medium"
-			*text = upsert(*text, "coding", "reviewer1_agent", tomlString("claude"), nl)
-			*text = upsert(*text, "coding", "reviewer1_model_requested", tomlString(o.reviewerModel), nl)
-			*text = upsert(*text, "coding", "reviewer1_effort", tomlString("medium"), nl)
-		}
 	}
 	if o.mechanical != nil {
 		m, ok := before["mechanical"].(map[string]any)
