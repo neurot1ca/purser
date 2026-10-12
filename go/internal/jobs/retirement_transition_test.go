@@ -116,7 +116,7 @@ func TestRetirementTransitionMatrix(t *testing.T) {
 	}
 }
 
-func TestCancelRetirementFailureKeepsDiscardResult(t *testing.T) {
+func TestCancelRetirementFailureKeepsRejectionResult(t *testing.T) {
 	id := strings.Repeat("d", 64)
 	state, worktree := retirementApplyJob(t, id)
 	if _, err := retention.AttachWorktree(state, worktree, id, "thread"); err != nil {
@@ -132,12 +132,12 @@ func TestCancelRetirementFailureKeepsDiscardResult(t *testing.T) {
 		RecordScopeConflictOutcome: func(map[string]any, string) {},
 		ReleaseScopeLease:          func(string, string) bool { return false },
 	})
-	if result["structuredContent"].(map[string]any)["discarded"] != true {
+	if result["structuredContent"].(map[string]any)["state"] != "SUCCEEDED" || result["isError"] == true {
 		t.Fatalf("dispatch failure changed cancel result: %#v", result)
 	}
-	apply := Apply(state, map[string]any{"jobId": id})
-	if apply["structuredContent"].(map[string]any)["errorCode"] != "DISCARDED" {
-		t.Fatalf("discarded apply outcome changed: %#v", apply)
+	record := readJob(filepath.Join(state, "codex_exec_mcp", "jobs"), id)
+	if record == nil || recordMap(record)["applyState"] != "rejected" || recordMap(record)["discarded"] == true {
+		t.Fatalf("cancel did not persist rejection without discard: %#v", recordMap(record))
 	}
 }
 

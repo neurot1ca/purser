@@ -67,6 +67,44 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		dispatchWorktreeRetirement(stateRoot, id)
 		return jobResult(map[string]any{"jobId": id, "state": state, "discarded": true})
 	}
+	if terminalJobState(state) && values["applyState"] != "applied" && nonemptyString(args["reason"]) != "failed" {
+		lock, err := AcquireOwnership(dir, id)
+		if err != nil {
+			return jobUpdateFailed(id, state)
+		}
+		current := readJob(dir, id)
+		if current == nil {
+			_ = lock.Release()
+			return jobUpdateFailed(id, state)
+		}
+		m := recordMap(current)
+		currentState := nonemptyString(m["state"])
+		if !terminalJobState(currentState) || m["applyState"] == "applied" {
+			_ = lock.Release()
+			return cancelRecordResult(m)
+		}
+		recordRejection := m["decisionRecorded"] != true
+		if nonemptyString(m["taskId"]) != "" {
+			_ = current.Set("decisionRecorded", true)
+		}
+		if err = current.Set("applyState", "rejected"); err == nil {
+			err = Write(filepath.Join(dir, id+".json"), current)
+		}
+		m = recordMap(current)
+		_ = lock.Release()
+		if err != nil {
+			return jobUpdateFailed(id, currentState)
+		}
+		if recordRejection {
+			recordDecision(m, "rejected", "cancel", id)
+		}
+		if err = persistCancellationAttempt(stateRoot, m); err != nil {
+			log.Printf("task attempt persistence failed for rejected job %s: %v", id, err)
+		}
+		_ = releaseScopeLease(stateRoot, id)
+		dispatchWorktreeRetirement(stateRoot, id)
+		return cancelRecordResult(m)
+	}
 	worktree, _ := values["worktreePath"].(string)
 	if terminalJobState(state) && worktree != "" && values["applyState"] != "applied" {
 		discardedPersisted := false
@@ -260,6 +298,8 @@ func persistCancellationAttempt(root string, job map[string]any) error {
 	outcome := "cancelled"
 	if job["discarded"] == true {
 		outcome = "discarded"
+	} else if job["applyState"] == "rejected" {
+		outcome = "rejected"
 	}
 	if outcome == "discarded" && previous.SendBackUsed && job["decisionRecorded"] == true && nonemptyString(job["cancellationReason"]) == "" {
 		outcome = "rejected"
@@ -342,6 +382,9 @@ func finishCancelled(record *Record) {
 func cancelRecordResult(record map[string]any) map[string]any {
 	state, _ := record["state"].(string)
 	value := map[string]any{"jobId": record["jobId"], "state": state}
+	if record["applyState"] == "rejected" {
+		return jobResult(value)
+	}
 	if terminalJobState(state) {
 		code, ok := record["errorCode"]
 		if !ok {

@@ -71,3 +71,51 @@ func TestReplyAdmissionReleasesOnlyTerminalUnappliedJobLease(t *testing.T) {
 		})
 	}
 }
+
+func TestStartSupersedesRerunAndReplyButPreservesAppliedJob(t *testing.T) {
+	for _, mode := range []string{"rerun", "reply"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			accepted := float64(time.Now().UnixNano())/1e9 - 10
+			priorID, appliedID := strings.Repeat("a", 64), strings.Repeat("b", 64)
+			prior := map[string]any{"jobId": priorID, "state": "SUCCEEDED", "taskId": "migration-gaps-plan-m2of5", "acceptedAt": accepted, "finishedAt": accepted + 1}
+			applied := map[string]any{"jobId": appliedID, "state": "SUCCEEDED", "taskId": "migration-gaps-plan-m2of5", "applyState": "applied", "acceptedAt": accepted - 1, "finishedAt": accepted}
+			args := map[string]any{"call": "00000000-0000-4000-8000-000000000101", "prompt": "rerun", "taskId": "migration-gaps-plan-m2of5-2", "cwd": t.TempDir()}
+			if mode == "reply" {
+				prior["threadId"], applied["threadId"] = "same-thread", "same-thread"
+				if err := SaveRecord(filepath.Join(root, "codex_exec_mcp", "threads"), map[string]any{"thread_id": "same-thread", "repoRoot": args["cwd"], "cwd": args["cwd"], "config_args": []any{}}); err != nil {
+					t.Fatal(err)
+				}
+				args = map[string]any{"call": "00000000-0000-4000-8000-000000000102", "prompt": "reply", "mode": "reply", "threadId": "same-thread"}
+			}
+			writeHostTestJSON(t, filepath.Join(dir, priorID+".json"), prior)
+			writeHostTestJSON(t, filepath.Join(dir, appliedID+".json"), applied)
+			if _, _, err := Start(root, args, StartOptions{StateRoot: root, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true}}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Read(filepath.Join(dir, priorID+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var applyState, supersededBy string
+			got.Get("applyState", &applyState)
+			got.Get("supersededBy", &supersededBy)
+			if applyState != "superseded" || supersededBy == "" {
+				t.Fatalf("prior applyState=%q supersededBy=%q", applyState, supersededBy)
+			}
+			untouched, err := Read(filepath.Join(dir, appliedID+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var appliedState string
+			untouched.Get("applyState", &appliedState)
+			if appliedState != "applied" {
+				t.Fatalf("applied job changed to %q", appliedState)
+			}
+		})
+	}
+}

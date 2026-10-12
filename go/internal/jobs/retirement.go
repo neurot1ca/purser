@@ -63,6 +63,9 @@ func DispatchWorktreeRetirement(stateRoot, jobID string) error {
 	if !containsOwner(prior.Jobs, jobID) {
 		return errors.New("job is not attached to the worktree")
 	}
+	if !worktreeRetirableNow(root, worktree) {
+		return nil
+	}
 	owned, err := retention.MarkWorktreeRetiring(root, worktree)
 	if err != nil {
 		return err
@@ -100,6 +103,36 @@ func DispatchWorktreeRetirement(stateRoot, jobID string) error {
 		return err
 	}
 	return nil
+}
+
+func worktreeRetirableNow(root, worktree string) bool {
+	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	entries, err := os.ReadDir(jobsDir)
+	if err != nil {
+		return false
+	}
+	now := float64(time.Now().UnixNano()) / 1e9
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(jobsDir, entry.Name())
+		job := readCleanupJSON(path)
+		if job == nil {
+			continue
+		}
+		bound, _ := job["worktreePath"].(string)
+		config, _ := job["threadConfig"].(map[string]any)
+		nested, _ := config["worktreePath"].(string)
+		if (bound == "" || !sameWorktree(bound, worktree)) && (nested == "" || !sameWorktree(nested, worktree)) {
+			continue
+		}
+		state, _ := job["state"].(string)
+		if !cleanupMayRemove(job, state) || cleanupRecentJobConflict(job, state, now, path) {
+			return false
+		}
+	}
+	return true
 }
 
 func releaseRetirementClaim(root, worktree string) {

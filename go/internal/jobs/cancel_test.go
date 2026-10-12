@@ -196,6 +196,40 @@ func TestCancelMatchesPythonOracle(t *testing.T) {
 	}
 }
 
+func TestCancelFinishedJobRejectsAndRunningJobRemainsUnchanged(t *testing.T) {
+	for _, state := range []string{"SUCCEEDED", "RUNNING"} {
+		t.Run(state, func(t *testing.T) {
+			root := scratch(t)
+			id := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+			path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			writeHostTestJSON(t, path, map[string]any{"jobId": id, "state": state, "applyState": "pending", "worktreePath": filepath.Join(root, "evidence")})
+			got := Cancel(root, map[string]any{"jobId": id})
+			if state == "SUCCEEDED" && got["isError"] == true {
+				t.Fatalf("cancel returned error: %#v", got)
+			}
+			record, err := Read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var applyState string
+			record.Get("applyState", &applyState)
+			want := "pending"
+			if state == "SUCCEEDED" {
+				want = "rejected"
+			}
+			if applyState != want {
+				t.Fatalf("applyState=%q want %q", applyState, want)
+			}
+			if _, err := os.Stat(filepath.Join(root, "evidence")); !os.IsNotExist(err) {
+				t.Fatalf("cancel changed worktree evidence: stat err=%v", err)
+			}
+		})
+	}
+}
+
 func TestCancelWaitsForDelayedTerminalWrite(t *testing.T) {
 	root := scratch(t)
 	jobID, token := "0123456789abcdef0123456789abcdef", "secret"

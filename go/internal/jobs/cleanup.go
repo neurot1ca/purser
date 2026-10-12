@@ -451,7 +451,7 @@ func recoverRetiringWorktrees(root string) error {
 }
 
 func cleanupMayRemove(j map[string]any, state string) bool {
-	return state != "UNKNOWN_OR_IN_PROGRESS" && cleanupTerminal[state] && (j["applyState"] == "applied" || j["discarded"] == true)
+	return state != "UNKNOWN_OR_IN_PROGRESS" && cleanupTerminal[state] && (j["applyState"] == "applied" || j["applyState"] == "rejected" || j["applyState"] == "superseded" || j["discarded"] == true)
 }
 
 func cleanupEligible(j map[string]any, state string, now float64, path string) bool {

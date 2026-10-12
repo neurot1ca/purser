@@ -135,6 +135,8 @@ func TestPostBoardTerminalAndQueuedStates(t *testing.T) {
 		{name: "cancelled", job: map[string]any{"state": "SUCCEEDED", "label": "Task cancelled", "discarded": true, "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "| Task cancelled | — | discarded |", unwant: "fetching result"},
 		{name: "failed", job: map[string]any{"state": "FAILED", "label": "Task failed", "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "| Task failed | — | failed |", unwant: "coding"},
 		{name: "applied while running", job: map[string]any{"state": "RUNNING", "label": "Task applied", "applyState": "applied"}, want: "| Task applied | — | done |", unwant: "coding"},
+		{name: "rejected is done", job: map[string]any{"state": "SUCCEEDED", "label": "Task rejected", "applyState": "rejected", "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "| Task rejected | — | done |", unwant: "in review"},
+		{name: "superseded hides after usual count", job: map[string]any{"state": "SUCCEEDED", "label": "Task superseded", "applyState": "superseded", "finishedAt": 1800000000, "boardDisplayCount": 2}, want: ""},
 		{name: "running coded", job: map[string]any{"state": "SUCCEEDED", "label": "Task coded", "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "coded · fetching result"},
 		{name: "queued without label", job: map[string]any{"state": "QUEUED", "taskId": "task-queued"}, want: "| task-queued | — | queued |"},
 	}
@@ -162,6 +164,12 @@ func TestPostBoardTerminalAndQueuedStates(t *testing.T) {
 			write(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), job)
 
 			board, _ := PostProjectJobBoard(root, "fixture", time.Unix(1800000000, 0))
+			if tc.want == "" {
+				if board != "" {
+					t.Fatalf("board=%q want hidden", board)
+				}
+				return
+			}
 			if board == "" || !strings.Contains(board, tc.want) {
 				t.Fatalf("board=%q want it to contain %q", board, tc.want)
 			}

@@ -247,6 +247,9 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 				state = "in review"
 			}
 		}
+		if j["applyState"] == "superseded" || j["applyState"] == "rejected" {
+			state = "done"
+		}
 		if applied {
 			state = "done"
 		}

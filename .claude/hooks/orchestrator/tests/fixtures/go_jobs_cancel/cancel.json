@@ -129,8 +129,7 @@
       "result": {
         "structuredContent": {
           "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-          "state": "SUCCEEDED",
-          "discarded": true
+          "state": "SUCCEEDED"
         },
         "isError": false
       },
@@ -141,10 +140,8 @@
           "acceptedAt": 10,
           "finishedAt": "TIME",
           "worktreePath": "C:/repo/worktree",
-          "applyState": "pending",
+          "applyState": "rejected",
           "taskId": "task-terminal",
-          "discarded": true,
-          "discardedAt": "TIME",
           "decisionRecorded": true
         }
       },
@@ -153,13 +150,8 @@
           "call": "recordDecision",
           "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "decision": "rejected",
-          "kind": "discard",
+          "kind": "cancel",
           "sourceJobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-        },
-        {
-          "call": "recordScopeConflictOutcome",
-          "jobId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-          "action": "discarded"
         },
         {
           "call": "releaseScopeLease",

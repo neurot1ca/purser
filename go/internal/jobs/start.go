@@ -198,6 +198,9 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	}
 	accepted := float64(time.Now().UnixNano()) / 1e9
 	job := map[string]any{"jobId": req.JobID, "call": req.Call, "state": "QUEUED", "acceptedAt": accepted, "deadlineAt": accepted + req.TimeoutSeconds, "signalToken": hex.EncodeToString(signal[:]), "generation": 1, "ownershipToken": hex.EncodeToString(owner[:])}
+	if req.Mode == "reply" {
+		job["threadId"] = nonemptyString(args["threadId"])
+	}
 	planRepository := ""
 	if thread != nil {
 		for _, k := range []string{"worktreePath", "snapshot", "head", "repoRoot", "baselineSnapshot"} {
@@ -272,6 +275,9 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	}
 	if err = Write(filepath.Join(dir, req.JobID+".json"), r); err != nil {
 		return nil, nil, err
+	}
+	if req.Mode == "reply" || nonemptyString(job["taskId"]) != "" {
+		supersedeEarlierJobs(stateRoot, dir, job)
 	}
 	if err = persistTaskAttempt(opt.StateRoot, recordMap(r), nonemptyString(args["cwd"])); err != nil {
 		log.Printf("task attempt persistence failed for job %s: %v", req.JobID, err)
@@ -348,6 +354,65 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 		}
 	}
 	return await(req.JobID, r), r, nil
+}
+
+func supersedeEarlierJobs(stateRoot, dir string, current map[string]any) {
+	currentID := nonemptyString(current["jobId"])
+	threadID, taskID := nonemptyString(current["threadId"]), nonemptyString(current["taskId"])
+	base, rerun := rerunTaskBase(taskID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.TrimSuffix(entry.Name(), ".json") == currentID {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		lock, err := AcquireOwnership(dir, id)
+		if err != nil {
+			continue
+		}
+		prior := readJob(dir, id)
+		if prior != nil {
+			m := recordMap(prior)
+			sameThread := threadID != "" && nonemptyString(m["threadId"]) == threadID
+			sameTask := rerun && rerunTaskMatches(base, nonemptyString(m["taskId"]))
+			if (sameThread || sameTask) && terminalJobState(nonemptyString(m["state"])) && m["applyState"] != "applied" && boardEarlier(m, current) {
+				if prior.Set("applyState", "superseded") == nil && prior.Set("supersededBy", currentID) == nil && Write(filepath.Join(dir, id+".json"), prior) == nil {
+					dispatchWorktreeRetirement(stateRoot, id)
+				}
+			}
+		}
+		_ = lock.Release()
+	}
+}
+
+func rerunTaskBase(taskID string) (string, bool) {
+	i := strings.LastIndexByte(taskID, '-')
+	if i <= 0 || i == len(taskID)-1 {
+		return "", false
+	}
+	for _, ch := range taskID[i+1:] {
+		if ch < '0' || ch > '9' {
+			return "", false
+		}
+	}
+	return taskID[:i], true
+}
+
+func rerunTaskMatches(base, prior string) bool {
+	if prior == base {
+		return true
+	}
+	priorBase, suffixed := rerunTaskBase(prior)
+	return suffixed && priorBase == base
+}
+
+func boardEarlier(prior, current map[string]any) bool {
+	priorAt, _ := prior["acceptedAt"].(float64)
+	currentAt, _ := current["acceptedAt"].(float64)
+	return priorAt <= currentAt
 }
 
 func persistTaskAttempt(root string, job map[string]any, repository string) error {
