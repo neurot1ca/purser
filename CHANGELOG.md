@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.135 — 2026-10-12
+
+- **Fixed:** A Codex Reviewer-1 receives the review schema, so its answer is no longer rejected as REVIEWER_RESPONSE_INVALID.
+- **Fixed:** Job record writes retry a transient Windows replace failure for up to two seconds, so a job host no longer dies at start with HOST_DIED.
+
 ## 0.1.134 — 2026-10-12
 
 - **Changed:** A Reviewer-1 from the same vendor as the implementer is no longer skipped, so any registered reviewer can be selected.
