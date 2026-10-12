@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.141 — 2026-10-12
+
+- **New:** `/purser:coder-effort low|medium|high|xhigh|auto` sets the Codex coder's thinking effort for new jobs in a project, keeping the routed model.
+- **Changed:** after an automatic /compact the session shows a short marker and Claude writes the notice in the user's language.
+- **Changed:** when a task's luna attempt failed more than once, Claude tells the user which model failed, on which job, and which model takes over.
+- **Fixed:** the job board no longer disappears when its refresh is slow; it keeps the last board.
+
 ## 0.1.140 — 2026-10-12
 
 - **Changed:** `/purser:init` asks every question as a picker with clearer texts, asks auto-compact last (On recommended) and no longer offers the concise reply style.
