@@ -54,6 +54,8 @@ test('a succeeded job moves through fetching result, review and acceptance befor
   expect(stage(coded, bundle)[0]).toBe('⚓ ◑ 1 in review')
   expect(stage({ ...coded, acceptance: { revision: 'r' } }, bundle)[0]).toBe('⚓ ◕ 1 accepted')
   expect(stage(files.jobs[2], bundle)[0]).toBe('⚓ ✓ 1 done')
+  expect(stage({ ...coded, applyState: 'rejected' }, bundle)[0]).toBe('⚓ ✓ 1 done')
+  expect(stage({ ...coded, applyState: 'superseded' }, bundle)[0]).toBe('⚓ ✓ 1 done')
 })
 
 test('a coded job still moving to review sits above queued jobs', () => {

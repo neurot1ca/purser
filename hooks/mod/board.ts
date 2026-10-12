@@ -94,6 +94,8 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
   // (or had nothing to apply); before that it is still moving through review.
   const stageOf = (job: Job, bundle: Job, apply: string) => {
     if (job.state !== 'SUCCEEDED') return undefined
+    // Rejected or superseded results are finished decisions, not pending review.
+    if (job.applyState === 'rejected' || job.applyState === 'superseded') return 'done'
     if (!Object.keys(bundle).length) return apply === 'applied' ? 'done' : 'fetching'
     if (['applied', 'n/a', 'no change'].includes(apply)) return 'done'
     return job.acceptance ? 'accepted' : 'review'
