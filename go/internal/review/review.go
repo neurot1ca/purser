@@ -105,11 +105,6 @@ func ReviewMode(routeKnown, alwaysFull bool, skipReason, result string) ModeDeci
 	}
 }
 
-// SameFamily reports whether a candidate reviewer belongs to the implementer's vendor.
-func SameFamily(implementer, reviewer string) bool {
-	return vendorFamily(implementer) != "" && vendorFamily(implementer) == vendorFamily(reviewer)
-}
-
 func vendorFamily(family string) string {
 	family = strings.ToLower(strings.TrimSpace(family))
 	if i := strings.IndexAny(family, "-/"); i >= 0 {

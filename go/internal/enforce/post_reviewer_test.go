@@ -42,17 +42,29 @@ func TestPostReviewerFamilyAndBoardZeroParity(t *testing.T) {
 
 func TestRunPostReviewerSameFamilyAndDeadline(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	var agents []string
+	var budgets []time.Duration
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, budget time.Duration) (review.BridgeOutcome, error) {
+		agents = append(agents, args["reviewer_agent"].(string))
+		budgets = append(budgets, budget)
+		return review.BridgeOutcome{Outcome: "unavailable"}, nil
+	}
 	candidates := []profile.ReviewerCandidate{{Agent: "agy", Model: "gemini-3.8-flash-high"}, {Agent: "opencode", Model: "google/gemini-2.5-pro"}}
 	pending := map[string]any{"fallback_family": "google", "model": "gpt-5"}
 	bundle := map[string]any{"findings": []any{}}
 	loaded := map[string]any{"reviewer1_model_requested": "gemini-3.8-flash-high"}
 	outcome, err := runPostReviewer("", "", pending, bundle, postProfile{ReviewerCandidates: candidates}, loaded, nil, nil, time.Now(), time.Second)
-	if err != nil || outcome.Outcome != "unavailable" || bundle["reviewer1_skipped_reason"] != "REVIEWER_VENDOR_CONFLICT" {
-		t.Fatalf("same-family rejection outcome=%#v err=%v bundle=%#v", outcome, err, bundle)
+	if err != nil || outcome.Outcome != "unavailable" || len(agents) != 2 {
+		t.Fatalf("same-family candidates were not tried in order: outcome=%#v agents=%v err=%v", outcome, agents, err)
+	}
+	if budgets[0] > 650*time.Millisecond {
+		t.Fatalf("first same-family reviewer budget=%s, want fallback reservation", budgets[0])
 	}
 	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
-	if !ok || len(attempts) != 2 || attempts[0].Outcome != "SKIPPED_SAME_VENDOR" || attempts[1].Outcome != "SKIPPED_SAME_VENDOR" {
-		t.Fatalf("same-family candidate order=%#v", bundle["reviewer1_attempts"])
+	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || attempts[1].Outcome != "UNAVAILABLE" {
+		t.Fatalf("same-family attempts=%#v", bundle["reviewer1_attempts"])
 	}
 
 	deadlineBundle := map[string]any{"findings": []any{}}
@@ -67,14 +79,38 @@ func TestRunPostReviewerSameFamilyAndDeadline(t *testing.T) {
 	}
 }
 
-func TestClaudeFallbackCannotPassClaudeReviewer(t *testing.T) {
+func TestRunPostReviewerAllowsSameVendorCodexReviewer(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	called := false
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		called = args["reviewer_agent"] == "codex" && args["reviewer_model"] == "gpt-6-luna"
+		return review.BridgeOutcome{Outcome: "completed"}, nil
+	}
+	bundle := map[string]any{"findings": []any{}}
+	outcome, err := runPostReviewer("", "", map[string]any{"model": "gpt-6-luna", "fallback_family": "openai"}, bundle,
+		postProfile{ReviewerCandidates: []profile.ReviewerCandidate{{Agent: "codex", Model: "gpt-6-luna"}}},
+		map[string]any{}, nil, nil, time.Now(), time.Second)
+	if err != nil || outcome.Outcome != "completed" || !called {
+		t.Fatalf("same-vendor reviewer outcome=%#v called=%t err=%v", outcome, called, err)
+	}
+}
+
+func TestClaudeFallbackAllowsClaudeReviewer(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	called := false
+	postReviewerBridge = func(_ context.Context, _ string, _ map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		called = true
+		return review.BridgeOutcome{Outcome: "completed"}, nil
+	}
 	bundle := map[string]any{"findings": []any{}}
 	pending := map[string]any{"agent": "claude", "model": "sonnet", "fallback_family": "anthropic"}
 	candidate := profile.ReviewerCandidate{Agent: "claude", Model: "opus", Effort: "high"}
 	outcome, err := runPostReviewer("", "", pending, bundle, postProfile{ReviewerCandidates: []profile.ReviewerCandidate{candidate}}, map[string]any{}, nil, nil, time.Now(), time.Second)
-	if err != nil || outcome.Outcome != "unavailable" || bundle["reviewer1_skipped_reason"] != "REVIEWER_VENDOR_CONFLICT" {
-		t.Fatalf("same-family Claude review=%#v err=%v bundle=%#v", outcome, err, bundle)
+	if err != nil || outcome.Outcome != "completed" || !called {
+		t.Fatalf("same-family Claude review=%#v called=%t err=%v bundle=%#v", outcome, called, err, bundle)
 	}
 }
 
@@ -148,7 +184,7 @@ func TestPostReviewerClaudeFallbackEffortAndReason(t *testing.T) {
 	}
 	candidates := []profile.ReviewerCandidate{
 		{Agent: "agy", Model: "gemini-3.8-flash-high"},
-		{Agent: "claude", Model: "claude-haiku-5-5"},
+		{Agent: "opencode", Model: "google/gemini-2.5-pro"},
 	}
 	bundle := map[string]any{"findings": []any{}}
 	_, err := runPostReviewer("", "", map[string]any{"model": "gpt-6-luna", "fallback_family": "openai"}, bundle,
@@ -181,14 +217,14 @@ func TestPostReviewerCircuitSkipRecordsUnavailableAttempt(t *testing.T) {
 	}
 	candidates := []profile.ReviewerCandidate{
 		{Agent: "agy", Model: "gemini-3.8-flash-high"},
-		{Agent: "claude", Model: "claude-haiku-5-5"},
+		{Agent: "opencode", Model: "google/gemini-2.5-pro"},
 	}
 	bundle := map[string]any{"findings": []any{}}
 	_, err := runPostReviewer("", stateRoot,
 		map[string]any{"model": "gpt-6-luna", "fallback_family": "openai", "repo_root": repoRoot, "project_key": projectKey},
 		bundle, postProfile{ReviewerCandidates: candidates}, map[string]any{}, nil, nil, time.Now(), time.Minute)
-	if err != nil || len(agents) != 1 || agents[0] != "claude" {
-		t.Fatalf("circuit fallback agents=%v err=%v, want [claude]", agents, err)
+	if err != nil || len(agents) != 1 || agents[0] != "opencode" {
+		t.Fatalf("circuit fallback agents=%v err=%v, want [opencode]", agents, err)
 	}
 	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
 	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || attempts[0].Reason != "REVIEWER_CIRCUIT_OPEN" || attempts[1].Outcome != "COMPLETED" {
@@ -294,7 +330,7 @@ func main() {
 	}
 }
 
-func TestDefaultReviewerSkipsImplementerVendorFallback(t *testing.T) {
+func TestDefaultReviewerTriesImplementerVendorFallback(t *testing.T) {
 	oldBridge := postReviewerBridge
 	t.Cleanup(func() { postReviewerBridge = oldBridge })
 	postReviewerBridge = func(_ context.Context, _ string, _ map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
@@ -321,7 +357,7 @@ func TestDefaultReviewerSkipsImplementerVendorFallback(t *testing.T) {
 		found := false
 		for _, attempt := range attempts {
 			if attempt.Agent == map[string]string{"openai": "codex", "anthropic": "claude"}[tc.vendor] {
-				found = attempt.Outcome == "SKIPPED_SAME_VENDOR"
+				found = attempt.Outcome == "UNAVAILABLE"
 			}
 		}
 		if !found {

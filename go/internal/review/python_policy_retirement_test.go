@@ -44,11 +44,3 @@ func TestPythonReviewerGateAndModeAssertions(t *testing.T) {
 		t.Fatalf("unknown result review mode = %#v", got)
 	}
 }
-
-func TestPythonVendorFamilyAssertions(t *testing.T) {
-	for _, pair := range [][2]string{{"gpt", "openai"}, {"gemini", "google"}, {"deepseek", "deepseek"}, {"claude", "anthropic"}, {"qwen", "qwen"}, {"unrecognized", "unrecognized"}} {
-		if !SameFamily(pair[0], pair[1]) {
-			t.Errorf("families %q and %q should normalize to the same vendor", pair[0], pair[1])
-		}
-	}
-}

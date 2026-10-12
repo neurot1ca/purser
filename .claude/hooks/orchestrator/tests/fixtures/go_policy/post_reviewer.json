@@ -71,7 +71,7 @@
       "finding_codes": []
     },
     {
-      "name": "same_family_filtered",
+      "name": "same_family_allowed",
       "candidates": [
         {
           "agent": "agy",
@@ -88,19 +88,14 @@
       ],
       "calls": [
         {
-          "agent": "opencode",
-          "model": "anthropic/claude-sonnet"
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
         }
       ],
       "attempts": [
         {
           "agent": "agy",
           "model": "gemini-3.8-flash-high",
-          "outcome": "SKIPPED_SAME_VENDOR"
-        },
-        {
-          "agent": "opencode",
-          "model": "anthropic/claude-sonnet",
           "outcome": "COMPLETED"
         }
       ],
@@ -108,7 +103,7 @@
       "finding_codes": []
     },
     {
-      "name": "all_filtered",
+      "name": "same_family_unavailable",
       "candidates": [
         {
           "agent": "agy",
@@ -120,24 +115,36 @@
         }
       ],
       "fallback_family": "google",
-      "responses": [],
-      "calls": [],
+      "responses": [
+        "unavailable",
+        "unavailable"
+      ],
+      "calls": [
+        {
+          "agent": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        {
+          "agent": "opencode",
+          "model": "google/gemini-2.5-pro"
+        }
+      ],
       "attempts": [
         {
           "agent": "agy",
           "model": "gemini-3.8-flash-high",
-          "outcome": "SKIPPED_SAME_VENDOR"
+          "outcome": "UNAVAILABLE",
+          "reason": "REVIEWER1_UNAVAILABLE"
         },
         {
           "agent": "opencode",
           "model": "google/gemini-2.5-pro",
-          "outcome": "SKIPPED_SAME_VENDOR"
+          "outcome": "UNAVAILABLE",
+          "reason": "REVIEWER1_UNAVAILABLE"
         }
       ],
-      "skipped_reason": "REVIEWER_VENDOR_CONFLICT",
-      "finding_codes": [
-        "REVIEWER_VENDOR_CONFLICT"
-      ]
+      "skipped_reason": "REVIEWER1_UNAVAILABLE",
+      "finding_codes": []
     },
     {
       "name": "deadline_across_candidates",

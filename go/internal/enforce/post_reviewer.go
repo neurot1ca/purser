@@ -34,22 +34,6 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 			{Agent: "codex", Model: "gpt-6-luna", Effort: "low"},
 		}
 	}
-	implementer := vendorFamily(stringValue(pending["fallback_family"]))
-	modelsPresent := false
-	if models, ok := pending["attempted_models"].([]any); ok {
-		modelsPresent = len(models) > 0
-	} else if models, ok := pending["attempted_models"].([]string); ok {
-		modelsPresent = len(models) > 0
-	}
-	if implementer == "" && modelsPresent {
-		implementer = vendorFamily(modelFamily(stringValue(pending["model"])))
-	}
-	if implementer == "" {
-		implementer = vendorFamily(stringValue(loaded["coder_family"]))
-		if implementer == "" {
-			implementer = vendorFamily(modelFamily(stringValue(pending["model"])))
-		}
-	}
 	configuredSeconds := 90.0
 	if n, ok := loaded["reviewer1_timeout_seconds"].(float64); ok {
 		configuredSeconds = n
@@ -99,16 +83,11 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	var last review.BridgeOutcome
 	invoked := false
 	for index, candidate := range candidates {
-		vendor := vendorFamily(modelFamily(candidate.Model))
-		if implementer != "" && vendor != "" && implementer == vendor {
-			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_SAME_VENDOR"})
-			continue
-		}
 		if !postReviewerAdapters[candidate.Agent] {
 			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_ADAPTER_UNREGISTERED"})
 			continue
 		}
-		if circuitDir != "" && time.Until(deadline) > 0 && hasEligibleReviewer(candidates[index+1:], implementer) &&
+		if circuitDir != "" && time.Until(deadline) > 0 && hasEligibleReviewer(candidates[index+1:]) &&
 			review.ReviewerCircuitOpen(circuitDir, candidate.Agent, candidate.Model, time.Now()) {
 			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "UNAVAILABLE", Reason: "REVIEWER_CIRCUIT_OPEN"})
 			continue
@@ -119,8 +98,7 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 			continue
 		}
 		for _, later := range candidates[index+1:] {
-			laterVendor := vendorFamily(modelFamily(later.Model))
-			if postReviewerAdapters[later.Agent] && (implementer == "" || laterVendor == "" || implementer != laterVendor) {
+			if postReviewerAdapters[later.Agent] {
 				budget = budget * 60 / 100
 				break
 			}
@@ -176,8 +154,6 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		reason := "REVIEWER1_UNAVAILABLE"
 		if lastAttempt.Outcome == "SKIPPED_ADAPTER_UNREGISTERED" {
 			reason = "REVIEWER_ADAPTER_UNAVAILABLE"
-		} else if lastAttempt.Outcome == "SKIPPED_SAME_VENDOR" {
-			reason = "REVIEWER_VENDOR_CONFLICT"
 		}
 		bundle["reviewer1_skipped_reason"] = reason
 		last = review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{
@@ -190,10 +166,9 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	return last, nil
 }
 
-func hasEligibleReviewer(candidates []profile.ReviewerCandidate, implementer string) bool {
+func hasEligibleReviewer(candidates []profile.ReviewerCandidate) bool {
 	for _, candidate := range candidates {
-		vendor := vendorFamily(modelFamily(candidate.Model))
-		if postReviewerAdapters[candidate.Agent] && (implementer == "" || vendor == "" || implementer != vendor) {
+		if postReviewerAdapters[candidate.Agent] {
 			return true
 		}
 	}

@@ -71,11 +71,14 @@ func TestReadinessHostAgentOffIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestReadinessHostSameFamilyIsUnavailable(t *testing.T) {
+func TestReadinessHostSameFamilyRuns(t *testing.T) {
 	fixture := newReadinessHostFixture(t, "gemini-2.5-pro", "agy", true)
+	t.Setenv("PATH", fixture.gitDir)
 	checkReadinessBeforeSuccess(fixture.jobs, fixture.id, nil)
-	assertReadinessCheckerNotCalled(t, fixture.marker)
-	if got := readinessResult(t, fixture); got["verdict"] != "UNAVAILABLE" {
+	if _, err := os.Stat(fixture.marker); err != nil {
+		t.Fatalf("same-family readiness checker was not called: %v", err)
+	}
+	if got := readinessResult(t, fixture); got["verdict"] != "NO_UNMET_FOUND" {
 		t.Fatalf("same-family verdict = %#v", got)
 	}
 }

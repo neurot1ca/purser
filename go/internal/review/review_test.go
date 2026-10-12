@@ -157,9 +157,6 @@ func TestReviewDecisionPrimitives(t *testing.T) {
 			passed := Outcome{ReviewStatus: "COMPLETED", Result: "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", Validation: "PASS"}
 			return skip.Reason == NoDelta && !skip.Run && run.Run && !Passed(Outcome{}, NoDelta) && Passed(passed, "")
 		}},
-		{"same vendor excluded", "policy.py:580-618; codex.py:4582-4609", func() bool {
-			return SameFamily("gpt", "openai") && SameFamily("anthropic", "claude") && !SameFamily("google", "openai")
-		}},
 		{"full mode selection", "policy.py:715-770", func() bool {
 			cases := []struct{ route, skip, result, want string }{
 				{"normal", "REVIEWER_UNAVAILABLE", "", Full},

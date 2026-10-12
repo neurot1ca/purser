@@ -334,9 +334,6 @@ func detect(home, root string, o options) (map[string]any, error) {
 			if family == "" {
 				entry["family"] = nil
 			}
-			if coderFamily != "" {
-				entry["same_family"] = family == coderFamily
-			}
 			reviewerOptions = append(reviewerOptions, entry)
 		}
 	}

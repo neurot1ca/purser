@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"time"
 
 	"purser-hook/internal/enforce"
@@ -65,11 +63,6 @@ func checkReadinessBeforeSuccess(dir, jobID string, result map[string]any) {
 	if !worktreeOK || !snapshotOK || !objectiveOK || !acceptanceOK {
 		return
 	}
-	if review.SameFamily(readinessModelFamily(stringValue(job["model"])), readinessModelFamily(model)) {
-		verdict.Verdict = "UNAVAILABLE"
-		return
-	}
-
 	config, err := readinessCoderConfig()
 	if err != nil {
 		return
@@ -144,39 +137,6 @@ func readinessCoderConfig() (map[string]any, error) {
 		return nil, err
 	}
 	return policy.LoadCoderConfig(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"))
-}
-
-var modelVendorPrefix = regexp.MustCompile(`^(openai|google|deepseek|anthropic|qwen|mistral|llama)/`)
-
-func readinessModelFamily(model string) string {
-	name := strings.ToLower(model)
-	if match := modelVendorPrefix.FindStringSubmatch(name); len(match) == 2 {
-		if match[1] == "anthropic" {
-			return "claude"
-		}
-		return match[1]
-	}
-	if index := strings.Index(name, "/"); index >= 0 {
-		name = name[index+1:]
-	}
-	switch {
-	case strings.HasPrefix(name, "gemini-"):
-		return "gemini"
-	case strings.HasPrefix(name, "gpt-") || regexp.MustCompile(`^o[134](-|$)`).MatchString(name):
-		return "gpt"
-	case strings.HasPrefix(name, "claude-"):
-		return "claude"
-	case strings.HasPrefix(name, "deepseek-"):
-		return "deepseek"
-	case strings.HasPrefix(name, "qwen-") || regexp.MustCompile(`^qwen[0-9]`).MatchString(name):
-		return "qwen"
-	case strings.HasPrefix(name, "mistral-") || regexp.MustCompile(`^mistral[0-9]`).MatchString(name):
-		return "mistral"
-	case strings.HasPrefix(name, "llama-") || regexp.MustCompile(`^llama[0-9]`).MatchString(name):
-		return "llama"
-	default:
-		return ""
-	}
 }
 
 func stringValue(value any) string {
