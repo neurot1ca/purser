@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.140 — 2026-10-12
+
+- **Changed:** `/purser:init` asks every question as a picker with clearer texts, asks auto-compact last (On recommended) and no longer offers the concise reply style.
+- **New:** `/purser:auto-compact on|off` turns Purser's automatic /compact on or off for all projects.
+
 ## 0.1.139 — 2026-10-12
 
 - **New:** `/purser:reviewer` lists the reviewers installed on this machine (Codex luna, Claude Haiku, agy, a DeepSeek model through OpenCode) and lets you switch Reviewer-1 or turn it off without rerunning init.
