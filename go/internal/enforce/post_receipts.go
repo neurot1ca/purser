@@ -2,11 +2,12 @@ package enforce
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"purser-hook/internal/contextio"
 )
@@ -40,10 +41,10 @@ func writePostReceiptState(path string, state map[string]any) {
 }
 
 // queuePostCompletionReceipt stores the finalized completion receipt for the session.
-func queuePostCompletionReceipt(root string, event map[string]any, repository string, bundle map[string]any) {
+func queuePostCompletionReceipt(root string, event map[string]any, repository string, bundle map[string]any) map[string]any {
 	session, model := stringValue(event["session_id"]), stringValue(bundle["model"])
 	if repository == "" || session == "" || model == "" {
-		return
+		return nil
 	}
 	effort := stringValue(bundle["effort"])
 	if effort == "" {
@@ -69,9 +70,25 @@ func queuePostCompletionReceipt(root string, event map[string]any, repository st
 		}
 	}
 	path := postReceiptStatePath(root, repository)
+	unlock, err := contextio.LockFile(path + ".lock")
+	if err != nil {
+		return nil
+	}
+	defer unlock()
 	state := readPostReceiptState(path, session)
 	state["receipt_pending"] = receipt
 	writePostReceiptState(path, state)
+	if stringValue(event["tool_use_id"]) == "" {
+		return nil
+	}
+	advice := PostReceiptAdvice(receipt, time.Now().UTC())
+	id, err := callKey(event)
+	if err != nil {
+		return nil
+	}
+	state["receipt_delivered"] = true
+	writePostReceiptState(path, state)
+	return map[string]any{"id": id, "message": advice}
 }
 
 // queuePostReceipt adds a visible dispatch receipt to the next-turn queue.
@@ -126,22 +143,8 @@ func postPendingGuidance(root string, event map[string]any, repository string) s
 	}
 	state := readPostReceiptState(postReceiptStatePath(root, repository), session)
 	parts := []string{}
-	if receipt, ok := state["receipt_pending"].(map[string]any); ok {
-		model, modelOK := receipt["model"].(string)
-		effort, effortOK := receipt["effort"].(string)
-		if modelOK && model != "" && effortOK {
-			values := []string{"model " + model, "effort " + effort}
-			if receipt["gear"] == "up" {
-				values = append(values, "gear up")
-			}
-			if percentage, ok := receipt["5h_used_pct"].(float64); ok {
-				values = append(values, fmt.Sprintf("5h used %g%%", percentage))
-			}
-			if percentage, ok := receipt["5h_used_pct"].(int); ok {
-				values = append(values, fmt.Sprintf("5h used %d%%", percentage))
-			}
-			parts = append(parts, "Write one line in the user's language as `> ⚓ **Codex done: ...**`, showing "+strings.Join(values, ", ")+".")
-		}
+	if receipt, ok := state["receipt_pending"].(map[string]any); ok && state["receipt_delivered"] != true {
+		parts = append(parts, PostReceiptAdvice(receipt, time.Now().UTC()))
 	}
 	if pending, ok := state["dispatch_pending"].(map[string]any); ok {
 		if lines, ok := pending["lines"].([]any); ok && len(lines) > 0 {
@@ -160,4 +163,30 @@ func postPendingGuidance(root string, event map[string]any, repository string) s
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// Claim UI emission durably so cached lifecycle output never repeats a receipt.
+func deliverPostCompletionReceipt(response map[string]any, root string) {
+	receipt := mapValue(response["completion_receipt"])
+	delete(response, "completion_receipt")
+	id, message := stringValue(receipt["id"]), stringValue(receipt["message"])
+	if !asyncHash.MatchString(id) || message == "" {
+		return
+	}
+	path := filepath.Join(root, "receipt_deliveries", id+".json")
+	unlock, err := contextio.LockFile(path + ".lock")
+	if err != nil {
+		return
+	}
+	defer unlock()
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if atomicAdmissionJSON(path, receipt) != nil {
+		return
+	}
+	if prior := stringValue(response["systemMessage"]); prior != "" {
+		message = prior + "\n" + message
+	}
+	response["systemMessage"] = message
 }

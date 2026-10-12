@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"sort"
@@ -19,22 +20,37 @@ const planSchemaVersion = 1
 const planCollectionVersion = 2
 
 type PlanState struct {
-	Version             int        `json:"version"`
-	Revision            int        `json:"revision"`
-	ProjectKey          string     `json:"project_key"`
-	ProjectRoot         string     `json:"project_root"`
-	TaskID              string     `json:"task_id"`
-	ArtifactPath        string     `json:"artifact_path"`
-	ArtifactDigest      string     `json:"artifact_digest"`
-	AcceptedMilestones  []int      `json:"accepted_milestones"`
-	CompletedMilestones []int      `json:"completed_milestones"`
-	CurrentMilestone    int        `json:"current_milestone"`
-	LinkedJobs          []string   `json:"linked_jobs,omitempty"`
-	LinkedJob           string     `json:"linked_job,omitempty"`
-	PendingNextAction   string     `json:"pending_next_action"`
-	UserStopped         bool       `json:"user_stopped"`
-	Gate                string     `json:"gate"`
-	AppliedPasses       []PlanPass `json:"applied_passes,omitempty"`
+	Version             int              `json:"version"`
+	Revision            int              `json:"revision"`
+	ProjectKey          string           `json:"project_key"`
+	ProjectRoot         string           `json:"project_root"`
+	TaskID              string           `json:"task_id"`
+	ArtifactPath        string           `json:"artifact_path"`
+	ArtifactDigest      string           `json:"artifact_digest"`
+	AcceptedMilestones  []int            `json:"accepted_milestones"`
+	CompletedMilestones []int            `json:"completed_milestones"`
+	CurrentMilestone    int              `json:"current_milestone"`
+	LinkedJobs          []string         `json:"linked_jobs,omitempty"`
+	LinkedJob           string           `json:"linked_job,omitempty"`
+	PendingNextAction   string           `json:"pending_next_action"`
+	UserStopped         bool             `json:"user_stopped"`
+	Gate                string           `json:"gate"`
+	AppliedPasses       []PlanPass       `json:"applied_passes,omitempty"`
+	Milestones          []PlanMilestone  `json:"milestones,omitempty"`
+	ReadyMilestones     []ReadyMilestone `json:"ready_milestones,omitempty"`
+}
+
+type PlanMilestone struct {
+	ID              string   `json:"id"`
+	Dependencies    []int    `json:"dependencies,omitempty"`
+	WritePaths      []string `json:"write_paths,omitempty"`
+	TaskSection     string   `json:"task_section"`
+	ValidationState string   `json:"validation_state,omitempty"`
+}
+
+type ReadyMilestone struct {
+	ID          string `json:"id"`
+	ArtifactRef string `json:"artifact_ref"`
 }
 
 type PlanPass struct {
@@ -122,6 +138,17 @@ func validatePlanRecord(state *PlanState) error {
 		}
 		applied[pass.JobID] = true
 	}
+	for _, milestone := range state.Milestones {
+		id, err := strconv.Atoi(strings.TrimPrefix(milestone.ID, "M"))
+		if err != nil || !seen[id] || milestone.TaskSection == "" {
+			return errors.New("active plan record is malformed")
+		}
+		for _, dependency := range milestone.Dependencies {
+			if !seen[dependency] || dependency == id {
+				return errors.New("active plan record is malformed")
+			}
+		}
+	}
 	return nil
 }
 
@@ -134,7 +161,172 @@ func validatePlanArtifact(state *PlanState) error {
 	if hex.EncodeToString(digest[:]) != state.ArtifactDigest {
 		return errors.New("active plan artifact digest does not match")
 	}
+	if len(state.Milestones) > 0 {
+		expected, err := parsePlanMilestones(artifact, state.AcceptedMilestones)
+		if err != nil || len(expected) != len(state.Milestones) {
+			return errors.New("active plan metadata does not match artifact")
+		}
+		for i, m := range expected {
+			saved := state.Milestones[i]
+			saved.ValidationState = ""
+			if !reflect.DeepEqual(m, saved) {
+				return errors.New("active plan metadata does not match artifact")
+			}
+		}
+	}
 	return nil
+}
+
+func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	headings := regexp.MustCompile(`(?m)^(#{1,6})\s+([^\n]+)(?:\n|$)`).FindAllStringSubmatchIndex(text, -1)
+	idPattern := regexp.MustCompile(`^M([0-9]+)\b`)
+	depLine := regexp.MustCompile(`(?im)^\*\*Dependenc(?:y|ies):\*\*[ \t]*([^\n]*)`)
+	pathLine := regexp.MustCompile(`(?im)^\*\*(?:Touched paths|Touched files/dirs|Write paths):\*\*\s*\n`)
+	quotedPath := regexp.MustCompile("`([^`]+)`")
+	var result []PlanMilestone
+	explicit := false
+	for i, heading := range headings {
+		match := idPattern.FindStringSubmatch(text[heading[4]:heading[5]])
+		if match == nil {
+			continue
+		}
+		n, err := strconv.Atoi(match[1])
+		if err != nil || n < 1 || strconv.Itoa(n) != match[1] {
+			return nil, errors.New("invalid milestone ID")
+		}
+		end := len(text)
+		for _, next := range headings[i+1:] {
+			if next[3]-next[2] <= heading[3]-heading[2] {
+				end = next[0]
+				break
+			}
+		}
+		section := strings.TrimSpace(text[heading[0]:end])
+		if len(section) > 32768 || len(result) >= 128 {
+			return nil, errors.New("plan task sections exceed bounds")
+		}
+		m := PlanMilestone{ID: "M" + match[1], TaskSection: section}
+		declarations := depLine.FindAllStringSubmatch(section, -1)
+		if len(declarations) > 1 {
+			return nil, fmt.Errorf("duplicate dependency declaration for %s", m.ID)
+		}
+		if len(declarations) == 1 {
+			explicit = true
+			// Parallel-group annotations are not dependency declarations.
+			raw := strings.TrimSuffix(strings.TrimSpace(strings.SplitN(declarations[0][1], ". **Parallel group:**", 2)[0]), ".")
+			if !strings.EqualFold(raw, "none") {
+				for _, token := range strings.Split(raw, ",") {
+					n, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(token), "M"))
+					if err != nil || n < 1 || containsMilestone(m.Dependencies, n) {
+						return nil, fmt.Errorf("invalid dependencies for %s", m.ID)
+					}
+					m.Dependencies = append(m.Dependencies, n)
+				}
+			}
+		}
+		if loc := pathLine.FindStringIndex(section); loc != nil {
+			for _, line := range strings.Split(section[loc[1]:], "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
+					break
+				}
+				paths := quotedPath.FindAllStringSubmatch(line, -1)
+				if len(paths) == 0 {
+					paths = [][]string{{"", strings.TrimSpace(line[2:])}}
+				}
+				for _, path := range paths {
+					clean := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(path[1], `\`, "/")))
+					if clean == "." || filepath.IsAbs(clean) || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]") {
+						return nil, fmt.Errorf("invalid write path for %s", m.ID)
+					}
+					if runtime.GOOS == "windows" {
+						clean = strings.ToLower(clean)
+					}
+					m.WritePaths = append(m.WritePaths, clean)
+				}
+			}
+		}
+		result = append(result, m)
+	}
+	if !explicit {
+		return nil, nil
+	} // Undeclared legacy dependencies stay serial.
+	byID := map[int]PlanMilestone{}
+	for _, m := range result {
+		n := milestoneNumber(m.ID)
+		if _, duplicate := byID[n]; duplicate || depLine.FindStringSubmatch(m.TaskSection) == nil || len(m.WritePaths) == 0 {
+			return nil, fmt.Errorf("duplicate or incomplete milestone %s", m.ID)
+		}
+		byID[n] = m
+	}
+	for _, n := range accepted {
+		if _, ok := byID[n]; !ok {
+			return nil, fmt.Errorf("accepted milestone M%d is missing", n)
+		}
+	}
+	visiting, visited := map[int]bool{}, map[int]bool{}
+	ancestors := map[int]map[int]bool{}
+	var visit func(int) error
+	visit = func(n int) error {
+		if visiting[n] {
+			return errors.New("plan milestone dependencies contain a cycle")
+		}
+		if visited[n] {
+			return nil
+		}
+		visiting[n] = true
+		ancestors[n] = map[int]bool{}
+		for _, dep := range byID[n].Dependencies {
+			if _, ok := byID[dep]; !ok {
+				return fmt.Errorf("milestone M%d has missing dependency M%d", n, dep)
+			}
+			if containsMilestone(accepted, n) && !containsMilestone(accepted, dep) {
+				return fmt.Errorf("milestone M%d requires unaccepted M%d", n, dep)
+			}
+			if err := visit(dep); err != nil {
+				return err
+			}
+			ancestors[n][dep] = true
+			for ancestor := range ancestors[dep] {
+				ancestors[n][ancestor] = true
+			}
+		}
+		visiting[n], visited[n] = false, true
+		return nil
+	}
+	for n := range byID {
+		if err := visit(n); err != nil {
+			return nil, err
+		}
+	}
+	for i, n := range accepted {
+		for _, other := range accepted[i+1:] {
+			if ancestors[n][other] || ancestors[other][n] {
+				continue
+			}
+			for _, a := range byID[n].WritePaths {
+				for _, b := range byID[other].WritePaths {
+					if a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
+						return nil, fmt.Errorf("parallel milestones M%d and M%d have incompatible write paths", n, other)
+					}
+				}
+			}
+		}
+	}
+	selected := make([]PlanMilestone, 0, len(accepted))
+	for _, n := range accepted {
+		selected = append(selected, byID[n])
+	}
+	return selected, nil
+}
+
+func milestoneNumber(id string) int {
+	n, _ := strconv.Atoi(strings.TrimPrefix(id, "M"))
+	return n
 }
 
 func readPlans(path string) ([]*PlanState, error) {
@@ -250,6 +442,7 @@ func ReadPlan(root, repository string) (*PlanState, error) {
 	if err := validatePlanArtifact(state); err != nil {
 		return nil, err
 	}
+	state.ReadyMilestones = readyMilestones(root, state)
 	return state, nil
 }
 
@@ -278,6 +471,7 @@ func ReadPlanForTask(root, repository, taskID string) (*PlanState, error) {
 	if err := validatePlanArtifact(state); err != nil {
 		return nil, err
 	}
+	state.ReadyMilestones = readyMilestones(root, state)
 	return state, nil
 }
 
@@ -325,7 +519,12 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*P
 	} else {
 		states = nil
 	}
-	state := &PlanState{Version: planSchemaVersion, Revision: 1, ProjectKey: ProjectKey(canonical), ProjectRoot: canonical, TaskID: taskID, ArtifactPath: artifactPath, ArtifactDigest: hex.EncodeToString(digest[:]), AcceptedMilestones: accepted, CurrentMilestone: accepted[0], PendingNextAction: "dispatch"}
+	metadata, err := parsePlanMilestones(data, accepted)
+	if err != nil {
+		return nil, err
+	}
+	state := &PlanState{Version: planSchemaVersion, Revision: 1, ProjectKey: ProjectKey(canonical), ProjectRoot: canonical, TaskID: taskID, ArtifactPath: artifactPath, ArtifactDigest: hex.EncodeToString(digest[:]), AcceptedMilestones: accepted, CurrentMilestone: accepted[0], PendingNextAction: "dispatch", Milestones: metadata}
+	state.ReadyMilestones = readyMilestones(root, state)
 	states = append(states, state)
 	if err := writePlans(path, states); err != nil {
 		return nil, err
@@ -368,30 +567,53 @@ func UpdatePlan(root, repository, taskID string, expectedRevision int, operation
 	case "gate":
 		state.Gate = value
 	case "complete-milestone":
-		if state.CurrentMilestone == 0 {
+		milestone := state.CurrentMilestone
+		if value != "" {
+			n, err := strconv.Atoi(strings.TrimPrefix(value, "M"))
+			if err != nil || !containsMilestone(state.AcceptedMilestones, n) {
+				return nil, errors.New("invalid accepted milestone number")
+			}
+			milestone = n
+		} else {
+			// A legacy follow-up after a plain milestone apply must not finish its successor.
+			for i := len(state.AppliedPasses) - 1; i >= 0; i-- {
+				pass := state.AppliedPasses[i]
+				if plainPlanTaskMilestone(state.TaskID, pass.TaskID, pass.Milestone) && containsMilestone(state.CompletedMilestones, pass.Milestone) {
+					return state, nil
+				}
+			}
+		}
+		if containsMilestone(state.CompletedMilestones, milestone) {
+			return state, nil
+		}
+		if milestone == 0 {
 			return nil, errors.New("plan has no current milestone")
 		}
-		if jobID := runningLinkedJob(root, state, state.CurrentMilestone); jobID != "" {
-			return nil, fmt.Errorf("milestone %d has a running linked job %s", state.CurrentMilestone, jobID)
+		if len(state.Milestones) > 0 && !planDependenciesDone(state, milestone) {
+			return nil, errors.New("milestone prerequisites are not complete and validated")
 		}
-		if !containsMilestone(state.CompletedMilestones, state.CurrentMilestone) {
-			state.CompletedMilestones = append(state.CompletedMilestones, state.CurrentMilestone)
+		if jobID := runningLinkedJob(root, state, milestone); jobID != "" {
+			return nil, fmt.Errorf("milestone %d has a running linked job %s", milestone, jobID)
 		}
-		setLinkedJobs(state, nil)
+		state.CompletedMilestones = append(state.CompletedMilestones, milestone)
+		// Preserve independent work when completing a selected graph milestone.
+		if len(state.Milestones) == 0 {
+			setLinkedJobs(state, nil)
+		}
 		state.CurrentMilestone = 0
-		for _, milestone := range state.AcceptedMilestones {
-			if !containsMilestone(state.CompletedMilestones, milestone) {
-				state.CurrentMilestone = milestone
+		for _, n := range state.AcceptedMilestones {
+			if !containsMilestone(state.CompletedMilestones, n) {
+				state.CurrentMilestone = n
 				break
 			}
 		}
-		if state.CurrentMilestone == 0 {
-			state.PendingNextAction = ""
-		} else {
-			state.PendingNextAction = "dispatch"
-		}
+		state.PendingNextAction = pendingAction(state)
+
 	default:
 		return nil, errors.New("unsupported plan operation")
+	}
+	if len(state.Milestones) > 0 {
+		state.ReadyMilestones = readyMilestones(root, state)
 	}
 	state.Revision++
 	if err := writePlans(path, states); err != nil {
@@ -437,7 +659,7 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 	if err := validatePlanArtifact(state); err != nil {
 		return nil, true, err
 	}
-	if !containsMilestone(state.AcceptedMilestones, milestone) || containsMilestone(state.CompletedMilestones, milestone) || state.UserStopped || state.Gate != "" {
+	if !containsMilestone(state.AcceptedMilestones, milestone) || containsMilestone(state.CompletedMilestones, milestone) || state.UserStopped || state.Gate != "" || (len(state.Milestones) > 0 && !planDependenciesDone(state, milestone)) {
 		return nil, true, errors.New("active plan is not ready for this dispatch")
 	}
 	linked := linkedJobs(state)
@@ -446,6 +668,7 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 	}
 	setLinkedJobs(state, linked)
 	state.PendingNextAction = "apply"
+	state.ReadyMilestones = readyMilestones(root, state)
 	state.Revision++
 	if err := writePlans(path, states); err != nil {
 		return nil, true, err
@@ -693,6 +916,38 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 	return unfinished, nil
 }
 
+// PlanReadiness returns the ready passes under the existing plan lock for
+// the plan that owns taskID.
+func PlanReadiness(root, repository, taskID string) ([]ReadyMilestone, error) {
+	path, canonical, err := planPath(root, repository)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := LockFile(path + ".lock")
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	states, err := readPlans(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := checkPlanProjects(states, canonical); err != nil {
+		return nil, err
+	}
+	state, _, matches, err := resolvePlanOwner(states, taskID)
+	if err != nil || !matches {
+		return nil, err
+	}
+	if err := validatePlanArtifact(state); err != nil {
+		return nil, err
+	}
+	return readyMilestones(root, state), nil
+}
+
 func resolvePlanOwner(states []*PlanState, taskID string) (*PlanState, int, bool, error) {
 	var owner *PlanState
 	milestone := 0
@@ -778,32 +1033,117 @@ func pendingAction(state *PlanState) string {
 	return "dispatch"
 }
 
+func planDependenciesDone(state *PlanState, n int) bool {
+	for _, m := range state.Milestones {
+		if milestoneNumber(m.ID) != n {
+			continue
+		}
+		for _, dep := range m.Dependencies {
+			if !containsMilestone(state.CompletedMilestones, dep) {
+				return false
+			}
+			for _, prerequisite := range state.Milestones {
+				if milestoneNumber(prerequisite.ID) == dep && prerequisite.ValidationState != "" && prerequisite.ValidationState != "PASS" {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func readyMilestones(root string, state *PlanState) []ReadyMilestone {
+	if state.UserStopped || state.Gate != "" {
+		return nil
+	}
+	ready := []ReadyMilestone{}
+	for _, n := range state.AcceptedMilestones {
+		if len(state.Milestones) == 0 && n != state.CurrentMilestone {
+			continue
+		}
+		if containsMilestone(state.CompletedMilestones, n) || len(state.Milestones) > 0 && !planDependenciesDone(state, n) {
+			continue
+		}
+		// Any linked pass (including a result awaiting apply) prevents duplicate dispatch.
+		linked := false
+		for _, jobID := range linkedJobs(state) {
+			job, ok := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"))
+			if !ok || job["jobId"] != jobID {
+				linked = true
+				break
+			}
+			task, _ := job["taskId"].(string)
+			if milestone, matches := planTaskMilestone(state.TaskID, task); matches && milestone == n {
+				linked = true
+				break
+			}
+		}
+		if linked {
+			continue
+		}
+		// Recovery also sees running jobs whose link has not yet landed.
+		if runningLinkedJob(root, state, n) != "" {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(root, "codex_exec_mcp", "jobs"))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				continue
+			}
+			job, ok := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", entry.Name()))
+			if !ok {
+				continue
+			}
+			task, _ := job["taskId"].(string)
+			milestone, matches := planTaskMilestone(state.TaskID, task)
+			if matches && milestone == n && job["discarded"] != true && (job["state"] == "QUEUED" || job["state"] == "RUNNING") {
+				linked = true
+				break
+			}
+		}
+		if linked {
+			continue
+		}
+		id := fmt.Sprintf("M%d", n)
+		ready = append(ready, ReadyMilestone{ID: id, ArtifactRef: state.ArtifactPath + "#" + id})
+	}
+	return ready
+}
+
 func advanceAppliedMilestone(root string, state *PlanState) {
-	milestone := state.CurrentMilestone
-	if milestone == 0 || containsMilestone(state.CompletedMilestones, milestone) {
-		return
-	}
-	passed := false
-	for _, pass := range state.AppliedPasses {
-		if pass.Milestone == milestone && plainPlanTaskMilestone(state.TaskID, pass.TaskID, milestone) {
-			passed = true
-			break
+	for _, n := range state.AcceptedMilestones {
+		if len(state.Milestones) == 0 && n != state.CurrentMilestone {
+			continue
+		}
+		if containsMilestone(state.CompletedMilestones, n) || len(state.Milestones) > 0 && !planDependenciesDone(state, n) {
+			continue
+		}
+		passed := false
+		for _, pass := range state.AppliedPasses {
+			if pass.Milestone == n && plainPlanTaskMilestone(state.TaskID, pass.TaskID, n) {
+				passed = true
+				break
+			}
+		}
+		if passed && !hasOpenLinkedJob(root, state, n) {
+			state.CompletedMilestones = append(state.CompletedMilestones, n)
+			if len(state.Milestones) == 0 {
+				break
+			}
 		}
 	}
-	if !passed {
-		return
-	}
-	if hasOpenLinkedJob(root, state, milestone) {
-		return
-	}
-	state.CompletedMilestones = append(state.CompletedMilestones, milestone)
 	state.CurrentMilestone = 0
-	for _, accepted := range state.AcceptedMilestones {
-		if !containsMilestone(state.CompletedMilestones, accepted) {
-			state.CurrentMilestone = accepted
+	for _, n := range state.AcceptedMilestones {
+		if !containsMilestone(state.CompletedMilestones, n) {
+			state.CurrentMilestone = n
 			break
 		}
 	}
+	state.ReadyMilestones = readyMilestones(root, state)
 	state.PendingNextAction = pendingAction(state)
 }
 

@@ -6,8 +6,153 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+const readyPlanArtifact = `## Milestones
+### M1 - prerequisite
+**Dependency:** none. **Parallel group:** A.
+**Write paths:**
+- src/a.go
+**Implementation:** bounded task one
+### M2 - independent
+**Dependency:** none
+**Write paths:**
+- src/b.go
+**Implementation:** bounded task two
+### M3 - dependent
+**Dependency:** M1
+**Write paths:**
+- src/a.go
+**Implementation:** bounded task three
+## Other material
+This must not be part of M3's task section.
+`
+
+func TestPlanGraphRejectsInvalidAcceptance(t *testing.T) {
+	for _, tc := range []struct {
+		name, artifact string
+		accepted       []int
+	}{
+		{"cycle", strings.Replace(readyPlanArtifact, "none. **Parallel group:** A.", "M3", 1), []int{1, 2, 3}},
+		{"missing dependency", strings.Replace(readyPlanArtifact, "**Dependency:** M1", "**Dependency:** M9", 1), []int{1, 2, 3}},
+		{"unaccepted prerequisite", readyPlanArtifact, []int{3}},
+		{"missing accepted ID", readyPlanArtifact, []int{1, 4}},
+		{"partial declaration", strings.Replace(readyPlanArtifact, "**Dependency:** M1\n", "", 1), []int{1, 2, 3}},
+		{"duplicate declaration", strings.Replace(readyPlanArtifact, "**Dependency:** M1", "**Dependency:** M1\n**Dependency:** none", 1), []int{1, 2, 3}},
+		{"invalid dependency suffix", strings.Replace(readyPlanArtifact, "**Dependency:** M1", "**Dependency:** M1.M9", 1), []int{1, 2, 3}},
+		{"duplicate ID", strings.Replace(readyPlanArtifact, "### M2", "### M1", 1), []int{1, 2, 3}},
+		{"parallel scope", strings.Replace(readyPlanArtifact, "src/b.go", "src", 1), []int{1, 2, 3}},
+		{"unsafe path", strings.Replace(readyPlanArtifact, "src/b.go", "../outside", 1), []int{1, 2, 3}},
+		{"unbounded section", readyPlanArtifact + "### M4\n**Dependency:** none\n**Write paths:**\n- c.go\n" + strings.Repeat("x", 32769), []int{1, 2, 3, 4}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, artifact := planFixture(t)
+			if err := os.WriteFile(artifact, []byte(tc.artifact), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := AcceptPlan(root, repo, "graph", artifact, tc.accepted); err == nil {
+				t.Fatal("invalid graph accepted")
+			}
+			path, _, _ := planPath(root, repo)
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("acceptance wrote invalid state: %v", err)
+			}
+		})
+	}
+}
+
+func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := AcceptPlan(root, repo, "graph", artifact, []int{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ReadyMilestones) != 2 || state.ReadyMilestones[0].ID != "M1" || state.ReadyMilestones[1].ID != "M2" {
+		t.Fatalf("independent leaves: %+v", state)
+	}
+	if strings.Contains(state.Milestones[2].TaskSection, "Other material") {
+		t.Fatal("task section leaked beyond milestone")
+	}
+	writeJob := func(id, task, status string) {
+		t.Helper()
+		path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(map[string]any{"jobId": id, "taskId": task, "state": status})
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeJob("first", "graph-m1of3", "SUCCEEDED")
+	if _, _, err := BindPlanJob(root, repo, "graph-m1of3", "first"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlanForTask(root, repo, "graph")
+	if err != nil || len(state.ReadyMilestones) != 1 || state.ReadyMilestones[0].ID != "M2" {
+		t.Fatalf("linked result was offered again: %+v %v", state, err)
+	}
+	writeJob("independent", "graph-m2of3", "RUNNING")
+	if _, _, err := BindPlanJob(root, repo, "graph-m2of3", "independent"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := BindPlanJob(root, repo, "graph-m3of3", "premature"); err == nil {
+		t.Fatal("unready dependency bound")
+	}
+	if err := RecordPlanApply(root, repo, "graph-m1of3", "first"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlanForTask(root, repo, "graph")
+	if err != nil || state.CurrentMilestone == 0 || len(state.ReadyMilestones) != 1 || state.ReadyMilestones[0].ID != "M3" || len(state.LinkedJobs) != 1 {
+		t.Fatalf("dependent not released alongside independent work: %+v %v", state, err)
+	}
+	if state.ReadyMilestones[0].ArtifactRef != state.ArtifactPath+"#M3" {
+		t.Fatal("missing artifact pointer")
+	}
+	for _, value := range []string{"", "1"} {
+		repeated, err := UpdatePlan(root, repo, "graph", state.Revision, "complete-milestone", value)
+		if err != nil || repeated.Revision != state.Revision || !reflect.DeepEqual(repeated.CompletedMilestones, []int{1}) {
+			t.Fatalf("apply follow-up completed successor: %+v %v", repeated, err)
+		}
+	}
+	if _, err := UpdatePlan(root, repo, "graph", state.Revision, "complete-milestone", "2"); err == nil {
+		t.Fatal("running milestone completed")
+	}
+	// The validation seam blocks dependent release whenever a state is present
+	// and not PASS; absence retains existing completion behavior.
+	path, _, _ := planPath(root, repo)
+	for _, validation := range []string{"PENDING", "FAIL", "UNKNOWN"} {
+		state.Milestones[0].ValidationState = validation
+		if err := writePlans(path, []*PlanState{state}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := ReadPlanForTask(root, repo, "graph")
+		if err != nil || len(got.ReadyMilestones) != 0 {
+			t.Fatalf("validation %s released dependent: %+v %v", validation, got, err)
+		}
+	}
+	state.Milestones[0].ValidationState = "PASS"
+	if err := writePlans(path, []*PlanState{state}); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"stop", "gate"} {
+		state, err = UpdatePlan(root, repo, "graph", state.Revision, operation, "approval")
+		if err != nil || len(state.ReadyMilestones) != 0 {
+			t.Fatalf("%s plan offered work: %+v %v", operation, state, err)
+		}
+		if operation == "stop" {
+			state, err = UpdatePlan(root, repo, "graph", state.Revision, "resume", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
 
 func planFixture(t *testing.T) (string, string, string) {
 	t.Helper()

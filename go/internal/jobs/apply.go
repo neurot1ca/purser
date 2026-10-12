@@ -110,6 +110,8 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	}
 	var saved map[string]any
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
+		recordPlanApply(stateRoot, recordMap(job), jobID)
+		addReadyPlanMilestones(stateRoot, recordMap(job), saved)
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 		dispatchWorktreeRetirement(stateRoot, jobID)
@@ -217,6 +219,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		values := recordMap(job)
 		supersedeEarlierTaskJobs(stateRoot, jobID, values)
 		recordPlanApply(stateRoot, values, jobID)
+		addReadyPlanMilestones(stateRoot, values, value)
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
@@ -254,10 +257,24 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	}
 	recordPlanApply(stateRoot, recordMap(job), jobID)
+	addReadyPlanMilestones(stateRoot, recordMap(job), value)
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 	dispatchWorktreeRetirement(stateRoot, jobID)
 	supersedeEarlierTaskJobs(stateRoot, jobID, recordMap(job))
 	return applyToolResult(value)
+}
+
+func addReadyPlanMilestones(stateRoot string, job, value map[string]any) {
+	repository, _ := job["repoRoot"].(string)
+	taskID, _ := job["taskId"].(string)
+	if repository == "" || taskID == "" {
+		return
+	}
+	delete(value, "ready_milestones")
+	ready, err := contextio.PlanReadiness(stateRoot, repository, taskID)
+	if err == nil && len(ready) > 0 {
+		value["ready_milestones"] = ready
+	}
 }
 
 func supersedeEarlierTaskJobs(stateRoot, appliedID string, applied map[string]any) {

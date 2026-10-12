@@ -91,9 +91,6 @@ func Stop(event map[string]any, started time.Time) []byte {
 			}
 		}
 	}
-	if receipt, ok := state["receipt_pending"].(map[string]any); ok && str(receipt["model"]) != "" && receiptSatisfied(receipt, joined) {
-		clear("receipt_pending")
-	}
 	if dispatch, ok := state["dispatch_pending"].(map[string]any); ok {
 		lines, valid := dispatch["lines"].([]any)
 		board, hasBoard := dispatch["board"].(string)
@@ -155,17 +152,30 @@ func Stop(event map[string]any, started time.Time) []byte {
 		}
 		if plans, err := ReconcilePlans(stateRoot(), repository); err == nil {
 			var eligible []string
+			var eligiblePlans []string
 			for _, plan := range plans {
 				if blocked, ok := exactInteger(reminded[plan.TaskID]); ok && blocked == latestUser {
 					continue
 				}
-				if plan.UserStopped || plan.Gate != "" || !containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) || hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) || hasOpenPlanTaskJob(stateRoot(), plan) || planCodexDispatched(records, latestUser, plan.TaskID) {
+				if plan.UserStopped || plan.Gate != "" {
 					continue
 				}
-				eligible = append(eligible, fmt.Sprintf("%s M%d/%d %s", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones), plan.PendingNextAction))
-				reminded[plan.TaskID] = latestUser
+				if len(plan.Milestones) == 0 {
+					if containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) && !hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) && !hasOpenPlanTaskJob(stateRoot(), plan) && !planCodexDispatched(records, latestUser, plan.TaskID) {
+						eligible = append(eligible, fmt.Sprintf("%s M%d/%d %s", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones), plan.PendingNextAction))
+						eligiblePlans = append(eligiblePlans, plan.TaskID)
+					}
+					continue
+				}
+				for _, ready := range plan.ReadyMilestones {
+					eligible = append(eligible, fmt.Sprintf("%s %s %s", plan.TaskID, ready.ID, ready.ArtifactRef))
+					eligiblePlans = append(eligiblePlans, plan.TaskID)
+				}
 			}
 			if len(eligible) > 0 {
+				for _, taskID := range eligiblePlans {
+					reminded[taskID] = latestUser
+				}
 				state["plan_boundary_blocked_users"] = reminded
 				planReason = "Continue accepted plans " + strings.Join(eligible, "; ") + " through normal Purser routing and review."
 			}
@@ -180,10 +190,6 @@ func Stop(event map[string]any, started time.Time) []byte {
 	if pending, ok := state["maintenance_pending"].(map[string]any); ok && pending["blocked"] != true {
 		pending["blocked"] = true
 		add("maintenance", maintenanceGuidance(pending))
-	}
-	if pending, ok := state["receipt_pending"].(map[string]any); ok && str(pending["model"]) != "" && pending["blocked"] != true {
-		pending["blocked"] = true
-		add("receipt", receiptAdvice(pending))
 	}
 	if pending, ok := state["dispatch_pending"].(map[string]any); ok && pending["blocked"] != true {
 		if advice := dispatchAdvice(pending); advice != "" {
@@ -213,12 +219,12 @@ func Stop(event map[string]any, started time.Time) []byte {
 		kinds["flow"] = true
 	}
 	reasons = stopReasons(retryReason, reasons, flow)
+	if retryReason != "" {
+		kinds["dispatch"] = true
+	}
 	if planReason != "" {
 		reasons = append(reasons, planReason)
 		kinds["plan"] = true
-	}
-	if retryReason != "" {
-		kinds["dispatch"] = true
 	}
 	if changed || len(reasons) > 0 {
 		if writeAdvisorState(path, state) != nil {
@@ -346,68 +352,6 @@ func validStopPending(field string, p map[string]any) bool {
 		return true
 	}
 	return false
-}
-
-func receiptCurrent(p map[string]any, now time.Time) bool {
-	if captured, err := time.Parse(time.RFC3339Nano, str(p["snapshot_at"])); err == nil && now.Sub(captured) > time.Hour {
-		return false
-	}
-	if reset, err := time.Parse(time.RFC3339Nano, str(p["5h_resets_at"])); err == nil {
-		return reset.After(now)
-	}
-	return true
-}
-
-func receiptSatisfied(p map[string]any, message string) bool {
-	if !strings.Contains(message, str(p["model"])) || !strings.Contains(message, str(p["effort"])) {
-		return false
-	}
-	if !receiptCurrent(p, time.Now().UTC()) {
-		return true
-	}
-	if pct, ok := p["7d_used_pct"]; ok {
-		value := regexp.QuoteMeta(fmt.Sprint(pct))
-		if !regexp.MustCompile(`(?:` + value + `\s*%|%\s*` + value + `)`).MatchString(message) {
-			return false
-		}
-	}
-	if reset, err := time.Parse(time.RFC3339Nano, str(p["7d_resets_at"])); err == nil {
-		minutes := max(0, int(time.Until(reset).Minutes()))
-		first, second := minutes/60, minutes%60
-		if minutes >= 1440 {
-			first, second = minutes/1440, minutes%1440/60
-		}
-		if !regexp.MustCompile(fmt.Sprintf(`\b%d\D+%d\b`, first, second)).MatchString(message) {
-			return false
-		}
-	}
-	return true
-}
-
-func receiptAdvice(p map[string]any) string {
-	parts := []string{"model " + str(p["model"]), "effort " + str(p["effort"])}
-	if !receiptCurrent(p, time.Now().UTC()) {
-		return "The quota snapshot is stale. Write one line in the user's language as `> ⚓ **Codex done: ...**`, in the user's language, showing " + strings.Join(parts, ", ") + "."
-	}
-	if pct, ok := p["5h_used_pct"]; ok {
-		parts = append(parts, "5h used "+fmt.Sprint(pct)+"%")
-	}
-	if reset, err := time.Parse(time.RFC3339Nano, str(p["5h_resets_at"])); err == nil {
-		minutes := max(0, int(time.Until(reset).Minutes()))
-		parts = append(parts, fmt.Sprintf("time until 5h reset %dh %dm", minutes/60, minutes%60))
-	}
-	if pct, ok := p["7d_used_pct"]; ok {
-		parts = append(parts, "7d used "+fmt.Sprint(pct)+"%")
-	}
-	if reset, err := time.Parse(time.RFC3339Nano, str(p["7d_resets_at"])); err == nil {
-		minutes := max(0, int(time.Until(reset).Minutes()))
-		if minutes >= 1440 {
-			parts = append(parts, fmt.Sprintf("time until 7d reset %dd %dh", minutes/1440, minutes%1440/60))
-		} else {
-			parts = append(parts, fmt.Sprintf("time until 7d reset %dh %dm", minutes/60, minutes%60))
-		}
-	}
-	return "Write one line in the user's language as `> ⚓ **Codex done: ...**`, showing " + strings.Join(parts, ", ") + "."
 }
 
 func markBoardDisplayed(dispatch map[string]any) {

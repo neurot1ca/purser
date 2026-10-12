@@ -96,12 +96,6 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 		state["reminder_messages"], state["reminder_wasted_tokens"] = 0, 0
 		_ = writeAdvisorState(statePath, state)
 	}
-	receiptAdviceText := ""
-	if receipt, ok := state["receipt_pending"].(map[string]any); ok {
-		receiptAdviceText = receiptAdvice(receipt)
-		state["receipt_pending"] = nil
-		_ = writeAdvisorState(statePath, state)
-	}
 	if outcome, ok := state["compaction_outcome_pending"].(map[string]any); ok {
 		adviceTurn, turnOK := exactInteger(outcome["advice_turn"])
 		if turnOK && (outcome["compaction_observed"] == true || compactBoundaryAfterAdvice(records, number(state["context_prompt_count"]), adviceTurn)) {
@@ -121,7 +115,7 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 		}
 	}
 	if pending, ok := state["notice_pending"].(map[string]any); ok && validNoticePending(pending) {
-		return joinContext(compactionNoticeAdvice(pending, stringSlice(pending["triggers"])), receiptAdviceText)
+		return joinContext(compactionNoticeAdvice(pending, stringSlice(pending["triggers"])))
 	}
 	triggers := compactionAdviceTriggers(records, settings.idleMinutes)
 	currentTask, completedTasks := completedCodexTasks(records)
@@ -135,7 +129,7 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 	if context < settings.threshold {
 		state["last_suggested_context"] = 0
 		_ = writeAdvisorState(statePath, state)
-		return receiptAdviceText
+		return ""
 	}
 	last := number(state["last_suggested_context"])
 	if last == 0 && len(triggers) == 0 {
@@ -152,7 +146,7 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 	}
 	reminder := func() string {
 		if !reminderDue {
-			return receiptAdviceText
+			return ""
 		}
 		pct := max(0, int(math.Round(100*(1-float64(postCompactContextTokens)/float64(context)))))
 		notice := map[string]any{"context": context, "percentage": pct, "handoff": filepath.Join(filepath.Dir(statePath), "purser-handoff.md")}
@@ -161,7 +155,7 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 			word.WriteRune(r)
 			word.WriteRune('\u0332')
 		}
-		return joinContext("Translate this reminder into the user's language, keeping the markdown exactly and the underline on every character of the translated word (markdown has no underline). Put it as the very last text of the turn after a `---` line:", fmt.Sprintf("> **%s: Tokens are leaking; not compacting has cost ~%dK tokens so far.**\n%s", word.String(), number(state["reminder_wasted_tokens"])/1000, compactionBlockquote(notice, true)), receiptAdviceText)
+		return joinContext("Translate this reminder into the user's language, keeping the markdown exactly and the underline on every character of the translated word (markdown has no underline). Put it as the very last text of the turn after a `---` line:", fmt.Sprintf("> **%s: Tokens are leaking; not compacting has cost ~%dK tokens so far.**\n%s", word.String(), number(state["reminder_wasted_tokens"])/1000, compactionBlockquote(notice, true)))
 	}
 	if last != 0 && len(triggers) != 0 && context < last+settings.regrow {
 		_ = writeAdvisorState(statePath, state)
@@ -172,11 +166,11 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 		return reminder()
 	}
 	if err := updateAdvisorHandoff(repository, records, context, triggers); err != nil {
-		return receiptAdviceText
+		return ""
 	}
 	id := make([]byte, 16)
 	if _, err := rand.Read(id); err != nil {
-		return receiptAdviceText
+		return ""
 	}
 	pct := max(0, int(math.Round(100*(1-float64(postCompactContextTokens)/float64(context)))))
 	notice := map[string]any{"context": context, "percentage": pct,
@@ -185,9 +179,9 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 		"advice_written": false, "advice_turn": 0}
 	state["last_suggested_context"], state["reminder_messages"], state["notice_pending"] = context, 0, notice
 	if writeAdvisorState(statePath, state) != nil {
-		return receiptAdviceText
+		return ""
 	}
-	return joinContext(compactionNoticeAdvice(notice, triggers), receiptAdviceText)
+	return joinContext(compactionNoticeAdvice(notice, triggers))
 }
 
 func recordAdviceWritten(path, session string) {

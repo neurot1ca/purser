@@ -47,6 +47,7 @@ func PostToolUse(event map[string]any, root string) (response map[string]any, fa
 	if err != nil {
 		return postInternalOutput(event, root, err), err
 	}
+	deliverPostCompletionReceipt(response, root)
 	return response, nil
 }
 
@@ -178,7 +179,7 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 	if err = finishPostSession(root, event, pending, bundle, intake.ThreadID, repoRoot, false, float64(time.Now().UnixNano())/1e9, numberOr(loaded["manifest_budget_seconds"], 3)); err != nil {
 		return nil, err
 	}
-	recordPostCompletion(root, event, repoRoot, bundle)
+	completionReceipt := recordPostCompletion(root, event, repoRoot, bundle)
 	if pending["has_code_map"] == true && len(anyStringList(bundle["changed_paths"])) > 0 {
 		bundle["code_map"] = "STALE"
 	}
@@ -188,6 +189,9 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 	}
 	response, err := replacement(compact, stringValue(loaded["post_tool_output_field"]))
 	if err == nil {
+		if completionReceipt != nil {
+			response["completion_receipt"] = completionReceipt
+		}
 		appendPostQuotaSystemMessage(response, bundle["codex_quota"])
 		postGearAdvice(root, event, pending, loaded, response, numberOr(event["duration_ms"], 0), "")
 	}
@@ -468,7 +472,9 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	if bundle := postResponseBundle(response, loaded); bundle != nil {
 		PostImplementerObservations(original, pending, bundle, root)
 		PostMechanicalLearning(loaded, root, pluginRoot(), pendingProjectKey(pending), pending, bundle)
-		queuePostCompletionReceipt(root, original, stringValue(pending["repo_root"]), bundle)
+		if receipt := queuePostCompletionReceipt(root, original, stringValue(pending["repo_root"]), bundle); receipt != nil {
+			response["completion_receipt"] = receipt
+		}
 	}
 	response = appendPostDispatchReceipt(response, root, event, pending, stringValue(pending["repo_root"]))
 	index["response"] = response
@@ -577,11 +583,8 @@ func appendAsyncProjectStatus(root string, event, index, pending, response map[s
 	return response
 }
 
-func recordPostCompletion(root string, event map[string]any, repo string, bundle map[string]any) {
-	if repo == "" {
-		return
-	}
-	queuePostCompletionReceipt(root, event, repo, bundle)
+func recordPostCompletion(root string, event map[string]any, repo string, bundle map[string]any) map[string]any {
+	return queuePostCompletionReceipt(root, event, repo, bundle)
 }
 
 func appendPostDispatchReceipt(response map[string]any, root string, event, pending map[string]any, repo string) map[string]any {

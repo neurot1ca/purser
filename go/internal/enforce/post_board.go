@@ -511,6 +511,9 @@ func appendPostApplyGuidance(response map[string]any, jobID string) {
 // PostReceiptAdvice mirrors compaction_advisor._receipt_advice.
 func PostReceiptAdvice(receipt map[string]any, now time.Time) string {
 	parts := []string{"model " + fmt.Sprint(receipt["model"]), "effort " + fmt.Sprint(receipt["effort"])}
+	if receipt["gear"] == "up" {
+		parts = append(parts, "gear up")
+	}
 	current := true
 	if captured, ok := receipt["snapshot_at"].(string); ok {
 		if parsed, err := parseBoardTime(captured); err == nil && !parsed.IsZero() && now.Sub(parsed) > time.Hour {

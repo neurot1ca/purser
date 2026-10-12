@@ -16,6 +16,46 @@ import (
 	"purser-hook/internal/ledger"
 )
 
+func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	root, repo, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+	artifact := filepath.Join(t.TempDir(), "plan.md")
+	write(t, artifact, "### M1\n**Dependency:** none\n**Write paths:**\n- first.go\n### M2\n**Dependency:** M1\n**Write paths:**\n- second.go\n")
+	if _, err := contextio.AcceptPlan(root, repo, "plan", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+	job, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Set("taskId", "plan-m1of2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(path, job); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := contextio.BindPlanJob(root, repo, "plan-m1of2", id); err != nil {
+		t.Fatal(err)
+	}
+	result := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	ready, ok := result["ready_milestones"].([]contextio.ReadyMilestone)
+	if result["applied"] != true || !ok || len(ready) != 1 || ready[0].ID != "M2" {
+		t.Fatalf("apply omitted ready dependent: %#v", result)
+	}
+	state, err := contextio.ReadPlanForTask(root, repo, "plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contextio.UpdatePlan(root, repo, "plan", state.Revision, "stop", ""); err != nil {
+		t.Fatal(err)
+	}
+	repeated := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	if _, stale := repeated["ready_milestones"]; stale {
+		t.Fatalf("cached apply returned stopped work: %#v", repeated)
+	}
+}
+
 func TestLaterApplyPreservesNewerConflictingCommit(t *testing.T) {
 	root, repo, worktree, snapshot := handAppliedAdmissionFixture(t, false)
 	handAppliedGit(t, repo, "add", "src/file.txt")

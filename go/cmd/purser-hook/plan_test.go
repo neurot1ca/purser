@@ -7,11 +7,45 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"purser-hook/internal/contextio"
 )
+
+func TestPlanCLICompleteTargetsAppliedMilestone(t *testing.T) {
+	root, repo, artifact := planCLIFixture(t)
+	t.Setenv("PURSER_STATE_DIR", root)
+	if _, err := contextio.AcceptPlan(root, repo, "plan", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := contextio.BindPlanJob(root, repo, "plan-m1of2", "applied"); err != nil {
+		t.Fatal(err)
+	}
+	if err := contextio.RecordPlanApply(root, repo, "plan-m1of2", "applied"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := contextio.ReadPlanForTask(root, repo, "plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, selector := range [][]string{nil, {"--milestone", "1"}} {
+		args := append([]string{"complete-milestone", "--cwd", repo, "--task-id", "plan", "--revision", strconv.Itoa(state.Revision)}, selector...)
+		output, stderr, code := runPlanCLI(t, args...)
+		var after contextio.PlanState
+		if err := json.Unmarshal(output, &after); err != nil {
+			t.Fatalf("decode: %v stderr=%q", err, stderr)
+		}
+		if code != 0 || after.CurrentMilestone != 2 || after.Revision != state.Revision || len(after.CompletedMilestones) != 1 {
+			t.Fatalf("successor completed: %s %s", output, stderr)
+		}
+	}
+	output, stderr, code := runPlanCLI(t, "complete-milestone", "--cwd", repo, "--task-id", "plan", "--revision", strconv.Itoa(state.Revision), "--milestone", "2")
+	if code != 0 || !bytes.Contains(output, []byte(`"current_milestone":0`)) {
+		t.Fatalf("no-delta milestone refused: %s %s", output, stderr)
+	}
+}
 
 func TestPlanMilestoneArguments(t *testing.T) {
 	values, err := parseMilestones("1, 3,5")

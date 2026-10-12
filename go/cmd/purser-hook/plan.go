@@ -26,6 +26,7 @@ func planMain(args []string) int {
 	artifact := flags.String("artifact", "", "accepted plan artifact path")
 	milestones := flags.String("milestones", "", "comma-separated accepted milestone numbers")
 	revision := flags.Int("revision", 0, "expected active-plan revision")
+	milestone := flags.String("milestone", "", "explicit milestone number or ID to complete")
 	value := flags.String("value", "", "gate detail")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *cwd == "" {
 		return planError(fmt.Errorf("invalid plan arguments"))
@@ -54,6 +55,9 @@ func planMain(args []string) int {
 			return planError(err)
 		}
 	} else {
+		if action == "complete-milestone" {
+			*value = *milestone
+		}
 		state, err = contextio.UpdatePlan(stateRoot(), repository, *taskID, *revision, action, *value)
 		if err != nil {
 			return planError(err)

@@ -9,6 +9,30 @@ import (
 	"time"
 )
 
+func TestStopDoesNotBlockCompletionReceiptAndPreservesOtherDecisions(t *testing.T) {
+	root, repo, _ := planFixture(t)
+	t.Setenv("PURSER_STATE_DIR", root)
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "done"}})
+	path := filepath.Join(root, "projects", repositoryProjectKey(repo), "telemetry", "compaction_advisor.json")
+	state := readAdvisorState(path, "plan-stop-session")
+	state["receipt_pending"] = map[string]any{"model": "model", "effort": "high", "5h_used_pct": 24, "7d_used_pct": 61, "snapshot_at": time.Now().Add(-2 * time.Hour).Format(time.RFC3339), "7d_resets_at": time.Now().Add(74 * time.Hour).Format(time.RFC3339), "blocked": false}
+	if err := writeAdvisorState(path, state); err != nil {
+		t.Fatal(err)
+	}
+	if got := planStop(t, repo, transcript, false); got != "" {
+		t.Fatalf("stale/weekly receipt blocked Stop: %s", got)
+	}
+	state = readAdvisorState(path, "plan-stop-session")
+	state["version_pending"] = map[string]any{"version": "2", "installed_version": "1", "delivered": true, "blocked": false}
+	if err := writeAdvisorState(path, state); err != nil {
+		t.Fatal(err)
+	}
+	if got := planStop(t, repo, transcript, false); got == "" || strings.Contains(got, "Codex done") {
+		t.Fatalf("unrelated Stop decision lost or receipt added: %s", got)
+	}
+}
+
 func TestPlanStopContinuationLifecycle(t *testing.T) {
 	root, repo, artifact := planFixture(t)
 	t.Setenv("PURSER_STATE_DIR", root)
