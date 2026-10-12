@@ -11,7 +11,7 @@ import (
 
 func TestDistributionSmokeValidFixture(t *testing.T) {
 	withStubbedDistributionRuntime(t)
-	artifactDir := writeDistributionFixture(t, true, false, false)
+	artifactDir := writeDistributionFixture(t, true, false, false, false)
 	if err := DistributionSmoke(artifactDir); err != nil {
 		t.Fatalf("valid distribution rejected: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestDistributionSmokeValidFixture(t *testing.T) {
 
 func TestDistributionSmokeRejectsChecksumMismatch(t *testing.T) {
 	withStubbedDistributionRuntime(t)
-	artifactDir := writeDistributionFixture(t, true, true, false)
+	artifactDir := writeDistributionFixture(t, true, true, false, false)
 	err := DistributionSmoke(artifactDir)
 	if err == nil || !strings.Contains(err.Error(), "archive checksum mismatch") {
 		t.Fatalf("checksum mismatch accepted: %v", err)
@@ -28,16 +28,25 @@ func TestDistributionSmokeRejectsChecksumMismatch(t *testing.T) {
 
 func TestDistributionSmokeReportsMissingBinary(t *testing.T) {
 	withStubbedDistributionRuntime(t)
-	artifactDir := writeDistributionFixture(t, false, false, false)
+	artifactDir := writeDistributionFixture(t, false, false, false, false)
 	err := DistributionSmoke(artifactDir)
 	if err == nil || !strings.Contains(err.Error(), "host binary missing from archive") {
 		t.Fatalf("missing host binary was not reported: %v", err)
 	}
 }
 
+func TestDistributionSmokeRejectsWrongBinaryLayout(t *testing.T) {
+	withStubbedDistributionRuntime(t)
+	artifactDir := writeDistributionFixture(t, true, false, false, true)
+	err := DistributionSmoke(artifactDir)
+	if err == nil || !strings.Contains(err.Error(), "host binary missing from archive") {
+		t.Fatalf("wrong host binary layout was not reported: %v", err)
+	}
+}
+
 func TestDistributionSmokeRejectsManifestDigestMismatch(t *testing.T) {
 	withStubbedDistributionRuntime(t)
-	artifactDir := writeDistributionFixture(t, true, false, true)
+	artifactDir := writeDistributionFixture(t, true, false, true, false)
 	err := DistributionSmoke(artifactDir)
 	if err == nil || !strings.Contains(err.Error(), "host binary digest is not covered by release metadata") {
 		t.Fatalf("manifest digest mismatch accepted: %v", err)
@@ -51,7 +60,7 @@ func withStubbedDistributionRuntime(t *testing.T) {
 	t.Cleanup(func() { verifyDistributionRuntime = previous })
 }
 
-func writeDistributionFixture(t *testing.T, includeBinary, badChecksum, badManifest bool) string {
+func writeDistributionFixture(t *testing.T, includeBinary, badChecksum, badManifest, wrongBinaryLayout bool) string {
 	t.Helper()
 	artifactDir := t.TempDir()
 	_, _, name, err := HostTarget()
@@ -79,7 +88,11 @@ func writeDistributionFixture(t *testing.T, includeBinary, badChecksum, badManif
 		}
 	}
 	if includeBinary {
-		writeZip(binaryName, binary, 0700)
+		archiveBinaryName := binaryName
+		if wrongBinaryLayout {
+			archiveBinaryName = name
+		}
+		writeZip(archiveBinaryName, binary, 0700)
 	}
 	writeZip("hooks/hooks.json", []byte(`{"modules":["register.ts"]}`), 0644)
 	writeZip("hooks/register.ts", []byte("classic.SessionStart classic.UserPromptSubmit $.plugin.root}/bin/ from './mod/enforcement.js'"), 0644)

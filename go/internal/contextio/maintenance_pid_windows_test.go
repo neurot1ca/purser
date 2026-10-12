@@ -3,11 +3,18 @@
 package contextio
 
 import (
+	"os"
 	"os/exec"
 	"testing"
 )
 
-func TestMaintenancePIDAlive(t *testing.T) {
+func TestMaintenancePidAlive(t *testing.T) {
+	t.Run("current process", func(t *testing.T) {
+		if !maintenancePIDAlive(os.Getpid()) {
+			t.Fatalf("current process %d reported dead", os.Getpid())
+		}
+	})
+
 	t.Run("exited process", func(t *testing.T) {
 		cmd := exec.Command("cmd", "/c", "exit 0")
 		if err := cmd.Start(); err != nil {
