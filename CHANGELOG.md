@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.137 — 2026-10-12
+
+- **Improved:** a job's start ETA comes from past jobs of the same route, scope size (up to 3 paths or 4+) and reason when there are enough of them, and from the newest telemetry; the estimate-accuracy notice no longer reports a false improvement after the duration fix.
+
 ## 0.1.136 — 2026-10-12
 
 - **Fixed:** agy as Reviewer-1 receives the review packet in its prompt instead of having to read a file it was not allowed to read, so it returns a review instead of timing out; a denied tool now fails fast as REVIEWER_TOOL_DENIED.
