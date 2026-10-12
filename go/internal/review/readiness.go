@@ -81,7 +81,7 @@ func RunReadiness(ctx context.Context, pluginRoot string, request ReadinessReque
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	working, err := os.MkdirTemp("", "readiness-check-")
+	working, err := runtimeTempDir("readiness-check-")
 	if err != nil {
 		return unknownReadiness(), err
 	}

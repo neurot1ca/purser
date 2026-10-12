@@ -330,7 +330,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		return bridgeOutcome(Unavailable("REVIEWER_TIMEOUT", "Reviewer-1 exceeded its bounded timeout.", config, provider))
 	}
 	root := fmt.Sprint(args["repo_root"])
-	working, err := os.MkdirTemp("", "reviewer1-")
+	working, err := runtimeTempDir("reviewer1-")
 	if err != nil {
 		return bridgeOutcome(Unavailable("REVIEWER_WORKDIR_UNAVAILABLE", "The isolated Reviewer-1 working directory failed ("+errorType(err)+").", config, provider))
 	}

@@ -25,7 +25,7 @@ func RunProbe(prefix []string, model string, timeout time.Duration) map[string]a
 	if timeout <= 0 || len(prefix) == 0 {
 		return ProbeResult(nil, "invalid probe command", false, false, -1, false)
 	}
-	cwd, err := os.MkdirTemp("", "purser-api-probe-")
+	cwd, err := runtimeTempDir("purser-api-probe-")
 	if err != nil {
 		return ProbeResult(nil, err.Error(), false, false, -1, false)
 	}

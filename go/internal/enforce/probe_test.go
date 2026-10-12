@@ -224,6 +224,10 @@ func TestP39SuccessfulProbeReturnsAndQueuesCreditNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantParent := filepath.Join(state, "cache", "tmp")
+	if filepath.Dir(string(probeCWD)) != wantParent {
+		t.Fatalf("probe temp cwd = %s, want parent %s", probeCWD, wantParent)
+	}
 	if _, err = os.Stat(string(probeCWD)); !os.IsNotExist(err) {
 		t.Fatalf("probe temp cwd remains after completion: %s (%v)", probeCWD, err)
 	}
