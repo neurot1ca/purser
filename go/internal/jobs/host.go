@@ -668,6 +668,12 @@ func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot strin
 	if existing, ok := existingRoots.([]any); ok {
 		writableRoots = append(writableRoots, existing...)
 	}
+	if configDir, err := os.UserConfigDir(); err == nil {
+		telemetryDir := filepath.Join(configDir, "go", "telemetry")
+		if info, err := os.Stat(telemetryDir); err == nil && info.IsDir() {
+			writableRoots = append(writableRoots, telemetryDir)
+		}
+	}
 	for _, variable := range []struct{ name, directory string }{
 		{"GOCACHE", filepath.Join(stateRoot, "cache", "go-build")},
 		{"GOTMPDIR", filepath.Join(stateRoot, "cache", "go-tmp")},

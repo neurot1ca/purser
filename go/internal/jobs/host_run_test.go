@@ -672,6 +672,46 @@ func mustRecordJSON(t *testing.T, record *Record) string {
 	return string(data)
 }
 
+func TestConfigureCodexGoCacheWritableRootsIncludeTelemetryWhenPresent(t *testing.T) {
+	for _, exists := range []bool{true, false} {
+		name := "missing"
+		if exists {
+			name = "present"
+		}
+		t.Run(name, func(t *testing.T) {
+			configRoot := t.TempDir()
+			t.Setenv("APPDATA", configRoot)
+			t.Setenv("XDG_CONFIG_HOME", configRoot)
+			t.Setenv("GOCACHE", filepath.Join(configRoot, "custom-cache"))
+			t.Setenv("GOTMPDIR", filepath.Join(configRoot, "custom-tmp"))
+			telemetryDir := filepath.Join(configRoot, "go", "telemetry")
+			if exists {
+				if err := os.MkdirAll(telemetryDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			var childEnv []string
+			args := LaunchArgs{}
+			if err := configureCodexGoCache(&args, &childEnv, configRoot, nil); err != nil {
+				t.Fatal(err)
+			}
+			config := args.Config.(map[string]any)
+			var roots []any
+			if workspace, ok := config["sandbox_workspace_write"].(map[string]any); ok {
+				roots, _ = workspace["writable_roots"].([]any)
+			}
+			if exists {
+				if len(roots) != 1 || roots[0] != telemetryDir {
+					t.Errorf("writable roots = %#v, want [%q]", roots, telemetryDir)
+				}
+			} else if len(roots) != 0 {
+				t.Errorf("writable roots = %#v, want no telemetry root", roots)
+			}
+		})
+	}
+}
+
 func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 	t.Setenv("GOCACHE", "")
 	t.Setenv("GOTMPDIR", "")
