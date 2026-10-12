@@ -160,8 +160,9 @@ func TestDefaultReviewerFallsBackWithinReservedBudget(t *testing.T) {
 	if len(agents) != 2 || agents[0] != "agy" || agents[1] != "claude" {
 		t.Fatalf("reviewer calls=%v, want [agy claude]", agents)
 	}
-	if budgets[0] > 1300*time.Millisecond || budgets[1] < 500*time.Millisecond {
-		t.Fatalf("budgets=%v, want first capped near 60%% and fallback reserved", budgets)
+	// Codex now follows Claude in the default chain, reserving part of the remainder.
+	if budgets[0] > 1250*time.Millisecond || budgets[1] < 300*time.Millisecond {
+		t.Fatalf("budgets=%v, want first capped near 60%% and second reviewer reserved a nonzero share", budgets)
 	}
 	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
 	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || attempts[1].Outcome != "COMPLETED" {
@@ -184,7 +185,7 @@ func TestPostReviewerClaudeFallbackEffortAndReason(t *testing.T) {
 	}
 	candidates := []profile.ReviewerCandidate{
 		{Agent: "agy", Model: "gemini-3.8-flash-high"},
-		{Agent: "opencode", Model: "google/gemini-2.5-pro"},
+		{Agent: "claude", Model: "claude-haiku-5-5"},
 	}
 	bundle := map[string]any{"findings": []any{}}
 	_, err := runPostReviewer("", "", map[string]any{"model": "gpt-6-luna", "fallback_family": "openai"}, bundle,
@@ -217,14 +218,14 @@ func TestPostReviewerCircuitSkipRecordsUnavailableAttempt(t *testing.T) {
 	}
 	candidates := []profile.ReviewerCandidate{
 		{Agent: "agy", Model: "gemini-3.8-flash-high"},
-		{Agent: "opencode", Model: "google/gemini-2.5-pro"},
+		{Agent: "claude", Model: "claude-haiku-5-5"},
 	}
 	bundle := map[string]any{"findings": []any{}}
 	_, err := runPostReviewer("", stateRoot,
 		map[string]any{"model": "gpt-6-luna", "fallback_family": "openai", "repo_root": repoRoot, "project_key": projectKey},
 		bundle, postProfile{ReviewerCandidates: candidates}, map[string]any{}, nil, nil, time.Now(), time.Minute)
-	if err != nil || len(agents) != 1 || agents[0] != "opencode" {
-		t.Fatalf("circuit fallback agents=%v err=%v, want [opencode]", agents, err)
+	if err != nil || len(agents) != 1 || agents[0] != "claude" {
+		t.Fatalf("circuit fallback agents=%v err=%v, want [claude]", agents, err)
 	}
 	attempts, ok := bundle["reviewer1_attempts"].([]postReviewerAttempt)
 	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || attempts[0].Reason != "REVIEWER_CIRCUIT_OPEN" || attempts[1].Outcome != "COMPLETED" {
