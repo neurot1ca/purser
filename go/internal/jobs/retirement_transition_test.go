@@ -101,7 +101,8 @@ func TestRetirementTransitionMatrix(t *testing.T) {
 				})
 				if tc.discard {
 					applied := Apply(state, map[string]any{"jobId": id})
-					if applied["structuredContent"].(map[string]any)["errorCode"] != "DISCARDED" {
+					outcome := applied["structuredContent"].(map[string]any)
+					if outcome["applied"] != true || outcome["validation"].(map[string]any)["status"] != "pending" {
 						t.Fatalf("discarded apply outcome changed: %#v", applied)
 					}
 				}

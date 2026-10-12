@@ -638,7 +638,8 @@
           "ownershipToken": "TOKEN",
           "worktreePath": "<ROOT>/old-worktree",
           "snapshot": "tree-1",
-          "baselineSnapshot": "tree-1"
+          "baselineSnapshot": "tree-1",
+          "threadId": "thread-1"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
           "name": "codex-reply",
@@ -656,12 +657,13 @@
           "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "threadId": "thread-1",
           "state": "SUCCEEDED",
-          "applyState": "pending",
+          "applyState": "superseded",
           "worktreePath": "<ROOT>/old-worktree",
           "snapshot": "tree-1",
           "taskId": "task-old",
           "acceptedAt": "TIME",
-          "decisionRecorded": true
+          "decisionRecorded": true,
+          "supersededBy": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1"
         },
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.owner-lock": true
       },
@@ -677,7 +679,7 @@
           "jobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "decision": "send_back",
           "kind": "reply",
-          "sourceJobId": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1"
+          "sourceJobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       ]
     },
@@ -739,7 +741,8 @@
           "signalToken": "TOKEN",
           "generation": 1,
           "ownershipToken": "TOKEN",
-          "repoRoot": "<ROOT>/repo"
+          "repoRoot": "<ROOT>/repo",
+          "threadId": "thread-retired"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
           "name": "codex-reply",
@@ -759,12 +762,14 @@
           "jobId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
           "threadId": "thread-retired",
           "state": "SUCCEEDED",
-          "applyState": "pending",
+          "applyState": "superseded",
           "worktreePath": "<ROOT>/old-worktree",
           "snapshot": "tree-old",
           "repoRoot": "<ROOT>/repo",
-          "acceptedAt": "TIME"
-        }
+          "acceptedAt": "TIME",
+          "supersededBy": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1"
+        },
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.owner-lock": true
       },
       "launches": [
         {
@@ -968,7 +973,8 @@
           "snapshot": "<TREE>",
           "head": "<HEAD>",
           "repoRoot": "<ROOT>/repo",
-          "baselineSnapshot": "<TREE>"
+          "baselineSnapshot": "<TREE>",
+          "threadId": "thread-rebase"
         },
         "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1.launch": {
           "name": "codex-reply",
@@ -986,15 +992,17 @@
           "jobId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "threadId": "thread-rebase",
           "state": "SUCCEEDED",
-          "applyState": "pending",
+          "applyState": "superseded",
           "worktreePath": "<ROOT>/worktree",
           "snapshot": "<OLD_TREE>",
           "baselineSnapshot": "<OLD_TREE>",
           "head": "<OLD_HEAD>",
           "repoRoot": "<ROOT>/repo",
           "taskId": "task-rebase",
-          "acceptedAt": "TIME"
-        }
+          "acceptedAt": "TIME",
+          "supersededBy": "11e594f481958c10e3015d0bf0447a22f068a8a647f475df15ce2c7ab4b8f3f1"
+        },
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.owner-lock": true
       },
       "launches": [
         {
