@@ -88,7 +88,7 @@ func LaunchFailureEvidence(agent string, events []map[string]any, stderr string,
 			after = &n
 		}
 	}
-	if !work && creditError.MatchString(text) {
+	if creditError.MatchString(text) {
 		return evidence("CREDIT_EXHAUSTED", nil, false)
 	}
 	if rateError.MatchString(text) {

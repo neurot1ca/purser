@@ -37,6 +37,9 @@ func privateMain() (code int) {
 	if os.Args[1] == "validate-apply" {
 		return validateApplyMain(os.Args[2:])
 	}
+	if os.Args[1] == "quota-wake" {
+		return quotaWakeMain(os.Args[2:])
+	}
 	return operationMain(os.Args[2:])
 }
 

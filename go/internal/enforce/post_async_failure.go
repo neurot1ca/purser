@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 )
 
@@ -35,6 +36,9 @@ func finalizeAsyncFailure(root string, event, index, pending map[string]any) (ma
 		}
 	default:
 		return nil, false, nil
+	}
+	if err := recordQuotaWakeFailure(root, pending, index, job); err != nil {
+		return nil, false, err
 	}
 	project := stringValue(index["project_key"])
 	if project == "" {
@@ -138,6 +142,47 @@ func finalizeAsyncFailure(root string, event, index, pending map[string]any) (ma
 		return failureErrorOutput("WiringError: " + err.Error()), true, err
 	}
 	return response, true, nil
+}
+
+func recordQuotaWakeFailure(root string, pending, index, job map[string]any) error {
+	if job["state"] != "FAILED" || stringValue(mapValue(job["launchFailureEvidence"])["type"]) != "CREDIT_EXHAUSTED" {
+		return nil
+	}
+	repository := stringValue(pending["repo_root"])
+	session := stringValue(index["session_id"])
+	if session == "" {
+		session = stringValue(pending["session_id"])
+	}
+	if repository == "" || session == "" {
+		return nil
+	}
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return nil
+		}
+		home = filepath.Join(userHome, ".codex")
+	}
+	now := time.Now().UTC()
+	quota, ok := contextio.LatestQuota(home, now)
+	if !ok {
+		return nil
+	}
+	var reset time.Time
+	for _, label := range []string{"5h", "7d"} {
+		used, ok := quota[label+"_used_pct"].(float64)
+		resetText, resetOK := quota[label+"_resets_at"].(string)
+		at, err := time.Parse(time.RFC3339, resetText)
+		if ok && used >= 100 && resetOK && err == nil && at.After(now) && at.After(reset) {
+			reset = at
+		}
+	}
+	if reset.IsZero() {
+		return nil
+	}
+	return contextio.RecordQuotaWake(repository, root, session, stringValue(pending["task_id"]),
+		reset.Format(time.RFC3339), "quota_failure", now)
 }
 
 func asyncFailureDuration(job map[string]any) *float64 {

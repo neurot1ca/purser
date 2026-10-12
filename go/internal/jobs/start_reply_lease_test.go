@@ -8,8 +8,31 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 )
+
+func TestStartClearsDueQuotaWakeForCodexImplementation(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	if err := contextio.RecordQuotaWake(repo, root, "session", "task", time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), "quota_failure", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := Start(root, map[string]any{
+		"call": "00000000-0000-4000-8000-000000000201", "prompt": "resume", "cwd": repo,
+		"taskId": "task", "phase": "implementation",
+	}, StartOptions{
+		StateRoot: root, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true},
+		Launch: func(string, int64, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wake, err := contextio.ReadQuotaWake(repo, root, time.Now().UTC())
+	if err != nil || wake != nil {
+		t.Fatalf("quota wake after implementation start = %#v, %v", wake, err)
+	}
+}
 
 func TestReplyAdmissionReleasesOnlyTerminalUnappliedJobLease(t *testing.T) {
 	for _, state := range []string{"SUCCEEDED", "RUNNING"} {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"time"
 )
 
 func activeCoderPath(project, root string) string {
@@ -151,6 +152,7 @@ func writeProjectActiveCoder(project, root string, value map[string]any) error {
 // A stale answer cannot approve or decline a newer question.
 func ApplyFallbackConsent(project, root, session string, approve bool, resetMarker, switchedAt any) (bool, error) {
 	changed := false
+	quotaDeclined := false
 	_, err := updateActiveCoderState(activeCoderPath(project, root), func(state map[string]any) {
 		evidence, ok := state["triggering_evidence"].(map[string]any)
 		if state["active_coder"] != "primary" || !ok || evidence["question_session"] != session ||
@@ -161,6 +163,7 @@ func ApplyFallbackConsent(project, root, session string, approve bool, resetMark
 			state["triggering_evidence"] = map[string]any{
 				"declined": true, "trigger_id": evidence["trigger_id"], "type": evidence["type"],
 			}
+			quotaDeclined = evidence["type"] == "QUOTA"
 			changed = true
 			return
 		}
@@ -172,6 +175,13 @@ func ApplyFallbackConsent(project, root, session string, approve bool, resetMark
 		evidence["switched_at"] = switchedAt
 		changed = true
 	})
+	if err == nil && changed && quotaDeclined {
+		if reset, ok := resetMarker.(string); ok {
+			if at, parseErr := time.Parse(time.RFC3339, reset); parseErr == nil && at.After(time.Now()) {
+				err = RecordQuotaWake(project, root, session, "", reset, "fallback_declined", time.Now())
+			}
+		}
+	}
 	return changed, err
 }
 

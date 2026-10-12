@@ -56,7 +56,7 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "maintenance" {
 		os.Exit(maintenanceMain(os.Args[2:]))
 	}
-	if len(os.Args) > 1 && (os.Args[1] == "op" || os.Args[1] == "host" || os.Args[1] == "retire-worktree" || os.Args[1] == "validate-apply") {
+	if len(os.Args) > 1 && (os.Args[1] == "op" || os.Args[1] == "host" || os.Args[1] == "retire-worktree" || os.Args[1] == "validate-apply" || os.Args[1] == "quota-wake") {
 		os.Exit(privateMain())
 	}
 	defer func() { _ = recover() }()

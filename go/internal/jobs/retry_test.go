@@ -29,6 +29,15 @@ func TestRetryFixtures(t *testing.T) {
 	}
 }
 
+func TestLaunchFailureEvidenceKeepsQuotaClassificationAfterWork(t *testing.T) {
+	evidence := LaunchFailureEvidence("codex", []map[string]any{
+		{"type": "item.started"}, {"type": "error", "message": "quota-exceeded"},
+	}, "", true, false, false, nil)
+	if evidence["type"] != "CREDIT_EXHAUSTED" || evidence["noWorkProof"] != false {
+		t.Fatalf("quota failure evidence = %#v", evidence)
+	}
+}
+
 func replayRetry(c map[string]any) map[string]any {
 	var r map[string]any
 	switch c["kind"] {

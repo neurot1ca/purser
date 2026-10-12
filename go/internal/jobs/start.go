@@ -328,9 +328,18 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 			_ = lock.Release()
 		}
 	}
+	started := false
 	if opt.Launch != nil {
 		if err = opt.Launch(req.JobID, 1, job["ownershipToken"].(string)); err != nil {
 			return jobResult(map[string]any{"jobId": req.JobID, "state": "UNKNOWN_OR_IN_PROGRESS", "errorCode": "PROCESS_UNCONFIRMED", "message": "Host launch unconfirmed"}), r, nil
+		}
+		started = true
+	}
+	if started && req.Agent == "codex" && job["phase"] == "implementation" {
+		if repository := nonemptyString(job["repoRoot"]); repository != "" {
+			if err := contextio.ClearQuotaWakeAfterReset(repository, opt.StateRoot, time.Now().UTC()); err != nil {
+				log.Printf("quota wake cleanup failed after job %s started: %v", req.JobID, err)
+			}
 		}
 	}
 	if sendBackFrom != nil {
