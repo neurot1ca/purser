@@ -29,6 +29,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "reviewer" {
 		os.Exit(reviewerMain(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "auto-compact" {
+		os.Exit(autoCompactMain(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "plan" {
 		os.Exit(planMain(os.Args[2:]))
 	}

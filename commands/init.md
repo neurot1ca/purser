@@ -77,10 +77,10 @@ suffix=""; [ "$os" = windows ] && suffix=".exe"
    *Açayım mı? İstediğin zaman `/purser:optimize` ile değiştirebilirsin.*
 
    On yes, add `--maintenance` to both plan and apply; on no, add `--no-maintenance` to both. After a successful apply, if the user opted into maintenance, immediately run the bundled binary's synchronous cleanup command: `"${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-${os}-${arch}${suffix}" maintenance run cleanup --repo "<repository-root>"`. It saves the report and cleanup `last-run.json` marker as part of the run, so the scheduler will not rerun cleanup for 56 hours. Read the report path printed by the command and present its findings in the same concise form as the SessionStart maintenance notice: finding count, the top five findings and evidence in a table, and the full report path (the full report retains any remaining findings). If the command fails, show the error in one ⚓ receipt and stop setup.
-8. Only when `auto_compact_enabled` is `null`, regardless of coder, ask once in the user's language with one `AskUserQuestion` picker. Put “No” first and mark it “(recommended)” in the user's language. Keep `--auto-compact` / `--no-auto-compact` in both plan and apply; if it is `true` or `false`, do not ask again.
+8. Only when `auto_compact_enabled` is `null`, regardless of coder, ask once in the user's language with one `AskUserQuestion` picker. Put On first and mark it “(recommended)” in the user's language, followed by Off. Keep `--auto-compact` / `--no-auto-compact` in both plan and apply; if it is `true` or `false`, do not ask again.
 
-   EN: ⚓ **Automatic context handoff** *When the context grows large, Purser can save a handoff and run `/compact` for you automatically, so later messages cost far less. Turn it on?*
-   TR: ⚓ **Otomatik bağlam devri** *Bağlam büyüdüğünde Purser senin için otomatik olarak bir devir notu kaydedip `/compact` çalıştırabilir; böylece sonraki mesajlar çok daha az maliyetli olur. Açayım mı?*
+   EN: ⚓ **Automatic compaction** *When this conversation passes about 250K tokens, Purser saves a handoff (decisions, open work and the next step), runs /compact for you and picks the task back up by itself, so every later message costs far less and nothing is lost. It applies to all your projects. You can turn it off anytime with `/purser:auto-compact off`.*
+   TR: ⚓ **Otomatik sıkıştırma** *Sohbet yaklaşık 250 bin tokenı geçince Purser bir devir notu kaydeder (kararlar, açık işler ve sonraki adım), senin yerine /compact çalıştırır ve işe kendiliğinden kaldığı yerden devam eder; sonraki her mesaj çok daha ucuza gelir, hiçbir şey kaybolmaz. Tüm projelerinde geçerlidir. İstediğin zaman `/purser:auto-compact off` ile kapatabilirsin.*
 9. Run the bundled binary's `init --plan --coder X --reviewer AGENT`, adding the selected `--mode MODE` and manual `--model MODEL --effort EFFORT` only when Codex was chosen, or coder `--model MODEL` only when OpenCode or agy was chosen. For a selected Reviewer-1 model, add `--reviewer-model MODEL`; use `--reviewer none` when Off was selected. Pass the selected mechanical-route flag when OpenCode was detected. Add `--trust` and `--scaffold-profile` only if chosen. Include the selected maintenance flag when Codex was chosen and the selected auto-compact flag when step 8 asked. Build a short summary from the `--plan` output and show it in one ⚓ receipt. Do not show the `normal` route. For small chores, show “Free OpenCode models” if step 4 was enabled; otherwise show the plan's mechanical route. Include the mode line only when a mode was chosen. Put other plan lines (trust, profile scaffold, maintenance, auto-compact, files to write) below as one short italic line each. Ask for confirmation in one yes/no `AskUserQuestion` picker, with Yes first and “(recommended)” in the user's language. Only after yes, run the same options with `--apply --json` instead of `--plan`.
 
    EN summary:
@@ -101,15 +101,6 @@ suffix=""; [ "$os" = windows ] && suffix=".exe"
    > - *Planlar → {plan_standard model / effort}*
    > *Bu kurulumu uygulayayım mı?*
 
-   If the JSON reports `concise_style_offer_due: true`, ask in the user's language with one yes/no `AskUserQuestion` picker, putting “No” first and marking it “(recommended)” in the user's language, omitting the old numbered choice text and rendering the second line in italics:
-
-   EN: ⚓ **Concise reply style** *In Purser's measurements, concise replies used 56% fewer output tokens on average. Shall I turn on the Concise reply style for you? Don't worry, you can still ask for longer answers anytime.*
-   EN detail: *If your security settings don't allow it, I'll let you know so you can turn it on yourself.*
-
-   TR: ⚓ **Kısa yanıt stili** *Purser'ın ölçümlerinde kısa yanıtlar ortalama %56 daha az çıktı tokenı kullandı. Senin için Concise cevap stilini açayım mı? Endişelenme, istediğin zaman yine uzun cevap isteyebilirsin.*
-   TR detail: *Güvenlik ayarların izin vermezse, ayarı senin açman için haber vereceğim.*
-
-   On yes, run `init --enable-concise-style`. If it is denied or fails, tell the user in their language in one ⚓ receipt: “I couldn't change the setting; type `/output-style concise` to turn it on yourself.” / “Ayarı açamadım; `/output-style concise` yazarak sen açabilirsin.” On no, continue; declining still counts as shown.
 10. Run `/purser:check` and show its result in one ⚓ receipt.
 11. Offer `/purser:optimize` in one sentence as an ⚓ receipt; do not run it automatically.
 

@@ -859,8 +859,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		}
 	}
 	if o.autoCompact != nil {
-		marker := filepath.Join(stateRootPath(), "auto-compact.json")
-		if e = atomicWrite(marker, []byte(fmt.Sprintf("{\"enabled\": %t}", *o.autoCompact)), false); e != nil {
+		if e = writeAutoCompact(*o.autoCompact); e != nil {
 			return printError(errOut, e)
 		}
 	}
