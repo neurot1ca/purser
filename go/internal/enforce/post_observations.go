@@ -3,6 +3,7 @@ package enforce
 import (
 	"encoding/json"
 	"math"
+	"path/filepath"
 	"strings"
 )
 
@@ -71,8 +72,19 @@ func PostImplementerObservations(event, pending, bundle map[string]any, root str
 	if threadID != nil {
 		threadID = normalizeObservationID(threadID, "thread")
 	}
+	duration := postObservationDuration(event["duration_ms"])
+	if jobID := stringValue(mapValue(event["tool_input"])["jobId"]); jobID != "" {
+		index, err := readAsyncObject(filepath.Join(root, "async_jobs", jobID+".json"))
+		if err == nil {
+			if job := asyncJob(root, index); job != nil {
+				if elapsed := workerDuration(job["startedAt"], job["finishedAt"]); elapsed > 0 {
+					duration = elapsed
+				}
+			}
+		}
+	}
 	payload := map[string]any{
-		"duration_ms": postObservationDuration(event["duration_ms"]), "implementer": agent,
+		"duration_ms": duration, "implementer": agent,
 		"served_model": model, "served_effort": effort, "served_route": pending["route"],
 		"served_agent": pending["agent"], "served_provider": providerName,
 		"route": pending["route"], "phase": pending["phase"],

@@ -123,6 +123,43 @@ func TestPostImplementerObservationsCarriesDispatcherAgentID(t *testing.T) {
 	}
 }
 
+func TestPostImplementerObservationsUsesAsyncJobDuration(t *testing.T) {
+	root := t.TempDir()
+	const jobID = "async-job"
+	for path, value := range map[string]any{
+		filepath.Join(root, "async_jobs", jobID+".json"): map[string]any{"jobId": jobID, "call": "call"},
+		filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"): map[string]any{
+			"jobId": jobID, "call": "call", "startedAt": float64(100), "finishedAt": float64(400),
+		},
+	} {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := map[string]any{"session_id": "session-async", "tool_name": "mcp__codex-main__codex_result",
+		"tool_input": map[string]any{"jobId": jobID}, "duration_ms": float64(4)}
+	pending := map[string]any{"task_id": "async-duration", "project_key": "unresolved", "agent": "codex",
+		"route": "normal", "phase": "implementation", "model": "openai/gpt-5", "effort": "high"}
+	bundle := map[string]any{"implementer": "codex-main", "model": "openai/gpt-5", "effort": "high", "validation": "UNKNOWN",
+		"worker_validation": map[string]any{"status": "UNKNOWN"}, "routing_enforced": true}
+	PostImplementerObservations(event, pending, bundle, root)
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "events", "by_task", "async-duration.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeLine(t, strings.TrimSpace(string(data)))["payload"].(map[string]any)["duration_ms"]
+	if got != float64(300000) {
+		t.Fatalf("async duration_ms = %v, want job run duration 300000", got)
+	}
+}
+
 func decodeLine(t *testing.T, line string) map[string]any {
 	t.Helper()
 	var value map[string]any

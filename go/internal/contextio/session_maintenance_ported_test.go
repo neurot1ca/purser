@@ -85,6 +85,10 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 		"ts_utc": now.Format(time.RFC3339), "payload": map[string]any{
 			"implementer": "claude", "route": "normal", "duration_ms": 120000, "eta_minutes": 3,
 		}}
+	poisoned := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": project,
+		"ts_utc": now.Format(time.RFC3339), "payload": map[string]any{
+			"implementer": "claude", "route": "normal", "duration_ms": 10, "eta_minutes": 9,
+		}}
 	data, err := json.Marshal(item)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +96,11 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+	poisonedData, err := json.Marshal(poisoned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(append(data, '\n'), append(poisonedData, '\n')...), 0600); err != nil {
 		t.Fatal(err)
 	}
 	statePath := filepath.Join(root, "projects", project, "duration_accuracy.json")

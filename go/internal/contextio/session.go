@@ -289,7 +289,7 @@ func readRouteDurationSamples(root, key string, groups map[string][]DurationSamp
 			p, _ := item["payload"].(map[string]any)
 			route, _ := p["route"].(string)
 			duration, ok := numeric(p["duration_ms"])
-			if !ok || duration <= 0 || !contains(finishedRoutes, route) {
+			if !ok || duration < 1000 || !contains(finishedRoutes, route) {
 				continue
 			}
 			agent, _ := p["implementer"].(string)
@@ -527,7 +527,7 @@ func compactAccuracyHint(root, key string) string {
 			eta, eok := numeric(p["eta_minutes"])
 			duration, dok := numeric(p["duration_ms"])
 			stamp, e := time.Parse(time.RFC3339Nano, fmt.Sprint(item["ts_utc"]))
-			if !aok || agent == "" || !eok || !dok || eta <= 0 || duration <= 0 || e != nil {
+			if !aok || agent == "" || !eok || !dok || eta <= 0 || duration < 1000 || e != nil {
 				continue
 			}
 			jobs[agent] = append(jobs[agent], estimate{stamp, math.Abs(eta*60000-duration) / duration * 100})
