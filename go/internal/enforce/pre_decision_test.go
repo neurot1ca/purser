@@ -699,7 +699,7 @@ func TestPreInvalidOrchWithoutTask(t *testing.T) {
 	}
 }
 
-func TestPreTaskRetryDispatch(t *testing.T) {
+func TestPreFailedTaskRetryDispatch(t *testing.T) {
 	for _, tc := range []struct {
 		name, disposition, category, route, model, effort, mode, deny string
 		finished, corrupt, sync, duplicate                            bool
@@ -744,7 +744,7 @@ func TestPreTaskRetryDispatch(t *testing.T) {
 			}
 			attempt := TaskAttempt{ProjectKey: projectKey(&repo), TaskID: "task-recorded", LatestJobID: "prior-job", TerminalDisposition: tc.disposition}
 			if tc.category != "" {
-				attempt.Failure = &TaskFailureEvidence{JobID: "prior-job", Category: tc.category}
+				attempt.Failure = &TaskFailureEvidence{JobID: "prior-job", Category: tc.category, Model: "gpt-6.2-luna"}
 			}
 			if tc.category != "" || tc.disposition != "" || tc.corrupt {
 				if err := SaveTaskAttempt(state, attempt); err != nil {
@@ -821,9 +821,13 @@ func TestPreTaskRetryDispatch(t *testing.T) {
 					basis = "Prior luna implementation attempt prior-job was cancelled as failed."
 				}
 				header := "ORCH|task=task-recorded|phase=implementation|route=" + wantRoute + "|reason=repeated_failure|basis=" + basis + "|scope=src/a.go|eta=7m\nImplement."
-				if !strings.HasPrefix(stringValue(updated["prompt"]), header) || got["systemMessage"] != "Purser: prior luna attempt failed; route="+wantRoute+" -> "+wantModel+" / "+wantEffort+"." {
+				context := stringValue(hook["additionalContext"])
+				if !strings.HasPrefix(stringValue(updated["prompt"]), header) ||
+					!strings.Contains(context, `translated from: "> ⚓ **gpt-6.2-luna failed more than once on retry task; `+wantModel+` will take over this job.**"`) || got["systemMessage"] != nil {
 					t.Fatalf("rewritten header/receipt: %#v", got)
 				}
+			} else if strings.Contains(stringValue(hook["additionalContext"]), "failed more than once") {
+				t.Fatalf("ordinary start included escalation receipt: %#v", got)
 			}
 			if hook["permissionDecision"] == "deny" || updated["route"] != wantRoute || updated["jobModel"] != wantModel || updated["jobEffort"] != wantEffort || updated["mode"] != "new" || updated["model"] != wantModel || mapValue(updated["config"])["model_reasoning_effort"] != wantEffort {
 				t.Fatalf("effective dispatch: %#v", got)

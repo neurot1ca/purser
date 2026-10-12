@@ -270,9 +270,9 @@ func persistCancellationAttempt(root string, job map[string]any) error {
 	var failure *enforce.TaskFailureEvidence
 	if lunaImplementationAttempt(job) {
 		if input.CancellationReason == "failed" {
-			failure = &enforce.TaskFailureEvidence{JobID: jobID, Category: "failed_abandonment"}
+			failure = &enforce.TaskFailureEvidence{JobID: jobID, Category: "failed_abandonment", Model: input.Model}
 		} else if input.Outcome == "rejected" && input.SendBackUsed {
-			failure = &enforce.TaskFailureEvidence{JobID: jobID, Category: "rejected_after_sendback"}
+			failure = &enforce.TaskFailureEvidence{JobID: jobID, Category: "rejected_after_sendback", Model: input.Model}
 		}
 	}
 	disposition := outcome

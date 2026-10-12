@@ -28,6 +28,7 @@ type TaskFailureInput struct {
 type TaskFailureEvidence struct {
 	JobID    string `json:"job_id"`
 	Category string `json:"category"`
+	Model    string `json:"model,omitempty"`
 }
 
 type TaskAttempt struct {
@@ -46,10 +47,10 @@ func classifyTaskFailure(in TaskFailureInput) (TaskFailureEvidence, bool) {
 		return TaskFailureEvidence{}, false
 	}
 	if in.Outcome == "rejected" && in.SendBackUsed {
-		return TaskFailureEvidence{JobID: in.JobID, Category: "rejected_after_sendback"}, true
+		return TaskFailureEvidence{JobID: in.JobID, Category: "rejected_after_sendback", Model: in.Model}, true
 	}
 	if (in.Outcome == "cancelled" || in.Outcome == "discarded") && in.CancellationReason == "failed" {
-		return TaskFailureEvidence{JobID: in.JobID, Category: "failed_abandonment"}, true
+		return TaskFailureEvidence{JobID: in.JobID, Category: "failed_abandonment", Model: in.Model}, true
 	}
 	return TaskFailureEvidence{}, false
 }

@@ -488,7 +488,22 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	result, err := persistPreSuccess(event, runtimeRoot, root, live, parsed, selection, updated,
 		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, label, config, bypassMetadata)
 	if failed && err == nil && mapValue(result["hookSpecificOutput"])["permissionDecision"] != "deny" {
-		result["systemMessage"] = fmt.Sprintf("Purser: prior luna attempt failed; route=%s -> %s / %s.", *parsed.Route, selection.Model, selection.Effort)
+		delete(result, "systemMessage")
+		hook := mapValue(result["hookSpecificOutput"])
+		failedModel := attempt.Failure.Model
+		if failedModel == "" {
+			failedModel = stringValue(mapValue(mapValue(config["routes"])["subtle"])["model"])
+		}
+		taskLabel := pointerValue(parsed.TaskID)
+		if text, ok := label.(string); ok && text != "" {
+			taskLabel = text
+		}
+		line := fmt.Sprintf(`Tell the user in the user's language exactly one line, translated from: "> ⚓ **%s failed more than once on %s; %s will take over this job.**"`, failedModel, taskLabel, selection.Model)
+		if prior := stringValue(hook["additionalContext"]); prior != "" {
+			hook["additionalContext"] = prior + "\n" + line
+		} else {
+			hook["additionalContext"] = line
+		}
 	}
 	return result, err
 }
