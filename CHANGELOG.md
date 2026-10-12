@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.134 — 2026-10-12
+
+- **Changed:** A Reviewer-1 from the same vendor as the implementer is no longer skipped, so any registered reviewer can be selected.
+- **Fixed:** A Codex Reviewer-1 accepts Codex model ids and passes the configured reviewer effort to Codex.
+
 ## 0.1.133 — 2026-10-12
 
 - **Fixed:** Asynchronous job finishes record the job's real run time instead of the result call's few milliseconds, so the duration-accuracy notice no longer reports absurd error rates.
