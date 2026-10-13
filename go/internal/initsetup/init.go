@@ -141,10 +141,6 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintln(stderr, "purser:init: fallback selection is not available when Claude is the primary coder")
 		return 2
 	}
-	if o.maintenance != nil && o.coder != "codex" {
-		fmt.Fprintln(stderr, "purser:init: maintenance reports can only be configured when Codex is the coder")
-		return 2
-	}
 	if o.mode != "" && !oneOf(o.mode, "balanced", "maximum", "manual") {
 		fmt.Fprintln(stderr, "purser:init: invalid mode")
 		return 2

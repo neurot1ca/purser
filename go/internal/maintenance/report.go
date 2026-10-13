@@ -335,6 +335,9 @@ func writeAtomic(path string, data []byte) error {
 // RunAndPersistReport is the pass-5 prompt -> Runner -> parse -> persistence
 // composition. Eligibility and opt-in stay with pass 6.
 func RunAndPersistReport(r Runner, state, repository, reportType string) (string, error) {
+	if err := r.resolveCoder(); err != nil {
+		return "", err
+	}
 	root, err := filepath.Abs(repository)
 	if err != nil {
 		return "", err
@@ -350,7 +353,7 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	}
 	started := time.Now()
 	timestamp := started.UTC().Format("20060102T150405.000000Z")
-	quotaBefore := latestMaintenanceQuota(time.Now())
+	quotaBefore := latestMaintenanceQuota(time.Now(), r.CoderAgent)
 	jobsBefore := maintenanceJobIDs(state)
 	commit := "unknown"
 	command := proc.Hide(exec.Command("git", "-C", root, "rev-parse", "HEAD"))
@@ -368,7 +371,7 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	}
 	result, runErr := r.Run(state, root, reportType, prompt)
 	if runErr != nil {
-		recordReportFailure(state, root, reportType, timestamp, result, runErr, started, quotaBefore)
+		recordReportFailure(state, root, reportType, timestamp, result, runErr, started, quotaBefore, r.CoderAgent)
 		return "", runErr
 	}
 	body := stringValue(result["content"], "")
@@ -385,13 +388,13 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	} else if value := result["totalTokens"]; value != nil && value != 0 && value != "" {
 		tokens = value
 	}
-	quotaAfter := latestMaintenanceQuota(time.Now())
+	quotaAfter := latestMaintenanceQuota(time.Now(), r.CoderAgent)
 	jobID, _ := result["jobId"].(string)
 	quotaChange := maintenanceQuotaChange(quotaBefore, quotaAfter, jobsBefore, maintenanceJobIDs(state), jobID, state)
 	cost := map[string]any{"tokens": tokens, "elapsed_seconds": roundSeconds(time.Since(started)), "quota_before": quotaOrUnknown(quotaBefore), "quota_after": quotaOrUnknown(quotaAfter), "quota_change_active_window_pct": quotaChange}
 	path, err := PersistReport(state, root, reportType, timestamp, commit, body, versions, limitations, findings, coverage, coverageTargetPct, cost)
 	if err != nil {
-		recordReportFailure(state, root, reportType, timestamp, result, err, started, quotaBefore)
+		recordReportFailure(state, root, reportType, timestamp, result, err, started, quotaBefore, r.CoderAgent)
 		return "", err
 	}
 	counts := map[string]int{}
@@ -420,7 +423,10 @@ func nullableConfidence(findings []map[string]any, counts map[string]int, key st
 	return counts[key]
 }
 
-func latestMaintenanceQuota(now time.Time) map[string]any {
+func latestMaintenanceQuota(now time.Time, agent string) map[string]any {
+	if agent != "codex" {
+		return nil
+	}
 	home := os.Getenv("CODEX_HOME")
 	if home == "" {
 		userHome, err := os.UserHomeDir()
@@ -514,16 +520,16 @@ func roundFloat(value float64) float64 {
 	return math.RoundToEven(value*1000) / 1000
 }
 
-func recordReportFailure(state, root, reportType, timestamp string, result map[string]any, cause error, started time.Time, quotaBefore map[string]any) {
+func recordReportFailure(state, root, reportType, timestamp string, result map[string]any, cause error, started time.Time, quotaBefore map[string]any, agent string) {
 	stateName := stringValue(result["state"], "FAILED")
 	errorText := cause.Error()
-	failure := map[string]any{"project_root": root, "started_at": timestamp, "job_id": result["jobId"], "state": "FAILED", "error": errorText, "cost": map[string]any{"tokens": "unknown", "elapsed_seconds": roundSeconds(time.Since(started)), "quota_before": quotaOrUnknown(quotaBefore), "quota_after": quotaOrUnknown(latestMaintenanceQuota(time.Now())), "quota_change_active_window_pct": "unknown"}}
+	failure := map[string]any{"project_root": root, "started_at": timestamp, "job_id": result["jobId"], "state": "FAILED", "error": errorText, "cost": map[string]any{"tokens": "unknown", "elapsed_seconds": roundSeconds(time.Since(started)), "quota_before": quotaOrUnknown(quotaBefore), "quota_after": quotaOrUnknown(latestMaintenanceQuota(time.Now(), agent)), "quota_change_active_window_pct": "unknown"}}
 	failurePath := filepath.Join(state, "projects", contextio.ProjectKey(root), "maintenance", "reports", reportType, "failures", timestamp+".json")
 	_ = writeJSONAtomic(failurePath, failure)
 	outcome, reason := "failed", "REPORT_FAILED"
-	if strings.Contains(errorText, "yielded to a user Codex job") {
+	if strings.Contains(errorText, "yielded to a user "+coderLabel(agent)+" job") {
 		outcome, reason = "yielded", "USER_JOB_PREEMPTED"
-	} else if strings.Contains(errorText, "Codex job ") {
+	} else if strings.Contains(errorText, coderLabel(agent)+" job ") && agent == "codex" {
 		reason = "CODEX_JOB_" + stateName
 	}
 	_ = enforce.EmitMaintenanceReportObservation(state, root, "MAINTENANCE_REPORT_FINISHED", map[string]any{"report_id": timestamp, "report_type": reportType, "outcome": outcome, "reason_code": reason, "elapsed_seconds": roundSeconds(time.Since(started)), "quota_change_active_window_pct": nil, "findings_high_count": nil, "findings_medium_count": nil, "findings_low_count": nil, "line_coverage_pct": nil})

@@ -62,26 +62,32 @@ suffix=""; [ "$os" = windows ] && suffix=".exe"
    > Before writing code, read `.orchestrator/ponytail.md`. The repository contract and the task's acceptance criteria outrank it.
 
    On no, do nothing.
-7. Only when Codex is the chosen coder and `maintenance_enabled` is `null`, after the existing setup questions and before showing the plan, ask once in the user's language with one `AskUserQuestion` picker. Use “Turn it on” as the recommended yes option and keep `--maintenance` / `--no-maintenance` in both plan and apply. If Codex was not chosen, do not ask and pass neither flag.
+7. When `maintenance_enabled` is `null`, for every chosen coder, after the existing setup questions and before showing the plan, ask once in the user's language with one `AskUserQuestion` picker. Use “Turn it on” as the recommended yes option and keep `--maintenance` / `--no-maintenance` in both plan and apply. For Codex, agy, Claude, and OpenCode free models, replace `<coder>` with the chosen coder model name and use the subscription/free-model receipt. For a paid OpenCode provider model, replace `<coder>` with the chosen model name and use the API-credit receipt.
 
-   EN: ⚓ **Purser can keep this project tidy in the background.** *When you are idle it runs read-only scans on your Codex subscription, never a paid API and never during a job:*
+   EN: ⚓ **Purser can keep this project tidy in the background.** *When you are idle it runs read-only scans with your coder (<coder>) on its subscription, never a paid API and never during a job:*
    - *cleanup candidates (dead code, stale files)*
    - *missing tests and the project's test coverage*
    - *a short report; nothing is changed*
    *Turn it on? You can change it anytime with `/purser:optimize`.*
 
-   TR: ⚓ **Purser bu projeyi arka planda düzenli tutabilir.** *Sen boştayken Codex aboneliğinle yalnızca okuma yapan taramalar çalıştırır; ücretli API kullanmaz, iş çalışırken devreye girmez:*
+   TR: ⚓ **Purser bu projeyi arka planda düzenli tutabilir.** *Sen boştayken kodlayıcınla (<coder>) aboneliği üzerinden yalnızca okuma yapan taramalar çalıştırır; ücretli API kullanmaz, iş çalışırken devreye girmez:*
    - *temizlenebilecekler (ölü kod, eskimiş dosyalar)*
    - *eksik testler ve proje test kapsaması*
    - *kısa bir rapor; hiçbir şey değiştirilmez*
    *Açayım mı? İstediğin zaman `/purser:optimize` ile değiştirebilirsin.*
+
+   For a paid OpenCode provider model, replace the first italic line in the matching language receipt with:
+
+   EN: *When you are idle it runs read-only scans with your coder (<coder>), which uses its API credit, never during a job:*
+
+   TR: *Sen boştayken kodlayıcınla (<coder>) yalnızca okuma yapan taramalar çalıştırır; bu, API kredisini kullanır; iş çalışırken devreye girmez:*
 
    On yes, add `--maintenance` to both plan and apply; on no, add `--no-maintenance` to both. After a successful apply, if the user opted into maintenance, immediately run the bundled binary's synchronous cleanup command: `"${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-${os}-${arch}${suffix}" maintenance run cleanup --repo "<repository-root>"`. It saves the report and cleanup `last-run.json` marker as part of the run, so the scheduler will not rerun cleanup for 56 hours. Read the report path printed by the command and present its findings in the same concise form as the SessionStart maintenance notice: finding count, the top five findings and evidence in a table, and the full report path (the full report retains any remaining findings). If the command fails, show the error in one ⚓ receipt and stop setup.
 8. Only when `auto_compact_enabled` is `null`, regardless of coder, ask once in the user's language with one `AskUserQuestion` picker. Put On first and mark it “(recommended)” in the user's language, followed by Off. Keep `--auto-compact` / `--no-auto-compact` in both plan and apply; if it is `true` or `false`, do not ask again.
 
    EN: ⚓ **Automatic compaction** *When this conversation passes about 250K tokens, Purser saves a handoff (decisions, open work and the next step), runs /compact for you and picks the task back up by itself, so every later message costs far less and nothing is lost. It applies to all your projects. You can turn it off anytime with `/purser:auto-compact off`.*
    TR: ⚓ **Otomatik sıkıştırma** *Sohbet yaklaşık 250 bin tokenı geçince Purser bir devir notu kaydeder (kararlar, açık işler ve sonraki adım), senin yerine /compact çalıştırır ve işe kendiliğinden kaldığı yerden devam eder; sonraki her mesaj çok daha ucuza gelir, hiçbir şey kaybolmaz. Tüm projelerinde geçerlidir. İstediğin zaman `/purser:auto-compact off` ile kapatabilirsin.*
-9. Run the bundled binary's `init --plan --coder X --reviewer AGENT`, adding the selected `--mode MODE` and manual `--model MODEL --effort EFFORT` only when Codex was chosen, or coder `--model MODEL` only when OpenCode or agy was chosen. For a selected Reviewer-1 model, add `--reviewer-model MODEL`; use `--reviewer none` when Off was selected. Pass the selected mechanical-route flag when OpenCode was detected. Add `--trust` and `--scaffold-profile` only if chosen. Include the selected maintenance flag when Codex was chosen and the selected auto-compact flag when step 8 asked. Build a short summary from the `--plan` output and show it in one ⚓ receipt. Do not show the `normal` route. For small chores, show “Free OpenCode models” if step 4 was enabled; otherwise show the plan's mechanical route. Include the mode line only when a mode was chosen. Put other plan lines (trust, profile scaffold, maintenance, auto-compact, files to write) below as one short italic line each. Ask for confirmation in one yes/no `AskUserQuestion` picker, with Yes first and “(recommended)” in the user's language. Only after yes, run the same options with `--apply --json` instead of `--plan`.
+9. Run the bundled binary's `init --plan --coder X --reviewer AGENT`, adding the selected `--mode MODE` and manual `--model MODEL --effort EFFORT` only when Codex was chosen, or coder `--model MODEL` only when OpenCode or agy was chosen. For a selected Reviewer-1 model, add `--reviewer-model MODEL`; use `--reviewer none` when Off was selected. Pass the selected mechanical-route flag when OpenCode was detected. Add `--trust` and `--scaffold-profile` only if chosen. Include the selected maintenance flag for every chosen coder and the selected auto-compact flag when step 8 asked. Build a short summary from the `--plan` output and show it in one ⚓ receipt. Do not show the `normal` route. For small chores, show “Free OpenCode models” if step 4 was enabled; otherwise show the plan's mechanical route. Include the mode line only when a mode was chosen. Put other plan lines (trust, profile scaffold, maintenance, auto-compact, files to write) below as one short italic line each. Ask for confirmation in one yes/no `AskUserQuestion` picker, with Yes first and “(recommended)” in the user's language. Only after yes, run the same options with `--apply --json` instead of `--plan`.
 
    EN summary:
 

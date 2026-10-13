@@ -146,6 +146,15 @@ func TestPlanAndApplyRejectInconsistentModelFlagsEqually(t *testing.T) {
 	}
 }
 
+func TestPlanAcceptsMaintenanceWithOpenCodeCoder(t *testing.T) {
+	_, _, restore := initTestEnvironment(t)
+	defer restore()
+	var output, errOutput bytes.Buffer
+	if code := Run(&output, &errOutput, []string{"--plan", "--coder", "opencode", "--reviewer", "none", "--maintenance"}); code == 2 || strings.Contains(errOutput.String(), "maintenance reports can only be configured") {
+		t.Fatalf("--maintenance was rejected for OpenCode: exit %d: %s", code, errOutput.String())
+	}
+}
+
 func TestApplyInNonGitDirectorySkipsMaintenanceAndWritesConfig(t *testing.T) {
 	home, root, restore := initTestEnvironment(t)
 	defer restore()

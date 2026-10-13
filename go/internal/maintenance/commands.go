@@ -17,7 +17,7 @@ import (
 var checkSleep = time.Sleep
 var maintenanceClock = time.Now
 
-func LatestQuota(now time.Time) map[string]any { return latestMaintenanceQuota(now) }
+func LatestQuota(now time.Time) map[string]any { return latestMaintenanceQuota(now, "codex") }
 
 func CanonicalRepository(repository string) (string, error) {
 	root, err := filepath.Abs(repository)
@@ -195,7 +195,10 @@ func Control(state, command, repository, decision, report string, acted []string
 func DelayedCheck(repository, state string, delay time.Duration, runner Runner) (string, error) {
 	checkSleep(minDuration(maxDuration(delay, 0), 5*time.Minute))
 	now := maintenanceClock()
-	quota := latestMaintenanceQuota(now)
+	if err := runner.resolveCoder(); err != nil {
+		return "", err
+	}
+	quota := latestMaintenanceQuota(now, runner.CoderAgent)
 	root, err := CanonicalRepository(repository)
 	if err != nil {
 		return "", err
@@ -206,7 +209,7 @@ func DelayedCheck(repository, state string, delay time.Duration, runner Runner) 
 	dir := MaintenanceDirectory(state, root)
 	var due []string
 	for _, kind := range []string{"cleanup", "test-gaps"} {
-		if contextio.MaintenanceEligible(root, state, now, quota, kind).Eligible {
+		if contextio.MaintenanceEligible(root, state, now, quota, kind, runner.CoderAgent == "codex").Eligible {
 			due = append(due, kind)
 		}
 	}

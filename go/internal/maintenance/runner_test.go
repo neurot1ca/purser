@@ -127,4 +127,16 @@ func TestLifecycleOracle(t *testing.T) {
 	}
 }
 
+func TestRunStartsConfiguredOpenCodeAgentAndOperationModel(t *testing.T) {
+	state, repo := t.TempDir(), t.TempDir()
+	fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
+	runner := Runner{Jobs: fake, CoderAgent: "opencode", CoderModel: "deepseek/deepseek-v4-pro", CoderEffort: "none", Sleep: func(time.Duration) {}}
+	if _, err := runner.Run(state, repo, "cleanup", "prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.started["agent"] != "opencode" || fake.started["jobModel"] != "deepseek/deepseek-v4-pro" || fake.started["jobEffort"] != "none" || fake.started["jobPhase"] != "operation" || fake.started["sandbox"] != "read-only" {
+		t.Fatalf("maintenance start args = %#v", fake.started)
+	}
+}
+
 func fileExists(path string) bool { _, err := os.Stat(path); return !errors.Is(err, os.ErrNotExist) }

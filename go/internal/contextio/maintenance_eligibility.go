@@ -23,7 +23,7 @@ type MaintenanceEligibility struct {
 
 // MaintenanceEligible evaluates local maintenance evidence only. quota is the
 // already-read quota snapshot; this function never fetches quota or starts jobs.
-func MaintenanceEligible(repository, state string, now time.Time, quota map[string]any, reportType string) MaintenanceEligibility {
+func MaintenanceEligible(repository, state string, now time.Time, quota map[string]any, reportType string, quotaRequired ...bool) MaintenanceEligibility {
 	result := MaintenanceEligibility{Reason: "unknown_evidence", ReportType: reportType}
 	if reportType != "cleanup" && reportType != "test-gaps" {
 		result.Reason = "unsupported_report_type"
@@ -69,20 +69,23 @@ func MaintenanceEligible(repository, state string, now time.Time, quota map[stri
 			}
 		}
 	}
-	if !maintenanceQuotaFresh(quota, now) {
-		result.Reason = "stale_quota"
-		return result
-	}
-	_, used, hasWindow := maintenanceQuotaWindow(quota)
-	if !hasWindow {
-		consent, valid := readSmallObject(filepath.Join(directory, "consent.json"))
-		if !valid || consent["decision"] != "yes" || consent["project_root"] != root {
-			result.Reason = "consent_required"
+	needsQuota := len(quotaRequired) == 0 || quotaRequired[0]
+	if needsQuota {
+		if !maintenanceQuotaFresh(quota, now) {
+			result.Reason = "stale_quota"
 			return result
 		}
-	} else if used > maintenanceMaxQuota {
-		result.Reason = "quota_limit"
-		return result
+		_, used, hasWindow := maintenanceQuotaWindow(quota)
+		if !hasWindow {
+			consent, valid := readSmallObject(filepath.Join(directory, "consent.json"))
+			if !valid || consent["decision"] != "yes" || consent["project_root"] != root {
+				result.Reason = "consent_required"
+				return result
+			}
+		} else if used > maintenanceMaxQuota {
+			result.Reason = "quota_limit"
+			return result
+		}
 	}
 	jobsDir := filepath.Join(state, "codex_exec_mcp", "jobs")
 	entries, err := os.ReadDir(jobsDir)

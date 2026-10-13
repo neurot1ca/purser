@@ -68,3 +68,48 @@ func TestDelayedCheckUsesPostDelayActivityAndQuota(t *testing.T) {
 		t.Fatal("check unexpectedly acquired the global maintenance slot")
 	}
 }
+
+func TestDelayedCheckKeepsCodexQuotaGate(t *testing.T) {
+	oldSleep, oldClock := checkSleep, maintenanceClock
+	t.Cleanup(func() { checkSleep, maintenanceClock = oldSleep, oldClock })
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	checkSleep = func(time.Duration) {}
+	maintenanceClock = func() time.Time { return now }
+	repo, state := t.TempDir(), t.TempDir()
+	if out, err := testutil.Hide(exec.Command("git", "-C", repo, "init", "-q")).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	root, err := CanonicalRepository(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := MaintenanceDirectory(state, root)
+	for path, value := range map[string]any{
+		filepath.Join(directory, "opt-in.json"):        map[string]any{"enabled": true, "project_root": root},
+		filepath.Join(directory, "last-activity.json"): map[string]any{"at": float64(now.Add(-6 * time.Minute).Unix())},
+	} {
+		data, _ := json.Marshal(value)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := &fakeJobs{}
+	_, err = DelayedCheck(root, state, 0, Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "gpt-6-luna", CoderEffort: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.started != nil {
+		t.Fatalf("Codex maintenance started without fresh quota: %#v", fake.started)
+	}
+	openCode := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED", "content": "```purser-findings-json\n[]\n```"}}}
+	_, err = DelayedCheck(root, state, 0, Runner{Jobs: openCode, CoderAgent: "opencode", CoderModel: "deepseek/deepseek-v4-pro", CoderEffort: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openCode.started["agent"] != "opencode" {
+		t.Fatalf("OpenCode maintenance did not run without a quota snapshot: %#v", openCode.started)
+	}
+}

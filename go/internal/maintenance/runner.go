@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/models"
+	"purser-hook/internal/obsidian"
+	"purser-hook/internal/policy"
 )
 
 const (
@@ -29,6 +32,9 @@ type JobOperations interface {
 
 type Runner struct {
 	Jobs         JobOperations
+	CoderAgent   string
+	CoderModel   string
+	CoderEffort  string
 	Now          func() time.Time
 	Sleep        func(time.Duration)
 	PollInterval time.Duration
@@ -44,6 +50,9 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 	}
 	if reportType != "cleanup" && reportType != "test-gaps" {
 		return nil, fmt.Errorf("unsupported maintenance report type: %s", reportType)
+	}
+	if err := r.resolveCoder(); err != nil {
+		return nil, err
 	}
 	now, sleep, poll, timeout := r.clock()
 	root, err := filepath.Abs(repository)
@@ -84,7 +93,8 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 	}
 	started, err := r.Jobs.Start(state, map[string]any{
 		"call": call, "mode": "new", "prompt": prompt, "cwd": root,
-		"sandbox": "read-only", "jobPhase": "operation", "agent": "codex",
+		"sandbox": "read-only", "jobPhase": "operation", "agent": r.CoderAgent,
+		"jobModel": r.CoderModel, "jobEffort": r.CoderEffort,
 		"timeoutSeconds": int(timeout.Seconds()),
 	})
 	if err != nil {
@@ -93,7 +103,7 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 	started = structured(started)
 	jobID, ok := started["jobId"].(string)
 	if !ok || jobID == "" {
-		return nil, errors.New(stringValue(started["message"], "durable Codex job could not be started"))
+		return nil, errors.New(stringValue(started["message"], "durable "+coderLabel(r.CoderAgent)+" job could not be started"))
 	}
 	active["job_id"] = jobID
 	if err := replaceActive(activePath, active); err != nil {
@@ -107,14 +117,14 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 				for now().Before(cancelDeadline) {
 					result := structured(r.Jobs.Result(state, jobID))
 					if terminal(result["state"], false) {
-						return nil, errors.New("maintenance yielded to a user Codex job")
+						return nil, fmt.Errorf("maintenance yielded to a user %s job", coderLabel(r.CoderAgent))
 					}
 					sleep(minDuration(poll, cancelDeadline.Sub(now())))
 				}
 				retainSlot = true
 				return nil, errors.New("maintenance cancellation was unconfirmed; global slot retained by job timeout")
 			}
-			return nil, errors.New("maintenance yielded to a user Codex job")
+			return nil, fmt.Errorf("maintenance yielded to a user %s job", coderLabel(r.CoderAgent))
 		}
 		result := structured(r.Jobs.Result(state, jobID))
 		status := stringValue(result["state"], "")
@@ -128,10 +138,49 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 			if result["jobId"] == nil {
 				result["jobId"] = jobID
 			}
-			return result, fmt.Errorf("Codex job %s: %s %s", status, stringValue(result["errorCode"], ""), stringValue(result["message"], ""))
+			return result, fmt.Errorf("%s job %s: %s %s", coderLabel(r.CoderAgent), status, stringValue(result["errorCode"], ""), stringValue(result["message"], ""))
 		}
 		sleep(poll)
 	}
+}
+
+func coderLabel(agent string) string {
+	switch agent {
+	case "codex":
+		return "Codex"
+	case "opencode":
+		return "OpenCode"
+	case "agy":
+		return "Antigravity"
+	case "claude":
+		return "Claude"
+	default:
+		return agent
+	}
+}
+
+func (r *Runner) resolveCoder() error {
+	if r.CoderAgent != "" && r.CoderModel != "" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	config, err := policy.LoadCoderConfig(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"))
+	if err != nil {
+		return fmt.Errorf("maintenance coder configuration: %w", err)
+	}
+	agent, _ := config["coder_agent"].(string)
+	routes, _ := config["routes"].(map[string]any)
+	route, _ := routes["operation"].(map[string]any)
+	model, _ := route["model"].(string)
+	effort, _ := route["effort"].(string)
+	if agent == "" || model == "" {
+		return errors.New("maintenance operation coder route is unavailable")
+	}
+	r.CoderAgent, r.CoderModel, r.CoderEffort = agent, models.ResolveLatest(agent, model), effort
+	return nil
 }
 
 func (r Runner) clock() (func() time.Time, func(time.Duration), time.Duration, time.Duration) {
