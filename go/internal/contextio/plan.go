@@ -806,10 +806,35 @@ func RecordPlanValidation(root, repository, taskID, jobID, status string) error 
 		return nil
 	}
 	changed := false
+	passIndex := -1
+	for i, pass := range state.AppliedPasses {
+		if pass.JobID == jobID {
+			passIndex = i
+			break
+		}
+	}
 	for i := range state.Milestones {
 		if milestoneNumber(state.Milestones[i].ID) == milestoneForPass(state, jobID) && state.Milestones[i].ValidationState != status {
 			state.Milestones[i].ValidationState = status
 			changed = true
+		}
+	}
+	settled := ""
+	switch status {
+	case "PASS":
+		settled = "PASS"
+	case "FAILED", "FAIL", "TIMEOUT":
+		settled = "FAILED"
+	}
+	if passIndex > 0 && settled != "" {
+		for _, prior := range state.AppliedPasses[:passIndex] {
+			for i := range state.Milestones {
+				m := &state.Milestones[i]
+				if milestoneNumber(m.ID) == prior.Milestone && (m.ValidationState == "STALE" || m.ValidationState == "INTERRUPTED") {
+					m.ValidationState = settled
+					changed = true
+				}
+			}
 		}
 	}
 	if changed {

@@ -24,6 +24,14 @@ func tryLock(f *os.File) error {
 	}
 	return nil
 }
+func lockBlocking(f *os.File) error {
+	var overlapped syscall.Overlapped
+	r1, _, e := lockFileEx.Call(f.Fd(), 2, 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
+	if r1 == 0 {
+		return e
+	}
+	return nil
+}
 func unlock(f *os.File) error {
 	var overlapped syscall.Overlapped
 	r1, _, e := unlockFileEx.Call(f.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"purser-hook/internal/contextio"
 )
 
 func validationFixture(t *testing.T, paths []string) (string, string, applyValidation) {
@@ -357,8 +359,50 @@ func TestValidationInterruptedOnRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "interrupted" {
-		t.Fatalf("status=%s", got.Status)
+	if got.Status != "interrupted" || got.Reason != "validation process no longer matches its recorded identity" {
+		t.Fatalf("record=%+v", got)
+	}
+}
+
+func TestValidationWaitsForRepositoryValidationLock(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	key := validationRepositoryKey(repo)
+	path := validationRecordPath(root, key, record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := contextio.LockFileBlocking(filepath.Join(root, "apply_validation", key, "repository.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := runApplyValidationCommand
+	runApplyValidationCommand = func(_ string, _ []string, args []string, _ time.Duration, _ io.Writer, result *applyValidation) error {
+		if len(args) > 0 && args[0] == "test" && result != nil {
+			result.Counts = map[string]int{"tests_passed": 1}
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		runApplyValidationCommand = prior
+		_ = unlock()
+	})
+	finished := make(chan error, 1)
+	go func() { finished <- RunApplyValidation(root, key, record.JobID) }()
+	time.Sleep(11 * time.Second)
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("validation exited while queued behind another validation: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("validation did not finish after repository lock was released")
+	}
+	got, err := readApplyValidation(path)
+	if err != nil || got.Status != "passed" {
+		t.Fatalf("validation after lock release = %#v, %v", got, err)
 	}
 }
 

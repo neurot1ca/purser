@@ -477,7 +477,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 	if record.JobID != id || record.Status != "pending" {
 		return errors.New("validation is not pending")
 	}
-	lock, err := lease.Lock(filepath.Join(stateRoot, "apply_validation", key, "repository.lock"))
+	lock, err := contextio.LockFileBlocking(filepath.Join(stateRoot, "apply_validation", key, "repository.lock"))
 	if err != nil {
 		return err
 	}
@@ -615,7 +615,7 @@ func recoverApplyValidationsInDirectory(stateRoot, dir string) {
 			_ = unlock()
 			continue
 		}
-		record.Status, record.Reason = "interrupted", "validation process did not survive host restart"
+		record.Status, record.Reason = "interrupted", "validation process no longer matches its recorded identity"
 		writeErr := writeApplyValidationUnlocked(path, record)
 		_ = unlock()
 		if writeErr != nil {

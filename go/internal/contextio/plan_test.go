@@ -199,6 +199,81 @@ func TestRecordPlanValidationRejectsUnknownStatus(t *testing.T) {
 	}
 }
 
+func TestLaterPassingValidationSettlesStaleMilestone(t *testing.T) {
+	for _, priorState := range []string{"STALE", "INTERRUPTED"} {
+		t.Run(priorState, func(t *testing.T) {
+			root, repo := planValidationSettlementFixture(t, priorState)
+			if err := RecordPlanValidation(root, repo, "graph-m2of3", "job-2", "PASS"); err != nil {
+				t.Fatal(err)
+			}
+			state, err := ReadPlanForTask(root, repo, "graph")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Milestones[0].ValidationState != "PASS" {
+				t.Fatalf("%s prerequisite state = %q, want PASS", priorState, state.Milestones[0].ValidationState)
+			}
+			if !containsMilestone(state.CompletedMilestones, 1) {
+				t.Fatalf("passing later validation did not complete prerequisite: %+v", state)
+			}
+		})
+	}
+}
+
+func TestLaterFailingValidationSettlesStaleMilestoneAsFailed(t *testing.T) {
+	root, repo := planValidationSettlementFixture(t, "STALE")
+	if err := RecordPlanValidation(root, repo, "graph-m2of3", "job-2", "FAILED"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ReadPlanForTask(root, repo, "graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Milestones[0].ValidationState != "FAILED" {
+		t.Fatalf("stale prerequisite state = %q, want FAILED", state.Milestones[0].ValidationState)
+	}
+	if containsMilestone(state.CompletedMilestones, 1) || planDependenciesDone(state, 3) {
+		t.Fatalf("failed later validation released prerequisite: %+v", state)
+	}
+}
+
+func TestLaterPassingValidationDoesNotClearFailedMilestone(t *testing.T) {
+	root, repo := planValidationSettlementFixture(t, "FAILED")
+	if err := RecordPlanValidation(root, repo, "graph-m2of3", "job-2", "PASS"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ReadPlanForTask(root, repo, "graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Milestones[0].ValidationState != "FAILED" || planDependenciesDone(state, 3) {
+		t.Fatalf("later pass cleared genuinely failed prerequisite: %+v", state)
+	}
+}
+
+func planValidationSettlementFixture(t *testing.T, firstState string) (string, string) {
+	t.Helper()
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "graph", artifact, []int{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	for _, pass := range []struct{ task, job string }{{"graph-m1of3", "job-1"}, {"graph-m2of3", "job-2"}} {
+		if _, _, err := BindPlanJob(root, repo, pass.task, pass.job); err != nil {
+			t.Fatal(err)
+		}
+		if err := RecordPlanApply(root, repo, pass.task, pass.job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RecordPlanValidation(root, repo, "graph-m1of3", "job-1", firstState); err != nil {
+		t.Fatal(err)
+	}
+	return root, repo
+}
+
 func planFixture(t *testing.T) (string, string, string) {
 	t.Helper()
 	base := t.TempDir()
