@@ -653,7 +653,7 @@ func TestPreparationProtectionIsPerGeneration(t *testing.T) {
 	old := filepath.Join(root, "preparations", id, "revision-1")
 	protected := filepath.Join(root, "preparations", id, "revision-2")
 	putFile(t, filepath.Join(old, "state.json"), []byte(`{"state":"PREPARED"}`), 1000)
-	putFile(t, filepath.Join(protected, "state.json"), []byte(`{"state":"PREPARING"}`), 1000)
+	putFile(t, filepath.Join(protected, "state.json"), []byte(`{"state":"PREPARING"}`), 1000+maxPrepAge)
 	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"SUCCEEDED","applyState":"applied"}`), 1000)
 	putFile(t, filepath.Join(root, "async_jobs", id+".json"), []byte(`{"stage":"CONSUMED"}`), 1000)
 	RetirePreparations(root, 1000+maxPrepAge+1, false)
