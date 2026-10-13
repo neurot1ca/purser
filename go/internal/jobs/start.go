@@ -254,6 +254,22 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 			planRepository = repository
 		}
 	}
+	if planRepository != "" {
+		taskID := nonemptyString(job["taskId"])
+		_, _, bindErr := contextio.BindPlanJob(stateRoot, planRepository, taskID, req.JobID)
+		if bindErr != nil {
+			var readinessErr *contextio.PlanReadinessError
+			if errors.As(bindErr, &readinessErr) {
+				if removeErr := os.Remove(filepath.Join(dir, req.JobID+".lock")); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					return nil, nil, errors.New("Plan milestone cannot start: " + bindErr.Error() + "; reservation cleanup failed: " + removeErr.Error())
+				}
+				message := "Plan milestone cannot start: " + bindErr.Error() + "."
+				return nil, nil, errors.New(strings.TrimSpace(message))
+			}
+			job["planBindingError"] = bindErr.Error()
+			log.Printf("plan binding failed for job %s: %v", req.JobID, bindErr)
+		}
+	}
 	codexBin := opt.CodexBin
 	if req.Agent != "codex" {
 		codexBin = nil
@@ -289,10 +305,6 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 				lease.ReleaseJobScopeLease(stateRoot, oldID)
 			}
 		}
-	}
-	if planRepository != "" {
-		taskID := nonemptyString(job["taskId"])
-		_, _, _ = contextio.BindPlanJob(stateRoot, planRepository, taskID, req.JobID)
 	}
 	if req.Mode == "new" && nonemptyString(job["taskId"]) != "" {
 		entries, _ := os.ReadDir(dir)

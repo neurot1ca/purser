@@ -69,6 +69,10 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	}
 	bundle := baseBundle("")
 	bundle["task_id"], bundle["phase"], bundle["route"] = pending["task_id"], pending["phase"], pending["route"]
+	if bindingError := stringValue(job["planBindingError"]); bindingError != "" {
+		bundle["force_full_review"] = true
+		bundle["findings"] = appendPostFinding(bundle["findings"], "PLAN_BINDING_INTERNAL_ERROR", "Plan binding failed internally during launch: "+bindingError)
+	}
 	implementer := stringValue(pending["agent"])
 	if implementer == "" {
 		implementer = "codex"

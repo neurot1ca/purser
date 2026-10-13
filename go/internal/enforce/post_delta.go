@@ -64,7 +64,7 @@ func assemblePostDelta(repoRoot string, pending, bundle map[string]any, protecte
 		}
 	}
 	bundle["baseline_head"], bundle["current_head"] = delta["baseline_head"], delta["current_head"]
-	forceFull := delta["status"] != ledger.OK
+	forceFull := delta["status"] != ledger.OK || bundle["force_full_review"] == true
 	var anomaly map[string]any
 	if delta["status"] == ledger.OK && phase == "implementation" && len(scope) > 0 && baseline["status"] == ledger.OK {
 		if worktree != "" {

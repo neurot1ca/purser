@@ -139,6 +139,32 @@ func TestPostAsyncResultRetainsApplyGuidanceForUnappliedJob(t *testing.T) {
 	}
 }
 
+func TestAsyncPlanBindingFailureForcesFullReview(t *testing.T) {
+	state, repo, event, index, pending, original, job, resolved, _ := newAsyncSuccessCase(t, "plan_binding_failure")
+	job["planBindingError"] = "plan file could not be read"
+	if err := atomicAdmissionJSON(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	configureNativeReviewer(t, state, &resolved, "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "PASS")
+	response, err := finishAsyncSuccess(state, event, index, pending, original, repo,
+		map[string]any{"post_tool_output_field": "updatedToolOutput", "reviewer1_model_requested": "gemini-3.8-flash-high"},
+		resolved, nil, map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := responseBundle(t, response)
+	if bundle["claude_review_mode"] != review.Full {
+		t.Fatalf("internal binding failure did not force FULL review: %#v", bundle)
+	}
+	found := false
+	for _, raw := range postReviewerFindings(bundle["findings"]) {
+		found = found || stringValue(raw["code"]) == "PLAN_BINDING_INTERNAL_ERROR"
+	}
+	if !found {
+		t.Fatalf("durable binding failure finding missing: %#v", bundle["findings"])
+	}
+}
+
 func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "durable_review_finalization.json"))
 	if err != nil {

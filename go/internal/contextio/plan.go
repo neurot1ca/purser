@@ -19,6 +19,21 @@ import (
 const planSchemaVersion = 1
 const planCollectionVersion = 2
 
+var ErrPlanNotReady = errors.New("active plan is not ready for this dispatch")
+
+type PlanReadinessError struct {
+	MissingDependencies []string
+}
+
+func (e *PlanReadinessError) Error() string {
+	if len(e.MissingDependencies) > 0 {
+		return fmt.Sprintf("active plan is not ready: dependency %s is not done", strings.Join(e.MissingDependencies, ", "))
+	}
+	return ErrPlanNotReady.Error()
+}
+
+func (e *PlanReadinessError) Is(target error) bool { return target == ErrPlanNotReady }
+
 var knownPlanValidationStates = map[string]struct{}{
 	"PENDING": {}, "PASS": {}, "FAILED": {}, "FAIL": {}, "UNKNOWN": {},
 	"STALE": {}, "LAUNCH_ERROR": {}, "INTERRUPTED": {}, "TIMEOUT": {}, "SKIPPED": {},
@@ -665,7 +680,7 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 		return nil, true, err
 	}
 	if !containsMilestone(state.AcceptedMilestones, milestone) || containsMilestone(state.CompletedMilestones, milestone) || state.UserStopped || state.Gate != "" || (len(state.Milestones) > 0 && !planDependenciesDone(state, milestone)) {
-		return nil, true, errors.New("active plan is not ready for this dispatch")
+		return nil, true, &PlanReadinessError{MissingDependencies: missingPlanDependencies(state, milestone)}
 	}
 	linked := linkedJobs(state)
 	if !containsPlanString(linked, jobID) {
@@ -679,6 +694,29 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 		return nil, true, err
 	}
 	return state, true, nil
+}
+
+func missingPlanDependencies(state *PlanState, milestone int) []string {
+	for _, item := range state.Milestones {
+		if milestoneNumber(item.ID) != milestone {
+			continue
+		}
+		var missing []string
+		for _, dependency := range item.Dependencies {
+			if !containsMilestone(state.CompletedMilestones, dependency) {
+				missing = append(missing, fmt.Sprintf("M%d", dependency))
+				continue
+			}
+			for _, prerequisite := range state.Milestones {
+				if milestoneNumber(prerequisite.ID) == dependency && prerequisite.ValidationState != "" && prerequisite.ValidationState != "PASS" {
+					missing = append(missing, fmt.Sprintf("M%d", dependency))
+					break
+				}
+			}
+		}
+		return missing
+	}
+	return nil
 }
 
 // RecordPlanApply records an explicitly applied pass and advances a plain

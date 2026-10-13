@@ -239,6 +239,67 @@ func TestStartBindsRegisteredPlanBeforeLaunch(t *testing.T) {
 	}
 }
 
+func TestStartRefusesPlanWithIncompleteDependencyAndCanRetry(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	gitStart(t, repo, "init", "-q")
+	artifact := filepath.Join(base, "plan.md")
+	if err := os.WriteFile(artifact, []byte("## Milestones\n### M1 - prerequisite\n**Dependency:** none\n**Write paths:**\n- src/a.go\n**Implementation:** first\n### M2 - dependent\n**Dependency:** M1\n**Write paths:**\n- src/b.go\n**Implementation:** second\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(base, "state")
+	if _, err := contextio.AcceptPlan(stateRoot, repo, "plan-1", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	start := func(taskID, call string) (bool, *Record, error) {
+		launched := false
+		_, record, err := Start(stateRoot, map[string]any{"call": call, "prompt": "pass", "cwd": repo, "taskId": taskID}, StartOptions{
+			StateRoot:  stateRoot,
+			Validation: StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }},
+			Launch:     func(string, int64, string) error { launched = true; return nil },
+			Await: func(id string, _ *Record) map[string]any {
+				return jobResult(map[string]any{"jobId": id, "state": "QUEUED"})
+			},
+		})
+		return launched, record, err
+	}
+	taskID := "plan-1-m2of2"
+	launched, _, err := start(taskID, "00000000-0000-4000-8000-000000000010")
+	if err == nil || launched || !strings.Contains(err.Error(), "M1") {
+		t.Fatalf("dependent start launched=%v err=%v", launched, err)
+	}
+	jobDir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
+	for _, suffix := range []string{".launch", ".json", ".lock"} {
+		if _, statErr := os.Stat(filepath.Join(jobDir, "00000000-0000-4000-8000-000000000010"+suffix)); !os.IsNotExist(statErr) {
+			t.Fatalf("refused start left recovery or reservation artifact %s: %v", suffix, statErr)
+		}
+	}
+	launched, predecessor, err := start("plan-1-m1of2", "00000000-0000-4000-8000-000000000011")
+	if err != nil || !launched || predecessor == nil {
+		t.Fatalf("prerequisite start launched=%v record=%v err=%v", launched, predecessor, err)
+	}
+	if err := predecessor.Set("state", "SUCCEEDED"); err != nil {
+		t.Fatal(err)
+	}
+	predecessorID := nonemptyString(recordMap(predecessor)["jobId"])
+	if err := Write(filepath.Join(jobDir, predecessorID+".json"), predecessor); err != nil {
+		t.Fatal(err)
+	}
+	if err := contextio.RecordPlanApply(stateRoot, repo, "plan-1-m1of2", predecessorID); err != nil {
+		t.Fatal(err)
+	}
+	if err := contextio.RecordPlanValidation(stateRoot, repo, "plan-1-m1of2", predecessorID, "PASS"); err != nil {
+		t.Fatal(err)
+	}
+	launched, _, err = start(taskID, "00000000-0000-4000-8000-000000000010")
+	if err != nil || !launched {
+		t.Fatalf("retry after dependency completion launched=%v err=%v", launched, err)
+	}
+}
+
 func TestStartLaunchesWhenPlanReadFails(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "repo")
@@ -259,7 +320,7 @@ func TestStartLaunchesWhenPlanReadFails(t *testing.T) {
 	}
 	args := map[string]any{"call": "00000000-0000-4000-8000-000000000002", "prompt": "pass", "cwd": repo, "taskId": "plan-1-m1of1-p1"}
 	launched := false
-	_, _, err := Start(stateRoot, args, StartOptions{
+	_, record, err := Start(stateRoot, args, StartOptions{
 		StateRoot:  stateRoot,
 		Validation: StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }},
 		Launch: func(string, int64, string) error {
@@ -272,6 +333,13 @@ func TestStartLaunchesWhenPlanReadFails(t *testing.T) {
 	})
 	if err != nil || !launched {
 		t.Fatalf("Start did not launch after plan read failure: launched=%v err=%v", launched, err)
+	}
+	if record == nil || nonemptyString(recordMap(record)["planBindingError"]) == "" {
+		t.Fatalf("internal plan binding failure marker was not durable: %#v", recordMap(record))
+	}
+	stored := readJob(filepath.Join(stateRoot, "codex_exec_mcp", "jobs"), nonemptyString(recordMap(record)["jobId"]))
+	if stored == nil || nonemptyString(recordMap(stored)["planBindingError"]) == "" {
+		t.Fatal("internal plan binding marker missing from durable job record")
 	}
 }
 

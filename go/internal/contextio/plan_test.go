@@ -103,6 +103,11 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 	}
 	if _, _, err := BindPlanJob(root, repo, "graph-m3of3", "premature"); err == nil {
 		t.Fatal("unready dependency bound")
+	} else {
+		var readinessErr *PlanReadinessError
+		if !errors.Is(err, ErrPlanNotReady) || !errors.As(err, &readinessErr) || !reflect.DeepEqual(readinessErr.MissingDependencies, []string{"M1"}) {
+			t.Fatalf("readiness refusal = %v (%+v)", err, readinessErr)
+		}
 	}
 	if err := RecordPlanApply(root, repo, "graph-m1of3", "first"); err != nil {
 		t.Fatal(err)
