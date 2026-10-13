@@ -9,17 +9,17 @@ import (
 )
 
 func ConfigureNoWindow(command *exec.Cmd) {
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	Hide(command)
 }
 
 func ConfigureProcessTreeKill(command *exec.Cmd) {
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000200, HideWindow: true}
+	Hide(command)
+	command.SysProcAttr.CreationFlags |= 0x200
 	command.Cancel = func() error {
 		if command.Process == nil {
 			return nil
 		}
 		kill := Hide(exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(command.Process.Pid)))
-		kill.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 		if err := kill.Run(); err == nil {
 			return nil
 		}

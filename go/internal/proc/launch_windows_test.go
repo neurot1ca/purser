@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestConfigureBelowNormalPriorityPreservesNoWindow(t *testing.T) {
+func TestConfigureBelowNormalPriorityPreservesHiddenConsole(t *testing.T) {
 	command := exec.Command("git")
 	ConfigureProcessTreeKill(command)
 	ConfigureBelowNormalPriority(command)
 
-	if command.SysProcAttr.CreationFlags != 0x08004200 || !command.SysProcAttr.HideWindow {
-		t.Fatalf("process attributes = %#v, want flags 0x08004200 and hidden window", command.SysProcAttr)
+	if command.SysProcAttr.CreationFlags != 0x00004210 || !command.SysProcAttr.HideWindow {
+		t.Fatalf("process attributes = %#v, want flags 0x00004210 and hidden window", command.SysProcAttr)
 	}
 }
 
