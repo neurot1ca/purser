@@ -12,8 +12,40 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
+
+func TestProjectRoleReadinessUsesProjectExecutable(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	repository := filepath.Join(work, "repository")
+	if err := os.MkdirAll(repository, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(work, "state")
+	executable := filepath.ToSlash(filepath.Join(work, "project-reviewer"))
+	roles := profile.ProjectRolesPath(state, repository)
+	if err := os.MkdirAll(filepath.Dir(roles), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(roles, []byte("schema_version = 1\n[coding]\nreviewer1_executable = \""+executable+"\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", root)
+	t.Setenv("USERPROFILE", filepath.Join(work, "home"))
+	t.Setenv("PURSER_STATE_DIR", state)
+	config, err := readinessCoderConfig(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config["reviewer1_executable"]; got != executable {
+		t.Fatalf("readiness executable = %#v, want %q", got, executable)
+	}
+}
 
 func init() {
 	if os.Getenv("PURser_READINESS_MOCK") == "1" {

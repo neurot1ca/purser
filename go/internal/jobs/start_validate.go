@@ -31,7 +31,7 @@ type StartRequest struct {
 type StartValidationOptions struct {
 	Agent           string
 	FixedAgent      bool
-	ConfiguredAgent func() (string, error)
+	ConfiguredAgent func(repository string) (string, error)
 	ValidateAgent   func(string) error
 	LookupExisting  func(string) map[string]any
 }
@@ -54,16 +54,6 @@ func ValidateStart(args map[string]any, opt StartValidationOptions) (StartReques
 	}
 	if !validStartAgent(agent) {
 		return fail("INVALID_ARGUMENT", "Invalid agent")
-	}
-	if _, supplied := args["agent"]; !supplied && !opt.FixedAgent && os.Getenv("PURSER_AGENT") == "" && opt.ConfiguredAgent != nil {
-		var err error
-		agent, err = opt.ConfiguredAgent()
-		if err != nil {
-			return fail("INVALID_CONFIG", err.Error())
-		}
-		if !validStartAgent(agent) {
-			return fail("INVALID_ARGUMENT", "Invalid agent")
-		}
 	}
 	call, callOK := args["call"].(string)
 	prompt, promptOK := args["prompt"].(string)
@@ -106,6 +96,18 @@ func ValidateStart(args map[string]any, opt StartValidationOptions) (StartReques
 				return fail("INVALID_ARGUMENT", "cwd is missing and repository root could not be resolved for Codex launch")
 			}
 			args["cwd"] = root
+		}
+	}
+	_, explicitAgent := args["agent"]
+	if mode == "new" && !explicitAgent && !opt.FixedAgent && os.Getenv("PURSER_AGENT") == "" && opt.ConfiguredAgent != nil {
+		repository, _ := args["cwd"].(string)
+		var err error
+		agent, err = opt.ConfiguredAgent(repository)
+		if err != nil {
+			return fail("INVALID_CONFIG", err.Error())
+		}
+		if !validStartAgent(agent) {
+			return fail("INVALID_ARGUMENT", "Invalid agent")
 		}
 	}
 	name := "codex"

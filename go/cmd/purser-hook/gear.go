@@ -27,7 +27,7 @@ func gearMain(args []string) int {
 	if err != nil {
 		return gearError(err)
 	}
-	config, err := gearConfig()
+	config, err := gearConfig(repository)
 	if err != nil {
 		return gearError(err)
 	}
@@ -82,10 +82,10 @@ func gearRepository(path string) (string, error) {
 			break
 		}
 	}
-	return "", fmt.Errorf("--cwd is not inside a git repository")
+	return absolute, nil
 }
 
-func gearConfig() (map[string]any, error) {
+func gearConfig(repository string) (map[string]any, error) {
 	pluginRoot := pluginroot.Root()
 	if pluginRoot == "" {
 		return nil, fmt.Errorf("orchestrator config path is unavailable")
@@ -94,7 +94,7 @@ func gearConfig() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return policy.LoadCoderConfig(filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json"), filepath.Join(home, ".orchestrator", "config.toml"))
+	return policy.LoadCoderConfigForRepository(filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json"), filepath.Join(home, ".orchestrator", "config.toml"), repository)
 }
 
 func gearError(err error) int {

@@ -140,8 +140,8 @@ func dispatchOperation(ctx context.Context, tool string, args map[string]any, ro
 		if override != "" {
 			codexBin = override
 		}
-		configuredAgent := func() (string, error) {
-			config, err := policy.LoadCoderConfig(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"))
+		configuredAgent := func(repository string) (string, error) {
+			config, err := policy.LoadCoderConfigForRepository(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"), repository)
 			if err != nil {
 				return "", err
 			}

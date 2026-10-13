@@ -32,7 +32,7 @@ func coderEffortMain(args []string) int {
 		fmt.Fprintln(os.Stderr, usage)
 		return 2
 	}
-	config, err := gearConfig()
+	config, err := gearConfig(repository)
 	if err != nil {
 		writeJSON(map[string]any{"error": err.Error()})
 		return 1

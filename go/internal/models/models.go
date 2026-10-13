@@ -154,7 +154,7 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	if state.CheckedOn != nil && *state.CheckedOn == time.Now().UTC().Format("2006-01-02") {
 		return "", "", false
 	}
-	loaded, err := loadConfig()
+	loaded, err := loadConfig(repository)
 	if err != nil {
 		return "", "", false
 	}
@@ -310,7 +310,7 @@ func DiscoverCachedCodexVersion() (current, newer string, ok bool) {
 	if err != nil || len(candidates) == 0 {
 		return "", "", false
 	}
-	loaded, err := loadConfig()
+	loaded, err := loadConfig("")
 	if err != nil {
 		return "", "", false
 	}
@@ -489,13 +489,13 @@ type listingResult struct {
 }
 
 // Variables keep the process and filesystem boundaries replaceable in package tests.
-var loadConfig = func() (loadedConfig, error) {
+var loadConfig = func(repository string) (loadedConfig, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return loadedConfig{}, err
 	}
 	configPath := obsidian.ConfigPath()
-	config, err := policy.LoadCoderConfig(configPath, filepath.Join(home, ".orchestrator", "config.toml"))
+	config, err := policy.LoadCoderConfigForRepository(configPath, filepath.Join(home, ".orchestrator", "config.toml"), repository)
 	if err != nil {
 		return loadedConfig{}, err
 	}

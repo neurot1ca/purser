@@ -63,10 +63,6 @@ func checkReadinessBeforeSuccess(dir, jobID string, result map[string]any) {
 	if !worktreeOK || !snapshotOK || !objectiveOK || !acceptanceOK {
 		return
 	}
-	config, err := readinessCoderConfig()
-	if err != nil {
-		return
-	}
 	delta := ledger.ComputeJobDelta(worktree, snapshot)
 	if delta["status"] != "OK" {
 		return
@@ -83,6 +79,10 @@ func checkReadinessBeforeSuccess(dir, jobID string, result map[string]any) {
 	repoRoot, _ := job["repoRoot"].(string)
 	if repoRoot == "" {
 		repoRoot = worktree
+	}
+	config, err := readinessCoderConfig(repoRoot)
+	if err != nil {
+		return
 	}
 	executable, _ := config["reviewer1_executable"].(string)
 	got, err := review.RunReadiness(context.Background(), obsidian.PluginRoot(), review.ReadinessRequest{
@@ -131,12 +131,12 @@ func storeReadinessVerdict(dir, jobID string, verdict review.ReadinessVerdict) {
 	}
 }
 
-func readinessCoderConfig() (map[string]any, error) {
+func readinessCoderConfig(repository string) (map[string]any, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	return policy.LoadCoderConfig(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"))
+	return policy.LoadCoderConfigForRepository(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"), repository)
 }
 
 func stringValue(value any) string {

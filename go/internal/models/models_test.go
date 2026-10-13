@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var lastConfigRepository string
+
 func setupDiscovery(t *testing.T, config map[string]any, listing func(string, map[string]map[string]json.RawMessage) listingResult) string {
 	return setupDiscoveryWithRouteOrder(t, config, routeNames(config), listing)
 }
@@ -20,7 +22,10 @@ func setupDiscoveryWithRouteOrder(t *testing.T, config map[string]any, routeOrde
 	state := t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", state)
 	oldConfig, oldCatalog, oldListing := loadConfig, loadCatalog, listModels
-	loadConfig = func() (loadedConfig, error) { return loadedConfig{Values: config, RouteOrder: routeOrder}, nil }
+	loadConfig = func(repository string) (loadedConfig, error) {
+		lastConfigRepository = repository
+		return loadedConfig{Values: config, RouteOrder: routeOrder}, nil
+	}
 	loadCatalog = func() (catalog, error) { return catalog{Providers: map[string]map[string]json.RawMessage{}}, nil }
 	listModels = listing
 	t.Cleanup(func() { loadConfig, loadCatalog, listModels = oldConfig, oldCatalog, oldListing })
@@ -225,9 +230,13 @@ func TestDiscoverChecksOverlayOnlyRoute(t *testing.T) {
 	})
 	writeCodexCache(t, `{"models":[{"slug":"gpt-6.1-sol","visibility":"list"}]}`)
 
-	current, newer, ok := DiscoverModelVersion(t.TempDir())
+	repository := t.TempDir()
+	current, newer, ok := DiscoverModelVersion(repository)
 	if !ok || current != "gpt-6-sol" || newer != "gpt-6.1-sol" {
 		t.Fatalf("got %q -> %q, available = %v; want overlay route", current, newer, ok)
+	}
+	if lastConfigRepository != repository {
+		t.Fatalf("config repository = %q, want %q", lastConfigRepository, repository)
 	}
 	if got := readStateJSON(t, root)["report"].(map[string]any)["current"]; got != current {
 		t.Fatalf("report current = %v, want %q", got, current)

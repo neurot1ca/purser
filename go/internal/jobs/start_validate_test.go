@@ -55,7 +55,7 @@ func TestStartValidationPythonParity(t *testing.T) {
 			o := StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }}
 			if c.Name == "invalid_config" {
 				o.FixedAgent = false
-				o.ConfiguredAgent = func() (string, error) { return "", errors.New("bad configuration") }
+				o.ConfiguredAgent = func(string) (string, error) { return "", errors.New("bad configuration") }
 			}
 			if c.Existing {
 				o.LookupExisting = func(string) map[string]any { return c.Result }
@@ -116,6 +116,32 @@ func TestValidateStartDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
 	emptyRequest, emptyFailure := ValidateStart(emptyArgs, StartValidationOptions{Agent: "codex", FixedAgent: true, ValidateAgent: func(string) error { return nil }})
 	if emptyFailure != nil || emptyRequest.Args["cwd"] != root {
 		t.Fatalf("empty cwd was not defaulted to repository root: request=%#v failure=%#v", emptyRequest, emptyFailure)
+	}
+}
+
+func TestProjectRoleConfiguredAgentUsesResolvedRepository(t *testing.T) {
+	t.Setenv("PURSER_AGENT", "")
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	args := map[string]any{"call": "00000000-0000-0000-0000-000000000003", "prompt": "run", "model": "claude-sonnet-4-5"}
+	calledWith := ""
+	request, failure := ValidateStart(args, StartValidationOptions{
+		ConfiguredAgent: func(repository string) (string, error) {
+			calledWith = repository
+			return "claude", nil
+		},
+		ValidateAgent: func(string) error { return nil },
+	})
+	if failure != nil || request.Agent != "claude" || filepath.Clean(strings.ReplaceAll(calledWith, "/", string(filepath.Separator))) != filepath.Clean(repo) {
+		t.Fatalf("configured agent repository = %q; request=%#v failure=%#v, want %q", calledWith, request, failure, repo)
 	}
 }
 
