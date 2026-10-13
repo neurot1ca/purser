@@ -3,6 +3,16 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.148 — 2026-10-13
+
+- **New:** Purser roles are per project: `/purser:init` and `/purser:reviewer` save coder and reviewer choices to the current project only, and other projects keep the global defaults; trust stays global.
+- **New:** a read-only Haiku helper agent answers lookups and summaries that would otherwise cost main-Claude round trips.
+- **Fixed:** maintenance scans run with the chosen coder, not only Codex; only Codex keeps the quota gate.
+- **Fixed:** init marks only Purser's own default as recommended, detects with a chosen model alone, and completes outside a git repository; the job board stays silent there.
+- **Fixed:** a project with no recorded language uses the user's last language, and a project that records English keeps it.
+- **Fixed:** an upgrade notice is shown once, not again after a compact or new session.
+- **Fixed:** the duration-estimate notice appears only when estimates are within 30% of the actual time.
+
 ## 0.1.147 — 2026-10-13
 
 - **New:** after an apply, host validation also runs `pytest`, `npm test` or `cargo test` for changed Python, JavaScript or Rust code; a project's `[validation] command` in `.orchestrator/profile.toml` replaces that detection.
