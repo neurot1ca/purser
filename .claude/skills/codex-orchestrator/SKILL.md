@@ -132,9 +132,7 @@ Put estimated duration in `eta` beside the recorded actual duration.
 
 ### Async by default
 
-Treat plan paths as estimates. Claude may start several accepted, disjoint
-milestones as separate dispatchers only when the longest job plus
-fan-in review is clearly shorter than serial work. Include shared generated
+Treat plan paths as estimates. For an accepted plan, dispatch every entry in ready_milestones in the same turn, using one background purser:dispatcher Agent call per pass. Submit all calls before waiting for any result. Include shared generated
 files and validation inputs when judging disjointness. For worktree jobs,
 dispatch overlapping paths immediately: Purser queues hot-path conflicts as
 `QUEUED` and auto-starts them on lease release; otherwise jobs run in parallel
