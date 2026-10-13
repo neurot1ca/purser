@@ -43,6 +43,14 @@ func TestMCPStartupRunsNativeCleanupWithoutPython(t *testing.T) {
 	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
 	t.Setenv("PURSER_STATE_DIR", stateRoot)
 	t.Setenv("PATH", pathDir)
+	catalogDir := filepath.Join(stateRoot, "model-catalog")
+	if err := os.MkdirAll(catalogDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := fmt.Sprintf(`{"fetched_at":%q,"dropped_count":0,"providers":{"provider":{"models":{"model-a":{"id":"model-a","name":"Model A","reasoning":true,"limits":{"context":1000,"output":100}}}}}}`, time.Now().UTC().Format(time.RFC3339Nano))
+	if err := os.WriteFile(filepath.Join(catalogDir, "catalog.json"), []byte(catalog), 0600); err != nil {
+		t.Fatal(err)
+	}
 	id := strings.Repeat("a", 64)
 	jobsDir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
 	if err := os.MkdirAll(jobsDir, 0700); err != nil {
