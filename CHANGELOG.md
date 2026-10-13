@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.145 — 2026-10-13
+
+- **Changed:** `/purser:coder-effort` with no level asks for the effort with a choice form.
+- **Fixed:** worker test evidence recovers command output from progress events and marks a run that captured no output instead of showing an empty tail.
+- **Fixed:** the dispatcher agent uses the `haiku` alias, so Claude Code builds that do not list the full model id no longer warn.
+- **Fixed:** Purser's own tests keep the real Go module cache and make no network calls, so they pass inside a network-less Linux Codex sandbox.
 ## 0.1.144 — 2026-10-13
 
 - **Changed:** `/purser:coder-effort` with no level reports the project's current setting.
