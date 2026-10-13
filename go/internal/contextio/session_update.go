@@ -87,7 +87,7 @@ func pluginVersionContext(session, repository string, state map[string]any) stri
 		return ""
 	}
 	state["version_pending"].(map[string]any)["delivered"] = true
-	return "On your next reply, render exactly one line in the user's language in this form, translating from English: " +
+	return "On your next reply, put exactly one notice line first, then handle the user's request in full; the notice never replaces the task. Render the notice in the user's language, translating from English, in this form: " +
 		"`> ⚓ **Purser upgraded to " + version + ":** <one short sentence summarizing the bullets>`. " +
 		"Keep ⚓ and " + version + ". " +
 		"Source bullets (summarize them in one short sentence):\n" + strings.Join(bullets, "\n")

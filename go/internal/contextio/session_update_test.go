@@ -76,7 +76,7 @@ func TestSessionStartPluginVersionNoticeParity(t *testing.T) {
 
 	write(versionPath, `{"announced_version":"1.8.0"}`)
 	changed := sessionStartContext(t, event)
-	want := "On your next reply, render exactly one line in the user's language in this form, translating from English: `> ⚓ **Purser upgraded to 2.0.0:** <one short sentence summarizing the bullets>`. Keep ⚓ and 2.0.0. Source bullets (summarize them in one short sentence):\n- First change.\n- Second change."
+	want := "On your next reply, put exactly one notice line first, then handle the user's request in full; the notice never replaces the task. Render the notice in the user's language, translating from English, in this form: `> ⚓ **Purser upgraded to 2.0.0:** <one short sentence summarizing the bullets>`. Keep ⚓ and 2.0.0. Source bullets (summarize them in one short sentence):\n- First change.\n- Second change."
 	if !strings.Contains(changed, want) || strings.Contains(changed, "Old change.") {
 		t.Fatalf("version notice differs from Python notice: %q", changed)
 	}
