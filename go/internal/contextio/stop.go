@@ -146,38 +146,45 @@ func Stop(event map[string]any, started time.Time) []byte {
 	add := func(kind, reason string) { reasons = append(reasons, reason); kinds[kind] = true }
 	planReason := ""
 	if latestUser >= 0 {
-		reminded, _ := state["plan_boundary_blocked_users"].(map[string]any)
-		if reminded == nil {
-			reminded = map[string]any{}
-		}
 		if plans, err := ReconcilePlans(stateRoot(), repository); err == nil {
-			var eligible []string
-			var eligiblePlans []string
+			type readyPlan struct {
+				taskID     string
+				count      int
+				artifact   string
+				milestones []string
+			}
+			byPlan := map[string]*readyPlan{}
 			for _, plan := range plans {
-				if blocked, ok := exactInteger(reminded[plan.TaskID]); ok && blocked == latestUser {
-					continue
-				}
 				if plan.UserStopped || plan.Gate != "" {
 					continue
 				}
-				if len(plan.Milestones) == 0 {
-					if containsMilestone(plan.AcceptedMilestones, plan.CurrentMilestone) && !hasOpenLinkedJob(stateRoot(), plan, plan.CurrentMilestone) && !hasOpenPlanTaskJob(stateRoot(), plan) && !planCodexDispatched(records, latestUser, plan.TaskID) {
-						eligible = append(eligible, fmt.Sprintf("%s M%d/%d %s", plan.TaskID, plan.CurrentMilestone, len(plan.AcceptedMilestones), plan.PendingNextAction))
-						eligiblePlans = append(eligiblePlans, plan.TaskID)
-					}
-					continue
-				}
 				for _, ready := range plan.ReadyMilestones {
-					eligible = append(eligible, fmt.Sprintf("%s %s %s", plan.TaskID, ready.ID, ready.ArtifactRef))
-					eligiblePlans = append(eligiblePlans, plan.TaskID)
+					if planMilestoneDispatched(records, latestUser, plan.TaskID, milestoneNumber(ready.ID)) {
+						continue
+					}
+					entry := byPlan[plan.TaskID]
+					if entry == nil {
+						entry = &readyPlan{taskID: plan.TaskID, count: len(plan.AcceptedMilestones), artifact: plan.ArtifactPath}
+						byPlan[plan.TaskID] = entry
+					}
+					entry.milestones = append(entry.milestones, ready.ID)
 				}
 			}
-			if len(eligible) > 0 {
-				for _, taskID := range eligiblePlans {
-					reminded[taskID] = latestUser
-				}
-				state["plan_boundary_blocked_users"] = reminded
-				planReason = "Continue accepted plans " + strings.Join(eligible, "; ") + " through normal Purser routing and review."
+			var eligible []string
+			for _, plan := range byPlan {
+				sort.Strings(plan.milestones)
+				eligible = append(eligible, fmt.Sprintf("%s (%d accepted) %s#%s", plan.taskID, plan.count, plan.artifact, strings.Join(plan.milestones, ",")))
+			}
+			sort.Strings(eligible)
+			readySet := strings.Join(eligible, "; ")
+			reminded, _ := state["plan_ready_set_reminded"].(map[string]any)
+			remindedUser, remindedUserOK := 0, false
+			if reminded != nil {
+				remindedUser, remindedUserOK = exactInteger(reminded["user_index"])
+			}
+			if readySet != "" && (!remindedUserOK || remindedUser != latestUser || str(reminded["ready_set"]) != readySet) {
+				state["plan_ready_set_reminded"] = map[string]any{"user_index": latestUser, "ready_set": readySet}
+				planReason = "This turn, start every listed ready pass through a separate purser:dispatcher agent, in parallel. Use normal routing and review: " + readySet
 			}
 		}
 	}

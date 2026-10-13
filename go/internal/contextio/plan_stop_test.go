@@ -54,9 +54,9 @@ func TestPlanStopContinuationLifecycle(t *testing.T) {
 	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "What is the weather?"}})
 	first := planStop(t, repo, transcript, false)
-	wantReason := "Continue accepted plans plan-1 M1/2 dispatch through normal Purser routing and review."
-	if !strings.Contains(first, wantReason) {
-		t.Fatalf("first Stop reason = %q, want to contain %q", first, wantReason)
+	wantPrefix := "This turn, start every listed ready pass through a separate purser:dispatcher agent, in parallel. Use normal routing and review: "
+	if !strings.Contains(first, wantPrefix) || !strings.Contains(first, "plan-1 (2 accepted) ") || !strings.Contains(first, "#M1") {
+		t.Fatalf("first Stop reason = %q, want batch instruction and compact ready pass", first)
 	}
 	if duplicate := planStop(t, repo, transcript, false); duplicate != "" {
 		t.Fatalf("duplicate Stop blocked same user turn: %q", duplicate)
@@ -66,7 +66,7 @@ func TestPlanStopContinuationLifecycle(t *testing.T) {
 	}
 
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Another unrelated question."}})
-	if next := planStop(t, repo, transcript, false); !strings.Contains(next, "plan-1 M1/2") {
+	if next := planStop(t, repo, transcript, false); !strings.Contains(next, "plan-1 (2 accepted) ") || !strings.Contains(next, "#M1") {
 		t.Fatalf("next milestone Stop reason = %q", next)
 	}
 
@@ -83,7 +83,7 @@ func TestPlanStopContinuationLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue."}})
-	if resumed := planStop(t, repo, transcript, false); !strings.Contains(resumed, "plan-1 M1/2") {
+	if resumed := planStop(t, repo, transcript, false); !strings.Contains(resumed, "plan-1 (2 accepted) ") || !strings.Contains(resumed, "#M1") {
 		t.Fatalf("resumed plan Stop reason = %q", resumed)
 	}
 }
@@ -211,7 +211,7 @@ func TestPlanStopEvaluatesPlansIndependently(t *testing.T) {
 	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue."}})
 	got := planStop(t, repo, transcript, false)
-	if !strings.Contains(got, "plan-b M1/2") || strings.Contains(got, "plan-a") || strings.Contains(got, "plan: ") {
+	if !strings.Contains(got, "plan-b (2 accepted)") || !strings.Contains(got, "#M1") || strings.Contains(got, "plan-a") || strings.Contains(got, "plan: ") {
 		t.Fatalf("Stop continuation did not isolate plan B or retained full pointer: %q", got)
 	}
 	if duplicate := planStop(t, repo, transcript, false); duplicate != "" {
@@ -242,7 +242,7 @@ func TestPlanStopRemindsApplyAndDispatchPlans(t *testing.T) {
 	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue both plans."}})
 	got := planStop(t, repo, transcript, false)
-	if !strings.Contains(got, "plan-apply M1/2 dispatch") || !strings.Contains(got, "plan-dispatch M1/1 dispatch") {
+	if !strings.Contains(got, "plan-apply (2 accepted)") || !strings.Contains(got, "plan-dispatch (1 accepted)") {
 		t.Fatalf("Stop omitted a plan's next action: %q", got)
 	}
 }
@@ -284,7 +284,7 @@ func TestPlanStopResumesAfterResolvedLinkedJobs(t *testing.T) {
 			}
 			transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
 			appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue the plan."}})
-			if got := planStop(t, repo, transcript, false); !strings.Contains(got, "plan-resolved M1/2 dispatch") {
+			if got := planStop(t, repo, transcript, false); !strings.Contains(got, "plan-resolved (2 accepted)") || !strings.Contains(got, "#M1") {
 				t.Fatalf("Stop did not resume the next pass: %q", got)
 			}
 		})
@@ -325,10 +325,10 @@ func TestPlanStopCompactSizeDoesNotExceedLegacySingleton(t *testing.T) {
 	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
 	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue."}})
 	got := planStop(t, repo, transcript, false)
-	legacy := "Continue accepted plan " + plan.TaskID + " at milestone 1 of 5: dispatch the next pass through normal Purser routing and review. " + renderActivePlanPointer(repo)
-	t.Logf("singleton Stop characters=%d; legacy singleton characters=%d", len(got), len(legacy))
-	if len(got) > len(legacy) {
-		t.Fatalf("singleton Stop grew from %d to %d characters", len(legacy), len(got))
+	wantPrefix := "This turn, start every listed ready pass through a separate purser:dispatcher agent, in parallel. Use normal routing and review: "
+	compactEntry := plan.TaskID + " (5 accepted) " + artifact + "#M1"
+	if len(got) > len(wantPrefix)+len(compactEntry)+len(stopSuffix) {
+		t.Fatalf("singleton batch Stop was not compact: %d characters: %q", len(got), got)
 	}
 	second, err := AcceptPlan(root, repo, "plan-second", artifact, []int{1, 2})
 	if err != nil {
@@ -339,8 +339,79 @@ func TestPlanStopCompactSizeDoesNotExceedLegacySingleton(t *testing.T) {
 	appendPlanStopRecord(t, secondTranscript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue both."}})
 	twoPlan := planStop(t, repo, secondTranscript, false)
 	t.Logf("two-plan Stop characters=%d", len(twoPlan))
-	if !strings.Contains(twoPlan, "plan-second M1/2") || strings.Contains(twoPlan, "plan-single") {
+	if !strings.Contains(twoPlan, "plan-second (2 accepted)") || !strings.Contains(twoPlan, "plan-single (5 accepted)") {
 		t.Fatalf("new sibling was hidden by the same-turn reminder: %q", twoPlan)
+	}
+}
+
+func TestPlanStopReadyBatchLifecycle(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", root)
+	if _, err := AcceptPlan(root, repo, "batch", artifact, []int{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue the plan."}})
+	prefix := "This turn, start every listed ready pass through a separate purser:dispatcher agent, in parallel. Use normal routing and review: "
+	first := planStop(t, repo, transcript, false)
+	if !strings.Contains(first, prefix) || !strings.Contains(first, "batch (3 accepted) ") || !strings.Contains(first, "#M1,M2") || strings.Contains(first, "bounded task") {
+		t.Fatalf("initial batch did not list both ready passes compactly: %q", first)
+	}
+	if duplicate := planStop(t, repo, transcript, false); duplicate != "" {
+		t.Fatalf("unchanged ready set repeated: %q", duplicate)
+	}
+	plan, err := ReadPlanForTask(root, repo, "batch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Revision++
+	planPath, _, err := planPath(root, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePlans(planPath, []*PlanState{plan}); err != nil {
+		t.Fatal(err)
+	}
+	if revisionOnly := planStop(t, repo, transcript, false); revisionOnly != "" {
+		t.Fatalf("revision-only change repeated the ready set: %q", revisionOnly)
+	}
+	jobID, taskID := strings.Repeat("f", 64), "batch-m1of3"
+	if _, matched, err := BindPlanJob(root, repo, taskID, jobID); err != nil || !matched {
+		t.Fatalf("bind running M1: matched=%v err=%v", matched, err)
+	}
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+	if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	job := map[string]any{"jobId": jobID, "taskId": taskID, "state": "RUNNING"}
+	data, _ := json.Marshal(job)
+	if err := os.WriteFile(jobPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	running := planStop(t, repo, transcript, false)
+	if !strings.Contains(running, "batch (3 accepted) ") || !strings.Contains(running, "#M2") || strings.Contains(running, "#M1") {
+		t.Fatalf("running M1 did not leave M2 as the ready pass: %q", running)
+	}
+	job["state"] = "SUCCEEDED"
+	data, _ = json.Marshal(job)
+	if err := os.WriteFile(jobPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPlanApply(root, repo, taskID, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPlanValidation(root, repo, taskID, jobID, "PASS"); err != nil {
+		t.Fatal(err)
+	}
+	opened := planStop(t, repo, transcript, false)
+	if !strings.Contains(opened, "batch (3 accepted) ") || !strings.Contains(opened, "#M2,M3") {
+		t.Fatalf("newly opened M3 was not included in the changed ready set: %q", opened)
+	}
+	if duplicate := planStop(t, repo, transcript, false); duplicate != "" {
+		t.Fatalf("unchanged expanded ready set repeated: %q", duplicate)
 	}
 }
 
@@ -373,7 +444,7 @@ func TestPlanStopIneligibleSiblingDoesNotSuppress(t *testing.T) {
 				appendPlanStopRecord(t, transcript, map[string]any{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": "call-1", "name": "mcp__plugin_purser_codex-main__codex_start", "input": map[string]any{"prompt": "ORCH|task=plan-a-m1of1-p1c|phase=implement"}}}}})
 			}
 			got := planStop(t, repo, transcript, false)
-			if !strings.Contains(got, "plan-b M1/1") || strings.Contains(got, "plan-a") {
+			if !strings.Contains(got, "plan-b (1 accepted)") || !strings.Contains(got, "#M1") || strings.Contains(got, "plan-a") {
 				t.Fatalf("%s plan A suppressed eligible plan B: %q", status, got)
 			}
 		})
