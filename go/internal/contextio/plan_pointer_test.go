@@ -82,6 +82,37 @@ func TestPlanPointerDeliveredAtCompactAndClear(t *testing.T) {
 	}
 }
 
+func TestPlanPointerRestoresReadyGraphSiblingWhileApplyPending(t *testing.T) {
+	root := t.TempDir()
+	repo := updateSessionTestRepo(t)
+	artifact := filepath.Join(t.TempDir(), "graph-plan.md")
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", root)
+	state, err := AcceptPlan(root, repo, "graph-pointer", artifact, []int{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, taskID := strings.Repeat("a", 64), "graph-pointer-m1of3"
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+	if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := json.Marshal(map[string]any{"jobId": jobID, "taskId": taskID, "state": "SUCCEEDED"})
+	if err := os.WriteFile(jobPath, job, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, matched, err := BindPlanJob(root, repo, taskID, jobID); err != nil || !matched {
+		t.Fatalf("bind result awaiting apply: matched=%v err=%v", matched, err)
+	}
+	got := renderActivePlanPointer(repo)
+	want := "next action: apply; plan: " + state.ArtifactPath + "; ready: M2; start every listed ready pass through a separate purser:dispatcher agent, in parallel."
+	if !strings.Contains(got, want) {
+		t.Fatalf("graph pointer omitted independent ready sibling: want %q in %q", want, got)
+	}
+}
+
 func TestPlanPointerPromptDeduplicatesUnchangedAction(t *testing.T) {
 	_, repo, _, _ := planPointerFixture(t, []int{1, 2})
 	event := map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "pointer-prompt", "cwd": repo, "prompt": "continue"}
