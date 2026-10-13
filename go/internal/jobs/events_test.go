@@ -73,8 +73,29 @@ func TestTestEvidenceKeepsLatestRunnerRunsAndBoundsOutput(t *testing.T) {
 	if len(got) != 1 || got[0]["exit_code"] != 0 || got[0]["command"] != "go test ./..." {
 		t.Fatalf("test evidence = %#v", got)
 	}
-	if tail := got[0]["output_tail"].(string); len(tail) != 4096 {
-		t.Fatalf("output tail bytes = %d, want 4096", len(tail))
+	if tail := got[0]["output_tail"].(string); tail != strings.Repeat("x", 4096) {
+		t.Fatalf("output tail = %q, want last 4096 bytes unchanged", tail)
+	}
+}
+
+func TestTestEvidenceRecoversOutputFromUpdatedItem(t *testing.T) {
+	events := []map[string]any{
+		{"type": "item.updated", "item": map[string]any{"id": "run-1", "type": "command_execution"}, "output_delta": "--- FAIL: TestExample"},
+		{"type": "item.completed", "item": map[string]any{"id": "run-1", "type": "command_execution", "command": "go test ./pkg", "exit_code": float64(1), "status": "completed", "aggregated_output": ""}},
+	}
+	evidence := TestEvidence(events)
+	if len(evidence) != 1 || evidence[0]["output_tail"] != "--- FAIL: TestExample" {
+		t.Fatalf("TestEvidence() = %#v, want output recovered from item.updated", evidence)
+	}
+}
+
+func TestTestEvidenceMarksMissingOutput(t *testing.T) {
+	events := []map[string]any{
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./pkg", "exit_code": float64(1), "status": "completed", "timed_out": true}},
+	}
+	evidence := TestEvidence(events)
+	if len(evidence) != 1 || evidence[0]["output_tail"] != "[no output captured; item status: completed; timeout: true]" {
+		t.Fatalf("TestEvidence() = %#v, want explicit missing-output marker", evidence)
 	}
 }
 

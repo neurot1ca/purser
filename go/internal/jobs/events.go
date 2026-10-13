@@ -152,12 +152,24 @@ type testEvidenceRun struct {
 
 func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 	latest := make(map[string]testEvidenceRun)
+	outputs := make(map[string]string)
 	lastEdit, lastRun := -1, -1
 	for i, event := range events {
-		if event["type"] != "item.completed" {
+		kind, _ := event["type"].(string)
+		item, _ := event["item"].(map[string]any)
+		if kind == "item.updated" && item["type"] == "command_execution" {
+			if id, _ := item["id"].(string); id != "" {
+				if delta, _ := event["output_delta"].(string); delta != "" {
+					outputs[id] += delta
+				} else if output := commandOutput(item); output != "" {
+					outputs[id] = output
+				}
+			}
 			continue
 		}
-		item, _ := event["item"].(map[string]any)
+		if kind != "item.completed" {
+			continue
+		}
 		if item["type"] == "file_change" && item["status"] == "completed" {
 			lastEdit = i
 		}
@@ -173,7 +185,20 @@ func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 			continue
 		}
 		lastRun = i
-		output, _ := item["aggregated_output"].(string)
+		output := commandOutput(item)
+		if output == "" {
+			if id, _ := item["id"].(string); id != "" {
+				output = outputs[id]
+			}
+		}
+		if output == "" {
+			status := firstString(item["status"], "unknown")
+			marker := "[no output captured; item status: " + status
+			if item["timed_out"] == true || strings.Contains(strings.ToLower(status), "timeout") {
+				marker += "; timeout: true"
+			}
+			output = marker + "]"
+		}
 		lines := strings.Split(output, "\n")
 		if len(lines) > 40 {
 			lines = lines[len(lines)-40:]
@@ -204,6 +229,15 @@ func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].index < runs[j].index })
 	return runs, failed
+}
+
+func commandOutput(item map[string]any) string {
+	for _, key := range []string{"aggregated_output", "output", "stdout", "stderr"} {
+		if output, _ := item[key].(string); output != "" {
+			return output
+		}
+	}
+	return ""
 }
 
 // TestEvidence returns the latest completed test-runner command for each
