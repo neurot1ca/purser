@@ -83,6 +83,62 @@ func TestPostAsyncDiscardedCancelReturnsOnlyReceipt(t *testing.T) {
 	}
 }
 
+func TestPostAsyncRejectedCancelReturnsOnlyReceipt(t *testing.T) {
+	state, repo, event, index, _, original, job, _, _ := newAsyncSuccessCase(t, "rejected_cancel")
+	event["tool_name"] = "mcp__codex-main__codex_cancel"
+	event["cwd"] = repo
+	job["applyState"] = "rejected"
+	if err := atomicAdmissionJSON(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	response, err := postAsyncDispatch(event, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := responseBundle(t, response); !reflect.DeepEqual(got, map[string]any{
+		"jobId": index["jobId"], "state": "SUCCEEDED", "applyState": "rejected",
+	}) {
+		t.Fatalf("rejection receipt = %#v", got)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "codex_apply") {
+		t.Fatalf("rejection receipt retained apply guidance: %#v", response)
+	}
+	indexPath := filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json")
+	saved, err := readAsyncObject(indexPath)
+	if err != nil || saved["stage"] != "CONSUMED" {
+		t.Fatalf("rejection receipt was not consumed: %#v err=%v", saved, err)
+	}
+	if _, err := os.Stat(pendingPathForAsync(state, original)); !os.IsNotExist(err) {
+		t.Fatalf("rejected result pending record remains: err=%v", err)
+	}
+}
+
+func TestPostAsyncResultRetainsApplyGuidanceForUnappliedJob(t *testing.T) {
+	state, _, event, index, _, _, job, _, _ := newAsyncSuccessCase(t, "unapplied_result_guidance")
+	job["worktreePath"] = filepath.Join(state, "worktree")
+	job["applyState"] = ""
+	if err := atomicAdmissionJSON(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	guidance := PostApplyGuidance("", stringValue(index["jobId"]))
+	response := map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse", "additionalContext": guidance}}
+	index["stage"], index["response"] = "CONSUMED", response
+	if err := writeAsyncObject(filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json"), index); err != nil {
+		t.Fatal(err)
+	}
+	got, err := postAsyncDispatch(event, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context := stringValue(mapValue(got["hookSpecificOutput"])["additionalContext"]); !strings.Contains(context, "codex_apply") {
+		t.Fatalf("codex_result guidance missing: %#v", got)
+	}
+}
+
 func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "durable_review_finalization.json"))
 	if err != nil {

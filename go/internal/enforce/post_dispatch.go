@@ -361,7 +361,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	}
 	defer func() { releaseTaskUsageLock(lock); _ = lock.Close() }()
 	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") {
-		if job := asyncJob(root, index); job != nil && job["discarded"] == true {
+		if job := asyncJob(root, index); job != nil && (job["discarded"] == true || job["applyState"] == "rejected") {
 			loaded, loadErr := loadPreConfig()
 			if loadErr != nil {
 				return nil, loadErr
@@ -370,7 +370,13 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			if field == "" {
 				field = "updatedToolOutput"
 			}
-			response, replaceErr := replacement(map[string]any{"jobId": index["jobId"], "state": job["state"], "discarded": true}, field)
+			receipt := map[string]any{"jobId": index["jobId"], "state": job["state"]}
+			if job["discarded"] == true {
+				receipt["discarded"] = true
+			} else {
+				receipt["applyState"] = "rejected"
+			}
+			response, replaceErr := replacement(receipt, field)
 			if replaceErr != nil {
 				return nil, replaceErr
 			}
