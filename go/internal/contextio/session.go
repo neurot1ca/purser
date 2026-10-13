@@ -49,7 +49,7 @@ func SessionStart(event map[string]any) []byte {
 		contentBytes, _ = os.ReadFile(handoff)
 	}
 	content := strings.ReplaceAll(strings.ReplaceAll(string(contentBytes), "\r\n", "\n"), "\r", "\n")
-	language := HandoffUserLanguage(string(content))
+	language := projectUserLanguage(stateRoot(), string(content))
 	session, _ := event["session_id"].(string)
 	source, _ := event["source"].(string)
 	validSession := session != ""
@@ -597,12 +597,57 @@ func HandoffUserLanguage(content string) string {
 		match := handoffLanguage.FindStringSubmatch(strings.TrimSuffix(line, "\r"))
 		if len(match) == 2 {
 			language := strings.TrimSpace(match[1])
-			if language != "" && !strings.HasPrefix(language, "<") {
+			if usableUserLanguage(language) {
 				return language
 			}
 		}
 	}
 	return ""
+}
+
+func usableUserLanguage(language string) bool {
+	language = strings.TrimSpace(language)
+	if language == "" || strings.HasPrefix(language, "<") || strings.EqualFold(language, "English") {
+		return false
+	}
+	switch strings.ToLower(language) {
+	case "-", "none", "null", "n/a", "na", "unknown", "unspecified", "not specified", "tbd":
+		return false
+	}
+	return true
+}
+
+func projectUserLanguage(root, content string) string {
+	if language := HandoffUserLanguage(content); language != "" {
+		RecordUserLanguage(root, language)
+		return language
+	}
+	return lastUserLanguage(root)
+}
+
+// RecordUserLanguage stores the latest usable language from a project handoff.
+func RecordUserLanguage(root, language string) {
+	if root == "" || !usableUserLanguage(language) {
+		return
+	}
+	_ = writeJSONAtomically(filepath.Join(root, "user-language.json"), map[string]string{"language": strings.TrimSpace(language)})
+}
+
+func lastUserLanguage(root string) string {
+	if root == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(root, "user-language.json"))
+	if err != nil {
+		return ""
+	}
+	var saved struct {
+		Language string `json:"language"`
+	}
+	if json.Unmarshal(data, &saved) != nil || !usableUserLanguage(saved.Language) {
+		return ""
+	}
+	return strings.TrimSpace(saved.Language)
 }
 
 func languageInstruction(language string) string {

@@ -81,6 +81,7 @@ func queuePostCompletionReceipt(root string, event map[string]any, repository st
 	if data, err := os.ReadFile(filepath.Join(filepath.Dir(path), "purser-handoff.md")); err == nil {
 		if recorded := contextio.HandoffUserLanguage(string(data)); recorded != "" {
 			language = recorded
+			contextio.RecordUserLanguage(root, recorded)
 		}
 	}
 	if language != "" {
