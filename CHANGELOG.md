@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.144 — 2026-10-13
+
+- **Changed:** `/purser:coder-effort` with no level reports the project's current setting.
+- **Fixed:** cancelling a finished unapplied job returns a short rejected receipt instead of the result bundle and an apply instruction.
+- **Fixed:** apply validation compares working-tree content, so committing the applied change no longer marks the result stale, and same-second edits are still caught.
+- **Fixed:** `/purser:reviewer` accepts the agy model it lists.
 ## 0.1.143 — 2026-10-12
 
 - **New:** after an apply, Purser validates the applied revision on the host in a hidden, low-priority run (go vet, go test, plugin test) and binds the result to that revision.
