@@ -5,7 +5,7 @@ allowed-tools: Bash(node *)
 
 Use the user's request below as the planning goal. Plan only; do not edit code or start implementation.
 
-Dispatch one asynchronous call through the configured coder. Use `codex_start` once, run the exact waiter command it returns in the background, end the turn, and if it prints `STILL_WAITING`, run it again; otherwise call `codex_result` with this jobId. Do not start a second planning call for this request. Use a stable task ID for the whole call. The first line of the worker prompt must be exactly:
+Dispatch one asynchronous call through the configured coder. Use `codex_start` once, run the exact waiter command it returns in the background, end the turn, and if it prints `STILL_WAITING`, run it again; otherwise call `codex_result` with this jobId. Follow the `next` instruction in the `codex_start` result (in headless runs it specifies foreground execution). Do not start a second planning call for this request. Use a stable task ID for the whole call. The first line of the worker prompt must be exactly:
 
 ```text
 ORCH|task=<stable-id>|phase=plan|route=plan_standard|reason=new_task[|scope=<repo-relative-path[,repo-relative-path...]>]

@@ -184,6 +184,49 @@ func TestPostStartWaiterUsesExecutablePath(t *testing.T) {
 	}
 }
 
+func TestPostStartWaiterModeUsesClaudeEntrypoint(t *testing.T) {
+	for _, tc := range []struct {
+		name, entrypoint, wantMode string
+	}{
+		{name: "headless_sdk_cli", entrypoint: "sdk-cli", wantMode: "foreground"},
+		{name: "absent_entrypoint", entrypoint: "", wantMode: "background"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_ENTRYPOINT", tc.entrypoint)
+			root := t.TempDir()
+			event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+				"tool_use_id": "mode-" + tc.name, "session_id": "waiter-mode-session"}
+			call, _ := callKey(event)
+			jobID := jobHash("waiter-mode-" + tc.name)
+			pending := map[string]any{"async_call": "waiter-mode-" + tc.name, "async_ready": true,
+				"session_id": event["session_id"], "tool_use_id": event["tool_use_id"], "project_key": "project"}
+			path := filepath.Join(root, "pending", call+".json")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeFixtureJSON(path, pending); err != nil {
+				t.Fatal(err)
+			}
+			event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "RUNNING"}}
+			got, err := postStart(event, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, ok := mapValue(got["hookSpecificOutput"])["updatedToolOutput"].([]any)
+			if !ok || len(entries) == 0 {
+				t.Fatalf("post-start response has no updated tool output: %#v", got)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(stringValue(mapValue(entries[0])["text"])), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if next := stringValue(payload["next"]); !strings.HasPrefix(next, "Run in the "+tc.wantMode+" (use the PowerShell tool on Windows): ") {
+				t.Fatalf("next instruction = %q, want %s mode", next, tc.wantMode)
+			}
+		})
+	}
+}
+
 func TestPostStartKeepsDeadUnconfirmedJobOwnedAndReleasesLease(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
