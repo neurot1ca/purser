@@ -17,6 +17,12 @@ import (
 
 // LoadCoderConfig loads shipped defaults and the initial Codex user overlay.
 func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
+	return LoadCoderConfigForRepository(configPath, userPath, "")
+}
+
+// LoadCoderConfigForRepository loads shipped defaults and applies global and
+// repository-scoped role configuration.
+func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[string]any, error) {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
@@ -27,14 +33,13 @@ func LoadCoderConfig(configPath, userPath string) (map[string]any, error) {
 	if err := decoder.Decode(&config); err != nil {
 		return nil, err
 	}
-	userRaw, err := os.ReadFile(userPath)
-	if os.IsNotExist(err) {
+	rolePath := profile.ProjectRolesPath(profile.StateRoot(), repository)
+	_, globalErr := os.Stat(userPath)
+	_, projectErr := os.Stat(rolePath)
+	if os.IsNotExist(globalErr) && os.IsNotExist(projectErr) {
 		return config, validateHookConfig(config)
 	}
-	if err != nil {
-		return nil, err
-	}
-	user, _, err := profile.DecodeTOML(userRaw)
+	user, err := profile.ResolveUserConfig(profile.StateRoot(), repository, userPath)
 	if err != nil {
 		return nil, err
 	}

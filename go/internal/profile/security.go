@@ -13,7 +13,7 @@ var familyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 var userSecurity = map[string]map[string]bool{
 	"roles":    {"orchestrator": true, "coder": true, "reviewer": true},
-	"coding":   {"coder_agent": true, "routes": true, "family": true},
+	"coding":   {"coder_agent": true, "routes": true, "family": true, "reviewer1_agent": true, "reviewer1_model_requested": true, "reviewer1_effort": true, "reviewer1_executable": true},
 	"reviewer": {"executable": true, "selected": true, "alternatives": true},
 	"trust":    {"paths": true},
 	"paths":    {"protected": true},
@@ -53,7 +53,21 @@ func ValidateSecurityValue(section, key string, value any) (bool, string) {
 		valid := false
 		switch key {
 		case "coder_agent":
-			valid = oneOf(value, "codex", "opencode", "agy")
+			valid = oneOf(value, "codex", "opencode", "agy", "claude")
+		case "reviewer1_agent":
+			valid = oneOf(value, "codex", "opencode", "agy", "claude")
+		case "reviewer1_model_requested":
+			if value == nil {
+				valid = true
+			} else if model, ok := value.(string); ok {
+				valid = model != ""
+			}
+		case "reviewer1_effort":
+			valid = oneOf(value, "low", "medium", "high", "xhigh", "max")
+		case "reviewer1_executable":
+			if executable, ok := value.(string); ok {
+				valid = isHostAbsolute(executable)
+			}
 		case "family":
 			if v, ok := value.(string); ok {
 				valid = familyPattern.MatchString(v)

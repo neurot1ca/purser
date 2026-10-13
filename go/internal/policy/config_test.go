@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"purser-hook/internal/profile"
 )
 
 func TestPythonConfigGoldenParity(t *testing.T) {
@@ -100,6 +102,35 @@ func TestClaudeFallbackAndReviewerChoicesValidateAndPersist(t *testing.T) {
 	}
 	if _, err := LoadCoderConfig(configPath, userPath); err == nil {
 		t.Fatal("unsupported Claude effort was accepted")
+	}
+}
+
+func TestLoadCoderConfigProjectRoles(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", filepath.Join(root, "state"))
+	repository := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repository, 0700); err != nil {
+		t.Fatal(err)
+	}
+	userPath := filepath.Join(root, "global.toml")
+	if err := os.WriteFile(userPath, []byte("[roles]\ncoder = \"codex\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rolePath := profile.ProjectRolesPath(filepath.Join(root, "state"), repository)
+	if err := os.MkdirAll(filepath.Dir(rolePath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rolePath, []byte("schema_version = 1\n[roles]\ncoder = \"claude\"\n[coding]\ncoder_agent = \"claude\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json")
+	loaded, err := LoadCoderConfigForRepository(configPath, userPath, repository)
+	if err != nil || loaded["coder_agent"] != "claude" {
+		t.Fatalf("project coder config = %#v, %v", loaded, err)
+	}
+	legacy, err := LoadCoderConfig(configPath, userPath)
+	if err != nil || legacy["coder_agent"] == "claude" {
+		t.Fatalf("legacy global-only call was affected: %#v, %v", legacy, err)
 	}
 }
 

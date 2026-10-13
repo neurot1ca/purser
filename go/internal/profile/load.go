@@ -40,6 +40,15 @@ func loadProfileFiles(projectRoot, userPath string, readFile func(string) ([]byt
 		}
 	}()
 	user := loadTierFile(userPath, "user", readFile)
+	rolePath := ProjectRolesPath(StateRoot(), projectRoot)
+	if _, err := os.Stat(rolePath); !errors.Is(err, os.ErrNotExist) {
+		config, resolveErr := ResolveUserConfig(StateRoot(), projectRoot, userPath)
+		if resolveErr != nil {
+			user = rejectedFileTier("user", resolveErr)
+		} else {
+			user = ValidateTier("user", config)
+		}
+	}
 	project := loadTierFile(filepath.Join(projectRoot, ".orchestrator", "profile.toml"), "project", readFile)
 	return ResolveProfile(projectRoot, user, project)
 }
