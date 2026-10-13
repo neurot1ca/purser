@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.146 — 2026-10-13
+
+- **New:** when an accepted plan has several ready passes, Purser asks Claude to start them all in the same turn, and lists them again after `/compact`.
+- **Changed:** a plan pass whose dependencies are not done refuses to start.
+- **Fixed:** with no reviewer configured, `/purser:reviewer` shows the installed agent Purser would use, or Off when none is installed.
+- **Fixed:** apply validations started close together wait for each other instead of ending as interrupted, and a later passing validation settles earlier plan passes.
 ## 0.1.145 — 2026-10-13
 
 - **Changed:** `/purser:coder-effort` with no level asks for the effort with a choice form.

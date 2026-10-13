@@ -39,8 +39,8 @@ boundaries.
   variants or fixtures. Trivial one-liners need no test.
 
 - Run focused tests for what you change, once, green, at the end. Workers run
-  focused tests only; Claude runs `go test ./...` and `go vet ./...` from `go/`
-  once before acceptance.
+  focused tests only; Purser's post-apply host validation runs the full
+  `go test ./...` and `go vet ./...`.
 - End implementation reports with the single `VALIDATION:` JSON line the hook
   requests.
 - Test scratch goes under the git-ignored `.tmp/`, never inside

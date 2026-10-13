@@ -211,9 +211,13 @@ consequential and escalated work. Request repair only for a material defect,
 failed criterion, contract violation, or required validation gap. After repair,
 review the new delta, blocking finding, and newly affected boundaries.
 
-When relevant, Claude runs `go test ./...` and `go vet ./...` from `go/` once
-before acceptance. Workers run focused validation, never repeated full suites.
-Repeat an expensive successful check only if repair could invalidate it.
+Workers run focused validation, never full suites. After each apply Purser
+validates the applied revision on the host and returns its summary; that is the
+full-suite evidence. When that summary is present, Claude does not run the
+suite itself: before a commit or release it reads the latest apply validation,
+and a failure without named tests is a Purser gap to report, not a reason to
+rerun. When no apply validation is returned, Claude runs the project's full
+check once before the commit.
 
 ### One-turn AUDIT
 
