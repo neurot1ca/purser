@@ -188,7 +188,7 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 	path := filepath.Join(root, "telemetry", "events", now.Format("2006-01"), "session_accuracy.jsonl")
 	item := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": project,
 		"ts_utc": now.Format(time.RFC3339), "payload": map[string]any{
-			"implementer": "claude", "route": "normal", "duration_ms": 120000, "eta_minutes": 3,
+			"implementer": "claude", "route": "normal", "duration_ms": 120000, "eta_minutes": 2.5,
 		}}
 	poisoned := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": project,
 		"ts_utc": now.Format(time.RFC3339), "payload": map[string]any{
@@ -210,7 +210,7 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 	}
 	statePath := filepath.Join(root, "projects", project, "duration_accuracy.json")
 	writeSessionMaintenanceJSON(t, statePath, map[string]any{"version": 2, "compacts": 4, "errors": map[string]any{"claude": 75}})
-	if got := compactAccuracyHint(root, project); !strings.Contains(got, "Claude's task duration estimates have improved") || !strings.Contains(got, "50%") {
+	if got := compactAccuracyHint(root, project); !strings.Contains(got, "> ⚓ **Claude's task duration estimates are now typically within 25% of the actual time.**") {
 		t.Fatalf("accuracy improvement hint = %q", got)
 	}
 	if got := compactAccuracyHint(root, project); got != "" {
@@ -233,8 +233,66 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeSessionMaintenanceJSON(t, statePath, map[string]any{"version": 2, "compacts": 4, "errors": map[string]any{"agent-x": 75}})
-	if got := compactAccuracyHint(root, project); !strings.Contains(got, "agent-x's task duration estimates have improved") {
+	if got := compactAccuracyHint(root, project); !strings.Contains(got, "> ⚓ **agent-x's task duration estimates are now typically within 25% of the actual time.**") {
 		t.Fatalf("unknown implementer possessive hint = %q", got)
+	}
+}
+
+func TestSessionCompactAccuracyHintAnnouncementThresholds(t *testing.T) {
+	root := t.TempDir()
+	project := "project"
+	now := time.Now().UTC().Truncate(time.Second)
+	path := filepath.Join(root, "telemetry", "events", now.Format("2006-01"), "session_accuracy.jsonl")
+	statePath := filepath.Join(root, "projects", project, "duration_accuracy.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeSample := func(eta float64) {
+		t.Helper()
+		item := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": project,
+			"ts_utc": now.Format(time.RFC3339), "payload": map[string]any{
+				"implementer": "claude", "duration_ms": 120000, "eta_minutes": eta,
+			}}
+		data, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name string
+		eta  float64
+		want string
+	}{
+		{name: "83 percent does not announce", eta: 3.66},
+		{name: "25 percent first announcement", eta: 2.5, want: "within 25%"},
+		{name: "22 percent is less than five points better", eta: 2.44},
+		{name: "19 percent is five points better", eta: 2.38, want: "within 19%"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeSample(tc.eta)
+			var state map[string]any
+			if _, err := os.Stat(statePath); os.IsNotExist(err) {
+				writeSessionMaintenanceJSON(t, statePath, map[string]any{"version": 2, "compacts": 4, "errors": map[string]any{}})
+			} else {
+				stateData, err := os.ReadFile(statePath)
+				if err != nil || json.Unmarshal(stateData, &state) != nil {
+					t.Fatalf("read accuracy state: %v", err)
+				}
+				state["compacts"] = 4
+				writeSessionMaintenanceJSON(t, statePath, state)
+			}
+			got := compactAccuracyHint(root, project)
+			if tc.want == "" && got != "" {
+				t.Fatalf("accuracy hint = %q, want no notice", got)
+			}
+			if tc.want != "" && !strings.Contains(got, tc.want) {
+				t.Fatalf("accuracy hint = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

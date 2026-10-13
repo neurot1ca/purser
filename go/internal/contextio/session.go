@@ -519,17 +519,23 @@ func compactAccuracyHint(root, key string) string {
 	defer unlock(lock)
 	state, ok := readSmallObject(path)
 	if !ok {
-		state = map[string]any{"version": float64(2), "compacts": float64(0), "errors": map[string]any{}}
+		state = map[string]any{"version": float64(2), "compacts": float64(0), "errors": map[string]any{}, "announced": map[string]any{}}
 	}
 	version, versionOK := numeric(state["version"])
 	if !versionOK || version != 2 {
 		state["version"] = float64(2)
 		state["errors"] = map[string]any{}
+		state["announced"] = map[string]any{}
 	}
 	countf, ok := numeric(state["compacts"])
 	errors, ok2 := state["errors"].(map[string]any)
 	if !ok || !ok2 || countf < 0 || math.Trunc(countf) != countf {
 		return ""
+	}
+	announced, ok := state["announced"].(map[string]any)
+	if !ok {
+		announced = map[string]any{}
+		state["announced"] = announced
 	}
 	count := int(countf) + 1
 	state["compacts"] = count
@@ -577,14 +583,16 @@ func compactAccuracyHint(root, key string) string {
 			continue
 		}
 		avg := total / float64(len(samples))
-		prev, pok := numeric(errors[agent])
 		errors[agent] = avg
-		if pok && avg < prev {
+		rounded := int(math.Floor(avg + .5))
+		lastAnnounced, wasAnnounced := numeric(announced[agent])
+		if rounded <= 30 && (!wasAnnounced || float64(rounded) <= lastAnnounced-5) {
 			name := map[string]string{"codex-main": "Codex", "opencode-main": "OpenCode", "agy-main": "Antigravity", "claude": "Claude"}[agent]
 			if name == "" {
 				name = agent
 			}
-			messages = append(messages, fmt.Sprintf("Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **%s's task duration estimates have improved through the self-learning system! The estimated margin of error is now %d%%.**\"", name, int(math.Floor(avg+.5))))
+			announced[agent] = rounded
+			messages = append(messages, fmt.Sprintf("Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **%s's task duration estimates are now typically within %d%% of the actual time.**\"", name, rounded))
 		}
 	}
 	_ = writeJSONAtomically(path, state)
