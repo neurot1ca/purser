@@ -11,15 +11,19 @@ import (
 
 func coderEffortMain(args []string) int {
 	usage := "usage: purser-hook coder-effort low|medium|high|xhigh|auto --cwd <repository>"
-	if len(args) == 0 || !validCoderEffortArgument(args[0]) {
-		fmt.Fprintln(os.Stderr, usage)
-		return 2
+	effort := ""
+	if len(args) > 0 && args[0][0] != '-' {
+		if !validCoderEffortArgument(args[0]) {
+			fmt.Fprintln(os.Stderr, usage)
+			return 2
+		}
+		effort = args[0]
+		args = args[1:]
 	}
-	effort := args[0]
 	flags := flag.NewFlagSet("coder-effort", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	cwd := flags.String("cwd", "", "repository path")
-	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *cwd == "" {
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *cwd == "" {
 		fmt.Fprintln(os.Stderr, usage)
 		return 2
 	}
@@ -37,7 +41,16 @@ func coderEffortMain(args []string) int {
 		writeJSON(map[string]any{"error": "coder_effort applies only to the Codex coder"})
 		return 1
 	}
-	if err := contextio.SetCoderEffort(stateRoot(), contextio.ProjectKey(repository), effort); err != nil {
+	if effort == "" {
+		effort, err = contextio.CoderEffort(stateRoot(), contextio.ProjectKey(repository))
+		if err != nil {
+			writeJSON(map[string]any{"error": err.Error()})
+			return 1
+		}
+		if effort == "" {
+			effort = "auto"
+		}
+	} else if err := contextio.SetCoderEffort(stateRoot(), contextio.ProjectKey(repository), effort); err != nil {
 		writeJSON(map[string]any{"error": err.Error()})
 		return 1
 	}

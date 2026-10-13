@@ -14,4 +14,4 @@ suffix=""; [ "$os" = windows ] && suffix=".exe"
 "${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-${os}-${arch}${suffix}" coder-effort $ARGUMENTS --cwd "$PWD"
 ```
 
-Report the JSON acknowledgement in one line in the user's language.
+With no level, report the current setting in one line. Otherwise, report the JSON acknowledgement in one line in the user's language.
