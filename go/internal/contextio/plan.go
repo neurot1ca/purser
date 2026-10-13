@@ -201,8 +201,8 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	headings := regexp.MustCompile(`(?m)^(#{1,6})\s+([^\n]+)(?:\n|$)`).FindAllStringSubmatchIndex(text, -1)
 	idPattern := regexp.MustCompile(`^M([0-9]+)\b`)
-	depLine := regexp.MustCompile(`(?im)^\*\*Dependenc(?:y|ies):\*\*[ \t]*([^\n]*)`)
-	pathLine := regexp.MustCompile(`(?im)^\*\*(?:Touched paths|Touched files/dirs|Write paths):\*\*\s*\n`)
+	depLine := regexp.MustCompile(`(?im)^[ \t]*(?:[-*][ \t]+)?\*\*Dependenc(?:y|ies):\*\*[ \t]*([^\n]*)`)
+	pathLine := regexp.MustCompile(`(?im)^[ \t]*(?:[-*][ \t]+)?\*\*(?:Touched paths|Touched files/dirs|Write paths):\*\*[ \t]*([^\n]*)`)
 	quotedPath := regexp.MustCompile("`([^`]+)`")
 	var result []PlanMilestone
 	explicit := false
@@ -245,13 +245,25 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 				}
 			}
 		}
-		if loc := pathLine.FindStringIndex(section); loc != nil {
-			for _, line := range strings.Split(section[loc[1]:], "\n") {
+		if declaration := pathLine.FindStringSubmatchIndex(section); declaration != nil {
+			inline := section[declaration[2]:declaration[3]]
+			lines := []string{}
+			if paths := quotedPath.FindAllStringSubmatch(inline, -1); len(paths) > 0 {
+				for _, path := range paths {
+					lines = append(lines, "- `"+path[1]+"`")
+				}
+			} else {
+				lines = strings.Split(section[declaration[1]:], "\n")[1:]
+			}
+			for _, line := range lines {
 				line = strings.TrimSpace(line)
 				if line == "" {
 					continue
 				}
 				if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
+					break
+				}
+				if strings.HasPrefix(strings.TrimSpace(line[2:]), "**") {
 					break
 				}
 				paths := quotedPath.FindAllStringSubmatch(line, -1)

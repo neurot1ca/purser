@@ -1197,7 +1197,7 @@ func appendPrePlanShape(prompt, phase string) string {
 		return prompt
 	}
 	block := `Required plan shape (Purser):
-Write Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint), Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.`
+Write Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint). Example fields: - **Dependency:** None. and - **Write paths:** ` + "`go/internal/testutil/environment.go`" + ` only. Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.`
 	return strings.TrimRight(prompt, " \t\r\n") + "\n\n" + block
 }
 

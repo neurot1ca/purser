@@ -30,6 +30,44 @@ const readyPlanArtifact = `## Milestones
 This must not be part of M3's task section.
 `
 
+func TestParsePlanMilestonesBulletInlineDeclarations(t *testing.T) {
+	artifact := []byte("## Milestones\n" +
+		"### M1\n- **Dependency:** None.\n- **Write paths:** `go/internal/testutil/environment.go` only.\n- **Validation:** focused test.\n- **Parallel group:** P1\n" +
+		"### M2\n  * **Dependency:** none\n  * **Touched paths:** `go/internal/testutil/other.go` only.\n  * **Validation:** focused test.\n  * **Parallel group:** P1\n")
+	milestones, err := parsePlanMilestones(artifact, []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(milestones) != 2 {
+		t.Fatalf("got %d milestones, want 2", len(milestones))
+	}
+	for i, want := range []string{"go/internal/testutil/environment.go", "go/internal/testutil/other.go"} {
+		if len(milestones[i].Dependencies) != 0 {
+			t.Errorf("%s dependencies = %v, want none", milestones[i].ID, milestones[i].Dependencies)
+		}
+		if !reflect.DeepEqual(milestones[i].WritePaths, []string{want}) {
+			t.Errorf("%s write paths = %v, want [%s]", milestones[i].ID, milestones[i].WritePaths, want)
+		}
+	}
+}
+
+func TestParsePlanMilestonesLegacyAndBulletDependency(t *testing.T) {
+	legacy, err := parsePlanMilestones([]byte(readyPlanArtifact), []int{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy) != 3 || !reflect.DeepEqual(legacy[0].WritePaths, []string{"src/a.go"}) {
+		t.Fatalf("legacy declaration did not parse: %+v", legacy)
+	}
+	bullet, err := parsePlanMilestones([]byte("## Milestones\n### M1\n- **Dependency:** none\n- **Write paths:**\n  - `src/a.go`\n### M2\n- **Dependency:** M1\n- **Write paths:**\n  - `src/b.go`\n"), []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bullet) != 2 || !reflect.DeepEqual(bullet[1].Dependencies, []int{1}) {
+		t.Fatalf("bullet dependency = %+v, want M2 depends on M1", bullet)
+	}
+}
+
 func TestPlanGraphRejectsInvalidAcceptance(t *testing.T) {
 	for _, tc := range []struct {
 		name, artifact string
