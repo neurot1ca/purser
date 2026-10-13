@@ -366,7 +366,7 @@ func checkoutRevision(repo string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	tempIndex, err := os.CreateTemp("", "purser-validation-index-")
+	tempIndex, err := os.CreateTemp(filepath.Dir(indexPath), "purser-validation-index-")
 	if err != nil {
 		return "", "", err
 	}
@@ -380,7 +380,7 @@ func checkoutRevision(repo string) (string, string, error) {
 		return "", "", err
 	}
 	env := replaceValidationEnv(os.Environ(), "GIT_INDEX_FILE", tempPath)
-	cmd = proc.Hide(exec.Command("git", "add", "-A"))
+	cmd = proc.Hide(exec.Command("git", "add", "--renormalize", "-A"))
 	cmd.Dir, cmd.Env = repo, env
 	if err = cmd.Run(); err != nil {
 		return "", "", err

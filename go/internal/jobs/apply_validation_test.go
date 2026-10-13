@@ -95,7 +95,7 @@ func TestValidationPackageSelectionIncludesDeletedGoAndTouchedModule(t *testing.
 	}
 }
 
-func TestCheckoutRevisionReadErrorFails(t *testing.T) {
+func TestCheckoutRevisionFailsWhenDirectoryReplacesTrackedFile(t *testing.T) {
 	_, repo, _ := validationFixture(t, []string{"main.go"})
 	if err := os.Remove(filepath.Join(repo, "main.go")); err != nil {
 		t.Fatal(err)
@@ -104,7 +104,7 @@ func TestCheckoutRevisionReadErrorFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := checkoutRevision(repo); err == nil {
-		t.Fatal("status-listed unreadable path was silently skipped")
+		t.Fatal("directory replacing tracked file produced an unverifiable content tree")
 	}
 }
 
