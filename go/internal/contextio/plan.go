@@ -474,7 +474,7 @@ func ReadPlan(root, repository string) (*PlanState, error) {
 	if err := validatePlanArtifact(state); err != nil {
 		return nil, err
 	}
-	state.ReadyMilestones = readyMilestones(root, state)
+	state.ReadyMilestones = readyMilestones(root, state, states)
 	return state, nil
 }
 
@@ -503,7 +503,7 @@ func ReadPlanForTask(root, repository, taskID string) (*PlanState, error) {
 	if err := validatePlanArtifact(state); err != nil {
 		return nil, err
 	}
-	state.ReadyMilestones = readyMilestones(root, state)
+	state.ReadyMilestones = readyMilestones(root, state, states)
 	return state, nil
 }
 
@@ -556,8 +556,8 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*P
 		return nil, err
 	}
 	state := &PlanState{Version: planSchemaVersion, Revision: 1, ProjectKey: ProjectKey(canonical), ProjectRoot: canonical, TaskID: taskID, ArtifactPath: artifactPath, ArtifactDigest: hex.EncodeToString(digest[:]), AcceptedMilestones: accepted, CurrentMilestone: accepted[0], PendingNextAction: "dispatch", Milestones: metadata}
-	state.ReadyMilestones = readyMilestones(root, state)
 	states = append(states, state)
+	state.ReadyMilestones = readyMilestones(root, state, states)
 	if err := writePlans(path, states); err != nil {
 		return nil, err
 	}
@@ -645,7 +645,7 @@ func UpdatePlan(root, repository, taskID string, expectedRevision int, operation
 		return nil, errors.New("unsupported plan operation")
 	}
 	if len(state.Milestones) > 0 {
-		state.ReadyMilestones = readyMilestones(root, state)
+		state.ReadyMilestones = readyMilestones(root, state, states)
 	}
 	state.Revision++
 	if err := writePlans(path, states); err != nil {
@@ -700,7 +700,7 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 	}
 	setLinkedJobs(state, linked)
 	state.PendingNextAction = "apply"
-	state.ReadyMilestones = readyMilestones(root, state)
+	state.ReadyMilestones = readyMilestones(root, state, states)
 	state.Revision++
 	if err := writePlans(path, states); err != nil {
 		return nil, true, err
@@ -781,7 +781,7 @@ func RecordPlanApply(root, repository, taskID, jobID string) error {
 	linked = removeString(linked, jobID)
 	setLinkedJobs(state, linked)
 	state.PendingNextAction = pendingAction(state)
-	advanceAppliedMilestone(root, state)
+	advanceAppliedMilestone(root, state, states)
 	state.Revision++
 	return writePlans(path, states)
 }
@@ -850,8 +850,8 @@ func RecordPlanValidation(root, repository, taskID, jobID, status string) error 
 		}
 	}
 	if changed {
-		advanceAppliedMilestone(root, state)
-		state.ReadyMilestones = readyMilestones(root, state)
+		advanceAppliedMilestone(root, state, states)
+		state.ReadyMilestones = readyMilestones(root, state, states)
 		state.Revision++
 		return writePlans(path, states)
 	}
@@ -953,7 +953,7 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 	state.PendingNextAction = pendingAction(state)
 	currentBefore := state.CurrentMilestone
 	completedBefore := len(state.CompletedMilestones)
-	advanceAppliedMilestone(root, state)
+	advanceAppliedMilestone(root, state, states)
 	if state.CurrentMilestone != currentBefore || len(state.CompletedMilestones) != completedBefore {
 		changed = true
 	}
@@ -1037,7 +1037,7 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 			planChanged = true
 		}
 		state.PendingNextAction = pendingAction(state)
-		advanceAppliedMilestone(root, state)
+		advanceAppliedMilestone(root, state, states)
 		if state.CurrentMilestone != currentBefore || len(state.CompletedMilestones) != completedBefore {
 			planChanged = true
 		}
@@ -1086,7 +1086,7 @@ func PlanReadiness(root, repository, taskID string) ([]ReadyMilestone, error) {
 	if err := validatePlanArtifact(state); err != nil {
 		return nil, err
 	}
-	return readyMilestones(root, state), nil
+	return readyMilestones(root, state, states), nil
 }
 
 func resolvePlanOwner(states []*PlanState, taskID string) (*PlanState, int, bool, error) {
@@ -1211,11 +1211,27 @@ func appliedMilestoneAwaitingValidation(state *PlanState, n int) bool {
 	return false
 }
 
-func readyMilestones(root string, state *PlanState) []ReadyMilestone {
+func readyMilestones(root string, state *PlanState, states []*PlanState) []ReadyMilestone {
 	if state.UserStopped || state.Gate != "" {
 		return nil
 	}
+	var earlierWritePaths []string
+	for _, earlier := range states {
+		if earlier == state {
+			break
+		}
+		if earlier.UserStopped || earlier.Gate != "" {
+			continue
+		}
+		for _, m := range earlier.Milestones {
+			n := milestoneNumber(m.ID)
+			if containsMilestone(earlier.AcceptedMilestones, n) && !containsMilestone(earlier.CompletedMilestones, n) {
+				earlierWritePaths = append(earlierWritePaths, m.WritePaths...)
+			}
+		}
+	}
 	ready := []ReadyMilestone{}
+nextMilestone:
 	for _, n := range state.AcceptedMilestones {
 		if len(state.Milestones) == 0 && n != state.CurrentMilestone {
 			continue
@@ -1225,6 +1241,18 @@ func readyMilestones(root string, state *PlanState) []ReadyMilestone {
 		}
 		if appliedMilestoneAwaitingValidation(state, n) {
 			continue
+		}
+		for _, m := range state.Milestones {
+			if milestoneNumber(m.ID) != n {
+				continue
+			}
+			for _, a := range m.WritePaths {
+				for _, b := range earlierWritePaths {
+					if a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
+						continue nextMilestone
+					}
+				}
+			}
 		}
 		// Any linked pass (including a result awaiting apply) prevents duplicate dispatch.
 		linked := false
@@ -1275,7 +1303,7 @@ func readyMilestones(root string, state *PlanState) []ReadyMilestone {
 	return ready
 }
 
-func advanceAppliedMilestone(root string, state *PlanState) {
+func advanceAppliedMilestone(root string, state *PlanState, states []*PlanState) {
 	for _, n := range state.AcceptedMilestones {
 		if len(state.Milestones) == 0 && n != state.CurrentMilestone {
 			continue
@@ -1305,7 +1333,7 @@ func advanceAppliedMilestone(root string, state *PlanState) {
 			break
 		}
 	}
-	state.ReadyMilestones = readyMilestones(root, state)
+	state.ReadyMilestones = readyMilestones(root, state, states)
 	state.PendingNextAction = pendingAction(state)
 }
 

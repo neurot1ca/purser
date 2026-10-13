@@ -217,6 +217,61 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 	}
 }
 
+func TestPlanReadyEarlierPlanWriteOverlap(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := AcceptPlan(root, repo, "earlier", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := AcceptPlan(root, repo, "later", artifact, []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.ReadyMilestones) != 1 || b.ReadyMilestones[0].ID != "M2" {
+		t.Fatalf("overlapping milestone ready on acceptance: %+v", b.ReadyMilestones)
+	}
+	read, err := ReadPlanForTask(root, repo, b.TaskID)
+	if err != nil || !reflect.DeepEqual(read.ReadyMilestones, b.ReadyMilestones) {
+		t.Fatalf("read readiness: %+v %v", read, err)
+	}
+	ready, err := PlanReadiness(root, repo, "later-m1of2")
+	if err != nil || !reflect.DeepEqual(ready, b.ReadyMilestones) {
+		t.Fatalf("dispatch readiness: %+v %v", ready, err)
+	}
+	plans, err := ReconcilePlans(root, repo)
+	if err != nil || len(plans) != 2 || len(plans[0].ReadyMilestones) != 1 || !reflect.DeepEqual(plans[1].ReadyMilestones, b.ReadyMilestones) {
+		t.Fatalf("Stop readiness / earlier priority: %+v %v", plans, err)
+	}
+	if _, err := UpdatePlan(root, repo, a.TaskID, a.Revision, "complete-milestone", "1"); err != nil {
+		t.Fatal(err)
+	}
+	read, err = ReadPlanForTask(root, repo, b.TaskID)
+	if err != nil || len(read.ReadyMilestones) != 2 || read.ReadyMilestones[0].ID != "M1" || read.ReadyMilestones[1].ID != "M2" {
+		t.Fatalf("completion did not release overlap: %+v %v", read, err)
+	}
+}
+
+func TestPlanReadyEarlierUserStopped(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := AcceptPlan(root, repo, "earlier", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpdatePlan(root, repo, a.TaskID, a.Revision, "stop", ""); err != nil {
+		t.Fatal(err)
+	}
+	b, err := AcceptPlan(root, repo, "later", artifact, []int{1})
+	if err != nil || len(b.ReadyMilestones) != 1 || b.ReadyMilestones[0].ID != "M1" {
+		t.Fatalf("stopped earlier plan blocked milestone: %+v %v", b, err)
+	}
+}
+
 func TestRecordPlanValidationRejectsUnknownStatus(t *testing.T) {
 	root, repo, artifact := planFixture(t)
 	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
