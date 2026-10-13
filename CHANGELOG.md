@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.147 — 2026-10-13
+
+- **New:** after an apply, host validation also runs `pytest`, `npm test` or `cargo test` for changed Python, JavaScript or Rust code; a project's `[validation] command` in `.orchestrator/profile.toml` replaces that detection.
+- **Fixed:** plan passes written as bullets (`- **Dependency:** None.`) are recognized, so independent passes run in parallel instead of one by one.
+- **Fixed:** in headless `claude -p` runs Claude waits for the Codex result in the foreground instead of exiting before it arrives.
+- **Fixed:** the upgrade notice comes first in the next reply and no longer replaces the task.
+
 ## 0.1.146 — 2026-10-13
 
 - **New:** when an accepted plan has several ready passes, Purser asks Claude to start them all in the same turn, and lists them again after `/compact`.
