@@ -2,8 +2,10 @@ package retention
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -381,7 +383,7 @@ func TestOwnerManagedStateIsUntouched(t *testing.T) {
 	}
 }
 
-func TestProjectsAreWarnOnlyWhenOverLimit(t *testing.T) {
+func TestRetentionProjectsPreserveConfigurationWhenOverLimit(t *testing.T) {
 	root := t.TempDir()
 	profile := filepath.Join(root, "projects", "0123456789abcdef", "profile.toml")
 	putFile(t, profile, []byte("profile"), 1000)
@@ -411,7 +413,7 @@ func TestProjectsAreWarnOnlyWhenOverLimit(t *testing.T) {
 	}
 }
 
-func TestProductionDeleteAllowlistIsOnlyCatalogCache(t *testing.T) {
+func TestRetentionGenericAllowlistPreservesOwnerManagedArtifacts(t *testing.T) {
 	ownership := registry["worktree_ownership"]
 	if ownership.owner != "worktree-retirement" || ownership.maxAgeDays != 3 {
 		t.Fatalf("worktree ownership policy = %#v", ownership)
@@ -426,6 +428,124 @@ func TestProductionDeleteAllowlistIsOnlyCatalogCache(t *testing.T) {
 		if len(p.deleteGlobs) != 0 {
 			t.Errorf("unexpected production delete allowlist for %q: %#v", name, p.deleteGlobs)
 		}
+	}
+}
+
+func TestRetentionValidationAges(t *testing.T) {
+	for _, c := range []struct {
+		status       string
+		days         int64
+		log, summary bool
+	}{
+		{"passed", 4, false, true}, {"passed", 15, false, false},
+		{"failed", 4, true, true}, {"error", 15, false, false},
+		{"running", 15, true, true}, {"unknown", 15, true, true},
+	} {
+		t.Run(c.status+fmt.Sprint(c.days), func(t *testing.T) {
+			root := t.TempDir()
+			id := strings.Repeat("a", 64)
+			base := filepath.Join(root, "apply_validation", "0123456789abcdef", id)
+			putFile(t, base+".json", []byte(`{"job_id":"`+id+`","status":"`+c.status+`"}`), 1000)
+			putFile(t, base+".log", []byte("output"), 1000)
+			PruneState(root, float64(1000+c.days*86400), false)
+			if pathExists(base+".log") != c.log || pathExists(base+".json") != c.summary {
+				t.Fatal("incorrect validation retention split")
+			}
+		})
+	}
+}
+
+func TestRetentionArtifactOwnership(t *testing.T) {
+	for _, protection := range []string{"", "pending", "thread", "running", "malformed", "lock"} {
+		t.Run(protection, func(t *testing.T) {
+			root := t.TempDir()
+			id, key := strings.Repeat("a", 64), strings.Repeat("b", 64)
+			index := filepath.Join(root, "async_jobs", id+".json")
+			putFile(t, index, []byte(`{"jobId":"`+id+`","call_key":"`+key+`","stage":"CONSUMED"}`), 1000)
+			state := "SUCCEEDED"
+			if protection == "running" {
+				state = "RUNNING"
+			}
+			putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"`+state+`","applyState":"applied"}`), 1000)
+			bundle := filepath.Join(root, "bundle_artifacts", key+".json")
+			raw := filepath.Join(root, "raw_tool_outputs", key+".json")
+			putFile(t, bundle, []byte(`{"task_id":"task","raw_output_path":`+strconv.Quote(raw)+`}`), 1000)
+			putFile(t, raw, []byte(`{}`), 1000)
+			putFile(t, filepath.Join(root, "bundle_artifacts", "unknown.json"), []byte(`{}`), 1000)
+			if protection == "pending" {
+				putFile(t, filepath.Join(root, "pending", key+".json"), []byte(`{}`), 1000)
+			}
+			if protection == "thread" {
+				putFile(t, filepath.Join(root, "threads", "thread.json"), []byte(`{"job_id":"`+id+`"}`), 1000)
+			}
+			if protection == "malformed" {
+				putFile(t, filepath.Join(root, "threads", "thread.json"), []byte(`{`), 1000)
+			}
+			if protection == "lock" {
+				unlock, err := jobsLock(index)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer unlock()
+			}
+			PruneState(root, 1000+15*86400, false)
+			protected := protection == "pending" || protection == "running" || protection == "lock"
+			if pathExists(bundle) != protected || pathExists(raw) != protected || !pathExists(filepath.Join(root, "bundle_artifacts", "unknown.json")) {
+				t.Fatal("artifact ownership protection failed")
+			}
+		})
+	}
+}
+
+func TestRetentionDisposableProject(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "projects", "0123456789abcdef")
+	putFile(t, filepath.Join(base, "code-map", "map.txt"), []byte("cache"), 1000)
+	putFile(t, filepath.Join(base, "code-map", "manifest.json"), []byte(`{}`), 1000)
+	putFile(t, filepath.Join(base, "profile.toml"), []byte("configuration"), 1000)
+	PruneState(root, 1000+15*86400, false)
+	if pathExists(filepath.Join(base, "code-map", "map.txt")) || !pathExists(filepath.Join(base, "profile.toml")) {
+		t.Fatal("disposable project classification failed")
+	}
+	putFile(t, filepath.Join(base, "code-map", "map.txt"), []byte("cache"), 1000)
+	putFile(t, filepath.Join(base, "active_plan.json"), []byte(`{}`), 1000)
+	PruneState(root, 1000+15*86400, false)
+	if !pathExists(filepath.Join(base, "code-map", "map.txt")) {
+		t.Fatal("active project cache removed")
+	}
+}
+
+func TestRetentionBlockedDeletionRetries(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("a", 64)
+	base := filepath.Join(root, "apply_validation", "0123456789abcdef", id)
+	putFile(t, base+".json", []byte(`{"job_id":"`+id+`","status":"passed"}`), 1000)
+	putFile(t, base+".log", []byte("output"), 1000)
+	previous := removeRetainedFile
+	t.Cleanup(func() { removeRetainedFile = previous })
+	removeRetainedFile = func(string) error { return os.ErrPermission }
+	PruneState(root, 1000+15*86400, false)
+	if !pathExists(base+".log") || !pathExists(base+".json") {
+		t.Fatal("blocked deletion lost retry evidence")
+	}
+	removeRetainedFile = previous
+	PruneState(root, 1000+15*86400, false)
+	if pathExists(base+".log") || pathExists(base+".json") {
+		t.Fatal("blocked deletion not retried")
+	}
+}
+
+func TestRetentionArtifactLinks(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	id := strings.Repeat("a", 64)
+	putFile(t, filepath.Join(outside, id+".json"), []byte(`{"job_id":"`+id+`","status":"passed"}`), 1000)
+	putFile(t, filepath.Join(outside, id+".log"), []byte("external"), 1000)
+	if err := os.Symlink(outside, filepath.Join(root, "apply_validation")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	PruneState(root, 1000+15*86400, false)
+	if !pathExists(filepath.Join(outside, id+".log")) {
+		t.Fatal("followed artifact link")
 	}
 }
 

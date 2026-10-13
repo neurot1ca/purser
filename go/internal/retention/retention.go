@@ -30,6 +30,7 @@ var maxPrepBytes int64 = 2 * gib
 var warningOnce sync.Once
 var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var renamePluginPath = os.Rename
+var removeRetainedFile = os.Remove
 
 type policy struct {
 	owner       string
@@ -221,6 +222,7 @@ var registry = map[string]policy{
 	"marketplace":               bounded("release"),
 	"telemetry":                 bounded("telemetry-distill"),
 	"projects":                  byteLimit(128 * mib),
+	"apply_validation":          bounded("validation-retention"),
 	"task_retries":              bounded("task-retry-evidence"),
 	"codex_exec_mcp":            bounded("jobs-cleanup"),
 	"raw_tool_outputs":          {maxAgeDays: 7, maxFiles: -1, maxBytes: 64 * mib},
@@ -306,6 +308,7 @@ func PruneState(root string, now float64, checkCeiling bool) {
 	if !safeRoot(root) {
 		return
 	}
+	retireArtifacts(root, now, buildArtifactReferences(root))
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return
@@ -330,6 +333,238 @@ func PruneState(root string, now float64, checkCeiling bool) {
 	if checkCeiling {
 		checkRootCeiling(root, now)
 	}
+}
+
+// Artifact deletion uses the producer's lock and rechecks disposition inside it.
+// Unknown classes and missing/ambiguous ownership are never age-based authority.
+type artifactReferences struct {
+	values map[string]struct{}
+}
+
+func (r *artifactReferences) add(value string) {
+	if value == "" {
+		return
+	}
+	for _, item := range []string{value, filepath.Clean(value), filepath.Base(value)} {
+		if item != "." && item != "" {
+			r.values[item] = struct{}{}
+		}
+	}
+}
+
+func addArtifactValues(value any, refs *artifactReferences) {
+	switch item := value.(type) {
+	case string:
+		refs.add(item)
+	case map[string]any:
+		for _, child := range item {
+			addArtifactValues(child, refs)
+		}
+	case []any:
+		for _, child := range item {
+			addArtifactValues(child, refs)
+		}
+	}
+}
+
+func scanArtifactReferences(root, relative string, include func(map[string]any) bool, refs *artifactReferences) {
+	base := filepath.Join(root, filepath.FromSlash(relative))
+	for _, path := range filesUnder(base) {
+		if filepath.Ext(path) != ".json" {
+			continue
+		}
+		value := readObject(path)
+		if value == nil {
+			continue
+		}
+		if include == nil || include(value) {
+			addArtifactValues(value, refs)
+		}
+	}
+}
+
+func buildArtifactReferences(root string) artifactReferences {
+	refs := artifactReferences{values: map[string]struct{}{}}
+	scanArtifactReferences(root, "pending", nil, &refs)
+	scanArtifactReferences(root, "task_retries", nil, &refs)
+	scanArtifactReferences(root, "codex_exec_mcp/jobs", func(value map[string]any) bool {
+		return !cleanupTerminalState(stringValue(value["state"]))
+	}, &refs)
+	scanArtifactReferences(root, "active_tasks", func(value map[string]any) bool {
+		return value["completed"] != true
+	}, &refs)
+	scanArtifactReferences(root, "sessions", func(value map[string]any) bool {
+		return value["live_thread"] != nil
+	}, &refs)
+	return refs
+}
+
+func retireArtifacts(root string, now float64, refs artifactReferences) {
+	for _, path := range filesUnder(filepath.Join(root, "apply_validation")) {
+		if filepath.Ext(path) != ".json" || !jobIDPattern.MatchString(strings.TrimSuffix(filepath.Base(path), ".json")) {
+			continue
+		}
+		rel, _ := filepath.Rel(filepath.Join(root, "apply_validation"), path)
+		if len(strings.Split(rel, string(filepath.Separator))) != 2 {
+			continue
+		}
+		enqueueUnlock, err := artifactLock(root, filepath.Join(filepath.Dir(path), "enqueue.lock"))
+		if err != nil {
+			continue
+		}
+		repositoryUnlock, err := artifactLock(root, filepath.Join(filepath.Dir(path), "repository.lock"))
+		if err != nil {
+			_ = enqueueUnlock()
+			continue
+		}
+		unlock, err := artifactLock(root, path+".lock")
+		if err != nil {
+			_ = repositoryUnlock()
+			_ = enqueueUnlock()
+			continue
+		}
+		record := readObject(path)
+		id := strings.TrimSuffix(filepath.Base(path), ".json")
+		if record["job_id"] == id && (record["status"] == "passed" || record["status"] == "failed" || record["status"] == "error" || record["status"] == "launch_error" || record["status"] == "timeout" || record["status"] == "interrupted") {
+			log := strings.TrimSuffix(path, ".json") + ".log"
+			days := 14
+			if record["status"] == "passed" {
+				days = 3
+			}
+			stamp, e := fileMtime(path)
+			if e == nil && now-stamp >= float64(days)*86400 {
+				retireArtifactFile(root, log, now, days)
+			}
+			// Retain the summary if log removal was blocked: it is retry authority.
+			if !pathExists(log) {
+				retireArtifactFile(root, path, now, 14)
+			}
+		}
+		_ = unlock()
+		_ = repositoryUnlock()
+		_ = enqueueUnlock()
+	}
+	for _, indexPath := range filesUnder(filepath.Join(root, "async_jobs")) {
+		id := strings.TrimSuffix(filepath.Base(indexPath), ".json")
+		if filepath.Ext(indexPath) != ".json" || !jobIDPattern.MatchString(id) {
+			continue
+		}
+		if !artifactSafePath(root, indexPath) {
+			continue
+		}
+		unlock, err := jobsLock(indexPath)
+		if err != nil {
+			continue
+		}
+		index := readObject(indexPath)
+		key := stringValue(index["call_key"])
+		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+		if !artifactSafePath(root, jobPath) {
+			_ = unlock()
+			continue
+		}
+		job := readObject(jobPath)
+		if index["jobId"] == id && index["stage"] == "CONSUMED" && job["jobId"] == id && cleanupTerminalState(stringValue(job["state"])) && (job["applyState"] == "applied" || job["discarded"] == true) && jobIDPattern.MatchString(key) && !pathExists(filepath.Join(root, "pending", key+".json")) {
+			bundle := filepath.Join(root, "bundle_artifacts", key+".json")
+			raw := filepath.Join(root, "raw_tool_outputs", key+".json")
+			if !artifactSafePath(root, bundle) || !artifactSafePath(root, raw) {
+				_ = unlock()
+				continue
+			}
+			value := readObject(bundle)
+			ownedRaw := filepath.Clean(stringValue(value["raw_output_path"])) == filepath.Clean(raw)
+			if runtime.GOOS == "windows" {
+				ownedRaw = strings.EqualFold(filepath.Clean(stringValue(value["raw_output_path"])), filepath.Clean(raw))
+			}
+			if value != nil && stringValue(value["task_id"]) != "" && ownedRaw && !artifactReferenced(refs, []string{id, key, stringValue(value["task_id"]), bundle, raw}) {
+				// Keep the bundle as ownership evidence until its raw output is gone.
+				retireArtifactFile(root, raw, now, 7)
+				if !pathExists(raw) {
+					retireArtifactFile(root, bundle, now, 7)
+				}
+			}
+		}
+		_ = unlock()
+	}
+	for _, path := range filesUnder(filepath.Join(root, "projects")) {
+		rel, _ := filepath.Rel(filepath.Join(root, "projects"), path)
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) != 3 || parts[1] != "code-map" || (parts[2] != "map.txt" && parts[2] != "manifest.json") {
+			continue
+		}
+		project := filepath.Join(root, "projects", parts[0])
+		unlock, err := artifactLock(root, filepath.Join(project, "code-map", "index.lock"))
+		if err != nil {
+			continue
+		}
+		if !pathExists(filepath.Join(project, "scope_leases.json")) && !pathExists(filepath.Join(project, "active_plan.json")) && !pathExists(filepath.Join(project, "active-coder.json")) && !artifactReferenced(refs, []string{parts[0]}) {
+			retireArtifactFile(root, path, now, 14)
+		}
+		_ = unlock()
+	}
+}
+
+func artifactSafePath(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		if isReparsePath(current) {
+			return false
+		}
+	}
+	return safeRoot(root)
+}
+
+func artifactLock(root, path string) (func() error, error) {
+	if !artifactSafePath(root, path) {
+		return nil, fmt.Errorf("unsafe artifact lock")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = contextio.TryLock(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() error {
+		err := contextio.Unlock(f)
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}, nil
+}
+
+func retireArtifactFile(root, path string, now float64, days int) bool {
+	if !artifactSafePath(root, path) || !regularFile(path) {
+		return false
+	}
+	stamp, err := fileMtime(path)
+	if err != nil || now-stamp < float64(days)*86400 {
+		return false
+	}
+	if removeRetainedFile(path) != nil || !errorsIsNotExist(path) {
+		Warning(root)
+		return false
+	}
+	return true
+}
+
+func artifactReferenced(refs artifactReferences, needles []string) bool {
+	for _, needle := range needles {
+		for _, item := range []string{needle, filepath.Clean(needle), filepath.Base(needle)} {
+			if _, ok := refs.values[item]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func prune(base string, p policy, now float64) bool {
