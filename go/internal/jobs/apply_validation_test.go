@@ -97,6 +97,93 @@ func TestValidationPackageSelectionIncludesDeletedGoAndTouchedModule(t *testing.
 	}
 }
 
+func TestValidationPythonManifestDirectory(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"pkg/tests/test_one.py"})
+	write(t, filepath.Join(repo, "pkg", "pyproject.toml"), "[tool.pytest.ini_options]\n")
+	write(t, filepath.Join(repo, "pkg", "tests", "test_one.py"), "")
+	commands := selectEcosystemValidationCommands(repo, record.Paths)
+	if len(commands) != 1 || commands[0].tool != "python" || commands[0].dir != filepath.Join(repo, "pkg") || strings.Join(commands[0].args, " ") != "-m pytest -q" {
+		t.Fatalf("Python validation selection=%+v (root %s)", commands, root)
+	}
+}
+
+func TestValidationNpmPlaceholderIsNotRun(t *testing.T) {
+	_, repo, record := validationFixture(t, []string{"web/test.ts"})
+	write(t, filepath.Join(repo, "web", "package.json"), `{"scripts":{"test":"echo \"Error: no test specified\" && exit 1"}}`)
+	write(t, filepath.Join(repo, "web", "test.ts"), "")
+	if got := selectEcosystemValidationCommands(repo, record.Paths); len(got) != 0 {
+		t.Fatalf("placeholder npm test was selected: %+v", got)
+	}
+}
+
+func TestValidationProfileCommandOverridesEcosystemDetection(t *testing.T) {
+	got := runEcosystemValidationFixture(t, []string{"test.py"}, func(repo string) {
+		write(t, filepath.Join(repo, "pyproject.toml"), "")
+		write(t, filepath.Join(repo, "test.py"), "")
+		write(t, filepath.Join(repo, ".orchestrator", "profile.toml"), "schema_version = 1\n[validation]\ncommand = \"custom-check --all\"\n")
+	}, func(tool string) (string, error) { return "/fake/" + tool, nil }, func(dir string, _ []string, args []string, _ time.Duration, _ io.Writer, _ *applyValidation) error {
+		if dir == "" || len(args) != 3 || args[len(args)-1] != "custom-check --all" {
+			t.Fatalf("profile command invocation dir=%q args=%v", dir, args)
+		}
+		return nil
+	})
+	if got.Status != "passed" || len(got.Commands) != 1 || !strings.Contains(got.Commands[0], "custom-check --all") {
+		t.Fatalf("profile command result=%+v", got)
+	}
+}
+
+func TestValidationMissingEcosystemToolIsSkipped(t *testing.T) {
+	got := runEcosystemValidationFixture(t, []string{"test.py"}, func(repo string) {
+		write(t, filepath.Join(repo, "pyproject.toml"), "")
+		write(t, filepath.Join(repo, "test.py"), "")
+	}, func(string) (string, error) { return "", exec.ErrNotFound }, func(string, []string, []string, time.Duration, io.Writer, *applyValidation) error {
+		t.Fatal("runner called for missing pytest executable")
+		return nil
+	})
+	if got.Status != "skipped" || got.Reason != "python3 is unavailable" && got.Reason != "python is unavailable" {
+		t.Fatalf("missing tool result=%+v", got)
+	}
+}
+
+func TestValidationFailingEcosystemCommandFails(t *testing.T) {
+	got := runEcosystemValidationFixture(t, []string{"test.py"}, func(repo string) {
+		write(t, filepath.Join(repo, "pyproject.toml"), "")
+		write(t, filepath.Join(repo, "test.py"), "")
+	}, func(tool string) (string, error) { return "/fake/" + tool, nil }, func(string, []string, []string, time.Duration, io.Writer, *applyValidation) error {
+		return errors.New("exit status 1")
+	})
+	if got.Status != "failed" || got.Reason != "python -m pytest -q failed" {
+		t.Fatalf("failing ecosystem result=%+v", got)
+	}
+}
+
+func runEcosystemValidationFixture(t *testing.T, paths []string, setup func(string), lookPath func(string) (string, error), runner func(string, []string, []string, time.Duration, io.Writer, *applyValidation) error) applyValidation {
+	t.Helper()
+	root, repo, record := validationFixture(t, paths)
+	setup(repo)
+	revision, snapshot, err := checkoutRevision(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Revision, record.Snapshot = revision, snapshot
+	key := validationRepositoryKey(repo)
+	path := validationRecordPath(root, key, record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	priorRunner, priorLookPath := runApplyValidationCommand, validationLookPath
+	runApplyValidationCommand, validationLookPath = runner, lookPath
+	t.Cleanup(func() { runApplyValidationCommand, validationLookPath = priorRunner, priorLookPath })
+	if err := RunApplyValidation(root, key, record.JobID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := readApplyValidation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
 func TestCheckoutRevisionFailsWhenDirectoryReplacesTrackedFile(t *testing.T) {
 	_, repo, _ := validationFixture(t, []string{"main.go"})
 	if err := os.Remove(filepath.Join(repo, "main.go")); err != nil {

@@ -42,6 +42,7 @@ type ResolvedProfile struct {
 	ProjectID  *string `json:"project_id"`
 	// MeasurementLedger is configured as [project].measurement_ledger, optionally with #Heading.
 	MeasurementLedger  *string             `json:"measurement_ledger,omitempty"`
+	ValidationCommand  *string             `json:"validation_command,omitempty"`
 	ProtectedPaths     []string            `json:"protected_paths"`
 	ForceFullReview    bool                `json:"force_full_review"`
 	FullSuiteRequired  bool                `json:"full_suite_required"`
@@ -179,7 +180,7 @@ func ResolveProfile(projectRoot string, user, project Tier) ResolvedProfile {
 	if value, ok := projectValues["maintenance.coverage_target_pct"].(float64); ok {
 		coverageTarget = value
 	}
-	return ResolvedProfile{Configured: project.Status != "missing", ProjectID: profileOptionalString(projectValues["project.id"]), MeasurementLedger: profileOptionalString(projectValues["project.measurement_ledger"]), ProtectedPaths: protected, ForceFullReview: forceFull, FullSuiteRequired: profileBool(projectValues, "review.full_suite_required"), CoverageTargetPct: coverageTarget, SkipMaxLines: lines, SkipMaxFiles: files, Trusted: trusted, ReviewerExecutable: profileOptionalString(userValues["reviewer.executable"]), ReviewerCandidates: candidates, Roles: roles, AuthoritySources: sources, Checks: checks, Worktree: worktree, VaultRoot: profileOptionalString(userValues["telemetry.vault_root"]), LooseningsIgnored: ignored, UserStatus: user.Status, ProjectStatus: project.Status, Warnings: warnings}
+	return ResolvedProfile{Configured: project.Status != "missing", ProjectID: profileOptionalString(projectValues["project.id"]), MeasurementLedger: profileOptionalString(projectValues["project.measurement_ledger"]), ValidationCommand: profileOptionalString(projectValues["validation.command"]), ProtectedPaths: protected, ForceFullReview: forceFull, FullSuiteRequired: profileBool(projectValues, "review.full_suite_required"), CoverageTargetPct: coverageTarget, SkipMaxLines: lines, SkipMaxFiles: files, Trusted: trusted, ReviewerExecutable: profileOptionalString(userValues["reviewer.executable"]), ReviewerCandidates: candidates, Roles: roles, AuthoritySources: sources, Checks: checks, Worktree: worktree, VaultRoot: profileOptionalString(userValues["telemetry.vault_root"]), LooseningsIgnored: ignored, UserStatus: user.Status, ProjectStatus: project.Status, Warnings: warnings}
 }
 
 // IsTrusted requires a canonical path equality, never a parent/child match.

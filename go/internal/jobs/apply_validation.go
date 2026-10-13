@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/proc"
+	"purser-hook/internal/profile"
 )
 
 const (
@@ -28,6 +30,7 @@ const (
 
 var launchApplyValidation = LaunchDetached
 var runApplyValidationCommand = runValidationCommand
+var validationLookPath = exec.LookPath
 var applyValidationExecutable = resolveApplyValidationExecutable
 var applyValidationTestLaunches atomic.Int64
 var applyValidationTestCommands atomic.Int64
@@ -80,6 +83,7 @@ type applyValidation struct {
 	Reason         string         `json:"reason,omitempty"`
 	PluginStatus   string         `json:"plugin_test_status,omitempty"`
 	PluginReason   string         `json:"plugin_test_reason,omitempty"`
+	Commands       []string       `json:"commands,omitempty"`
 	Counts         map[string]int `json:"counts,omitempty"`
 	FailedTests    []string       `json:"failing_tests,omitempty"`
 	UpdatedAt      string         `json:"updated_at"`
@@ -508,7 +512,16 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			return err
 		}
 	}
-	if len(packages) == 0 && !touchesPlugin(record.Paths) && validationState == "" {
+	profileConfig := profile.LoadProfile(record.Repository)
+	customCommand := ""
+	if profileConfig.ValidationCommand != nil {
+		customCommand = *profileConfig.ValidationCommand
+	}
+	ecosystemCommands := []ecosystemValidationCommand{}
+	if customCommand == "" {
+		ecosystemCommands = selectEcosystemValidationCommands(record.Repository, record.Paths)
+	}
+	if len(packages) == 0 && !touchesPlugin(record.Paths) && customCommand == "" && len(ecosystemCommands) == 0 && validationState == "" {
 		return finishValidation(stateRoot, path, &record, "skipped", "no Go packages or plugin paths were changed")
 	}
 	logPath := filepath.Join(filepath.Dir(path), id+".log")
@@ -523,10 +536,9 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			pkgs := packagesForModule(packages, goRoot, module)
 			if len(pkgs) > 0 {
 				args := append([]string{"vet", "-p", "2"}, pkgs...)
+				record.Commands = appendValidationCommand(record.Commands, "go "+strings.Join(args, " "))
 				if err = runApplyValidationCommand(module, env, args, validationTimeout, logFile, nil); err != nil {
-					if validationState == "" || validationFailureState(err) == "timeout" {
-						validationState, validationReason = validationFailureState(err), "go vet failed"
-					}
+					setValidationOutcome(&validationState, &validationReason, validationFailureState(err), "go vet failed")
 				}
 			}
 		}
@@ -535,28 +547,56 @@ func RunApplyValidation(stateRoot, key, id string) error {
 		for _, module := range modules {
 			env := moduleValidationEnvironment(stateRoot, module)
 			args := append([]string{"test", "-p", "2", "-json"}, packagesForModule(packages, goRoot, module)...)
+			record.Commands = appendValidationCommand(record.Commands, "go "+strings.Join(args, " "))
 			if err = runApplyValidationCommand(module, env, args, validationTimeout, logFile, &record); err != nil {
-				if validationState == "" || validationFailureState(err) == "timeout" {
-					validationState, validationReason = validationFailureState(err), "go test failed"
-				}
+				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), "go test failed")
+			}
+		}
+	}
+	if customCommand != "" {
+		shell, shellArgs, tool := validationShell(customCommand)
+		if binary, lookErr := validationLookPath(shell); lookErr != nil {
+			setValidationOutcome(&validationState, &validationReason, "skipped", tool+" is unavailable")
+		} else {
+			args := append([]string{binary}, shellArgs...)
+			record.Commands = appendValidationCommand(record.Commands, tool+" -c "+customCommand)
+			if err = runApplyValidationCommand(record.Repository, validationEnvironment(stateRoot), args, validationTimeout, logFile, nil); err != nil {
+				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), "validation command failed")
+			}
+		}
+	} else {
+		for _, check := range ecosystemCommands {
+			binary, lookErr := validationLookPath(check.tool)
+			if lookErr != nil && check.tool == "python" {
+				check.tool = "python3"
+				binary, lookErr = validationLookPath(check.tool)
+			}
+			if lookErr != nil {
+				setValidationOutcome(&validationState, &validationReason, "skipped", check.tool+" is unavailable")
+				continue
+			}
+			args := []string{binary}
+			args = append(args, check.args...)
+			record.Commands = appendValidationCommand(record.Commands, check.tool+" "+strings.Join(check.args, " "))
+			if err = runApplyValidationCommand(check.dir, validationEnvironment(stateRoot), args, validationTimeout, logFile, nil); err != nil {
+				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), check.label+" failed")
 			}
 		}
 	}
 	if touchesPlugin(record.Paths) {
 		env := validationEnvironment(stateRoot)
-		claude, lookErr := exec.LookPath("claude")
+		claude, lookErr := validationLookPath("claude")
 		if lookErr != nil {
 			record.PluginStatus, record.PluginReason = "skipped", "claude binary is unavailable"
-			if validationState == "" {
-				validationState, validationReason = "skipped", record.PluginReason
-			}
+			setValidationOutcome(&validationState, &validationReason, "skipped", record.PluginReason)
 		} else if err = runApplyValidationCommand(record.Repository, env, []string{claude, "plugin", "test"}, validationTimeout, logFile, nil); err != nil {
 			record.PluginStatus, record.PluginReason = validationFailureState(err), "claude plugin test failed"
-			if validationState == "" || validationFailureState(err) == "timeout" {
-				validationState, validationReason = record.PluginStatus, record.PluginReason
-			}
+			setValidationOutcome(&validationState, &validationReason, record.PluginStatus, record.PluginReason)
 		} else {
 			record.PluginStatus = "passed"
+		}
+		if lookErr == nil {
+			record.Commands = appendValidationCommand(record.Commands, "claude plugin test")
 		}
 	}
 	if validationState != "" {
@@ -820,6 +860,127 @@ func moduleValidationEnvironment(root, module string) []string {
 		env = append(env, "GO111MODULE=off")
 	}
 	return env
+}
+
+type ecosystemValidationCommand struct {
+	label string
+	tool  string
+	dir   string
+	args  []string
+}
+
+func validationShell(command string) (string, []string, string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/C", command}, "cmd"
+	}
+	return "sh", []string{"-c", command}, "sh"
+}
+
+func selectEcosystemValidationCommands(root string, paths []string) []ecosystemValidationCommand {
+	paths = append([]string(nil), paths...)
+	sort.Strings(paths)
+	selected := map[string]ecosystemValidationCommand{}
+	for _, name := range paths {
+		clean := filepath.Clean(filepath.FromSlash(name))
+		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(clean))
+		base := strings.ToLower(filepath.Base(clean))
+		if ext == ".py" && selected["python"].tool == "" {
+			if dir, ok := nearestValidationManifest(root, filepath.Dir(clean), []string{"pyproject.toml", "setup.cfg", "pytest.ini", "tox.ini"}); ok {
+				selected["python"] = ecosystemValidationCommand{label: "python -m pytest -q", tool: "python", dir: dir, args: []string{"-m", "pytest", "-q"}}
+			}
+		}
+		if (ext == ".js" || ext == ".jsx" || ext == ".ts" || ext == ".tsx" || ext == ".mjs" || ext == ".cjs") && selected["javascript"].tool == "" {
+			if dir, ok := nearestValidationManifest(root, filepath.Dir(clean), []string{"package.json"}); ok && hasNpmTest(filepath.Join(dir, "package.json")) {
+				selected["javascript"] = ecosystemValidationCommand{label: "npm test --silent", tool: "npm", dir: dir, args: []string{"test", "--silent"}}
+			}
+		}
+		if (ext == ".rs" || base == "cargo.toml") && selected["rust"].tool == "" {
+			start := filepath.Dir(clean)
+			if base == "cargo.toml" {
+				start = filepath.Dir(clean)
+			}
+			if dir, ok := nearestValidationManifest(root, start, []string{"Cargo.toml"}); ok {
+				selected["rust"] = ecosystemValidationCommand{label: "cargo test", tool: "cargo", dir: dir, args: []string{"test"}}
+			}
+		}
+	}
+	commands := make([]ecosystemValidationCommand, 0, len(selected))
+	for _, ecosystem := range []string{"python", "javascript", "rust"} {
+		if command, ok := selected[ecosystem]; ok {
+			commands = append(commands, command)
+		}
+	}
+	return commands
+}
+
+func nearestValidationManifest(root, relativeDir string, names []string) (string, bool) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	dir := filepath.Join(root, relativeDir)
+	for {
+		for _, name := range names {
+			if info, statErr := os.Stat(filepath.Join(dir, name)); statErr == nil && !info.IsDir() {
+				return dir, true
+			}
+		}
+		if filepath.Clean(dir) == filepath.Clean(root) {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", false
+}
+
+func hasNpmTest(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var manifest struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if json.Unmarshal(data, &manifest) != nil {
+		return false
+	}
+	test, ok := manifest.Scripts["test"]
+	return ok && strings.TrimSpace(test) != "" && strings.TrimSpace(test) != `echo "Error: no test specified" && exit 1`
+}
+
+func appendValidationCommand(commands []string, command string) []string {
+	if len(commands) >= 20 {
+		return commands
+	}
+	if len(command) > 512 {
+		command = command[:512]
+	}
+	return append(commands, command)
+}
+
+func setValidationOutcome(status, reason *string, candidate, candidateReason string) {
+	rank := func(value string) int {
+		switch value {
+		case "timeout":
+			return 4
+		case "failed", "launch_error":
+			return 3
+		case "skipped":
+			return 1
+		default:
+			return 0
+		}
+	}
+	if rank(candidate) > rank(*status) {
+		*status, *reason = candidate, candidateReason
+	}
 }
 
 func selectValidationPackages(stateRoot, repo string, paths []string) (string, []string, []string, error) {

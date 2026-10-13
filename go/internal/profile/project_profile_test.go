@@ -63,6 +63,13 @@ paths = ["$ROOT"]
 	}
 }
 
+func TestProjectProfileValidationCommand(t *testing.T) {
+	result := loadProjectProfileTest(t, "schema_version = 1\n[validation]\ncommand = \"make verify\"\n", "")
+	if result.ProjectStatus != "ok" || result.ValidationCommand == nil || *result.ValidationCommand != "make verify" {
+		t.Fatalf("validation command=%v project status=%q warnings=%v", result.ValidationCommand, result.ProjectStatus, result.Warnings)
+	}
+}
+
 func TestProjectProfileNonBooleanFullSuiteRequiredRejectsTier(t *testing.T) {
 	result := loadProjectProfileTest(t, "schema_version = 1\n[review]\nfull_suite_required = 1\n", "")
 	if result.ProjectStatus != "rejected" || result.FullSuiteRequired || !result.ForceFullReview {

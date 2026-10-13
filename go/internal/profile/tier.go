@@ -23,6 +23,7 @@ var projectNonSecurity = map[string]map[string]bool{
 	"project": {"id": true, "measurement_ledger": true}, "authority": {"sources": true},
 	"worktree":    {"copy": true, "setup": true, "setup_timeout_seconds": true},
 	"maintenance": {"coverage_target_pct": true},
+	"validation":  {"command": true},
 }
 
 // ValidateTier mirrors project_profile._load_tier after TOML decoding. Pass
@@ -87,7 +88,7 @@ func validateTier(tier string, data map[string]any, order *tierKeyOrder) Tier {
 		security = projectSecurity
 		nonSecurity = projectNonSecurity
 		securityOrder = []string{"paths", "review"}
-		nonSecurityOrder = []string{"project", "authority", "worktree", "maintenance"}
+		nonSecurityOrder = []string{"project", "authority", "worktree", "maintenance", "validation"}
 	}
 	if tier == "user" {
 		if _, exists := data["checks"]; exists {
@@ -192,6 +193,14 @@ func validateTier(tier string, data map[string]any, order *tierKeyOrder) Tier {
 					values["maintenance.coverage_target_pct"] = target
 				} else {
 					warnings = append(warnings, tier+": [maintenance] coverage_target_pct must be a finite number greater than 0 and at most 100; using 90")
+				}
+				continue
+			}
+			if sectionName == "validation" {
+				if command, valid := value.(string); valid && strings.TrimSpace(command) != "" {
+					values["validation.command"] = command
+				} else {
+					warnings = append(warnings, tier+": [validation] command must be a non-empty string; ignored")
 				}
 				continue
 			}
