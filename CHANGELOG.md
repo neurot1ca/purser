@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.149 — 2026-10-13
+
+- **Fixed:** on Windows, Purser's child processes get a hidden console instead of none, so tools they start no longer flash a console window.
+- **Fixed:** superseded jobs are cleaned up like other finished jobs, freeing their worktrees and preparations.
+- **Fixed:** retention removes passed validation logs after 3 days, other validation records, unreferenced job bundles and stale code maps after 14 days.
+- **New:** a shared process-tree supervision foundation for Windows, macOS and Linux (not yet used by job launches).
+
 ## 0.1.148 — 2026-10-13
 
 - **New:** Purser roles are per project: `/purser:init` and `/purser:reviewer` save coder and reviewer choices to the current project only, and other projects keep the global defaults; trust stays global.
