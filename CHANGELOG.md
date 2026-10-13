@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.150 — 2026-10-13
+
+- **Fixed:** a plan milestone is no longer offered as ready while another plan's unfinished milestone writes the same files.
+- **Fixed:** worktree removal retries with backoff after a lock (for example antivirus) and only counts a worktree removed once it is gone.
+- **Fixed:** one protected preparation no longer keeps every other preparation of the same job; Go cache cleanup waits for running builds.
+
 ## 0.1.149 — 2026-10-13
 
 - **Fixed:** on Windows, Purser's child processes get a hidden console instead of none, so tools they start no longer flash a console window.
