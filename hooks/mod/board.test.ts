@@ -208,6 +208,28 @@ test('a missing async jobs directory is empty and does not log a refresh failure
   await ui.unmount()
 })
 
+test('a non-git project with no jobs is empty and does not log a refresh failure', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, { OS: 'Linux', HOME: '/home/test', OSTYPE: 'linux-gnu', HOSTTYPE: 'x86_64' })
+  const logs: string[] = []
+  on('process.run', () => ({ value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' } }))
+  on('session.cwd', () => ({ value: '/non-git-project' }))
+  on('session.id', () => ({ value: 'board-non-git' }))
+  on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: 'Other mod status' })
+  })
+  const ui = await $.ui.mount({
+    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
+  })
+  expect(logs).toEqual([])
+  expect(await ui.find({ type: 'Button', key: 'purser-board-details' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: 'Other mod status' }))?.text).toBe('Other mod status')
+  await ui.unmount()
+})
+
 test('board read errors fail silently, preserve the turn, and log once per session', async ($, on) => {
   const logs: string[] = []
   let logged: () => void = () => {}

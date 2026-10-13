@@ -210,7 +210,10 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
   if (key === undefined) {
     // A busy machine can take seconds to start git; the key is cached so it runs once per folder.
     const rootResult = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 10_000 })
-    if (rootResult.exitCode !== 0) throw new Error('project root unavailable')
+    if (rootResult.exitCode !== 0) {
+      if (/\bnot a git repository\b/i.test(rootResult.stderr)) return undefined
+      throw new Error('project root unavailable')
+    }
     key = await projectKeyFromRoot(rootResult.stdout.trim(), os)
     projectKeys.set(cwd, key)
   }
