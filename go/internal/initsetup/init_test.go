@@ -76,14 +76,15 @@ func TestClaudeCoderPlanAndApply(t *testing.T) {
 	if !bytes.Equal(pythonAfter, pythonPrior) {
 		t.Errorf("existing ~/.orchestrator/python changed: got %q, want %q", pythonAfter, pythonPrior)
 	}
-	loaded, err := policy.LoadCoderConfig(shippedConfig, configPath)
+	loaded, err := policy.LoadCoderConfigForRepository(shippedConfig, configPath, root)
 	if err != nil {
 		t.Fatalf("generated config does not load: %v", err)
 	}
 	if got := loaded["coder_agent"]; got != "claude" {
 		t.Errorf("coder_agent = %v, want claude", got)
 	}
-	raw, err := os.ReadFile(configPath)
+	rolePath := profile.ProjectRolesPath(state, root)
+	raw, err := os.ReadFile(rolePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,6 +577,96 @@ func TestExistingProfileIsNeverOverwritten(t *testing.T) {
 	after, err := os.ReadFile(profilePath)
 	if err != nil || !bytes.Equal(after, original) {
 		t.Errorf("profile = %q, error = %v; want original bytes", after, err)
+	}
+}
+
+func TestProjectRoleApplyLeavesGlobalConfigUntouched(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	state := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", state)
+	otherRoot := t.TempDir()
+	otherRolePath := profile.ProjectRolesPath(state, otherRoot)
+	otherRoles := []byte("schema_version = 1\n\n[roles]\ncoder = \"opencode\"\n")
+	if err := os.MkdirAll(filepath.Dir(otherRolePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherRolePath, otherRoles, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	globalPath := filepath.Join(home, ".orchestrator", "config.toml")
+	global := []byte("schema_version = 1\n\n[roles]\ncoder = \"codex\"\nreviewer = \"agy\"\n\n[coding]\ncoder_agent = \"codex\"\n")
+	if err := os.MkdirAll(filepath.Dir(globalPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(globalPath, global, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var acknowledgement bytes.Buffer
+	if code := Run(&acknowledgement, &bytes.Buffer{}, []string{"--apply", "--coder", "claude", "--reviewer", "none", "--json"}); code != 0 {
+		t.Fatal("apply failed")
+	}
+	var ack map[string]any
+	if err := json.Unmarshal(acknowledgement.Bytes(), &ack); err != nil || ack["scope"] != "project" || ack["roles_path"] != profile.ProjectRolesPath(state, root) {
+		t.Fatalf("acknowledgement = %s, error = %v", acknowledgement.String(), err)
+	}
+	if after, err := os.ReadFile(globalPath); err != nil || !bytes.Equal(after, global) {
+		t.Fatalf("global config = %q, error = %v; want original bytes", after, err)
+	}
+	if after, err := os.ReadFile(otherRolePath); err != nil || !bytes.Equal(after, otherRoles) {
+		t.Fatalf("other project roles = %q, error = %v; want original bytes", after, err)
+	}
+	rolePath := profile.ProjectRolesPath(state, root)
+	values, err := profile.ResolveUserConfig(state, root, globalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := values["roles"].(map[string]any)
+	if roles["coder"] != "claude" || roles["reviewer"] != "none" {
+		t.Fatalf("effective roles = %#v", roles)
+	}
+	if _, err := os.Stat(rolePath); err != nil {
+		t.Fatalf("project roles file was not written: %v", err)
+	}
+}
+
+func TestProjectRoleConcurrentUpdatesKeepBothSections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "roles.toml")
+	if err := os.WriteFile(path, []byte("schema_version = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, section := range []string{"fallback", "mechanical"} {
+		section := section
+		go func() {
+			<-start
+			errs <- updateLocked(path, func(raw []byte) ([]byte, error) {
+				values, _, err := profile.DecodeTOML(raw)
+				if err != nil {
+					return nil, err
+				}
+				values[section] = map[string]any{"enabled": true}
+				return encodeRoleSections(values, "fallback", "mechanical")
+			})
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, _, err := profile.DecodeTOML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["fallback"] == nil || values["mechanical"] == nil {
+		t.Fatalf("concurrent role update lost a section: %#v", values)
 	}
 }
 

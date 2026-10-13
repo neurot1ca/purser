@@ -1,6 +1,8 @@
 package initsetup
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,5 +188,40 @@ func TestReviewerSetRefusesMissingAgent(t *testing.T) {
 	err := validateReviewerInstalled(map[string]any{"agents": map[string]any{"agy": map[string]any{"available": false}}}, "agy", "gemini-3.8-flash-high")
 	if err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestProjectReviewerSetKeepsCoderAndDisablesGlobalReviewer(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	state := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", state)
+	globalPath := filepath.Join(home, ".orchestrator", "config.toml")
+	global := []byte("schema_version = 1\n\n[roles]\ncoder = \"codex\"\nreviewer = \"agy\"\n\n[coding]\ncoder_agent = \"codex\"\nroutes = { normal = { model = \"gpt-6-luna\", effort = \"medium\" } }\n")
+	if err := os.MkdirAll(filepath.Dir(globalPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(globalPath, global, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var acknowledgement strings.Builder
+	if code := ReviewerRun(&acknowledgement, &strings.Builder{}, []string{"set", "--cwd", root, "--agent", "none", "--json"}); code != 0 {
+		t.Fatal("reviewer set failed")
+	}
+	var ack map[string]any
+	if err := json.Unmarshal([]byte(acknowledgement.String()), &ack); err != nil || ack["scope"] != "project" || ack["roles_path"] != profile.ProjectRolesPath(state, root) {
+		t.Fatalf("acknowledgement = %s, error = %v", acknowledgement.String(), err)
+	}
+	if after, err := os.ReadFile(globalPath); err != nil || !bytes.Equal(after, global) {
+		t.Fatalf("global config = %q, error = %v; want original bytes", after, err)
+	}
+	effective, err := profile.ResolveUserConfig(state, root, globalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := effective["roles"].(map[string]any)
+	coding := effective["coding"].(map[string]any)
+	if roles["reviewer"] != "none" || roles["coder"] != "codex" || coding["coder_agent"] != "codex" || coding["routes"] == nil {
+		t.Fatalf("effective roles/coding = %#v / %#v", roles, coding)
 	}
 }

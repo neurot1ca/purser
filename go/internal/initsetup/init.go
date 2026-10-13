@@ -248,15 +248,9 @@ func agent(name string) map[string]any {
 
 func detect(home, root string, o options) (map[string]any, error) {
 	configPath := filepath.Join(home, ".orchestrator", "config.toml")
-	data := map[string]any{}
-	if raw, e := os.ReadFile(configPath); e == nil {
-		var err error
-		data, _, err = profile.DecodeTOML(raw)
-		if err != nil {
-			return nil, err
-		}
-	} else if !os.IsNotExist(e) {
-		return nil, e
+	data, err := effectiveUserConfig(root, configPath)
+	if err != nil {
+		return nil, err
 	}
 	providers := loadProviders(home)
 	agents := map[string]any{}
@@ -775,30 +769,40 @@ func contains(items []string, value string) bool {
 }
 
 func setup(out, errOut io.Writer, home, root, configPath string, o options) int {
-	original, e := os.ReadFile(configPath)
+	rolePath := profile.ProjectRolesPath(profile.StateRoot(), root)
+	original, e := os.ReadFile(rolePath)
 	if e != nil && !os.IsNotExist(e) {
 		return printError(errOut, e)
 	}
 	if os.IsNotExist(e) {
 		original = nil
 	}
-	text := string(original)
-	if text == "" {
-		text = "schema_version = 1\n"
+	effective, e := effectiveUserConfig(root, configPath)
+	if e != nil {
+		return printError(errOut, e)
 	}
-	newline := "\n"
-	if strings.Contains(text, "\r\n") {
-		newline = "\r\n"
+	sections := []string{"roles", "reviewer"}
+	if effective["coding"] != nil || o.coder != "codex" || o.mode != "" {
+		sections = append(sections, "coding")
 	}
-	values := map[string]any{}
-	if len(original) > 0 {
-		var er error
-		values, _, er = profile.DecodeTOML(original)
-		if er != nil {
-			return printError(errOut, er)
-		}
+	if o.fallbackAgent != "" {
+		sections = append(sections, "fallback")
 	}
-	if e = editConfig(&text, values, root, o, newline); e != nil {
+	if o.mechanical != nil {
+		sections = append(sections, "mechanical")
+	}
+	textBytes, e := projectRoleText(original, effective, sections...)
+	if e != nil {
+		return printError(errOut, e)
+	}
+	text := string(textBytes)
+	values, _, e := profile.DecodeTOML(textBytes)
+	if e != nil {
+		return printError(errOut, e)
+	}
+	roleOptions := o
+	roleOptions.trust = false
+	if e = editConfig(&text, values, root, roleOptions, "\n"); e != nil {
 		return printError(errOut, e)
 	}
 	changed := []byte(text)
@@ -864,7 +868,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 			}
 		}
 		if !bytes.Equal(original, changed) {
-			fmt.Fprint(out, unifiedInitialDiff(configPath, string(original), string(changed)))
+			fmt.Fprint(out, unifiedInitialDiff(rolePath, string(original), string(changed)))
 		}
 		if scaffold != nil {
 			fmt.Fprintf(out, "Create %s:\n%s", profilePath, scaffold)
@@ -877,16 +881,29 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		}
 		return 0
 	}
-	if !bytes.Equal(original, changed) {
-		if now, e := os.ReadFile(configPath); e == nil && !bytes.Equal(now, original) {
-			return printError(errOut, errors.New("config changed during setup; run the plan again"))
+	if e = updateLocked(rolePath, func(current []byte) ([]byte, error) {
+		currentEffective, err := effectiveUserConfig(root, configPath)
+		if err != nil {
+			return nil, err
 		}
-		if len(original) > 0 {
-			if e = backup(configPath, original); e != nil {
-				return printError(errOut, e)
-			}
+		base, err := projectRoleText(current, currentEffective, sections...)
+		if err != nil {
+			return nil, err
 		}
-		if e = atomicWrite(configPath, changed, false); e != nil {
+		currentValues, _, err := profile.DecodeTOML(base)
+		if err != nil {
+			return nil, err
+		}
+		updated := string(base)
+		if err := editConfig(&updated, currentValues, root, roleOptions, "\n"); err != nil {
+			return nil, err
+		}
+		return []byte(updated), nil
+	}); e != nil {
+		return printError(errOut, e)
+	}
+	if o.trust {
+		if e = editGlobalTrust(configPath, root); e != nil {
 			return printError(errOut, e)
 		}
 	}
@@ -925,7 +942,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	}
 	offerDue := claimConcise(home, root)
 	if o.jsonOutput {
-		return writeIndented(out, map[string]any{"status": "applied", "handoff": handoff, "concise_style_offer_due": offerDue, "skipped": skipped})
+		return writeIndented(out, map[string]any{"status": "applied", "handoff": handoff, "concise_style_offer_due": offerDue, "skipped": skipped, "scope": "project", "roles_path": rolePath})
 	}
 	for _, step := range skipped {
 		fmt.Fprintf(out, "Skipped %s.\n", step)
@@ -1421,15 +1438,24 @@ func atomicWrite(path string, content []byte, exclusive bool) error {
 }
 func backup(path string, raw []byte) error {
 	stamp := time.Now().UTC().Format("20060102T150405000000Z")
-	f, e := os.OpenFile(path+".bak-"+stamp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if e != nil {
-		return e
+	for suffix := 0; ; suffix++ {
+		name := path + ".bak-" + stamp
+		if suffix > 0 {
+			name = fmt.Sprintf("%s-%d", name, suffix)
+		}
+		f, e := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if os.IsExist(e) {
+			continue
+		}
+		if e != nil {
+			return e
+		}
+		defer f.Close()
+		if _, e = f.Write(raw); e != nil {
+			return e
+		}
+		return f.Sync()
 	}
-	defer f.Close()
-	if _, e = f.Write(raw); e != nil {
-		return e
-	}
-	return f.Sync()
 }
 func fallbackFamily(agent, model string) string {
 	if agent == "claude" {

@@ -1,7 +1,6 @@
 package initsetup
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -52,11 +51,12 @@ func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 		return reviewerError(stdout, err)
 	}
 	configPath := filepath.Join(home, ".orchestrator", "config.toml")
+	effective, err := effectiveUserConfig(root, configPath)
+	if err != nil {
+		return reviewerError(stdout, err)
+	}
 	if action == "list" {
-		current, err := reviewerCurrent(configPath, detected)
-		if err != nil {
-			return reviewerError(stdout, err)
-		}
+		current := reviewerCurrentValues(effective, detected)
 		return reviewerJSON(stdout, map[string]any{"current": current, "choices": reviewerChoices(detected)})
 	}
 	if *agentName == "none" {
@@ -87,47 +87,37 @@ func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 			return reviewerError(stdout, err)
 		}
 	}
-	original, err := os.ReadFile(configPath)
-	if err != nil && !os.IsNotExist(err) {
-		return reviewerError(stdout, err)
+	rolePath := profile.ProjectRolesPath(profile.StateRoot(), root)
+	sections := []string{"roles", "reviewer"}
+	if effective["coding"] != nil {
+		sections = append(sections, "coding")
 	}
-	text := string(original)
-	if text == "" {
-		text = "schema_version = 1\n"
-	}
-	values := map[string]any{}
-	if len(original) > 0 {
-		values, _, err = profile.DecodeTOML(original)
+	if err := updateLocked(rolePath, func(original []byte) ([]byte, error) {
+		currentEffective, err := effectiveUserConfig(root, configPath)
 		if err != nil {
-			return reviewerError(stdout, err)
+			return nil, err
 		}
-	}
-	newline := "\n"
-	if strings.Contains(text, "\r\n") {
-		newline = "\r\n"
-	}
-	if err := editReviewerConfig(&text, values, *agentName, *model, *effort, newline); err != nil {
+		text, err := projectRoleText(original, currentEffective, sections...)
+		if err != nil {
+			return nil, err
+		}
+		values, _, err := profile.DecodeTOML(text)
+		if err != nil {
+			return nil, err
+		}
+		updated := string(text)
+		if err := editReviewerConfig(&updated, values, *agentName, *model, *effort, "\n"); err != nil {
+			return nil, err
+		}
+		return []byte(updated), nil
+	}); err != nil {
 		return reviewerError(stdout, err)
-	}
-	updated := []byte(text)
-	if !bytes.Equal(original, updated) {
-		if now, readErr := os.ReadFile(configPath); readErr == nil && !bytes.Equal(now, original) {
-			return reviewerError(stdout, errors.New("config changed during update"))
-		}
-		if len(original) > 0 {
-			if err := backup(configPath, original); err != nil {
-				return reviewerError(stdout, err)
-			}
-		}
-		if err := atomicWrite(configPath, updated, false); err != nil {
-			return reviewerError(stdout, err)
-		}
 	}
 	result := map[string]any{"agent": *agentName}
 	if *agentName != "none" {
 		result["model"], result["effort"] = *model, nullableString(*effort)
 	}
-	return reviewerJSON(stdout, map[string]any{"reviewer": result})
+	return reviewerJSON(stdout, map[string]any{"reviewer": result, "scope": "project", "roles_path": rolePath})
 }
 
 func reviewerCurrent(path string, detected map[string]any) (map[string]any, error) {
@@ -142,6 +132,10 @@ func reviewerCurrent(path string, detected map[string]any) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
+	return reviewerCurrentValues(values, detected), nil
+}
+
+func reviewerCurrentValues(values map[string]any, detected map[string]any) map[string]any {
 	role := ""
 	if roles, ok := values["roles"].(map[string]any); ok {
 		if value, ok := roles["reviewer"].(string); ok {
@@ -151,7 +145,7 @@ func reviewerCurrent(path string, detected map[string]any) (map[string]any, erro
 	selected, _ := values["reviewer"].(map[string]any)
 	if choice, ok := selected["selected"].(map[string]any); ok {
 		role = asString(choice["agent"])
-		return map[string]any{"agent": role, "model": nullableString(asString(choice["model"])), "effort": nullableString(asString(choice["effort"]))}, nil
+		return map[string]any{"agent": role, "model": nullableString(asString(choice["model"])), "effort": nullableString(asString(choice["effort"]))}
 	}
 	model, effort := "", ""
 	if coding, ok := values["coding"].(map[string]any); ok {
@@ -162,12 +156,12 @@ func reviewerCurrent(path string, detected map[string]any) (map[string]any, erro
 		}
 	}
 	if role == "" {
-		return reviewerDefault(detected, model, effort), nil
+		return reviewerDefault(detected, model, effort)
 	}
 	if role == "none" {
-		return map[string]any{"agent": "none"}, nil
+		return map[string]any{"agent": "none"}
 	}
-	return map[string]any{"agent": role, "model": nullableString(model), "effort": nullableString(effort)}, nil
+	return map[string]any{"agent": role, "model": nullableString(model), "effort": nullableString(effort)}
 }
 
 func reviewerDefault(detected map[string]any, configuredModel, configuredEffort string) map[string]any {
