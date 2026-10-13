@@ -29,6 +29,42 @@ func TestReviewerListInstalledOnly(t *testing.T) {
 	}
 }
 
+func TestReviewerCurrentDefaultUsesNextInstalledAgent(t *testing.T) {
+	got, err := reviewerCurrent(filepath.Join(t.TempDir(), "missing.toml"), map[string]any{"agents": map[string]any{
+		"agy":    map[string]any{"available": false},
+		"claude": map[string]any{"available": true},
+		"codex":  map[string]any{"available": true},
+	}})
+	if err != nil || got["agent"] != "claude" || got["model"] != "claude-haiku-5-5" || got["effort"] != "medium" {
+		t.Fatalf("default reviewer = %#v, err=%v", got, err)
+	}
+}
+
+func TestReviewerCurrentDefaultNoneInstalled(t *testing.T) {
+	got, err := reviewerCurrent(filepath.Join(t.TempDir(), "missing.toml"), map[string]any{"agents": map[string]any{
+		"agy": map[string]any{"available": false}, "claude": map[string]any{"available": false}, "codex": map[string]any{"available": false},
+	}})
+	if err != nil || len(got) != 1 || got["agent"] != "none" {
+		t.Fatalf("default reviewer = %#v, err=%v", got, err)
+	}
+}
+
+func TestReviewerCurrentExplicitSelectionUnchanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`[roles]
+reviewer = "agy"
+
+[reviewer]
+selected = { agent = "codex", model = "gpt-6-luna", effort = "high" }
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := reviewerCurrent(path, map[string]any{"agents": map[string]any{"agy": map[string]any{"available": false}}})
+	if err != nil || got["agent"] != "codex" || got["model"] != "gpt-6-luna" || got["effort"] != "high" {
+		t.Fatalf("explicit reviewer = %#v, err=%v", got, err)
+	}
+}
+
 func TestReviewerSetAcceptsListedAGYModel(t *testing.T) {
 	choices := reviewerChoices(map[string]any{"agents": map[string]any{
 		"agy": map[string]any{"available": true},

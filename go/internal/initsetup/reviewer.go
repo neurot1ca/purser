@@ -53,7 +53,7 @@ func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 	}
 	configPath := filepath.Join(home, ".orchestrator", "config.toml")
 	if action == "list" {
-		current, err := reviewerCurrent(configPath)
+		current, err := reviewerCurrent(configPath, detected)
 		if err != nil {
 			return reviewerError(stdout, err)
 		}
@@ -130,10 +130,10 @@ func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 	return reviewerJSON(stdout, map[string]any{"reviewer": result})
 }
 
-func reviewerCurrent(path string) (map[string]any, error) {
+func reviewerCurrent(path string, detected map[string]any) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return map[string]any{"agent": "agy", "model": "gemini-3.8-flash-high", "effort": nil}, nil
+		return reviewerDefault(detected, "", ""), nil
 	}
 	if err != nil {
 		return nil, err
@@ -142,14 +142,11 @@ func reviewerCurrent(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	role := "agy"
+	role := ""
 	if roles, ok := values["roles"].(map[string]any); ok {
 		if value, ok := roles["reviewer"].(string); ok {
 			role = value
 		}
-	}
-	if role == "none" {
-		return map[string]any{"agent": "none"}, nil
 	}
 	selected, _ := values["reviewer"].(map[string]any)
 	if choice, ok := selected["selected"].(map[string]any); ok {
@@ -157,17 +154,42 @@ func reviewerCurrent(path string) (map[string]any, error) {
 		return map[string]any{"agent": role, "model": nullableString(asString(choice["model"])), "effort": nullableString(asString(choice["effort"]))}, nil
 	}
 	model, effort := "", ""
-	if role == "agy" {
-		model = agyReviewerModel()
-	}
 	if coding, ok := values["coding"].(map[string]any); ok {
+		model = asString(coding["reviewer1_model_requested"])
+		effort = asString(coding["reviewer1_effort"])
 		if agent := asString(coding["reviewer1_agent"]); agent != "" {
 			role = agent
 		}
-		model = asString(coding["reviewer1_model_requested"])
-		effort = asString(coding["reviewer1_effort"])
+	}
+	if role == "" {
+		return reviewerDefault(detected, model, effort), nil
+	}
+	if role == "none" {
+		return map[string]any{"agent": "none"}, nil
 	}
 	return map[string]any{"agent": role, "model": nullableString(model), "effort": nullableString(effort)}, nil
+}
+
+func reviewerDefault(detected map[string]any, configuredModel, configuredEffort string) map[string]any {
+	agents, _ := detected["agents"].(map[string]any)
+	for _, name := range []string{"agy", "claude", "codex"} {
+		info, _ := agents[name].(map[string]any)
+		if info["available"] != true {
+			continue
+		}
+		switch name {
+		case "agy":
+			return map[string]any{"agent": name, "model": first(configuredModel, agyReviewerModel()), "effort": nil}
+		case "claude":
+			if !oneOf(configuredEffort, "low", "medium", "high", "xhigh", "max") {
+				configuredEffort = "medium"
+			}
+			return map[string]any{"agent": name, "model": "claude-haiku-5-5", "effort": configuredEffort}
+		case "codex":
+			return map[string]any{"agent": name, "model": "gpt-6-luna", "effort": "low"}
+		}
+	}
+	return map[string]any{"agent": "none"}
 }
 
 func reviewerChoices(detected map[string]any) []map[string]any {
