@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"purser-hook/internal/profile"
 )
 
 type fakeJobs struct {
@@ -136,6 +138,32 @@ func TestRunStartsConfiguredOpenCodeAgentAndOperationModel(t *testing.T) {
 	}
 	if fake.started["agent"] != "opencode" || fake.started["jobModel"] != "deepseek/deepseek-v4-pro" || fake.started["jobEffort"] != "none" || fake.started["jobPhase"] != "operation" || fake.started["sandbox"] != "read-only" {
 		t.Fatalf("maintenance start args = %#v", fake.started)
+	}
+}
+
+func TestRunnerUsesProjectCoderConfiguration(t *testing.T) {
+	root := t.TempDir()
+	repository := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repository, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("USERPROFILE", filepath.Join(root, "user"))
+	t.Setenv("PURSER_STATE_DIR", filepath.Join(root, "state"))
+	rolePath := profile.ProjectRolesPath(filepath.Join(root, "state"), repository)
+	if err := os.MkdirAll(filepath.Dir(rolePath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	roles := []byte("schema_version = 1\n[roles]\ncoder = \"opencode\"\n[coding]\ncoder_agent = \"opencode\"\n[coding.routes]\nmechanical = \"deepseek/deepseek-v4-pro\"\nsubtle = \"deepseek/deepseek-v4-pro\"\nnormal = \"deepseek/deepseek-v4-pro\"\nconsequential = \"deepseek/deepseek-v4-pro\"\nescalated = \"deepseek/deepseek-v4-pro\"\noperation = \"deepseek/deepseek-v4-pro\"\nplan_standard = \"deepseek/deepseek-v4-pro\"\n")
+	if err := os.WriteFile(rolePath, roles, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
+	runner := Runner{Jobs: fake, Sleep: func(time.Duration) {}}
+	if _, err := runner.Run(filepath.Join(root, "state"), repository, "cleanup", "prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.started["agent"] != "opencode" || fake.started["jobModel"] != "deepseek/deepseek-v4-pro" {
+		t.Fatalf("maintenance start args ignored project coder: %#v", fake.started)
 	}
 }
 

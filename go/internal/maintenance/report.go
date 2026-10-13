@@ -335,7 +335,7 @@ func writeAtomic(path string, data []byte) error {
 // RunAndPersistReport is the pass-5 prompt -> Runner -> parse -> persistence
 // composition. Eligibility and opt-in stay with pass 6.
 func RunAndPersistReport(r Runner, state, repository, reportType string) (string, error) {
-	if err := r.resolveCoder(); err != nil {
+	if err := r.resolveCoder(repository); err != nil {
 		return "", err
 	}
 	root, err := filepath.Abs(repository)

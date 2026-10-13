@@ -51,7 +51,7 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 	if reportType != "cleanup" && reportType != "test-gaps" {
 		return nil, fmt.Errorf("unsupported maintenance report type: %s", reportType)
 	}
-	if err := r.resolveCoder(); err != nil {
+	if err := r.resolveCoder(repository); err != nil {
 		return nil, err
 	}
 	now, sleep, poll, timeout := r.clock()
@@ -159,7 +159,7 @@ func coderLabel(agent string) string {
 	}
 }
 
-func (r *Runner) resolveCoder() error {
+func (r *Runner) resolveCoder(repository string) error {
 	if r.CoderAgent != "" && r.CoderModel != "" {
 		return nil
 	}
@@ -167,7 +167,7 @@ func (r *Runner) resolveCoder() error {
 	if err != nil {
 		return err
 	}
-	config, err := policy.LoadCoderConfig(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"))
+	config, err := policy.LoadCoderConfigForRepository(obsidian.ConfigPath(), filepath.Join(home, ".orchestrator", "config.toml"), repository)
 	if err != nil {
 		return fmt.Errorf("maintenance coder configuration: %w", err)
 	}

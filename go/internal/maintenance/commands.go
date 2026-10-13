@@ -195,7 +195,7 @@ func Control(state, command, repository, decision, report string, acted []string
 func DelayedCheck(repository, state string, delay time.Duration, runner Runner) (string, error) {
 	checkSleep(minDuration(maxDuration(delay, 0), 5*time.Minute))
 	now := maintenanceClock()
-	if err := runner.resolveCoder(); err != nil {
+	if err := runner.resolveCoder(repository); err != nil {
 		return "", err
 	}
 	quota := latestMaintenanceQuota(now, runner.CoderAgent)
