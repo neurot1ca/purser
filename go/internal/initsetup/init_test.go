@@ -101,6 +101,74 @@ func TestClaudeCoderPlanAndApply(t *testing.T) {
 	}
 }
 
+func TestListModelsMarksRouteRecommendations(t *testing.T) {
+	listing := discovered{source: "codex debug models", models: []map[string]any{
+		{"id": "gpt-6-luna", "efforts": []string{"low", "high"}},
+		{"id": "gpt-6.1-sol", "efforts": []string{"medium", "high", "xhigh"}},
+		{"id": "gpt-6-astra", "efforts": []string{"high"}},
+	}}
+	got := modelList(listing, map[string]string{"gpt-6-luna": "high", "gpt-6.1-sol": "medium"})
+	models := got["models"].([]map[string]any)
+	if models[0]["recommended"] != true || models[0]["recommended_effort"] != "high" {
+		t.Errorf("luna recommendation = %#v", models[0])
+	}
+	if models[1]["recommended"] != true || models[1]["recommended_effort"] != "medium" {
+		t.Errorf("sol recommendation = %#v", models[1])
+	}
+	if models[2]["recommended"] != false || models[2]["recommended_effort"] != nil {
+		t.Errorf("astra recommendation = %#v", models[2])
+	}
+}
+
+func TestDetectAcceptsCodexModelWithoutModeOrEffort(t *testing.T) {
+	_, _, restore := initTestEnvironment(t)
+	defer restore()
+	path := t.TempDir()
+	t.Setenv("PATH", path)
+	var output, errOutput bytes.Buffer
+	if code := Run(&output, &errOutput, []string{"--detect", "--json", "--coder", "codex", "--model", "gpt-6-luna"}); code != 0 {
+		t.Fatalf("detect returned %d: %s", code, errOutput.String())
+	}
+	var detected map[string]any
+	if err := json.Unmarshal(output.Bytes(), &detected); err != nil {
+		t.Fatalf("invalid detect output %q: %v", output.String(), err)
+	}
+}
+
+func TestPlanAndApplyRejectInconsistentModelFlagsEqually(t *testing.T) {
+	_, _, restore := initTestEnvironment(t)
+	defer restore()
+	for _, operation := range []string{"--plan", "--apply"} {
+		args := []string{operation, "--coder", "codex", "--reviewer", "none", "--mode", "balanced", "--model", "gpt-6-luna"}
+		if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, args); code != 2 {
+			t.Errorf("%s returned %d for balanced mode with a manual model; want 2", operation, code)
+		}
+	}
+}
+
+func TestApplyInNonGitDirectorySkipsMaintenanceAndWritesConfig(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	t.Setenv("PATH", t.TempDir())
+	var output, errOutput bytes.Buffer
+	args := []string{"--apply", "--json", "--coder", "codex", "--reviewer", "none", "--no-maintenance"}
+	if code := Run(&output, &errOutput, args); code != 0 {
+		t.Fatalf("apply returned %d: %s", code, errOutput.String())
+	}
+	config := filepath.Join(home, ".orchestrator", "config.toml")
+	if raw, err := os.ReadFile(config); err != nil || !strings.Contains(string(raw), `coder = "codex"`) {
+		t.Fatalf("config was not written for %s: %q, %v", root, raw, err)
+	}
+	var applied map[string]any
+	if err := json.Unmarshal(output.Bytes(), &applied); err != nil {
+		t.Fatalf("invalid apply output %q: %v", output.String(), err)
+	}
+	skipped, ok := applied["skipped"].([]any)
+	if !ok || len(skipped) != 1 || skipped[0] != "maintenance reports: project is not in a Git repository" {
+		t.Fatalf("skipped steps = %#v", applied["skipped"])
+	}
+}
+
 func TestAutoCompactInit(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()

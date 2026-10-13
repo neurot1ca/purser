@@ -153,7 +153,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintln(stderr, "purser:init: --mode manual requires --model")
 		return 2
 	}
-	if oneOf(o.mode, "balanced", "maximum") && (o.model != "" || o.effort != "") || o.mode == "" && o.effort != "" || o.mode == "" && o.model != "" && !oneOf(o.coder, "opencode", "agy") {
+	if !o.detect && (oneOf(o.mode, "balanced", "maximum") && (o.model != "" || o.effort != "") || o.mode == "" && o.effort != "" || o.mode == "" && o.model != "" && !oneOf(o.coder, "opencode", "agy")) {
 		fmt.Fprintln(stderr, "purser:init: invalid model or effort for selected mode")
 		return 2
 	}
@@ -272,6 +272,7 @@ func detect(home, root string, o options) (map[string]any, error) {
 			continue
 		}
 		listing := discoverModels(name, providers)
+		markModelRecommendations(listing.models, routeRecommendations())
 		modelSets[name] = listing.models
 		if name == "codex" {
 			a["models"] = stringsFromModels(listing.models)
@@ -358,6 +359,11 @@ func samePath(a, b string) bool {
 
 func listModels(agent string) (map[string]any, error) {
 	listing := discoverModels(agent, loadProviders(mustHome()))
+	return modelList(listing, routeRecommendations()), nil
+}
+
+func modelList(listing discovered, recommendations map[string]string) map[string]any {
+	markModelRecommendations(listing.models, recommendations)
 	result := map[string]any{"status": "available", "models": listing.models, "source": listing.source}
 	if len(listing.models) == 0 {
 		result["status"] = "unavailable"
@@ -365,7 +371,43 @@ func listModels(agent string) (map[string]any, error) {
 		result["source"] = listing.source
 		result["reason"] = listing.reason
 	}
-	return result, nil
+	return result
+}
+
+func routeRecommendations() map[string]string {
+	var config struct {
+		Routes map[string]struct {
+			Model  string `json:"model"`
+			Effort string `json:"effort"`
+		} `json:"routes"`
+	}
+	raw, err := os.ReadFile(obsidian.ConfigPath())
+	if err == nil {
+		_ = json.Unmarshal(raw, &config)
+	}
+	recommendations := map[string]string{}
+	for _, name := range []string{"normal", "mechanical", "subtle", "consequential", "escalated", "operation", "plan_standard"} {
+		route := config.Routes[name]
+		if route.Model != "" {
+			if _, exists := recommendations[route.Model]; !exists || name == "normal" {
+				recommendations[route.Model] = route.Effort
+			}
+		}
+	}
+	return recommendations
+}
+
+func markModelRecommendations(models []map[string]any, recommendations map[string]string) {
+	for _, model := range models {
+		id := asString(model["id"])
+		effort, recommended := recommendations[id]
+		model["recommended"] = recommended
+		if recommended && effort != "" {
+			model["recommended_effort"] = effort
+		} else {
+			model["recommended_effort"] = nil
+		}
+	}
 }
 
 type discovered struct {
@@ -546,11 +588,13 @@ func modelOptions(agent string, models []map[string]any) []any {
 	for _, m := range models {
 		entries = append(entries, m)
 	}
+	recommendations := routeRecommendations()
 	if agent != "opencode" {
 		out := []any{}
 		for _, m := range entries {
 			id := asString(m["id"])
-			out = append(out, map[string]any{"label": id, "models": []string{id}, "family": vendorFamily(asString(m["family"]))})
+			_, recommended := recommendations[id]
+			out = append(out, map[string]any{"label": id, "models": []string{id}, "family": vendorFamily(asString(m["family"])), "recommended": recommended})
 		}
 		return out
 	}
@@ -558,14 +602,22 @@ func modelOptions(agent string, models []map[string]any) []any {
 	out := []any{}
 	for _, m := range entries {
 		id := asString(m["id"])
+		_, recommended := recommendations[id]
 		if id == "opencode/big-pickle" || strings.HasPrefix(id, "opencode/") && strings.HasSuffix(id, "-free") {
 			free = append(free, id)
 		} else {
-			out = append(out, map[string]any{"label": id, "models": []string{id}, "family": vendorFamily(asString(m["family"]))})
+			out = append(out, map[string]any{"label": id, "models": []string{id}, "family": vendorFamily(asString(m["family"])), "recommended": recommended})
 		}
 	}
 	if len(free) > 0 {
-		out = append([]any{map[string]any{"label": "Free OpenCode models (Purser races them)", "models": free, "family": "opencode"}}, out...)
+		recommended := false
+		for _, id := range free {
+			if _, ok := recommendations[id]; ok {
+				recommended = true
+				break
+			}
+		}
+		out = append([]any{map[string]any{"label": "Free OpenCode models (Purser races them)", "models": free, "family": "opencode", "recommended": recommended}}, out...)
 	}
 	return out
 }
@@ -855,17 +907,19 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 			return printError(errOut, e)
 		}
 	}
+	skipped := []string{}
 	if o.maintenance != nil {
 		canonical, e := gitProjectRoot(root)
 		if e != nil {
-			return printError(errOut, e)
-		}
-		key := contextio.ProjectKey(canonical)
-		marker := filepath.Join(stateRootPath(), "projects", key, "maintenance", "opt-in.json")
-		rootJSON, _ := json.Marshal(canonical)
-		b := []byte(fmt.Sprintf("{\"project_root\": %s, \"enabled\": %t}", rootJSON, *o.maintenance))
-		if e = atomicWrite(marker, b, false); e != nil {
-			return printError(errOut, e)
+			skipped = append(skipped, "maintenance reports: project is not in a Git repository")
+		} else {
+			key := contextio.ProjectKey(canonical)
+			marker := filepath.Join(stateRootPath(), "projects", key, "maintenance", "opt-in.json")
+			rootJSON, _ := json.Marshal(canonical)
+			b := []byte(fmt.Sprintf("{\"project_root\": %s, \"enabled\": %t}", rootJSON, *o.maintenance))
+			if e = atomicWrite(marker, b, false); e != nil {
+				return printError(errOut, e)
+			}
 		}
 	}
 	if o.autoCompact != nil {
@@ -875,7 +929,10 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	}
 	offerDue := claimConcise(home, root)
 	if o.jsonOutput {
-		return writeIndented(out, map[string]any{"status": "applied", "handoff": handoff, "concise_style_offer_due": offerDue})
+		return writeIndented(out, map[string]any{"status": "applied", "handoff": handoff, "concise_style_offer_due": offerDue, "skipped": skipped})
+	}
+	for _, step := range skipped {
+		fmt.Fprintf(out, "Skipped %s.\n", step)
 	}
 	if !bytes.Equal(original, changed) || scaffold != nil || handoffCreated {
 		fmt.Fprintln(out, "Applied.")
