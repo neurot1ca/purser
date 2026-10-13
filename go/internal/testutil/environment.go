@@ -9,6 +9,11 @@ import (
 // RunIsolated gives a test binary private home and resolved temporary paths so
 // path-derived fixture identities match the paths seen by production code.
 func RunIsolated(m *testing.M) int {
+	originalHome, _ := os.UserHomeDir()
+	goModCache := resolveGoModCache(os.Getenv("GOMODCACHE"), os.Getenv("GOPATH"), originalHome)
+	if goModCache != "" {
+		_ = os.Setenv("GOMODCACHE", goModCache)
+	}
 	tempRoot, err := os.MkdirTemp("", "purser-tests-")
 	if err != nil {
 		return 1
@@ -45,4 +50,19 @@ func RunIsolated(m *testing.M) int {
 		}
 	}
 	return m.Run()
+}
+
+func resolveGoModCache(goModCache, goPath, home string) string {
+	if goModCache != "" {
+		return goModCache
+	}
+	for _, entry := range filepath.SplitList(goPath) {
+		if entry != "" {
+			return filepath.Join(entry, "pkg", "mod")
+		}
+	}
+	if home != "" {
+		return filepath.Join(home, "go", "pkg", "mod")
+	}
+	return ""
 }
