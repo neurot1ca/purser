@@ -299,6 +299,37 @@ func TestValidationSourceEditDuringRunIsStale(t *testing.T) {
 	}
 }
 
+func TestValidationCommitDuringRunKeepsPassedResult(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	key := validationRepositoryKey(repo)
+	path := validationRecordPath(root, key, record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	prior := runApplyValidationCommand
+	runApplyValidationCommand = func(_ string, _ []string, args []string, _ time.Duration, _ io.Writer, result *applyValidation) error {
+		if len(args) > 0 && args[0] == "test" {
+			git(t, repo, "add", "--all")
+			git(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "applied changes")
+			if result != nil {
+				result.Counts = map[string]int{"tests_passed": 1}
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { runApplyValidationCommand = prior })
+	if err := RunApplyValidation(root, key, record.JobID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readApplyValidation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "passed" {
+		t.Fatalf("commit of validated content changed status: %#v", got)
+	}
+}
+
 func TestValidationRepeatApplyEnqueuesOnce(t *testing.T) {
 	root, repo, record := validationFixture(t, []string{"main.go"})
 	prior := launchApplyValidation

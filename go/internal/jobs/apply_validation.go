@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"hash"
 	"io"
 	"os"
 	"os/exec"
@@ -131,8 +129,8 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 		return
 	}
 	defer lock()
-	invalidatePriorApplyValidations(stateRoot, dir, id, revision, snapshot)
-	if prior, readErr := readApplyValidation(path); readErr == nil && prior.Revision == revision && prior.Snapshot == snapshot {
+	invalidatePriorApplyValidations(stateRoot, dir, id, snapshot)
+	if prior, readErr := readApplyValidation(path); readErr == nil && prior.Snapshot == snapshot {
 		result = validationSummary(prior)
 		return
 	}
@@ -184,7 +182,7 @@ func persistApplyValidationSummary(stateRoot, id string, result map[string]any) 
 	}
 }
 
-func invalidatePriorApplyValidations(stateRoot, dir, currentID, revision, snapshot string) {
+func invalidatePriorApplyValidations(stateRoot, dir, currentID, snapshot string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -199,7 +197,7 @@ func invalidatePriorApplyValidations(stateRoot, dir, currentID, revision, snapsh
 		}
 		path := filepath.Join(dir, entry.Name())
 		record, err := readApplyValidation(path)
-		if err != nil || record.Revision == revision && record.Snapshot == snapshot || record.Status == "pending" || record.Status == "running" || record.Status == "interrupted" || record.Status == "stale" {
+		if err != nil || record.Snapshot == snapshot || record.Status == "pending" || record.Status == "running" || record.Status == "interrupted" || record.Status == "stale" {
 			continue
 		}
 		markApplyValidationStale(stateRoot, path, &record, "a later apply changed the repository checkout")
@@ -240,12 +238,12 @@ func ApplyValidationResult(stateRoot, repository, jobID string) map[string]any {
 	if err != nil {
 		return nil
 	}
-	revision, snapshot, err := checkoutRevision(repository)
+	_, snapshot, err := checkoutRevision(repository)
 	if err != nil {
 		markApplyValidationStale(stateRoot, path, &record, "repository checkout could not be verified after validation")
 		return validationSummary(record)
 	}
-	if (revision != record.Revision || snapshot != record.Snapshot) && record.Status != "pending" && record.Status != "running" {
+	if snapshot != record.Snapshot && record.Status != "pending" && record.Status != "running" {
 		markApplyValidationStale(stateRoot, path, &record, "repository checkout changed after validation")
 	}
 	return validationSummary(record)
@@ -354,41 +352,58 @@ func checkoutRevision(repo string) (string, string, error) {
 		return "", "", err
 	}
 	revision := string(bytes.TrimSpace(head))
-	h := sha256.New()
-	writeValidationHashFrame(h, []byte(revision))
-	cmd = proc.Hide(exec.Command("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"))
+	cmd = proc.Hide(exec.Command("git", "rev-parse", "--git-path", "index"))
 	cmd.Dir = repo
-	status, err := cmd.Output()
+	index, err := cmd.Output()
 	if err != nil {
 		return "", "", err
 	}
-	writeValidationHashFrame(h, status)
-	for _, entry := range bytes.Split(status, []byte{0}) {
-		if len(entry) < 4 {
-			continue
-		}
-		name := string(entry[3:])
-		full := filepath.Join(repo, filepath.FromSlash(name))
-		data, readErr := os.ReadFile(full)
-		if readErr == nil {
-			writeValidationHashFrame(h, []byte(name))
-			writeValidationHashFrame(h, data)
-		} else if errors.Is(readErr, os.ErrNotExist) {
-			writeValidationHashFrame(h, []byte(name))
-			writeValidationHashFrame(h, []byte("<deleted>"))
-		} else {
-			return "", "", readErr
-		}
+	indexPath := string(bytes.TrimSpace(index))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
 	}
-	snapshot := hex.EncodeToString(h.Sum(nil))
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		return "", "", err
+	}
+	tempIndex, err := os.CreateTemp("", "purser-validation-index-")
+	if err != nil {
+		return "", "", err
+	}
+	tempPath := tempIndex.Name()
+	if err = tempIndex.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", "", err
+	}
+	defer os.Remove(tempPath)
+	if err = os.WriteFile(tempPath, indexData, 0600); err != nil {
+		return "", "", err
+	}
+	env := replaceValidationEnv(os.Environ(), "GIT_INDEX_FILE", tempPath)
+	cmd = proc.Hide(exec.Command("git", "add", "-A"))
+	cmd.Dir, cmd.Env = repo, env
+	if err = cmd.Run(); err != nil {
+		return "", "", err
+	}
+	cmd = proc.Hide(exec.Command("git", "write-tree"))
+	cmd.Dir, cmd.Env = repo, env
+	tree, err := cmd.Output()
+	if err != nil {
+		return "", "", err
+	}
+	snapshot := strings.TrimSpace(string(tree))
 	return revision, snapshot, nil
 }
 
-func writeValidationHashFrame(h hash.Hash, value []byte) {
-	var size [8]byte
-	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
-	_, _ = h.Write(size[:])
-	_, _ = h.Write(value)
+func replaceValidationEnv(env []string, key, value string) []string {
+	prefix := strings.ToUpper(key) + "="
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(strings.ToUpper(entry), prefix) {
+			out = append(out, entry)
+		}
+	}
+	return append(out, key+"="+value)
 }
 
 func validationPackageSnapshot(repo string, packages []string) (string, error) {
@@ -471,11 +486,11 @@ func RunApplyValidation(stateRoot, key, id string) error {
 	if err = writeApplyValidation(path, record); err != nil {
 		return err
 	}
-	status, snapshot, err := checkoutRevision(record.Repository)
+	_, snapshot, err := checkoutRevision(record.Repository)
 	if err != nil {
 		return finishValidation(stateRoot, path, &record, "launch_error", err.Error())
 	}
-	if status != record.Revision || snapshot != record.Snapshot {
+	if snapshot != record.Snapshot {
 		return finishValidation(stateRoot, path, &record, "stale", "checkout changed before validation started")
 	}
 	goRoot, modules, packages, err := selectValidationPackages(stateRoot, record.Repository, record.Paths)
@@ -617,12 +632,12 @@ func recoverApplyValidationsInDirectory(stateRoot, dir string) {
 }
 
 func finishValidation(root, path string, record *applyValidation, status, reason string) error {
-	currentRevision, currentSnapshot, err := checkoutRevision(record.Repository)
+	_, currentSnapshot, err := checkoutRevision(record.Repository)
 	packageSnapshot := ""
 	if err == nil && record.TestedSnapshot != "" {
 		packageSnapshot, err = validationPackageSnapshot(record.Repository, record.Packages)
 	}
-	if err == nil && status != "launch_error" && (currentRevision != record.Revision || currentSnapshot != record.Snapshot || packageSnapshot != record.TestedSnapshot) {
+	if err == nil && status != "launch_error" && (currentSnapshot != record.Snapshot || packageSnapshot != record.TestedSnapshot) {
 		status = "stale"
 		reason = "checkout changed during validation"
 	} else if err != nil && status == "passed" {
