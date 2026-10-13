@@ -486,6 +486,11 @@ func RunApplyValidation(stateRoot, key, id string) error {
 		return err
 	}
 	defer lock()
+	cacheUser, err := acquireCacheUser(stateRoot)
+	if err != nil {
+		return err
+	}
+	defer cacheUser()
 	record.Status = "running"
 	if err = writeApplyValidation(path, record); err != nil {
 		return err

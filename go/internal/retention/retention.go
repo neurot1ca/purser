@@ -809,13 +809,14 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 	}
 	var eligible []eligibleGeneration
 	protected := make(map[string]bool)
+	protectedGeneration := make(map[string]bool)
 	for jobID, paths := range byJob {
 		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
 		job := readObject(jobPath)
 		for _, path := range paths {
 			state, ok := preparationState(path)
 			if ok && protectedPreparationState(path, state, job, now) {
-				protected[jobID] = true
+				protectedGeneration[path] = true
 			}
 		}
 		if !jobIDPattern.MatchString(jobID) {
@@ -855,6 +856,9 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 			}
 		}
 		for _, path := range paths {
+			if protectedGeneration[path] {
+				continue
+			}
 			stamp, e1 := fileMtime(path)
 			stateStamp, e2 := fileMtime(filepath.Join(path, "state.json"))
 			if e1 != nil || e2 != nil {
@@ -896,15 +900,9 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 		job := readObject(jobPath)
 		index := readObject(indexPath)
 		state, stateOK := preparationState(item.path)
-		safe := !protected[filepath.Base(item.owner)]
+		safe := !protected[filepath.Base(item.owner)] && !protectedGeneration[item.path]
 		if stateOK && protectedPreparationState(item.path, state, job, now) {
 			safe = false
-		}
-		for _, sibling := range byJob[filepath.Base(item.owner)] {
-			siblingState, ok := preparationState(sibling)
-			if ok && protectedPreparationState(sibling, siblingState, job, now) {
-				safe = false
-			}
 		}
 		if index != nil && index["stage"] == "FINALIZING" {
 			safe = false

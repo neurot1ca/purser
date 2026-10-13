@@ -65,7 +65,9 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 	sweepTemporaryDirectories(root, now)
 	retention.RemoveOldPrefixedEntries(filepath.Join(root, "cache", "go-tmp"), now, 24*time.Hour, []string{""})
 	retention.RemoveOldPrefixedEntries(tempRoot, now, 24*time.Hour, []string{"purser-", "reviewer1-", "readiness-check-", "go-build"})
-	trimPurserGoCache(root)
+	if err := trimPurserGoCache(root); err != nil {
+		fmt.Fprintf(os.Stderr, "Purser: cache cleanup: %v\n", err)
+	}
 	if err = recoverRetiringWorktrees(root); err != nil {
 		return fmt.Errorf("recover retiring worktrees: %w", err)
 	}
@@ -76,6 +78,7 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 	}
 	current := float64(now.UnixNano()) / 1e9
 	loaded := make([]cleanupRecord, 0)
+	worktreeJobs := map[string][]cleanupRecord{}
 	protected := map[string]bool{}
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
@@ -88,7 +91,11 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 		}
 		stem := strings.TrimSuffix(e.Name(), ".json")
 		if j["jobId"] == stem {
-			loaded = append(loaded, cleanupRecord{p, j})
+			record := cleanupRecord{p, j}
+			loaded = append(loaded, record)
+			if k := worktreeKey(j["worktreePath"]); k != "" {
+				worktreeJobs[k] = append(worktreeJobs[k], record)
+			}
 		}
 		state, _ := j["state"].(string)
 		if state == "UNKNOWN_OR_IN_PROGRESS" || !cleanupTerminal[state] || cleanupConflictProtected(root, j, state, current, p) {
@@ -204,7 +211,7 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 		wt, _ := j["worktreePath"].(string)
 		if wt != "" && cleanupEligible(j, state, current, r.path) && !protected[worktreeKey(wt)] {
 			if repo, ok := j["repoRoot"].(string); ok && repo != "" {
-				acted = removeWorktree(root, repo, wt, listings, prune) || acted
+				acted = removeWorktree(root, repo, wt, listings, prune, worktreeJobs) || acted
 			}
 		}
 		stem := strings.TrimSuffix(filepath.Base(r.path), ".json")
@@ -300,8 +307,8 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 		}
 		_ = unlock()
 	}
-	cleanupOrphanWorktrees(root, current, protected, listings, prune, owners)
-	enforceWorktreeCount(root, current, protected, listings, prune, owners)
+	cleanupOrphanWorktrees(root, current, protected, listings, prune, owners, worktreeJobs)
+	enforceWorktreeCount(root, current, protected, listings, prune, owners, worktreeJobs)
 	byteCheck := false
 	if checkCeiling {
 		if fi, e := os.Stat(filepath.Join(root, retention.CeilingStamp)); e != nil {
@@ -311,7 +318,7 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 		}
 	}
 	retention.RetirePreparations(root, current, byteCheck)
-	enforceArtifactSizeLimit(root, current, loaded, protected, listings, prune)
+	enforceArtifactSizeLimit(root, current, loaded, protected, listings, prune, worktreeJobs)
 	for _, repo := range prune {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		command := proc.Hide(exec.CommandContext(ctx, "git", "-C", repo, "worktree", "prune"))
@@ -347,25 +354,63 @@ func sweepTemporaryDirectories(root string, now time.Time) {
 	}
 }
 
-func trimPurserGoCache(root string) {
-	if os.Getenv("GOCACHE") != "" || hasRunningCodexJob(root) {
-		return
+func trimPurserGoCache(root string) error {
+	unlock, err := cacheGate(root)
+	if err != nil {
+		return err
 	}
-	cache := filepath.Join(root, "cache", "go-build")
-	var size int64
-	_ = filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
+	defer unlock()
+	users := filepath.Join(root, "cache", "go-users")
+	entries, err := os.ReadDir(users)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("invalid cache user: %s", entry.Name())
+		}
+		f, e := os.OpenFile(filepath.Join(users, entry.Name()), os.O_RDWR, 0600)
+		if e != nil {
+			return e
+		}
+		e = contextio.TryLock(f)
+		if e == nil {
+			_ = contextio.Unlock(f)
+		}
+		_ = f.Close()
+		if e != nil {
 			return nil
 		}
+	}
+	if hasRunningCodexJob(root) {
+		return nil
+	}
+	cache := filepath.Join(root, "cache", "go-build")
+	if _, statErr := os.Lstat(cache); os.IsNotExist(statErr) {
+		return nil
+	} else if statErr != nil || !cleanupPath(root, cache) {
+		return fmt.Errorf("invalid Purser cache: %s", cache)
+	}
+	var size int64
+	err = filepath.WalkDir(cache, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if isCleanupLink(path) {
+			return fmt.Errorf("cache link: %s", path)
+		}
 		if !entry.IsDir() {
-			if info, err := entry.Info(); err == nil && info.Mode().IsRegular() {
+			if info, e := entry.Info(); e == nil && info.Mode().IsRegular() {
 				size += info.Size()
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
 	if size <= 2*1024*1024*1024 {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -383,7 +428,12 @@ func trimPurserGoCache(root string) {
 		command.Env = append(command.Env, "GOCACHE="+cache)
 	}
 	proc.ConfigureNoWindow(command)
-	_ = command.Run()
+	var stderr cleanupStderr
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("go clean -cache: %w: %s", err, stderr.String())
+	}
+	return nil
 }
 
 func hasRunningCodexJob(root string) bool {
@@ -395,11 +445,54 @@ func hasRunningCodexJob(root string) bool {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		if job := readCleanupJSON(filepath.Join(root, "codex_exec_mcp", "jobs", entry.Name())); job != nil && job["state"] == "RUNNING" {
+		path := filepath.Join(root, "codex_exec_mcp", "jobs", entry.Name())
+		job := readCleanupJSON(path)
+		if job != nil && (job["state"] == "RUNNING" || job["state"] == "UNKNOWN_OR_IN_PROGRESS") {
 			return true
+		}
+		if job == nil {
+			info, e := entry.Info()
+			if e == nil && time.Since(info.ModTime()) < time.Hour {
+				fmt.Fprintf(os.Stderr, "Purser: malformed recent job record blocks cache cleanup: %s\n", path)
+				return true
+			}
+			fmt.Fprintf(os.Stderr, "Purser: ignoring stale malformed job record for cache cleanup: %s\n", path)
 		}
 	}
 	return false
+}
+
+func cacheGate(root string) (func() error, error) {
+	path := filepath.Join(root, "cache", "go-cache.lock")
+	if !cleanupPath(root, path) {
+		return nil, fmt.Errorf("invalid cache gate: %s", path)
+	}
+	return contextio.LockFileBlocking(path)
+}
+
+func acquireCacheUser(root string) (func(), error) {
+	gate, err := cacheGate(root)
+	if err != nil {
+		return nil, err
+	}
+	defer gate()
+	dir := filepath.Join(root, "cache", "go-users")
+	if !cleanupPath(root, dir) {
+		return nil, fmt.Errorf("invalid cache users: %s", dir)
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(dir, "user-")
+	if err != nil {
+		return nil, err
+	}
+	if err := contextio.TryLock(f); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return nil, err
+	}
+	return func() { _ = contextio.Unlock(f); _ = f.Close(); _ = os.Remove(f.Name()) }, nil
 }
 
 func recoverRetiringWorktrees(root string) error {
@@ -737,7 +830,7 @@ func gitWorktreeListing(repo string) *worktreeListing {
 	}
 	return &worktreeListing{paths[0], paths}
 }
-func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing, prune map[string]string) bool {
+func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing, prune map[string]string, passJobs ...map[string][]cleanupRecord) bool {
 	target, e := filepath.Abs(wt)
 	if e != nil || !cleanupPath(root, target) {
 		return false
@@ -756,41 +849,156 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 	}
 	if _, e = os.Stat(target); os.IsNotExist(e) {
 		prune[key] = key
+		return true
+	}
+	jobRecords := cleanupRecordsForWorktree(root, target, passJobs...)
+	if !worktreeRemovalReady(jobRecords) {
 		return false
 	}
 	if listings[key] == nil {
 		listings[key] = gitWorktreeListing(key)
 	}
 	l := listings[key]
-	if l == nil {
+	owned, ownerErr := retention.ReadWorktreeOwnership(root, target)
+	ownedOK := ownerErr == nil && sameWorktree(owned.WorktreePath, target) && len(owned.Jobs) > 0
+	fallbackOK := ownedOK && l != nil
+	if l == nil && !fallbackOK {
+		recordWorktreeRemoval(jobRecords, target, fmt.Errorf("git worktree listing unavailable"))
 		return false
 	}
 	found := false
-	for _, p := range l.paths {
-		if worktreeKey(p) == worktreeKey(target) {
-			found = true
+	if l != nil {
+		for _, p := range l.paths {
+			if worktreeKey(p) == worktreeKey(target) {
+				found = true
+			}
 		}
 	}
-	if !found {
+	if !found && !fallbackOK {
+		recordWorktreeRemoval(jobRecords, target, fmt.Errorf("worktree is not registered"))
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	command := proc.Hide(exec.CommandContext(ctx, "git", "-C", l.command, "worktree", "remove", "--force", target))
-	proc.ConfigureNoWindow(command)
-	if command.Run() != nil {
-		if !makeCleanupWritable(target) || command.Run() != nil {
-			return false
+
+	var removalErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		var stderr cleanupStderr
+		if found {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			command := proc.Hide(exec.CommandContext(ctx, "git", "-C", l.command, "worktree", "remove", "--force", target))
+			proc.ConfigureNoWindow(command)
+			command.Stderr = &stderr
+			removalErr = command.Run()
+			cancel()
+		} else {
+			removalErr = os.RemoveAll(target)
 		}
-	}
-	next := l.paths[:0]
-	for _, p := range l.paths {
-		if worktreeKey(p) != worktreeKey(target) {
-			next = append(next, p)
+		if removalErr == nil {
+			if _, statErr := os.Lstat(target); os.IsNotExist(statErr) {
+				break
+			}
+			removalErr = fmt.Errorf("target remains after removal")
 		}
+		if attempt == 0 && !makeCleanupWritable(target) {
+			break
+		}
+		if attempt == 1 || removalErr == nil {
+			break
+		}
+		removalErr = fmt.Errorf("%w: %s", removalErr, stderr.String())
 	}
-	l.paths = next
+	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
+		if removalErr == nil {
+			removalErr = fmt.Errorf("target remains after removal")
+		}
+		recordWorktreeRemoval(jobRecords, target, removalErr)
+		return false
+	}
+	if l != nil {
+		next := l.paths[:0]
+		for _, p := range l.paths {
+			if worktreeKey(p) != worktreeKey(target) {
+				next = append(next, p)
+			}
+		}
+		l.paths = next
+	}
 	return true
+}
+
+type cleanupStderr struct{ bytes.Buffer }
+
+func (b *cleanupStderr) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.Len() < 4096 {
+		remaining := 4096 - b.Len()
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = b.Buffer.Write(p)
+	}
+	return n, nil
+}
+
+func recordWorktreeRemoval(records []cleanupRecord, target string, removalErr error) {
+	message := fmt.Sprintf("remove %s: %v", target, removalErr)
+	if len(message) > 4096 {
+		message = message[:4096]
+	}
+	for _, record := range records {
+		path, job := record.path, record.job
+		bound, _ := job["worktreePath"].(string)
+		if job == nil || (filepath.Clean(bound) != filepath.Clean(target) && !sameWorktree(bound, target)) {
+			continue
+		}
+		attempts := 0.0
+		if prior, ok := job["cleanupRemoval"].(map[string]any); ok {
+			attempts, _ = cleanupNumber(prior["attempts"])
+		}
+		attempts++
+		delay := 5 * time.Minute
+		for n := 1.0; n < attempts && delay < time.Hour; n++ {
+			delay *= 2
+		}
+		if delay > time.Hour {
+			delay = time.Hour
+		}
+		job["cleanupRemoval"] = map[string]any{"path": target, "error": message, "attempts": attempts, "nextAttemptAt": time.Now().Add(delay).Unix()}
+		data, marshalErr := json.Marshal(job)
+		if marshalErr == nil {
+			_ = atomicWrite(path, data)
+		}
+	}
+}
+
+func worktreeRemovalReady(records []cleanupRecord) bool {
+	now := float64(time.Now().Unix())
+	for _, record := range records {
+		job := record.job
+		if retry, ok := job["cleanupRemoval"].(map[string]any); ok {
+			if next, ok := cleanupNumber(retry["nextAttemptAt"]); ok && next > now {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func cleanupRecordsForWorktree(root, target string, passJobs ...map[string][]cleanupRecord) []cleanupRecord {
+	if len(passJobs) > 0 {
+		return passJobs[0][worktreeKey(target)]
+	}
+	owned, err := retention.ReadWorktreeOwnership(root, target)
+	if err != nil {
+		return nil
+	}
+	records := make([]cleanupRecord, 0, len(owned.Jobs))
+	for _, id := range owned.Jobs {
+		path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+		if job := readCleanupJSON(path); job != nil {
+			records = append(records, cleanupRecord{path, job})
+		}
+	}
+	return records
 }
 
 func makeCleanupWritable(root string) bool {
@@ -815,7 +1023,7 @@ func makeCleanupWritable(root string) bool {
 	return ok
 }
 
-func enforceArtifactSizeLimit(root string, now float64, records []cleanupRecord, protected map[string]bool, listings map[string]*worktreeListing, prune map[string]string) {
+func enforceArtifactSizeLimit(root string, now float64, records []cleanupRecord, protected map[string]bool, listings map[string]*worktreeListing, prune map[string]string, worktreeJobs map[string][]cleanupRecord) {
 	limit := maxArtifactBytes
 	wtRoot, prepRoot := filepath.Join(root, "wt"), filepath.Join(root, "preparations")
 	total := cleanupTreeBytes(wtRoot) + cleanupTreeBytes(prepRoot)
@@ -899,7 +1107,7 @@ func enforceArtifactSizeLimit(root string, now float64, records []cleanupRecord,
 		removedWT := false
 		if wt != "" {
 			if repo, ok := job["repoRoot"].(string); ok && repo != "" {
-				removedWT = removeWorktree(root, repo, wt, listings, prune)
+				removedWT = removeWorktree(root, repo, wt, listings, prune, worktreeJobs)
 			}
 		}
 		id, _ := job["jobId"].(string)
@@ -939,7 +1147,7 @@ func cleanupTreeBytes(root string) int64 {
 	return total
 }
 
-func cleanupOrphanWorktrees(root string, current float64, protected map[string]bool, listings map[string]*worktreeListing, prune map[string]string, owners map[string]map[string]any) {
+func cleanupOrphanWorktrees(root string, current float64, protected map[string]bool, listings map[string]*worktreeListing, prune map[string]string, owners map[string]map[string]any, worktreeJobs map[string][]cleanupRecord) {
 	base := filepath.Join(root, "wt")
 	if isCleanupLink(base) {
 		return
@@ -960,11 +1168,11 @@ func cleanupOrphanWorktrees(root string, current float64, protected map[string]b
 			continue
 		}
 		repo := filepath.Dir(filepath.Clean(common))
-		removeWorktree(root, repo, p, listings, prune)
+		removeWorktree(root, repo, p, listings, prune, worktreeJobs)
 	}
 }
 
-func enforceWorktreeCount(root string, current float64, protected map[string]bool, listings map[string]*worktreeListing, prune map[string]string, owners map[string]map[string]any) {
+func enforceWorktreeCount(root string, current float64, protected map[string]bool, listings map[string]*worktreeListing, prune map[string]string, owners map[string]map[string]any, worktreeJobs map[string][]cleanupRecord) {
 	base := filepath.Join(root, "wt")
 	if isCleanupLink(base) {
 		return
@@ -1029,7 +1237,7 @@ func enforceWorktreeCount(root string, current float64, protected map[string]boo
 				repo = filepath.Dir(filepath.Clean(common))
 			}
 		}
-		if repo != "" && removeWorktree(root, repo, c.path, listings, prune) {
+		if repo != "" && removeWorktree(root, repo, c.path, listings, prune, worktreeJobs) {
 			count--
 		}
 	}

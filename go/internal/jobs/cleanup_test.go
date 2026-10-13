@@ -72,6 +72,31 @@ func TestTrimPurserGoCacheSkippedWhileCodexJobRuns(t *testing.T) {
 		t.Fatalf("cache marker removed while a Codex job runs: %v", err)
 	}
 }
+
+func TestMalformedCodexJobOnlyBlocksCacheWhileRecent(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if hasRunningCodexJob(root) {
+		t.Fatal("stale malformed job blocked cache cleanup")
+	}
+	if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !hasRunningCodexJob(root) {
+		t.Fatal("recent malformed job did not block cache cleanup")
+	}
+}
 func cleanupRepo(t *testing.T, state string) string {
 	t.Helper()
 	repo := filepath.Join(state, "repo")

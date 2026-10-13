@@ -647,6 +647,24 @@ func TestPreparationRetiresCompletedAndOldOrphanButKeepsProtectedStates(t *testi
 	}
 }
 
+func TestPreparationProtectionIsPerGeneration(t *testing.T) {
+	root := t.TempDir()
+	id := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	old := filepath.Join(root, "preparations", id, "revision-1")
+	protected := filepath.Join(root, "preparations", id, "revision-2")
+	putFile(t, filepath.Join(old, "state.json"), []byte(`{"state":"PREPARED"}`), 1000)
+	putFile(t, filepath.Join(protected, "state.json"), []byte(`{"state":"PREPARING"}`), 1000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"SUCCEEDED","applyState":"applied"}`), 1000)
+	putFile(t, filepath.Join(root, "async_jobs", id+".json"), []byte(`{"stage":"CONSUMED"}`), 1000)
+	RetirePreparations(root, 1000+maxPrepAge+1, false)
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("eligible generation remains: %v", err)
+	}
+	if _, err := os.Stat(protected); err != nil {
+		t.Fatalf("protected generation removed: %v", err)
+	}
+}
+
 func TestPreparationKeepsRecentConflictAndRetiresOldTerminalConflict(t *testing.T) {
 	root := t.TempDir()
 	recent := "1111111111111111111111111111111111111111111111111111111111111111"

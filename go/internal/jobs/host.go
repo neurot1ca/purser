@@ -317,6 +317,11 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if stateRoot == "" {
 			stateRoot = filepath.Dir(filepath.Dir(dir))
 		}
+		cacheUser, cacheErr := acquireCacheUser(stateRoot)
+		if cacheErr != nil {
+			return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Codex Go cache is busy")
+		}
+		defer cacheUser()
 		jobTempDir = filepath.Join(stateRoot, "cache", "tmp", jobID)
 		var writableRoots []any
 		if worktreePath != "" {
