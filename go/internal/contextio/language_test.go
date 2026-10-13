@@ -13,9 +13,11 @@ func TestSessionStartLanguageFallback(t *testing.T) {
 		global  string
 		project string
 		want    string
+		avoid   string
 	}{
 		{name: "global language", global: "Turkish", want: "Reply to the user in Turkish."},
 		{name: "project language wins", global: "Turkish", project: "User language: German\n", want: "Reply to the user in German"},
+		{name: "project English suppresses global instruction", global: "Turkish", project: "User language: English\n", avoid: "Reply to the user in Turkish"},
 		{name: "no recorded language", want: "Reply in the language the user writes in."},
 	}
 	for _, tt := range tests {
@@ -41,16 +43,18 @@ func TestSessionStartLanguageFallback(t *testing.T) {
 			if !strings.Contains(context, tt.want) {
 				t.Fatalf("SessionStart context %q does not contain %q", context, tt.want)
 			}
+			if tt.avoid != "" && strings.Contains(context, tt.avoid) {
+				t.Fatalf("SessionStart context %q contains %q", context, tt.avoid)
+			}
 		})
 	}
 }
 
-func TestRecordUserLanguageIgnoresEnglishAndPlaceholders(t *testing.T) {
+func TestRecordUserLanguageAcceptsEnglishAndIgnoresPlaceholders(t *testing.T) {
 	root := t.TempDir()
-	RecordUserLanguage(root, "Turkish")
 	RecordUserLanguage(root, "English")
 	RecordUserLanguage(root, "<language>")
-	if got := lastUserLanguage(root); got != "Turkish" {
-		t.Fatalf("lastUserLanguage() = %q, want Turkish", got)
+	if got := lastUserLanguage(root); got != "English" {
+		t.Fatalf("lastUserLanguage() = %q, want English", got)
 	}
 }

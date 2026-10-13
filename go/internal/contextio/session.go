@@ -607,7 +607,7 @@ func HandoffUserLanguage(content string) string {
 
 func usableUserLanguage(language string) bool {
 	language = strings.TrimSpace(language)
-	if language == "" || strings.HasPrefix(language, "<") || strings.EqualFold(language, "English") {
+	if language == "" || strings.HasPrefix(language, "<") {
 		return false
 	}
 	switch strings.ToLower(language) {
