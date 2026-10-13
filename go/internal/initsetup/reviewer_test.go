@@ -29,6 +29,30 @@ func TestReviewerListInstalledOnly(t *testing.T) {
 	}
 }
 
+func TestReviewerSetAcceptsListedAGYModel(t *testing.T) {
+	choices := reviewerChoices(map[string]any{"agents": map[string]any{
+		"agy": map[string]any{"available": true},
+	}})
+	offered := choices[0]["model"].(string)
+	listing := []map[string]any{{
+		"id":       "gemini-3.8-flash",
+		"variants": map[string]string{"high": offered},
+	}}
+	if !reviewerModelListed("agy", listing, offered) {
+		t.Fatalf("listed model %q was not accepted", offered)
+	}
+}
+
+func TestReviewerSetRefusesAGYModelAbsentFromDiscovery(t *testing.T) {
+	listing := []map[string]any{{
+		"id":       "gemini-3.8-flash",
+		"variants": map[string]string{"medium": "gemini-3.8-flash-medium"},
+	}}
+	if reviewerModelListed("agy", listing, agyReviewerModel()) {
+		t.Fatalf("undiscovered model %q was accepted", agyReviewerModel())
+	}
+}
+
 func TestReviewerSetWritesSelectionAndPreservesCoder(t *testing.T) {
 	text := "schema_version = 1\n\n[roles]\ncoder = \"codex\"\nreviewer = \"agy\"\n\n[coding]\ncoder_agent = \"codex\"\nreviewer1_agent = \"claude\"\n"
 	values, _, err := profile.DecodeTOML([]byte(text))

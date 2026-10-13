@@ -694,18 +694,28 @@ func validateSelection(o options, home string) error {
 			}
 		} else {
 			listing := discoverModels(o.reviewer, loadProviders(home))
-			found := false
-			for _, m := range listing.models {
-				if m["id"] == o.reviewerModel {
-					found = true
-				}
-			}
-			if !found {
+			if !reviewerModelListed(o.reviewer, listing.models, o.reviewerModel) {
 				return fmt.Errorf("selected Reviewer-1 model is absent from %s models", o.reviewer)
 			}
 		}
 	}
 	return nil
+}
+func reviewerModelListed(agent string, listing []map[string]any, requested string) bool {
+	for _, model := range listing {
+		if model["id"] == requested {
+			return true
+		}
+		if agent == "agy" {
+			variants, _ := model["variants"].(map[string]string)
+			for _, variant := range variants {
+				if variant == requested {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 func contains(items []string, value string) bool {
 	for _, x := range items {
