@@ -29,13 +29,18 @@ func postIntake(event map[string]any, root string) (intake postIntakeResult, ear
 		strings.HasSuffix(tool, "__codex_start") || strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
 		return intake, map[string]any{}, nil
 	}
-	loadedConfig, err := loadPreConfig()
-	if err != nil {
-		return intake, nil, err
-	}
 	root = defaultPreStateRoot(root)
 	paths := pendingCandidates(root, event)
 	pending, err := readPostPending(paths)
+	repository := stringValue(pending["repo_root"])
+	if repository == "" {
+		resolved, _ := resolveProjectRoot(event, nil)
+		repository = pointerValue(resolved)
+	}
+	loadedConfig, configErr := loadPreConfig(repository)
+	if configErr != nil {
+		return intake, nil, configErr
+	}
 	if err != nil {
 		return intake, nil, err
 	}

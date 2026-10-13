@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/profile"
 )
 
 func TestPreSuccessP64Fixture(t *testing.T) {
@@ -170,6 +171,47 @@ func TestPreSuccessP64Fixture(t *testing.T) {
 				t.Fatalf("p64 state mismatch:\n%s", strings.Join(differences, "\n"))
 			}
 		})
+	}
+}
+
+func TestProjectRolePreConfigUsesRepository(t *testing.T) {
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	state, home := filepath.Join(base, "state"), filepath.Join(base, "home")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", pluginRoot)
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	projectA, projectB := filepath.Join(base, "a"), filepath.Join(base, "b")
+	for _, project := range []string{projectA, projectB} {
+		if err = os.MkdirAll(project, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roles := []struct {
+		project, toml, coder, reviewer string
+	}{
+		{projectA, "schema_version = 1\n[roles]\ncoder = \"claude\"\n[coding]\ncoder_agent = \"claude\"\nreviewer1_agent = \"agy\"\nreviewer1_model_requested = \"gemini-3.8-flash-high\"\n", "claude", "gemini-3.8-flash-high"},
+		{projectB, "schema_version = 1\n[roles]\ncoder = \"codex\"\n[coding]\ncoder_agent = \"codex\"\nreviewer1_agent = \"claude\"\nreviewer1_model_requested = \"claude-sonnet-4-5\"\nreviewer1_effort = \"high\"\n", "codex", "claude-sonnet-4-5"},
+	}
+	for _, role := range roles {
+		path := profile.ProjectRolesPath(state, role.project)
+		if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(path, []byte(role.toml), 0600); err != nil {
+			t.Fatal(err)
+		}
+		config, loadErr := loadPreConfig(role.project)
+		if loadErr != nil {
+			t.Fatalf("load %s: %v", role.project, loadErr)
+		}
+		if config["coder_agent"] != role.coder || config["reviewer1_model_requested"] != role.reviewer {
+			t.Fatalf("repository %s config coder=%v reviewer=%v", role.project, config["coder_agent"], config["reviewer1_model_requested"])
+		}
 	}
 }
 

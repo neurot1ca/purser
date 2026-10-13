@@ -60,7 +60,8 @@ func postInternalOutput(event map[string]any, root string, cause error) map[stri
 		_ = writePostDiagnostic(root, event, cause)
 	}
 	field := "updatedToolOutput"
-	if config, err := loadPreConfig(); err == nil {
+	repository, _ := resolveProjectRoot(event, nil)
+	if config, err := loadPreConfig(pointerValue(repository)); err == nil {
 		bundle["reviewer1_model_requested"] = config["reviewer1_model_requested"]
 		if value := stringValue(config["post_tool_output_field"]); value != "" {
 			field = value
@@ -89,12 +90,12 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 		return early, nil
 	}
 	pending, bundle, resolved := intake.Pending, intake.Bundle, intake.Profile
-	loaded, err := loadPreConfig()
+	started := time.Now()
+	repoRoot := stringValue(pending["repo_root"])
+	loaded, err := loadPreConfig(repoRoot)
 	if err != nil {
 		return nil, err
 	}
-	started := time.Now()
-	repoRoot := stringValue(pending["repo_root"])
 	project := pendingProjectKey(pending)
 	if resolved.ForceFullReview {
 		code, msg := "PROFILE_FORCES_FULL", "The resolved profile forces FULL Claude review."
@@ -232,11 +233,16 @@ func postConfiguredChecks(pending map[string]any) []profile.Check {
 }
 
 func postStartDispatch(event map[string]any, root string) (map[string]any, error) {
-	loaded, err := loadPreConfig()
+	pending, pendingErr := readPostPending(pendingCandidates(root, event))
+	repository := stringValue(pending["repo_root"])
+	if repository == "" {
+		resolved, _ := resolveProjectRoot(event, nil)
+		repository = pointerValue(resolved)
+	}
+	loaded, err := loadPreConfig(repository)
 	if err != nil {
 		return nil, err
 	}
-	pending, pendingErr := readPostPending(pendingCandidates(root, event))
 	adapted := make(map[string]any, len(event)+1)
 	for key, value := range event {
 		adapted[key] = value
@@ -352,7 +358,8 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	repoRoot := stringValue(event["repo_root"])
 	lock, index, pending, original, cached, err := claimAsyncResult(root, event, repoRoot)
 	if err != nil {
-		loaded, loadErr := loadPreConfig()
+		repository, _ := resolveProjectRoot(event, nil)
+		loaded, loadErr := loadPreConfig(pointerValue(repository))
 		if loadErr != nil {
 			return nil, loadErr
 		}
@@ -360,9 +367,10 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 		return response, replaceErr
 	}
 	defer func() { releaseTaskUsageLock(lock); _ = lock.Close() }()
+	repoRoot = stringValue(pending["repo_root"])
 	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") {
 		if job := asyncJob(root, index); job != nil && (job["discarded"] == true || job["applyState"] == "rejected") {
-			loaded, loadErr := loadPreConfig()
+			loaded, loadErr := loadPreConfig(repoRoot)
 			if loadErr != nil {
 				return nil, loadErr
 			}
@@ -416,7 +424,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			contextio.ClearCompletedGearAdviceRecovery(root, stringValue(index["project_key"]), stringValue(index["jobId"]))
 			return response, nil
 		}
-		loaded, loadErr := loadPreConfig()
+		loaded, loadErr := loadPreConfig(repoRoot)
 		if loadErr != nil {
 			return nil, loadErr
 		}
@@ -427,7 +435,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			if failure == nil && result != nil {
 				context := stringValue(mapValue(result["hookSpecificOutput"])["additionalContext"])
 				field := "updatedToolOutput"
-				if config, configErr := loadPreConfig(); configErr == nil && stringValue(config["post_tool_output_field"]) != "" {
+				if config, configErr := loadPreConfig(repoRoot); configErr == nil && stringValue(config["post_tool_output_field"]) != "" {
 					field = stringValue(config["post_tool_output_field"])
 				}
 				result, failure = replacement(map[string]any{"state": "FAILED", "ambiguous_outcome": true,
@@ -441,13 +449,13 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			}
 			return result, failure
 		}
-		loaded, loadErr := loadPreConfig()
+		loaded, loadErr := loadPreConfig(repoRoot)
 		if loadErr != nil {
 			return nil, loadErr
 		}
 		return replacement(map[string]any{"status": "ALREADY_CONSUMED_OR_INTERRUPTED", "claude_review_mode": "FULL", "ambiguous_outcome": true}, stringValue(loaded["post_tool_output_field"]))
 	}
-	loaded, err := loadPreConfig()
+	loaded, err := loadPreConfig(repoRoot)
 	if err != nil {
 		return nil, err
 	}

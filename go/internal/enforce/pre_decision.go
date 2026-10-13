@@ -34,10 +34,6 @@ func init() {
 // preDecision assembles the existing Pre policy pieces. Success persistence is
 // intentionally left to pass 64.
 func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[string]any) (map[string]any, error) {
-	config, err := loadPreConfig()
-	if err != nil {
-		return nil, err
-	}
 	input, ok := event["tool_input"].(map[string]any)
 	if !ok {
 		return denyPre("MALFORMED_TOOL_INPUT", "tool_input must be an object"), nil
@@ -45,6 +41,24 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	tool := stringValue(event["tool_name"])
 	isStart := strings.HasSuffix(tool, "__codex_start")
 	reply := strings.HasSuffix(tool, "__codex-reply")
+	if isStart && stringValue(input["mode"]) == "reply" {
+		reply = true
+	}
+	var root *string
+	rootReason := ""
+	if reply {
+		if indexed, _ := indexedReplyRoot(runtimeRoot, input["threadId"]); indexed != nil {
+			root = indexed
+		} else {
+			root, rootReason = resolveProjectRoot(event, nil)
+		}
+	} else {
+		root, rootReason = resolveProjectRoot(event, nil)
+	}
+	config, err := loadPreConfig(pointerValue(root))
+	if err != nil {
+		return nil, err
+	}
 	mode := "new"
 	if isStart {
 		mode = stringValue(input["mode"])
@@ -73,8 +87,6 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		return denyPre(parsed.Code, parsed.Message), nil
 	}
 
-	var root *string
-	rootReason := ""
 	var live map[string]any
 	var attempt TaskAttempt
 	loadAttempt := func(root *string, parsed policy.OrchParseResult) bool {
@@ -99,8 +111,6 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		parsed, root, live = recovery.Parsed, recovery.Root, recovery.LiveThread
 		live = clonePostMap(live)
 		live["_last_outcome"] = recovery.Record["last_outcome"]
-	} else {
-		root, rootReason = resolveProjectRoot(event, nil)
 	}
 	if !parsed.Valid {
 		return denyPre(parsed.Code, parsed.Message), nil
@@ -1136,7 +1146,7 @@ func preOpenCodeCandidates(runtimeRoot string) []any {
 	return value.Candidates
 }
 
-func loadPreConfig() (map[string]any, error) {
+func loadPreConfig(repository ...string) (map[string]any, error) {
 	pluginRoot := pluginroot.Root()
 	if pluginRoot == "" {
 		return nil, errors.New("orchestrator config path is unavailable")
@@ -1145,7 +1155,11 @@ func loadPreConfig() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return policy.LoadCoderConfig(filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json"), filepath.Join(home, ".orchestrator", "config.toml"))
+	repo := ""
+	if len(repository) > 0 {
+		repo = repository[0]
+	}
+	return policy.LoadCoderConfigForRepository(filepath.Join(pluginRoot, ".claude", "hooks", "orchestrator", "config.json"), filepath.Join(home, ".orchestrator", "config.toml"), repo)
 }
 
 func denyPre(code, message string) map[string]any {
