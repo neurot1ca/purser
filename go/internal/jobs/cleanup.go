@@ -28,7 +28,7 @@ const (
 
 var maxArtifactBytes int64 = 2 * 1024 * 1024 * 1024
 
-var cleanupTerminal = map[string]bool{"SUCCEEDED": true, "FAILED": true, "CANCELLED": true, "TIMED_OUT": true, "UNKNOWN_OR_IN_PROGRESS": true, "EXPIRED": true}
+var cleanupTerminal = map[string]bool{"SUCCEEDED": true, "FAILED": true, "CANCELLED": true, "TIMED_OUT": true, "UNKNOWN_OR_IN_PROGRESS": true, "EXPIRED": true, "SUPERSEDED": true}
 
 type cleanupRecord struct {
 	path string

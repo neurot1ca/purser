@@ -111,6 +111,41 @@ func cleanupJob(t *testing.T, state, id, status string, extra map[string]any) {
 }
 func cleanupNow() time.Time { return time.Unix(2_000_000_000, 0) }
 
+func TestCleanupSuperseded(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		name := "stale-thread"
+		if active {
+			name = "active-job"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			repo := cleanupRepo(t, root)
+			wt := cleanupWT(t, root, repo, name)
+			id := strings.Repeat("a", 64)
+			job := map[string]any{"repoRoot": repo, "worktreePath": wt, "finishedAt": float64(cleanupNow().Unix()) - 8*86400}
+			cleanupJob(t, root, id, "SUPERSEDED", job)
+			if err := os.MkdirAll(filepath.Join(root, "codex_exec_mcp", "threads"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			threadPath := filepath.Join(root, "codex_exec_mcp", "threads", "stale.json")
+			writeHostTestJSON(t, threadPath, map[string]any{"thread_id": "stale", "cwd": wt, "worktreePath": wt, "config_args": []any{}})
+			if active {
+				cleanupJob(t, root, strings.Repeat("b", 64), "RUNNING", map[string]any{"worktreePath": wt, "threadId": "stale"})
+			}
+			if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+				t.Fatal(err)
+			}
+			_, err := os.Stat(wt)
+			if active && err != nil {
+				t.Fatalf("active job worktree removed: %v", err)
+			}
+			if !active && !os.IsNotExist(err) {
+				t.Fatalf("stale thread record retained worktree: %v", err)
+			}
+		})
+	}
+}
+
 func TestCleanupPathAllowsSymlinkedTempAncestor(t *testing.T) {
 	base := t.TempDir()
 	real := filepath.Join(base, "real")

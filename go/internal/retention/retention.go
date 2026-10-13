@@ -699,7 +699,7 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 }
 
 func cleanupTerminalState(state string) bool {
-	return state == "SUCCEEDED" || state == "FAILED" || state == "CANCELLED" || state == "TIMED_OUT" || state == "EXPIRED"
+	return state == "SUCCEEDED" || state == "FAILED" || state == "CANCELLED" || state == "TIMED_OUT" || state == "EXPIRED" || state == "SUPERSEDED"
 }
 
 // RemovePreparationTree removes one job-owned preparation directory after validating its state-root boundary.

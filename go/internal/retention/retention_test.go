@@ -25,6 +25,27 @@ func putFile(t *testing.T, path string, data []byte, stamp int64) {
 
 func unixTime(seconds int64) time.Time { return time.Unix(seconds, 0) }
 
+func TestRetentionSuperseded(t *testing.T) {
+	t.Run("eligible", func(t *testing.T) {
+		root := t.TempDir()
+		id := strings.Repeat("a", 64)
+		wt := filepath.Join(root, "wt", "shared")
+		job := map[string]any{"jobId": id, "state": "SUPERSEDED", "finishedAt": 1000, "worktreePath": wt}
+		data, err := json.Marshal(job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), data, 1000)
+		prep := filepath.Join(root, "preparations", id, "revision-1")
+		putFile(t, filepath.Join(prep, "state.json"), []byte(`{"state":"PREPARED"}`), 1000)
+		RetirePreparations(root, 1000+maxPrepAge+1, false)
+		_, err = os.Stat(prep)
+		if !os.IsNotExist(err) {
+			t.Errorf("eligible residue retained: %v", err)
+		}
+	})
+}
+
 func TestRemoveOldPrefixedEntries(t *testing.T) {
 	root := t.TempDir()
 	now := time.Now()
