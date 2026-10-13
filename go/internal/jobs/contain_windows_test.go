@@ -77,8 +77,12 @@ func TestContainmentHelper(t *testing.T) {
 		_, _ = fmt.Fprintln(stdin, "spawn")
 		grandWait := openProcess(t, readPID(t, reader, "GRAND"))
 		defer syscall.CloseHandle(grandWait)
-		check(t, job.Terminate(1))
+		check(t, root.Process.Kill())
 		_ = root.Wait()
+		if job.ConfirmDescendantsStopped(true) {
+			t.Fatal("outside owner incorrectly discounted the surviving descendant")
+		}
+		check(t, job.Terminate(1))
 		if !job.ConfirmDescendantsStopped(true) {
 			t.Fatal("terminated job was not confirmed empty")
 		}

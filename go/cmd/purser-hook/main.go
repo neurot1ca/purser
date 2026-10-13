@@ -14,6 +14,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "supervisor" {
+		os.Exit(supervisorMain(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
 		os.Exit(mcpMain(os.Args[2:]))
 	}
