@@ -88,6 +88,10 @@ func TestSessionStartPluginVersionNoticeParity(t *testing.T) {
 	if !ok || pending["version"] != "2.0.0" {
 		t.Fatalf("version pending state = %#v", state["version_pending"])
 	}
+	newSession := map[string]any{"hook_event_name": "SessionStart", "session_id": "session-update-new", "source": "startup", "cwd": repo}
+	if repeated := sessionStartContext(t, newSession); strings.Contains(repeated, "Purser upgraded") {
+		t.Fatalf("delivered version notice repeated in a new session: %s", repeated)
+	}
 }
 
 func TestSessionStartReportsModelChangeOnce(t *testing.T) {
