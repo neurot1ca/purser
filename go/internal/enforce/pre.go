@@ -84,9 +84,15 @@ func preApply(event map[string]any, runtimeRoot string) map[string]any {
 		}
 		sessionID := stringValue(event["session_id"])
 		revision := stringValue(input["revision"])
-		current, valid := applyRevision(stateRoot, jobID, "")
-		if sessionID == "" || !valid || revision == "" || revision != current {
-			return denyPre("ACCEPTANCE_REVISION_UNAVAILABLE", "reviewed revision is unavailable")
+		current, valid, cause := applyRevision(stateRoot, jobID, "")
+		if sessionID == "" {
+			return denyPre("ACCEPTANCE_REVISION_UNAVAILABLE", "acceptance session is unavailable")
+		}
+		if !valid {
+			return denyPre("ACCEPTANCE_REVISION_UNAVAILABLE", cause)
+		}
+		if revision == "" || revision != current {
+			return denyPre("ACCEPTANCE_REVISION_UNAVAILABLE", "acceptance revision does not match the reviewed worktree")
 		}
 		recordReviewIntervalDecision(stateRoot, jobID, "accepted")
 		updated := make(map[string]any, len(input)+2)
@@ -97,7 +103,7 @@ func preApply(event map[string]any, runtimeRoot string) map[string]any {
 		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}}
 	}
 	if subagent {
-		if _, valid := applyRevision(stateRoot, jobID, stringValue(event["session_id"])); !valid {
+		if _, valid, _ := applyRevision(stateRoot, jobID, stringValue(event["session_id"])); !valid {
 			return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse",
 				"permissionDecision": "deny", "permissionDecisionReason": "main Claude has not accepted this revision"}}
 		}
@@ -105,7 +111,7 @@ func preApply(event map[string]any, runtimeRoot string) map[string]any {
 	return map[string]any{}
 }
 
-func applyRevision(stateRoot, jobID, sessionID string) (string, bool) {
+func applyRevision(stateRoot, jobID, sessionID string) (string, bool, string) {
 	jobPath := filepath.Join(stateRoot, "codex_exec_mcp", "jobs", jobID+".json")
 	read := func() map[string]any {
 		data, err := os.ReadFile(jobPath)
@@ -120,38 +126,46 @@ func applyRevision(stateRoot, jobID, sessionID string) (string, bool) {
 	}
 	job := read()
 	if job == nil {
-		return "", false
+		return "", false, "acceptance job is missing"
+	}
+	if stringValue(job["reviewedSnapshot"]) == "" {
+		return "", false, "reviewed bundle is unavailable for this job"
 	}
 	repo, _ := job["repoRoot"].(string)
 	root, err := filepath.EvalSymlinks(repo)
 	if err != nil {
-		return "", false
+		return "", false, "reviewed revision is unavailable"
 	}
 	root, err = filepath.Abs(root)
 	if err != nil {
-		return "", false
+		return "", false, "reviewed revision is unavailable"
 	}
 	sum := sha256.Sum256([]byte(root))
 	unlock, err := lease.Lock(filepath.Join(filepath.Dir(filepath.Dir(jobPath)), "apply", hex.EncodeToString(sum[:])+".lock"))
 	if err != nil {
-		return "", false
+		return "", false, "reviewed revision is unavailable"
 	}
 	defer func() { _ = unlock() }()
 	job = read()
 	if job == nil {
-		return "", false
+		return "", false, "acceptance job is missing"
+	}
+	if stringValue(job["reviewedSnapshot"]) == "" {
+		return "", false, "reviewed bundle is unavailable for this job"
 	}
 	worktree, _ := job["worktreePath"].(string)
 	snapshot, _ := job["snapshot"].(string)
 	digest, err := ledger.JobChangedPathsSHA256(worktree, snapshot)
 	if err != nil {
-		return "", false
+		return "", false, "reviewed revision is unavailable"
 	}
-	if sessionID == "" {
-		return digest, true
+	if sessionID != "" {
+		acceptance, _ := job["acceptance"].(map[string]any)
+		if acceptance == nil || acceptance["sessionId"] != sessionID || acceptance["revision"] != digest {
+			return digest, false, "main Claude has not accepted this revision"
+		}
 	}
-	acceptance, _ := job["acceptance"].(map[string]any)
-	return digest, acceptance != nil && acceptance["sessionId"] == sessionID && acceptance["revision"] == digest
+	return digest, true, ""
 }
 
 func asyncPreFollowup(event map[string]any, root string) map[string]any {

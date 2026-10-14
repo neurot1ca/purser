@@ -106,6 +106,10 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 		compact["changed_path_count"] = len(paths)
 		if digest, ok := bundle["changed_paths_sha256"].(string); ok && digest != "" {
 			compact["changed_paths_sha256"] = digest
+		} else if bundle["apply"] == "codex_apply" {
+			// Worktree acceptance uses the patch digest from JobChangedPathsSHA256.
+			// Never publish the path-list fallback as if it were that revision.
+			compact["changed_paths_sha256"] = nil
 		} else {
 			compact["changed_paths_sha256"] = hex.EncodeToString(sum[:])
 		}

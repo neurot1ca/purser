@@ -65,9 +65,25 @@ func TestPreApplyAcceptanceGate(t *testing.T) {
 	if denied := decision(event(map[string]any{"jobId": id, "acceptOnly": true}, "agent-1")); denied["permissionDecision"] != "deny" {
 		t.Fatalf("subagent acceptOnly was not denied: %#v", denied)
 	}
-	reviewedRevision, err := ledger.JobChangedPathsSHA256(worktree, snapshot)
-	if err != nil {
+	receipt := baseBundle("")
+	if _, err := assemblePostDelta(repo, map[string]any{"phase": "implementation", "scope": []string{"."},
+		"baseline": map[string]any{"status": "UNKNOWN"}, "worktree_path": worktree, "worktree_snapshot": snapshot}, receipt, nil, nil); err != nil {
 		t.Fatal(err)
+	}
+	reviewedRevision := stringValue(receipt["changed_paths_sha256"])
+	if expected, err := ledger.JobChangedPathsSHA256(worktree, snapshot); err != nil || reviewedRevision != expected {
+		t.Fatalf("receipt revision differs from worktree revision: receipt=%q expected=%q err=%v", reviewedRevision, expected, err)
+	}
+	missingDigest := baseBundle("")
+	missingDigest["apply"], missingDigest["changed_paths"] = "codex_apply", receipt["changed_paths"]
+	compact, _, err := compactBundle(missingDigest, 8192)
+	if err != nil || compact["changed_paths_sha256"] != nil {
+		t.Fatalf("worktree receipt published a fallback revision: %#v err=%v", compact["changed_paths_sha256"], err)
+	}
+	wrong := decision(event(map[string]any{"jobId": id, "acceptOnly": true, "revision": "wrong-revision"}, nil))
+	wrongReason := stringValue(wrong["permissionDecisionReason"])
+	if wrong["permissionDecision"] != "deny" || !strings.Contains(wrongReason, "does not match") || strings.Contains(wrongReason, reviewedRevision) {
+		t.Fatalf("wrong revision was not safely identified: %#v", wrong)
 	}
 	main := decision(event(map[string]any{"jobId": id, "acceptOnly": true, "revision": reviewedRevision}, nil))
 	updated := mapValue(main["updatedInput"])
@@ -75,6 +91,13 @@ func TestPreApplyAcceptanceGate(t *testing.T) {
 	if !ok || revision != reviewedRevision || updated["sessionId"] != "session-main" {
 		t.Fatalf("main acceptance was not bound to hook revision and session: %#v", main)
 	}
+	delete(job, "reviewedSnapshot")
+	writeJSON()
+	noBundle := decision(event(map[string]any{"jobId": id, "acceptOnly": true, "revision": reviewedRevision}, nil))
+	if !strings.Contains(stringValue(noBundle["permissionDecisionReason"]), "bundle") || strings.Contains(stringValue(noBundle["permissionDecisionReason"]), reviewedRevision) {
+		t.Fatalf("missing reviewed bundle cause was not safely identified: %#v", noBundle)
+	}
+	job["reviewedSnapshot"] = snapshot
 	job["acceptance"] = map[string]any{"revision": revision, "sessionId": "session-main", "acceptedAt": "now"}
 	writeJSON()
 	if allowed := decision(event(input, "agent-1")); allowed["permissionDecision"] == "deny" {
