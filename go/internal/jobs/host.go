@@ -298,6 +298,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 					return nil, err
 				}
 			}
+			resumePartialAttempt(dir, job, worktreePath, &prompt)
 			if err = Write(path, job); err != nil {
 				return nil, err
 			}
@@ -908,6 +909,7 @@ func failHostUnavailable(path, id string, generation int64, token, message strin
 	if err = Write(path, job); err != nil {
 		return nil, err
 	}
+	finishFailedAttempt(filepath.Dir(path), id, job)
 	_ = os.Remove(filepath.Join(filepath.Dir(path), id+".launch"))
 	return map[string]any{"status": "error", "errorCode": hostUnavailableCode, "message": message}, nil
 }

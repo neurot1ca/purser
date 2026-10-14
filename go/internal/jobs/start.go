@@ -245,6 +245,12 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	if nonemptyString(job["repoRoot"]) == "" && nonemptyString(args["cwd"]) != "" {
 		job["repoRoot"] = nonemptyString(args["cwd"])
 	}
+	if req.Mode == "new" && nonemptyString(job["taskId"]) != "" {
+		attempt, status, err := enforce.LoadTaskAttempt(stateRoot, contextio.ProjectKey(nonemptyString(job["repoRoot"])), nonemptyString(job["taskId"]))
+		if err == nil && status == enforce.TaskAttemptOK && attempt.TerminalDisposition == "failed" && len(attempt.LatestJobID) == 64 && validJobID(attempt.LatestJobID) {
+			job["resumeJobId"] = attempt.LatestJobID
+		}
+	}
 	if readyCheck(args) {
 		job["readinessCheck"] = readinessValue(args)
 	}

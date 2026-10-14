@@ -121,6 +121,12 @@ func finishJob(dir, id, state, code string, result map[string]any, message strin
 	if err := Write(path, r); err != nil {
 		return err
 	}
+	finishFailedAttempt(dir, id, r)
+	// A finish before worktree creation also retires an unconsumed retry patch.
+	var resumeID string
+	if terminalJobs[state] && r.Get("resumeJobId", &resumeID) && len(resumeID) == 64 && validJobID(resumeID) {
+		_ = os.Remove(filepath.Join(dir, resumeID+".partial.patch"))
+	}
 	if leaseQueued, _ := recordMap(r)["leaseQueued"].(bool); leaseQueued {
 		job := recordMap(r)
 		_, started := job["startedAt"]

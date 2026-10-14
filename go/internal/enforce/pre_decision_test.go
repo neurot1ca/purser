@@ -715,6 +715,7 @@ func TestPreFailedTaskRetryDispatch(t *testing.T) {
 		{name: "cancelled reuse", route: "subtle", disposition: "cancelled", finished: true},
 		{name: "discarded reuse", route: "subtle", disposition: "discarded", finished: true},
 		{name: "failed reuse", route: "subtle", disposition: "failed", category: "failed_abandonment", finished: true},
+		{name: "host failed reuse", route: "subtle", disposition: "failed", finished: true},
 		{name: "started protected", route: "subtle", disposition: "started", finished: true, deny: "TASK_ALREADY_FINISHED:"},
 		{name: "accepted protected", route: "subtle", disposition: "accepted", finished: true, deny: "TASK_ALREADY_FINISHED:"},
 		{name: "applied protected", route: "subtle", disposition: "applied", finished: true, deny: "TASK_ALREADY_FINISHED:"},

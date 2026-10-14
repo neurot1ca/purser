@@ -103,6 +103,10 @@ func SaveTaskAttempt(root string, update TaskAttempt) error {
 	if status == TaskAttemptMissing {
 		current = TaskAttempt{ProjectKey: update.ProjectKey, TaskID: update.TaskID}
 	}
+	// A late host finish must not overwrite a newer attempt under this same lock.
+	if update.TerminalDisposition == "failed" && update.LatestJobID != "" && current.LatestJobID != "" && update.LatestJobID != current.LatestJobID {
+		return nil
+	}
 	if update.LatestJobID != "" {
 		current.LatestJobID = update.LatestJobID
 	}
@@ -118,5 +122,13 @@ func SaveTaskAttempt(root string, update TaskAttempt) error {
 		failure := *update.Failure
 		current.Failure = &failure
 	}
-	return atomicAdmissionJSON(path, current)
+	if err := atomicAdmissionJSON(path, current); err != nil {
+		return err
+	}
+	if current.TerminalDisposition != "started" && (current.TerminalDisposition != "failed" || update.LatestJobID == "") {
+		if raw, err := hex.DecodeString(current.LatestJobID); err == nil && len(raw) == 32 {
+			_ = os.Remove(filepath.Join(root, "codex_exec_mcp", "jobs", current.LatestJobID+".partial.patch"))
+		}
+	}
+	return nil
 }
