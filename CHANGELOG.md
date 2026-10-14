@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.152 — 2026-10-15
+
+- **New:** the remote bridge adds `host_validation`, `host_write` (NEXT.md with a base hash) and `host_release` (runs the host's `PURSER_REMOTE_RELEASE` script), and `host_read` serves the project `CLAUDE.md`, which cloud setup installs.
+- **New:** `start-host` keeps its settings, finds ngrok outside PATH, and `install` starts the bridge hidden at logon (Windows task, macOS LaunchAgent, Linux systemd user unit).
+- **New:** `scripts/remote/call.sh` calls the bridge over HTTPS when a cloud session's MCP client cannot connect.
+- **Fixed:** remote `codex_start` passed pre enforcement only with a tool use ID, and remote results now carry the review bundle and revision.
+- **Fixed:** a long label plus the plan suffix no longer exceeds 80 runes and blocks `codex_start`.
 ## 0.1.151 — 2026-10-14
 
 - **New:** `purser-hook remote` serves the Codex tools over token-protected HTTP MCP so a Claude Code cloud session can drive Codex on your PC; see `docs/REMOTE_CLAUDE.md`.
