@@ -17,7 +17,6 @@ import (
 const (
 	createBreakawayFromJob = 0x01000000
 	createNewProcessGroup  = 0x00000200
-	createNoWindow         = 0x08000000
 	processCreateProcess   = 0x00000080
 	processDupHandle       = 0x00000040
 	processQueryLimited    = 0x00001000
@@ -50,11 +49,12 @@ func LaunchDetached(argv, env []string, dir string) (pid int, identity int64, er
 	command.Env = env
 	command.Dir = dir
 	command.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: createBreakawayFromJob | createNewProcessGroup | createNoWindow,
+		CreationFlags: createBreakawayFromJob | createNewProcessGroup,
 		HideWindow:    true,
 		// ParentProcess makes Go use STARTUPINFOEX and set EXTENDED_STARTUPINFO_PRESENT.
 		ParentProcess: parent,
 	}
+	proc.Hide(command)
 	if err := command.Start(); err != nil {
 		return 0, 0, err
 	}

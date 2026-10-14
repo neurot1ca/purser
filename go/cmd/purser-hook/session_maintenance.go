@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"time"
 
 	"purser-hook/internal/contextio"
-	"purser-hook/internal/jobs"
 	"purser-hook/internal/maintenance"
 	"purser-hook/internal/models"
 	"purser-hook/internal/proc"
@@ -15,7 +13,6 @@ import (
 
 var (
 	discoverSessionModelVersion = models.DiscoverModelVersion
-	cleanupSessionJobs          = jobs.CleanupJobs
 	startSessionMaintenance     = proc.StartDetached
 	contextSessionStart         = contextio.SessionStart
 	writeSessionOutput          = func(output []byte) { _, _ = os.Stdout.Write(output) }
@@ -30,7 +27,7 @@ func handleSessionStart(event map[string]any) {
 
 func sessionMaintenance(event map[string]any) {
 	defer func() { _ = recover() }()
-	defer safeSessionMaintenanceStep(func() { cleanupSessionJobs(stateRoot(), time.Now(), true) })
+	defer enqueueCleanup(stateRoot())
 	repository := contextio.ProjectRoot(event)
 	if repository != "" {
 		safeSessionMaintenanceStep(func() { _, _, _ = discoverSessionModelVersion(repository) })

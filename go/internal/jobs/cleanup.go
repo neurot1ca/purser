@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,6 +31,205 @@ var maxArtifactBytes int64 = 2 * 1024 * 1024 * 1024
 
 var cleanupTerminal = map[string]bool{"SUCCEEDED": true, "FAILED": true, "CANCELLED": true, "TIMED_OUT": true, "UNKNOWN_OR_IN_PROGRESS": true, "EXPIRED": true, "SUPERSEDED": true}
 
+var cleanupChildAlive = IdentityMatches
+var cleanupMinimumInterval = 10 * time.Minute
+var cleanupClock = time.Now
+var cleanupSleep = time.Sleep
+
+type cleanupChild struct {
+	PID           int
+	Identity      int64
+	Completed     string
+	LastCompleted int64
+}
+
+// RequestCleanup only stamps and launches. The stamp is never removed: a request
+// racing acknowledgement of a pass remains different from Completed.
+func RequestCleanup(root string, launch func() (int, int64, error)) (err error) {
+	dir, err := cleanupDirectory(root)
+	if err != nil {
+		return err
+	}
+	defer func() { cleanupFailure(dir, err) }()
+	if err = atomicWrite(filepath.Join(dir, "dirty"), []byte(rand.Text())); err != nil {
+		return err
+	}
+	unlock, err := cleanupLock(dir, "queue")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	child, err := readCleanupChild(dir)
+	if err != nil {
+		return err
+	}
+	if cleanupChildAlive(child.PID, child.Identity) {
+		return nil
+	}
+	return launchCleanupChild(dir, child, launch)
+}
+
+// RunCleanup executes at most two existing bounded passes, then hands any newer
+// stamp to a successor. Only the detached command calls this entry point.
+func RunCleanup(root string, launch func() (int, int64, error)) error {
+	return runCleanup(root, launch, func() error { return cleanupJobs(root, os.TempDir(), time.Now(), true) })
+}
+
+func runCleanup(root string, launch func() (int, int64, error), pass func() error) (err error) {
+	dir, err := cleanupDirectory(root)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("cleanup panic: %v", p)
+		}
+		cleanupFailure(dir, err)
+	}()
+	releaseSweep, err := cleanupLock(dir, "sweep")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if releaseSweep != nil {
+			releaseSweep()
+		}
+	}()
+	for i := 0; i < 2; i++ {
+		unlock, lockErr := cleanupLock(dir, "queue")
+		if lockErr != nil {
+			return lockErr
+		}
+		child, readErr := readCleanupChild(dir)
+		dirty, stampErr := os.ReadFile(filepath.Join(dir, "dirty"))
+		unlock()
+		if readErr != nil {
+			return readErr
+		}
+		if stampErr != nil {
+			return stampErr
+		}
+		if string(dirty) != child.Completed {
+			if child.LastCompleted > 0 {
+				remaining := cleanupMinimumInterval - cleanupClock().Sub(time.Unix(child.LastCompleted, 0))
+				if remaining > 0 {
+					cleanupSleep(remaining)
+				}
+			}
+			if err = pass(); err != nil {
+				return err
+			}
+		}
+		unlock, err = cleanupLock(dir, "queue")
+		if err != nil {
+			return err
+		}
+		child.Completed = string(dirty)
+		child.LastCompleted = cleanupClock().Unix()
+		latest, readErr := os.ReadFile(filepath.Join(dir, "dirty"))
+		if readErr != nil {
+			unlock()
+			return readErr
+		}
+		if string(latest) == child.Completed || i == 1 {
+			// Release the sweep under the queue lock so the exit/launch boundary
+			// cannot strand a request behind an exiting child's PID.
+			releaseSweep()
+			releaseSweep = nil
+			child.PID, child.Identity = 0, 0
+			if string(latest) != child.Completed {
+				err = launchCleanupChild(dir, child, launch)
+			} else {
+				err = writeCleanupChild(dir, child)
+			}
+			unlock()
+			return err
+		}
+		err = writeCleanupChild(dir, child)
+		unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupDirectory(root string) (string, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, "cleanup")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || isReparsePoint(info) {
+		return "", fmt.Errorf("linked cleanup directory")
+	}
+	return dir, nil
+}
+
+func cleanupLock(dir, name string) (func(), error) {
+	deadline := time.Now().Add(time.Second)
+	for {
+		f, err := os.OpenFile(filepath.Join(dir, name+".lock"), os.O_CREATE|os.O_RDWR, 0600)
+		if err == nil {
+			err = contextio.TryLock(f)
+			if err == nil {
+				return func() { _ = contextio.Unlock(f); _ = f.Close() }, nil
+			}
+			_ = f.Close()
+		}
+		if !time.Now().Before(deadline) {
+			return nil, err
+		}
+		// Sharing violations (including antivirus opens) are retries, not proof
+		// that a running child will handle this request.
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func readCleanupChild(dir string) (cleanupChild, error) {
+	var child cleanupChild
+	data, err := os.ReadFile(filepath.Join(dir, "child.json"))
+	if os.IsNotExist(err) {
+		return child, nil
+	}
+	if err != nil {
+		return child, err
+	}
+	err = json.Unmarshal(data, &child)
+	return child, err
+}
+
+func writeCleanupChild(dir string, child cleanupChild) error {
+	data, err := json.Marshal(child)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(dir, "child.json"), data)
+}
+
+func launchCleanupChild(dir string, child cleanupChild, launch func() (int, int64, error)) error {
+	pid, identity, err := launch()
+	if err != nil {
+		return err
+	}
+	child.PID, child.Identity = pid, identity
+	return writeCleanupChild(dir, child)
+}
+
+func cleanupFailure(dir string, err error) {
+	if err != nil {
+		_ = atomicWrite(filepath.Join(dir, "error"), []byte(err.Error()))
+		fmt.Fprintf(os.Stderr, "Purser: cleanup retry pending: %v\n", err)
+	}
+}
+
 type cleanupRecord struct {
 	path string
 	job  map[string]any
@@ -41,6 +241,15 @@ type worktreeListing struct {
 
 // CleanupJobs performs MCP startup maintenance without requiring Python.
 func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr error) {
+	dir, err := cleanupDirectory(stateRoot)
+	if err != nil {
+		return err
+	}
+	unlock, err := cleanupLock(dir, "sweep")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return cleanupJobs(stateRoot, os.TempDir(), now, checkCeiling)
 }
 

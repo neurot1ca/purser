@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +21,25 @@ import (
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
 )
+
+var requestCleanup = func(root string) error {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	return jobs.RequestCleanup(root, func() (int, int64, error) { return launchPrivate(root, "cleanup", root) })
+}
+
+func enqueueCleanup(root string) {
+	defer func() {
+		if p := recover(); p != nil {
+			fmt.Fprintf(os.Stderr, "Purser: cleanup enqueue failed: %v\n", p)
+		}
+	}()
+	if err := requestCleanup(root); err != nil {
+		fmt.Fprintf(os.Stderr, "Purser: cleanup enqueue failed: %v\n", err)
+	}
+}
 
 func privateMain() (code int) {
 	defer func() {
@@ -40,6 +60,22 @@ func privateMain() (code int) {
 	if os.Args[1] == "quota-wake" {
 		return quotaWakeMain(os.Args[2:])
 	}
+	if os.Args[1] == "cleanup" {
+		if len(os.Args) != 3 {
+			privateError(errors.New("usage: purser-hook cleanup <stateRoot>"))
+			return 2
+		}
+		root, err := filepath.Abs(os.Args[2])
+		if err != nil {
+			privateError(err)
+			return 2
+		}
+		if err := jobs.RunCleanup(root, func() (int, int64, error) { return launchPrivate(root, "cleanup", root) }); err != nil {
+			privateError(err)
+			return 1
+		}
+		return 0
+	}
 	return operationMain(os.Args[2:])
 }
 
@@ -48,6 +84,7 @@ func validateApplyMain(argv []string) int {
 		privateError(errors.New("usage: purser-hook validate-apply <stateRoot> <repositoryKey> <jobId>"))
 		return 2
 	}
+	defer enqueueCleanup(argv[0])
 	if err := jobs.RunApplyValidation(argv[0], argv[1], argv[2]); err != nil {
 		privateError(err)
 		return 1
@@ -61,6 +98,7 @@ func retireWorktreeMain(argv []string) int {
 		privateError(errors.New("usage: purser-hook retire-worktree <stateRoot> <jobId> [generation]"))
 		return 2
 	}
+	defer enqueueCleanup(argv[0])
 	var err error
 	if len(argv) == 3 {
 		var generation int64
@@ -124,6 +162,9 @@ type operationInputError struct{ message string }
 func (e operationInputError) Error() string { return e.message }
 
 func dispatchOperation(ctx context.Context, tool string, args map[string]any, root string) (map[string]any, error) {
+	if tool == "codex_apply" || tool == "codex_cancel" || tool == "codex_result" {
+		defer enqueueCleanup(root)
+	}
 	launch := func(id string, generation int64, token string) error {
 		return launchHost(root, id, generation, token)
 	}
@@ -209,6 +250,9 @@ func hostMain(argv []string) (code int) {
 			privateError(err)
 			code = 1
 		}
+		if len(argv) == 4 {
+			enqueueCleanup(stateRoot())
+		}
 	}()
 	if len(argv) != 4 {
 		return hostFailure(jobID, generation, errors.New("usage: purser-hook host <jobDir> <jobId> <generation> <token>"), 2)
@@ -283,13 +327,23 @@ func launchHost(root, id string, generation int64, token string) error {
 }
 
 func launchHostDir(root, dir, id string, generation int64, token string) error {
+	_, _, err := launchPrivate(root, "host", dir, id, strconv.FormatInt(generation, 10), token)
+	return err
+}
+
+func launchPrivate(root string, args ...string) (int, int64, error) {
 	executable, err := os.Executable()
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
-	argv := []string{executable, "host", dir, id, strconv.FormatInt(generation, 10), token}
-	_, _, err = jobs.LaunchDetached(argv, os.Environ(), root)
-	return err
+	env := []string{}
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(value), "PURSER_STATE_DIR=") {
+			env = append(env, value)
+		}
+	}
+	env = append(env, "PURSER_STATE_DIR="+root)
+	return jobs.LaunchDetached(append([]string{executable}, args...), env, root)
 }
 
 func privateError(err error) {

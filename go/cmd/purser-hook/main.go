@@ -59,7 +59,7 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "maintenance" {
 		os.Exit(maintenanceMain(os.Args[2:]))
 	}
-	if len(os.Args) > 1 && (os.Args[1] == "op" || os.Args[1] == "host" || os.Args[1] == "retire-worktree" || os.Args[1] == "validate-apply" || os.Args[1] == "quota-wake") {
+	if len(os.Args) > 1 && (os.Args[1] == "op" || os.Args[1] == "host" || os.Args[1] == "retire-worktree" || os.Args[1] == "validate-apply" || os.Args[1] == "quota-wake" || os.Args[1] == "cleanup") {
 		os.Exit(privateMain())
 	}
 	defer func() { _ = recover() }()
@@ -141,6 +141,8 @@ func main() {
 		if output := contextio.Stop(event, started); len(output) > 0 {
 			_, _ = os.Stdout.Write(output)
 		}
+	case "SessionEnd":
+		defer enqueueCleanup(stateRoot())
 	}
 	if eventName, ok := event["hook_event_name"].(string); ok {
 		switch eventName {

@@ -7,18 +7,17 @@ import (
 	"path/filepath"
 	"purser-hook/internal/testutil"
 	"testing"
-	"time"
 
 	"purser-hook/internal/contextio"
 )
 
 func saveSessionMaintenanceHooks(t *testing.T) {
 	t.Helper()
-	oldDiscover, oldCleanup := discoverSessionModelVersion, cleanupSessionJobs
+	oldDiscover, oldCleanup := discoverSessionModelVersion, requestCleanup
 	oldStart := startSessionMaintenance
 	oldContext, oldWrite := contextSessionStart, writeSessionOutput
 	t.Cleanup(func() {
-		discoverSessionModelVersion, cleanupSessionJobs = oldDiscover, oldCleanup
+		discoverSessionModelVersion, requestCleanup = oldDiscover, oldCleanup
 		startSessionMaintenance = oldStart
 		contextSessionStart, writeSessionOutput = oldContext, oldWrite
 	})
@@ -78,14 +77,15 @@ func TestMaintenanceReportWakeRequiresMatchingOptIn(t *testing.T) {
 func TestSessionMaintenanceCleansJobsWithoutRepository(t *testing.T) {
 	saveSessionMaintenanceHooks(t)
 	called := false
+	t.Setenv("PURSER_STATE_DIR", t.TempDir())
 	discoverSessionModelVersion = func(string) (string, string, bool) {
 		t.Fatal("model discovery called without a repository")
 		return "", "", false
 	}
-	cleanupSessionJobs = func(root string, now time.Time, checkCeiling bool) error {
+	requestCleanup = func(root string) error {
 		called = true
-		if root != stateRoot() || time.Since(now) > time.Second || !checkCeiling {
-			t.Fatalf("cleanup args = %q, %v, %v", root, now, checkCeiling)
+		if root != stateRoot() {
+			t.Fatalf("cleanup root = %q", root)
 		}
 		return nil
 	}
@@ -97,13 +97,14 @@ func TestSessionMaintenanceCleansJobsWithoutRepository(t *testing.T) {
 
 func TestSessionStartOutputSurvivesMaintenancePanic(t *testing.T) {
 	saveSessionMaintenanceHooks(t)
+	t.Setenv("PURSER_STATE_DIR", t.TempDir())
 	output := []byte("session context")
 	contextSessionStart = func(map[string]any) []byte { return output }
 	written := []byte(nil)
 	writeSessionOutput = func(data []byte) { written = append(written, data...) }
 	discoverSessionModelVersion = func(string) (string, string, bool) { panic("maintenance failure") }
 	cleanupCalled := false
-	cleanupSessionJobs = func(string, time.Time, bool) error { cleanupCalled = true; return nil }
+	requestCleanup = func(string) error { cleanupCalled = true; return nil }
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

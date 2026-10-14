@@ -38,8 +38,9 @@ func TestDetachedHelper(t *testing.T) {
 		return
 	}
 	if os.Getenv("PURSER_DETACH_CHILD") == "1" {
-		consoleWindow, _, _ := syscall.NewLazyDLL("user32.dll").NewProc("GetConsoleWindow").Call()
-		if consoleWindow != 0 {
+		consoleWindow, _, _ := kernel32.NewProc("GetConsoleWindow").Call()
+		visible, _, _ := user32.NewProc("IsWindowVisible").Call(consoleWindow)
+		if visible != 0 {
 			_ = os.WriteFile(os.Getenv("PURSER_DETACH_CONSOLE_MARKER"), nil, 0600)
 		}
 		for os.Getenv("PURSER_DETACH_RELEASE") == "" {
@@ -54,7 +55,7 @@ func TestDetachedHelper(t *testing.T) {
 	}
 }
 
-func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
+func TestDetachedSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
 	if os.Getenv("GITHUB_ACTIONS") == "true" {
 		t.Skip("GitHub Actions runs tests inside a kill-on-close job object; detachment is verified on interactive desktops only")
 	}
@@ -102,7 +103,7 @@ func TestDetachSurvivesLauncherExitAndChecksCreationIdentity(t *testing.T) {
 		t.Fatalf("creation identity did not match the live detached process: pid=%d expected=%d actual=%d alive=%t err=%v", pid, identity, actual, alive, inspectErr)
 	}
 	if _, err := os.Stat(consoleMarker); err == nil {
-		t.Fatal("detached child has a console window")
+		t.Fatal("detached child has a visible console window")
 	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
