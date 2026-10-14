@@ -180,7 +180,7 @@ func (s *mcpServer) runCall(ctx context.Context, key string, id json.RawMessage,
 			tool = pythonMCPValue(name)
 		}
 		switch tool {
-		case "codex", "codex-reply", "codex_start", "codex_result", "codex_cancel", "codex_apply", "host_diff", "host_read":
+		case "codex", "codex-reply", "codex_start", "codex_result", "codex_cancel", "codex_apply", "host_diff", "host_read", "host_validation", "host_write", "host_release":
 		default:
 			result = legacyError(nil, "unknown tool: "+tool)
 			return
@@ -218,6 +218,12 @@ func (s *mcpServer) runCall(ctx context.Context, key string, id json.RawMessage,
 				result = remoteHostDiff(s.remote, args)
 			} else if tool == "host_read" {
 				result = remoteHostRead(s.remote, args)
+			} else if tool == "host_validation" {
+				result = remoteHostValidation(s.remote, args)
+			} else if tool == "host_write" {
+				result = remoteHostWrite(s.remote, args)
+			} else if tool == "host_release" {
+				result = remoteHostRelease(s.remote, args)
 			} else {
 				var value map[string]any
 				var err error
