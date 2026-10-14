@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.153 — 2026-10-15
+
+- **New:** remote `host_read` serves `memory/<file>` from the host's Claude Code memory for the repository, so cloud sessions share the local session's memory.
+
 ## 0.1.152 — 2026-10-15
 
 - **New:** the remote bridge adds `host_validation`, `host_write` (NEXT.md with a base hash) and `host_release` (runs the host's `PURSER_REMOTE_RELEASE` script), and `host_read` serves the project `CLAUDE.md`, which cloud setup installs.
