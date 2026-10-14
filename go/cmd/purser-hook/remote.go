@@ -180,6 +180,8 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 	if !filepath.IsAbs(p) {
 		if clean == "NEXT.md" || clean == "CLAUDE.md" {
 			p = filepath.Join(c.repo, clean)
+		} else if filepath.ToSlash(clean) == "user/CLAUDE.md" {
+			p = filepath.Join(remoteClaudeConfigDir(), "CLAUDE.md")
 		} else {
 			p = filepath.Join(baseDir, clean)
 		}
@@ -188,7 +190,7 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 	if err != nil {
 		return legacyError(nil, err.Error())
 	}
-	if sameRemotePath(resolved, filepath.Join(c.repo, "NEXT.md")) || sameRemotePath(resolved, filepath.Join(c.repo, "CLAUDE.md")) {
+	if sameRemotePath(resolved, filepath.Join(c.repo, "NEXT.md")) || sameRemotePath(resolved, filepath.Join(c.repo, "CLAUDE.md")) || sameRemotePath(resolved, filepath.Join(remoteClaudeConfigDir(), "CLAUDE.md")) {
 		p = resolved
 	} else {
 		base, baseErr := filepath.EvalSymlinks(baseDir)
@@ -211,12 +213,16 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 
 // remoteMemoryDir is Claude Code's auto-memory folder for repo, readable as host_read "memory/<file>".
 func remoteMemoryDir(repo string) string {
-	config := os.Getenv("CLAUDE_CONFIG_DIR")
-	if config == "" {
-		home, _ := os.UserHomeDir()
-		config = filepath.Join(home, ".claude")
+	return filepath.Join(remoteClaudeConfigDir(), "projects", regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(repo, "-"), "memory")
+}
+
+// remoteClaudeConfigDir holds the host user's Claude Code instructions, readable as host_read "user/CLAUDE.md".
+func remoteClaudeConfigDir() string {
+	if config := os.Getenv("CLAUDE_CONFIG_DIR"); config != "" {
+		return config
 	}
-	return filepath.Join(config, "projects", regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(repo, "-"), "memory")
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
 }
 
 var remoteJobID = regexp.MustCompile(`^[0-9a-f]{16,128}$`)

@@ -282,3 +282,15 @@ func TestRemoteHostReadServesProjectMemoryOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteHostReadServesUserClaudeMD(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	if err := os.WriteFile(filepath.Join(config, "CLAUDE.md"), []byte("user rules"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := remoteHostRead(&remoteConfig{repo: t.TempDir()}, map[string]any{"path": "user/CLAUDE.md"})
+	if got["isError"] == true || !strings.HasPrefix(got["content"].([]any)[0].(map[string]any)["text"].(string), "user rules") {
+		t.Fatalf("user CLAUDE.md not readable: %#v", got)
+	}
+}
