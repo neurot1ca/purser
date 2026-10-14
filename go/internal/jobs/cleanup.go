@@ -72,7 +72,15 @@ func RequestCleanup(root string, launch func() (int, int64, error)) (err error) 
 // RunCleanup executes at most two existing bounded passes, then hands any newer
 // stamp to a successor. Only the detached command calls this entry point.
 func RunCleanup(root string, launch func() (int, int64, error)) error {
-	return runCleanup(root, launch, func() error { return cleanupJobs(root, os.TempDir(), time.Now(), true) })
+	return runCleanup(root, launch, func() error {
+		if err := cleanupJobs(root, os.TempDir(), time.Now(), true); err != nil {
+			return err
+		}
+		if executable, err := os.Executable(); err == nil {
+			retention.PrunePluginCache(executable)
+		}
+		return nil
+	})
 }
 
 func runCleanup(root string, launch func() (int, int64, error), pass func() error) (err error) {
@@ -239,7 +247,29 @@ type worktreeListing struct {
 	paths   []string
 }
 
-// CleanupJobs performs MCP startup maintenance without requiring Python.
+// RecoverCleanup performs prompt job and interrupted worktree recovery without
+// sweeping caches or retiring other artifacts. Its count shares cleanup's budget.
+func RecoverCleanup(stateRoot string, now time.Time) (count int, recoveryErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			recoveryErr = fmt.Errorf("recovery panic: %v", recovered)
+		}
+	}()
+	recovered, err := RecoverPending(stateRoot, now)
+	if err != nil {
+		return recovered, fmt.Errorf("recover pending jobs: %w", err)
+	}
+	root, err := filepath.Abs(stateRoot)
+	if err != nil {
+		return recovered, fmt.Errorf("resolve state root: %w", err)
+	}
+	if err := recoverRetiringWorktrees(root); err != nil {
+		return recovered, fmt.Errorf("recover retiring worktrees: %w", err)
+	}
+	return recovered, nil
+}
+
+// CleanupJobs performs a locked cleanup pass without requiring Python.
 func CleanupJobs(stateRoot string, now time.Time, checkCeiling bool) (cleanupErr error) {
 	dir, err := cleanupDirectory(stateRoot)
 	if err != nil {
@@ -263,9 +293,9 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 			fmt.Fprintf(os.Stderr, "Purser: job cleanup aborted: %s\n", message)
 		}
 	}()
-	recovered, err := RecoverPending(stateRoot, now)
+	recovered, err := RecoverCleanup(stateRoot, now)
 	if err != nil {
-		return fmt.Errorf("recover pending jobs: %w", err)
+		return err
 	}
 	root, err := filepath.Abs(stateRoot)
 	if err != nil {
@@ -276,9 +306,6 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 	retention.RemoveOldPrefixedEntries(tempRoot, now, 24*time.Hour, []string{"purser-", "reviewer1-", "readiness-check-", "go-build"})
 	if err := trimPurserGoCache(root); err != nil {
 		fmt.Fprintf(os.Stderr, "Purser: cache cleanup: %v\n", err)
-	}
-	if err = recoverRetiringWorktrees(root); err != nil {
-		return fmt.Errorf("recover retiring worktrees: %w", err)
 	}
 	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
 	entries, err := os.ReadDir(jobsDir)

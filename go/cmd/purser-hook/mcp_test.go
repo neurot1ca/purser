@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"purser-hook/internal/jobs"
 )
 
 func TestMCPMaintenanceChild(t *testing.T) {
@@ -32,8 +34,19 @@ func envInt(key string) int {
 	return value
 }
 
-func TestMCPStartupRunsNativeCleanupWithoutPython(t *testing.T) {
-	base := t.TempDir()
+func TestMCPStartupRecoversAndEnqueuesCleanupWithoutInlineSweep(t *testing.T) {
+	scratch, err := filepath.Abs("../../../.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(scratch, 0700); err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(scratch, "mcp-maintenance-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
 	pluginRoot := filepath.Join(base, "plugin")
 	stateRoot := filepath.Join(base, "state")
 	pathDir := filepath.Join(base, "empty-path")
@@ -60,11 +73,37 @@ func TestMCPStartupRunsNativeCleanupWithoutPython(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(jobsDir, id+".json"), job, 0600); err != nil {
 		t.Fatal(err)
 	}
+	staleTemp := filepath.Join(stateRoot, "cache", "go-tmp", "stale")
+	if err := os.MkdirAll(staleTemp, 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(staleTemp, old, old); err != nil {
+		t.Fatal(err)
+	}
+	oldRequest := requestCleanup
+	t.Cleanup(func() { requestCleanup = oldRequest })
+	starts := 0
+	requestCleanup = func(root string) error {
+		return jobs.RequestCleanup(root, func() (int, int64, error) {
+			starts++
+			return 0, 0, nil
+		})
+	}
 
-	var stderr bytes.Buffer
-	startMCPMaintenance(context.Background(), io.Discard, &stderr)
+	var stdout, stderr bytes.Buffer
+	startMCPMaintenance(context.Background(), &stdout, &stderr)
 	if _, err := os.Stat(filepath.Join(jobsDir, id+".owner-lock")); err != nil {
 		t.Fatalf("startup did not run native recovery: %v", err)
+	}
+	if _, err := os.Stat(staleTemp); err != nil {
+		t.Errorf("startup ran the expensive temp sweep: %v", err)
+	}
+	if dirty, err := os.ReadFile(filepath.Join(stateRoot, "cleanup", "dirty")); err != nil || len(dirty) == 0 || starts != 1 {
+		t.Errorf("cleanup request not recorded for child: dirty=%q starts=%d err=%v", dirty, starts, err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("maintenance contaminated protocol stdout: %q", stdout.String())
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("native maintenance wrote unexpected stderr: %q", got)

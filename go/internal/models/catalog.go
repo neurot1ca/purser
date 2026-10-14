@@ -20,7 +20,7 @@ const catalogURL = "https://models.dev/api.json"
 var modelsDevURL = catalogURL
 
 // RefreshCatalog refreshes the checked models.dev cache when its last valid
-// fetch is at least 24 hours old.
+// fetch is at least one hour old.
 func RefreshCatalog(ctx context.Context, stateRoot string, now time.Time) error {
 	path := filepath.Join(stateRoot, "model-catalog", "catalog.json")
 	if fetchedAt, _, err := readCatalogCache(path); err == nil {

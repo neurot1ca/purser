@@ -139,9 +139,9 @@ func TestRetireWorktreeRefusesUnknownNonRetiringAndNonterminal(t *testing.T) {
 	}
 }
 
-func TestRetireWorktreeRejectsForeignPathAndLeavesPartialEvidence(t *testing.T) {
-	root := t.TempDir()
-	foreign := t.TempDir()
+func TestRecoverCleanupRejectsForeignPathAndRepairsPartialRetirement(t *testing.T) {
+	root := jobsScratchDir(t, "recover-cleanup-")
+	foreign := jobsScratchDir(t, "foreign-worktree-")
 	id := retirementID('c')
 	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{"repoRoot": root, "worktreePath": foreign, "applyState": "applied"})
 	if ok, err := retention.AttachWorktree(root, foreign, id, "thread"); err != nil || !ok {
@@ -190,8 +190,8 @@ func TestRetireWorktreeRejectsForeignPathAndLeavesPartialEvidence(t *testing.T) 
 	if err := writeJSONRecord(filepath.Join(root, "codex_exec_mcp", "jobs", partialID+".json"), job); err != nil {
 		t.Fatal(err)
 	}
-	if err := recoverRetiringWorktrees(root); err != nil {
-		t.Fatal(err)
+	if count, err := RecoverCleanup(root, time.Now()); err != nil || count != 0 {
+		t.Fatalf("RecoverCleanup() = (%d, %v), want (0, nil)", count, err)
 	}
 	if pathExists(wt) {
 		t.Fatal("maintenance did not recover the partial removal")
