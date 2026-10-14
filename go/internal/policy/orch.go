@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	orchKeys        = map[string]bool{"task": true, "phase": true, "route": true, "reason": true, "basis": true, "scope": true, "eta": true, "review_findings": true}
+	orchKeys        = map[string]bool{"task": true, "phase": true, "route": true, "reason": true, "basis": true, "scope": true, "eta": true, "review_findings": true, "requested": true}
 	orchDrivePrefix = regexp.MustCompile(`^[A-Za-z]:`)
 	solRoutes       = map[string]bool{"normal": true, "consequential": true, "escalated": true}
 	reviewFindingID = regexp.MustCompile(`^F[0-9a-f]{16}-[0-9]{4}$`)
@@ -38,6 +38,7 @@ type OrchParseResult struct {
 	Route          *string  `json:"route"`
 	Reason         *string  `json:"reason"`
 	Basis          *string  `json:"basis"`
+	Requested      *string  `json:"requested"`
 	Scope          []string `json:"scope"`
 	ETAMinutes     *int     `json:"eta_minutes"`
 	ReviewFindings []string `json:"review_findings,omitempty"`
@@ -145,6 +146,9 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 			return orchFailure(remainder, orchInvalidEnum, fmt.Sprintf("ORCH %s value %s is not allowed.", key, pythonRepr(value)), values)
 		}
 	}
+	if requested, present := values["requested"]; present && requested != "user" {
+		return orchFailure(remainder, orchInvalidEnum, "ORCH requested value must be user.", values)
+	}
 
 	scope := []string{}
 	if values["phase"] == "implementation" || values["phase"] == "plan" {
@@ -196,7 +200,8 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 		Valid: true, Code: orchValid, Message: "ORCH metadata is valid.", Prompt: remainder,
 		TaskID: stringPointer(values["task"]), Phase: stringPointer(values["phase"]), Route: stringPointer(values["route"]),
 		Reason: optionalStringPointer(values, "reason"), Basis: optionalStringPointer(values, "basis"),
-		Scope: scope, ETAMinutes: etaMinutes, ReviewFindings: reviewFindings,
+		Requested: optionalStringPointer(values, "requested"),
+		Scope:     scope, ETAMinutes: etaMinutes, ReviewFindings: reviewFindings,
 	}
 }
 
@@ -208,6 +213,7 @@ func orchFailure(prompt, code, message string, values map[string]string) OrchPar
 		result.Route = optionalStringPointer(values, "route")
 		result.Reason = optionalStringPointer(values, "reason")
 		result.Basis = optionalStringPointer(values, "basis")
+		result.Requested = optionalStringPointer(values, "requested")
 	}
 	return result
 }

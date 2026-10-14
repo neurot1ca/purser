@@ -492,7 +492,7 @@ func TestPreCoderEffortOverrideOnlyForSupportedNewCodexStarts(t *testing.T) {
 	}
 }
 
-func TestPreLatestModelDispatchAndReplies(t *testing.T) {
+func TestPreLatestModelDispatchAndRepliesKeepRoute(t *testing.T) {
 	for _, liveModel := range []string{"", "gpt-6.1-sol", "gpt-6.3-sol", "gpt-6.2-luna"} {
 		t.Run("live="+liveModel, func(t *testing.T) {
 			root := preTempDir(t)
@@ -517,8 +517,11 @@ func TestPreLatestModelDispatchAndReplies(t *testing.T) {
 				t.Fatal(err)
 			}
 			floor := "gpt-6.1-sol"
+			basis := "model resolution"
 			if liveModel != "" {
 				floor = "gpt-6.2-sol"
+			} else {
+				basis = "design:model resolution"
 			}
 			mapValue(mapValue(config["routes"])["normal"])["model"] = floor
 			data, _ = json.Marshal(config)
@@ -533,7 +536,7 @@ func TestPreLatestModelDispatchAndReplies(t *testing.T) {
 				t.Fatal(err)
 			}
 			tool := "mcp__codex-main__codex"
-			input := map[string]any{"prompt": "ORCH|task=task-recorded|phase=implementation|route=normal|reason=new_task|basis=model resolution|scope=src/a.go\nImplement.", "label": "latest model", "cwd": repo}
+			input := map[string]any{"prompt": "ORCH|task=task-recorded|phase=implementation|route=normal|reason=new_task|basis=" + basis + "|scope=src/a.go\nImplement.", "label": "latest model", "cwd": repo}
 			want := "gpt-6.2-sol"
 			if liveModel != "" {
 				seedPreThread(t, repo, state)
@@ -664,7 +667,7 @@ func TestPreCodexStartUsesMeasuredRouteETA(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			prompt := "ORCH|task=eta-task|phase=implementation|route=normal|reason=new_task|basis=bounded change|scope=src/a.go" + tc.orchETA + "\nImplement."
+			prompt := "ORCH|task=eta-task|phase=implementation|route=normal|reason=new_task|basis=design:bounded change|scope=src/a.go" + tc.orchETA + "\nImplement."
 			input := map[string]any{"mode": "new", "cwd": repo, "prompt": prompt}
 			if tc.inputETA != 0 {
 				input["etaMinutes"] = tc.inputETA
@@ -698,6 +701,55 @@ func TestPreInvalidOrchWithoutTask(t *testing.T) {
 	hook := mapValue(got["hookSpecificOutput"])
 	if hook["permissionDecision"] != "deny" || !strings.HasPrefix(stringValue(hook["permissionDecisionReason"]), "MISSING_REQUIRED_KEY:") {
 		t.Fatalf("expected normal parse denial: %#v", got)
+	}
+}
+
+func TestPreRouteDiscipline(t *testing.T) {
+	for _, tc := range []struct {
+		name, route, basis, requested, wantRoute, wantModel, wantEffort string
+	}{
+		{name: "plain basis downgrades", route: "normal", basis: "bounded task", wantRoute: "subtle", wantModel: "gpt-6-luna", wantEffort: "high"},
+		{name: "open design keeps normal", route: "normal", basis: "design: choose retry strategy", wantRoute: "normal", wantModel: "gpt-6.1-sol", wantEffort: "medium"},
+		{name: "user request keeps consequential", route: "consequential", basis: "bounded task", requested: "user", wantRoute: "consequential", wantModel: "gpt-6.1-sol", wantEffort: "high"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scratch := preTempDir(t)
+			repo, state := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v %s", err, out)
+			}
+			plugin, _ := filepath.Abs("../../..")
+			for key, value := range map[string]string{"HOME": scratch, "USERPROFILE": scratch, "HOMEDRIVE": "", "HOMEPATH": "", "PURSER_STATE_DIR": state, "CLAUDE_PLUGIN_ROOT": plugin, "CODEX_HOME": scratch} {
+				t.Setenv(key, value)
+			}
+			requested := ""
+			if tc.requested != "" {
+				requested = "|requested=" + tc.requested
+			}
+			prompt := "ORCH|task=route-task|phase=implementation|route=" + tc.route + "|reason=continue|basis=" + tc.basis + requested + "|scope=src/a.go\nImplement."
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start", "tool_use_id": tc.name,
+				"session_id": "route-session", "cwd": repo, "tool_input": map[string]any{"mode": "new", "cwd": repo, "prompt": prompt}}
+			got, err := Pre(event, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hook := mapValue(got["hookSpecificOutput"])
+			updated := mapValue(hook["updatedInput"])
+			if hook["permissionDecision"] == "deny" || updated["route"] != tc.wantRoute || updated["jobModel"] != tc.wantModel || updated["jobEffort"] != tc.wantEffort {
+				t.Fatalf("effective route/model/effort: %#v", got)
+			}
+			if tc.wantRoute == "subtle" {
+				path, _ := pendingPath(state, event)
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var pending map[string]any
+				if json.Unmarshal(data, &pending) != nil || pending["previous_route"] != "normal" || pending["new_route"] != "subtle" || pending["route_adjustment_reason"] != "no_open_design_decision_or_user_request" {
+					t.Fatalf("downgrade receipt: %s", data)
+				}
+			}
+		})
 	}
 }
 

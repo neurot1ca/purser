@@ -72,11 +72,13 @@ behavior, leaving no semantic choice to the worker.
 
 With Claude as coder, the same routes run Haiku (mechanical, operation), Sonnet medium (subtle, normal), Opus high (consequential, plan) and Opus xhigh (escalated), always the newest model of each tier.
 
-Research/study jobs (source studies, docs research, analyses) use `route=normal` with basis `Research study: <question>`.
+Research/study jobs (source studies, docs research, analyses) use `route=normal` only when the question or method remains open, with `basis=design:<choice>`.
 
 Choose the lowest row likely to succeed in one pass; default to `subtle` when
-decisions are stated. `normal`, `consequential`, and `escalated` require `basis=`
-naming the remaining design choice; the hook denies omission. Avoid cheap-first
+decisions are stated. For implementation starts, `normal`, `consequential`, and
+`escalated` are honored only when `basis=design:<choice>` leaves an open design
+decision or the ORCH line includes `requested=user`; otherwise the hook routes
+to `subtle` and records the adjustment. Avoid cheap-first
 cascades: repair costs review. Effort cannot fix contradictory or unresolved
 prompts. Resolved consequential implementation may use `subtle` only with the
 accepted map and every invariant explicit; Claude still reviews it as
@@ -117,11 +119,11 @@ emits the dispatch receipt; Claude must not write one.
 Claude writes the first prompt line exactly in this shape:
 
 ```text
-ORCH|task=<stable-id>|phase=<implementation|operation|plan>|route=<mechanical|subtle|normal|consequential|escalated|operation|plan_standard>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|scope=<repo-relative-path[,repo-relative-path...]>][|eta=<N>m]
+ORCH|task=<stable-id>|phase=<implementation|operation|plan>|route=<mechanical|subtle|normal|consequential|escalated|operation|plan_standard>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|requested=user][|scope=<repo-relative-path[,repo-relative-path...]>][|eta=<N>m]
 ```
 
-`task`, `phase`, and `route` are required; `reason` optional. `basis` is
-required for `normal`, `consequential`, and `escalated`, optional otherwise.
+`task`, `phase`, and `route` are required; `reason` and `requested` are optional.
+`basis` is required for `normal`, `consequential`, and `escalated`, optional otherwise.
 `scope` is required for `implementation`: bounded repository-relative paths,
 never the whole repository; omit for `operation`, optional for `plan`.
 `phase=plan` pairs only with `route=plan_standard` (read-only; see `/purser:plan`). Claude writes the line and

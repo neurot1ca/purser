@@ -124,6 +124,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	label = planMilestoneLabel(pointerValue(parsed.TaskID), label)
 	failed := attempt.Failure != nil && pointerValue(parsed.Phase) == "implementation"
+	var adjustedFrom, adjustedTo, routeAdjustmentReason *string
 	reusable := attempt.TerminalDisposition == "cancelled" || attempt.TerminalDisposition == "discarded" || attempt.TerminalDisposition == "failed"
 	if failed {
 		if reply && !isStart {
@@ -141,6 +142,13 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			basis = fmt.Sprintf("Prior luna implementation attempt %s was cancelled as failed.", attempt.Failure.JobID)
 		}
 		parsed.Reason, parsed.Basis = &reason, &basis
+	}
+	if !reply && !failed && pointerValue(parsed.Phase) == "implementation" &&
+		(*parsed.Route == "normal" || *parsed.Route == "consequential" || *parsed.Route == "escalated") &&
+		!strings.HasPrefix(pointerValue(parsed.Basis), "design:") && pointerValue(parsed.Requested) != "user" {
+		from, to, why := *parsed.Route, "subtle", "no_open_design_decision_or_user_request"
+		adjustedFrom, adjustedTo, routeAdjustmentReason = &from, &to, &why
+		*parsed.Route = to
 	}
 	if root != nil && parsed.Phase != nil && *parsed.Phase != "operation" &&
 		ClaudeRunsFullSuiteAtAcceptance(*root) {
@@ -199,6 +207,9 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		bypassETA = *parsed.ETAMinutes
 	}
 	bypassMetadata["reason"], bypassMetadata["eta_minutes"] = optionalString(parsed.Reason), bypassETA
+	if adjustedFrom != nil {
+		bypassMetadata["requested_route"], bypassMetadata["route_adjustment_reason"] = *adjustedFrom, *routeAdjustmentReason
+	}
 	bypassMetadata["repo_root"], bypassMetadata["project_key"] = root, projectKey(root)
 	if rootReason != "" {
 		bypassMetadata["project_root_reason"] = rootReason
@@ -498,7 +509,8 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 	}
 	result, err := persistPreSuccess(event, runtimeRoot, root, live, parsed, selection, updated,
-		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, label, config, bypassMetadata)
+		callID, inputHash, pendingETA, worktreeReplyPath, isStart, reply, worktreeStart, worktreeReply, label, config, bypassMetadata,
+		adjustedFrom, adjustedTo, routeAdjustmentReason)
 	if failed && err == nil && mapValue(result["hookSpecificOutput"])["permissionDecision"] != "deny" {
 		delete(result, "systemMessage")
 		hook := mapValue(result["hookSpecificOutput"])
@@ -527,7 +539,8 @@ func failedTaskReplyDenial() map[string]any {
 
 func persistPreSuccess(event map[string]any, runtimeRoot string, repository *string, live map[string]any,
 	parsed policy.OrchParseResult, selection CoderSelection, updated map[string]any,
-	callID, inputHash string, pendingETA *int, worktreeReplyPath *string, isStart, reply, worktreeStart, worktreeReply bool, label any, config map[string]any, bypassMetadata map[string]any) (result map[string]any, retErr error) {
+	callID, inputHash string, pendingETA *int, worktreeReplyPath *string, isStart, reply, worktreeStart, worktreeReply bool, label any, config map[string]any, bypassMetadata map[string]any,
+	adjustedFrom, adjustedTo, routeAdjustmentReason *string) (result map[string]any, retErr error) {
 	phase, taskID, routeName := pointerValue(parsed.Phase), pointerValue(parsed.TaskID), pointerValue(parsed.Route)
 	project := projectKey(repository)
 	input, _ := event["tool_input"].(map[string]any)
@@ -555,6 +568,9 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		if oldRoute, ok := live["route"].(string); ok && oldRoute != "" && oldRoute != routeName {
 			previousRoute, newRoute = &oldRoute, &routeName
 		}
+	}
+	if adjustedFrom != nil {
+		previousRoute, newRoute = adjustedFrom, adjustedTo
 	}
 	objective, criteria, grounded := parseTaskContract(stringValue(input["prompt"]), taskID, phase, parsed.Scope)
 	if !grounded && reply && live != nil {
@@ -602,7 +618,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		TaskObjective: objective, AcceptanceCriteria: criteria, TaskContractGrounded: grounded,
 		TaskType: taskType, SuspectedRouteMismatch: suspected, HasCodeMap: strings.Contains(stringValue(updated["prompt"]), "CODE_MAP="),
 		Reason: reason, ETAMinutes: pendingETA, ReplyCall: reply, Repository: repository,
-		ReasonSource: reasonSource, PreviousRoute: previousRoute, NewRoute: newRoute,
+		ReasonSource: reasonSource, PreviousRoute: previousRoute, NewRoute: newRoute, RouteAdjustmentReason: routeAdjustmentReason,
 		ManifestBudgetSeconds: numberValue(config["manifest_budget_seconds"]), LiveThread: live,
 		Profile: profileValue, ReadinessCheck: readiness, MechanicalOpenCodeEnabled: &mechanicalEnabled,
 	})
@@ -742,6 +758,9 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		"reason_source":    observedReasonSource, "previous_route": optionalString(previousRoute), "new_route": optionalString(newRoute),
 		"task_type": observationTaskType, "suspected_route_mismatch": suspected,
 		"agent": selection.Agent, "provider": provider(selection.Agent, selection.Model)}
+	if routeAdjustmentReason != nil {
+		obs["route_adjustment_reason"] = *routeAdjustmentReason
+	}
 	preEmit(runtimeRoot, event, repository, taskID, project, "TASK_ROUTE_SELECTED", obs)
 	started := make(map[string]any, len(obs)+1)
 	for key, value := range obs {

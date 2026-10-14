@@ -21,6 +21,7 @@ type PendingCallInput struct {
 	SuspectedRouteMismatch                                        any
 	HasCodeMap                                                    bool
 	Reason, ReasonSource                                          *string
+	RouteAdjustmentReason                                         *string
 	ETAMinutes                                                    any
 	PreviousRoute, NewRoute                                       *string
 	ReplyCall, Queued                                             bool
@@ -71,6 +72,7 @@ func BuildPendingCall(in PendingCallInput) (map[string]any, map[string]any) {
 		"task_type": in.TaskType, "suspected_route_mismatch": in.SuspectedRouteMismatch,
 		"has_code_map": in.HasCodeMap, "reason": optionalString(in.Reason), "eta_minutes": in.ETAMinutes,
 		"reason_source": optionalString(in.ReasonSource), "previous_route": optionalString(in.PreviousRoute), "new_route": optionalString(in.NewRoute),
+		"route_adjustment_reason": optionalString(in.RouteAdjustmentReason),
 	}
 	if mechanical {
 		pending["shadow_prompt"] = in.Prompt
