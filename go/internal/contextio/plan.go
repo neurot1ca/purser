@@ -786,7 +786,7 @@ func RecordPlanApply(root, repository, taskID, jobID string) error {
 	return writePlans(path, states)
 }
 
-// RecordPlanValidation updates the M3 readiness predicate for an applied pass.
+// RecordPlanValidation updates readiness and settles earlier applied passes in the project.
 func RecordPlanValidation(root, repository, taskID, jobID, status string) error {
 	if _, ok := knownPlanValidationStates[status]; !ok {
 		return fmt.Errorf("invalid plan validation status %q", status)
@@ -838,21 +838,45 @@ func RecordPlanValidation(root, repository, taskID, jobID, status string) error 
 	case "FAILED", "FAIL", "TIMEOUT":
 		settled = "FAILED"
 	}
-	if passIndex > 0 && settled != "" {
-		for _, prior := range state.AppliedPasses[:passIndex] {
-			for i := range state.Milestones {
-				m := &state.Milestones[i]
-				if milestoneNumber(m.ID) == prior.Milestone && (m.ValidationState == "STALE" || m.ValidationState == "INTERRUPTED") {
-					m.ValidationState = settled
-					changed = true
+	validatedJob, _ := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"))
+	validatedAt, validatedOK := numeric(validatedJob["appliedAt"])
+	ownerChanged := changed
+	changed = false
+	changedStates := make([]*PlanState, 0, len(states))
+	for _, candidate := range states {
+		candidateChanged := candidate == state && ownerChanged
+		if settled != "" {
+			for index, prior := range candidate.AppliedPasses {
+				if candidate != state || index >= passIndex {
+					if status != "PASS" {
+						continue
+					}
+					priorJob, ok := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", prior.JobID+".json"))
+					priorAt, priorOK := numeric(priorJob["appliedAt"])
+					if !ok || !priorOK || !validatedOK || priorJob["jobId"] != prior.JobID || validatedJob["jobId"] != jobID || !(priorAt > 0 && priorAt < validatedAt) {
+						continue
+					}
+				}
+				for i := range candidate.Milestones {
+					m := &candidate.Milestones[i]
+					if milestoneNumber(m.ID) == prior.Milestone && (m.ValidationState == "STALE" || m.ValidationState == "INTERRUPTED") {
+						m.ValidationState = settled
+						candidateChanged = true
+					}
 				}
 			}
 		}
+		if candidateChanged {
+			advanceAppliedMilestone(root, candidate, states)
+			candidate.Revision++
+			changed = true
+			changedStates = append(changedStates, candidate)
+		}
 	}
 	if changed {
-		advanceAppliedMilestone(root, state, states)
-		state.ReadyMilestones = readyMilestones(root, state, states)
-		state.Revision++
+		for _, candidate := range changedStates {
+			candidate.ReadyMilestones = readyMilestones(root, candidate, states)
+		}
 		return writePlans(path, states)
 	}
 	return nil

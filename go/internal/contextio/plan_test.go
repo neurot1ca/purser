@@ -313,6 +313,80 @@ func TestLaterPassingValidationSettlesStaleMilestone(t *testing.T) {
 	}
 }
 
+func TestCrossPlanValidationSettlesStaleMilestone(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, want string
+		otherProject       bool
+	}{
+		{"pass", "PASS", "PASS", false},
+		{"timeout", "TIMEOUT", "STALE", false},
+		{"other-project", "PASS", "STALE", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, artifact := planFixture(t)
+			content := "## Milestones\n### M2 - dependent\n**Dependency:** M3\n**Write paths:**\n- src/b.go\n### M3 - prerequisite\n**Dependency:** none\n**Write paths:**\n- src/a.go\n### M5 - dependent\n**Dependency:** M3\n**Write paths:**\n- src/c.go\n"
+			if err := os.WriteFile(artifact, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			a, err := AcceptPlan(root, repo, "plan-a", artifact, []int{2, 3, 5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.AppliedPasses = []PlanPass{{Milestone: 3, TaskID: "plan-a-m3of5", JobID: "job-a"}}
+			a.CompletedMilestones = []int{3}
+			a.Milestones[1].ValidationState = "STALE"
+			path, _, _ := planPath(root, repo)
+			if err := writePlans(path, []*PlanState{a}); err != nil {
+				t.Fatal(err)
+			}
+			validatedRepo := repo
+			if tc.otherProject {
+				validatedRepo = filepath.Join(filepath.Dir(repo), "other-repo")
+				if err := os.MkdirAll(filepath.Join(validatedRepo, ".git"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := AcceptPlan(root, validatedRepo, "plan-b", artifact, []int{2, 3, 5}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := BindPlanJob(root, validatedRepo, "plan-b-m3of5", "job-b"); err != nil {
+				t.Fatal(err)
+			}
+			if err := RecordPlanApply(root, validatedRepo, "plan-b-m3of5", "job-b"); err != nil {
+				t.Fatal(err)
+			}
+			for i, id := range []string{"job-a", "job-b"} {
+				jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+				if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+					t.Fatal(err)
+				}
+				data, _ := json.Marshal(map[string]any{"jobId": id, "appliedAt": i + 1})
+				if err := os.WriteFile(jobPath, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := RecordPlanValidation(root, validatedRepo, "plan-b-m3of5", "job-b", tc.status); err != nil {
+				t.Fatal(err)
+			}
+			a, err = ReadPlanForTask(root, repo, "plan-a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := a.Milestones[1].ValidationState; got != tc.want {
+				t.Fatalf("M3 validation = %q, want %q", got, tc.want)
+			}
+			for _, n := range []int{2, 5} {
+				if got := planDependenciesDone(a, n); got != (tc.want == "PASS") {
+					t.Fatalf("M%d dependencies done = %v, validation %s", n, got, tc.want)
+				}
+			}
+			if tc.want == "PASS" && (len(a.ReadyMilestones) != 2 || a.ReadyMilestones[0].ID != "M2" || a.ReadyMilestones[1].ID != "M5") {
+				t.Fatalf("dependents not ready: %+v", a.ReadyMilestones)
+			}
+		})
+	}
+}
+
 func TestLaterFailingValidationSettlesStaleMilestoneAsFailed(t *testing.T) {
 	root, repo := planValidationSettlementFixture(t, "STALE")
 	if err := RecordPlanValidation(root, repo, "graph-m2of3", "job-2", "FAILED"); err != nil {
