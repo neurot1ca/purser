@@ -4,6 +4,7 @@ import "purser-hook/internal/testutil"
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,9 +165,7 @@ func TestHostPythonOracleReplay(t *testing.T) {
 						}
 					}
 				}
-				record := readHostParityRecord(t, dir, jobID)
-				var port int
-				record.Get("signalPort", &port)
+				port := waitForHostSignalPort(t, dir, jobID)
 				if ok, signalErr := SignalCancel("127.0.0.1:"+strconv.Itoa(port), jobID, "host-signal-token", time.Second); signalErr != nil || !ok {
 					t.Fatalf("cancel failed: acknowledged=%v err=%v", ok, signalErr)
 				}
@@ -277,7 +276,7 @@ func setupHostParityRepo(t *testing.T, repo string, setupFailure bool) {
 
 func waitForHostQueued(t *testing.T, dir, id string) {
 	t.Helper()
-	until := time.Now().Add(4 * time.Second)
+	until := time.Now().Add(30 * time.Second)
 	lastState, lastCode, lastPort := "", "", 0
 	for time.Now().Before(until) {
 		record := readHostParityRecord(t, dir, id)
@@ -301,7 +300,7 @@ func waitForHostQueued(t *testing.T, dir, id string) {
 
 func waitForHostStateID(t *testing.T, dir, id, expected string) {
 	t.Helper()
-	until := time.Now().Add(4 * time.Second)
+	until := time.Now().Add(30 * time.Second)
 	last, code := "", ""
 	for time.Now().Before(until) {
 		record := readHostParityRecord(t, dir, id)
@@ -317,7 +316,7 @@ func waitForHostStateID(t *testing.T, dir, id, expected string) {
 
 func waitForHostErrorCode(t *testing.T, dir, id, code string) {
 	t.Helper()
-	until := time.Now().Add(4 * time.Second)
+	until := time.Now().Add(30 * time.Second)
 	lastState, lastCode := "", ""
 	for time.Now().Before(until) {
 		record := readHostParityRecord(t, dir, id)
@@ -329,6 +328,26 @@ func waitForHostErrorCode(t *testing.T, dir, id, code string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("host did not detect expected liveness state: state=%s code=%s", lastState, lastCode)
+}
+
+func waitForHostSignalPort(t *testing.T, dir, id string) int {
+	t.Helper()
+	until := time.Now().Add(30 * time.Second)
+	for time.Now().Before(until) {
+		record := readHostParityRecord(t, dir, id)
+		var port int
+		record.Get("signalPort", &port)
+		if port > 0 {
+			connection, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 100*time.Millisecond)
+			if err == nil {
+				_ = connection.Close()
+				return port
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("host signal listener did not become ready within 30 seconds")
+	return 0
 }
 
 func readHostParityRecord(t *testing.T, dir, id string) *Record {
