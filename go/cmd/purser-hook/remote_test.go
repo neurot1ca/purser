@@ -246,3 +246,14 @@ func TestRemoteUpdatedOutputReturnsReplacementBundle(t *testing.T) {
 		t.Fatalf("unexpected replacement: %#v", got)
 	}
 }
+
+func TestRemoteHostReadAllowsProjectClaudeMD(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("rules"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := remoteHostRead(&remoteConfig{repo: repo}, map[string]any{"path": "CLAUDE.md"})
+	if got["isError"] == true || !strings.HasPrefix(got["content"].([]any)[0].(map[string]any)["text"].(string), "rules") {
+		t.Fatalf("CLAUDE.md not readable: %#v", got)
+	}
+}

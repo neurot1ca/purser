@@ -174,8 +174,8 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 	}
 	clean := filepath.Clean(p)
 	if !filepath.IsAbs(p) {
-		if clean == "NEXT.md" {
-			p = filepath.Join(c.repo, "NEXT.md")
+		if clean == "NEXT.md" || clean == "CLAUDE.md" {
+			p = filepath.Join(c.repo, clean)
 		} else {
 			p = filepath.Join(stateRoot(), "plans", clean)
 		}
@@ -184,7 +184,7 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 	if err != nil {
 		return legacyError(nil, err.Error())
 	}
-	if sameRemotePath(resolved, filepath.Join(c.repo, "NEXT.md")) {
+	if sameRemotePath(resolved, filepath.Join(c.repo, "NEXT.md")) || sameRemotePath(resolved, filepath.Join(c.repo, "CLAUDE.md")) {
 		p = resolved
 	} else {
 		base, baseErr := filepath.EvalSymlinks(filepath.Join(stateRoot(), "plans"))
