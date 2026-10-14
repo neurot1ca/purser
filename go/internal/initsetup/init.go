@@ -769,6 +769,13 @@ func contains(items []string, value string) bool {
 }
 
 func setup(out, errOut io.Writer, home, root, configPath string, o options) int {
+	globalBefore, globalReadErr := os.ReadFile(configPath)
+	if globalReadErr != nil && !os.IsNotExist(globalReadErr) {
+		return printError(errOut, globalReadErr)
+	}
+	if os.IsNotExist(globalReadErr) {
+		globalBefore = nil
+	}
 	rolePath := profile.ProjectRolesPath(profile.StateRoot(), root)
 	original, e := os.ReadFile(rolePath)
 	if e != nil && !os.IsNotExist(e) {
@@ -881,6 +888,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		}
 		return 0
 	}
+	rolesChanged := false
 	if e = updateLocked(rolePath, func(current []byte) ([]byte, error) {
 		currentEffective, err := effectiveUserConfig(root, configPath)
 		if err != nil {
@@ -898,7 +906,9 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		if err := editConfig(&updated, currentValues, root, roleOptions, "\n"); err != nil {
 			return nil, err
 		}
-		return []byte(updated), nil
+		result := []byte(updated)
+		rolesChanged = !bytes.Equal(current, result)
+		return result, nil
 	}); e != nil {
 		return printError(errOut, e)
 	}
@@ -940,6 +950,14 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 			return printError(errOut, e)
 		}
 	}
+	globalAfter, globalReadErr := os.ReadFile(configPath)
+	if globalReadErr != nil && !os.IsNotExist(globalReadErr) {
+		return printError(errOut, globalReadErr)
+	}
+	if os.IsNotExist(globalReadErr) {
+		globalAfter = nil
+	}
+	globalChanged := !bytes.Equal(globalBefore, globalAfter)
 	offerDue := claimConcise(home, root)
 	if o.jsonOutput {
 		return writeIndented(out, map[string]any{"status": "applied", "handoff": handoff, "concise_style_offer_due": offerDue, "skipped": skipped, "scope": "project", "roles_path": rolePath})
@@ -947,7 +965,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	for _, step := range skipped {
 		fmt.Fprintf(out, "Skipped %s.\n", step)
 	}
-	if !bytes.Equal(original, changed) || scaffold != nil || handoffCreated {
+	if rolesChanged || globalChanged || scaffold != nil || handoffCreated {
 		fmt.Fprintln(out, "Applied.")
 	} else {
 		fmt.Fprintln(out, "No changes.")

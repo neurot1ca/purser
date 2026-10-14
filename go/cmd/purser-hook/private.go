@@ -37,6 +37,9 @@ var requestCleanup = func(root string) error {
 }
 
 func enqueueCleanup(root string) {
+	if os.Getenv("PURSER_TEST_DISABLE_CHILD_LAUNCH") == "1" {
+		return
+	}
 	defer func() {
 		if p := recover(); p != nil {
 			fmt.Fprintf(os.Stderr, "Purser: cleanup enqueue failed: %v\n", p)
@@ -338,6 +341,9 @@ func launchHostDir(root, dir, id string, generation int64, token string) error {
 }
 
 func launchPrivate(root string, args ...string) (int, int64, error) {
+	if os.Getenv("PURSER_TEST_DISABLE_CHILD_LAUNCH") == "1" {
+		return 0, 0, errors.New("private child launch disabled by test")
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return 0, 0, err

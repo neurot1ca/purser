@@ -57,6 +57,18 @@ func projectRoleText(original []byte, effective map[string]any, sections ...stri
 		}
 		values = parsed
 		values["schema_version"] = 1
+		complete := true
+		for _, name := range sections {
+			if _, exists := values[name]; !exists && effective[name] != nil {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			if _, hasTrust := values["trust"]; !hasTrust {
+				return append([]byte(nil), original...), nil
+			}
+		}
 	}
 	for _, name := range sections {
 		if _, exists := values[name]; !exists {

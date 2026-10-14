@@ -14,26 +14,14 @@ import (
 )
 
 func TestClaudeCoderPlanAndApply(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	state := t.TempDir()
-	t.Setenv("PURSER_STATE_DIR", state)
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	configPath := filepath.Join(home, ".orchestrator", "config.toml")
 	shippedConfig, err := filepath.Abs(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
-
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	state := os.Getenv("PURSER_STATE_DIR")
+	configPath := filepath.Join(home, ".orchestrator", "config.toml")
 	var plan bytes.Buffer
 	if code := Run(&plan, &bytes.Buffer{}, []string{"--plan", "--coder", "claude", "--reviewer", "agy"}); code != 0 {
 		t.Fatalf("plan failed: %s", plan.String())
@@ -157,7 +145,7 @@ func TestPlanAcceptsMaintenanceWithOpenCodeCoder(t *testing.T) {
 }
 
 func TestApplyInNonGitDirectorySkipsMaintenanceAndWritesConfig(t *testing.T) {
-	home, root, restore := initTestEnvironment(t)
+	_, root, restore := initTestEnvironment(t)
 	defer restore()
 	t.Setenv("PATH", t.TempDir())
 	var output, errOutput bytes.Buffer
@@ -165,9 +153,9 @@ func TestApplyInNonGitDirectorySkipsMaintenanceAndWritesConfig(t *testing.T) {
 	if code := Run(&output, &errOutput, args); code != 0 {
 		t.Fatalf("apply returned %d: %s", code, errOutput.String())
 	}
-	config := filepath.Join(home, ".orchestrator", "config.toml")
-	if raw, err := os.ReadFile(config); err != nil || !strings.Contains(string(raw), `coder = "codex"`) {
-		t.Fatalf("config was not written for %s: %q, %v", root, raw, err)
+	rolesPath := profile.ProjectRolesPath(os.Getenv("PURSER_STATE_DIR"), root)
+	if raw, err := os.ReadFile(rolesPath); err != nil || !strings.Contains(string(raw), `coder = "codex"`) {
+		t.Fatalf("project roles were not written for %s: %q, %v", root, raw, err)
 	}
 	var applied map[string]any
 	if err := json.Unmarshal(output.Bytes(), &applied); err != nil {
@@ -180,20 +168,9 @@ func TestApplyInNonGitDirectorySkipsMaintenanceAndWritesConfig(t *testing.T) {
 }
 
 func TestAutoCompactInit(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	state := t.TempDir()
-	t.Setenv("PURSER_STATE_DIR", state)
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	_, _, restore := initTestEnvironment(t)
+	defer restore()
+	state := os.Getenv("PURSER_STATE_DIR")
 	marker := filepath.Join(state, "auto-compact.json")
 	baseArgs := []string{"--coder", "claude", "--reviewer", "agy"}
 
@@ -357,7 +334,12 @@ func TestApplyPreservesExistingConfigBytesAndBacksUp(t *testing.T) {
 	if !bytes.Contains(changed, []byte("# keep comment\r\n[telemetry]\r\nvault_root = \"C:/vault\" # keep exact\r\n")) {
 		t.Errorf("unrelated CRLF bytes or comments changed:\n%s", changed)
 	}
-	parsed, _, err := profile.DecodeTOML(changed)
+	projectRolesPath := profile.ProjectRolesPath(os.Getenv("PURSER_STATE_DIR"), mustCwd())
+	projectRoles, err := os.ReadFile(projectRolesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _, err := profile.DecodeTOML(projectRoles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +347,11 @@ func TestApplyPreservesExistingConfigBytesAndBacksUp(t *testing.T) {
 	if roles["orchestrator"] != "claude-code" || roles["coder"] != "codex" || roles["reviewer"] != "none" {
 		t.Errorf("saved roles = %#v", roles)
 	}
-	trust, _ := parsed["trust"].(map[string]any)
+	global, _, err := profile.DecodeTOML(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, _ := global["trust"].(map[string]any)
 	paths, _ := trust["paths"].([]any)
 	if !containsStringValue(paths, mustCwd()) {
 		t.Errorf("project path %q missing from trust paths: %#v", mustCwd(), paths)
@@ -423,6 +409,11 @@ func TestSecondApplyIsNoopAndKeepsExistingHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rolePath := profile.ProjectRolesPath(state, mustCwd())
+	roleBytes, err := os.ReadFile(rolePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handoff := filepath.Join(state, "projects", contextio.ProjectKey(mustCwd()), "telemetry", "purser-handoff.md")
 	if err := os.WriteFile(handoff, []byte("user handoff; keep it\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -439,6 +430,10 @@ func TestSecondApplyIsNoopAndKeepsExistingHandoff(t *testing.T) {
 	if err != nil || !bytes.Equal(afterProfile, profileBytes) {
 		t.Errorf("second apply changed profile: %v", err)
 	}
+	afterRoles, roleErr := os.ReadFile(rolePath)
+	if roleErr != nil || !bytes.Equal(afterRoles, roleBytes) {
+		t.Errorf("second apply changed project roles: got %q, want %q, error %v", afterRoles, roleBytes, roleErr)
+	}
 	if !strings.HasPrefix(out.String(), "No changes.\nHandoff: ") {
 		t.Errorf("second apply output = %q", out.String())
 	}
@@ -447,6 +442,59 @@ func TestSecondApplyIsNoopAndKeepsExistingHandoff(t *testing.T) {
 	}
 	if got, err := os.ReadFile(handoff); err != nil || string(got) != "user handoff; keep it\n" {
 		t.Errorf("existing handoff = %q, error = %v", got, err)
+	}
+}
+
+func TestTrustOnlyGlobalChangeReportsAppliedThenNoChanges(t *testing.T) {
+	_, _, restore := initTestEnvironment(t)
+	defer restore()
+	args := []string{"--apply", "--coder", "claude", "--reviewer", "none"}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, args); code != 0 {
+		t.Fatal("initial apply failed")
+	}
+	var first bytes.Buffer
+	trustArgs := append(args, "--trust")
+	if code := Run(&first, &bytes.Buffer{}, trustArgs); code != 0 {
+		t.Fatalf("trust apply failed: %s", first.String())
+	}
+	if !strings.HasPrefix(first.String(), "Applied.\nHandoff: ") {
+		t.Fatalf("trust-only apply output = %q", first.String())
+	}
+	var second bytes.Buffer
+	if code := Run(&second, &bytes.Buffer{}, trustArgs); code != 0 {
+		t.Fatalf("second trust apply failed: %s", second.String())
+	}
+	if !strings.HasPrefix(second.String(), "No changes.\nHandoff: ") {
+		t.Fatalf("second trust apply output = %q", second.String())
+	}
+}
+
+func TestRoleChangeOnCompleteProjectRolesReportsAppliedThenNoChanges(t *testing.T) {
+	_, root, restore := initTestEnvironment(t)
+	defer restore()
+	state := os.Getenv("PURSER_STATE_DIR")
+	rolePath := profile.ProjectRolesPath(state, root)
+	if err := os.MkdirAll(filepath.Dir(rolePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	complete := "schema_version = 1\n\n[roles]\norchestrator = \"claude-code\"\ncoder = \"claude\"\nreviewer = \"none\"\n\n[coding]\ncoder_agent = \"claude\"\n"
+	if err := os.WriteFile(rolePath, []byte(complete), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--apply", "--coder", "codex", "--reviewer", "none"}
+	var first bytes.Buffer
+	if code := Run(&first, &bytes.Buffer{}, args); code != 0 {
+		t.Fatalf("role change failed: %s", first.String())
+	}
+	if !strings.HasPrefix(first.String(), "Applied.\nHandoff: ") {
+		t.Fatalf("role change output = %q", first.String())
+	}
+	var second bytes.Buffer
+	if code := Run(&second, &bytes.Buffer{}, args); code != 0 {
+		t.Fatalf("second role apply failed: %s", second.String())
+	}
+	if !strings.HasPrefix(second.String(), "No changes.\nHandoff: ") {
+		t.Fatalf("second role apply output = %q", second.String())
 	}
 }
 
@@ -673,9 +721,21 @@ func TestProjectRoleConcurrentUpdatesKeepBothSections(t *testing.T) {
 func initTestEnvironment(t *testing.T) (home, root string, restore func()) {
 	t.Helper()
 	home, root = t.TempDir(), t.TempDir()
+	state := t.TempDir()
+	for _, value := range os.Environ() {
+		key, _, ok := strings.Cut(value, "=")
+		if ok && strings.HasPrefix(key, "PURSER_") {
+			t.Setenv(key, "")
+		}
+	}
+	t.Setenv("PURSER_STATE_DIR", state)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("APPDATA", "")
+	t.Setenv("LOCALAPPDATA", "")
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

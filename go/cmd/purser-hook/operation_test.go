@@ -37,7 +37,7 @@ func runPrivate(t *testing.T, binary, state, operation, input string) (int, []by
 	}
 	command := testutil.Hide(exec.Command(binary, argv...))
 	command.Dir = t.TempDir()
-	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state)
+	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state, "PURSER_TEST_DISABLE_CHILD_LAUNCH=1")
 	command.Stdin = strings.NewReader(input)
 	output, err := command.CombinedOutput()
 	if err == nil {
