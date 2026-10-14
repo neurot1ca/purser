@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
@@ -870,6 +871,11 @@ func planMilestoneLabel(taskID string, label any) any {
 	suffix := fmt.Sprintf(" [%s-%s/%s]", match[1], match[2], match[3])
 	if strings.HasSuffix(text, suffix) {
 		return label
+	}
+	textRunes := []rune(text)
+	suffixRunes := []rune(suffix)
+	if len(textRunes)+len(suffixRunes) > 80 {
+		text = strings.TrimRightFunc(string(textRunes[:80-len(suffixRunes)]), unicode.IsSpace)
 	}
 	return text + suffix
 }
