@@ -55,6 +55,11 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 		return "UNCHANGED"
 	}
 	if truthy(values["leaseQueued"]) && state == "QUEUED" && !truthy(values["hostPid"]) {
+		if _, supervised := values["treeReceipt"]; supervised {
+			if stopped, _ := recordedTreeStopped(dir, job); !stopped {
+				return "UNCONFIRMED"
+			}
+		}
 		if deadline, ok := number(values["deadlineAt"]); ok && now >= deadline {
 			_ = lock.Release()
 			lock = nil
@@ -83,7 +88,13 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 	if processState != "DEAD" {
 		return processState
 	}
-	if state == "RUNNING" && (runtime.GOOS != "windows" || opt.GroupStopped != nil) {
+	_, supervised := values["treeReceipt"]
+	if supervised {
+		if stopped, _ := recordedTreeStopped(dir, job); !stopped {
+			return "UNCONFIRMED"
+		}
+	}
+	if !supervised && state == "RUNNING" && (runtime.GOOS != "windows" || opt.GroupStopped != nil) {
 		childValue, ok := recoveryInteger(job, "pid")
 		child := int(childValue)
 		ok = ok && childValue > 0 && int64(child) == childValue

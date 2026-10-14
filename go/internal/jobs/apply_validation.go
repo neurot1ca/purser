@@ -89,6 +89,7 @@ type applyValidation struct {
 	UpdatedAt      string         `json:"updated_at"`
 	PID            int            `json:"pid,omitempty"`
 	Identity       int64          `json:"identity,omitempty"`
+	TreeReceipt    string         `json:"tree_receipt,omitempty"`
 }
 
 // enqueueAppliedValidation is the single idempotent enqueue point for every successful apply outcome.
@@ -133,6 +134,19 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 		return
 	}
 	defer lock()
+	if prior, e := readApplyValidation(path); e == nil {
+		if prior.Status == "pending" || prior.Status == "running" || prior.Status == "unconfirmed" {
+			result = validationSummary(prior)
+			return
+		}
+		if prior.TreeReceipt != "" {
+			if stopped, stopErr := treeStopped(filepath.Dir(path), prior.JobID, prior.TreeReceipt); !stopped {
+				result = validationSummary(prior)
+				result["status"], result["reason"] = "unconfirmed", stopErr.Error()
+				return
+			}
+		}
+	}
 	invalidatePriorApplyValidations(stateRoot, dir, id, snapshot)
 	if prior, readErr := readApplyValidation(path); readErr == nil && prior.Snapshot == snapshot {
 		result = validationSummary(prior)
@@ -201,7 +215,7 @@ func invalidatePriorApplyValidations(stateRoot, dir, currentID, snapshot string)
 		}
 		path := filepath.Join(dir, entry.Name())
 		record, err := readApplyValidation(path)
-		if err != nil || record.Snapshot == snapshot || record.Status == "pending" || record.Status == "running" || record.Status == "interrupted" || record.Status == "stale" {
+		if err != nil || record.Snapshot == snapshot || record.Status == "pending" || record.Status == "running" || record.Status == "unconfirmed" || record.Status == "interrupted" || record.Status == "stale" {
 			continue
 		}
 		markApplyValidationStale(stateRoot, path, &record, "a later apply changed the repository checkout")
@@ -214,7 +228,7 @@ func markApplyValidationStale(stateRoot, path string, record *applyValidation, r
 		return
 	}
 	current, err := readApplyValidation(path)
-	if err == nil && current.Status != "pending" && current.Status != "running" && current.Status != "stale" {
+	if err == nil && current.Status != "pending" && current.Status != "running" && current.Status != "unconfirmed" && current.Status != "stale" {
 		current.Status, current.Reason = "stale", reason
 		if writeApplyValidationUnlocked(path, current) == nil {
 			*record = current
@@ -247,7 +261,7 @@ func ApplyValidationResult(stateRoot, repository, jobID string) map[string]any {
 		markApplyValidationStale(stateRoot, path, &record, "repository checkout could not be verified after validation")
 		return validationSummary(record)
 	}
-	if snapshot != record.Snapshot && record.Status != "pending" && record.Status != "running" {
+	if snapshot != record.Snapshot && record.Status != "pending" && record.Status != "running" && record.Status != "unconfirmed" {
 		markApplyValidationStale(stateRoot, path, &record, "repository checkout changed after validation")
 	}
 	return validationSummary(record)
@@ -543,6 +557,9 @@ func RunApplyValidation(stateRoot, key, id string) error {
 				args := append([]string{"vet", "-p", "2"}, pkgs...)
 				record.Commands = appendValidationCommand(record.Commands, "go "+strings.Join(args, " "))
 				if err = runApplyValidationCommand(module, env, args, validationTimeout, logFile, nil); err != nil {
+					if errors.Is(err, errTreeUnconfirmed) {
+						return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
+					}
 					setValidationOutcome(&validationState, &validationReason, validationFailureState(err), "go vet failed")
 				}
 			}
@@ -554,6 +571,9 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			args := append([]string{"test", "-p", "2", "-json"}, packagesForModule(packages, goRoot, module)...)
 			record.Commands = appendValidationCommand(record.Commands, "go "+strings.Join(args, " "))
 			if err = runApplyValidationCommand(module, env, args, validationTimeout, logFile, &record); err != nil {
+				if errors.Is(err, errTreeUnconfirmed) {
+					return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
+				}
 				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), "go test failed")
 			}
 		}
@@ -566,6 +586,9 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			args := append([]string{binary}, shellArgs...)
 			record.Commands = appendValidationCommand(record.Commands, tool+" -c "+customCommand)
 			if err = runApplyValidationCommand(record.Repository, validationEnvironment(stateRoot), args, validationTimeout, logFile, nil); err != nil {
+				if errors.Is(err, errTreeUnconfirmed) {
+					return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
+				}
 				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), "validation command failed")
 			}
 		}
@@ -584,6 +607,9 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			args = append(args, check.args...)
 			record.Commands = appendValidationCommand(record.Commands, check.tool+" "+strings.Join(check.args, " "))
 			if err = runApplyValidationCommand(check.dir, validationEnvironment(stateRoot), args, validationTimeout, logFile, nil); err != nil {
+				if errors.Is(err, errTreeUnconfirmed) {
+					return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
+				}
 				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), check.label+" failed")
 			}
 		}
@@ -595,6 +621,9 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			record.PluginStatus, record.PluginReason = "skipped", "claude binary is unavailable"
 			setValidationOutcome(&validationState, &validationReason, "skipped", record.PluginReason)
 		} else if err = runApplyValidationCommand(record.Repository, env, []string{claude, "plugin", "test"}, validationTimeout, logFile, nil); err != nil {
+			if errors.Is(err, errTreeUnconfirmed) {
+				return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
+			}
 			record.PluginStatus, record.PluginReason = validationFailureState(err), "claude plugin test failed"
 			setValidationOutcome(&validationState, &validationReason, record.PluginStatus, record.PluginReason)
 		} else {
@@ -656,9 +685,17 @@ func recoverApplyValidationsInDirectory(stateRoot, dir string) {
 			continue
 		}
 		record, readErr := readApplyValidation(path)
-		if readErr != nil || record.Status != "pending" && record.Status != "running" || record.PID > 0 && record.Identity > 0 && IdentityMatches(record.PID, record.Identity) {
+		if readErr != nil || record.Status != "pending" && record.Status != "running" && record.Status != "unconfirmed" || record.PID > 0 && record.Identity > 0 && recoveryProcessState(record.PID, uint64(record.Identity)) != "DEAD" {
 			_ = unlock()
 			continue
+		}
+		if record.TreeReceipt != "" {
+			if stopped, stopErr := treeStopped(filepath.Dir(path), record.JobID, record.TreeReceipt); !stopped {
+				record.Status, record.Reason = "unconfirmed", stopErr.Error()
+				_ = writeApplyValidationUnlocked(path, record)
+				_ = unlock()
+				continue
+			}
 		}
 		record.Status, record.Reason = "interrupted", "validation process no longer matches its recorded identity"
 		writeErr := writeApplyValidationUnlocked(path, record)
@@ -682,12 +719,15 @@ func finishValidation(root, path string, record *applyValidation, status, reason
 	if err == nil && record.TestedSnapshot != "" {
 		packageSnapshot, err = validationPackageSnapshot(record.Repository, record.Packages)
 	}
-	if err == nil && status != "launch_error" && (currentSnapshot != record.Snapshot || packageSnapshot != record.TestedSnapshot) {
+	if err == nil && status != "launch_error" && status != "unconfirmed" && (currentSnapshot != record.Snapshot || packageSnapshot != record.TestedSnapshot) {
 		status = "stale"
 		reason = "checkout changed during validation"
 	} else if err != nil && status == "passed" {
 		status = "stale"
 		reason = "checkout snapshot could not be verified after validation"
+	}
+	if current, readErr := readApplyValidation(path); readErr == nil {
+		record.TreeReceipt = current.TreeReceipt
 	}
 	record.Status, record.Reason = status, reason
 	if err = writeApplyValidation(path, *record); err != nil {
@@ -763,7 +803,37 @@ func runValidationCommand(dir string, env, args []string, timeout time.Duration,
 		cmd.Stdout = capture
 	}
 	cmd.Stderr = capture
-	err := cmd.Run()
+	receiptPath := ""
+	if file, ok := log.(*os.File); ok {
+		validationPath := strings.TrimSuffix(file.Name(), ".log") + ".json"
+		current, readErr := readApplyValidation(validationPath)
+		if readErr == nil {
+			prepared, prepareErr := prepareTreeReceipt(filepath.Dir(validationPath), current.JobID, current.TreeReceipt)
+			if prepareErr != nil {
+				return prepareErr
+			}
+			receiptPath = prepared
+			current.TreeReceipt = receiptPath
+			if err := writeApplyValidation(validationPath, current); err != nil {
+				return err
+			}
+			if record != nil {
+				record.TreeReceipt = receiptPath
+			}
+		}
+	}
+	supervised, err := startSupervisedCommand(ctx, cmd, receiptPath)
+	if err != nil {
+		if receiptPath != "" {
+			err = errors.Join(err, writeTreeReceipt(receiptPath, true, err))
+		}
+		return err
+	}
+	r, err := supervised.wait()
+	if !r.Confirmed {
+		return errors.Join(err, errTreeUnconfirmed)
+	}
+
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

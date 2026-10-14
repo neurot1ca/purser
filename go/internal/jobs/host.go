@@ -113,9 +113,13 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			repoRoot = root
 		}
 	}
-	defer os.Remove(args.OutputPath)
 	jobTempDir := ""
 	workerAlive := false
+	defer func() {
+		if !workerAlive {
+			_ = os.Remove(args.OutputPath)
+		}
+	}()
 	defer func() {
 		if jobTempDir == "" || workerAlive {
 			return
@@ -446,7 +450,8 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		command.Stdout = eventWriter{stream: stream, activity: activity, activityMu: activityMu}
 		stderr := &tailBuffer{limit: 4000}
 		command.Stderr = stderr
-		proc.ConfigureProcessTreeKill(command)
+		var supervised *supervisedCommand
+		var treeResult proc.SupervisionResult
 		lock, err = AcquireOwnership(dir, jobID)
 		if err != nil {
 			return nil, err
@@ -460,9 +465,23 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				_ = lock.Release()
 				return map[string]any{"status": "stale"}, nil
 			}
-			err = command.Start()
+			var previousReceipt string
+			job.Get("treeReceipt", &previousReceipt)
+			receipt, receiptErr := prepareTreeReceipt(dir, jobID, previousReceipt)
+			if receiptErr == nil {
+				_ = job.Set("treeReceipt", receipt)
+				receiptErr = Write(path, job)
+			}
+			if receiptErr != nil {
+				_ = lock.Release()
+				return nil, receiptErr
+			}
+			supervised, err = startSupervisedCommand(ctx, command, receipt)
 			if err != nil {
 				_ = lock.Release()
+				if proofErr := writeTreeReceipt(receipt, true, err); proofErr != nil {
+					return nil, errors.Join(err, proofErr)
+				}
 				close(terminal)
 				contextErr := ctx.Err()
 				if contextErr == nil && float64(time.Now().UnixNano())/1e9 >= deadline {
@@ -471,17 +490,18 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				return finishHostStartError(dir, jobID, generation, token, cancelled.Load(), contextErr, err)
 			}
 			workerAlive = true
-			_ = job.Set("pid", command.Process.Pid)
+			_ = job.Set("pid", supervised.GuardPID)
 			err = Write(path, job)
 		}
 		if releaseErr := lock.Release(); err == nil {
 			err = releaseErr
 		}
 		if err != nil {
-			if command.Process != nil {
-				_ = command.Process.Kill()
-				_ = command.Wait()
-				workerAlive = false
+			if supervised != nil {
+				supervised.Stop()
+				treeResult, stopErr := supervised.wait()
+				workerAlive = !treeResult.Confirmed
+				err = errors.Join(err, stopErr)
 			}
 			return nil, err
 		}
@@ -489,13 +509,13 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		_, checkpointErr := CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, true, true)
 		activityMu.Unlock()
 		if checkpointErr != nil {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-			workerAlive = false
-			return nil, checkpointErr
+			supervised.Stop()
+			treeResult, stopErr := supervised.wait()
+			workerAlive = !treeResult.Confirmed
+			return nil, errors.Join(checkpointErr, stopErr)
 		}
 		done := make(chan error, 1)
-		go func() { done <- command.Wait() }()
+		go func() { var waitErr error; treeResult, waitErr = supervised.wait(); done <- waitErr }()
 		checkTicker := time.NewTicker(100 * time.Millisecond)
 		defer checkTicker.Stop()
 		var runErr error
@@ -508,15 +528,26 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				_, checkpointErr := CheckpointLiveness(path, generation, token, activity, float64(time.Now().UnixNano())/1e9, true, false)
 				activityMu.Unlock()
 				if checkpointErr != nil {
-					_ = command.Process.Kill()
-					<-done
-					workerAlive = false
-					return nil, checkpointErr
+					supervised.Stop()
+					stopErr := <-done
+					workerAlive = !treeResult.Confirmed
+					return nil, errors.Join(checkpointErr, stopErr)
 				}
 			}
 		}
-		workerAlive = false
+		workerAlive = !treeResult.Confirmed
 		checkTicker.Stop()
+		if !treeResult.Confirmed {
+			message := "Process termination unconfirmed"
+			if runErr != nil {
+				message = runErr.Error()
+			}
+			return finishHostError(path, jobID, generation, token, "PROCESS_UNCONFIRMED", message)
+		}
+		if treeResult.RootExit == -1 {
+			close(terminal)
+			return finishHostStartError(dir, jobID, generation, token, cancelled.Load(), ctx.Err(), runErr)
+		}
 		if !cancelled.Load() {
 			activityMu.Lock()
 			lastActivity := numberOr(activity["lastActivityAt"], float64(time.Now().UnixNano())/1e9)
@@ -527,14 +558,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				return nil, checkpointErr
 			}
 		}
-		exitCode := 0
-		if runErr != nil {
-			var exit *exec.ExitError
-			if errors.As(runErr, &exit) {
-				exitCode = exit.ExitCode()
-			} else {
-				exitCode = 1
-			}
+		exitCode := treeResult.RootExit
+		if runErr != nil && exitCode == 0 {
+			exitCode = 1
 		}
 		if cancelled.Load() || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			exitCode = 1
@@ -915,7 +941,11 @@ func failHostUnavailable(path, id string, generation int64, token, message strin
 }
 
 func finishHostError(path, id string, generation int64, token, code, message string) (map[string]any, error) {
-	err := finishJob(filepath.Dir(path), id, "FAILED", code, nil, message,
+	state := "FAILED"
+	if code == "PROCESS_UNCONFIRMED" {
+		state = "UNKNOWN_OR_IN_PROGRESS"
+	}
+	err := finishJob(filepath.Dir(path), id, state, code, nil, message,
 		float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
 	if err != nil {
 		return nil, err

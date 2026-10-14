@@ -321,7 +321,7 @@ func TestHostEntryPointReportsExplicitErrorStatus(t *testing.T) {
 	}
 	command := testutil.Hide(exec.Command(binary, "host", dir, jobID, "1", token))
 	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state)
-	output, err := command.CombinedOutput()
+	output, err := command.Output()
 	if err == nil {
 		t.Fatalf("host unexpectedly returned success: %s", output)
 	}

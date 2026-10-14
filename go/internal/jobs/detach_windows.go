@@ -48,11 +48,12 @@ func LaunchDetached(argv, env []string, dir string) (pid int, identity int64, er
 	command := proc.Hide(exec.Command(argv[0], argv[1:]...))
 	command.Env = env
 	command.Dir = dir
-	command.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: createBreakawayFromJob | createNewProcessGroup,
-		HideWindow:    true,
-		// ParentProcess makes Go use STARTUPINFOEX and set EXTENDED_STARTUPINFO_PRESENT.
-		ParentProcess: parent,
+	command.SysProcAttr.CreationFlags |= createBreakawayFromJob | createNewProcessGroup
+	// ParentProcess makes Go use STARTUPINFOEX and set EXTENDED_STARTUPINFO_PRESENT.
+	command.SysProcAttr.ParentProcess = parent
+	if len(argv) > 1 && argv[1] == "validate-apply" {
+		// The validation host's below-normal priority is inherited by its guards and workers.
+		proc.ConfigureBelowNormalPriority(command)
 	}
 	proc.Hide(command)
 	if err := command.Start(); err != nil {

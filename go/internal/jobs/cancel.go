@@ -60,6 +60,11 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	}
 	values := recordMap(job)
 	state, _ := values["state"].(string)
+	if _, supervised := values["treeReceipt"]; supervised && terminalJobState(state) {
+		if stopped, err := recordedTreeStopped(dir, job); !stopped {
+			return processUnconfirmedError(id, err)
+		}
+	}
 	if values["discarded"] == true {
 		if err := persistCancellationAttempt(stateRoot, values); err != nil {
 			log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
@@ -193,7 +198,7 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 		return cancelRecordResult(values)
 	}
-	if state == "RUNNING" && deadHostTreeConfirmed(job) {
+	if state == "RUNNING" && deadHostTreeConfirmed(dir, job) {
 		lock, err := AcquireOwnership(dir, id)
 		if err != nil {
 			return processUnconfirmed(id)
@@ -203,7 +208,7 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		if current != nil {
 			current.Get("state", &currentState)
 		}
-		if current != nil && currentState == "RUNNING" && deadHostTreeConfirmed(current) {
+		if current != nil && currentState == "RUNNING" && deadHostTreeConfirmed(dir, current) {
 			finishCancelled(current)
 			if reason, ok := args["reason"].(string); ok {
 				_ = current.Set("cancellationReason", reason)
@@ -232,13 +237,18 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
 	confirmed, err := SignalCancel(address, id, token, cancelSignalTimeout)
 	if err != nil || !confirmed {
-		return processUnconfirmed(id)
+		return cancellationUnconfirmed(dir, id, err)
 	}
 	current := readJob(dir, id)
 	if current != nil {
 		var currentState string
 		current.Get("state", &currentState)
 		if terminalJobState(currentState) {
+			if _, supervised := current.values["treeReceipt"]; supervised {
+				if stopped, err := recordedTreeStopped(dir, current); !stopped {
+					return processUnconfirmedError(id, err)
+				}
+			}
 			m := recordMap(current)
 			if currentState == "CANCELLED" {
 				if reason, ok := args["reason"].(string); ok {
@@ -256,13 +266,18 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	}
 	confirmed, err = SignalWait(address, id, token, 7*time.Second)
 	if err != nil || !confirmed {
-		return processUnconfirmed(id)
+		return cancellationUnconfirmed(dir, id, err)
 	}
 	current = readJob(dir, id)
 	if current != nil {
 		var currentState string
 		current.Get("state", &currentState)
 		if terminalJobState(currentState) {
+			if _, supervised := current.values["treeReceipt"]; supervised {
+				if stopped, err := recordedTreeStopped(dir, current); !stopped {
+					return processUnconfirmedError(id, err)
+				}
+			}
 			m := recordMap(current)
 			if currentState == "CANCELLED" {
 				if reason, ok := args["reason"].(string); ok {
@@ -329,7 +344,11 @@ func lunaImplementationAttempt(job map[string]any) bool {
 		models.SameFamily(nonemptyString(job["model"]), "gpt-6-luna")
 }
 
-func deadHostTreeConfirmed(record *Record) bool {
+func deadHostTreeConfirmed(dir string, record *Record) bool {
+	if _, supervised := record.values["treeReceipt"]; supervised {
+		stopped, _ := recordedTreeStopped(dir, record)
+		return stopped
+	}
 	pidValue, pidOK := recoveryInteger(record, "hostPid")
 	created, createdOK := recoveryInteger(record, "hostCreatedAt")
 	pid := int(pidValue)
@@ -401,6 +420,26 @@ func cancelRecordResult(record map[string]any) map[string]any {
 
 func processUnconfirmed(id string) map[string]any {
 	return jobResult(map[string]any{"jobId": id, "state": "UNKNOWN_OR_IN_PROGRESS", "errorCode": "PROCESS_UNCONFIRMED", "message": "Process termination unconfirmed"})
+}
+
+func processUnconfirmedError(id string, err error) map[string]any {
+	message := "Process termination unconfirmed"
+	if err != nil {
+		message = err.Error()
+	}
+	return jobResult(map[string]any{"jobId": id, "state": "UNKNOWN_OR_IN_PROGRESS", "errorCode": "PROCESS_UNCONFIRMED", "message": message})
+}
+
+func cancellationUnconfirmed(dir, id string, signalErr error) map[string]any {
+	job := readJob(dir, id)
+	if job != nil {
+		if _, supervised := job.values["treeReceipt"]; supervised {
+			if stopped, err := recordedTreeStopped(dir, job); !stopped {
+				return processUnconfirmedError(id, err)
+			}
+		}
+	}
+	return processUnconfirmedError(id, signalErr)
 }
 
 func jobUpdateFailed(id, state string) map[string]any {

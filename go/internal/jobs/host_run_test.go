@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,6 +25,25 @@ func TestHostFakeWorker(t *testing.T) {
 	}
 	output := os.Args[len(os.Args)-1]
 	mode := os.Getenv("PURSER_HOST_FAKE_MODE")
+	if mode == "leaf" {
+		time.Sleep(time.Hour)
+		os.Exit(0)
+	}
+	if mode == "tree" || mode == "tree-wait" {
+		child := exec.Command(os.Args[0], "-test.run=TestHostFakeWorker", "--", output)
+		child.Env = replaceValidationEnv(os.Environ(), "PURSER_HOST_FAKE_MODE", "leaf")
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(child.Process.Pid)
+		if err := os.WriteFile(os.Getenv("PURSER_HOST_TREE_PID"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if mode == "tree-wait" {
+			time.Sleep(time.Hour)
+		}
+	}
 	if mode == "stdin" {
 		prompt, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -161,6 +181,7 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 	}{
 		{name: "success", state: "SUCCEEDED"},
 		{name: "worker_nonzero", mode: "nonzero", state: "FAILED", errorCode: "CODEX_FAILED"},
+		{name: "worker_launch_failure", state: "FAILED", errorCode: "CODEX_FAILED"},
 		{name: "deadline", mode: "sleep", state: "TIMED_OUT", errorCode: "DEADLINE_EXCEEDED", deadline: 120 * time.Millisecond},
 		{name: "deadline_before_worker_start", state: "TIMED_OUT", errorCode: "DEADLINE_EXCEEDED", deadline: -time.Second},
 		{name: "signal_cancel", mode: "sleep", state: "CANCELLED", errorCode: "CANCELLED", deadline: 5 * time.Second, cancel: true},
@@ -204,6 +225,9 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 				t.Fatal(err)
 			}
 			options := HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+				if tc.name == "worker_launch_failure" {
+					return []string{filepath.Join(root, "absent-worker")}, nil
+				}
 				return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
 			}}
 			finished := make(chan error, 1)
@@ -218,7 +242,12 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 				record.Get("signalPort", &port)
 				ok, signalErr := SignalCancel("127.0.0.1:"+strconv.Itoa(port), hostTestID, "signal", time.Second)
 				if signalErr != nil || !ok {
-					t.Fatalf("cancel signal failed: ack=%t err=%v", ok, signalErr)
+					var hostErr error
+					select {
+					case hostErr = <-finished:
+					default:
+					}
+					t.Fatalf("cancel signal failed: ack=%t err=%v hostErr=%v record=%#v", ok, signalErr, hostErr, recordMap(readJob(dir, hostTestID)))
 				}
 				if err := <-finished; err != nil {
 					t.Fatal(err)
@@ -229,6 +258,11 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 				}
 			}
 			got := readJob(dir, hostTestID)
+			if tc.name == "worker_launch_failure" {
+				if stopped, err := recordedTreeStopped(dir, got); !stopped {
+					t.Fatalf("launch failure tree unconfirmed: %v", err)
+				}
+			}
 			var state, code string
 			got.Get("state", &state)
 			got.Get("errorCode", &code)

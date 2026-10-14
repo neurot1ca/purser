@@ -1,5 +1,5 @@
 package main
 
-import "purser-hook/internal/proc"
+import "purser-hook/internal/jobs"
 
-func supervisorMain(args []string) int { return proc.SupervisorMain(args) }
+func supervisorMain(args []string) int { return jobs.DurableSupervisorMain(args) }

@@ -185,7 +185,13 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			} else if _, err := RunHostGeneration(dir, jobID, 1, "host-owner-token", options); err != nil {
 				t.Fatal(err)
 			}
-			got := normalizeHostParity(t, readHostParityRecord(t, dir, jobID), root)
+			completed := readHostParityRecord(t, dir, jobID)
+			if _, supervised := completed.values["treeReceipt"]; supervised {
+				if stopped, err := recordedTreeStopped(dir, completed); !stopped {
+					t.Fatalf("tree stop not confirmed: %v", err)
+				}
+			}
+			got := normalizeHostParity(t, completed, root)
 			if failed, ok := got["testEvidenceFailed"].(bool); ok && !failed {
 				if _, oracleHasField := fixture.Record["testEvidenceFailed"]; !oracleHasField {
 					delete(got, "testEvidenceFailed")
@@ -348,6 +354,7 @@ func normalizeHostParity(t *testing.T, record *Record, root string) map[string]a
 	if err := json.Unmarshal(recordBytes(t, record), &value); err != nil {
 		t.Fatal(err)
 	}
+	delete(value, "treeReceipt") // Go-only lifecycle proof is asserted separately.
 	return normalizeHostParityValue(value, root).(map[string]any)
 }
 

@@ -19,6 +19,7 @@ func LaunchDetached(argv, env []string, dir string) (pid int, identity int64, er
 	command.Env = env
 	command.Dir = dir
 	ConfigureDetachedSession(command)
+	proc.Hide(command)
 	if err := command.Start(); err != nil {
 		return 0, 0, err
 	}

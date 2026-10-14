@@ -128,6 +128,11 @@ func worktreeRetirableNow(root, worktree string) bool {
 			continue
 		}
 		state, _ := job["state"].(string)
+		if receipt, ok := job["treeReceipt"].(string); ok {
+			if stopped, _ := treeStopped(jobsDir, stringValue(job["jobId"]), receipt); !stopped {
+				return false
+			}
+		}
 		if !cleanupMayRemove(job, state) || cleanupRecentJobConflict(job, state, now, path) {
 			return false
 		}
@@ -226,6 +231,11 @@ func RetireWorktree(stateRoot, jobID string, generation ...int64) error {
 		if record == nil || record["jobId"] != id {
 			return fmt.Errorf("attached job %s is missing or invalid", id)
 		}
+		if receipt, exists := record["treeReceipt"]; exists {
+			if stopped, stopErr := treeStopped(jobsDir, stringValue(record["jobId"]), stringValue(receipt)); !stopped {
+				return stopErr
+			}
+		}
 		state, _ := record["state"].(string)
 		if !cleanupEligible(record, state, float64(time.Now().UnixNano())/1e9, p) {
 			return fmt.Errorf("attached job %s is not terminal and eligible", id)
@@ -273,6 +283,11 @@ func RetireWorktree(stateRoot, jobID string, generation ...int64) error {
 			matchesNested = nestedPath != "" && sameWorktree(nestedPath, worktree) && (bound == "" || matchesTop)
 			if !matchesTop && !matchesNested {
 				continue
+			}
+		}
+		if receipt, exists := record["treeReceipt"]; exists {
+			if stopped, stopErr := treeStopped(jobsDir, stringValue(record["jobId"]), stringValue(receipt)); !stopped {
+				return stopErr
 			}
 		}
 		state, _ := record["state"].(string)
