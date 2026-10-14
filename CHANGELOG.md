@@ -3,6 +3,18 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.151 — 2026-10-14
+
+- **New:** `purser-hook remote` serves the Codex tools over token-protected HTTP MCP so a Claude Code cloud session can drive Codex on your PC; see `docs/REMOTE_CLAUDE.md`.
+- **New:** `purser-hook recover-state` reports, and with `--apply` removes, Purser-owned leftovers in the state root.
+- **Changed:** implementation routes normal and above need `basis=design:` or `requested=user`; otherwise Purser routes to subtle.
+- **Changed:** cleanup runs in one coalesced background pass at most every 10 minutes instead of at every bridge start.
+- **Fixed:** the MCP bridge and waiters exit within seconds after their Claude session ends.
+- **Fixed:** jobs, validation hosts, synchronous workers, reviewers and checks run under process-tree supervision; cancel, recovery and worktree removal wait until the whole tree has stopped.
+- **Fixed:** a later passing validation settles stale plan milestones, so dependent milestones are no longer blocked.
+- **Fixed:** a job whose host failed frees its task id and keeps its partial changes for the next attempt.
+- **Fixed:** init prints "Applied." only when it really changed a setting.
+
 ## 0.1.150 — 2026-10-13
 
 - **Fixed:** a plan milestone is no longer offered as ready while another plan's unfinished milestone writes the same files.
