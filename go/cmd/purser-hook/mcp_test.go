@@ -13,11 +13,53 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"purser-hook/internal/jobs"
+	"purser-hook/internal/waiter"
 )
+
+func TestMCPMonitorFailureServesProtocolUnbound(t *testing.T) {
+	owner, err := waiter.PinOwner(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_SESSION_OWNER", owner.String())
+	original := registerSessionOwner
+	t.Cleanup(func() { registerSessionOwner = original })
+	registerSessionOwner = func(context.Context, waiter.Owner, chan struct{}, io.Writer) error {
+		return syscall.EACCES
+	}
+	output, stderr, input, serverDone := runMCPWithStartup(func(context.Context, io.Writer, io.Writer) {})
+	if _, err := io.WriteString(input, `{"jsonrpc":"2.0","id":1,"method":"initialize"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(input, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for strings.Count(output.String(), "\n") < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := output.String(); !strings.Contains(got, `"id":1`) || !strings.Contains(got, `"id":2`) {
+		t.Fatalf("protocol unavailable after monitor failure: %s", got)
+	}
+	if strings.Contains(output.String(), "session owner monitor") {
+		t.Fatalf("monitor warning contaminated protocol stdout: %s", output.String())
+	}
+	if strings.Count(stderr.String(), "serving without owner binding") != 1 {
+		t.Fatalf("want one fail-open warning, got %q", stderr.String())
+	}
+	if got := os.Getenv("PURSER_SESSION_OWNER"); got != "" {
+		t.Fatalf("owner token remained bound after monitor failure: %q", got)
+	}
+	_ = input.Close()
+	if code := <-serverDone; code != 0 {
+		t.Fatalf("MCP exit code = %d", code)
+	}
+}
 
 func TestMCPMaintenanceChild(t *testing.T) {
 	if os.Getenv("PURSER_MCP_CHILD") != "1" {

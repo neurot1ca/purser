@@ -15,5 +15,9 @@ func Command(jobID string) string {
 			}
 		}
 	}
-	return `"` + executable + `" wait ` + jobID
+	token := "unknown"
+	if owner, err := SessionOwner(); err == nil {
+		token = owner.String()
+	}
+	return `"` + executable + `" wait ` + jobID + ` --session-owner ` + token
 }

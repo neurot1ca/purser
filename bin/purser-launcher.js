@@ -14,7 +14,7 @@ function goBinaryPath() {
   return path.join(__dirname, '..', 'bin', `purser-hook-${goos}-${goarch}${goos === 'windows' ? '.exe' : ''}`);
 }
 
-function main(args, run = spawnSync) {
+function main(args, run = spawnSync, replace = process.execve) {
   if (args[0] !== 'go-mcp') {
     process.stderr.write('Purser: invalid launcher invocation\n');
     return 1;
@@ -24,11 +24,31 @@ function main(args, run = spawnSync) {
   const expected = binary || path.join(__dirname, '..', 'bin', `purser-hook-${process.platform}-${process.arch}`);
   let reason = !binary ? 'unsupported platform' : !fs.existsSync(binary) ? 'Go binary missing' : null;
   if (!reason) {
-    let child = run(binary, ['mcp', ...args.slice(1)], { stdio: 'inherit', windowsHide: true });
+    const childArgs = ['mcp', ...args.slice(1)];
+    const env = process.env;
+    if (process.platform !== 'win32' && typeof replace === 'function') {
+      try {
+        replace(binary, [binary, ...childArgs], env);
+        return 1; // A successful exec never returns.
+      } catch (error) {
+        if (error.code === 'EACCES') {
+          try {
+            fs.chmodSync(binary, 0o755);
+            replace(binary, [binary, ...childArgs], env);
+            return 1;
+          } catch (retryError) {
+            error = retryError;
+          }
+        }
+        // Unsupported runtimes and exec failures retain the hidden fallback.
+        process.stderr.write(`Purser: exec replacement unavailable: ${error.message}\n`);
+      }
+    }
+    let child = run(binary, childArgs, { stdio: 'inherit', windowsHide: true, env });
     if (process.platform !== 'win32' && child.error && child.error.code === 'EACCES') {
       try {
         fs.chmodSync(binary, 0o755);
-        child = run(binary, ['mcp', ...args.slice(1)], { stdio: 'inherit', windowsHide: true });
+        child = run(binary, childArgs, { stdio: 'inherit', windowsHide: true, env });
       } catch (error) {
         child = { error };
       }

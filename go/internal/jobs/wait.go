@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"errors"
 	"math"
 	"os"
@@ -30,6 +31,11 @@ var waitSleep = time.Sleep
 // by the Python waiter. SignalWait is bounded so replacement generations are
 // noticed promptly even while an older endpoint is still open.
 func Wait(stateRoot, jobID string) WaitResult {
+	return WaitContext(context.Background(), stateRoot, jobID)
+}
+
+// WaitContext stops observation only; session cancellation never cancels a job.
+func WaitContext(ctx context.Context, stateRoot, jobID string) WaitResult {
 	started := time.Now()
 	maxWaitSeconds := int64(9 * 60)
 	if configured, err := strconv.ParseInt(os.Getenv("PURSER_WAIT_MAX_SECONDS"), 10, 64); err == nil && configured > 0 {
@@ -44,6 +50,9 @@ func Wait(stateRoot, jobID string) WaitResult {
 	}
 	recoveryAttempted := false
 	for {
+		if ctx.Err() != nil {
+			return WaitResult{Lines: []string{"purser-wait " + jobID + " SESSION_ENDED"}, ExitCode: 0}
+		}
 		job := readJobWithRetry(dir, jobID)
 		if job == nil {
 			return reportWaitRecord(dir, jobID, nil)

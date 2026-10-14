@@ -179,7 +179,7 @@ func TestPostStartWaiterUsesExecutablePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := stringValue(payload["next"])
-	if !strings.Contains(next, `"`+executable+`" wait `+jobID) || strings.Contains(strings.ToLower(next), "python") {
+	if !strings.Contains(next, `"`+executable+`" wait `+jobID+` --session-owner `) || strings.Contains(strings.ToLower(next), "python") {
 		t.Fatalf("next command does not invoke Go waiter by executable path: %s", next)
 	}
 }
@@ -302,6 +302,12 @@ func normalizePostStart(value any, root, repo, project string) any {
 				if strings.HasPrefix(next, commandPrefix) {
 					if separator := strings.Index(next[len(commandPrefix):], waiterSeparator); separator >= 0 {
 						jobCommand := next[len(commandPrefix)+separator+len(waiterSeparator):]
+						// The legacy oracle predates pinned session ownership.
+						if start := strings.Index(jobCommand, " --session-owner "); start >= 0 {
+							if end := strings.Index(jobCommand[start:], " ; "); end >= 0 {
+								jobCommand = jobCommand[:start] + jobCommand[start+end:]
+							}
+						}
 						payload["next"] = commandPrefix + `__PYTHON__" "__WAITER__" ` + jobCommand
 						if normalized, err := canonicalJSON(payload); err == nil {
 							item = string(normalized)

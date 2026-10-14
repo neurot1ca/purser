@@ -15,11 +15,14 @@ import (
 
 	"purser-hook/internal/jobs"
 	"purser-hook/internal/models"
+	"purser-hook/internal/waiter"
 )
 
 const mcpSchemas = `[{"name":"codex","description":"Run a new Codex thread.","inputSchema":{"type":"object","properties":{"prompt":{"type":"string"},"label":{"type":"string","description":"Short human task description in the user's language (up to 80 characters)."},"model":{"type":"string"},"cwd":{"type":"string"},"config":{"type":"object"},"developer-instructions":{"type":"string"},"base-instructions":{"type":"string"},"compact-prompt":{"type":"string"},"sandbox":{"type":"string","enum":["read-only","workspace-write","danger-full-access"]},"approval-policy":{"type":"string","enum":["on-request","never"]}},"required":["prompt"]}},{"name":"codex-reply","description":"Continue a thread created by this server.","inputSchema":{"type":"object","properties":{"threadId":{"type":"string"},"conversationId":{"type":"string","description":"Deprecated alias for threadId."},"prompt":{"type":"string"},"label":{"type":"string","description":"Short human task description in the user's language (up to 80 characters); may be omitted to reuse the thread label."}},"required":["prompt"]}},{"name":"codex_start","description":"Start a durable Codex job.","inputSchema":{"type":"object","properties":{"prompt":{"type":"string"},"label":{"type":"string","description":"Short human task description in the user's language (up to 80 characters)."},"model":{"type":"string"},"cwd":{"type":"string"},"config":{"type":"object"},"developer-instructions":{"type":"string"},"base-instructions":{"type":"string"},"compact-prompt":{"type":"string"},"sandbox":{"type":"string","enum":["read-only","workspace-write","danger-full-access"]},"approval-policy":{"type":"string","enum":["on-request","never"]},"call":{"type":"string"},"mode":{"type":"string","enum":["new","reply"]},"worktree":{"type":"boolean"},"threadId":{"type":"string"},"timeoutSeconds":{"type":"number"},"taskId":{"type":"string"},"route":{"type":"string"},"etaMinutes":{"type":"integer"},"jobModel":{"type":"string"},"jobEffort":{"type":"string"},"jobLabel":{"type":"string"},"jobPhase":{"type":"string"},"readinessCriteria":{"type":"object"},"readinessGrounded":{"type":"boolean"},"readinessAgent":{"type":"string"},"readinessModel":{"type":"string"}},"required":["prompt"]}},{"name":"codex_result","description":"Read a durable Codex job.","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"adopt":{"type":"boolean","description":"After user consent, finalize a job from an earlier session in this project."}},"required":["jobId"]}},{"name":"codex_cancel","description":"Cancel a durable Codex job.","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"reason":{"type":"string"}},"required":["jobId"]}},{"name":"codex_apply","description":"Apply a job worktree patch.","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"resolved":{"type":"boolean","description":"Record a hand-resolved conflict after verifying the repository."},"reviewer1Valid":{"type":"integer","minimum":0},"reviewer1False":{"type":"integer","minimum":0},"acceptOnly":{"type":"boolean"},"sessionId":{"type":"string"},"revision":{"type":"string"}},"required":["jobId"]}}]`
 
 type mcpServer struct {
+	ctx     context.Context
+	work    sync.WaitGroup
 	out     io.Writer
 	mu      sync.Mutex
 	callsMu sync.Mutex
@@ -126,7 +129,11 @@ func (s *mcpServer) handle(line []byte) {
 		} else {
 			params = map[string]json.RawMessage{}
 		}
-		ctx, cancel := context.WithCancel(context.Background())
+		parent := s.ctx
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx, cancel := context.WithCancel(parent)
 		key := mcpIDKey(id)
 		s.callsMu.Lock()
 		if s.calls == nil {
@@ -134,7 +141,8 @@ func (s *mcpServer) handle(line []byte) {
 		}
 		s.calls[key] = &mcpCall{cancel: cancel}
 		s.callsMu.Unlock()
-		go s.runCall(ctx, key, id, params, cancel)
+		s.work.Add(1)
+		go func() { defer s.work.Done(); s.runCall(ctx, key, id, params, cancel) }()
 		return
 	default:
 		s.send(rpcReply{"2.0", id, nil, struct {
@@ -251,7 +259,20 @@ func normalizeMCPString(raw json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), raw...)
 }
 
+var discoverSessionOwner = waiter.SessionOwner
+
 func mcpMain(args []string) int {
+	owner, err := discoverSessionOwner()
+	if err != nil {
+		_ = os.Unsetenv("PURSER_SESSION_OWNER")
+		fmt.Fprintf(os.Stderr, "Purser: session owner monitor failed: %v\n", err)
+		return mcpMainWithStartup(args, os.Stdin, os.Stdout, os.Stderr, startMCPMaintenance)
+	}
+	if err := os.Setenv("PURSER_SESSION_OWNER", owner.String()); err != nil {
+		_ = os.Unsetenv("PURSER_SESSION_OWNER")
+		fmt.Fprintf(os.Stderr, "Purser: session owner monitor unavailable: %v\n", err)
+		return mcpMainWithStartup(args, os.Stdin, os.Stdout, os.Stderr, startMCPMaintenance)
+	}
 	return mcpMainWithStartup(args, os.Stdin, os.Stdout, os.Stderr, startMCPMaintenance)
 }
 
@@ -266,21 +287,64 @@ func mcpMainWithStartup(args []string, input io.Reader, output, stderr io.Writer
 	if *codexBin != "" {
 		_ = os.Setenv("PURSER_CODEX_BIN", *codexBin)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go startup(ctx, io.Discard, stderr)
-	server := &mcpServer{out: output}
-	reader := bufio.NewReader(input)
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
-			server.handle(line)
+	ctx, cancel, err := sessionContext(stderr)
+	if err != nil {
+		_ = os.Unsetenv("PURSER_SESSION_OWNER")
+		fmt.Fprintf(stderr, "Purser: session owner monitor unavailable; serving without owner binding: %v\n", err)
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	server := &mcpServer{out: output, ctx: ctx}
+	server.work.Add(1)
+	go func() { defer server.work.Done(); startup(ctx, io.Discard, stderr) }()
+	defer func() {
+		cancel()
+		if closer, ok := input.(io.Closer); ok {
+			_ = closer.Close()
 		}
-		if err != nil {
-			if err != io.EOF {
-				fmt.Fprintln(stderr, err)
+		done := make(chan struct{})
+		go func() { server.work.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(4 * time.Second):
+			fmt.Fprintln(stderr, "Purser: session teardown unconfirmed after 4s")
+		}
+	}()
+	type frame struct {
+		line []byte
+		err  error
+	}
+	frames := make(chan frame)
+	go func() {
+		reader := bufio.NewReader(input)
+		for {
+			line, err := reader.ReadBytes('\n')
+			select {
+			case frames <- frame{line, err}:
+			case <-ctx.Done():
+				return
 			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
 			return 0
+		case frame := <-frames:
+			if ctx.Err() != nil {
+				return 0
+			}
+			if len(bytes.TrimSpace(frame.line)) > 0 {
+				server.handle(frame.line)
+			}
+			if frame.err != nil {
+				if frame.err != io.EOF {
+					fmt.Fprintln(stderr, frame.err)
+				}
+				return 0
+			}
 		}
 	}
 }
