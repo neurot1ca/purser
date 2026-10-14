@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -21,6 +22,11 @@ import (
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
 )
+
+var launchPrivateChild = jobs.LaunchDetached
+
+// Tests must explicitly opt in before launching their own cleanup executable.
+var allowCleanupTestChild bool
 
 var requestCleanup = func(root string) error {
 	root, err := filepath.Abs(root)
@@ -336,6 +342,14 @@ func launchPrivate(root string, args ...string) (int, int64, error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	name := filepath.Base(executable)
+	if runtime.GOOS == "windows" {
+		name = strings.ToLower(name)
+	}
+	if len(args) > 0 && args[0] == "cleanup" && !allowCleanupTestChild &&
+		(strings.HasSuffix(name, ".test") || strings.HasSuffix(name, ".test.exe")) {
+		return 0, 0, fmt.Errorf("refusing cleanup launch from Go test binary: %s", executable)
+	}
 	env := []string{}
 	for _, value := range os.Environ() {
 		if !strings.HasPrefix(strings.ToUpper(value), "PURSER_STATE_DIR=") {
@@ -343,7 +357,7 @@ func launchPrivate(root string, args ...string) (int, int64, error) {
 		}
 	}
 	env = append(env, "PURSER_STATE_DIR="+root)
-	return jobs.LaunchDetached(append([]string{executable}, args...), env, root)
+	return launchPrivateChild(append([]string{executable}, args...), env, root)
 }
 
 func privateError(err error) {

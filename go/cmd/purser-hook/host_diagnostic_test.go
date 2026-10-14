@@ -9,6 +9,13 @@ import (
 )
 
 func TestHostMainRecordsReturnedError(t *testing.T) {
+	oldLaunch := launchPrivateChild
+	launches := 0
+	launchPrivateChild = func([]string, []string, string) (int, int64, error) {
+		launches++
+		return 0, 0, nil
+	}
+	t.Cleanup(func() { launchPrivateChild = oldLaunch })
 	stateRoot := t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", stateRoot)
 	jobDir := filepath.Join(t.TempDir(), "jobs")
@@ -19,6 +26,9 @@ func TestHostMainRecordsReturnedError(t *testing.T) {
 	const jobID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	if code := hostMain([]string{jobDir, jobID, "7", "token"}); code == 0 {
 		t.Fatal("hostMain succeeded with a missing job record")
+	}
+	if launches != 0 {
+		t.Fatalf("hostMain launched %d cleanup children", launches)
 	}
 
 	f, err := os.Open(filepath.Join(stateRoot, "diagnostics.jsonl"))
