@@ -796,6 +796,96 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 		return
 	}
 	base := filepath.Join(root, "preparations")
+	generations, sizes, eligible, protected, protectedGeneration := preparationRetirementDecisions(root, now, checkBytes)
+
+	sort.Slice(eligible, func(i, j int) bool {
+		if eligible[i].stamp == eligible[j].stamp {
+			return eligible[i].path < eligible[j].path
+		}
+		return eligible[i].stamp < eligible[j].stamp
+	})
+	total := int64(0)
+	for _, size := range sizes {
+		total += size
+	}
+	count := len(generations)
+	protectedCount := count - len(eligible)
+	protectedBytes := int64(0)
+	if checkBytes {
+		for _, item := range eligible {
+			protectedBytes += item.size
+		}
+		protectedBytes = total - protectedBytes
+	}
+	removalFailed := false
+	for _, item := range eligible {
+		indexPath := filepath.Join(root, "async_jobs", filepath.Base(item.owner)+".json")
+		unlock, lockErr := jobsLock(indexPath)
+		if lockErr != nil {
+			removalFailed = true
+			continue
+		}
+		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", filepath.Base(item.owner)+".json")
+		job := readObject(jobPath)
+		index := readObject(indexPath)
+		state, stateOK := preparationState(item.path)
+		safe := !protected[filepath.Base(item.owner)] && !protectedGeneration[item.path]
+		if stateOK && protectedPreparationState(item.path, state, job, now) {
+			safe = false
+		}
+		if index != nil && index["stage"] == "FINALIZING" {
+			safe = false
+		}
+		if pathExists(jobPath) {
+			safe = safe && job != nil && cleanupTerminalState(stringValue(job["state"])) && preparationJobEligible(job, jobPath, now)
+		} else {
+			mtime, err := fileMtime(item.path)
+			safe = safe && err == nil && now-mtime >= maxPrepAge
+		}
+		removed := safe && removeStateTree(item.path, base)
+		if removed {
+			count--
+			total -= item.size
+			if samePath(item.path, item.owner) {
+				_ = os.Remove(item.owner)
+			}
+		} else {
+			removalFailed = true
+		}
+		_ = unlock()
+	}
+	if protectedCount > maxPrepCount || (checkBytes && protectedBytes > maxPrepBytes) ||
+		(removalFailed && (count > maxPrepCount || (checkBytes && total > maxPrepBytes))) {
+		Warning(root)
+	}
+}
+
+// PreparationCandidate exposes the existing preparation retirement decision without deleting.
+type PreparationCandidate struct {
+	Path     string
+	JobID    string
+	Eligible bool
+}
+
+// ListPreparationCandidates shares the decisions used by RetirePreparations.
+func ListPreparationCandidates(root string, now float64) []PreparationCandidate {
+	if !safeRoot(root) {
+		return nil
+	}
+	generations, _, eligible, _, _ := preparationRetirementDecisions(root, now, false)
+	allowed := make(map[string]bool)
+	for _, item := range eligible {
+		allowed[item.path] = true
+	}
+	result := make([]PreparationCandidate, 0, len(generations))
+	for _, item := range generations {
+		result = append(result, PreparationCandidate{Path: item.path, JobID: filepath.Base(item.owner), Eligible: allowed[item.path]})
+	}
+	return result
+}
+
+func preparationRetirementDecisions(root string, now float64, checkBytes bool) ([]generation, map[string]int64, []eligibleGeneration, map[string]bool, map[string]bool) {
+	base := filepath.Join(root, "preparations")
 	generations := preparationGenerations(root)
 	byJob := make(map[string][]string)
 	for _, item := range generations {
@@ -869,66 +959,7 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 			eligible = append(eligible, eligibleGeneration{stamp: stamp, owner: filepath.Join(base, jobID), path: path, size: sizes[path]})
 		}
 	}
-	sort.Slice(eligible, func(i, j int) bool {
-		if eligible[i].stamp == eligible[j].stamp {
-			return eligible[i].path < eligible[j].path
-		}
-		return eligible[i].stamp < eligible[j].stamp
-	})
-	total := int64(0)
-	for _, size := range sizes {
-		total += size
-	}
-	count := len(generations)
-	protectedCount := count - len(eligible)
-	protectedBytes := int64(0)
-	if checkBytes {
-		for _, item := range eligible {
-			protectedBytes += item.size
-		}
-		protectedBytes = total - protectedBytes
-	}
-	removalFailed := false
-	for _, item := range eligible {
-		indexPath := filepath.Join(root, "async_jobs", filepath.Base(item.owner)+".json")
-		unlock, lockErr := jobsLock(indexPath)
-		if lockErr != nil {
-			removalFailed = true
-			continue
-		}
-		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", filepath.Base(item.owner)+".json")
-		job := readObject(jobPath)
-		index := readObject(indexPath)
-		state, stateOK := preparationState(item.path)
-		safe := !protected[filepath.Base(item.owner)] && !protectedGeneration[item.path]
-		if stateOK && protectedPreparationState(item.path, state, job, now) {
-			safe = false
-		}
-		if index != nil && index["stage"] == "FINALIZING" {
-			safe = false
-		}
-		if pathExists(jobPath) {
-			safe = safe && job != nil && cleanupTerminalState(stringValue(job["state"])) && preparationJobEligible(job, jobPath, now)
-		} else {
-			mtime, err := fileMtime(item.path)
-			safe = safe && err == nil && now-mtime >= maxPrepAge
-		}
-		removed := safe && removeStateTree(item.path, base)
-		if removed {
-			count--
-			total -= item.size
-			if samePath(item.path, item.owner) {
-				_ = os.Remove(item.owner)
-			}
-		} else {
-			removalFailed = true
-		}
-		_ = unlock()
-	}
-	if protectedCount > maxPrepCount || (checkBytes && protectedBytes > maxPrepBytes) ||
-		(removalFailed && (count > maxPrepCount || (checkBytes && total > maxPrepBytes))) {
-		Warning(root)
-	}
+	return generations, sizes, eligible, protected, protectedGeneration
 }
 
 func cleanupTerminalState(state string) bool {

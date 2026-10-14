@@ -201,6 +201,78 @@ func cleanupLock(dir, name string) (func(), error) {
 	}
 }
 
+// CleanupSweepLock exposes the same sweep lock used by RunCleanup.
+func CleanupSweepLock(root string) (func(), error) {
+	dir, err := cleanupDirectory(root)
+	if err != nil {
+		return nil, err
+	}
+	return cleanupLock(dir, "sweep")
+}
+
+// RetirementCandidate is a read-only decision from durable worktree ownership.
+type RetirementCandidate struct {
+	Path   string
+	Jobs   []string
+	Reason string
+}
+
+// ListRetirementCandidates inventories ownership using cleanup's retirement predicates.
+func ListRetirementCandidates(root string, now time.Time) ([]RetirementCandidate, error) {
+	dir := filepath.Join(root, "worktree_ownership")
+	if !cleanupPath(root, dir) {
+		return nil, fmt.Errorf("unsafe ownership directory")
+	}
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result []RetirementCandidate
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		candidate := RetirementCandidate{Path: path, Reason: "invalid ownership"}
+		var owned retention.WorktreeOwnership
+		if cleanupPath(root, path) {
+			data, readErr := os.ReadFile(path)
+			if readErr == nil && json.Unmarshal(data, &owned) == nil {
+				candidate.Path, candidate.Jobs = owned.WorktreePath, owned.Jobs
+				if validOwnedWorktree(root, owned.WorktreePath) && len(owned.Jobs) > 0 {
+					verified, e := retention.ReadWorktreeOwnership(root, owned.WorktreePath)
+					verifiedJSON, _ := json.Marshal(verified)
+					ownedJSON, _ := json.Marshal(owned)
+					if e == nil && bytes.Equal(verifiedJSON, ownedJSON) {
+						candidate.Reason = ""
+						for _, id := range owned.Jobs {
+							p := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+							if !validJobID(id) || len(id) != 64 || !cleanupPath(root, p) {
+								candidate.Reason = "invalid job ownership"
+								break
+							}
+							job := readCleanupJSON(p)
+							state, _ := job["state"].(string)
+							if job == nil || job["jobId"] != id || !cleanupEligible(job, state, float64(now.UnixNano())/1e9, p) || cleanupConflictProtected(root, job, state, float64(now.UnixNano())/1e9, p) {
+								candidate.Reason = "owner is missing, protected or ineligible"
+								break
+							}
+						}
+						if !worktreeRetirableNow(root, owned.WorktreePath) {
+							candidate.Reason = "referenced by ineligible job"
+						}
+					}
+				}
+			}
+		}
+		result = append(result, candidate)
+	}
+	return result, nil
+}
+
 func readCleanupChild(dir string) (cleanupChild, error) {
 	var child cleanupChild
 	data, err := os.ReadFile(filepath.Join(dir, "child.json"))
