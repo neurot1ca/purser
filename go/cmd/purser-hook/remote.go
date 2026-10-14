@@ -68,21 +68,16 @@ func remoteAdditionalContext(v map[string]any) string {
 	s, _ := h["additionalContext"].(string)
 	return s
 }
-func remotePostText(v map[string]any) string {
-	if text := remoteAdditionalContext(v); text != "" {
-		return text
-	}
+
+// remoteUpdatedOutput returns the post hook's replacement content, which carries the review bundle and revision.
+func remoteUpdatedOutput(v map[string]any) []any {
 	h, _ := v["hookSpecificOutput"].(map[string]any)
-	for _, field := range []string{"updatedToolOutput", "updatedMCPToolOutput"} {
-		items, _ := h[field].([]any)
-		for _, item := range items {
-			m, _ := item.(map[string]any)
-			if text, ok := m["text"].(string); ok && text != "" {
-				return text
-			}
+	for _, field := range []string{"updatedMCPToolOutput", "updatedToolOutput"} {
+		if items, ok := h[field].([]any); ok && len(items) > 0 {
+			return items
 		}
 	}
-	return ""
+	return nil
 }
 func remoteContent(v map[string]any) []any {
 	if v == nil {

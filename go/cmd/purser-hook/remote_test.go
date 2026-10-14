@@ -98,3 +98,14 @@ func TestRemoteHostReadAndStartRestrictions(t *testing.T) {
 		t.Fatal("unexpected test file")
 	}
 }
+
+func TestRemoteUpdatedOutputReturnsReplacementBundle(t *testing.T) {
+	bundle := []any{map[string]any{"type": "text", "text": `{"changed_paths_sha256":"abc"}`}}
+	post := map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse", "updatedMCPToolOutput": bundle, "additionalContext": "note"}}
+	if got := remoteUpdatedOutput(post); len(got) != 1 || got[0].(map[string]any)["text"] != bundle[0].(map[string]any)["text"] {
+		t.Fatalf("replacement bundle dropped: %#v", got)
+	}
+	if got := remoteUpdatedOutput(map[string]any{}); got != nil {
+		t.Fatalf("unexpected replacement: %#v", got)
+	}
+}

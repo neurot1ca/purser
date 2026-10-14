@@ -254,7 +254,11 @@ func (s *mcpServer) runCall(ctx context.Context, key string, id json.RawMessage,
 				post, failure = enforce.PostInternalError(postEvent, stateRoot())
 			}
 			_ = failure
-			if context := remotePostText(post); context != "" && result != nil {
+			if replaced := remoteUpdatedOutput(post); replaced != nil && result != nil {
+				result["content"] = replaced
+				delete(result, "structuredContent")
+			}
+			if context := remoteAdditionalContext(post); context != "" && result != nil {
 				result["content"] = append(remoteContent(result), map[string]any{"type": "text", "text": context})
 			}
 			return
