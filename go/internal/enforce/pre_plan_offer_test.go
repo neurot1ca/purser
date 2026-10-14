@@ -69,7 +69,11 @@ func TestPrePlanRedirect(t *testing.T) {
 			if tc.reason != "" {
 				reason = "|reason=" + tc.reason
 			}
-			prompt := fmt.Sprintf("ORCH|task=%s|phase=%s|route=%s%s|basis=bounded implementation|scope=%s\nImplement.", tc.task, tc.phase, tc.route, reason, strings.Join(tc.scope, ","))
+			basis := "bounded implementation"
+			if tc.route == "consequential" {
+				basis = "design:bounded implementation"
+			}
+			prompt := fmt.Sprintf("ORCH|task=%s|phase=%s|route=%s%s|basis=%s|scope=%s\nImplement.", tc.task, tc.phase, tc.route, reason, basis, strings.Join(tc.scope, ","))
 			input["prompt"] = prompt
 			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": "plan-redirect-call", "session_id": "plan-redirect-session", "cwd": repo, "tool_input": input}
 			got, err := Pre(event, state)

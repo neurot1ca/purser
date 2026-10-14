@@ -98,7 +98,7 @@ func runCheck(repoRoot string, check profile.Check, deadline context.Context) Ch
 	}
 	ctx, cancel := context.WithTimeout(deadline, time.Duration(check.TimeoutSeconds)*time.Second)
 	defer cancel()
-	cmd := exec.Command(executable, check.Argv[1:]...)
+	cmd := proc.Hide(exec.Command(executable, check.Argv[1:]...))
 	cmd.Dir = repoRoot
 	for _, value := range cmd.Environ() {
 		if !strings.HasPrefix(value, "CI=") {

@@ -464,7 +464,7 @@ func TestPreCoderEffortOverrideOnlyForSupportedNewCodexStarts(t *testing.T) {
 				seedPreThread(t, repo, state)
 				tool, task, route, thread, mode = "mcp__codex-main__codex-reply", "task-recorded", "subtle", "thread-p63", "reply"
 			}
-			prompt := "ORCH|task=" + task + "|phase=implementation|route=" + route + "|reason=new_task|basis=bounded effort test|scope=src/a.go\nImplement."
+			prompt := "ORCH|task=" + task + "|phase=implementation|route=" + route + "|reason=new_task|basis=design:bounded effort test|scope=src/a.go\nImplement."
 			input := map[string]any{"mode": mode, "cwd": repo, "prompt": prompt}
 			if thread != "" {
 				input["threadId"] = thread

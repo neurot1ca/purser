@@ -211,7 +211,7 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 		}
 		return legacyError(nil, err.Error()), nil
 	}
-	command := exec.Command(commandArgs[0], commandArgs[1:]...)
+	command := proc.Hide(exec.Command(commandArgs[0], commandArgs[1:]...))
 	command.Dir = cwd
 	if agent == "codex" {
 		command.Stdin = strings.NewReader(prompt)

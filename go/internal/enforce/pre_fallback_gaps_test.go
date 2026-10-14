@@ -126,7 +126,7 @@ func TestPreFallbackGapsP63BFixture(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			prompt := "ORCH|task=task-1|phase=implementation|route=normal|reason=new_task|basis=specific repository boundary|scope=AGENTS.md\nDo the work."
+			prompt := "ORCH|task=task-1|phase=implementation|route=normal|reason=new_task|basis=design:specific repository boundary|scope=AGENTS.md\nDo the work."
 			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__plugin_purser_codex-main__codex", "tool_input": map[string]any{"prompt": prompt, "label": "fixture", "cwd": repo}, "session_id": "session-1", "tool_use_id": "use-p63b"}
 			got, gotErr := Pre(event, runtimeRoot)
 			out := mapValue(got["hookSpecificOutput"])

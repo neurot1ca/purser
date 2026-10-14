@@ -146,6 +146,7 @@
         ],
         "reviewer_executable": null,
         "route": "subtle",
+        "route_adjustment_reason": null,
         "scope": [
           "src/a.go"
         ],
@@ -364,6 +365,7 @@
         ],
         "reviewer_executable": null,
         "route": "subtle",
+        "route_adjustment_reason": null,
         "scope": [
           "src/a.go"
         ],
@@ -597,6 +599,7 @@
         ],
         "reviewer_executable": null,
         "route": "plan_standard",
+        "route_adjustment_reason": null,
         "scope": [],
         "session_id": "p64-session",
         "shadow_prompt": null,
@@ -754,6 +757,7 @@
         ],
         "reviewer_executable": null,
         "route": "operation",
+        "route_adjustment_reason": null,
         "scope": [],
         "shadow_prompt": null,
         "skip_max_files": 2,
@@ -900,6 +904,7 @@
         ],
         "reviewer_executable": null,
         "route": "operation",
+        "route_adjustment_reason": null,
         "scope": [],
         "shadow_prompt": null,
         "skip_max_files": 2,
