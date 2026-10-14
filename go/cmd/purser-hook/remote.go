@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"purser-hook/internal/jobs"
+	"purser-hook/internal/proc"
 )
 
 const remoteSchemas = `[{"name":"codex_start","description":"Start a durable Codex job.","inputSchema":{"type":"object","properties":{"prompt":{"type":"string"},"label":{"type":"string"},"model":{"type":"string"},"cwd":{"type":"string"},"config":{"type":"object"},"developer-instructions":{"type":"string"},"base-instructions":{"type":"string"},"compact-prompt":{"type":"string"},"sandbox":{"type":"string"},"approval-policy":{"type":"string"},"worktree":{"type":"boolean"},"timeoutSeconds":{"type":"number"}},"required":["prompt"]}},{"name":"codex_result","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"}},"required":["jobId"]}},{"name":"codex_cancel","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"reason":{"type":"string"}},"required":["jobId"]}},{"name":"codex_apply","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"commitMessage":{"type":"string","description":"Required for the plain apply step."},"acceptOnly":{"type":"boolean"},"revision":{"type":"string"},"reviewer1Valid":{"type":"integer","minimum":0},"reviewer1False":{"type":"integer","minimum":0},"resolved":{"type":"boolean"}},"required":["jobId"]}},{"name":"host_diff","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"}},"required":["jobId"]}},{"name":"host_read","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]`
@@ -129,7 +130,7 @@ func remoteCommitApplied(repo string, args, result map[string]any) string {
 		return "applied job returned no paths"
 	}
 	run := func(name string, argv ...string) (string, error) {
-		cmd := exec.Command(name, argv...)
+		cmd := proc.Hide(exec.Command(name, argv...))
 		cmd.Dir = repo
 		out, e := cmd.CombinedOutput()
 		if e != nil {
@@ -140,7 +141,7 @@ func remoteCommitApplied(repo string, args, result map[string]any) string {
 	if out, e := run("git", append([]string{"add", "--"}, paths...)...); e != nil {
 		return "git add failed: " + out
 	}
-	if out, e := run("git", append(append([]string{"commit", "--only", "-m", msg, "--"}, paths...))...); e != nil {
+	if out, e := run("git", append([]string{"commit", "--only", "-m", msg, "--"}, paths...)...); e != nil {
 		return "git commit failed: " + out
 	}
 	if out, e := run("git", "push", "origin", "HEAD"); e != nil {
@@ -218,12 +219,12 @@ func remoteHostDiff(c *remoteConfig, args map[string]any) map[string]any {
 	if worktree == "" || snapshot == "" {
 		return legacyError(nil, "job has no worktree snapshot")
 	}
-	cmd := exec.Command("git", "add", "-N", ".")
+	cmd := proc.Hide(exec.Command("git", "add", "-N", "."))
 	cmd.Dir = worktree
 	if out, e := cmd.CombinedOutput(); e != nil {
 		return legacyError(nil, strings.TrimSpace(string(out)))
 	}
-	cmd = exec.Command("git", "diff", snapshot)
+	cmd = proc.Hide(exec.Command("git", "diff", snapshot))
 	cmd.Dir = worktree
 	out, e := cmd.Output()
 	if e != nil {
