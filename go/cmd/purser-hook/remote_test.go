@@ -257,3 +257,28 @@ func TestRemoteHostReadAllowsProjectClaudeMD(t *testing.T) {
 		t.Fatalf("CLAUDE.md not readable: %#v", got)
 	}
 }
+
+func TestRemoteHostReadServesProjectMemoryOnly(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	repo := t.TempDir()
+	dir := remoteMemoryDir(repo)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("index"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "secret.md"), []byte("no"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := &remoteConfig{repo: repo}
+	if got := remoteHostRead(c, map[string]any{"path": "memory/MEMORY.md"}); got["isError"] == true {
+		t.Fatalf("memory index not readable: %#v", got)
+	}
+	for _, bad := range []string{"memory/../../../secret.md", "memory/../../secret.md"} {
+		if got := remoteHostRead(c, map[string]any{"path": bad}); got["isError"] != true {
+			t.Fatalf("%s escaped the memory folder: %#v", bad, got)
+		}
+	}
+}

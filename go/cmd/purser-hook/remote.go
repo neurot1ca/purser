@@ -173,11 +173,15 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 		return legacyError(nil, "path is outside the remote read allowlist")
 	}
 	clean := filepath.Clean(p)
+	baseDir := filepath.Join(stateRoot(), "plans")
+	if rest, ok := strings.CutPrefix(filepath.ToSlash(clean), "memory/"); ok && !filepath.IsAbs(p) {
+		baseDir, clean = remoteMemoryDir(c.repo), filepath.FromSlash(rest)
+	}
 	if !filepath.IsAbs(p) {
 		if clean == "NEXT.md" || clean == "CLAUDE.md" {
 			p = filepath.Join(c.repo, clean)
 		} else {
-			p = filepath.Join(stateRoot(), "plans", clean)
+			p = filepath.Join(baseDir, clean)
 		}
 	}
 	resolved, err := filepath.EvalSymlinks(p)
@@ -187,7 +191,7 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 	if sameRemotePath(resolved, filepath.Join(c.repo, "NEXT.md")) || sameRemotePath(resolved, filepath.Join(c.repo, "CLAUDE.md")) {
 		p = resolved
 	} else {
-		base, baseErr := filepath.EvalSymlinks(filepath.Join(stateRoot(), "plans"))
+		base, baseErr := filepath.EvalSymlinks(baseDir)
 		rel, e := filepath.Rel(base, resolved)
 		if baseErr != nil || e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 			return legacyError(nil, "path is outside the remote read allowlist")
@@ -203,6 +207,16 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 	}
 	hash := sha256.Sum256(b)
 	return map[string]any{"content": []any{map[string]any{"type": "text", "text": string(b) + "\nsha256: " + hex.EncodeToString(hash[:])}}, "structuredContent": map[string]any{"sha256": hex.EncodeToString(hash[:])}}
+}
+
+// remoteMemoryDir is Claude Code's auto-memory folder for repo, readable as host_read "memory/<file>".
+func remoteMemoryDir(repo string) string {
+	config := os.Getenv("CLAUDE_CONFIG_DIR")
+	if config == "" {
+		home, _ := os.UserHomeDir()
+		config = filepath.Join(home, ".claude")
+	}
+	return filepath.Join(config, "projects", regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(repo, "-"), "memory")
 }
 
 var remoteJobID = regexp.MustCompile(`^[0-9a-f]{16,128}$`)
