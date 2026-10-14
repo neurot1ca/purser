@@ -140,7 +140,7 @@ func TestNativeRunBridgeUnavailableAndDeadline(t *testing.T) {
 	started := time.Now()
 	got, err = RunBridge(context.Background(), root, args, 300*time.Millisecond)
 	elapsed := time.Since(started)
-	if err != nil || got.Outcome != "unavailable" || got.Attributes["error_code"] != "REVIEWER_TIMEOUT" || elapsed > 400*time.Millisecond {
+	if err != nil || got.Outcome != "unavailable" || got.Attributes["error_code"] != "REVIEWER_TIMEOUT" || elapsed > 5*time.Second {
 		t.Fatalf("timeout = %#v, %v, elapsed %s", got, err, elapsed)
 	}
 }

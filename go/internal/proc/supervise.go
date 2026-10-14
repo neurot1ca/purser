@@ -14,13 +14,15 @@ import (
 // Launch describes a worker. File streams preserve independent output capture;
 // control and owner liveness use private pipes never inherited by workers.
 type Launch struct {
-	Args    []string
-	Env     []string
-	Dir     string
-	Stdin   *os.File `json:"-"`
-	Stdout  *os.File `json:"-"`
-	Stderr  *os.File `json:"-"`
-	Streams [3]uintptr
+	Args          []string
+	Env           []string
+	Dir           string
+	CreationFlags uint32
+	HideWindow    bool
+	Stdin         *os.File `json:"-"`
+	Stdout        *os.File `json:"-"`
+	Stderr        *os.File `json:"-"`
+	Streams       [3]uintptr
 }
 
 type supervisorConfig struct {
@@ -266,8 +268,9 @@ func runWorker(launch Launch) {
 		sendEvent(supervisionEvent{Kind: "root", Exit: -1}, exec.ErrNotFound)
 		return
 	}
-	command := Hide(exec.Command(launch.Args[0], launch.Args[1:]...))
+	command := exec.Command(launch.Args[0], launch.Args[1:]...)
 	command.Env, command.Dir = launch.Env, launch.Dir
+	configureWorkerLaunch(command, launch)
 	files := streamFiles(launch.Streams)
 	command.Stdin, command.Stdout, command.Stderr = files[0], files[1], files[2]
 	Hide(command)

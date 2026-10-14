@@ -12,11 +12,29 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/testutil"
 )
 
+func init() {
+	supervisorPrefix = []string{"-test.run=^TestReviewSupervisorHelper$", "--", "supervisor"}
+}
+
+func TestReviewSupervisorHelper(t *testing.T) {
+	for i, arg := range os.Args {
+		if arg == "supervisor" {
+			os.Exit(proc.SupervisorMain(os.Args[i+1:]))
+		}
+	}
+}
+
 func TestChecksCommandHelper(t *testing.T) {
+	for i, arg := range os.Args {
+		if arg == "supervisor" {
+			os.Exit(proc.SupervisorMain(os.Args[i+1:]))
+		}
+	}
 	mode := os.Getenv("PURSER_CHECK_HELPER")
 	if mode == "" {
 		return
@@ -55,6 +73,21 @@ func TestChecksCommandHelper(t *testing.T) {
 		for {
 			time.Sleep(time.Minute)
 		}
+	case "spawn-grandchild-exit":
+		child := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestChecksCommandHelper$"))
+		child.Env = append(os.Environ(), "PURSER_CHECK_HELPER=hold-stdout")
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(8)
+		}
+		if err := os.WriteFile(os.Getenv("PURSER_CHECK_PID_FILE"), []byte(fmt.Sprint(child.Process.Pid)), 0600); err != nil {
+			os.Exit(8)
+		}
+		os.Exit(0)
+	case "hold-stdout":
+		for {
+			time.Sleep(time.Minute)
+		}
 	case "write-after-delay":
 		time.Sleep(1500 * time.Millisecond)
 		if err := os.WriteFile(os.Getenv("PURSER_CHECK_WRITE_FILE"), []byte("alive"), 0600); err != nil {
@@ -63,6 +96,23 @@ func TestChecksCommandHelper(t *testing.T) {
 		os.Exit(0)
 	default:
 		os.Exit(9)
+	}
+}
+
+func TestChecksTreeCompletionWithInheritedOutput(t *testing.T) {
+	pidFile := filepath.Join(reviewScratchDir(t), "grandchild.pid")
+	t.Setenv("PURSER_CHECK_PID_FILE", pidFile)
+	got := runCheckHelper(t, "spawn-grandchild-exit", 8*time.Second, "")
+	if got.Status != "PASS" {
+		t.Fatalf("check result %#v", got)
+	}
+	pid := waitCheckPID(t, pidFile)
+	deadline := time.Now().Add(5 * time.Second)
+	for processExists(pid) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if processExists(pid) {
+		t.Fatalf("completed check descendant %s remains", pid)
 	}
 }
 
@@ -329,11 +379,28 @@ func runCheckHelper(t *testing.T, mode string, timeout time.Duration, pidFile st
 	if pidFile != "" {
 		t.Setenv("PURSER_CHECK_PID_FILE", pidFile)
 	}
-	got := RunChecks(t.TempDir(), []profile.Check{{Name: mode, Argv: checkHelperArgv(), TimeoutSeconds: int(timeout.Seconds())}}, context.Background())
+	got := RunChecks(reviewScratchDir(t), []profile.Check{{Name: mode, Argv: checkHelperArgv(), TimeoutSeconds: int(timeout.Seconds())}}, context.Background())
 	if len(got) != 1 {
 		t.Fatalf("got %d results", len(got))
 	}
 	return got[0]
+}
+
+func reviewScratchDir(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", ".tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(root, "review-supervision-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 func checkHelperArgv() []string {

@@ -10,12 +10,26 @@ import (
 	"purser-hook/internal/testutil"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"purser-hook/internal/jobs"
+	"purser-hook/internal/proc"
 )
+
+func init() {
+	supervisorPrefix = []string{"-test.run=^TestSynchronousSupervisorHelper$", "--", "supervisor"}
+}
+
+func TestSynchronousSupervisorHelper(t *testing.T) {
+	for i, arg := range os.Args {
+		if arg == "supervisor" {
+			os.Exit(proc.SupervisorMain(os.Args[i+1:]))
+		}
+	}
+}
 
 func TestSynchronousToolsReplayGolden(t *testing.T) {
 	_, source, _, _ := runtime.Caller(0)
@@ -260,20 +274,58 @@ func TestSynchronousFakeCodexProcess(t *testing.T) {
 	if os.Getenv("PURSER_SYNC_FAKE_CODEX") != "1" {
 		return
 	}
-	if marker := os.Getenv("PURSER_SYNC_ORACLE_STARTED"); marker != "" {
+	mode := os.Getenv("PURSER_SYNC_ORACLE_MODE")
+	if marker := os.Getenv("PURSER_SYNC_ORACLE_STARTED"); marker != "" && mode != "cancel-with-grandchild" {
 		if err := os.WriteFile(marker, []byte("started"), 0600); err != nil {
 			os.Exit(2)
 		}
 	}
-	mode := os.Getenv("PURSER_SYNC_ORACLE_MODE")
 	thread := os.Getenv("PURSER_SYNC_ORACLE_THREAD")
 	if mode == "cancel" {
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
+	if mode == "hold" {
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
+	if mode == "write-after-delay" {
+		time.Sleep(1500 * time.Millisecond)
+		if err := os.WriteFile(os.Getenv("PURSER_SYNC_ORACLE_CHILD_MARKER"), []byte("survived"), 0600); err != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
 	write := func(value map[string]any) {
 		data, _ := json.Marshal(value)
 		_, _ = os.Stdout.Write(append(data, '\n'))
+	}
+	if mode == "grandchild" || mode == "cancel-with-grandchild" {
+		child := testutil.Hide(exec.Command(os.Args[0], "-test.run=^TestSynchronousFakeCodexProcess$"))
+		child.Env = syncEnv("PURSER_SYNC_ORACLE_MODE", "hold")
+		if mode == "cancel-with-grandchild" {
+			child.Env = syncEnvFrom(child.Env, "PURSER_SYNC_ORACLE_MODE", "write-after-delay")
+			child.Env = syncEnvFrom(child.Env, "PURSER_SYNC_ORACLE_CHILD_MARKER", os.Getenv("PURSER_SYNC_ORACLE_CHILD_MARKER"))
+		}
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		if pidFile := os.Getenv("PURSER_SYNC_ORACLE_CHILD_PID"); pidFile != "" {
+			if err := os.WriteFile(pidFile, []byte(strconv.Itoa(child.Process.Pid)), 0600); err != nil {
+				os.Exit(2)
+			}
+		}
+		if marker := os.Getenv("PURSER_SYNC_ORACLE_STARTED"); marker != "" {
+			if err := os.WriteFile(marker, []byte("started"), 0600); err != nil {
+				os.Exit(2)
+			}
+		}
+		if mode == "cancel-with-grandchild" {
+			for {
+				time.Sleep(time.Minute)
+			}
+		}
 	}
 	write(map[string]any{"type": "thread.started", "thread_id": thread})
 	if mode == "failure" {
@@ -294,6 +346,105 @@ func TestSynchronousFakeCodexProcess(t *testing.T) {
 	}
 	write(map[string]any{"type": "turn.completed", "usage": map[string]any{"input_tokens": 3, "output_tokens": 2}})
 	os.Exit(0)
+}
+
+func syncEnv(name, value string) []string { return syncEnvFrom(os.Environ(), name, value) }
+
+func syncEnvFrom(environment []string, name, value string) []string {
+	result := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || !strings.EqualFold(key, name) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, name+"="+value)
+}
+
+func TestSynchronousCompletionSweepsGrandchildHoldingOutput(t *testing.T) {
+	isolateSynchronousEnvironment(t)
+	args := synchronousDirectArgs(t)
+	t.Setenv("PURSER_SYNC_ORACLE_MODE", "grandchild")
+	got, err := runSynchronousContext(context.Background(), args, "codex")
+	if err != nil || got == nil || got["isError"] == true {
+		t.Fatalf("synchronous result = %#v, %v", got, err)
+	}
+}
+
+func TestSynchronousCancelSweepsBeforeRetry(t *testing.T) {
+	isolateSynchronousEnvironment(t)
+	args := synchronousDirectArgs(t)
+	scratch := synchronousScratchDir(t)
+	started := filepath.Join(scratch, "grandchild-started")
+	marker := filepath.Join(scratch, "grandchild-survived")
+	t.Setenv("PURSER_SYNC_ORACLE_MODE", "cancel-with-grandchild")
+	t.Setenv("PURSER_SYNC_ORACLE_STARTED", started)
+	t.Setenv("PURSER_SYNC_ORACLE_CHILD_MARKER", marker)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { _, err := runSynchronousContext(ctx, args, "codex"); result <- err }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(started); err != nil {
+		cancel()
+		t.Fatal("grandchild did not start")
+	}
+	cancel()
+	if err := <-result; !errors.Is(err, errSynchronousCancelled) {
+		t.Fatalf("cancel result = %v", err)
+	}
+	time.Sleep(1600 * time.Millisecond)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("cancelled attempt descendant survived before retry: %v", err)
+	}
+	t.Setenv("PURSER_SYNC_ORACLE_MODE", "success")
+	t.Setenv("PURSER_SYNC_ORACLE_STARTED", "")
+	if got, err := runSynchronousContext(context.Background(), args, "codex"); err != nil || got == nil || got["isError"] == true {
+		t.Fatalf("retry result = %#v, %v", got, err)
+	}
+}
+
+func synchronousDirectArgs(t *testing.T) map[string]any {
+	t.Helper()
+	scratch := synchronousScratchDir(t)
+	state := filepath.Join(scratch, "state")
+	cwd := filepath.Join(scratch, "cwd")
+	if err := os.MkdirAll(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("PURSER_SYNC_ORACLE_THREAD", "thread-supervision")
+	prefix, err := synchronousFakeCodexPrefix()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_CODEX_BIN", string(prefix))
+	return map[string]any{"prompt": "supervision test", "cwd": cwd}
+}
+
+func synchronousScratchDir(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", ".tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(root, "sync-supervision-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 func isolateSynchronousEnvironment(t *testing.T) {

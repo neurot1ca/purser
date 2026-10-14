@@ -1,12 +1,11 @@
 package review
 
-import "purser-hook/internal/proc"
-
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -240,16 +239,12 @@ func invoke(command []string, cwd string, timeout time.Duration) ([]byte, string
 	started, remaining, retried := time.Now(), timeout, false
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), remaining)
-		cmd := proc.Hide(exec.CommandContext(ctx, command[0], command[1:]...))
-		cmd.Dir = cwd
-		cmd.Env = os.Environ()
-		cmd.Stdin = os.Stdin
-		configureLaunch(cmd)
-		stdout, err := cmd.Output()
+		var stdout bytes.Buffer
+		_, err := runSupervised(ctx, command, cwd, os.Environ(), os.Stdin, &stdout, io.Discard)
 		elapsed, deadline := time.Since(started), errors.Is(ctx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err == nil {
-			return stdout, ""
+			return stdout.Bytes(), ""
 		}
 		if deadline {
 			return nil, "REVIEWER_TIMEOUT"
@@ -257,8 +252,8 @@ func invoke(command []string, cwd string, timeout time.Duration) ([]byte, string
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) {
 			return nil, "REVIEWER_EXECUTABLE_MISSING"
 		}
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
+		var exit interface{ ExitCode() int }
+		if errors.Is(err, errTeardownUnconfirmed) || !errors.As(err, &exit) {
 			return nil, "REVIEWER_RESPONSE_INVALID"
 		}
 		left := timeout - elapsed

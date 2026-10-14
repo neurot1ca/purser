@@ -13,12 +13,15 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"purser-hook/internal/jobs"
 	"purser-hook/internal/proc"
 )
 
 var errSynchronousCancelled = errors.New("synchronous tool cancelled")
+
+var supervisorPrefix = []string{"supervisor"}
 
 func runSynchronous(args map[string]any, name string) (map[string]any, error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -208,25 +211,59 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 		}
 		return legacyError(nil, err.Error()), nil
 	}
-	command := proc.Hide(exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...))
+	command := exec.Command(commandArgs[0], commandArgs[1:]...)
 	command.Dir = cwd
 	if agent == "codex" {
 		command.Stdin = strings.NewReader(prompt)
 	}
-	proc.ConfigureProcessTreeKill(command)
-	stdout, err := command.StdoutPipe()
+	var input, inputWriter *os.File
+	if command.Stdin != nil {
+		input, inputWriter, err = os.Pipe()
+		if err != nil {
+			return legacyError(nil, err.Error()), nil
+		}
+	}
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return legacyError(nil, err.Error()), nil
 	}
-	stderr, err := command.StderrPipe()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return legacyError(nil, err.Error()), nil
 	}
-	if err = command.Start(); err != nil {
+	executable, err := os.Executable()
+	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
+		return legacyError(nil, err.Error()), nil
+	}
+	supervision, err := proc.StartSupervised(ctx, executable, supervisorPrefix, proc.Launch{
+		Args: command.Args, Dir: cwd, Env: command.Env, Stdin: input,
+		Stdout: stdoutWriter, Stderr: stderrWriter,
+	})
+	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
+		if input != nil {
+			_ = input.Close()
+			_ = inputWriter.Close()
+		}
 		result := legacyError(nil, err.Error())
 		result["typedEvidence"] = jobs.LaunchFailureEvidence(agent, nil, "", false, false, false, nil)
 		return result, nil
 	}
+	if input != nil {
+		_ = input.Close()
+		go func() { _, _ = io.Copy(inputWriter, command.Stdin); _ = inputWriter.Close() }()
+	}
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
 	stream := jobs.NewEventStream(agent)
 	var tail limitedTail
 	stdoutHadOutput := false
@@ -240,21 +277,36 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 		_, readErr := io.Copy(&tail, stderr)
 		stderrDone <- readErr
 	}()
-	<-stdoutDone
-	<-stderrDone
-	waitErr := command.Wait()
+	supervised := supervision.Result()
+	if !supervised.Confirmed {
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return legacyError(optionalThread(threadID), "worker process-tree teardown was not confirmed"), nil
+	}
+	drainTimer := time.NewTimer(2 * time.Second)
+	defer drainTimer.Stop()
+	outDone, errDone := (<-chan error)(stdoutDone), (<-chan error)(stderrDone)
+	for outDone != nil || errDone != nil {
+		select {
+		case <-outDone:
+			outDone = nil
+		case <-errDone:
+			errDone = nil
+		case <-drainTimer.C:
+			_ = stdout.Close()
+			_ = stderr.Close()
+			return legacyError(optionalThread(threadID), "worker output pipes remained open after tree teardown"), nil
+		}
+	}
+	_ = stdout.Close()
+	_ = stderr.Close()
 	if ctx.Err() != nil {
 		return nil, errSynchronousCancelled
 	}
-	exitCode := 0
-	if waitErr != nil {
-		var exit *exec.ExitError
-		if errors.As(waitErr, &exit) {
-			exitCode = exit.ExitCode()
-		} else {
-			exitCode = 1
-		}
+	if !supervised.Confirmed || supervised.Err != nil {
+		return legacyError(optionalThread(threadID), fmt.Sprintf("worker execution or process-tree teardown failed: %v", supervised.Err)), nil
 	}
+	exitCode := supervised.RootExit
 	eventResult := stream.Result(false, exitCode, tail.String())
 	if agent == "agy" && name == "codex-reply" && eventResult.ThreadID != threadID {
 		eventResult.Failure = strings.TrimSpace(eventResult.Failure + "\nAntigravity did not resume the requested conversation; start a fresh call")

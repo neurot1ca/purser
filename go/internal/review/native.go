@@ -13,8 +13,6 @@ import (
 	"reflect"
 	"strings"
 	"time"
-
-	"purser-hook/internal/proc"
 )
 
 const defaultPacketBudget = 200000
@@ -517,7 +515,7 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, pro
 			return nil, "", time.Since(started), retried, "REVIEWER_TIMEOUT", 0, nil
 		}
 		ctx, cancel := context.WithTimeout(parent, remaining)
-		cmd := proc.Hide(exec.CommandContext(ctx, command[0], command[1:]...))
+		cmd := exec.Command(command[0], command[1:]...)
 		cmd.Dir = cwd
 		cmd.Env = os.Environ()
 		if adapter.Provider() == "agy" && hasFlag(command, "--input-format", "stream-json") {
@@ -544,14 +542,12 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, pro
 		if absolute, err := filepath.Abs(executablePath); err == nil {
 			executablePath = absolute
 		}
-		proc.ConfigureProcessTreeKill(cmd)
-		configureNativeLaunch(cmd, adapter.LaunchOptions())
 		var stdout, stderr boundedBuffer
 		stdout.limit = maxReviewerStdoutBytes
 		stderr.limit, stderr.tail = maxReviewerStderrBytes, true
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
-		err := cmd.Run()
+		rootExit, err := runSupervised(ctx, cmd.Args, cmd.Dir, cmd.Env, cmd.Stdin, &stdout, &stderr, adapter.LaunchOptions())
 		elapsed := time.Since(started)
 		stdoutHead, stdoutTail := stdout.diagnosticParts()
 		stderrHead, stderrTail := stderr.diagnosticParts()
@@ -576,8 +572,10 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, pro
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) {
 			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_EXECUTABLE_MISSING", 0, evidence
 		}
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
+		if errors.Is(err, errTeardownUnconfirmed) {
+			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_PROCESS_FAILED", rootExit, evidence
+		}
+		if rootExit == 0 {
 			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, ResponseInvalid, 0, evidence
 		}
 		left := timeout - elapsed
@@ -585,7 +583,7 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, pro
 			retried = 1
 			continue
 		}
-		return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_PROCESS_FAILED", exit.ExitCode(), evidence
+		return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, "REVIEWER_PROCESS_FAILED", rootExit, evidence
 	}
 }
 

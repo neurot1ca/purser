@@ -24,10 +24,12 @@ func TestNativeLaunchOptionsPreserveTreeCancel(t *testing.T) {
 		t.Run(tc.provider, func(t *testing.T) {
 			adapter := reviewerAdapter{provider: tc.provider}
 			command := testutil.Hide(exec.Command("reviewer"))
-			proc.ConfigureProcessTreeKill(command)
+			command.SysProcAttr.CreationFlags |= 0x400
 			configureNativeLaunch(command, adapter.LaunchOptions())
-			if command.SysProcAttr == nil || command.SysProcAttr.CreationFlags != tc.flags || !command.SysProcAttr.HideWindow {
-				t.Fatalf("launch options = %#v, want flags %#x hidden", command.SysProcAttr, tc.flags)
+			proc.ConfigureProcessTreeKill(command)
+			wantFlags := uint32(0x610)
+			if command.SysProcAttr == nil || command.SysProcAttr.CreationFlags != wantFlags || !command.SysProcAttr.HideWindow {
+				t.Fatalf("launch options = %#v, want merged hidden flags %#x (provider flags %#x)", command.SysProcAttr, wantFlags, tc.flags)
 			}
 			if command.Cancel == nil {
 				t.Fatal("process-tree cancellation was not preserved")

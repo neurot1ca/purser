@@ -15,13 +15,13 @@ import (
 func TestChecksHideWindowsConsole(t *testing.T) {
 	status := testutil.Hide(exec.Command("git"))
 	proc.ConfigureNoWindow(status)
-	if status.SysProcAttr == nil || status.SysProcAttr.CreationFlags&0x08000000 == 0 || !status.SysProcAttr.HideWindow {
-		t.Fatalf("git status process attributes = %#v, want CREATE_NO_WINDOW and hidden window", status.SysProcAttr)
+	if status.SysProcAttr == nil || status.SysProcAttr.CreationFlags&0x10 == 0 || status.SysProcAttr.CreationFlags&0x08000000 != 0 || !status.SysProcAttr.HideWindow {
+		t.Fatalf("git status process attributes = %#v, want CREATE_NEW_CONSOLE and hidden window", status.SysProcAttr)
 	}
 
 	check := testutil.Hide(exec.Command("check"))
 	proc.ConfigureProcessTreeKill(check)
-	if check.SysProcAttr == nil || check.SysProcAttr.CreationFlags&0x08000000 == 0 || check.SysProcAttr.CreationFlags&syscall.CREATE_NEW_PROCESS_GROUP == 0 || !check.SysProcAttr.HideWindow {
-		t.Fatalf("check process attributes = %#v, want CREATE_NO_WINDOW, CREATE_NEW_PROCESS_GROUP, and hidden window", check.SysProcAttr)
+	if check.SysProcAttr == nil || check.SysProcAttr.CreationFlags&0x10 == 0 || check.SysProcAttr.CreationFlags&0x08000000 != 0 || check.SysProcAttr.CreationFlags&syscall.CREATE_NEW_PROCESS_GROUP == 0 || !check.SysProcAttr.HideWindow {
+		t.Fatalf("check process attributes = %#v, want CREATE_NEW_CONSOLE, CREATE_NEW_PROCESS_GROUP, and hidden window", check.SysProcAttr)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -97,7 +98,7 @@ func runCheck(repoRoot string, check profile.Check, deadline context.Context) Ch
 	}
 	ctx, cancel := context.WithTimeout(deadline, time.Duration(check.TimeoutSeconds)*time.Second)
 	defer cancel()
-	cmd := proc.Hide(exec.CommandContext(ctx, executable, check.Argv[1:]...))
+	cmd := exec.Command(executable, check.Argv[1:]...)
 	cmd.Dir = repoRoot
 	for _, value := range cmd.Environ() {
 		if !strings.HasPrefix(value, "CI=") {
@@ -105,19 +106,18 @@ func runCheck(repoRoot string, check profile.Check, deadline context.Context) Ch
 		}
 	}
 	cmd.Env = append(cmd.Env, "CI=1")
-	proc.ConfigureProcessTreeKill(cmd)
 	var output bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &output, &output
-	err = cmd.Run()
+	rootExit, err := runSupervised(ctx, cmd.Args, cmd.Dir, cmd.Environ(), nil, &output, &output)
 	result.DurationMS = int(time.Since(started).Milliseconds())
+	code := rootExit
 	switch {
 	case ctx.Err() != nil:
 		result.Status, result.Tail = "UNKNOWN", tail(output.String()+"\ntimed out")
-	case err == nil:
-		code := 0
+	case errors.Is(err, errTeardownUnconfirmed):
+		result.Status, result.Tail = "UNKNOWN", tail(output.String()+"\nprocess-tree teardown unconfirmed")
+	case rootExit == 0 && err == nil:
 		result.Status, result.ExitCode = "PASS", &code
-	case cmd.ProcessState != nil:
-		code := cmd.ProcessState.ExitCode()
+	case rootExit >= 0:
 		result.Status, result.ExitCode, result.Tail = "FAIL", &code, tail(output.String())
 	default:
 		result.Status, result.Tail = "UNKNOWN", tail("launch error: "+err.Error())
