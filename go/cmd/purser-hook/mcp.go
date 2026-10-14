@@ -204,7 +204,8 @@ func (s *mcpServer) runCall(ctx context.Context, key string, id json.RawMessage,
 				}
 				args["cwd"] = s.remote.repo
 			}
-			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__plugin_purser_codex-main__" + tool, "tool_input": args, "session_id": s.remote.session, "cwd": s.remote.repo}
+			toolUseID := fmt.Sprintf("toolu_remote_%d", time.Now().UnixNano())
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__plugin_purser_codex-main__" + tool, "tool_input": args, "tool_use_id": toolUseID, "session_id": s.remote.session, "cwd": s.remote.repo}
 			pre, _ := enforce.Pre(event, stateRoot())
 			if denied, reason := remoteDeny(pre); denied {
 				result = legacyError(nil, reason)
@@ -247,7 +248,7 @@ func (s *mcpServer) runCall(ctx context.Context, key string, id json.RawMessage,
 					}
 				}
 			}
-			postEvent := map[string]any{"hook_event_name": "PostToolUse", "tool_name": event["tool_name"], "tool_input": args, "tool_response": result, "session_id": s.remote.session, "cwd": s.remote.repo}
+			postEvent := map[string]any{"hook_event_name": "PostToolUse", "tool_name": event["tool_name"], "tool_input": args, "tool_response": result, "tool_use_id": toolUseID, "session_id": s.remote.session, "cwd": s.remote.repo}
 			post, failure := enforce.PostToolUse(postEvent, stateRoot())
 			if post == nil {
 				post, failure = enforce.PostInternalError(postEvent, stateRoot())
