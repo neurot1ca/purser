@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.154 — 2026-10-15
+
+- **New:** remote `host_read` serves the host user's `CLAUDE.md` as `user/CLAUDE.md`, so cloud sessions follow the same reply and working rules.
+
 ## 0.1.153 — 2026-10-15
 
 - **New:** remote `host_read` serves `memory/<file>` from the host's Claude Code memory for the repository, so cloud sessions share the local session's memory.
