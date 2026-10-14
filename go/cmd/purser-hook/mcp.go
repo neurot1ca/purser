@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/jobs"
 	"purser-hook/internal/models"
 	"purser-hook/internal/waiter"
@@ -27,6 +28,7 @@ type mcpServer struct {
 	mu      sync.Mutex
 	callsMu sync.Mutex
 	calls   map[string]*mcpCall
+	remote  *remoteConfig
 }
 
 type mcpCall struct {
@@ -178,9 +180,82 @@ func (s *mcpServer) runCall(ctx context.Context, key string, id json.RawMessage,
 			tool = pythonMCPValue(name)
 		}
 		switch tool {
-		case "codex", "codex-reply", "codex_start", "codex_result", "codex_cancel", "codex_apply":
+		case "codex", "codex-reply", "codex_start", "codex_result", "codex_cancel", "codex_apply", "host_diff", "host_read":
 		default:
 			result = legacyError(nil, "unknown tool: "+tool)
+			return
+		}
+		if s.remote != nil {
+			if !remoteToolAllowed(tool) {
+				result = legacyError(nil, "tool is not available remotely: "+tool)
+				return
+			}
+			if tool == "codex_apply" && args["acceptOnly"] != true {
+				if messageErr := remoteCommitMessageError(args); messageErr != "" {
+					result = legacyError(nil, messageErr)
+					return
+				}
+			}
+			if tool == "codex_start" {
+				cwd, _ := args["cwd"].(string)
+				if cwd != "" && !sameRemotePath(cwd, s.remote.repo) {
+					result = legacyError(nil, "cwd must match pinned repository")
+					return
+				}
+				args["cwd"] = s.remote.repo
+			}
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__plugin_purser_codex-main__" + tool, "tool_input": args, "session_id": s.remote.session, "cwd": s.remote.repo}
+			pre, _ := enforce.Pre(event, stateRoot())
+			if denied, reason := remoteDeny(pre); denied {
+				result = legacyError(nil, reason)
+				return
+			}
+			if updated := remoteUpdatedInput(pre); updated != nil {
+				args = updated
+			}
+			if tool == "host_diff" {
+				result = remoteHostDiff(s.remote, args)
+			} else if tool == "host_read" {
+				result = remoteHostRead(s.remote, args)
+			} else {
+				var value map[string]any
+				var err error
+				if tool == "codex_result" {
+					type outcome struct {
+						value map[string]any
+						err   error
+					}
+					done := make(chan outcome, 1)
+					go func() { value, err := dispatchOperation(ctx, tool, args, stateRoot()); done <- outcome{value, err} }()
+					select {
+					case finished := <-done:
+						value, err = finished.value, finished.err
+					case <-time.After(30 * time.Second):
+						err = context.DeadlineExceeded
+					}
+				} else {
+					value, err = dispatchOperation(ctx, tool, args, stateRoot())
+				}
+				if err != nil {
+					result = legacyError(nil, err.Error())
+				} else {
+					result = value
+				}
+				if tool == "codex_apply" && result["isError"] != true {
+					if failure := remoteCommitApplied(s.remote.repo, args, result); failure != "" {
+						result = legacyError(nil, failure)
+					}
+				}
+			}
+			postEvent := map[string]any{"hook_event_name": "PostToolUse", "tool_name": event["tool_name"], "tool_input": args, "tool_response": result, "session_id": s.remote.session, "cwd": s.remote.repo}
+			post, failure := enforce.PostToolUse(postEvent, stateRoot())
+			if post == nil {
+				post, failure = enforce.PostInternalError(postEvent, stateRoot())
+			}
+			_ = failure
+			if context := remotePostText(post); context != "" && result != nil {
+				result["content"] = append(remoteContent(result), map[string]any{"type": "text", "text": context})
+			}
 			return
 		}
 		value, err := dispatchOperation(ctx, tool, args, stateRoot())
