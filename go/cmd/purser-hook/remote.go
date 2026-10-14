@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,21 +15,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"purser-hook/internal/jobs"
 	"purser-hook/internal/proc"
 )
 
-const remoteSchemas = `[{"name":"codex_start","description":"Start a durable Codex job.","inputSchema":{"type":"object","properties":{"prompt":{"type":"string"},"label":{"type":"string"},"model":{"type":"string"},"cwd":{"type":"string"},"config":{"type":"object"},"developer-instructions":{"type":"string"},"base-instructions":{"type":"string"},"compact-prompt":{"type":"string"},"sandbox":{"type":"string"},"approval-policy":{"type":"string"},"worktree":{"type":"boolean"},"timeoutSeconds":{"type":"number"}},"required":["prompt"]}},{"name":"codex_result","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"}},"required":["jobId"]}},{"name":"codex_cancel","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"reason":{"type":"string"}},"required":["jobId"]}},{"name":"codex_apply","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"commitMessage":{"type":"string","description":"Required for the plain apply step."},"acceptOnly":{"type":"boolean"},"revision":{"type":"string"},"reviewer1Valid":{"type":"integer","minimum":0},"reviewer1False":{"type":"integer","minimum":0},"resolved":{"type":"boolean"}},"required":["jobId"]}},{"name":"host_diff","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"}},"required":["jobId"]}},{"name":"host_read","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]`
+const remoteSchemas = `[{"name":"codex_start","description":"Start a durable Codex job.","inputSchema":{"type":"object","properties":{"prompt":{"type":"string"},"label":{"type":"string"},"model":{"type":"string"},"cwd":{"type":"string"},"config":{"type":"object"},"developer-instructions":{"type":"string"},"base-instructions":{"type":"string"},"compact-prompt":{"type":"string"},"sandbox":{"type":"string"},"approval-policy":{"type":"string"},"worktree":{"type":"boolean"},"timeoutSeconds":{"type":"number"}},"required":["prompt"]}},{"name":"codex_result","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"}},"required":["jobId"]}},{"name":"codex_cancel","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"reason":{"type":"string"}},"required":["jobId"]}},{"name":"codex_apply","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"},"commitMessage":{"type":"string","description":"Required for the plain apply step."},"acceptOnly":{"type":"boolean"},"revision":{"type":"string"},"reviewer1Valid":{"type":"integer","minimum":0},"reviewer1False":{"type":"integer","minimum":0},"resolved":{"type":"boolean"}},"required":["jobId"]}},{"name":"host_diff","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"}},"required":["jobId"]}},{"name":"host_read","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},{"name":"host_validation","inputSchema":{"type":"object","properties":{"jobId":{"type":"string"}},"required":["jobId"]}},{"name":"host_write","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"baseSha256":{"type":"string"}},"required":["path","content","baseSha256"]}},{"name":"host_release","inputSchema":{"type":"object","properties":{},"required":[]}}]`
 
 type remoteConfig struct{ repo, session string }
 
 func remoteToolAllowed(name string) bool {
 	switch name {
-	case "codex_start", "codex_result", "codex_cancel", "codex_apply", "host_diff", "host_read":
+	case "codex_start", "codex_result", "codex_cancel", "codex_apply", "host_diff", "host_read", "host_validation", "host_write", "host_release":
 		return true
 	}
 	return false
@@ -197,7 +201,191 @@ func remoteHostRead(c *remoteConfig, args map[string]any) map[string]any {
 	if len(b) > 400<<10 {
 		return legacyError(nil, "file exceeds 400 KB")
 	}
-	return map[string]any{"content": []any{map[string]any{"type": "text", "text": string(b)}}}
+	hash := sha256.Sum256(b)
+	return map[string]any{"content": []any{map[string]any{"type": "text", "text": string(b) + "\nsha256: " + hex.EncodeToString(hash[:])}}, "structuredContent": map[string]any{"sha256": hex.EncodeToString(hash[:])}}
+}
+
+var remoteJobID = regexp.MustCompile(`^[0-9a-f]{16,128}$`)
+
+func remoteHostValidation(c *remoteConfig, args map[string]any) map[string]any {
+	id, _ := args["jobId"].(string)
+	if !remoteJobID.MatchString(id) {
+		return legacyError(nil, "invalid jobId")
+	}
+	return remoteValidationAt(stateRoot(), c.repo, id)
+}
+
+func remoteValidationAt(root, repo, id string) map[string]any {
+	if !remoteJobID.MatchString(id) {
+		return legacyError(nil, "invalid jobId")
+	}
+	abs, err := filepath.Abs(repo)
+	if err != nil {
+		return legacyError(nil, err.Error())
+	}
+	key := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(abs))))
+	path := filepath.Join(root, "apply_validation", hex.EncodeToString(key[:]), id+".json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return legacyError(nil, err.Error())
+	}
+	if len(b) > 400<<10 {
+		return legacyError(nil, "validation record exceeds 400 KB")
+	}
+	var record map[string]any
+	if err = json.Unmarshal(b, &record); err != nil {
+		return legacyError(nil, err.Error())
+	}
+	text := string(b)
+	if status := record["status"]; status != "passed" && status != "running" && status != "pending" {
+		log, readErr := os.ReadFile(strings.TrimSuffix(path, ".json") + ".log")
+		if readErr == nil {
+			lines := strings.Split(strings.TrimRight(string(log), "\r\n"), "\n")
+			if len(lines) > 200 {
+				lines = lines[len(lines)-200:]
+			}
+			extra := "\n\n--- validation log (last 200 lines) ---\n" + strings.Join(lines, "\n")
+			if len(text)+len(extra) > 400<<10 {
+				extra = extra[:max(0, (400<<10)-len(text))]
+			}
+			text += extra
+		}
+	}
+	return map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "structuredContent": record}
+}
+
+func remoteHostWrite(c *remoteConfig, args map[string]any) map[string]any {
+	p, ok := args["path"].(string)
+	content, contentOK := args["content"].(string)
+	base, baseOK := args["baseSha256"].(string)
+	if !ok || p != "NEXT.md" || !contentOK || !baseOK {
+		return legacyError(nil, "only NEXT.md may be written")
+	}
+	if len(content) > 400<<10 {
+		return legacyError(nil, "file exceeds 400 KB")
+	}
+	path := filepath.Join(c.repo, "NEXT.md")
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return legacyError(nil, err.Error())
+	}
+	hash := sha256.Sum256(current)
+	if base != hex.EncodeToString(hash[:]) {
+		return legacyError(nil, "NEXT.md changed; read it again")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return legacyError(nil, err.Error())
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".NEXT.md-*")
+	if err != nil {
+		return legacyError(nil, err.Error())
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(info.Mode().Perm()); err == nil {
+		_, err = tmp.WriteString(content)
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return legacyError(nil, err.Error())
+	}
+	latest, err := os.ReadFile(path)
+	if err != nil {
+		return legacyError(nil, err.Error())
+	}
+	latestHash := sha256.Sum256(latest)
+	if hex.EncodeToString(latestHash[:]) != base {
+		return legacyError(nil, "NEXT.md changed; read it again")
+	}
+	for attempt := 0; ; attempt++ {
+		err = os.Rename(tmpName, path)
+		if err == nil || runtime.GOOS != "windows" || attempt == 4 {
+			break
+		}
+		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+	}
+	if err != nil {
+		return legacyError(nil, err.Error())
+	}
+	return map[string]any{"content": []any{map[string]any{"type": "text", "text": "NEXT.md updated"}}}
+}
+
+var remoteReleaseMu sync.Mutex
+var remoteReleaseRunner = func(dir, name string, args []string, timeout time.Duration) (string, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := proc.Hide(exec.CommandContext(ctx, name, args...))
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	exitCode := 0
+	if err != nil {
+		exitCode = -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+	}
+	return string(out), exitCode, err
+}
+
+func remoteHostRelease(c *remoteConfig, _ map[string]any) map[string]any {
+	if !remoteReleaseMu.TryLock() {
+		return legacyError(nil, "a host release is already running")
+	}
+	defer remoteReleaseMu.Unlock()
+	runGit := func(name string, args ...string) (string, error) {
+		out, _, err := remoteReleaseRunner(c.repo, name, args, 30*time.Second)
+		return strings.TrimSpace(out), err
+	}
+	refuse := func(reason string) map[string]any { return legacyError(nil, reason) }
+	releasePath := strings.TrimSpace(os.Getenv("PURSER_REMOTE_RELEASE"))
+	if releasePath == "" || !filepath.IsAbs(releasePath) {
+		return refuse("no release command configured on the host (PURSER_REMOTE_RELEASE)")
+	}
+	info, err := os.Stat(releasePath)
+	if err != nil || info.IsDir() {
+		return refuse("no release command configured on the host (PURSER_REMOTE_RELEASE)")
+	}
+	if out, err := runGit("git", "status", "--porcelain"); err != nil {
+		return refuse("git status failed: " + out)
+	} else if out != "" {
+		return refuse("working tree is dirty")
+	}
+	if out, err := runGit("git", "branch", "--show-current"); err != nil {
+		return refuse("branch check failed: " + out)
+	} else if out != "main" {
+		return refuse("branch must be main; current branch is " + out)
+	}
+	name, args := releasePath, []string{}
+	switch strings.ToLower(filepath.Ext(releasePath)) {
+	case ".ps1":
+		name = "pwsh"
+		if _, err = exec.LookPath(name); err != nil {
+			name = "powershell.exe"
+			if _, err = exec.LookPath(name); err != nil {
+				return refuse("release command unavailable: pwsh or powershell.exe")
+			}
+		}
+		args = []string{"-NoProfile", "-NonInteractive", "-File", releasePath}
+	case ".sh":
+		name, args = "/bin/sh", []string{releasePath}
+	}
+	out, exitCode, runErr := remoteReleaseRunner(c.repo, name, args, 15*time.Minute)
+	if len(out) > 8<<10 {
+		out = out[len(out)-(8<<10):]
+	}
+	result := map[string]any{"exitCode": exitCode, "output": out}
+	response := map[string]any{"content": []any{map[string]any{"type": "text", "text": fmt.Sprintf("exit code: %d\n%s", exitCode, out)}}, "structuredContent": result}
+	if runErr != nil || exitCode != 0 {
+		response["isError"] = true
+	}
+	return response
 }
 func remoteHostDiff(c *remoteConfig, args map[string]any) map[string]any {
 	id, _ := args["jobId"].(string)
