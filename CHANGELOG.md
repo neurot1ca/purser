@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.155 — 2026-10-15
+
+- **Fixed:** applying a plan milestone job (original, repair or review send-back) no longer leaves its milestone listed as ready; the milestone completes automatically once its host validation passes, and an apply whose plan bookkeeping fails still succeeds and returns a visible `plan_warning`.
+- **Fixed:** a live linked job (including a codex-reply send-back) blocks readiness of its plan milestone; applied and superseded jobs do not.
+- **Changed:** the jobs test suite no longer inherits the host validation recursion marker and runs with small fixtures, so host validation of ./internal/jobs finishes inside its timeout (production limits and the validation timeout are unchanged).
+
 ## 0.1.154 — 2026-10-15
 
 - **New:** remote `host_read` serves the host user's `CLAUDE.md` as `user/CLAUDE.md`, so cloud sessions follow the same reply and working rules.
