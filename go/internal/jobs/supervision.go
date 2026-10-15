@@ -217,7 +217,13 @@ func (s *supervisedCommand) wait() (proc.SupervisionResult, error) {
 		case err := <-s.copies:
 			r.Err = errors.Join(r.Err, err)
 		case <-timer.C:
-			return r, errors.Join(r.Err, errors.New("supervised output drain unconfirmed"))
+			// The worker's exit and tree sweep are already confirmed. A
+			// descendant that escaped the streams' lifetime must not hold
+			// command completion open after the worker itself has exited.
+			for _, file := range s.readers {
+				_ = file.Close()
+			}
+			i = s.count
 		}
 	}
 	if !r.Confirmed {

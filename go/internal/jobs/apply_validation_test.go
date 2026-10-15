@@ -310,6 +310,63 @@ func TestValidationTimeout(t *testing.T) {
 	runValidationFixture(t, "timeout", context.DeadlineExceeded)
 }
 
+func TestValidationCommandHelper(t *testing.T) {
+	switch os.Getenv("PURSER_VALIDATION_COMMAND_HELPER") {
+	case "worker":
+		_, _ = io.WriteString(os.Stdout, "worker output before exit\n")
+		child := exec.Command(os.Args[0], "-test.run=^TestValidationCommandHelper$")
+		child.Env = replaceValidationEnv(os.Environ(), "PURSER_VALIDATION_COMMAND_HELPER", "grandchild")
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+	case "grandchild":
+		time.Sleep(30 * time.Second)
+	case "timeout":
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func TestValidationCommandExitedWhileGrandchildKeepsPipeOpen(t *testing.T) {
+	log, err := os.CreateTemp(t.TempDir(), "validation.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	env := replaceValidationEnv(os.Environ(), "PURSER_VALIDATION_COMMAND_HELPER", "worker")
+	started := time.Now()
+	err = runValidationCommand(t.TempDir(), env, []string{os.Args[0], "-test.run=^TestValidationCommandHelper$"}, 10*time.Second, log, nil)
+	if err != nil {
+		t.Fatalf("runValidationCommand: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("command completion took %s", elapsed)
+	}
+	if _, err := log.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(output), "worker output before exit") {
+		t.Fatalf("output before worker exit was not captured: %q", output)
+	}
+}
+
+func TestValidationCommandDeadlineWhileProcessRunning(t *testing.T) {
+	log, err := os.CreateTemp(t.TempDir(), "validation.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	env := replaceValidationEnv(os.Environ(), "PURSER_VALIDATION_COMMAND_HELPER", "timeout")
+	err = runValidationCommand(t.TempDir(), env, []string{os.Args[0], "-test.run=^TestValidationCommandHelper$"}, 100*time.Millisecond, log, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runValidationCommand error = %v, want deadline exceeded", err)
+	}
+}
+
 func TestValidationStaleRevision(t *testing.T) {
 	root, repo, record := validationFixture(t, []string{"main.go"})
 	key := validationRepositoryKey(repo)
