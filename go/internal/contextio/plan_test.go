@@ -51,6 +51,30 @@ func TestParsePlanMilestonesBulletInlineDeclarations(t *testing.T) {
 	}
 }
 
+func TestParsePlanMilestonesResolvesBareListNames(t *testing.T) {
+	artifact := []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** go/internal/jobs/a.go, session_maintenance.go\n")
+	milestones, err := parsePlanMilestones(artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"go/internal/jobs/a.go", "go/internal/jobs/session_maintenance.go"}
+	if !reflect.DeepEqual(milestones[0].WritePaths, want) {
+		t.Fatalf("write paths = %v, want %v", milestones[0].WritePaths, want)
+	}
+}
+
+func TestParsePlanMilestonesExpandsBracePaths(t *testing.T) {
+	artifact := []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** `go/internal/jobs/{host,apply}.go`\n")
+	milestones, err := parsePlanMilestones(artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"go/internal/jobs/host.go", "go/internal/jobs/apply.go"}
+	if !reflect.DeepEqual(milestones[0].WritePaths, want) {
+		t.Fatalf("write paths = %v, want %v", milestones[0].WritePaths, want)
+	}
+}
+
 func TestParsePlanMilestonesLegacyAndBulletDependency(t *testing.T) {
 	legacy, err := parsePlanMilestones([]byte(readyPlanArtifact), []int{1, 2, 3})
 	if err != nil {
@@ -251,6 +275,28 @@ func TestPlanReadyEarlierPlanWriteOverlap(t *testing.T) {
 	read, err = ReadPlanForTask(root, repo, b.TaskID)
 	if err != nil || len(read.ReadyMilestones) != 2 || read.ReadyMilestones[0].ID != "M1" || read.ReadyMilestones[1].ID != "M2" {
 		t.Fatalf("completion did not release overlap: %+v %v", read, err)
+	}
+}
+
+func TestPlanReadyEarlierMetadataLessPlanBlocksOverlap(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	legacyArtifact := filepath.Join(filepath.Dir(artifact), "legacy.md")
+	legacy := "## Milestones\n### M1\n**Write paths:**\n- src/a.go\n"
+	if err := os.WriteFile(legacyArtifact, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "earlier", legacyArtifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	later, err := AcceptPlan(root, repo, "later", artifact, []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(later.ReadyMilestones) != 1 || later.ReadyMilestones[0].ID != "M2" {
+		t.Fatalf("metadata-less overlap readiness = %+v, want disjoint M2 only", later.ReadyMilestones)
 	}
 }
 

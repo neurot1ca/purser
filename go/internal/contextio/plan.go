@@ -252,6 +252,9 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 				for _, path := range paths {
 					lines = append(lines, "- `"+path[1]+"`")
 				}
+			} else if strings.TrimSpace(inline) != "" {
+				lines = append(lines, "- "+inline)
+				lines = append(lines, strings.Split(section[declaration[1]:], "\n")[1:]...)
 			} else {
 				lines = strings.Split(section[declaration[1]:], "\n")[1:]
 			}
@@ -270,15 +273,63 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 				if len(paths) == 0 {
 					paths = [][]string{{"", strings.TrimSpace(line[2:])}}
 				}
+				previousPath := ""
 				for _, path := range paths {
-					clean := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(path[1], `\`, "/")))
-					if clean == "." || filepath.IsAbs(clean) || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]") {
-						return nil, fmt.Errorf("invalid write path for %s", m.ID)
+					raw := strings.ReplaceAll(path[1], `\`, "/")
+					start, braces := 0, 0
+					for i := 0; i <= len(raw); i++ {
+						if i < len(raw) {
+							switch raw[i] {
+							case '{':
+								braces++
+							case '}':
+								braces--
+								if braces < 0 {
+									return nil, fmt.Errorf("invalid write path for %s", m.ID)
+								}
+							}
+						}
+						if i != len(raw) && (raw[i] != ',' || braces != 0) {
+							continue
+						}
+						part := strings.TrimSpace(raw[start:i])
+						start = i + 1
+						if part == "" || braces != 0 {
+							return nil, fmt.Errorf("invalid write path for %s", m.ID)
+						}
+						if !strings.Contains(part, "/") && previousPath != "" {
+							part = filepath.ToSlash(filepath.Join(filepath.Dir(previousPath), part))
+						}
+						expanded := []string{part}
+						if open := strings.IndexByte(part, '{'); open >= 0 {
+							close := strings.IndexByte(part[open+1:], '}')
+							if close < 0 || strings.ContainsAny(part[open+1+close+1:], "{}") || strings.Contains(part[:open], "}") {
+								return nil, fmt.Errorf("invalid write path for %s", m.ID)
+							}
+							close += open + 1
+							var alternatives []string
+							for _, alternative := range strings.Split(part[open+1:close], ",") {
+								if strings.TrimSpace(alternative) == "" {
+									return nil, fmt.Errorf("invalid write path for %s", m.ID)
+								}
+								alternatives = append(alternatives, part[:open]+strings.TrimSpace(alternative)+part[close+1:])
+							}
+							expanded = alternatives
+						} else if strings.ContainsAny(part, "{}") {
+							return nil, fmt.Errorf("invalid write path for %s", m.ID)
+						}
+						for _, candidate := range expanded {
+							clean := filepath.ToSlash(filepath.Clean(candidate))
+							if clean == "." || filepath.IsAbs(clean) || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]{}") {
+								return nil, fmt.Errorf("invalid write path for %s", m.ID)
+							}
+							if runtime.GOOS == "windows" {
+								clean = strings.ToLower(clean)
+							}
+							m.WritePaths = append(m.WritePaths, clean)
+							previousPath = clean
+						}
 					}
-					if runtime.GOOS == "windows" {
-						clean = strings.ToLower(clean)
-					}
-					m.WritePaths = append(m.WritePaths, clean)
 				}
 			}
 		}
@@ -1235,6 +1286,35 @@ func appliedMilestoneAwaitingValidation(state *PlanState, n int) bool {
 	return false
 }
 
+func legacyPlanWritePaths(state *PlanState) []string {
+	data, err := os.ReadFile(state.ArtifactPath)
+	if err != nil {
+		return nil
+	}
+	parsed, err := parsePlanMilestones(data, state.AcceptedMilestones)
+	if err != nil || len(parsed) == 0 {
+		heading := regexp.MustCompile(`(?m)^(#{1,6}\s+M[0-9]+\b[^\n]*(?:\n|$))`)
+		text := heading.ReplaceAllStringFunc(string(data), func(match string) string {
+			return match + "**Dependency:** none\n"
+		})
+		if text == string(data) {
+			return nil
+		}
+		parsed, err = parsePlanMilestones([]byte(text), state.AcceptedMilestones)
+	}
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, milestone := range parsed {
+		n := milestoneNumber(milestone.ID)
+		if containsMilestone(state.AcceptedMilestones, n) && !containsMilestone(state.CompletedMilestones, n) {
+			paths = append(paths, milestone.WritePaths...)
+		}
+	}
+	return paths
+}
+
 func readyMilestones(root string, state *PlanState, states []*PlanState) []ReadyMilestone {
 	if state.UserStopped || state.Gate != "" {
 		return nil
@@ -1245,6 +1325,10 @@ func readyMilestones(root string, state *PlanState, states []*PlanState) []Ready
 			break
 		}
 		if earlier.UserStopped || earlier.Gate != "" {
+			continue
+		}
+		if len(earlier.Milestones) == 0 {
+			earlierWritePaths = append(earlierWritePaths, legacyPlanWritePaths(earlier)...)
 			continue
 		}
 		for _, m := range earlier.Milestones {
