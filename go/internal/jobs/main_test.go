@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -16,6 +17,13 @@ func TestMain(m *testing.M) {
 	// detached launches disabled below, including an explicit child-guard test.
 	_ = os.Unsetenv(applyValidationChildEnv)
 	DisableApplyValidationForTests()
+	// Exercise count boundaries without production-sized filesystem fixtures
+	// and the resulting Go test-cache input replay after the tests finish.
+	maxJobRecords, maxWorktrees = 2, 2
+	// Keep repeated Git lookups from logging every miss on the host's PATH.
+	if git, err := exec.LookPath("git"); err == nil {
+		_ = os.Setenv("PATH", filepath.Dir(git)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	applyValidationExecutable = func() (string, error) { return "purser-hook", nil }
 	if os.Getenv("PURSER_HOST_FAKE_WORKER") == "1" {
 		os.Exit(m.Run())

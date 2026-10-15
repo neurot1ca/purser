@@ -22,10 +22,9 @@ import (
 	"purser-hook/internal/retention"
 )
 
-const (
-	cleanupRetention = 3 * 24 * time.Hour
-	maxWorktrees     = 128
-)
+const cleanupRetention = 3 * 24 * time.Hour
+
+var maxWorktrees = 128
 
 var maxArtifactBytes int64 = 2 * 1024 * 1024 * 1024
 

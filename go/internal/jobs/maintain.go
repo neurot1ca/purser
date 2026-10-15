@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const maxJobRecords = 256
+var maxJobRecords = 256
 
 // RecoverPending reconciles bounded, valid nonterminal job records with their hosts.
 func RecoverPending(stateRoot string, now time.Time) (int, error) {
