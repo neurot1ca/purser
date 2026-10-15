@@ -111,7 +111,9 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	}
 	var saved map[string]any
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
-		recordPlanApply(stateRoot, recordMap(job), jobID)
+		if err := recordPlanApply(stateRoot, recordMap(job), jobID); err != nil {
+			saved["plan_warning"] = err.Error()
+		}
 		enqueueAppliedValidation(stateRoot, recordMap(job), saved)
 		addReadyPlanMilestones(stateRoot, recordMap(job), saved)
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
@@ -220,7 +222,9 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	if applied {
 		values := recordMap(job)
 		supersedeEarlierTaskJobs(stateRoot, jobID, values)
-		recordPlanApply(stateRoot, values, jobID)
+		if err := recordPlanApply(stateRoot, values, jobID); err != nil {
+			value["plan_warning"] = err.Error()
+		}
 		enqueueAppliedValidation(stateRoot, values, value)
 		addReadyPlanMilestones(stateRoot, values, value)
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
@@ -259,7 +263,9 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 	if acceptedApply {
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
 	}
-	recordPlanApply(stateRoot, recordMap(job), jobID)
+	if err := recordPlanApply(stateRoot, recordMap(job), jobID); err != nil {
+		value["plan_warning"] = err.Error()
+	}
 	enqueueAppliedValidation(stateRoot, recordMap(job), value)
 	addReadyPlanMilestones(stateRoot, recordMap(job), value)
 	releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
@@ -319,15 +325,17 @@ func supersedeEarlierTaskJobs(stateRoot, appliedID string, applied map[string]an
 	}
 }
 
-func recordPlanApply(stateRoot string, job map[string]any, jobID string) {
+func recordPlanApply(stateRoot string, job map[string]any, jobID string) error {
 	repository, _ := job["repoRoot"].(string)
 	taskID, _ := job["taskId"].(string)
 	if repository == "" || taskID == "" {
-		return
+		return nil
 	}
 	if err := contextio.RecordPlanApply(stateRoot, repository, taskID, jobID); err != nil {
 		fmt.Fprintf(os.Stderr, "RecordPlanApply failed for job %s: %v\n", jobID, err)
+		return err
 	}
+	return nil
 }
 
 func applyToolResult(value map[string]any) map[string]any {

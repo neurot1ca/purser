@@ -701,6 +701,74 @@ func TestPlanPassDoesNotCompleteMilestoneAutomatically(t *testing.T) {
 	}
 }
 
+func TestPlanAppliedRepairWaitsForValidationThenCompletesOnce(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := BindPlanJob(root, repo, "plan-1-m1of2-p1c", "job-repair"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPlanApply(root, repo, "plan-1-m1of2-p1c", "job-repair"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ReadPlanForTask(root, repo, "plan-1")
+	if err != nil || containsMilestone(state.CompletedMilestones, 1) || containsReady(state.ReadyMilestones, "M1") {
+		t.Fatalf("applied repair escaped host validation gate: %+v %v", state, err)
+	}
+	if err := RecordPlanValidation(root, repo, "plan-1-m1of2-p1c", "job-repair", "PASS"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlanForTask(root, repo, "plan-1")
+	if err != nil || !reflect.DeepEqual(state.CompletedMilestones, []int{1}) {
+		t.Fatalf("passing repair did not complete milestone: %+v %v", state, err)
+	}
+	if err := RecordPlanValidation(root, repo, "plan-1-m1of2-p1c", "job-repair", "PASS"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlanForTask(root, repo, "plan-1")
+	if err != nil || !reflect.DeepEqual(state.CompletedMilestones, []int{1}) {
+		t.Fatalf("repeated validation duplicated completion: %+v %v", state, err)
+	}
+}
+
+func TestPlanLiveSendBackBlocksReadiness(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", "job-sendback.json")
+	if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{"jobId": "job-sendback", "taskId": "plan-1-m1of2-p1c", "state": "RUNNING"})
+	if err := os.WriteFile(jobPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := BindPlanJob(root, repo, "plan-1-m1of2-p1c", "job-sendback"); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := PlanReadiness(root, repo, "plan-1-m1of2-p1c")
+	if err != nil || containsReady(ready, "M1") {
+		t.Fatalf("live send-back did not block its milestone: %+v %v", ready, err)
+	}
+}
+
+func containsReady(ready []ReadyMilestone, id string) bool {
+	for _, milestone := range ready {
+		if milestone.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPlanPlainMilestoneApplyCompletes(t *testing.T) {
 	root, repo, artifact := planFixture(t)
 	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})

@@ -1278,21 +1278,8 @@ nextMilestone:
 				}
 			}
 		}
-		// Any linked pass (including a result awaiting apply) prevents duplicate dispatch.
-		linked := false
-		for _, jobID := range linkedJobs(state) {
-			job, ok := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"))
-			if !ok || job["jobId"] != jobID {
-				linked = true
-				break
-			}
-			task, _ := job["taskId"].(string)
-			if milestone, matches := planTaskMilestone(state.TaskID, task); matches && milestone == n {
-				linked = true
-				break
-			}
-		}
-		if linked {
+		// Any live linked pass (including a result awaiting apply) prevents duplicate dispatch.
+		if hasOpenLinkedJob(root, state, n) {
 			continue
 		}
 		// Recovery also sees running jobs whose link has not yet landed.
@@ -1303,6 +1290,7 @@ nextMilestone:
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
+		linked := false
 		for _, entry := range entries {
 			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 				continue
@@ -1313,7 +1301,7 @@ nextMilestone:
 			}
 			task, _ := job["taskId"].(string)
 			milestone, matches := planTaskMilestone(state.TaskID, task)
-			if matches && milestone == n && job["discarded"] != true && (job["state"] == "QUEUED" || job["state"] == "RUNNING") {
+			if matches && milestone == n && job["discarded"] != true && job["applyState"] != "applied" && job["applyState"] != "superseded" && job["state"] != "SUPERSEDED" && (job["state"] == "QUEUED" || job["state"] == "RUNNING") {
 				linked = true
 				break
 			}
@@ -1337,7 +1325,7 @@ func advanceAppliedMilestone(root string, state *PlanState, states []*PlanState)
 		}
 		passed := false
 		for _, pass := range state.AppliedPasses {
-			if pass.Milestone == n && plainPlanTaskMilestone(state.TaskID, pass.TaskID, n) {
+			if pass.Milestone == n && (len(state.Milestones) > 0 || plainPlanTaskMilestone(state.TaskID, pass.TaskID, n)) {
 				passed = true
 				break
 			}
@@ -1392,7 +1380,7 @@ func hasOpenLinkedJob(root string, state *PlanState, milestone int) bool {
 			continue
 		}
 		stateText, _ := job["state"].(string)
-		if discarded, _ := job["discarded"].(bool); discarded {
+		if discarded, _ := job["discarded"].(bool); discarded || job["applyState"] == "superseded" || job["applyState"] == "applied" || job["state"] == "SUPERSEDED" {
 			continue
 		}
 		if stateText == "SUCCEEDED" {
@@ -1419,7 +1407,7 @@ func runningLinkedJob(root string, state *PlanState, milestone int) string {
 		if json.Unmarshal(data, &job) != nil || job["jobId"] != jobID {
 			continue
 		}
-		if discarded, _ := job["discarded"].(bool); discarded {
+		if discarded, _ := job["discarded"].(bool); discarded || job["applyState"] == "applied" || job["applyState"] == "superseded" || job["state"] == "SUPERSEDED" {
 			continue
 		}
 		taskID, _ := job["taskId"].(string)

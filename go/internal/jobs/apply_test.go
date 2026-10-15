@@ -69,6 +69,31 @@ func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
 	}
 }
 
+func TestApplyPlanRecordingFailureIsVisibleWithoutFailingApply(t *testing.T) {
+	id := strings.Repeat("b", 64)
+	root, repo, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+	artifact := filepath.Join(t.TempDir(), "plan.md")
+	write(t, artifact, "### M1\n**Dependency:** none\n**Write paths:**\n- first.go\n")
+	if _, err := contextio.AcceptPlan(root, repo, "plan", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+	job, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Set("taskId", "plan-m1of1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(path, job); err != nil {
+		t.Fatal(err)
+	}
+	result := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	if result["applied"] != true || result["plan_warning"] == nil || result["plan_warning"] == "" {
+		t.Fatalf("plan recording failure was hidden or failed apply: %#v", result)
+	}
+}
+
 func TestLaterApplyPreservesNewerConflictingCommit(t *testing.T) {
 	root, repo, worktree, snapshot := handAppliedAdmissionFixture(t, false)
 	handAppliedGit(t, repo, "add", "src/file.txt")

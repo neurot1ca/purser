@@ -78,7 +78,9 @@ func applyResolvedJob(stateRoot, dir, jobID string, job *Record, repo, worktree,
 	}
 	values = recordMap(job)
 	supersedeEarlierTaskJobs(stateRoot, jobID, values)
-	recordPlanApply(stateRoot, values, jobID)
+	if err := recordPlanApply(stateRoot, values, jobID); err != nil {
+		value["plan_warning"] = err.Error()
+	}
 	enqueueAppliedValidation(stateRoot, values, value)
 	addReadyPlanMilestones(stateRoot, values, value)
 	recordScopeOutcome(opt, stateRoot, values, "resolved_by_hand")
