@@ -104,8 +104,6 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 			if err := SaveRecord(filepath.Join(stateRoot, "codex_exec_mcp", "threads"), thread); err != nil {
 				return nil, nil, err
 			}
-			args["worktree"] = true
-			args["cwd"] = thread["cwd"]
 		}
 		if sendBackFrom != nil {
 			prior := recordMap(sendBackFrom)
@@ -164,12 +162,13 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 				}
 			}
 		}
-		if nonemptyString(args["cwd"]) == "" && nonemptyString(thread["worktreePath"]) == "" {
+		if nonemptyString(thread["worktreePath"]) == "" {
 			repo := nonemptyString(thread["repoRoot"])
 			if repo == "" {
 				return startFailure("WORKTREE_SNAPSHOT_FAILED", "Repository root could not be resolved for Codex launch"), nil, nil
 			}
 			args["cwd"] = repo
+			args["worktree"] = true
 		}
 	}
 	var signal, owner [16]byte

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -77,6 +78,11 @@ func TestHostFakeWorker(t *testing.T) {
 	}
 	_, _ = os.Stdout.WriteString("{\"type\": \"turn.completed\"}\r\n")
 	result := []byte("fake answer")
+	if mode == "edit" {
+		if err := os.WriteFile("reply.txt", []byte("reply edit"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if mode == "environment" {
 		result, _ = json.Marshal(map[string]string{
 			"GOCACHE": os.Getenv("GOCACHE"), "GOTMPDIR": os.Getenv("GOTMPDIR"),
@@ -492,7 +498,6 @@ func TestStartReplyUsesRecordedRepositoryForNonWorktreeThread(t *testing.T) {
 	var launched []string
 	opt := StartOptions{StateRoot: state, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true},
 		Launch: func(id string, generation int64, token string) error {
-			job := readJob(dir, id)
 			launch, readErr := os.ReadFile(filepath.Join(dir, id+".launch"))
 			if readErr != nil {
 				return readErr
@@ -506,11 +511,13 @@ func TestStartReplyUsesRecordedRepositoryForNonWorktreeThread(t *testing.T) {
 			cwd, _ := value.Args["cwd"].(string)
 			launched = append(launched, cwd)
 			_, hostErr := RunHostGeneration(dir, id, generation, token, HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
-				if filepath.Clean(args.Cwd) != filepath.Clean(repo) {
-					t.Errorf("host cwd = %q, want repository root %q", args.Cwd, repo)
-				}
-				if _, exists := recordMap(job)["worktreePath"]; exists {
-					t.Errorf("non-worktree job unexpectedly has worktreePath: %s", mustRecordJSON(t, job))
+				job := recordMap(readJob(dir, id))
+				if args.Name == "codex-reply" {
+					if sameWorktree(args.Cwd, repo) || !sameWorktree(args.Cwd, nonemptyString(job["worktreePath"])) || nonemptyString(job["snapshot"]) == "" {
+						t.Errorf("reply did not get an isolated snapshot: cwd=%q job=%#v", args.Cwd, job)
+					}
+				} else if !sameWorktree(args.Cwd, repo) || job["worktreePath"] != nil {
+					t.Errorf("initial non-worktree launch changed: cwd=%q job=%#v", args.Cwd, job)
 				}
 				executable, executableErr := os.Executable()
 				if executableErr != nil {
@@ -539,8 +546,9 @@ func TestStartReplyUsesRecordedRepositoryForNonWorktreeThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recordMap(reply)["worktreePath"] != nil || len(launched) != 2 || filepath.Clean(launched[1]) != filepath.Clean(repo) {
-		t.Fatalf("reply did not stay non-worktree at recorded root; launches=%#v job=%s", launched, mustRecordJSON(t, reply))
+	reply = readJob(dir, nonemptyString(recordMap(reply)["jobId"]))
+	if nonemptyString(recordMap(reply)["worktreePath"]) == "" || recordMap(reply)["state"] != "SUCCEEDED" || len(launched) != 2 || !sameWorktree(launched[1], repo) {
+		t.Fatalf("reply did not create a worktree from the recorded root; launches=%#v job=%s", launched, mustRecordJSON(t, reply))
 	}
 
 	oldState := t.TempDir()
@@ -549,13 +557,104 @@ func TestStartReplyUsesRecordedRepositoryForNonWorktreeThread(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	result, _, err := Start(oldState, map[string]any{"call": "00000000-0000-4000-8000-000000000013", "prompt": "continue", "mode": "reply", "threadId": "old-thread"}, StartOptions{StateRoot: oldState})
+	result, _, err := Start(oldState, map[string]any{"call": "00000000-0000-4000-8000-000000000013", "prompt": "continue", "mode": "reply", "threadId": "old-thread", "cwd": repo, "worktree": false}, StartOptions{StateRoot: oldState, Launch: func(string, int64, string) error {
+		t.Fatal("reply without a recorded repository launched")
+		return nil
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	failure, _ := result["structuredContent"].(map[string]any)
 	if failure["errorCode"] != "WORKTREE_SNAPSHOT_FAILED" || failure["message"] != "Repository root could not be resolved for Codex launch" {
 		t.Fatalf("rootless old thread error = %#v", result)
+	}
+}
+
+func TestReplyAfterCompletedRetirementStaysIsolated(t *testing.T) {
+	for _, creationFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("creationFails=%t", creationFails), func(t *testing.T) {
+			state := jobsScratchDir(t, "retired-reply-")
+			repo := cleanupRepo(t, state)
+			worktree := cleanupWT(t, state, repo, "retiring")
+			priorID := strings.Repeat("a", 64)
+			cleanupJob(t, state, priorID, "SUCCEEDED", map[string]any{
+				"threadId": "reply-thread", "repoRoot": repo, "worktreePath": worktree, "applyState": "applied",
+			})
+			threads := filepath.Join(state, "codex_exec_mcp", "threads")
+			if err := SaveRecord(threads, map[string]any{
+				"thread_id": "reply-thread", "cwd": worktree, "repoRoot": repo, "worktreePath": worktree, "config_args": []any{},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := retention.AttachWorktree(state, worktree, priorID, "reply-thread"); err != nil || !ok {
+				t.Fatalf("attach = %v, %v", ok, err)
+			}
+			if _, err := retention.MarkWorktreeRetiring(state, worktree); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := retention.UpdateWorktreeOwnership(state, worktree, func(record *retention.WorktreeOwnership) { record.Claimed = true }); err != nil {
+				t.Fatal(err)
+			}
+			if err := RetireWorktree(state, priorID); err != nil {
+				t.Fatal(err)
+			}
+			if pathExists(worktree) || nonemptyString(LoadRecord(threads, "reply-thread")["worktreePath"]) != "" {
+				t.Fatal("retirement did not clear the worktree binding")
+			}
+			if err := os.WriteFile(filepath.Join(repo, "reply.txt"), []byte("host advanced"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cleanupGit(t, repo, "add", "reply.txt")
+			cleanupGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "host advanced")
+			head := cleanupGit(t, repo, "rev-parse", "HEAD")
+			dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+			t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+			t.Setenv("PURSER_HOST_FAKE_MODE", "edit")
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			workerLaunched := false
+			opt := StartOptions{StateRoot: state, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true},
+				Launch: func(id string, generation int64, token string) error {
+					if creationFails {
+						if err := os.WriteFile(filepath.Join(state, "wt", id[:12]), []byte("blocked"), 0600); err != nil {
+							return err
+						}
+					}
+					_, hostErr := RunHostGeneration(dir, id, generation, token, HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+						workerLaunched = true
+						job := recordMap(readJob(dir, id))
+						if sameWorktree(args.Cwd, repo) || sameWorktree(args.Cwd, worktree) || !sameWorktree(args.Cwd, nonemptyString(job["worktreePath"])) || nonemptyString(job["snapshot"]) == "" || job["head"] != head {
+							t.Fatalf("reply escaped fresh isolation: cwd=%q job=%#v", args.Cwd, job)
+						}
+						return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+					}})
+					return hostErr
+				}}
+			_, reply, err := Start(state, map[string]any{
+				"call": "00000000-0000-4000-8000-000000000014", "prompt": "continue", "mode": "reply", "threadId": "reply-thread", "cwd": repo, "worktree": false,
+			}, opt)
+			if err != nil || reply == nil {
+				t.Fatalf("reply start: record=%v err=%v", reply, err)
+			}
+			job := recordMap(readJob(dir, nonemptyString(recordMap(reply)["jobId"])))
+			if creationFails {
+				if workerLaunched || job["state"] != "FAILED" || job["errorCode"] != "WORKTREE_SNAPSHOT_FAILED" || job["message"] != "Worktree snapshot could not be created" {
+					t.Fatalf("creation failure did not refuse worker launch: launched=%v job=%#v", workerLaunched, job)
+				}
+			} else {
+				if !workerLaunched || job["state"] != "SUCCEEDED" {
+					t.Fatalf("isolated reply did not succeed: %#v", job)
+				}
+				if edited, err := os.ReadFile(filepath.Join(nonemptyString(job["worktreePath"]), "reply.txt")); err != nil || string(edited) != "reply edit" {
+					t.Fatalf("worker edit = %q, %v", edited, err)
+				}
+			}
+			if host, err := os.ReadFile(filepath.Join(repo, "reply.txt")); err != nil || string(host) != "host advanced" {
+				t.Fatalf("reply changed host checkout: %q, %v", host, err)
+			}
+		})
 	}
 }
 
