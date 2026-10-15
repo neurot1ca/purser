@@ -13,7 +13,7 @@ import (
 )
 
 func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
-	base := t.TempDir()
+	base := gitTempDir(t)
 	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
 	snapshot := initReplayRepository(t, repo, "")
 	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
@@ -47,7 +47,7 @@ func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
 }
 
 func TestPrepareJobReplayRetryFromAppliedPreparingStatePreservesIgnoredFiles(t *testing.T) {
-	base := t.TempDir()
+	base := gitTempDir(t)
 	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
 	initReplayRepository(t, repo, "")
 	writePatchTestFile(t, filepath.Join(repo, ".gitignore"), []byte(".tmp/\n"))
@@ -119,7 +119,7 @@ func TestPrepareJobReplayRetryFromAppliedPreparingStatePreservesIgnoredFiles(t *
 }
 
 func TestPrepareJobReplayFailureRestoresWorkerDiff(t *testing.T) {
-	base := t.TempDir()
+	base := gitTempDir(t)
 	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
 	snapshot := initReplayRepository(t, repo, "")
 	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
@@ -148,7 +148,7 @@ func TestPrepareJobReplayFailureRestoresWorkerDiff(t *testing.T) {
 }
 
 func TestPrepareJobReplayThreeWayStagesAddedFile(t *testing.T) {
-	base := t.TempDir()
+	base := gitTempDir(t)
 	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
 	snapshot := initReplayRepository(t, repo, "")
 	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
@@ -170,7 +170,7 @@ func TestPrepareJobReplayThreeWayStagesAddedFile(t *testing.T) {
 }
 
 func TestPrepareJobReplayWhenTargetAlreadyContainsNewOwnershipLock(t *testing.T) {
-	base := t.TempDir()
+	base := gitTempDir(t)
 	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
 	snapshot := initReplayRepository(t, repo, "")
 	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
@@ -219,7 +219,7 @@ func TestPrepareJobReplayPythonFixture(t *testing.T) {
 	}
 	for _, c := range f.Cases {
 		t.Run(c.Name, func(t *testing.T) {
-			base := t.TempDir()
+			base := gitTempDir(t)
 			repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
 			snapshot := initReplayRepository(t, repo, c.BaseTracked)
 			git(t, repo, "worktree", "add", "--detach", worker, "HEAD")

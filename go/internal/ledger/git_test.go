@@ -155,6 +155,10 @@ func gitTempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	return root
 }

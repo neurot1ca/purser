@@ -13,7 +13,7 @@ import (
 )
 
 func TestApplyJobPatchLeavesNewFileIntentToAdd(t *testing.T) {
-	root := t.TempDir()
+	root := gitTempDir(t)
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestDriftAndApplyJobPatchPythonFixture(t *testing.T) {
 	}
 	for _, c := range fixture.Cases {
 		t.Run(c.Name, func(t *testing.T) {
-			base := t.TempDir()
+			base := gitTempDir(t)
 			repo := filepath.Join(base, "repo")
 			initReplayRepository(t, repo, "base\n")
 			snapshot, err := CheckoutSnapshot(repo)
@@ -102,7 +102,7 @@ func TestDriftAndApplyJobPatchPythonFixture(t *testing.T) {
 }
 
 func TestApplyJobPatchConflictDoesNotWriteToWorkingDirectory(t *testing.T) {
-	base := t.TempDir()
+	base := gitTempDir(t)
 	repo := filepath.Join(base, "repo")
 	initReplayRepository(t, repo, "base\n")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("checkout\n"), 0600); err != nil {
