@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.156 — 2026-10-15
+
+- **Fixed:** host apply validation now ends when the `go test` process exits; a child that keeps the output pipe open no longer turns a pass into a timeout.
+- **Fixed:** plan write paths now resolve bare file names against the previous path, expand brace forms, and a plan accepted without milestone metadata blocks only later milestones whose write paths overlap.
+- **Fixed:** state cleanup removes retired worktrees that have no `.git`, keeps the final git error, and prunes `bundle_artifacts` and `projects` files over their byte limits oldest first, keeping artifacts of live and unapplied jobs; a missing repository no longer records retry backoff that blocks retirement recovery.
+
 ## 0.1.155 — 2026-10-15
 
 - **Fixed:** applying a plan milestone job (original, repair or review send-back) no longer leaves its milestone listed as ready; the milestone completes automatically once its host validation passes, and an apply whose plan bookkeeping fails still succeeds and returns a visible `plan_warning`.
