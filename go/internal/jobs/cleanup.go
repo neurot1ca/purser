@@ -1168,13 +1168,19 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 		}
 		return true
 	}
-	jobRecords := cleanupRecordsForWorktree(root, target, passJobs...)
-	if !worktreeRemovalReady(jobRecords) {
-		return false
-	}
 	_, gitErr := os.Lstat(filepath.Join(target, ".git"))
 	missingGit := os.IsNotExist(gitErr)
 	if !missingGit && key == "" {
+		return false
+	}
+	if !missingGit {
+		info, repoErr := os.Stat(key)
+		if repoErr != nil || !info.IsDir() {
+			return false
+		}
+	}
+	jobRecords := cleanupRecordsForWorktree(root, target, passJobs...)
+	if !worktreeRemovalReady(jobRecords) {
 		return false
 	}
 	if !missingGit && listings[key] == nil {
