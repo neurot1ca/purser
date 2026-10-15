@@ -12,6 +12,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "supervisor" {
 		os.Exit(DurableSupervisorMain(os.Args[2:]))
 	}
+	// Host validation inherits this recursion guard; tests exercise enqueue with
+	// detached launches disabled below, including an explicit child-guard test.
+	_ = os.Unsetenv(applyValidationChildEnv)
 	DisableApplyValidationForTests()
 	applyValidationExecutable = func() (string, error) { return "purser-hook", nil }
 	if os.Getenv("PURSER_HOST_FAKE_WORKER") == "1" {

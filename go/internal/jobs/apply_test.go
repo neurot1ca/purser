@@ -40,14 +40,22 @@ func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
 	if _, _, err := contextio.BindPlanJob(root, repo, "plan-m1of2", id); err != nil {
 		t.Fatal(err)
 	}
-	result := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	response := Apply(root, map[string]any{"jobId": id})
+	result, ok := response["structuredContent"].(map[string]any)
+	if !ok || response["isError"] != false || result["applied"] != true {
+		t.Fatalf("apply failed: %#v", response)
+	}
 	ready, ok := result["ready_milestones"].([]contextio.ReadyMilestone)
-	if result["applied"] != true || ok || result["validation"].(map[string]any)["status"] != "pending" {
+	validation, valid := result["validation"].(map[string]any)
+	if ok || !valid || validation["status"] != "pending" {
 		t.Fatalf("apply released dependent before host validation: %#v", result)
 	}
 	state, err := contextio.ReadPlanForTask(root, repo, "plan")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(state.ReadyMilestones) != 0 {
+		t.Fatalf("pending host validation left ready milestones: %+v", state.ReadyMilestones)
 	}
 	if err := contextio.RecordPlanValidation(root, repo, "plan-m1of2", id, "PASS"); err != nil {
 		t.Fatal(err)
@@ -63,7 +71,11 @@ func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
 	if _, err := contextio.UpdatePlan(root, repo, "plan", state.Revision, "stop", ""); err != nil {
 		t.Fatal(err)
 	}
-	repeated := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	response = Apply(root, map[string]any{"jobId": id})
+	repeated, ok := response["structuredContent"].(map[string]any)
+	if !ok || response["isError"] != false || repeated["applied"] != true {
+		t.Fatalf("cached apply failed: %#v", response)
+	}
 	if _, stale := repeated["ready_milestones"]; stale {
 		t.Fatalf("cached apply returned stopped work: %#v", repeated)
 	}
@@ -88,7 +100,11 @@ func TestApplyPlanRecordingFailureIsVisibleWithoutFailingApply(t *testing.T) {
 	if err := Write(path, job); err != nil {
 		t.Fatal(err)
 	}
-	result := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	response := Apply(root, map[string]any{"jobId": id})
+	result, ok := response["structuredContent"].(map[string]any)
+	if !ok || response["isError"] != false || result["applied"] != true {
+		t.Fatalf("apply failed: %#v", response)
+	}
 	if result["applied"] != true || result["plan_warning"] == nil || result["plan_warning"] == "" {
 		t.Fatalf("plan recording failure was hidden or failed apply: %#v", result)
 	}
