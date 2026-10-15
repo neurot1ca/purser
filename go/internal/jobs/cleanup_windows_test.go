@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"purser-hook/internal/retention"
 )
@@ -17,8 +18,11 @@ func TestRemoveWindowsLockedFileKeepsRetryEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := retirementID('7')
-	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{"repoRoot": repo, "worktreePath": wt, "applyState": "applied"})
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{"repoRoot": repo, "worktreePath": wt, "applyState": "applied", "finishedAt": cleanupNow().Add(-8 * 24 * time.Hour).Unix()})
 	if ok, err := retention.AttachWorktree(root, wt, id, ""); !ok || err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retention.MarkWorktreeRetiring(root, wt); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(wt, "held")
@@ -38,8 +42,8 @@ func TestRemoveWindowsLockedFileKeepsRetryEvidence(t *testing.T) {
 			_ = syscall.CloseHandle(handle)
 		}
 	}()
-	if removeWorktree(root, repo, wt, map[string]*worktreeListing{}, map[string]string{}) {
-		t.Fatal("locked target counted as removed")
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatal(err)
 	}
 	path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
 	job := readCleanupJSON(path)
@@ -57,7 +61,10 @@ func TestRemoveWindowsLockedFileKeepsRetryEvidence(t *testing.T) {
 	if err := writeJSONRecord(path, job); err != nil {
 		t.Fatal(err)
 	}
-	if !removeWorktree(root, repo, wt, map[string]*worktreeListing{}, map[string]string{}) || pathExists(wt) {
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatal(err)
+	}
+	if pathExists(wt) || pathExists(path) {
 		t.Fatal("unlocked target did not recover")
 	}
 }

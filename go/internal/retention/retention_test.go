@@ -439,7 +439,7 @@ func TestRetentionValidationAges(t *testing.T) {
 	}{
 		{"passed", 4, false, true}, {"passed", 15, false, false},
 		{"failed", 4, true, true}, {"error", 15, false, false},
-		{"running", 15, true, true}, {"unknown", 15, true, true},
+		{"running", 15, true, true}, {"pending", 15, true, true}, {"unknown", 15, true, true},
 	} {
 		t.Run(c.status+fmt.Sprint(c.days), func(t *testing.T) {
 			root := t.TempDir()
@@ -512,6 +512,98 @@ func TestRetentionDisposableProject(t *testing.T) {
 	PruneState(root, 1000+15*86400, false)
 	if !pathExists(filepath.Join(base, "code-map", "map.txt")) {
 		t.Fatal("active project cache removed")
+	}
+}
+
+func TestRetentionArtifactByteLimits(t *testing.T) {
+	root := t.TempDir()
+	id, key := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	newID, newKey := strings.Repeat("c", 64), strings.Repeat("d", 64)
+	bundle := filepath.Join(root, "bundle_artifacts", key+".json")
+	raw := filepath.Join(root, "raw_tool_outputs", key+".json")
+	newBundle := filepath.Join(root, "bundle_artifacts", newKey+".json")
+	newRaw := filepath.Join(root, "raw_tool_outputs", newKey+".json")
+	bundleData := []byte(`{"task_id":"task","raw_output_path":` + strconv.Quote(raw) + `}`)
+	newBundleData := []byte(`{"task_id":"task","raw_output_path":` + strconv.Quote(newRaw) + `}`)
+	for _, class := range []string{"bundle_artifacts", "projects"} {
+		previous := registry[class]
+		p := previous
+		if class == "bundle_artifacts" {
+			p.maxBytes = int64(len(bundleData))
+		} else {
+			p.maxBytes = 1
+		}
+		registry[class] = p
+		t.Cleanup(func() { registry[class] = previous })
+	}
+	putFile(t, filepath.Join(root, "async_jobs", id+".json"), []byte(`{"jobId":"`+id+`","call_key":"`+key+`","stage":"CONSUMED"}`), 1000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"SUCCEEDED","applyState":"applied"}`), 1000)
+	putFile(t, bundle, bundleData, 1000)
+	putFile(t, raw, []byte(`{}`), 1000)
+	putFile(t, filepath.Join(root, "async_jobs", newID+".json"), []byte(`{"jobId":"`+newID+`","call_key":"`+newKey+`","stage":"CONSUMED"}`), 2000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", newID+".json"), []byte(`{"jobId":"`+newID+`","state":"SUCCEEDED","applyState":"applied"}`), 2000)
+	putFile(t, newBundle, newBundleData, 2000)
+	putFile(t, newRaw, []byte(`{}`), 2000)
+	project := filepath.Join(root, "projects", "0123456789abcdef")
+	cache := filepath.Join(project, "code-map", "map.txt")
+	profile := filepath.Join(project, "profile.toml")
+	putFile(t, cache, []byte("regenerable cache"), 1000)
+	putFile(t, profile, []byte("configuration"), 1000)
+	PruneState(root, 1000+86400, false)
+	if pathExists(bundle) || pathExists(raw) || !pathExists(newBundle) || !pathExists(newRaw) || pathExists(cache) || !pathExists(profile) {
+		t.Fatal("byte limits failed oldest-first pruning or removed configuration")
+	}
+}
+
+func TestRetentionBytePressureKeepsUnappliedSuccess(t *testing.T) {
+	root := t.TempDir()
+	previous := registry["bundle_artifacts"]
+	registry["bundle_artifacts"] = policy{maxAgeDays: 7, maxFiles: -1, maxBytes: 1}
+	t.Cleanup(func() { registry["bundle_artifacts"] = previous })
+	id, key := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	putFile(t, filepath.Join(root, "async_jobs", id+".json"), []byte(`{"jobId":"`+id+`","call_key":"`+key+`","stage":"CONSUMED"}`), 1000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"SUCCEEDED"}`), 1000)
+	raw := filepath.Join(root, "raw_tool_outputs", key+".json")
+	bundle := filepath.Join(root, "bundle_artifacts", key+".json")
+	putFile(t, raw, []byte(`{}`), 1000)
+	putFile(t, bundle, []byte(`{"task_id":"task","raw_output_path":`+strconv.Quote(raw)+`}`), 1000)
+	PruneState(root, 1000+601, false)
+	if !pathExists(bundle) || !pathExists(raw) {
+		t.Fatal("unapplied successful job artifacts were removed under byte pressure")
+	}
+}
+
+func TestRetentionArtifactByteLimitsKeepLive(t *testing.T) {
+	for _, protection := range []string{"live", "unreadable"} {
+		t.Run(protection, func(t *testing.T) {
+			root := t.TempDir()
+			for _, class := range []string{"bundle_artifacts", "projects"} {
+				previous := registry[class]
+				p := previous
+				p.maxBytes = 1
+				registry[class] = p
+				t.Cleanup(func() { registry[class] = previous })
+			}
+			id, key, liveID := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+			putFile(t, filepath.Join(root, "async_jobs", id+".json"), []byte(`{"jobId":"`+id+`","call_key":"`+key+`","stage":"CONSUMED"}`), 1000)
+			putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"SUCCEEDED","applyState":"applied"}`), 1000)
+			putFile(t, filepath.Join(root, "async_jobs", liveID+".json"), []byte(`{"jobId":"`+liveID+`","call_key":"`+key+`","project_key":"0123456789abcdef"}`), 1000)
+			job := []byte(`{"jobId":"` + liveID + `","state":"RUNNING"}`)
+			if protection == "unreadable" {
+				job = []byte(`{`)
+			}
+			putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", liveID+".json"), job, 1000)
+			bundle := filepath.Join(root, "bundle_artifacts", key+".json")
+			raw := filepath.Join(root, "raw_tool_outputs", key+".json")
+			putFile(t, bundle, []byte(`{"task_id":"task","raw_output_path":`+strconv.Quote(raw)+`}`), 1000)
+			putFile(t, raw, []byte(`{}`), 1000)
+			cache := filepath.Join(root, "projects", "0123456789abcdef", "code-map", "map.txt")
+			putFile(t, cache, []byte("regenerable cache"), 1000)
+			PruneState(root, 1000+15*86400, false)
+			if !pathExists(bundle) || !pathExists(raw) || !pathExists(cache) {
+				t.Fatal("live or ambiguous reference lost artifacts under age/byte pressure")
+			}
+		})
 	}
 }
 

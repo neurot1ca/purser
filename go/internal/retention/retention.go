@@ -338,7 +338,8 @@ func PruneState(root string, now float64, checkCeiling bool) {
 // Artifact deletion uses the producer's lock and rechecks disposition inside it.
 // Unknown classes and missing/ambiguous ownership are never age-based authority.
 type artifactReferences struct {
-	values map[string]struct{}
+	values    map[string]struct{}
+	uncertain bool
 }
 
 func (r *artifactReferences) add(value string) {
@@ -369,18 +370,30 @@ func addArtifactValues(value any, refs *artifactReferences) {
 
 func scanArtifactReferences(root, relative string, include func(map[string]any) bool, refs *artifactReferences) {
 	base := filepath.Join(root, filepath.FromSlash(relative))
-	for _, path := range filesUnder(base) {
+	_ = filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+		if os.IsNotExist(err) && path == base {
+			return nil
+		}
+		if err != nil || isReparsePath(path) {
+			refs.uncertain = true
+			return filepath.SkipDir
+		}
+		if entry.IsDir() {
+			return nil
+		}
 		if filepath.Ext(path) != ".json" {
-			continue
+			return nil
 		}
 		value := readObject(path)
 		if value == nil {
-			continue
+			refs.uncertain = true
+			return nil
 		}
 		if include == nil || include(value) {
 			addArtifactValues(value, refs)
 		}
-	}
+		return nil
+	})
 }
 
 func buildArtifactReferences(root string) artifactReferences {
@@ -389,6 +402,15 @@ func buildArtifactReferences(root string) artifactReferences {
 	scanArtifactReferences(root, "task_retries", nil, &refs)
 	scanArtifactReferences(root, "codex_exec_mcp/jobs", func(value map[string]any) bool {
 		return !cleanupTerminalState(stringValue(value["state"]))
+	}, &refs)
+	scanArtifactReferences(root, "async_jobs", func(value map[string]any) bool {
+		id := stringValue(value["jobId"])
+		if !jobIDPattern.MatchString(id) {
+			refs.uncertain = true
+			return true
+		}
+		job := readObject(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"))
+		return !cleanupTerminalState(stringValue(job["state"]))
 	}, &refs)
 	scanArtifactReferences(root, "active_tasks", func(value map[string]any) bool {
 		return value["completed"] != true
@@ -400,6 +422,8 @@ func buildArtifactReferences(root string) artifactReferences {
 }
 
 func retireArtifacts(root string, now float64, refs artifactReferences) {
+	bundleExcess := rootSize(filepath.Join(root, "bundle_artifacts")) - registry["bundle_artifacts"].maxBytes
+	projectExcess := rootSize(filepath.Join(root, "projects")) - registry["projects"].maxBytes
 	for _, path := range filesUnder(filepath.Join(root, "apply_validation")) {
 		if filepath.Ext(path) != ".json" || !jobIDPattern.MatchString(strings.TrimSuffix(filepath.Base(path), ".json")) {
 			continue
@@ -433,18 +457,34 @@ func retireArtifacts(root string, now float64, refs artifactReferences) {
 			}
 			stamp, e := fileMtime(path)
 			if e == nil && now-stamp >= float64(days)*86400 {
-				retireArtifactFile(root, log, now, days)
+				retireArtifactFile(root, log, now, days, nil)
 			}
 			// Retain the summary if log removal was blocked: it is retry authority.
 			if !pathExists(log) {
-				retireArtifactFile(root, path, now, 14)
+				retireArtifactFile(root, path, now, 14, nil)
 			}
 		}
 		_ = unlock()
 		_ = repositoryUnlock()
 		_ = enqueueUnlock()
 	}
-	for _, indexPath := range filesUnder(filepath.Join(root, "async_jobs")) {
+	asyncPaths := filesUnder(filepath.Join(root, "async_jobs"))
+	artifactStamp := func(indexPath string) float64 {
+		index := readObject(indexPath)
+		key := stringValue(index["call_key"])
+		stamp := now
+		for _, path := range []string{
+			filepath.Join(root, "bundle_artifacts", key+".json"),
+			filepath.Join(root, "raw_tool_outputs", key+".json"),
+		} {
+			if value, err := fileMtime(path); err == nil && value < stamp {
+				stamp = value
+			}
+		}
+		return stamp
+	}
+	sort.SliceStable(asyncPaths, func(i, j int) bool { return artifactStamp(asyncPaths[i]) < artifactStamp(asyncPaths[j]) })
+	for _, indexPath := range asyncPaths {
 		id := strings.TrimSuffix(filepath.Base(indexPath), ".json")
 		if filepath.Ext(indexPath) != ".json" || !jobIDPattern.MatchString(id) {
 			continue
@@ -464,7 +504,11 @@ func retireArtifacts(root string, now float64, refs artifactReferences) {
 			continue
 		}
 		job := readObject(jobPath)
-		if index["jobId"] == id && index["stage"] == "CONSUMED" && job["jobId"] == id && cleanupTerminalState(stringValue(job["state"])) && (job["applyState"] == "applied" || job["discarded"] == true) && jobIDPattern.MatchString(key) && !pathExists(filepath.Join(root, "pending", key+".json")) {
+		state := stringValue(job["state"])
+		applyState := stringValue(job["applyState"])
+		ageOnly := state == "SUCCEEDED" && job["discarded"] != true && applyState != "applied" && applyState != "superseded"
+		byteEligible := applyState == "applied" || applyState == "superseded" || job["discarded"] == true || state == "SUCCEEDED"
+		if index["jobId"] == id && index["stage"] == "CONSUMED" && job["jobId"] == id && cleanupTerminalState(state) && byteEligible && jobIDPattern.MatchString(key) && !pathExists(filepath.Join(root, "pending", key+".json")) {
 			bundle := filepath.Join(root, "bundle_artifacts", key+".json")
 			raw := filepath.Join(root, "raw_tool_outputs", key+".json")
 			if !artifactSafePath(root, bundle) || !artifactSafePath(root, raw) {
@@ -478,9 +522,17 @@ func retireArtifacts(root string, now float64, refs artifactReferences) {
 			}
 			if value != nil && stringValue(value["task_id"]) != "" && ownedRaw && !artifactReferenced(refs, []string{id, key, stringValue(value["task_id"]), bundle, raw}) {
 				// Keep the bundle as ownership evidence until its raw output is gone.
-				retireArtifactFile(root, raw, now, 7)
+				rawLimit := &bundleExcess
+				if ageOnly {
+					rawLimit = nil
+				}
+				retireArtifactFile(root, raw, now, 7, rawLimit)
 				if !pathExists(raw) {
-					retireArtifactFile(root, bundle, now, 7)
+					bundleLimit := &bundleExcess
+					if ageOnly {
+						bundleLimit = nil
+					}
+					retireArtifactFile(root, bundle, now, 7, bundleLimit)
 				}
 			}
 		}
@@ -498,7 +550,7 @@ func retireArtifacts(root string, now float64, refs artifactReferences) {
 			continue
 		}
 		if !pathExists(filepath.Join(project, "scope_leases.json")) && !pathExists(filepath.Join(project, "active_plan.json")) && !pathExists(filepath.Join(project, "active-coder.json")) && !artifactReferenced(refs, []string{parts[0]}) {
-			retireArtifactFile(root, path, now, 14)
+			retireArtifactFile(root, path, now, 14, &projectExcess)
 		}
 		_ = unlock()
 	}
@@ -541,22 +593,29 @@ func artifactLock(root, path string) (func() error, error) {
 	}, nil
 }
 
-func retireArtifactFile(root, path string, now float64, days int) bool {
+func retireArtifactFile(root, path string, now float64, days int, excess *int64) bool {
 	if !artifactSafePath(root, path) || !regularFile(path) {
 		return false
 	}
 	stamp, err := fileMtime(path)
-	if err != nil || now-stamp < float64(days)*86400 {
+	if err != nil || now-stamp < 600 || (now-stamp < float64(days)*86400 && (excess == nil || *excess <= 0)) {
 		return false
 	}
+	size := fileSize(path)
 	if removeRetainedFile(path) != nil || !errorsIsNotExist(path) {
 		Warning(root)
 		return false
+	}
+	if excess != nil {
+		*excess -= size
 	}
 	return true
 }
 
 func artifactReferenced(refs artifactReferences, needles []string) bool {
+	if refs.uncertain {
+		return true
+	}
 	for _, needle := range needles {
 		for _, item := range []string{needle, filepath.Clean(needle), filepath.Base(needle)} {
 			if _, ok := refs.values[item]; ok {

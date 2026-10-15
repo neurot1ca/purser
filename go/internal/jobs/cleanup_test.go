@@ -171,6 +171,82 @@ func TestCleanupSuperseded(t *testing.T) {
 	}
 }
 
+func TestCleanupMissingGitWorktrees(t *testing.T) {
+	root := jobsScratchDir(t, "cleanup-missing-git-")
+	repo := cleanupRepo(t, root)
+	for _, name := range []string{"retired", "orphan"} {
+		wt := cleanupWT(t, root, repo, name)
+		if err := os.Remove(filepath.Join(wt, ".git")); err != nil {
+			t.Fatal(err)
+		}
+		old := cleanupNow().Add(-8 * 24 * time.Hour)
+		if err := os.Chtimes(wt, old, old); err != nil {
+			t.Fatal(err)
+		}
+		if name == "retired" {
+			cleanupJob(t, root, strings.Repeat("a", 64), "SUPERSEDED", map[string]any{
+				"repoRoot": repo, "worktreePath": wt, "finishedAt": old.Unix(),
+			})
+		}
+	}
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(root, "wt", "retired"), filepath.Join(root, "wt", "orphan"), filepath.Join(root, "codex_exec_mcp", "jobs", strings.Repeat("a", 64)+".json")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("retired residue remains: %s: %v", path, err)
+		}
+	}
+}
+
+func TestCleanupMissingGitKeepsLiveWorktree(t *testing.T) {
+	for _, protection := range []string{"live", "unreadable"} {
+		t.Run(protection, func(t *testing.T) {
+			root := jobsScratchDir(t, "cleanup-live-missing-git-")
+			wt := filepath.Join(root, "wt", "live")
+			if err := os.MkdirAll(wt, 0700); err != nil {
+				t.Fatal(err)
+			}
+			old := cleanupNow().Add(-8 * 24 * time.Hour)
+			if err := os.Chtimes(wt, old, old); err != nil {
+				t.Fatal(err)
+			}
+			cleanupJob(t, root, strings.Repeat("a", 64), "RUNNING", map[string]any{"worktreePath": wt})
+			if protection == "unreadable" {
+				path := filepath.Join(root, "codex_exec_mcp", "jobs", strings.Repeat("a", 64)+".json")
+				if err := os.WriteFile(path, []byte(`{`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(wt); err != nil {
+				t.Fatalf("live worktree removed: %v", err)
+			}
+		})
+	}
+}
+
+func TestCleanupGitRemovalPreservesFinalStderr(t *testing.T) {
+	root := jobsScratchDir(t, "cleanup-stderr-")
+	repo := cleanupRepo(t, root)
+	wt := cleanupWT(t, root, repo, "locked")
+	cleanupGit(t, repo, "worktree", "lock", "--reason", "cleanup-test-lock", wt)
+	id := strings.Repeat("a", 64)
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{"repoRoot": repo, "worktreePath": wt, "applyState": "applied"})
+	path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+	records := map[string][]cleanupRecord{worktreeKey(wt): {{path, readCleanupJSON(path)}}}
+	if removeWorktree(root, repo, wt, map[string]*worktreeListing{}, map[string]string{}, records) {
+		t.Fatal("git-locked worktree removed")
+	}
+	retry, _ := readCleanupJSON(path)["cleanupRemoval"].(map[string]any)
+	message, _ := retry["error"].(string)
+	if !strings.Contains(message, "locked") || strings.Contains(message, "already started") {
+		t.Fatalf("final attempt lost git stderr or reused its command: %q", message)
+	}
+}
+
 func TestCleanupPathAllowsSymlinkedTempAncestor(t *testing.T) {
 	base := t.TempDir()
 	real := filepath.Join(base, "real")

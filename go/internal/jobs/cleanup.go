@@ -393,10 +393,12 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 		}
 		p := filepath.Join(jobsDir, e.Name())
 		j := readCleanupJSON(p)
-		if j == nil {
-			continue
-		}
 		stem := strings.TrimSuffix(e.Name(), ".json")
+		if j == nil || j["jobId"] != stem {
+			// An unreadable owner may reference any worktree; leave it for recovery.
+			retention.Warning(root)
+			return nil
+		}
 		if j["jobId"] == stem {
 			record := cleanupRecord{p, j}
 			loaded = append(loaded, record)
@@ -528,7 +530,16 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 				acted = true
 			}
 		}
-		if !r.expired || !distilled[learning.SourceKey(stem)] {
+		if wt == "" {
+			// Retirement clears bindings before removal; ownership remains retry authority.
+			var ownedErr error
+			wt, ownedErr = findOwnedWorktree(root, stem)
+			if ownedErr != nil && ownedErr != errRetirementOwnershipMissing {
+				continue
+			}
+		}
+		_, worktreeErr := os.Lstat(wt)
+		if ((j["worktreePath"] != nil || wt != "") && (wt == "" || !cleanupPath(root, wt) || !os.IsNotExist(worktreeErr))) || !r.expired || !distilled[learning.SourceKey(stem)] {
 			if acted {
 				actions++
 			}
@@ -1151,25 +1162,29 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 		return false
 	}
 	key := worktreeKey(repo)
-	if key == "" {
-		return false
-	}
 	if _, e = os.Stat(target); os.IsNotExist(e) {
-		prune[key] = key
+		if key != "" {
+			prune[key] = key
+		}
 		return true
 	}
 	jobRecords := cleanupRecordsForWorktree(root, target, passJobs...)
 	if !worktreeRemovalReady(jobRecords) {
 		return false
 	}
-	if listings[key] == nil {
+	_, gitErr := os.Lstat(filepath.Join(target, ".git"))
+	missingGit := os.IsNotExist(gitErr)
+	if !missingGit && key == "" {
+		return false
+	}
+	if !missingGit && listings[key] == nil {
 		listings[key] = gitWorktreeListing(key)
 	}
 	l := listings[key]
 	owned, ownerErr := retention.ReadWorktreeOwnership(root, target)
 	ownedOK := ownerErr == nil && sameWorktree(owned.WorktreePath, target) && len(owned.Jobs) > 0
 	fallbackOK := ownedOK && l != nil
-	if l == nil && !fallbackOK {
+	if !missingGit && l == nil && !fallbackOK {
 		recordWorktreeRemoval(jobRecords, target, fmt.Errorf("git worktree listing unavailable"))
 		return false
 	}
@@ -1181,7 +1196,7 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 			}
 		}
 	}
-	if !found && !fallbackOK {
+	if !missingGit && !found && !fallbackOK {
 		recordWorktreeRemoval(jobRecords, target, fmt.Errorf("worktree is not registered"))
 		return false
 	}
@@ -1189,13 +1204,16 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 	var removalErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		var stderr cleanupStderr
-		if found {
+		if found && !missingGit {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			command := proc.Hide(exec.CommandContext(ctx, "git", "-C", l.command, "worktree", "remove", "--force", target))
 			proc.ConfigureNoWindow(command)
 			command.Stderr = &stderr
 			removalErr = command.Run()
 			cancel()
+			if removalErr != nil {
+				removalErr = fmt.Errorf("%w: %s", removalErr, stderr.String())
+			}
 		} else {
 			removalErr = os.RemoveAll(target)
 		}
@@ -1211,7 +1229,6 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 		if attempt == 1 || removalErr == nil {
 			break
 		}
-		removalErr = fmt.Errorf("%w: %s", removalErr, stderr.String())
 	}
 	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
 		if removalErr == nil {
@@ -1228,6 +1245,9 @@ func removeWorktree(root, repo, wt string, listings map[string]*worktreeListing,
 			}
 		}
 		l.paths = next
+	}
+	if missingGit && key != "" {
+		prune[key] = key
 	}
 	return true
 }
@@ -1254,7 +1274,7 @@ func recordWorktreeRemoval(records []cleanupRecord, target string, removalErr er
 	for _, record := range records {
 		path, job := record.path, record.job
 		bound, _ := job["worktreePath"].(string)
-		if job == nil || (filepath.Clean(bound) != filepath.Clean(target) && !sameWorktree(bound, target)) {
+		if job == nil || (bound != "" && filepath.Clean(bound) != filepath.Clean(target) && !sameWorktree(bound, target)) {
 			continue
 		}
 		attempts := 0.0
@@ -1470,11 +1490,14 @@ func cleanupOrphanWorktrees(root string, current float64, protected map[string]b
 		if e != nil || !fi.IsDir() || isCleanupLink(p) || protected[key] || owners[key] != nil || current-float64(fi.ModTime().UnixNano())/1e9 <= cleanupRetention.Seconds() {
 			continue
 		}
-		common := cleanupGitOutput(p, "rev-parse", "--path-format=absolute", "--git-common-dir")
-		if common == "" {
-			continue
+		common := ""
+		if pathExists(filepath.Join(p, ".git")) {
+			common = cleanupGitOutput(p, "rev-parse", "--path-format=absolute", "--git-common-dir")
 		}
-		repo := filepath.Dir(filepath.Clean(common))
+		repo := ""
+		if common != "" {
+			repo = filepath.Dir(filepath.Clean(common))
+		}
 		removeWorktree(root, repo, p, listings, prune, worktreeJobs)
 	}
 }
@@ -1538,13 +1561,13 @@ func enforceWorktreeCount(root string, current float64, protected map[string]boo
 		repo := ""
 		if c.owner != nil {
 			repo, _ = c.owner["repoRoot"].(string)
-		} else {
+		} else if pathExists(filepath.Join(c.path, ".git")) {
 			common := cleanupGitOutput(c.path, "rev-parse", "--path-format=absolute", "--git-common-dir")
 			if common != "" {
 				repo = filepath.Dir(filepath.Clean(common))
 			}
 		}
-		if repo != "" && removeWorktree(root, repo, c.path, listings, prune, worktreeJobs) {
+		if removeWorktree(root, repo, c.path, listings, prune, worktreeJobs) {
 			count--
 		}
 	}
