@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -107,11 +105,7 @@ func TestChecksTreeCompletionWithInheritedOutput(t *testing.T) {
 		t.Fatalf("check result %#v", got)
 	}
 	pid := waitCheckPID(t, pidFile)
-	deadline := time.Now().Add(5 * time.Second)
-	for processExists(pid) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if processExists(pid) {
+	if waitForProcessExit(pid, time.Now().Add(5*time.Second)) {
 		t.Fatalf("completed check descendant %s remains", pid)
 	}
 }
@@ -418,25 +412,4 @@ func waitCheckPID(t *testing.T, path string) string {
 	}
 	t.Fatalf("pid file missing: %s", path)
 	return ""
-}
-
-func processExists(pid string) bool {
-	if runtime.GOOS == "windows" {
-		cmd := testutil.Hide(exec.Command("powershell.exe", "-NoProfile", "-Command", "$p=Get-Process -Id "+pid+" -ErrorAction SilentlyContinue; if ($p) { exit 0 }; exit 1"))
-		err := cmd.Run()
-		if err == nil {
-			return true
-		}
-		exit, ok := err.(*exec.ExitError)
-		return !ok || exit.ExitCode() != 1
-	}
-	n, err := strconv.Atoi(pid)
-	if err != nil {
-		return true
-	}
-	proc, err := os.FindProcess(n)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(os.Signal(nil)) == nil
 }
