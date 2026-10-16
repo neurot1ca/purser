@@ -15,7 +15,7 @@ import (
 	"purser-hook/internal/review"
 )
 
-// ReviewerRun lists or changes the machine's Reviewer-1 selection.
+// ReviewerRun lists or changes the machine's Reviewer selection.
 func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 	if len(args) == 0 || (args[0] != "list" && args[0] != "set") {
 		return reviewerError(stdout, errors.New("usage: purser-hook reviewer list|set --cwd <dir>"))
@@ -288,12 +288,12 @@ func validateReviewerInstalled(detected map[string]any, agentName, model string)
 	}
 	if agentName == "agy" && model != "" {
 		if !strings.HasPrefix(model, "gemini-") {
-			return errors.New("selected Reviewer-1 model must be a Gemini model")
+			return errors.New("selected Reviewer model must be a Gemini model")
 		}
 		models, _ := info["models"].([]any)
 		if len(models) == 0 {
 			if model != agyReviewerModel() {
-				return errors.New("selected Reviewer-1 model is absent from agy models")
+				return errors.New("selected Reviewer model is absent from agy models")
 			}
 		} else {
 			listed := false
@@ -304,7 +304,7 @@ func validateReviewerInstalled(detected map[string]any, agentName, model string)
 				}
 			}
 			if !listed {
-				return errors.New("selected Reviewer-1 model is absent from agy models")
+				return errors.New("selected Reviewer model is absent from agy models")
 			}
 		}
 	}

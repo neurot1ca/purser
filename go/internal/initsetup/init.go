@@ -49,9 +49,9 @@ func Run(stdout, stderr io.Writer, args []string) int {
 	fs.StringVar(&o.fallbackModel, "fallback-model", "", "fallback model")
 	fs.StringVar(&o.mode, "mode", "", "route mode")
 	fs.StringVar(&o.effort, "effort", "", "model effort")
-	fs.StringVar(&o.reviewer, "reviewer", "", "Reviewer-1 agent")
-	fs.StringVar(&o.reviewerModel, "reviewer-model", "", "Reviewer-1 model")
-	fs.StringVar(&o.reviewerEffort, "reviewer-effort", "", "Reviewer-1 effort")
+	fs.StringVar(&o.reviewer, "reviewer", "", "Reviewer agent")
+	fs.StringVar(&o.reviewerModel, "reviewer-model", "", "Reviewer model")
+	fs.StringVar(&o.reviewerEffort, "reviewer-effort", "", "Reviewer effort")
 	var maintenance, noMaintenance, mechanical, noMechanical, autoCompact, noAutoCompact bool
 	fs.BoolVar(&maintenance, "maintenance", false, "enable maintenance reports")
 	fs.BoolVar(&noMaintenance, "no-maintenance", false, "disable maintenance reports")
@@ -767,12 +767,12 @@ func validateSelection(o options, home string) error {
 	if o.reviewerModel != "" {
 		if o.reviewer == "claude" {
 			if executable("claude") == "" || !strings.HasPrefix(o.reviewerModel, "claude-") {
-				return errors.New("selected Reviewer-1 model is absent from claude models")
+				return errors.New("selected Reviewer model is absent from claude models")
 			}
 		} else {
 			listing := discoverModels(o.reviewer, loadProviders(home))
 			if !reviewerModelListed(o.reviewer, listing.models, o.reviewerModel) {
-				return fmt.Errorf("selected Reviewer-1 model is absent from %s models", o.reviewer)
+				return fmt.Errorf("selected Reviewer model is absent from %s models", o.reviewer)
 			}
 		}
 	}

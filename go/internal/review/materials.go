@@ -31,7 +31,7 @@ func init() {
 	}
 }
 
-// ValidateConfig applies the Reviewer-1 config checks performed by reviewer.py.
+// ValidateConfig applies the Reviewer config checks performed by reviewer.py.
 func ValidateConfig(config map[string]any) error {
 	model, ok := config["reviewer1_model_requested"].(string)
 	if !ok || model == "" {
@@ -119,7 +119,7 @@ func BuildMaterials(taskID, repoRoot string, delta, classification map[string]an
 	if coverage.unknown {
 		validationEvidence += " REVIEW COVERAGE UNKNOWN: changed paths could not be safely compared with the reviewed paths. FULL Claude review is required."
 	} else if len(coverage.outside) > 0 {
-		validationEvidence += " PARTIAL REVIEW COVERAGE: Reviewer-1 receives in-scope paths and the out-of-scope diff marked [[OUT OF SCOPE]] for: " + strings.Join(coverage.outside, ", ") + ". FULL Claude review is required."
+		validationEvidence += " PARTIAL REVIEW COVERAGE: Reviewer receives in-scope paths and the out-of-scope diff marked [[OUT OF SCOPE]] for: " + strings.Join(coverage.outside, ", ") + ". FULL Claude review is required."
 	}
 	weakening := TestWeakeningCandidates(diff)
 	if len(weakening) > 0 {

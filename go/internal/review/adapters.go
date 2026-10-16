@@ -278,7 +278,7 @@ func RefuseUnsafeFlags(command []string, repositoryRoot string) error {
 			continue
 		}
 		if repositoryRoot == "" {
-			return &CommandRefused{"the repository root is required before granting Reviewer-1 an added directory"}
+			return &CommandRefused{"the repository root is required before granting Reviewer an added directory"}
 		}
 		candidate, err := resolveReviewerPath(command[i+1])
 		if err != nil {

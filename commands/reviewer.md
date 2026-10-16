@@ -1,5 +1,5 @@
 ---
-description: Choose Reviewer-1 from the agents installed on this machine, or turn it off.
+description: Choose Reviewer from the agents installed on this machine, or turn it off.
 allowed-tools: Bash(*), AskUserQuestion
 ---
 

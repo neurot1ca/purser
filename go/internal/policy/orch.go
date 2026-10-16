@@ -189,7 +189,7 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 		seen := map[string]bool{}
 		for _, reference := range strings.Split(raw, ",") {
 			if !reviewFindingID.MatchString(reference) || seen[reference] || len(seen) == 20 {
-				return orchFailure(remainder, orchMalformedLine, "ORCH review_findings must be unique, comma-separated Reviewer-1 finding references.", values)
+				return orchFailure(remainder, orchMalformedLine, "ORCH review_findings must be unique, comma-separated Reviewer finding references.", values)
 			}
 			seen[reference] = true
 			reviewFindings = append(reviewFindings, reference)

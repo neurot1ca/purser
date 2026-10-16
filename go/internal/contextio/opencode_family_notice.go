@@ -222,7 +222,7 @@ func openCodeRoles(repository string) []string {
 		reviewer = textValue(config["reviewer1_agent"])
 	}
 	if reviewer == "opencode" && textValue(rolesTable["reviewer"]) != "none" {
-		roles = append(roles, "Reviewer-1")
+		roles = append(roles, "Reviewer")
 	}
 	fallback, _ := user["fallback"].(map[string]any)
 	if textValue(fallback["agent"]) == "opencode" {

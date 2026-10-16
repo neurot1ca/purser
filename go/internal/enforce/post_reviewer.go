@@ -121,7 +121,7 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 		bridgeResult, err := postReviewerBridge(context.Background(), root, candidateArgs, budget)
 		if err != nil {
 			if review.IsReviewerBridgeException(err) {
-				bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer-1 bridge raised unexpectedly.")
+				bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer bridge raised unexpectedly.")
 			}
 			return review.BridgeOutcome{}, err
 		}
@@ -160,7 +160,7 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 			"review_status": "UNAVAILABLE", "provider": lastAttempt.Agent,
 			"reviewer1_model_requested": lastAttempt.Model, "result": "REVIEWER1_UNAVAILABLE",
 			"validation": "UNKNOWN", "findings": []any{map[string]any{"code": reason,
-				"message": "No eligible registered Reviewer-1 adapter was available; FULL review required."}},
+				"message": "No eligible registered Reviewer adapter was available; FULL review required."}},
 		}}
 	}
 	if last.Outcome == "completed" {

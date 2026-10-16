@@ -206,7 +206,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			result, runErr, time.Since(reviewerStarted), -1)
 		if runErr != nil {
 			bundle["claude_review_mode"] = review.Full
-			bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer-1 failed during async result review.")
+			bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer failed during async result review.")
 		} else {
 			attrs := result.Attributes
 			for _, key := range []string{"reviewer1_provider", "reviewer1_model_requested", "reviewer1_scope"} {

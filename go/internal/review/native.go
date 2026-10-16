@@ -221,7 +221,7 @@ func nativeReview(ctx context.Context, pluginRoot string, args map[string]any) (
 		if provider == "" {
 			provider = "agy"
 		}
-		return bridgeOutcome(Unavailable("REVIEWER_CONFIG_INVALID", "Reviewer-1 configuration was invalid ("+errorType(configErr)+"): "+configErr.Error(), map[string]any{"reviewer1_model_requested": pinnedModel}, provider))
+		return bridgeOutcome(Unavailable("REVIEWER_CONFIG_INVALID", "Reviewer configuration was invalid ("+errorType(configErr)+"): "+configErr.Error(), map[string]any{"reviewer1_model_requested": pinnedModel}, provider))
 	}
 	agent, _ := kwargs["reviewer_agent"].(string)
 	if agent == "" {
@@ -246,7 +246,7 @@ func nativeReview(ctx context.Context, pluginRoot string, args map[string]any) (
 		config["reviewer1_timeout_seconds"] = n
 	}
 	if err := ValidateConfig(config); err != nil {
-		return bridgeOutcome(Unavailable("REVIEWER_CONFIG_INVALID", "Reviewer-1 configuration was invalid (ValueError): "+err.Error(), config, agent))
+		return bridgeOutcome(Unavailable("REVIEWER_CONFIG_INVALID", "Reviewer configuration was invalid (ValueError): "+err.Error(), config, agent))
 	}
 	if materials == nil || err != nil {
 		omitted := PacketOmitted{"REVIEW_PACKET_INCOMPLETE", "The complete delegated review packet could not be built (" + errorType(err) + ": " + trimError(err) + "); no model call was made.", []string{"delegated_diff"}}
@@ -319,36 +319,36 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	ready := packet.(PacketReady)
 	seconds, ok := finiteNumber(config["reviewer1_timeout_seconds"])
 	if !ok || !isFinite(seconds) || seconds <= 0 {
-		return bridgeOutcome(Unavailable("REVIEWER_CONFIG_INVALID", "Reviewer-1 configuration was invalid (ValueError): reviewer1_timeout_seconds must be positive", config, provider))
+		return bridgeOutcome(Unavailable("REVIEWER_CONFIG_INVALID", "Reviewer configuration was invalid (ValueError): reviewer1_timeout_seconds must be positive", config, provider))
 	}
 	if timeout, exists := args["reviewer_timeout_seconds"]; exists && timeout != nil {
 		seconds, _ = finiteNumber(timeout)
 	}
 	if seconds <= 0 {
-		return bridgeOutcome(Unavailable("REVIEWER_CONFIG_INVALID", "Reviewer-1 configuration was invalid (ValueError): reviewer1_timeout_seconds must be positive", config, provider))
+		return bridgeOutcome(Unavailable("REVIEWER_CONFIG_INVALID", "Reviewer configuration was invalid (ValueError): reviewer1_timeout_seconds must be positive", config, provider))
 	}
 	remaining := time.Duration(seconds * float64(time.Second))
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < remaining {
 		remaining = time.Until(deadline)
 	}
 	if remaining <= 0 {
-		return bridgeOutcome(Unavailable("REVIEWER_TIMEOUT", "Reviewer-1 exceeded its bounded timeout.", config, provider))
+		return bridgeOutcome(Unavailable("REVIEWER_TIMEOUT", "Reviewer exceeded its bounded timeout.", config, provider))
 	}
 	root := fmt.Sprint(args["repo_root"])
 	working, err := runtimeTempDir("reviewer1-")
 	if err != nil {
-		return bridgeOutcome(Unavailable("REVIEWER_WORKDIR_UNAVAILABLE", "The isolated Reviewer-1 working directory failed ("+errorType(err)+").", config, provider))
+		return bridgeOutcome(Unavailable("REVIEWER_WORKDIR_UNAVAILABLE", "The isolated Reviewer working directory failed ("+errorType(err)+").", config, provider))
 	}
 	defer os.RemoveAll(working)
 	if provider == "opencode" {
 		working, err = os.MkdirTemp(filepath.Dir(working), "reviewer1-opencode-")
 		if err != nil {
-			return bridgeOutcome(Unavailable("REVIEWER_WORKDIR_UNAVAILABLE", "The isolated Reviewer-1 working directory failed ("+errorType(err)+").", config, provider))
+			return bridgeOutcome(Unavailable("REVIEWER_WORKDIR_UNAVAILABLE", "The isolated Reviewer working directory failed ("+errorType(err)+").", config, provider))
 		}
 	}
 	defer os.RemoveAll(working)
 	if err := RefuseWorkingDirectory(working, root); err != nil {
-		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer-1 response or configuration was invalid (ValueError): "+err.Error(), config, provider))
+		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer response or configuration was invalid (ValueError): "+err.Error(), config, provider))
 	}
 	packetName := ""
 	if provider == "opencode" {
@@ -356,11 +356,11 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	}
 	packetPath, err := WritePacket(working, packetName, ready.Encoded)
 	if err != nil {
-		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer-1 response or configuration was invalid ("+errorType(err)+"): "+err.Error(), config, provider))
+		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer response or configuration was invalid ("+errorType(err)+"): "+err.Error(), config, provider))
 	}
 	defer os.Remove(packetPath)
 	if err := adapter.ValidateModel(config["reviewer1_model_requested"]); err != nil {
-		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer-1 response or configuration was invalid (ValueError): "+err.Error(), config, provider))
+		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer response or configuration was invalid (ValueError): "+err.Error(), config, provider))
 	}
 	options := CommandOptions{WorkingDirectory: working, RepositoryRoot: root}
 	prompt := ReviewPrompt(packetPath)
@@ -374,7 +374,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		if errors.As(err, &refused) {
 			code = "REVIEWER_COMMAND_REFUSED"
 		}
-		return bridgeOutcome(Unavailable(code, "Reviewer-1 response or configuration was invalid ("+errorType(err)+"): "+err.Error(), config, provider))
+		return bridgeOutcome(Unavailable(code, "Reviewer response or configuration was invalid ("+errorType(err)+"): "+err.Error(), config, provider))
 	}
 	stdout, stderr, elapsed, retries, callErr, exitCode, evidence := invokePacket(ctx, adapter, command, prompt, working, remaining)
 	if callErr != "" {
@@ -396,10 +396,10 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	parsed, err := adapter.ParseEnvelope(string(stdout))
 	if err != nil {
 		code := ResponseInvalid
-		message := fmt.Sprintf("Reviewer-1 response or configuration was invalid (%s): %s", errorType(err), err.Error())
+		message := fmt.Sprintf("Reviewer response or configuration was invalid (%s): %s", errorType(err), err.Error())
 		if errors.Is(err, errAgyToolDenied) {
 			code = "REVIEWER_TOOL_DENIED"
-			message = "Reviewer-1 could not produce a review because a required tool was denied."
+			message = "Reviewer could not produce a review because a required tool was denied."
 		}
 		unavailable := Unavailable(code, message+retrySuffix(retries), config, provider)
 		unavailable.RawStdout = textPtr(lastBytes(stdout, 262144))
@@ -421,7 +421,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	}
 	response := parsed["response"].(map[string]any)
 	if response["result"] == Reviewer1Unavailable {
-		unavailable := Unavailable("REVIEWER_MODEL_REPORTED_UNAVAILABLE", "Reviewer-1 returned REVIEWER1_UNAVAILABLE."+retrySuffix(retries), config, provider)
+		unavailable := Unavailable("REVIEWER_MODEL_REPORTED_UNAVAILABLE", "Reviewer returned REVIEWER1_UNAVAILABLE."+retrySuffix(retries), config, provider)
 		unavailable.ElapsedSeconds = nativeFloatPtr(elapsed.Seconds())
 		unavailable.Diagnostics = reviewerDiagnostics(evidence, "", elapsed, 0, "reviewer model reported unavailable")
 		if stderr != "" {
@@ -434,7 +434,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	completed := CompletedReview{Result: result, Validation: response["validation"].(string), Findings: findingsFromAny(findings), ConversationID: parsed["conversation_id"].(string), Reviewer1ModelRequested: RequestedModel(config), DurationSeconds: parsed["duration_seconds"].(*float64), Usage: parsed["usage"].(map[string]any), Provider: provider, ServedModelAttestation: fmt.Sprint(parsed["served_model_attestation"]), RetryCount: retries, RetryRecovered: retries > 0}
 	if ready.PartialCoverage {
 		completed.Result, completed.Validation = Uncertain, "UNKNOWN"
-		completed.Findings = append(completed.Findings, Finding{Code: "REVIEW_PACKET_PARTIAL_COVERAGE", Message: "Reviewer-1 received a bounded diff excerpt; the complete delegated change requires FULL Claude review."})
+		completed.Findings = append(completed.Findings, Finding{Code: "REVIEW_PACKET_PARTIAL_COVERAGE", Message: "Reviewer received a bounded diff excerpt; the complete delegated change requires FULL Claude review."})
 	}
 	return bridgeOutcome(completed)
 }
@@ -485,13 +485,13 @@ func retrySuffix(retries int) string {
 func reviewerFailureMessage(code string, retries, exitCode int) string {
 	switch code {
 	case "REVIEWER_TIMEOUT":
-		return "Reviewer-1 exceeded its bounded timeout." + retrySuffix(retries)
+		return "Reviewer exceeded its bounded timeout." + retrySuffix(retries)
 	case "REVIEWER_EXECUTABLE_MISSING":
-		return "The configured Reviewer-1 executable was not found." + retrySuffix(retries)
+		return "The configured Reviewer executable was not found." + retrySuffix(retries)
 	case "REVIEWER_PROCESS_FAILED":
-		return fmt.Sprintf("Reviewer-1 exited non-zero (%d).", exitCode) + retrySuffix(retries)
+		return fmt.Sprintf("Reviewer exited non-zero (%d).", exitCode) + retrySuffix(retries)
 	default:
-		return "Reviewer-1 response or configuration was invalid (error)." + retrySuffix(retries)
+		return "Reviewer response or configuration was invalid (error)." + retrySuffix(retries)
 	}
 }
 
