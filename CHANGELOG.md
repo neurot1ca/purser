@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.163 — 2026-10-16
+
+- **Fixed:** `/purser:init` marks an option recommended only where Purser has a reason, and every setup question starts with ⚓.
+- **Changed:** Codex Reviewer-1 choices are the newest sol model at low effort and the newest luna model at medium effort; `init` accepts `--reviewer-effort`.
+
 ## 0.1.162 — 2026-10-16
 
 - **Fixed:** an OpenCode race inventory created before catalog baselines now gets one, and its unmeasured models enter the model race instead of never being raced.
