@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func buildPurserHook(t *testing.T) string {
@@ -37,7 +36,14 @@ func runPrivate(t *testing.T, binary, state, operation, input string) (int, []by
 	}
 	command := testutil.Hide(exec.Command(binary, argv...))
 	command.Dir = t.TempDir()
-	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state, "PURSER_TEST_DISABLE_CHILD_LAUNCH=1")
+	for _, value := range os.Environ() {
+		key, _, ok := strings.Cut(value, "=")
+		if ok && (strings.EqualFold(key, "PURSER_STATE_DIR") || strings.EqualFold(key, "PURSER_TEST_DISABLE_CHILD_LAUNCH")) {
+			continue
+		}
+		command.Env = append(command.Env, value)
+	}
+	command.Env = append(command.Env, "PURSER_STATE_DIR="+state, "PURSER_TEST_DISABLE_CHILD_LAUNCH=1")
 	command.Stdin = strings.NewReader(input)
 	output, err := command.CombinedOutput()
 	if err == nil {
@@ -62,6 +68,10 @@ func decodeOutput(t *testing.T, data []byte) map[string]any {
 func TestPrivateOperationLifecycleAndHookOutput(t *testing.T) {
 	binary := buildPurserHook(t)
 	state := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	fakeWorker := filepath.Join(t.TempDir(), "fake-worker")
 	if runtime.GOOS == "windows" {
 		fakeWorker += ".exe"
@@ -211,11 +221,12 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("PURSER_AGENT", "")
 	state := t.TempDir()
 	fakeDir := t.TempDir()
 	fakeSource := filepath.Join(fakeDir, "main.go")
-	if err = os.WriteFile(fakeSource, []byte("package main\nimport \"time\"\nfunc main() { time.Sleep(time.Second) }\n"), 0600); err != nil {
+	if err = os.WriteFile(fakeSource, []byte("package main\nfunc main() {}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	override := filepath.Join(fakeDir, "fake-codex")
@@ -288,15 +299,13 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	for _, call := range []string{"123e4567-e89b-12d3-a456-426614174001", "123e4567-e89b-12d3-a456-426614174003"} {
 		id := sha256.Sum256([]byte(call))
 		path := filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(id[:])+".json")
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			data, readErr := os.ReadFile(path)
-			var job map[string]any
-			if readErr == nil && json.Unmarshal(data, &job) == nil &&
-				(job["state"] == "SUCCEEDED" || job["state"] == "FAILED") {
-				break
-			}
-			time.Sleep(20 * time.Millisecond)
+		data, readErr := os.ReadFile(path)
+		var job map[string]any
+		if readErr != nil || json.Unmarshal(data, &job) != nil {
+			t.Fatalf("job record unavailable after disabled launch: %v", readErr)
+		}
+		if _, launched := job["hostPid"]; launched {
+			t.Fatalf("test launch-disable setting did not prevent host process: %#v", job)
 		}
 	}
 }
