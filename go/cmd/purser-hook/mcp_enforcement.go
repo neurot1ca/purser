@@ -64,8 +64,8 @@ func decodeMCPHandoff(data []byte, value any) error {
 	return d.Decode(value)
 }
 
-// prepareMCPCall is dormant until M4. The owner is pinned by the MCP host, never
-// supplied in arguments. Only the exact M1 metadata field selects the handoff.
+// prepareMCPCall joins one MCP call to the exact hook-published identity. The
+// owner is pinned by the MCP host, never supplied in arguments.
 func prepareMCPCall(root string, owner waiter.Owner, data []byte) (*enforce.MCPHandoff, error) {
 	var params map[string]any
 	if err := decodeMCPHandoff(data, &params); err != nil {
@@ -75,11 +75,19 @@ func prepareMCPCall(root string, owner waiter.Owner, data []byte) (*enforce.MCPH
 	id, _ := meta["claudecode/toolUseId"].(string)
 	name, _ := params["name"].(string)
 	args, _ := params["arguments"].(map[string]any)
-	return enforce.PrepareMCP(root, owner, id, "mcp__plugin_purser_codex-main__"+name, args)
+	var lastErr error
+	for _, prefix := range []string{"mcp__plugin_purser_codex-main__", "mcp__codex-main__"} {
+		h, err := enforce.PrepareMCP(root, owner, id, prefix+name, args)
+		if h != nil {
+			return h, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // mcp-handoff reads a trusted hook event. It publishes identity only and cannot
-// run policy or launch a worker. No production hook invokes it before M4.
+// run policy or launch a worker.
 func mcpHandoffMain() int {
 	owner, err := waiter.SessionOwner()
 	var event map[string]any

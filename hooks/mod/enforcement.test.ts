@@ -1,14 +1,7 @@
 import { expect, test } from 'claude-code/testing'
-import { applyGateFailure, preRequest } from './enforcement.js'
+import { preRequest } from './enforcement.js'
 
 const prompt = 'ORCH|task=t1|phase=implementation|route=normal'
-const success = JSON.stringify({
-  hookSpecificOutput: {
-    hookEventName: 'PreToolUse', updatedInput: { prompt: 'routed prompt', model: 'gpt-6-sol' },
-  },
-  systemMessage: 'Purser: route=normal -> gpt-6-sol / medium',
-})
-const bypassContext = 'Orchestrator routing was NOT enforced for this Codex call because of an internal error: fixture failure. The call is allowed unmodified. The bypass was recorded for PostToolUse.'
 const options = { plugins: [
   {
     name: 'p66-enforcement-observer', tier: 'prepend' as const,
@@ -43,6 +36,14 @@ function stubGo(
     }
     expect(e.argv[0].replace(/\\/g, '/').endsWith(binary)).toBe(true)
     const request = JSON.parse(e.init.stdin)
+    if (e.argv[1] === 'mcp-handoff') {
+      expect(request.hook_event_name).toBe('PreToolUse')
+      expect(e.init.timeoutMs).toBe(10000)
+      calls.push(e.init.stdin)
+      const result = outcome?.()
+      if (result?.deny) return { deny: result.deny }
+      return { value: { exitCode: result?.exitCode ?? 0, stdout: result?.stdout ?? '{"written":true}', stderr: result?.stderr ?? '' } }
+    }
     if (request.hook_event_name === 'PostToolUse' || request.hook_event_name === 'PostToolUseFailure') {
       expect(e.argv[1]).toBe('enforce')
       expect(e.init.timeoutMs).toBe(300000)
@@ -278,389 +279,75 @@ test('PostToolUseFailure routes both identities of five Codex tools without the 
   ])
 })
 
-function observed(toasts: string[]) {
-  const result = toasts.find(line => line.startsWith('p66-result:'))
-  expect(result).toBeDefined()
-  return JSON.parse(result!.slice('p66-result:'.length))
-}
 
-test('matches both Codex tool identities and continues once per call', options, async ($, on) => {
+
+test('valid MCP handoff publishes identity and forwards original input unchanged', options, async ($, on) => {
   const calls: string[] = []
-  const toolCalls: unknown[] = []
   const toasts: string[] = []
-  let continuations = 0
-  stubGo(on, JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { prompt: 'changed' } } }), calls, toasts)
-  on('classic.PreToolUse', () => { continuations++; return {} })
-  stubToolCall(on, toolCalls)
-
-  for (const tool of ['mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply']) {
-    await $.tool.call({ tool, prompt })
-  }
-
-  expect(calls).toHaveLength(2)
-  expect(continuations).toBe(2)
-  expect(toolCalls.map(call => call.prompt)).toEqual(['changed', 'changed'])
-  expect(calls.map(stdin => JSON.parse(stdin).tool_name)).toEqual([
-    'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
-  ])
-})
-
-test('passes non-Codex tool identities through without starting Go', options, async ($, on) => {
-  const calls: string[] = []
   const toolCalls: unknown[] = []
-  let continuations = 0
-  on('process.run', () => { calls.push('unexpected'); return { value: { exitCode: 0, stdout: '', stderr: '' } } })
-  on('classic.PreToolUse', () => { continuations++; return {} })
+  stubGo(on, '', calls, toasts)
   stubToolCall(on, toolCalls)
 
-  await $.tool.call({ tool: 'mcp__other-server__query', query: 'hello' })
-
-  expect(calls).toEqual([])
-  expect(continuations).toBe(1)
-  expect(toolCalls).toHaveLength(1)
-})
-
-test('all Codex PreToolUse identities reach Go while non-Codex tools do not', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  stubGo(on, success, calls, toasts)
-  stubToolCall(on, toolCalls)
-
-  const codexTools = [
-    'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
-    'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result', 'mcp__codex-main__codex_cancel',
-    'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
-    'mcp__plugin_purser_codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_result',
-    'mcp__plugin_purser_codex-main__codex_cancel',
-  ]
-  for (const tool of codexTools) {
-    await $.tool.call({ tool, task_id: 'origin-task' })
-  }
-  await $.tool.call({ tool: 'mcp__other-server__query', query: 'hello' })
-
-  expect(calls).toHaveLength(10)
-  expect(calls.map(stdin => JSON.parse(stdin).tool_name)).toEqual(codexTools)
-  expect(toolCalls).toHaveLength(11)
-})
-
-test('maps Go follow-up deny and passes allowed follow-up input unchanged', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  let response = JSON.stringify({ hookSpecificOutput: {
-    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'ASYNC_STILL_RUNNING: still running; wait for the completion signal',
-  } })
-  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => ({ stdout: response }))
-  stubToolCall(on, toolCalls)
-
-  const denied = await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_result', task_id: 'origin-task' })
-  expect(observed(toasts)).toEqual({ deny: 'ASYNC_STILL_RUNNING: still running; wait for the completion signal' })
-  expect(denied.isError).toBe(true)
-  expect(toolCalls).toEqual([])
-
-  response = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse' } })
-  toasts.length = 0
-  const input = { tool: 'mcp__plugin_purser_codex-main__codex_cancel', task_id: 'origin-task', reason: 'stop' }
+  const input = { tool: 'mcp__plugin_purser_codex-main__codex', prompt }
   await $.tool.call(input)
-  expect(JSON.parse(calls[1])).toMatchObject({ tool_name: input.tool, tool_input: { task_id: 'origin-task', reason: 'stop' } })
-  expect(observed(toasts)).toEqual({})
-  expect(toolCalls).toHaveLength(1)
-  expect(toolCalls[0]).toMatchObject({ task_id: 'origin-task', reason: 'stop' })
-})
 
-test('empty Go Pre output passes codex_result through unchanged', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  let stdout = ''
-  stubGo(on, '', calls, toasts, undefined, undefined, undefined, () => ({ stdout }))
-  on('classic.PreToolUse', () => ({ additionalContext: ['prior context'] }))
-  stubToolCall(on, toolCalls)
-
-  for (const output of ['{}\n', '']) {
-    stdout = output
-    await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_result', task_id: 'origin-task' })
-    expect(observed(toasts)).toEqual({ additionalContext: ['prior context'] })
-  }
-
-  expect(calls).toHaveLength(2)
-  expect(toolCalls).toHaveLength(2)
-})
-
-test('malformed Go Pre output adds the follow-up bypass context', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  stubGo(on, '{', calls, toasts)
-  on('classic.PreToolUse', () => ({ additionalContext: ['prior context'] }))
-  stubToolCall(on, toolCalls)
-
-  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_result', task_id: 'origin-task' })
-
-  const context = observed(toasts).additionalContext.join(' ')
-  expect(context).toContain('prior context')
-  expect(context).toContain('Orchestrator routing was NOT enforced')
-  expect(toolCalls).toHaveLength(1)
   expect(calls).toHaveLength(1)
-})
-
-test('follow-up adapter failure allows unchanged with Python internal-error context and no marker', options, async ($, on) => {
-  const calls: string[] = []
-  const markerWrites: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => ({ deny: 'Go helper unavailable' }), markerWrites)
-  stubToolCall(on, toolCalls)
-
-  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_result', task_id: 'origin-task' })
-
-  expect(observed(toasts).additionalContext[0]).toContain('because of an internal error: ')
-  expect(observed(toasts).additionalContext[0]).toContain('Go helper unavailable')
-  expect(observed(toasts).additionalContext[0]).toContain('The call is allowed unmodified.')
-  expect(observed(toasts).additionalContext[0]).toContain('The bypass record could not be persisted')
-  expect(markerWrites).toEqual([])
-  expect(toolCalls).toHaveLength(1)
-  expect(toolCalls[0]).toMatchObject({ task_id: 'origin-task' })
-})
-
-test('maps the Python deny reason', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  let continuations = 0
-  stubGo(on, JSON.stringify({ hookSpecificOutput: {
-    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'MALFORMED_TOOL_INPUT: tool_input must be an object',
-  } }), calls, toasts)
-  on('classic.PreToolUse', () => { continuations++; return {} })
-  stubToolCall(on, toolCalls)
-
-  const result = await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex-reply', prompt })
-
-  expect(observed(toasts)).toEqual({ deny: 'MALFORMED_TOOL_INPUT: tool_input must be an object' })
-  expect(result.isError).toBe(true)
-  expect(result.text).toBe('MALFORMED_TOOL_INPUT: tool_input must be an object')
-  expect(continuations).toBe(1)
-  expect(toolCalls).toEqual([])
-})
-
-test('maps rewritten input and the visible route line', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  let continuations = 0
-  stubGo(on, success, calls, toasts)
-  on('classic.PreToolUse', () => { continuations++; return {} })
-  stubToolCall(on, toolCalls)
-
-  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex', prompt })
-
-  expect(observed(toasts)).toEqual({
-    updatedInput: { prompt: 'routed prompt', model: 'gpt-6-sol' },
-  })
   expect(JSON.parse(calls[0])).toMatchObject({
-    session_id: 'p66-session', cwd: 'C:/p66-repo', hook_event_name: 'PreToolUse',
-    tool_name: 'mcp__plugin_purser_codex-main__codex', tool_input: { prompt },
+    hook_event_name: 'PreToolUse',
+    tool_name: input.tool,
+    tool_input: { prompt },
+    session_id: 'p66-session',
+    cwd: 'C:/p66-repo',
   })
-  expect(toolCalls[0]).toMatchObject({ prompt: 'routed prompt', model: 'gpt-6-sol' })
-  expect(toasts).toContain('Purser: route=normal -> gpt-6-sol / medium')
-  expect(continuations).toBe(1)
-})
-
-test('maps Python additional context and preserves context from another mod', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  let continuations = 0
-  stubGo(on, JSON.stringify({ hookSpecificOutput: {
-    hookEventName: 'PreToolUse', additionalContext: bypassContext,
-  } }), calls, toasts)
-  on('classic.PreToolUse', () => { continuations++; return { additionalContext: ['prior context'] } })
-  stubToolCall(on, toolCalls)
-
-  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex', prompt })
-
-  expect(observed(toasts)).toEqual({ additionalContext: ['prior context', bypassContext] })
   expect(toolCalls).toHaveLength(1)
-  expect(continuations).toBe(1)
+  expect(toolCalls[0]).toMatchObject({ tool: input.tool, prompt })
+  expect(toolCalls[0]).not.toHaveProperty('model')
+  expect(toasts).toContain('p66-result:{}')
 })
 
-test('preserves a prior block from another mod and continues once', options, async ($, on) => {
+test('handoff publication failure denies before the MCP call', options, async ($, on) => {
   const calls: string[] = []
-  const toolCalls: unknown[] = []
   const toasts: string[] = []
-  let continuations = 0
-  stubGo(on, success, calls, toasts)
-  on('classic.PreToolUse', () => { continuations++; return { deny: 'blocked by another mod' } })
+  const toolCalls: unknown[] = []
+  stubGo(on, '', calls, toasts, undefined, undefined, undefined, () => ({ exitCode: 1, stderr: 'sharing violation' }))
   stubToolCall(on, toolCalls)
 
   const result = await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex', prompt })
 
-  expect(observed(toasts)).toEqual({ deny: 'blocked by another mod' })
   expect(result.isError).toBe(true)
-  expect(result.text).toBe('blocked by another mod')
-  expect(calls).toEqual([])
+  expect(result.text).toContain('MCP handoff publication failed')
+  expect(result.text).toContain('sharing violation')
   expect(toolCalls).toEqual([])
-  expect(continuations).toBe(1)
 })
 
-test('detects Linux amd64 with uname when host environment variables are unset', options, async ($, on) => {
+test('non-Purser MCP calls continue without publication', options, async ($, on) => {
   const calls: string[] = []
-  const toolCalls: unknown[] = []
   const toasts: string[] = []
-  stubGo(on, success, calls, toasts, {}, { exitCode: 0, stdout: 'Linux x86_64' }, '/bin/purser-hook-linux-amd64')
+  const toolCalls: unknown[] = []
+  stubGo(on, '', calls, toasts)
   stubToolCall(on, toolCalls)
 
-  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex', prompt })
-
-  expect(calls).toHaveLength(1)
-  expect(observed(toasts)).toEqual({ updatedInput: { prompt: 'routed prompt', model: 'gpt-6-sol' } })
-  expect(toolCalls[0]).toMatchObject({ prompt: 'routed prompt', model: 'gpt-6-sol' })
-})
-
-test('detects Darwin arm64 with uname when host environment variables are unset', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  stubGo(on, success, calls, toasts, {}, { exitCode: 0, stdout: 'Darwin arm64' }, '/bin/purser-hook-darwin-arm64')
-  stubToolCall(on, toolCalls)
-
-  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex', prompt })
-
-  expect(calls).toHaveLength(1)
-  expect(observed(toasts)).toEqual({ updatedInput: { prompt: 'routed prompt', model: 'gpt-6-sol' } })
-  expect(toolCalls[0]).toMatchObject({ prompt: 'routed prompt', model: 'gpt-6-sol' })
-})
-
-test('fails open when uname platform detection fails', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  stubGo(on, success, calls, toasts, {}, { exitCode: 1, stdout: '' })
-  stubToolCall(on, toolCalls)
-
-  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex', prompt })
+  await $.tool.call({ tool: 'mcp__other-server__query', query: 'hello' })
 
   expect(calls).toEqual([])
-  expect(observed(toasts)).toEqual({
-    additionalContext: ['Orchestrator routing was NOT enforced for this Codex call because Go PreToolUse failed: platform detection failed. The call is allowed unmodified; FULL Claude review is required.'],
-  })
   expect(toolCalls).toHaveLength(1)
+  expect(toolCalls[0]).toMatchObject({ tool: 'mcp__other-server__query', query: 'hello' })
 })
 
-test('adapter failures allow sync Codex with FULL context and deny codex_start', options, async ($, on) => {
-  const failures = [
-    { name: 'spawn failure', outcome: { deny: 'spawn failed' }, message: 'spawn failed' },
-    { name: 'nonzero exit', outcome: { exitCode: 1 }, message: 'exited 1' },
-    { name: 'timeout', outcome: { deny: 'timed out' }, message: 'timed out' },
-    { name: 'malformed stdout', outcome: { stdout: '{' }, message: 'JSON Parse error' },
-    { name: 'invalid mapped output', outcome: { stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }) }, message: 'invalid Go PreToolUse decision' },
-    { name: 'interruption after pending write', outcome: { deny: 'process killed after pending admission' }, message: 'process killed after pending admission' },
-  ]
-  const calls: string[] = []
-  const markerWrites: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  let currentFailure = failures[0]
-  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => currentFailure.outcome, markerWrites)
-  stubToolCall(on, toolCalls)
-
-  for (const failure of failures) {
-    currentFailure = failure
-    for (const tool of ['mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex_start']) {
-      toasts.length = 0
-      const before = toolCalls.length
-      const result = await $.tool.call({ tool, prompt })
-      const mapped = observed(toasts)
-      if (tool.endsWith('__codex_start')) {
-        expect(mapped.deny).toContain('ASYNC_ENFORCEMENT_FAILED')
-        expect(mapped.deny).toContain(failure.message)
-        expect(result.isError).toBe(true)
-        expect(toolCalls).toHaveLength(before)
-      } else {
-        expect(mapped.additionalContext.join(' ')).toContain(failure.message)
-        expect(mapped.additionalContext.join(' ')).toContain('FULL Claude review is required')
-        expect(result.isError).not.toBe(true)
-        expect(toolCalls).toHaveLength(before + 1)
-        expect(toolCalls.at(-1)).toMatchObject({ prompt })
-      }
-    }
+test('handoff request carries subagent identity without changing arguments', () => {
+  const event = {
+    tool: 'mcp__plugin_purser_codex-main__codex_apply',
+    tool_use_id: 'toolu-1',
+    prompt: 'same',
+    agentId: 'dispatcher-1',
   }
-  expect(calls).toHaveLength(failures.length * 2)
-  expect(markerWrites).toHaveLength(failures.length * 2)
-  for (let index = 0; index < markerWrites.length; index++) {
-    const request = JSON.parse(markerWrites[index])
-    const pre = JSON.parse(calls[index])
-    expect(request).toMatchObject({
-      hook_event_name: 'WriteUndeliveredMarker', session_id: pre.session_id,
-      tool_use_id: pre.tool_use_id, tool_name: pre.tool_name,
-    })
-    expect(request.reason).toBeTruthy()
-  }
-})
-
-test('marker write failure preserves sync context and codex_start deny', options, async ($, on) => {
-  const calls: string[] = []
-  const markerWrites: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  stubGo(on, success, calls, toasts, undefined, undefined, undefined,
-    () => ({ exitCode: 1 }), markerWrites, () => ({ deny: 'marker write failed' }))
-  stubToolCall(on, toolCalls)
-
-  for (const tool of ['mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex_start']) {
-    toasts.length = 0
-    const before = toolCalls.length
-    const result = await $.tool.call({ tool, prompt })
-    const mapped = observed(toasts)
-    if (tool.endsWith('__codex_start')) {
-      expect(mapped.deny).toContain('ASYNC_ENFORCEMENT_FAILED')
-      expect(result.isError).toBe(true)
-      expect(toolCalls).toHaveLength(before)
-    } else {
-      expect(mapped.additionalContext.join(' ')).toContain('FULL Claude review is required')
-      expect(result.isError).not.toBe(true)
-      expect(toolCalls).toHaveLength(before + 1)
-    }
-  }
-  expect(markerWrites).toHaveLength(2)
-})
-
-test('a subagent call carries its agent id to Go; the main thread does not', () => {
-  const e = { tool: 'mcp__plugin_purser_codex-main__codex_apply', tool_use_id: 't1', jobId: 'j1' }
-  expect(preRequest({ ...e, agentId: 'dispatcher-1' }, 's1', 'C:/r')).toMatchObject({ agent_id: 'dispatcher-1', tool_input: { jobId: 'j1' } })
-  expect(preRequest(e, 's1', 'C:/r')).not.toHaveProperty('agent_id')
-})
-
-test('a failed apply gate refuses a subagent apply or an acceptance, not a main apply', () => {
-  expect(applyGateFailure({ jobId: 'j1', agentId: 'dispatcher-1' }, 'x')).toContain('APPLY_GATE_FAILED')
-  expect(applyGateFailure({ jobId: 'j1', acceptOnly: true }, 'x')).toContain('APPLY_GATE_FAILED')
-  expect(applyGateFailure({ jobId: 'j1' }, 'x')).toBe(undefined)
-})
-
-test('main-thread codex_apply reaches Go and a Go deny blocks it', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: unknown[] = []
-  const toasts: string[] = []
-  const deny = JSON.stringify({ hookSpecificOutput: {
-    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'reviewed revision is unavailable',
-  } })
-  stubGo(on, success, calls, toasts, undefined, undefined, undefined, () => ({ stdout: deny }))
-  stubToolCall(on, toolCalls)
-  const denied = await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_apply', jobId: 'j1', acceptOnly: true })
-  expect(JSON.parse(calls[0])).toMatchObject({ tool_name: 'mcp__plugin_purser_codex-main__codex_apply', tool_input: { jobId: 'j1', acceptOnly: true } })
-  expect(denied.deny).toBe('reviewed revision is unavailable')
-  expect(toolCalls).toEqual([])
-})
-
-test('an acceptance reaches the tool with the session id Go adds', options, async ($, on) => {
-  const calls: string[] = []
-  const toolCalls: any[] = []
-  const accept = JSON.stringify({ hookSpecificOutput: {
-    hookEventName: 'PreToolUse', updatedInput: { jobId: 'j1', acceptOnly: true, revision: 'r1', sessionId: 's1' },
-  } })
-  stubGo(on, success, calls, [], undefined, undefined, undefined, () => ({ stdout: accept }))
-  stubToolCall(on, toolCalls)
-  await $.tool.call({ tool: 'mcp__plugin_purser_codex-main__codex_apply', jobId: 'j1', acceptOnly: true, revision: 'r1' })
-  expect(toolCalls[0]).toMatchObject({ jobId: 'j1', acceptOnly: true, revision: 'r1', sessionId: 's1' })
+  expect(preRequest(event, 'session-1', 'C:/repo')).toEqual({
+    session_id: 'session-1',
+    cwd: 'C:/repo',
+    hook_event_name: 'PreToolUse',
+    tool_name: event.tool,
+    tool_use_id: 'toolu-1',
+    tool_input: { prompt: 'same' },
+    agent_id: 'dispatcher-1',
+  })
 })

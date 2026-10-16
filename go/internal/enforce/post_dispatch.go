@@ -15,6 +15,7 @@ import (
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
+	"purser-hook/internal/waiter"
 )
 
 // PostToolUse dispatches the Go PostToolUse lane and owns its process matrix.
@@ -22,6 +23,14 @@ func PostToolUse(event map[string]any, root string) (response map[string]any, fa
 	if event["hook_event_name"] != "PostToolUse" {
 		return nil, nil
 	}
+	root = defaultPreStateRoot(root)
+	var context string
+	var restoreErr error
+	event, context, restoreErr = restoreMCPPostEvent(event, root)
+	if restoreErr != nil {
+		return postInternalOutput(event, root, restoreErr), restoreErr
+	}
+	defer func() { response = appendMCPPostContext(response, "PostToolUse", context) }()
 	tool := stringValue(event["tool_name"])
 	if tool == "mcp__codex-main__codex_apply" || strings.HasSuffix(tool, "__codex_apply") {
 		return postApply(event, defaultPreStateRoot(root)), nil
@@ -29,7 +38,6 @@ func PostToolUse(event map[string]any, root string) (response map[string]any, fa
 	if !codexTools[tool] {
 		return map[string]any{}, nil
 	}
-	root = defaultPreStateRoot(root)
 	var err error
 	defer func() {
 		if value := recover(); value != nil {
@@ -656,4 +664,58 @@ func appendPostDispatchReceipt(response map[string]any, root string, event, pend
 
 func pluginRoot() string {
 	return obsidian.PluginRoot()
+}
+
+// Legacy hooks and the remote server have no handoff. Only a claimed, prepared
+// local record can replace post identity/input; it never invokes policy/review.
+func restoreMCPPostEvent(event map[string]any, root string) (map[string]any, string, error) {
+	if stringValue(event["tool_use_id"]) == "" {
+		return event, "", nil
+	}
+	owner, err := waiter.SessionOwner()
+	if err != nil {
+		return event, "", nil
+	}
+	h, err := ReadPreparedMCPHandoff(root, owner, stringValue(event["session_id"]), stringValue(event["tool_use_id"]))
+	if errors.Is(err, os.ErrNotExist) {
+		return event, "", nil
+	}
+	if err != nil {
+		return event, "", err
+	}
+	original, e1 := json.Marshal(event["tool_input"])
+	bound, e2 := json.Marshal(h.Input)
+	if e1 != nil || e2 != nil || string(original) != string(bound) || event["tool_name"] != h.Tool {
+		return event, "", errors.New("MCP post handoff binding mismatch")
+	}
+	restored := make(map[string]any, len(event)+1)
+	for key, value := range event {
+		restored[key] = value
+	}
+	restored["tool_input"], restored["cwd"] = h.Effective, h.Cwd
+	delete(restored, "agent_id")
+	if h.AgentID != "" {
+		restored["agent_id"] = h.AgentID
+	}
+	return restored, stringValue(mapValue(h.Response["hookSpecificOutput"])["additionalContext"]), nil
+}
+
+func appendMCPPostContext(response map[string]any, name, context string) map[string]any {
+	if context == "" {
+		return response
+	}
+	if response == nil {
+		response = map[string]any{}
+	}
+	output := mapValue(response["hookSpecificOutput"])
+	if output == nil {
+		output = map[string]any{}
+		response["hookSpecificOutput"] = output
+	}
+	output["hookEventName"] = name
+	if prior := stringValue(output["additionalContext"]); prior != "" {
+		context = prior + "\n" + context
+	}
+	output["additionalContext"] = context
+	return response
 }

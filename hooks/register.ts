@@ -98,7 +98,10 @@ export function register(on) {
   })
 
   on('classic.UserPromptSubmit', ($, e, next) => lifecycle($, e, next, 'UserPromptSubmit'))
-  on('classic.SessionStart', ($, e, next) => lifecycle($, e, next, 'SessionStart'))
+  on('classic.SessionStart', async ($, e, next) => {
+    const prior = await next(e)
+    return lifecycle($, e, () => prior, 'SessionStart')
+  })
   on('classic.PreCompact', ($, e, next) => lifecycle($, e, next, 'PreCompact'))
   on('classic.Stop', ($, e, next) => lifecycle($, e, next, 'Stop'))
 }

@@ -57,6 +57,9 @@ func TestMCPHandoffBindingReplay(t *testing.T) {
 	if h.event()["session_id"] != "hook-session" {
 		t.Fatal("untrusted identity won")
 	}
+	if agent, ok := h.event()["agent_id"]; !ok || agent != "" {
+		t.Fatalf("main identity was not preserved: %#v", h.event())
+	}
 	if _, err := ClaimMCPHandoff(root, owner, "call", tool, input); err == nil {
 		t.Fatal("replayed claim")
 	}

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/jobs"
 	"purser-hook/internal/waiter"
 )
@@ -330,7 +331,7 @@ func TestMCPCallValidatesArgumentsBeforeToolNameAndPreservesResultShape(t *testi
 		t.Fatalf("invalid arguments should be a tool error before unknown-name handling: %s", got)
 	}
 	got = exchange(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"codex","arguments":{"prompt":3}}}`)
-	if !strings.Contains(got, `"text":"{\"threadId\": null, \"error\": \"prompt must be a string\"}"`) ||
+	if !strings.Contains(got, `"text":"{\"threadId\": null, \"error\": \"MCP identity handoff:`) ||
 		!strings.Contains(got, `"isError":true`) {
 		t.Fatalf("dispatcher error shape: %s", got)
 	}
@@ -365,6 +366,101 @@ func TestMCPSingleWriterSerializesFrames(t *testing.T) {
 		var reply map[string]any
 		if json.Unmarshal([]byte(line), &reply) != nil {
 			t.Fatalf("interleaved frame: %q", line)
+		}
+	}
+}
+
+func TestMCPPreparedLocalDispatch(t *testing.T) {
+	parent := filepath.Join("..", "..", "..", ".tmp")
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp(parent, "mcp-dispatch-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ = filepath.Abs(root)
+	defer os.RemoveAll(root)
+	repo := filepath.Join(root, "repo with spaces")
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	owner, err := waiter.PinOwner(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin, _ := filepath.Abs(filepath.Join("..", "..", ".."))
+	bin, _ := synchronousFakeCodexPrefix()
+	t.Setenv("PURSER_SESSION_OWNER", owner.String())
+	t.Setenv("PURSER_STATE_DIR", filepath.Join(root, "state"))
+	t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
+	t.Setenv("CODEX_HOME", filepath.Join(root, "codex"))
+	t.Setenv("PURSER_AGENT", "codex")
+	t.Setenv("PURSER_CODEX_BIN", string(bin))
+	t.Setenv("PURSER_SYNC_FAKE_CODEX", "1")
+	t.Setenv("PURSER_SYNC_ORACLE_MODE", "success")
+	t.Setenv("PURSER_SYNC_ORACLE_THREAD", "prepared-thread")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "stale-env")
+	missing := []byte(`{"name":"codex_apply","arguments":{"jobId":"job","acceptOnly":true},"_meta":{"claudecode/toolUseId":"missing"}}`)
+	if result := runPreparedLocalMCPCall(context.Background(), missing); result["isError"] != true {
+		t.Fatalf("missing apply handoff bypassed denial: %v", result)
+	}
+	for i, tool := range []string{"codex", "codex-reply", "codex_apply", "codex"} {
+		input := map[string]any{"prompt": "ORCH|task=prepared|phase=implementation|route=subtle|scope=src/a.go\nImplement.", "cwd": repo, "label": "Prepared call"}
+		agent := ""
+		if i == 3 {
+			input["prompt"] = "ORCH|task=prepared-cancel|phase=implementation|route=subtle|scope=src/b.go\nImplement."
+			input["label"] = "Prepared cancellation"
+		}
+		if i == 1 {
+			input["threadId"] = "prepared-thread"
+		}
+		if tool == "codex_apply" {
+			input = map[string]any{"jobId": "job", "acceptOnly": true, "sessionId": "forged"}
+			agent = "subagent"
+		}
+		id := fmt.Sprintf("prepared-%d-%s", i, tool)
+		toolName := "mcp__plugin_purser_codex-main__" + tool
+		if i == 3 {
+			toolName = "mcp__codex-main__" + tool
+		}
+		event := map[string]any{"hook_event_name": "PreToolUse", "session_id": "hook-session", "tool_use_id": id, "tool_name": toolName, "tool_input": input, "cwd": repo, "agent_id": agent}
+		if err := enforce.PublishMCPHandoff(stateRoot(), owner, event); err != nil {
+			t.Fatal(err)
+		}
+		wire, _ := json.Marshal(map[string]any{"name": tool, "arguments": input, "_meta": map[string]any{"claudecode/toolUseId": id}})
+		ctx := context.Background()
+		if i == 3 {
+			cancelled, cancel := context.WithCancel(ctx)
+			cancel()
+			ctx = cancelled
+		}
+		result := runPreparedLocalMCPCall(ctx, wire)
+		if i < 2 {
+			if result["isError"] == true {
+				t.Fatalf("%s dispatch: %v", tool, result)
+			}
+			if len(result["content"].([]any)) != 1 {
+				t.Fatal("normal bundle grew")
+			}
+		} else if result["isError"] != true {
+			t.Fatalf("%s bypassed denial/cancellation: %v", tool, result)
+		}
+		if replay := runPreparedLocalMCPCall(context.Background(), wire); replay["isError"] != true {
+			t.Fatal("dispatch replayed")
+		}
+		h, err := enforce.ReadPreparedMCPHandoff(stateRoot(), owner, "hook-session", id)
+		if err != nil || h.SessionID != "hook-session" {
+			t.Fatalf("prepared identity: %v", err)
+		}
+		if i == 0 && h.Effective["model"] == nil {
+			t.Fatalf("%s was not routed: %v", tool, h.Response)
+		}
+		if i < 2 {
+			event["hook_event_name"], event["tool_response"] = "PostToolUse", result
+			if _, err := enforce.PostToolUse(event, stateRoot()); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 }

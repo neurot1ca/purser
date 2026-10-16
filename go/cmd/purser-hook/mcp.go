@@ -269,20 +269,15 @@ func (s *mcpServer) runCall(ctx context.Context, key string, id json.RawMessage,
 			}
 			return
 		}
-		value, err := dispatchOperation(ctx, tool, args, stateRoot())
-		if err != nil {
-			if tool == "codex_result" {
-				jobID, ok := args["jobId"].(string)
-				if !ok || jobID == "" {
-					result = jobs.Result(stateRoot(), "", float64(time.Now().UnixNano())/1e9, jobs.ResultOptions{})
-					return
-				}
+		if localPreparedMCPTool(tool) {
+			wire, err := json.Marshal(params)
+			if err != nil {
+				result = legacyError(nil, "MCP handoff parameters are invalid")
+			} else {
+				result = runPreparedLocalMCPCall(ctx, wire)
 			}
-			result = legacyError(nil, err.Error())
-		} else if value == nil {
-			result = legacyError(nil, "operation returned no result")
 		} else {
-			result = value
+			result = dispatchLocalMCPCall(ctx, tool, args)
 		}
 	}()
 
@@ -451,4 +446,61 @@ func startMCPMaintenance(ctx context.Context, stdout, stderr io.Writer) {
 		message := strings.NewReplacer("\r", " ", "\n", " ").Replace(err.Error())
 		fmt.Fprintf(stderr, "Purser: model catalog refresh skipped: %s\n", message)
 	}
+}
+
+// runPreparedLocalMCPCall claims the hook handoff before server-owned routing.
+func runPreparedLocalMCPCall(ctx context.Context, params []byte) map[string]any {
+	owner, err := waiter.SessionOwner()
+	if err != nil {
+		return legacyError(nil, "MCP identity handoff: "+err.Error())
+	}
+	h, err := prepareMCPCall(stateRoot(), owner, params)
+	if h == nil {
+		return legacyError(nil, "MCP identity handoff: "+err.Error())
+	}
+	if denied, reason := remoteDeny(h.Response); denied {
+		return legacyError(nil, reason)
+	}
+	if ctx.Err() != nil {
+		return legacyError(nil, ctx.Err().Error())
+	}
+	tool := mcpOperationName(h.Tool)
+	return dispatchLocalMCPCall(ctx, tool, h.Effective)
+}
+
+func mcpOperationName(tool string) string {
+	for _, prefix := range []string{"mcp__plugin_purser_codex-main__", "mcp__codex-main__"} {
+		if strings.HasPrefix(tool, prefix) {
+			return strings.TrimPrefix(tool, prefix)
+		}
+	}
+	return tool
+}
+
+func localPreparedMCPTool(tool string) bool {
+	switch tool {
+	case "codex", "codex-reply", "codex_start", "codex_result", "codex_cancel", "codex_apply":
+		return true
+	default:
+		return false
+	}
+}
+
+func dispatchLocalMCPCall(ctx context.Context, tool string, args map[string]any) map[string]any {
+	var result map[string]any
+	value, err := dispatchOperation(ctx, tool, args, stateRoot())
+	if err != nil {
+		if tool == "codex_result" {
+			jobID, ok := args["jobId"].(string)
+			if !ok || jobID == "" {
+				return jobs.Result(stateRoot(), "", float64(time.Now().UnixNano())/1e9, jobs.ResultOptions{})
+			}
+		}
+		result = legacyError(nil, err.Error())
+	} else if value == nil {
+		result = legacyError(nil, "operation returned no result")
+	} else {
+		result = value
+	}
+	return result
 }

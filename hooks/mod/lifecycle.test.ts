@@ -7,6 +7,7 @@ const context = (event: string, text: string) => JSON.stringify({
 test('classic lifecycle events send full hook input and map Go results', async ($, on) => {
   const sent: Record<string, unknown>[] = []
   const paths: string[] = []
+  const continued: Record<string, unknown>[] = []
   let maintenanceRan = false
   on('env.get', (_$, e) => ({ value: e.name === 'OS' ? 'Windows_NT' : e.name === 'PROCESSOR_ARCHITECTURE' ? 'AMD64' : undefined }))
   on('process.run', (_$, e) => {
@@ -21,7 +22,7 @@ test('classic lifecycle events send full hook input and map Go results', async (
     return { value: { exitCode: 0, stdout, stderr: '' } }
   })
   on('classic.UserPromptSubmit', () => ({ additionalContext: ['prior prompt'] }))
-  on('classic.SessionStart', () => { maintenanceRan = true; return { additionalContext: ['prior session'] } })
+  on('classic.SessionStart', (_$, e) => { maintenanceRan = true; continued.push(e); return { additionalContext: ['prior session'] } })
   on('classic.PreCompact', () => ({}))
   on('classic.Stop', () => ({}))
 
@@ -38,6 +39,11 @@ test('classic lifecycle events send full hook input and map Go results', async (
   expect(stop.block).toBe('finish notice')
   expect(sent.map(e => e.hook_event_name)).toEqual(['UserPromptSubmit', 'SessionStart', 'SessionStart', 'SessionStart', 'PreCompact', 'Stop'])
   expect(sent.filter(e => e.hook_event_name === 'SessionStart').map(e => e.source)).toEqual(['compact', 'clear', 'resume'])
+  expect(continued).toEqual([
+    { session_id: 's1', transcript_path: '', cwd: '/repo', source: 'compact', hook_event_name: 'SessionStart' },
+    { session_id: 's1', transcript_path: '', cwd: '/repo', source: 'clear', hook_event_name: 'SessionStart' },
+    { session_id: 's1', transcript_path: '', cwd: '/repo', source: 'resume', hook_event_name: 'SessionStart' },
+  ])
   expect(sent[4].trigger).toBe('manual')
   expect(sent[5].last_assistant_message).toBe('Done.')
   expect(paths.every(path => path.replace(/\\/g, '/').endsWith('/bin/purser-hook-windows-amd64.exe'))).toBe(true)

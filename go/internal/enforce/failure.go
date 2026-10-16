@@ -12,6 +12,7 @@ import (
 
 // PostToolUseFailure dispatches each Codex failure event to its Go finalizer.
 func PostToolUseFailure(event map[string]any, root string) (response map[string]any) {
+	root = defaultPreStateRoot(root)
 	tool := stringValue(event["tool_name"])
 	if !codexTools[tool] {
 		return nil
@@ -24,6 +25,13 @@ func PostToolUseFailure(event map[string]any, root string) (response map[string]
 			response = failureErrorOutput("RuntimeError: " + fmt.Sprint(recovered))
 		}
 	}()
+	var context string
+	var err error
+	event, context, err = restoreMCPPostEvent(event, root)
+	if err != nil {
+		return failureErrorOutput(safeError(err))
+	}
+	defer func() { response = appendMCPPostContext(response, "PostToolUseFailure", context) }()
 	if strings.HasSuffix(tool, "__codex_start") {
 		return postFailureStart(event, root)
 	}

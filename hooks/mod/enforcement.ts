@@ -23,15 +23,8 @@ export function preRequest(e: Record<string, unknown>, sessionId: string, cwd: s
   return {
     session_id: sessionId, cwd, hook_event_name: 'PreToolUse',
     tool_name: tool, tool_use_id, tool_input,
-    ...(agentId ? { agent_id: agentId } : {}),
+    agent_id: typeof agentId === 'string' ? agentId : '',
   }
-}
-
-// When the gate itself fails: a subagent apply or an acceptance is refused; a
-// main-thread apply proceeds as it did before the gate existed.
-export function applyGateFailure(e: Record<string, unknown>, reason: string): string | undefined {
-  if (!e.agentId && e.acceptOnly !== true) return undefined
-  return `APPLY_GATE_FAILED: Go PreToolUse failed: ${reason}. Main Claude must apply this job.`
 }
 
 function mapPostToolUse(event: PostEvent, stdout: string): {
@@ -130,139 +123,24 @@ async function handlePostToolUse(event: PostEvent, $, e, next) {
 }
 
 export function register(on) {
-  const syncTools = new Set([
-    'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
-    'mcp__plugin_purser_codex-main__codex', 'mcp__plugin_purser_codex-main__codex-reply',
-  ])
-  // Async start and follow-up tools use the Go adapter for both identities.
-  const startTools = new Set(['mcp__codex-main__codex_start', 'mcp__plugin_purser_codex-main__codex_start'])
-  const followupTools = new Set([
-    'mcp__codex-main__codex_result', 'mcp__codex-main__codex_cancel',
-    'mcp__plugin_purser_codex-main__codex_result', 'mcp__plugin_purser_codex-main__codex_cancel',
-  ])
-  // Go gates a subagent's apply on main Claude's recorded acceptance.
-  const applyTools = new Set(['mcp__codex-main__codex_apply', 'mcp__plugin_purser_codex-main__codex_apply'])
-  function mapPreToolUse(stdout: string): {
-    deny?: string
-    updatedInput?: Record<string, unknown>
-    additionalContext?: string[]
-    systemMessage?: string
-  } {
-    if (!stdout.trim()) return {}
-    const output = JSON.parse(stdout)
-    if (output === null || typeof output !== 'object' || Array.isArray(output)) {
-      throw new Error('invalid Go PreToolUse output')
-    }
-    if (Object.keys(output).length === 0) return {}
-    const specific = output?.hookSpecificOutput
-    if (specific?.hookEventName !== 'PreToolUse') throw new Error('invalid Go PreToolUse output')
-    if (specific.permissionDecision === 'deny' && typeof specific.permissionDecisionReason === 'string') {
-      return { deny: specific.permissionDecisionReason }
-    }
-    if (specific.permissionDecision !== undefined) throw new Error('invalid Go PreToolUse decision')
-    if (specific.updatedInput !== undefined &&
-        (specific.updatedInput === null || typeof specific.updatedInput !== 'object' || Array.isArray(specific.updatedInput))) {
-      throw new Error('invalid Go PreToolUse updatedInput')
-    }
-    if (specific.additionalContext !== undefined && typeof specific.additionalContext !== 'string') {
-      throw new Error('invalid Go PreToolUse additionalContext')
-    }
-    if (output.systemMessage !== undefined && typeof output.systemMessage !== 'string') {
-      throw new Error('invalid Go PreToolUse systemMessage')
-    }
-    return {
-      ...(specific.updatedInput ? { updatedInput: specific.updatedInput } : {}),
-      ...(specific.additionalContext ? { additionalContext: [specific.additionalContext] } : {}),
-      ...(output.systemMessage ? { systemMessage: output.systemMessage } : {}),
-    }
-  }
-
-  // classic.PreToolUse carries no agentId, so the apply gate runs on tool.call.
-  on('tool.call', async ($, e, next) => {
-    if (!applyTools.has(e.tool)) return next(e)
-    let mapped: ReturnType<typeof mapPreToolUse>
-    try {
-      const binary = await goBinary($)
-      const sessionId = await $.session.id()
-      const cwd = await $.session.cwd()
-      const result = await $.process.run([binary], {
-        cwd,
-        stdin: JSON.stringify(preRequest(e, sessionId, cwd)),
-        timeoutMs: 60000,
-      })
-      if (result.exitCode !== 0) throw new Error(`Go PreToolUse helper exited ${result.exitCode}`)
-      mapped = mapPreToolUse(result.stdout)
-    } catch (error) {
-      // Fail closed for a subagent or an acceptance; a main-thread apply proceeds as before.
-      const deny = applyGateFailure(e, error instanceof Error ? error.message : String(error))
-      return deny ? { deny } : next(e)
-    }
-    if (mapped.deny) return { deny: mapped.deny }
-    return next(mapped.updatedInput ? { ...e, ...mapped.updatedInput } : e)
-  })
-
   on("classic.PostToolUse", ($, e, next) => handlePostToolUse('PostToolUse', $, e, next))
   on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse('PostToolUseFailure', $, e, next))
 
   on('classic.PreToolUse', async ($, e, next) => {
-    const prior = await next(e)
-    if (prior.deny !== undefined) return prior
-    if (!syncTools.has(e.tool) && !startTools.has(e.tool) && !followupTools.has(e.tool)) return prior
-
-    let helperBinary = ''
-    let helperCwd = ''
-    let helperSessionId = ''
+    if (!postToolUseTools.has(e.tool) && !postToolUseFailureTools.has(e.tool)) return next(e)
     try {
       const binary = await goBinary($)
       const sessionId = await $.session.id()
-      helperBinary = binary
-      helperSessionId = sessionId
       const cwd = await $.session.cwd()
-      helperCwd = cwd
-      const result = await $.process.run([helperBinary], {
+      const result = await $.process.run([binary, 'mcp-handoff'], {
         cwd,
         stdin: JSON.stringify(preRequest(e, sessionId, cwd)),
-        timeoutMs: 60000,
+        timeoutMs: 10000,
       })
-      if (result.exitCode !== 0) throw new Error(`Go PreToolUse helper exited ${result.exitCode}`)
-      const mapped = mapPreToolUse(result.stdout)
-      if (mapped.systemMessage) await $.ui.toast(mapped.systemMessage)
-      if (!mapped.deny && !mapped.updatedInput && !mapped.additionalContext) return prior
-      return {
-        ...prior,
-        ...(mapped.deny ? { deny: mapped.deny } : {}),
-        ...(mapped.updatedInput ? { updatedInput: mapped.updatedInput } : {}),
-        ...(mapped.additionalContext ? { additionalContext: [...(prior.additionalContext ?? []), ...mapped.additionalContext] } : {}),
-      }
+      if (result.exitCode !== 0) return { deny: `MCP handoff publication failed: ${result.stderr || `exit ${result.exitCode}`}` }
+      return next(e)
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      if (!followupTools.has(e.tool) && helperBinary && typeof e.tool_use_id === 'string') {
-        try {
-          await $.process.run([helperBinary], {
-            cwd: helperCwd,
-            stdin: JSON.stringify({
-              hook_event_name: 'WriteUndeliveredMarker', session_id: helperSessionId,
-              tool_use_id: e.tool_use_id, tool_name: e.tool, reason,
-            }),
-            timeoutMs: 1000,
-          })
-        } catch { /* Marker persistence is best-effort; preserve the existing deny/FULL context. */ }
-      }
-      if (e.tool.endsWith('__codex_start')) {
-        return { ...prior, deny: `ASYNC_ENFORCEMENT_FAILED: Go PreToolUse failed: ${reason}. Async start lacks a durable route/baseline; FULL review is required.` }
-      }
-      if (followupTools.has(e.tool)) {
-        return {
-          ...prior,
-          additionalContext: [...(prior.additionalContext ?? []),
-            `Orchestrator routing was NOT enforced for this Codex call because of an internal error: ${reason}. The call is allowed unmodified. The bypass record could not be persisted; this PreToolUse context is the only warning.`],
-        }
-      }
-      return {
-        ...prior,
-        additionalContext: [...(prior.additionalContext ?? []),
-          `Orchestrator routing was NOT enforced for this Codex call because Go PreToolUse failed: ${reason}. The call is allowed unmodified; FULL Claude review is required.`],
-      }
+      return { deny: `MCP handoff publication failed: ${error instanceof Error ? error.message : String(error)}` }
     }
   })
 }

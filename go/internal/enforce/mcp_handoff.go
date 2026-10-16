@@ -45,10 +45,11 @@ type MCPHandoff struct {
 
 func (h *MCPHandoff) event() map[string]any {
 	e := map[string]any{"hook_event_name": "PreToolUse", "session_id": h.SessionID,
-		"tool_use_id": h.ToolUseID, "tool_name": h.Tool, "cwd": h.Cwd, "tool_input": h.Input}
-	if h.AgentID != "" {
-		e["agent_id"] = h.AgentID
-	}
+		"tool_use_id": h.ToolUseID, "tool_name": h.Tool, "cwd": h.Cwd, "tool_input": h.Input,
+		// PublishMCPHandoff records an explicit empty identity for main Claude.
+		// Preserve that value when reconstructing the event so Pre can distinguish
+		// main acceptance from an untrusted subagent.
+		"agent_id": h.AgentID}
 	return e
 }
 
