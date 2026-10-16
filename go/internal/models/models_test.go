@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -591,6 +592,50 @@ func TestOpenCodeListingOutputIsBounded(t *testing.T) {
 	}
 	if len(output.data) != 3 {
 		t.Fatalf("captured %d bytes, want limit 3", len(output.data))
+	}
+}
+
+func TestOpenCodeBinaryFindsWindowsNpmVariantFromCmdLauncher(t *testing.T) {
+	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		t.Skip("Windows x64 npm launcher layout")
+	}
+	root := t.TempDir()
+	launcher := filepath.Join(root, "opencode.cmd")
+	if err := os.WriteFile(launcher, []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "node_modules", "opencode-ai", "node_modules", "opencode-windows-x64", "bin", "opencode.exe")
+	if err := os.MkdirAll(filepath.Dir(executable), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldLookPath := lookPath
+	lookPath = func(string) (string, error) { return launcher, nil }
+	t.Cleanup(func() { lookPath = oldLookPath })
+
+	got, err := opencodeBinary()
+	if err != nil || got != executable {
+		t.Fatalf("opencodeBinary() = %q, %v; want %q, nil", got, err, executable)
+	}
+}
+
+func TestOpenCodeBinaryRejectsWindowsCmdWithoutExecutable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows npm launcher layout")
+	}
+	launcher := filepath.Join(t.TempDir(), "opencode.cmd")
+	if err := os.WriteFile(launcher, []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldLookPath := lookPath
+	lookPath = func(string) (string, error) { return launcher, nil }
+	t.Cleanup(func() { lookPath = oldLookPath })
+
+	got, err := opencodeBinary()
+	if err != nil || got != "" {
+		t.Fatalf("opencodeBinary() = %q, %v; want empty path, nil", got, err)
 	}
 }
 

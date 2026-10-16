@@ -760,9 +760,6 @@ func opencodeBinary() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(launcher), ".exe") {
-		return "", nil
-	}
 	name := "opencode"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
@@ -805,6 +802,13 @@ func opencodeBinary() (string, error) {
 				return candidate, nil
 			}
 		}
+	}
+	if runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(launcher), ".exe") {
+		candidate := filepath.Join(root, "node_modules", "opencode-ai", "bin", name)
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		return "", nil
 	}
 	return launcher, nil
 }
