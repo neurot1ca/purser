@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.165 — 2026-10-16
+
+- **Fixed:** `reviewer set` and `init` replace an existing reviewer or route sub-table in `roles.toml` instead of writing a duplicate key that broke every job start.
+- **Fixed:** a project opened through a symlinked path (such as macOS `/var` and `/private/var`) keeps one project key, so its roles, telemetry and handoff stay together.
+- **Fixed:** a failure to record a new OpenCode model's bracket result is reported instead of ignored, and the race inventory lock waits longer under load.
+
 ## 0.1.164 — 2026-10-16
 
 - **Fixed:** hidden Windows child processes start with a windowless console, so Windows Terminal no longer flashes a window while Purser works.
