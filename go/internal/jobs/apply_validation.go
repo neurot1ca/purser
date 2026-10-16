@@ -657,17 +657,28 @@ func RunApplyValidation(stateRoot, key, id string) error {
 		if lookErr != nil {
 			record.PluginStatus, record.PluginReason = "skipped", "claude binary is unavailable"
 			setValidationOutcome(&validationState, &validationReason, "skipped", record.PluginReason)
-		} else if err = runApplyValidationCommand(record.Repository, env, []string{claude, "plugin", "test"}, validationTimeout, logFile, nil); err != nil {
-			if errors.Is(err, errTreeUnconfirmed) {
-				return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
-			}
-			record.PluginStatus, record.PluginReason = validationFailureState(err), "claude plugin test failed"
-			setValidationOutcome(&validationState, &validationReason, record.PluginStatus, record.PluginReason)
 		} else {
-			record.PluginStatus = "passed"
-		}
-		if lookErr == nil {
-			record.Commands = appendValidationCommand(record.Commands, "claude plugin test")
+			files, listErr := trackedPluginTestFiles(record.Repository)
+			if listErr != nil {
+				record.PluginStatus, record.PluginReason = validationFailureState(listErr), "claude plugin test failed"
+				setValidationOutcome(&validationState, &validationReason, record.PluginStatus, record.PluginReason)
+			} else if len(files) == 0 {
+				record.PluginStatus, record.PluginReason = "skipped", "no tracked plugin test files"
+				setValidationOutcome(&validationState, &validationReason, "skipped", record.PluginReason)
+			} else {
+				record.PluginStatus = "passed"
+				for _, file := range files {
+					args := []string{claude, "plugin", "test", "--file", file, "."}
+					record.Commands = appendValidationCommand(record.Commands, "claude plugin test --file "+file)
+					if err = runApplyValidationCommand(record.Repository, env, args, validationTimeout, logFile, nil); err != nil {
+						if errors.Is(err, errTreeUnconfirmed) {
+							return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
+						}
+						record.PluginStatus, record.PluginReason = validationFailureState(err), "claude plugin test failed"
+						setValidationOutcome(&validationState, &validationReason, record.PluginStatus, record.PluginReason)
+					}
+				}
+			}
 		}
 	}
 	if validationState != "" {
@@ -1267,4 +1278,19 @@ func touchesPlugin(paths []string) bool {
 		}
 	}
 	return false
+}
+
+func trackedPluginTestFiles(repo string) ([]string, error) {
+	command := proc.Hide(exec.Command("git", "ls-files", "-z", "--", "*.test.ts", "*.test.tsx"))
+	command.Dir = repo
+	output, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	if len(output) == 0 {
+		return nil, nil
+	}
+	files := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+	sort.Strings(files)
+	return files, nil
 }

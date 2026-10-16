@@ -154,6 +154,52 @@ func TestValidationPass(t *testing.T) {
 	}
 }
 
+func TestPluginValidationRunsOnlyTrackedTestFiles(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"hooks/mod/changed.ts"})
+	write(t, filepath.Join(repo, ".gitignore"), "ignored/\n")
+	write(t, filepath.Join(repo, "hooks", "mod", "one.test.ts"), "")
+	write(t, filepath.Join(repo, "hooks", "mod", "two.test.tsx"), "")
+	write(t, filepath.Join(repo, "ignored", "one.test.ts"), "")
+	write(t, filepath.Join(repo, "ignored", "two.test.tsx"), "")
+	git(t, repo, "add", ".gitignore", "hooks/mod/one.test.ts", "hooks/mod/two.test.tsx")
+	var err error
+	record.Revision, record.Snapshot, err = checkoutRevision(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := validationRepositoryKey(repo)
+	path := validationRecordPath(root, key, record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	var gotFiles []string
+	priorRunner, priorLookPath := runApplyValidationCommand, validationLookPath
+	runApplyValidationCommand = func(_ string, _ []string, args []string, _ time.Duration, _ io.Writer, _ *applyValidation) error {
+		if len(args) >= 6 && args[1] == "plugin" && args[2] == "test" && args[3] == "--file" {
+			gotFiles = append(gotFiles, args[4])
+		}
+		return nil
+	}
+	validationLookPath = func(tool string) (string, error) {
+		if tool == "claude" {
+			return "claude", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { runApplyValidationCommand, validationLookPath = priorRunner, priorLookPath })
+	if err := RunApplyValidation(root, key, record.JobID); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"hooks/mod/one.test.ts", "hooks/mod/two.test.tsx"}
+	if strings.Join(gotFiles, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("plugin test files=%v want tracked files %v", gotFiles, want)
+	}
+	result, err := readApplyValidation(path)
+	if err != nil || result.PluginStatus != "passed" {
+		t.Fatalf("plugin validation result=%+v err=%v", result, err)
+	}
+}
+
 func TestValidationPackageSelectionIncludesDeletedGoAndTouchedModule(t *testing.T) {
 	t.Setenv("GOWORK", "off")
 	root, repo, _ := validationFixture(t, []string{"main.go"})
