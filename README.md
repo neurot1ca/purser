@@ -4,8 +4,9 @@
 
 ![Windows](https://img.shields.io/badge/Windows-supported-0078D6?logo=windows) ![Linux](https://img.shields.io/badge/Linux-supported-FCC624?logo=linux&logoColor=black) ![macOS](https://img.shields.io/badge/macOS-supported-000000?logo=apple) ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue) ![GitHub stars](https://img.shields.io/github/stars/neurot1ca/purser) ![GitHub release](https://img.shields.io/github/v/release/neurot1ca/purser)
 
-Purser keeps the workflow simple and focuses on saving Claude context and time.<br />
-Coding agents work in isolated Git worktrees while Claude plans and reviews.
+Purser keeps the workflow simple and focuses on saving Claude context and time.
+
+Purser is a parallel coding agent orchestrator for Claude Code: it delegates coding tasks to background workers that run side by side. It is made for developers on smaller Claude plans who want their usage to last through large projects. Claude stays in charge of planning and reviews, while configured coding agents write code in isolated Git worktrees.
 
 **[Install](#install) · [How it works](#workflow) · [Commands](#commands) · [Docs](#documentation)**
 
@@ -14,9 +15,7 @@ Coding agents work in isolated Git worktrees while Claude plans and reviews.
 
 ## Overview
 
-Purser is a parallel coding agent orchestrator for Claude Code. It delegates coding tasks to background workers that run side by side in isolated Git worktrees, while Claude stays in charge of planning and reviews.
-
-It is made for developers on smaller Claude plans who want their usage to last through large projects. Lightweight models that use very few tokens, such as gpt-6-luna, can handle small jobs with only the files needed for each step, without loading the full conversation history.
+Lightweight models that use very few tokens, such as gpt-6-luna, can handle small jobs with only the files needed for each step, without loading the full conversation history.
 
 ## Install
 
