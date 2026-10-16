@@ -5,8 +5,7 @@ review delegated AI coding work. This file binds every worker in this repository
 
 ## Scope and authority
 
-- Work only inside this repository. Never write to `C:\Projects\polymarket-btc5m-lab`;
-  its copy of the engine is frozen.
+- Work only inside this repository.
 - Workers do not commit or push. Claude commits after acceptance.
 - Do not modify `.claude/settings.local.json`.
 

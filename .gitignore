@@ -9,7 +9,7 @@ docs/PROVENANCE.md
 docs/ORCHESTRATION_REFORM_SPEC.md
 docs/ORCHESTRATOR_PROFILE_PLAN.md
 .claude/hooks/orchestrator/BUILD_SPEC.md
-profiles/polymarket-btc5m-lab.toml
+profiles/
 CLAUDE.md
 .orchestrator/profile.toml
 docs/local/
