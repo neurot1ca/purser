@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"purser-hook/internal/ledger"
 )
@@ -175,6 +176,30 @@ func TestGearSelectionPreservesAuthorityBoundaries(t *testing.T) {
 		map[string]any{"active_coder": "fallback"}, nil, true)
 	if fallback.Agent != "agy" || fallback.Model != "claude-test" {
 		t.Fatalf("gear changed fallback selection: %#v", fallback)
+	}
+}
+
+func TestMechanicalRaceDispatchKeepsExactMeasuredID(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", state)
+	cache, err := json.Marshal(map[string]any{
+		"checked_on": time.Now().UTC().Format("2006-01-02"),
+		"agents":     map[string][]string{"opencode": {"vendor/model-2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(state, "model-resolution.json"), cache, 0600); err != nil {
+		t.Fatal(err)
+	}
+	selection := SelectCoder("mechanical", "route-model", "none", "", true, false,
+		map[string]any{"coder_agent": "codex", "mechanical_opencode_enabled": true}, nil, nil, nil,
+		[]any{
+			map[string]any{"id": "vendor/model-1", "status": "measured", "mechanical_samples": []any{true, true, true, true, true}},
+			map[string]any{"id": "vendor/model-2", "status": "unmeasured", "mechanical_samples": []any{}},
+		}, false)
+	if selection.Agent != "opencode" || selection.Model != "vendor/model-1" {
+		t.Fatalf("race dispatch = %#v, measured candidate inherited a newer catalog ID", selection)
 	}
 }
 

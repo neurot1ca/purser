@@ -185,27 +185,11 @@ func workerValidationPassed(validation map[string]any) bool {
 
 func recordMechanicalSample(root, model string, success bool) error {
 	path := filepath.Join(root, "opencode", "candidates.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	path, unlock, err := lockCandidateInventory(root)
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
-	if info, e := lock.Stat(); e != nil {
-		return e
-	} else if info.Size() == 0 {
-		_, _ = lock.WriteAt([]byte("\x00"), 0)
-	}
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for contextio.TryLock(lock) != nil {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("candidate inventory lock unavailable")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	defer contextio.Unlock(lock)
+	defer unlock()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -219,6 +203,7 @@ func recordMechanicalSample(root, model string, success bool) error {
 		return fmt.Errorf("invalid candidate inventory")
 	}
 	oldLeader, varCandidate := "", map[string]any(nil)
+	retired := false
 	for _, item := range candidates {
 		c, ok := item.(map[string]any)
 		if !ok {
@@ -230,6 +215,17 @@ func recordMechanicalSample(root, model string, success bool) error {
 		}
 		if id == model {
 			varCandidate = c
+		}
+	}
+	if varCandidate == nil {
+		if history, ok := inventory["retired_candidates"].([]any); ok {
+			for _, item := range history {
+				c, ok := item.(map[string]any)
+				if ok && c["id"] == model {
+					varCandidate, retired = c, true
+					break
+				}
+			}
 		}
 	}
 	if varCandidate == nil {
@@ -246,6 +242,13 @@ func recordMechanicalSample(root, model string, success bool) error {
 	varCandidate["mechanical_samples"] = samples
 	if len(samples) >= mechanicalMinSamples && varCandidate["status"] != "failed" {
 		varCandidate["status"] = "measured"
+	}
+	if retired {
+		data, err = json.Marshal(inventory)
+		if err != nil {
+			return err
+		}
+		return atomicWrite(path, data)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, _ := candidates[i].(map[string]any)
@@ -315,6 +318,147 @@ func recordMechanicalSample(root, model string, success bool) error {
 		}
 	}
 	return nil
+}
+
+// ReconcileMechanicalInventory applies a validated successful free-model snapshot.
+// Callers must pass only free-model IDs; one invalid ID rejects the whole snapshot.
+// IDs are kept exact; the date is the snapshot's UTC catalog date.
+func ReconcileMechanicalInventory(root string, modelIDs []string, catalogDate string) error {
+	if _, err := time.Parse("2006-01-02", catalogDate); err != nil || catalogDate == "" {
+		return fmt.Errorf("invalid catalog date")
+	}
+	if len(modelIDs) == 0 {
+		return fmt.Errorf("empty model catalog")
+	}
+	seen := make(map[string]bool, len(modelIDs))
+	for _, id := range modelIDs {
+		if !opencodeCandidatePattern.MatchString(id) || seen[id] {
+			return fmt.Errorf("invalid model catalog")
+		}
+		seen[id] = true
+	}
+	path, unlock, err := lockCandidateInventory(root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			candidates := make([]any, 0, len(modelIDs))
+			for _, id := range modelIDs {
+				candidates = append(candidates, map[string]any{
+					"id":                 id,
+					"status":             "unmeasured",
+					"mechanical_samples": []any{},
+				})
+			}
+			inventory := map[string]any{
+				"candidates":         candidates,
+				"retired_candidates": []any{},
+				"catalog_date":       catalogDate,
+				"catalog_baseline":   catalogDate,
+			}
+			data, err = json.Marshal(inventory)
+			if err == nil {
+				err = atomicWrite(path, data)
+			}
+			return err
+		}
+		return err
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil || inventory == nil {
+		return fmt.Errorf("invalid candidate inventory")
+	}
+	active, ok := inventory["candidates"].([]any)
+	if !ok {
+		return fmt.Errorf("invalid candidate inventory")
+	}
+	history, exists := inventory["retired_candidates"]
+	retired := []any{}
+	if exists {
+		retired, ok = history.([]any)
+		if !ok {
+			return fmt.Errorf("invalid candidate history")
+		}
+	}
+	activeByID, historyByID := map[string]map[string]any{}, map[string]map[string]any{}
+	for _, group := range []struct {
+		items []any
+		index map[string]map[string]any
+	}{{active, activeByID}, {retired, historyByID}} {
+		for _, raw := range group.items {
+			candidate, ok := raw.(map[string]any)
+			id, idOK := candidate["id"].(string)
+			if !ok || !idOK || !opencodeCandidatePattern.MatchString(id) || activeByID[id] != nil || historyByID[id] != nil {
+				return fmt.Errorf("invalid candidate inventory entry")
+			}
+			group.index[id] = candidate
+		}
+	}
+	newActive := make([]any, 0, len(modelIDs))
+	for _, id := range modelIDs {
+		candidate := activeByID[id]
+		if candidate == nil {
+			candidate = historyByID[id]
+			if candidate != nil {
+				delete(historyByID, id)
+			}
+		}
+		if candidate == nil {
+			candidate = map[string]any{"id": id, "status": "unmeasured", "mechanical_samples": []any{}}
+		}
+		newActive = append(newActive, candidate)
+	}
+	newHistory := make([]any, 0, len(retired)+len(active))
+	for _, raw := range retired {
+		candidate := raw.(map[string]any)
+		if _, activeNow := seen[candidate["id"].(string)]; !activeNow {
+			newHistory = append(newHistory, candidate)
+		}
+	}
+	for _, raw := range active {
+		candidate := raw.(map[string]any)
+		if _, activeNow := seen[candidate["id"].(string)]; !activeNow {
+			newHistory = append(newHistory, candidate)
+		}
+	}
+	inventory["candidates"], inventory["retired_candidates"], inventory["catalog_date"] = newActive, newHistory, catalogDate
+	data, err = json.Marshal(inventory)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, data)
+}
+
+func lockCandidateInventory(root string) (string, func(), error) {
+	path := filepath.Join(root, "opencode", "candidates.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "", func() {}, err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return "", func() {}, err
+	}
+	if info, err := lock.Stat(); err != nil {
+		_ = lock.Close()
+		return "", func() {}, err
+	} else if info.Size() == 0 {
+		if _, err = lock.WriteAt([]byte("\x00"), 0); err != nil {
+			_ = lock.Close()
+			return "", func() {}, err
+		}
+	}
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for contextio.TryLock(lock) != nil {
+		if time.Now().After(deadline) {
+			_ = lock.Close()
+			return "", func() {}, fmt.Errorf("candidate inventory lock unavailable")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return path, func() { contextio.Unlock(lock); _ = lock.Close() }, nil
 }
 
 func boolSamples(values []any) bool {

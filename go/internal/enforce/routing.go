@@ -109,7 +109,7 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 			selection.Reason = reason
 		}
 	}
-	if newCall && !replyCall {
+	if newCall && !replyCall && !mechanicalCandidate {
 		selection.Model = models.ResolveLatest(selection.Agent, selection.Model)
 	}
 	return selection

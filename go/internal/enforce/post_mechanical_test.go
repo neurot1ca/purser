@@ -6,10 +6,218 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"purser-hook/internal/proc"
 )
+
+func TestReconcileMechanicalInventoryTransitions(t *testing.T) {
+	root := t.TempDir()
+	writeReconciliationInventory(t, root)
+	if err := recordMechanicalSample(root, "vendor/served", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReconcileMechanicalInventory(root, []string{"vendor/new-a", "vendor/served", "vendor/shadow", "vendor/new-b"}, "2026-10-16"); err != nil {
+		t.Fatal(err)
+	}
+	active, history := readMechanicalCandidates(t, root)
+	if got := candidateIDs(active); !reflect.DeepEqual(got, []string{"vendor/new-a", "vendor/served", "vendor/shadow", "vendor/new-b"}) {
+		t.Fatalf("active IDs = %v", got)
+	}
+	for _, id := range []string{"vendor/new-a", "vendor/new-b"} {
+		candidate := candidateByID(active, id)
+		if candidate["status"] != "unmeasured" || len(candidate["mechanical_samples"].([]any)) != 0 {
+			t.Fatalf("new candidate %q = %#v", id, candidate)
+		}
+	}
+	if got := candidateByID(active, "vendor/served")["mechanical_samples"].([]any); len(got) != 5 || got[4] != true {
+		t.Fatalf("surviving samples = %#v", got)
+	}
+	if err := ReconcileMechanicalInventory(root, []string{"vendor/served", "vendor/new-a"}, "2026-10-17"); err != nil {
+		t.Fatal(err)
+	}
+	active, history = readMechanicalCandidates(t, root)
+	if candidateByID(active, "vendor/shadow") != nil || candidateByID(active, "vendor/new-b") != nil {
+		t.Fatalf("retired model remained active: %v", candidateIDs(active))
+	}
+	if selected := firstOpenCodeCandidate(active); selected == "vendor/shadow" || selected == "vendor/new-b" {
+		t.Fatalf("retired model selected: %q", selected)
+	}
+	if candidateByID(history, "vendor/shadow") == nil || candidateByID(history, "vendor/new-b") == nil {
+		t.Fatalf("retired history missing models: %v", candidateIDs(history))
+	}
+	if err := recordMechanicalSample(root, "vendor/shadow", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReconcileMechanicalInventory(root, []string{"vendor/shadow", "vendor/served", "vendor/new-a"}, "2026-10-18"); err != nil {
+		t.Fatal(err)
+	}
+	active, history = readMechanicalCandidates(t, root)
+	if got := candidateByID(active, "vendor/shadow")["mechanical_samples"].([]any); len(got) != 1 || got[0] != false {
+		t.Fatalf("reappeared late sample = %#v", got)
+	}
+	if candidateByID(history, "vendor/shadow") != nil {
+		t.Fatalf("reappeared model remains retired: %v", candidateIDs(history))
+	}
+}
+
+func TestReconcileMechanicalInventoryCreatesMissingFile(t *testing.T) {
+	root := t.TempDir()
+	if err := ReconcileMechanicalInventory(root, []string{"vendor/first", "vendor/second"}, "2026-10-16"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	if inventory["catalog_date"] != "2026-10-16" || inventory["catalog_baseline"] != "2026-10-16" {
+		t.Fatalf("catalog dates = %#v", inventory)
+	}
+	if history, ok := inventory["retired_candidates"].([]any); !ok || len(history) != 0 {
+		t.Fatalf("retired candidates = %#v", inventory["retired_candidates"])
+	}
+	active, ok := inventory["candidates"].([]any)
+	if !ok || len(active) != 2 {
+		t.Fatalf("active candidates = %#v", inventory["candidates"])
+	}
+	for _, id := range []string{"vendor/first", "vendor/second"} {
+		candidate := candidateByID(active, id)
+		if candidate == nil || candidate["status"] != "unmeasured" {
+			t.Fatalf("new candidate %q = %#v", id, candidate)
+		}
+		if samples, ok := candidate["mechanical_samples"].([]any); !ok || len(samples) != 0 {
+			t.Fatalf("new candidate samples %q = %#v", id, candidate["mechanical_samples"])
+		}
+	}
+}
+
+func TestReconcileMechanicalInventoryMalformedInputPreservesFile(t *testing.T) {
+	root := t.TempDir()
+	writeMechanicalInventory(t, root)
+	path := filepath.Join(root, "opencode", "candidates.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		ids  []string
+		date string
+	}{{[]string{"bad/id/extra"}, "2026-10-16"}, {[]string{"vendor/model"}, "bad-date"}, {nil, "2026-10-16"}} {
+		if err := ReconcileMechanicalInventory(root, tc.ids, tc.date); err == nil {
+			t.Fatalf("ReconcileMechanicalInventory(%v, %q) succeeded", tc.ids, tc.date)
+		}
+	}
+	if err := os.WriteFile(path, []byte(`{"candidates":[{"id":3}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	malformed, _ := os.ReadFile(path)
+	if err := ReconcileMechanicalInventory(root, []string{"vendor/model"}, "2026-10-16"); err == nil {
+		t.Fatal("malformed inventory was accepted")
+	}
+	after, _ := os.ReadFile(path)
+	if !reflect.DeepEqual(after, malformed) || reflect.DeepEqual(after, before) {
+		t.Fatal("malformed inventory was not preserved byte-for-byte")
+	}
+}
+
+func TestMechanicalRefreshAndSampleShareInventoryLock(t *testing.T) {
+	root := t.TempDir()
+	writeReconciliationInventory(t, root)
+	_, unlock, err := lockCandidateInventory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		results <- ReconcileMechanicalInventory(root, []string{"vendor/served", "vendor/new-model"}, "2026-10-16")
+	}()
+	go func() { defer wg.Done(); results <- recordMechanicalSample(root, "vendor/served", false) }()
+	time.Sleep(20 * time.Millisecond)
+	unlock()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh/sample operations did not finish after lock release")
+	}
+	close(results)
+	for result := range results {
+		if result != nil {
+			t.Fatal(result)
+		}
+	}
+	active, _ := readMechanicalCandidates(t, root)
+	if candidateByID(active, "vendor/new-model") == nil {
+		t.Fatal("refresh update was lost")
+	}
+	samples := candidateByID(active, "vendor/served")["mechanical_samples"].([]any)
+	if len(samples) != 5 || samples[4] != false {
+		t.Fatalf("sample update was lost: %#v", samples)
+	}
+}
+
+func writeReconciliationInventory(t *testing.T, root string) {
+	t.Helper()
+	path := filepath.Join(root, "opencode", "candidates.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{"candidates": []any{
+		map[string]any{"id": "vendor/served", "status": "available", "mechanical_samples": []any{true, false, true, true}},
+		map[string]any{"id": "vendor/runner-up", "status": "measured", "mechanical_samples": []any{true, true, true, false, false}},
+		map[string]any{"id": "vendor/shadow", "status": "available", "mechanical_samples": []any{}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readMechanicalCandidates(t *testing.T, root string) ([]any, []any) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	active, _ := inventory["candidates"].([]any)
+	history, _ := inventory["retired_candidates"].([]any)
+	return active, history
+}
+
+func candidateByID(items []any, id string) map[string]any {
+	for _, raw := range items {
+		if item, ok := raw.(map[string]any); ok && item["id"] == id {
+			return item
+		}
+	}
+	return nil
+}
+
+func candidateIDs(items []any) []string {
+	ids := make([]string, 0, len(items))
+	for _, raw := range items {
+		if item, ok := raw.(map[string]any); ok {
+			ids = append(ids, item["id"].(string))
+		}
+	}
+	return ids
+}
 
 func TestPostMechanicalPythonFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/post_mechanical.json")
