@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.160 — 2026-10-16
+
+- **Fixed:** on Windows, an npm-installed OpenCode (`opencode.cmd` launcher) now resolves to its bundled `opencode.exe`, so OpenCode models are listed and the daily catalog refresh and model race run.
+- **Fixed:** Go cache host tests isolate the user config directory, and the non-git project key test follows the Windows-only case folding, so the suite passes on Linux and macOS.
+
 ## 0.1.159 — 2026-10-16
 
 - **Added:** the OpenCode model catalog refreshes once a day in a detached session-start child, keeping the free-model race inventory in step with OpenCode (new models added, vanished ones retired with their history).
