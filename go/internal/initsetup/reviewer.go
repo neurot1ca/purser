@@ -372,6 +372,7 @@ func editReviewerConfig(text *string, values map[string]any, agentName, model, e
 	}
 	roles["reviewer"] = agentName
 	*text = upsert(*text, "roles", "reviewer", tomlString(agentName), nl)
+	*text = removeTableSection(*text, "reviewer.selected")
 	*text = removeKey(*text, "reviewer", "selected", nl)
 	*text = removeKey(*text, "reviewer", "executable", nl)
 	for _, key := range []string{"reviewer1_agent", "reviewer1_model_requested", "reviewer1_effort", "reviewer1_executable"} {
@@ -423,6 +424,27 @@ func editReviewerConfig(text *string, values map[string]any, agentName, model, e
 		}
 	}
 	return nil
+}
+
+func removeTableSection(text, section string) string {
+	lines := strings.SplitAfter(text, "\n")
+	start := -1
+	for i, line := range lines {
+		match := sectionRE.FindStringSubmatch(strings.TrimRight(line, "\r\n"))
+		if match == nil {
+			continue
+		}
+		if start >= 0 {
+			return strings.Join(append(lines[:start], lines[i:]...), "")
+		}
+		if match[1] == section {
+			start = i
+		}
+	}
+	if start >= 0 {
+		return strings.Join(lines[:start], "")
+	}
+	return text
 }
 
 func removeKey(text, section, key, nl string) string {

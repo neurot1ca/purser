@@ -1277,6 +1277,7 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 		}
 		if routes != nil && o.coder != "claude" {
 			c["routes"] = routes
+			*text = removeCoderRoutes(*text)
 			*text = upsert(*text, "coding", "routes", tomlRoutes(routes), nl)
 		}
 	}

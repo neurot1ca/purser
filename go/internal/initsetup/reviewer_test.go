@@ -159,6 +159,65 @@ func TestReviewerSetWritesSelectionAndPreservesCoder(t *testing.T) {
 	}
 }
 
+func TestReviewerSetReplacesSelectedSubtable(t *testing.T) {
+	text := "schema_version = 1\r\n\r\n[roles]\r\ncoder = \"codex\"\r\nreviewer = \"agy\"\r\n\r\n[reviewer]\r\nexecutable = \"C:\\\\agy.exe\"\r\n  [reviewer.selected]\r\n    agent = \"agy\"\r\n    model = \"gemini-3.8-flash-high\"\r\n"
+	values, _, err := profile.DecodeTOML([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := editReviewerConfig(&text, values, "agy", "gemini-4-argon", "", "\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	parsed, _, err := profile.DecodeTOML([]byte(text))
+	if err != nil {
+		t.Fatalf("updated config does not parse: %v\n%s", err, text)
+	}
+	selected := parsed["reviewer"].(map[string]any)["selected"].(map[string]any)
+	if selected["agent"] != "agy" || selected["model"] != "gemini-4-argon" {
+		t.Fatalf("selected = %#v", selected)
+	}
+	if strings.Contains(strings.ReplaceAll(text, "\r\n", ""), "\n") || strings.Contains(text, "gemini-3.8-flash-high") {
+		t.Fatalf("old selection remains or line endings changed: %q", text)
+	}
+}
+
+func TestReviewerClearRemovesSelectedSubtable(t *testing.T) {
+	text := "[roles]\nreviewer = \"agy\"\n\n[reviewer]\n  [reviewer.selected]\n    agent = \"agy\"\n    model = \"gemini-3.8-flash-high\"\n"
+	values, _, err := profile.DecodeTOML([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := editReviewerConfig(&text, values, "none", "", "", "\n"); err != nil {
+		t.Fatal(err)
+	}
+	parsed, _, err := profile.DecodeTOML([]byte(text))
+	if err != nil {
+		t.Fatalf("cleared config does not parse: %v\n%s", err, text)
+	}
+	if parsed["reviewer"].(map[string]any)["selected"] != nil || strings.Contains(text, "[reviewer.selected]") {
+		t.Fatalf("selected subtable remains: %s", text)
+	}
+}
+
+func TestReviewerSetReplacesInlineSelection(t *testing.T) {
+	text := "[roles]\nreviewer = \"agy\"\n\n[reviewer]\nselected = { agent = \"agy\", model = \"gemini-old\" }\n"
+	values, _, err := profile.DecodeTOML([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := editReviewerConfig(&text, values, "agy", "gemini-new", "", "\n"); err != nil {
+		t.Fatal(err)
+	}
+	parsed, _, err := profile.DecodeTOML([]byte(text))
+	if err != nil {
+		t.Fatalf("updated config does not parse: %v\n%s", err, text)
+	}
+	selected := parsed["reviewer"].(map[string]any)["selected"].(map[string]any)
+	if selected["model"] != "gemini-new" || strings.Contains(text, "gemini-old") {
+		t.Fatalf("selected = %#v, config = %s", selected, text)
+	}
+}
+
 func TestReviewerSetWithoutModelWritesRoleOnly(t *testing.T) {
 	text := "schema_version = 1\n\n[roles]\ncoder = \"claude\"\nreviewer = \"agy\"\n\n[reviewer]\nselected = { agent = \"agy\", model = \"gemini-3.8-flash-high\" }\nexecutable = \"old-reviewer\"\n\n[coding]\ncoder_agent = \"claude\"\nreviewer1_agent = \"agy\"\nreviewer1_model_requested = \"gemini-3.8-flash-high\"\nreviewer1_effort = \"old\"\nreviewer1_executable = \"old-reviewer\"\n"
 	values, _, err := profile.DecodeTOML([]byte(text))

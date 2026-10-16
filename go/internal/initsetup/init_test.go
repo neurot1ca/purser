@@ -90,6 +90,25 @@ func TestClaudeCoderPlanAndApply(t *testing.T) {
 	}
 }
 
+func TestEditConfigReplacesCodingRoutesSubtable(t *testing.T) {
+	text := "[roles]\ncoder = \"codex\"\nreviewer = \"none\"\n\n[coding]\ncoder_agent = \"codex\"\n\n[coding.routes.normal]\nmodel = \"old-model\"\neffort = \"medium\"\n"
+	values, _, err := profile.DecodeTOML([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := editConfig(&text, values, "", options{coder: "agy", model: "gemini-4-argon", reviewer: "none"}, "\n"); err != nil {
+		t.Fatal(err)
+	}
+	parsed, _, err := profile.DecodeTOML([]byte(text))
+	if err != nil {
+		t.Fatalf("updated config does not parse: %v\n%s", err, text)
+	}
+	routes := parsed["coding"].(map[string]any)["routes"].(map[string]any)
+	if routes["normal"].(map[string]any)["model"] != "gemini-4-argon" || strings.Contains(text, "old-model") {
+		t.Fatalf("routes = %#v, config = %s", routes, text)
+	}
+}
+
 func TestListModelsMarksRouteRecommendations(t *testing.T) {
 	listing := discovered{source: "codex debug models", models: []map[string]any{
 		{"id": "gpt-6-luna", "efforts": []string{"low", "high"}},
