@@ -1,0 +1,1 @@
+Change the timeout value from 10 to 15 in settings.conf, preserving the rest of the file exactly.

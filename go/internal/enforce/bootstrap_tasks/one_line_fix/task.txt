@@ -1,0 +1,1 @@
+Fix the comparison in check.txt so that it accepts a value equal to 4. Change only the comparison operator.

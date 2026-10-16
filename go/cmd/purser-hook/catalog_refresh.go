@@ -74,10 +74,19 @@ func refreshCatalog(state, repository string) error {
 		return nil
 	}
 	if date, err := mechanicalInventoryDate(state); err == nil && date == snapshot.Date {
-		return nil
+		return bootstrapIfUnmeasured(state)
 	}
 	if err := enforce.ReconcileMechanicalInventory(state, ids, snapshot.Date); err != nil {
 		return fmt.Errorf("reconcile mechanical inventory: %w", err)
+	}
+	return bootstrapIfUnmeasured(state)
+}
+
+var bootstrapMechanicalRace = enforce.BootstrapMechanicalRace
+
+func bootstrapIfUnmeasured(state string) error {
+	if err := bootstrapMechanicalRace(state); err != nil {
+		return fmt.Errorf("bootstrap mechanical race: %w", err)
 	}
 	return nil
 }

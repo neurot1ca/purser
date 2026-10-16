@@ -17,10 +17,11 @@ import (
 
 func saveCatalogRefreshHooks(t *testing.T) {
 	t.Helper()
-	oldDiscover, oldConfig := discoverCatalogModels, loadCatalogConfig
+	oldDiscover, oldConfig, oldBootstrap := discoverCatalogModels, loadCatalogConfig, bootstrapMechanicalRace
 	t.Cleanup(func() {
-		discoverCatalogModels, loadCatalogConfig = oldDiscover, oldConfig
+		discoverCatalogModels, loadCatalogConfig, bootstrapMechanicalRace = oldDiscover, oldConfig, oldBootstrap
 	})
+	bootstrapMechanicalRace = func(string) error { return nil }
 	state, home := t.TempDir(), t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", state)
 	t.Setenv("PURSER_TEST_DISABLE_CHILD_LAUNCH", "1")
@@ -149,6 +150,36 @@ func TestCatalogRefreshSecondRepositoryStillDiscoversOnSameDay(t *testing.T) {
 	}
 	if len(calls) != 2 || calls[0] != first || calls[1] != second {
 		t.Fatalf("discover calls=%q", calls)
+	}
+}
+
+func TestCatalogRefreshRunsBootstrapAfterReconciliationAndOnSameDate(t *testing.T) {
+	saveCatalogRefreshHooks(t)
+	state := stateRoot()
+	today := time.Now().UTC().Format("2006-01-02")
+	repository := t.TempDir()
+	data, _ := json.Marshal(map[string]any{"opencode_snapshot_on": today, "agents": map[string][]string{"opencode": {"opencode/model-free"}}})
+	if err := os.WriteFile(filepath.Join(state, "model-resolution.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	discoverCatalogModels = func(string) (string, string, bool) { return "", "", false }
+	loadCatalogConfig = func(string) (map[string]any, error) { return map[string]any{}, nil }
+	calls := 0
+	bootstrapMechanicalRace = func(root string) error {
+		calls++
+		if _, err := os.Stat(filepath.Join(root, "opencode", "candidates.json")); err != nil {
+			t.Fatalf("bootstrap ran before reconciliation: %v", err)
+		}
+		return nil
+	}
+	if err := refreshCatalog(state, repository); err != nil {
+		t.Fatal(err)
+	}
+	if err := refreshCatalog(state, repository); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("bootstrap calls=%d, want refresh each detached run", calls)
 	}
 }
 

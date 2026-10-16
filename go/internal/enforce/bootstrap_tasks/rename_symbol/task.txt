@@ -1,0 +1,1 @@
+Rename the exported identifier OldName to NewName in every source file that references it. Do not change anything else.
