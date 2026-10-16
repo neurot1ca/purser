@@ -1,17 +1,15 @@
 package profile
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"purser-hook/internal/proc"
+	"purser-hook/internal/projectkey"
 )
 
 var projectRoleSections = []string{"roles", "coding", "reviewer", "fallback", "mechanical"}
@@ -28,12 +26,7 @@ func ProjectRolesPath(stateRoot, repository string) string {
 			}
 		}
 	}
-	keyPath := filepath.Clean(root)
-	if runtime.GOOS == "windows" {
-		keyPath = strings.ToLower(keyPath)
-	}
-	digest := sha256.Sum256([]byte(keyPath))
-	key := hex.EncodeToString(digest[:])[:16]
+	key := projectkey.For(root)
 	return filepath.Join(stateRoot, "projects", key, "roles.toml")
 }
 

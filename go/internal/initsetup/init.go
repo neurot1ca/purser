@@ -1126,7 +1126,11 @@ func gitProjectRoot(root string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	return strings.TrimSpace(string(out)), nil
+	rootPath := strings.TrimSpace(string(out))
+	if resolved, e := filepath.EvalSymlinks(rootPath); e == nil {
+		rootPath = resolved
+	}
+	return rootPath, nil
 }
 func claimConcise(home, project string) bool {
 	style, _ := effectiveStyle(home, project)

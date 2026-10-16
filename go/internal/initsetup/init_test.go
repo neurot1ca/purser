@@ -748,6 +748,17 @@ func TestProjectRoleApplyLeavesGlobalConfigUntouched(t *testing.T) {
 	}
 }
 
+func TestProjectRolePathResolvesSymlinkRoot(t *testing.T) {
+	state, root := t.TempDir(), t.TempDir()
+	alias := filepath.Join(t.TempDir(), "project-link")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	if got, want := profile.ProjectRolesPath(state, alias), profile.ProjectRolesPath(state, root); got != want {
+		t.Fatalf("symlink project roles path = %q, want %q", got, want)
+	}
+}
+
 func TestProjectRoleConcurrentUpdatesKeepBothSections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "roles.toml")
 	if err := os.WriteFile(path, []byte("schema_version = 1\n"), 0o600); err != nil {

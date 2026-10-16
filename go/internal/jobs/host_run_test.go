@@ -818,9 +818,15 @@ func TestConfigureCodexGoCacheWritableRootsIncludeTelemetryWhenPresent(t *testin
 			configRoot := t.TempDir()
 			t.Setenv("APPDATA", configRoot)
 			t.Setenv("XDG_CONFIG_HOME", configRoot)
+			t.Setenv("HOME", configRoot)
+			t.Setenv("USERPROFILE", configRoot)
 			t.Setenv("GOCACHE", filepath.Join(configRoot, "custom-cache"))
 			t.Setenv("GOTMPDIR", filepath.Join(configRoot, "custom-tmp"))
-			telemetryDir := filepath.Join(configRoot, "go", "telemetry")
+			userConfigDir, err := os.UserConfigDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			telemetryDir := filepath.Join(userConfigDir, "go", "telemetry")
 			if exists {
 				if err := os.MkdirAll(telemetryDir, 0700); err != nil {
 					t.Fatal(err)

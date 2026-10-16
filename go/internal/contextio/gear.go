@@ -1,15 +1,13 @@
 package contextio
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
-	"strings"
+
+	"purser-hook/internal/projectkey"
 )
 
 var validGearProjectKey = regexp.MustCompile(`^[0-9a-f]{16}$`)
@@ -25,12 +23,7 @@ type CoderEffortState struct {
 }
 
 func ProjectKey(repository string) string {
-	repository = filepath.Clean(repository)
-	if runtime.GOOS == "windows" {
-		repository = strings.ToLower(repository)
-	}
-	h := sha256.Sum256([]byte(repository))
-	return hex.EncodeToString(h[:])[:16]
+	return projectkey.For(repository)
 }
 
 func Gear(root, projectKey string) (bool, error) {

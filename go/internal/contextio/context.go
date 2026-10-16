@@ -44,11 +44,7 @@ func sessionKey(v any) string {
 }
 
 func repositoryProjectKey(repository string) string {
-	if runtime.GOOS == "windows" {
-		repository = strings.ToLower(repository)
-	}
-	h := sha256.Sum256([]byte(repository))
-	return hex.EncodeToString(h[:])[:16]
+	return ProjectKey(repository)
 }
 
 // ClaudeConfigDir returns the active Claude configuration directory.

@@ -312,8 +312,18 @@ func TestProjectReviewerSetKeepsCoderAndDisablesGlobalReviewer(t *testing.T) {
 		t.Fatal("reviewer set failed")
 	}
 	var ack map[string]any
-	if err := json.Unmarshal([]byte(acknowledgement.String()), &ack); err != nil || ack["scope"] != "project" || ack["roles_path"] != profile.ProjectRolesPath(state, root) {
+	if err := json.Unmarshal([]byte(acknowledgement.String()), &ack); err != nil || ack["scope"] != "project" {
 		t.Fatalf("acknowledgement = %s, error = %v", acknowledgement.String(), err)
+	}
+	gotRolePath, ok := ack["roles_path"].(string)
+	if !ok {
+		t.Fatalf("acknowledgement roles_path = %#v", ack["roles_path"])
+	}
+	wantRolePath := profile.ProjectRolesPath(state, root)
+	gotRoleInfo, gotRoleErr := os.Stat(gotRolePath)
+	wantRoleInfo, wantRoleErr := os.Stat(wantRolePath)
+	if gotRoleErr != nil || wantRoleErr != nil || !os.SameFile(gotRoleInfo, wantRoleInfo) {
+		t.Fatalf("acknowledgement roles_path = %q, want same file as %q (errors: %v, %v)", gotRolePath, wantRolePath, gotRoleErr, wantRoleErr)
 	}
 	if after, err := os.ReadFile(globalPath); err != nil || !bytes.Equal(after, global) {
 		t.Fatalf("global config = %q, error = %v; want original bytes", after, err)

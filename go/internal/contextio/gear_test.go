@@ -3,9 +3,32 @@ package contextio
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 )
+
+func TestProjectKeyPlainPathUnchanged(t *testing.T) {
+	plain := filepath.Join("plain", "path")
+	want := "890c56b666739746"
+	if runtime.GOOS == "windows" {
+		want = "3238d8890676a3b8"
+	}
+	if got := ProjectKey(plain); got != want {
+		t.Fatalf("plain project key = %q, want %q", got, want)
+	}
+}
+
+func TestProjectKeyResolvesSymlinkAlias(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "project-link")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	if got, want := ProjectKey(alias), ProjectKey(root); got != want {
+		t.Fatalf("symlink project key = %q, want %q", got, want)
+	}
+}
 
 func TestGearStateValidationFailureAndConcurrentUpdates(t *testing.T) {
 	root, key := t.TempDir(), "0123456789abcdef"
