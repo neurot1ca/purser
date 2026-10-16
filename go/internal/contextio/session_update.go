@@ -19,6 +19,14 @@ func sessionUpdateContext(session, repository string, state map[string]any) stri
 	if notice := mechanicalLeaderContext(session, repository, state); notice != "" {
 		notices = append(notices, notice)
 	}
+	if state != nil && repository != "" && session != "" {
+		if notice := openCodeFamilyContext(repository); notice != "" {
+			notices = append(notices, notice)
+		}
+		if notice := mechanicalRaceContext(); notice != "" {
+			notices = append(notices, notice)
+		}
+	}
 	if notice := pluginVersionContext(session, repository, state); notice != "" {
 		notices = append(notices, notice)
 	}
@@ -122,6 +130,9 @@ func mechanicalLeaderContext(session, repository string, state map[string]any) s
 		return ""
 	}
 	successes, sampleCount := int(successes64), int(sampleCount64)
+	if !claimActiveRaceResult(stateRoot(), model) {
+		return ""
+	}
 	pending, _ := state["leader_pending"].(map[string]any)
 	delivered := pending != nil && pending["model"] == model && pending["delivered"] == true
 	state["leader_pending"] = map[string]any{"model": model, "successes": successes,

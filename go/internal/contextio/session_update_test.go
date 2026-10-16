@@ -125,6 +125,10 @@ func TestSessionStartMechanicalLeaderNoticeParity(t *testing.T) {
 	if err := os.WriteFile(leaderPath, []byte(`{"model":"vendor/free-model","successes":7,"sample_count":9,"announced":false}`), 0600); err != nil {
 		t.Fatal(err)
 	}
+	inventoryPath := filepath.Join(stateRoot, "opencode", "candidates.json")
+	if err := os.WriteFile(inventoryPath, []byte(`{"candidates":[{"id":"vendor/free-model","status":"measured","mechanical_samples":[true,true,true,true,true,true,true,false,false]},{"id":"vendor/old","status":"measured","mechanical_samples":[true,true,true,true,false,false,false,false,false]}],"race":{"started":true,"finished":true,"winner":"vendor/free-model","finished_at":"2026-10-16T00:00:00Z","stage":"newcomer_vs_leader","entrants":["vendor/free-model","vendor/old"],"samples":{"vendor/free-model":[true,true,true]},"notice_claim_ids":[]}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	event := map[string]any{"hook_event_name": "SessionStart", "session_id": "session-leader", "source": "startup", "cwd": repo}
 	context := sessionStartContext(t, event)
 	want := "On your next reply, render exactly one line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged, in this form: " +
