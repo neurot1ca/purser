@@ -3,6 +3,16 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.167 — 2026-10-17
+
+- **Changed:** Purser's PreToolUse hook no longer rewrites tool input; it records a per-call handoff and only denies or passes, and the MCP server applies routing and the main-Claude-only acceptance check.
+- **Changed:** each slash command is granted only the exact bundled binary subcommands it runs.
+- **Fixed:** the agy Reviewer passes the auto-update opt-out value agy honours, so its background updater no longer opens a Windows Terminal window.
+- **Fixed:** post-apply plugin tests run only on tracked test files, so large ignored folders no longer fail validation.
+- **Fixed:** OpenCode newcomer and leader jobs no longer race on built-in tasks.
+- **Fixed:** `/purser:coder-effort` resolves the project from the project directory.
+- **Docs:** the README explains what Purser does on your machine.
+
 ## 0.1.166 — 2026-10-16
 
 - **Fixed:** the agy Reviewer no longer flashes a console window on Windows; Purser turns off agy's background updater for review runs.
