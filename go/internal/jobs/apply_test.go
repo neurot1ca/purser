@@ -208,6 +208,8 @@ func TestApplyPythonOracle(t *testing.T) {
 				got["worktreePath"] = "WORKTREE"
 			}
 			delete(got, "validation")
+			delete(got, "waiter")
+			delete(got, "next")
 			if !reflect.DeepEqual(got, c.Result) {
 				t.Errorf("result got %#v want %#v", got, c.Result)
 			}

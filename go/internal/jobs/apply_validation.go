@@ -111,7 +111,7 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 		if status, ok := result["status"].(string); ok && (status == "pending" || status == "running" || status == "unconfirmed") {
 			command := waiter.ValidationCommand(stateRoot, validationRepositoryKey(repo), id)
 			value["waiter"] = command
-			value["next"] = "Run " + command + " in the background (use the PowerShell tool on Windows) and use its final line to report host validation."
+			value["next"] = "Run " + command + " in the background (use the PowerShell tool on Windows); if it prints STILL_WAITING, run it again, otherwise use its final line to report host validation."
 		}
 		if result["status"] == "launch_error" {
 			if _, err := readApplyValidation(validationRecordPath(stateRoot, validationRepositoryKey(repo), id)); err != nil {

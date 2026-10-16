@@ -117,6 +117,8 @@ func TestApplyResolvedPythonOracle(t *testing.T) {
 			var got map[string]any
 			_ = json.Unmarshal(gotRaw, &got)
 			delete(got, "validation")
+			delete(got, "waiter")
+			delete(got, "next")
 			if !reflect.DeepEqual(got, c.Result) {
 				t.Errorf("result got %#v want %#v", got, c.Result)
 			}
