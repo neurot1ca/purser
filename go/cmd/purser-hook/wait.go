@@ -30,3 +30,15 @@ func waitMain(args []string) int {
 	}
 	return result.ExitCode
 }
+
+func waitValidationMain(args []string) int {
+	if len(args) != 3 {
+		fmt.Fprintln(os.Stdout, "purser-validation INVALID_ARGUMENT")
+		return 2
+	}
+	result := jobs.WaitApplyValidation(args[0], args[1], args[2])
+	for _, line := range result.Lines {
+		fmt.Fprintln(os.Stdout, line)
+	}
+	return result.ExitCode
+}

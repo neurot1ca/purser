@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"purser-hook/internal/lease"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
+	"purser-hook/internal/waiter"
 )
 
 const (
@@ -106,6 +108,11 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 	result := map[string]any{"status": "launch_error", "reason": "validation could not be enqueued"}
 	defer func() {
 		value["validation"] = result
+		if status, ok := result["status"].(string); ok && (status == "pending" || status == "running" || status == "unconfirmed") {
+			command := waiter.ValidationCommand(stateRoot, validationRepositoryKey(repo), id)
+			value["waiter"] = command
+			value["next"] = "Run " + command + " in the background (use the PowerShell tool on Windows) and use its final line to report host validation."
+		}
 		if result["status"] == "launch_error" {
 			if _, err := readApplyValidation(validationRecordPath(stateRoot, validationRepositoryKey(repo), id)); err != nil {
 				persistApplyValidationSummary(stateRoot, id, result)
@@ -184,6 +191,36 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 	record.PID, record.Identity = pid, identity
 	_ = recordApplyValidationProcess(path, pid, identity)
 	result = validationSummary(record)
+}
+
+// WaitApplyValidation observes the durable apply-validation record until it is
+// terminal or the bounded wait expires. Read errors are retried because records
+// are atomically replaced and Windows can briefly deny reads during replacement.
+func WaitApplyValidation(stateRoot, key, id string) WaitResult {
+	if !validJobID(id) || len(id) != 64 || len(key) != 64 {
+		return WaitResult{Lines: []string{"purser-validation INVALID_ARGUMENT"}, ExitCode: 2}
+	}
+	if _, err := hex.DecodeString(key); err != nil {
+		return WaitResult{Lines: []string{"purser-validation INVALID_ARGUMENT"}, ExitCode: 2}
+	}
+	started := time.Now()
+	maxWaitSeconds := int64(9 * 60)
+	if configured, err := strconv.ParseInt(os.Getenv("PURSER_WAIT_MAX_SECONDS"), 10, 64); err == nil && configured > 0 {
+		maxWaitSeconds = configured
+	}
+	path := validationRecordPath(stateRoot, key, id)
+	for {
+		record, err := readApplyValidation(path)
+		if err == nil && record.JobID == id && record.Status != "pending" && record.Status != "running" && record.Status != "unconfirmed" {
+			line, _ := json.Marshal(map[string]any{"status": record.Status, "reason": record.Reason, "failing_tests": boundedValidationIdentifiers(record.FailedTests)})
+			return WaitResult{Lines: []string{"purser-validation " + string(line)}, ExitCode: 0}
+		}
+		remaining := time.Duration(maxWaitSeconds)*time.Second - time.Since(started)
+		if remaining <= 0 {
+			return WaitResult{Lines: []string{"purser-validation STILL_WAITING"}, ExitCode: 5}
+		}
+		waitSleep(min(100*time.Millisecond, remaining))
+	}
 }
 
 func persistApplyValidationSummary(stateRoot, id string, result map[string]any) {

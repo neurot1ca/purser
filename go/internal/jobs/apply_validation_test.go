@@ -15,6 +15,80 @@ import (
 	"purser-hook/internal/contextio"
 )
 
+func TestWaitApplyValidationReportsTerminalClasses(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, reason, failing string
+	}{
+		{name: "passed", status: "passed"},
+		{name: "failed", status: "failed", reason: "go test failed", failing: "TestBroken"},
+		{name: "stale", status: "stale", reason: "checkout changed"},
+		{name: "unknown", status: "future_status", reason: "future"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			id, key := strings.Repeat("a", 64), strings.Repeat("b", 64)
+			path := validationRecordPath(root, key, id)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			record := applyValidation{JobID: id, Status: tc.status, Reason: tc.reason, FailedTests: []string{}}
+			if tc.failing != "" {
+				record.FailedTests = []string{tc.failing}
+			}
+			data, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			got := WaitApplyValidation(root, key, id)
+			if got.ExitCode != 0 || len(got.Lines) != 1 || !strings.Contains(got.Lines[0], `"status":"`+tc.status+`"`) || !strings.Contains(got.Lines[0], tc.reason) && tc.reason != "" || !strings.Contains(got.Lines[0], tc.failing) && tc.failing != "" {
+				t.Fatalf("WaitApplyValidation = %#v", got)
+			}
+		})
+	}
+}
+
+func TestWaitApplyValidationRunningReturnsStillWaiting(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
+	root := t.TempDir()
+	id, key := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	path := validationRecordPath(root, key, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(applyValidation{JobID: id, Status: "running"})
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := WaitApplyValidation(root, key, id)
+	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-validation STILL_WAITING" {
+		t.Fatalf("WaitApplyValidation = %#v", got)
+	}
+}
+
+func TestWaitApplyValidationRetriesTransientRecordRead(t *testing.T) {
+	root := t.TempDir()
+	id, key := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	path := validationRecordPath(root, key, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"partial"`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		data, _ := json.Marshal(applyValidation{JobID: id, Status: "passed"})
+		_ = os.WriteFile(path, data, 0600)
+	}()
+	got := WaitApplyValidation(root, key, id)
+	if got.ExitCode != 0 || len(got.Lines) != 1 || !strings.Contains(got.Lines[0], `"status":"passed"`) {
+		t.Fatalf("WaitApplyValidation = %#v", got)
+	}
+}
+
 func validationFixture(t *testing.T, paths []string) (string, string, applyValidation) {
 	t.Helper()
 	base := jobsScratchDir(t, "apply-validation-")

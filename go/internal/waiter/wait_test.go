@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +131,19 @@ func TestTerminalJobReturnsImmediately(t *testing.T) {
 	}
 	if _, ok := record["waiterObservedTerminalAt"].(float64); !ok {
 		t.Fatalf("terminal observation timestamp = %#v", record["waiterObservedTerminalAt"])
+	}
+}
+
+func TestValidationCommandQuotesArgumentsForCurrentShell(t *testing.T) {
+	command := waitercommand.ValidationCommand(`C:\state dir\it's`, strings.Repeat("a", 64), strings.Repeat("b", 64))
+	if !strings.Contains(command, "wait-validation") || !strings.Contains(command, strings.Repeat("a", 64)) || !strings.Contains(command, strings.Repeat("b", 64)) {
+		t.Fatalf("ValidationCommand = %q", command)
+	}
+	if runtime.GOOS == "windows" && !strings.HasPrefix(command, "& '") {
+		t.Fatalf("PowerShell command is not invokable: %q", command)
+	}
+	if runtime.GOOS != "windows" && !strings.HasPrefix(command, "'") {
+		t.Fatalf("shell command is not quoted: %q", command)
 	}
 }
 

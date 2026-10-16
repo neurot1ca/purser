@@ -29,6 +29,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "wait" {
 		os.Exit(waitMain(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "wait-validation" {
+		os.Exit(waitValidationMain(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "leases" {
 		os.Exit(leasesMain(os.Args[2:]))
 	}

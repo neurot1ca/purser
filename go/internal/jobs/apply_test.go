@@ -50,6 +50,9 @@ func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
 	if ok || !valid || validation["status"] != "pending" {
 		t.Fatalf("apply released dependent before host validation: %#v", result)
 	}
+	if result["waiter"] == nil || !strings.Contains(result["next"].(string), "in the background") {
+		t.Fatalf("pending apply did not provide a background waiter: %#v", result)
+	}
 	state, err := contextio.ReadPlanForTask(root, repo, "plan")
 	if err != nil {
 		t.Fatal(err)
