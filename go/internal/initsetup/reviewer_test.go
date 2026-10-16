@@ -23,6 +23,11 @@ func TestReviewerListInstalledOnly(t *testing.T) {
 	if len(choices) != 4 || choices[0]["agent"] != "codex" || choices[1]["agent"] != "agy" || choices[2]["agent"] != "opencode" || choices[2]["model"] != "deepseek/deepseek-v4-pro" || choices[3]["agent"] != "none" {
 		t.Fatalf("choices = %#v", choices)
 	}
+	detected["agents"].(map[string]any)["opencode"] = map[string]any{"available": true, "models": []any{"openai/gpt-6-luna"}}
+	choices = reviewerChoices(detected)
+	if len(choices) != 4 || choices[2]["agent"] != "opencode" || choices[2]["model"] != "openai/gpt-6-luna" {
+		t.Fatalf("non-DeepSeek choices = %#v", choices)
+	}
 
 	detected["agents"].(map[string]any)["opencode"] = map[string]any{"available": true, "models": []any{"openrouter/deepseek/deepseek-v3-pro", "openrouter/deepseek/deepseek-v4-pro"}}
 	choices = reviewerChoices(detected)
@@ -188,6 +193,18 @@ func TestReviewerSetRefusesMissingAgent(t *testing.T) {
 	err := validateReviewerInstalled(map[string]any{"agents": map[string]any{"agy": map[string]any{"available": false}}}, "agy", "gemini-3.8-flash-high")
 	if err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReviewerAcceptsAnyInstalledOpenCodeModel(t *testing.T) {
+	detected := map[string]any{"agents": map[string]any{
+		"opencode": map[string]any{"available": true, "models": []any{"openai/gpt-6-luna"}},
+	}}
+	if err := validateReviewerInstalled(detected, "opencode", "openai/gpt-6-luna"); err != nil {
+		t.Fatalf("non-DeepSeek OpenCode model was rejected: %v", err)
+	}
+	if err := validateReviewerInstalled(detected, "mystery", "openai/gpt-6-luna"); err == nil || !strings.Contains(err.Error(), "unsupported reviewer agent") {
+		t.Fatalf("unknown reviewer agent error = %v", err)
 	}
 }
 

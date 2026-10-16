@@ -203,11 +203,15 @@ func reviewerChoices(detected map[string]any) []map[string]any {
 			choices = append(choices, map[string]any{"agent": name, "model": agyReviewerModel(), "effort": nil, "installed": true})
 		case "opencode":
 			models, _ := info["models"].([]any)
+			ids := []string{}
 			deepseek := []string{}
 			for _, item := range models {
 				id, _ := item.(string)
-				if strings.Contains(strings.ToLower(id), "deepseek") {
-					deepseek = append(deepseek, id)
+				if id != "" {
+					ids = append(ids, id)
+					if strings.Contains(strings.ToLower(id), "deepseek") {
+						deepseek = append(deepseek, id)
+					}
 				}
 			}
 			preferred := []string{}
@@ -228,6 +232,9 @@ func reviewerChoices(detected map[string]any) []map[string]any {
 			if len(pro) > 0 {
 				preferred = pro
 			}
+			if len(preferred) == 0 {
+				preferred = ids
+			}
 			if id := modelversion.NewestVersion(preferred); id != "" {
 				choices = append(choices, map[string]any{"agent": name, "model": id, "effort": nil, "installed": true})
 			}
@@ -247,9 +254,6 @@ func validateReviewerInstalled(detected map[string]any, agentName, model string)
 	}
 	if agentName == "agy" && model != "" && model != agyReviewerModel() {
 		return errors.New("selected Reviewer-1 model is not the pinned agy model")
-	}
-	if agentName == "opencode" && model != "" && !strings.Contains(strings.ToLower(model), "deepseek") {
-		return errors.New("OpenCode Reviewer-1 model must contain deepseek")
 	}
 	return nil
 }
