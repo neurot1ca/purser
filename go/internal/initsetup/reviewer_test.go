@@ -18,20 +18,20 @@ func TestReviewerListInstalledOnly(t *testing.T) {
 		"claude":   map[string]any{"available": false},
 		"agy":      map[string]any{"available": true},
 		"opencode": map[string]any{"available": true, "models": []any{"deepseek/deepseek-flash", "deepseek/deepseek-v4-pro", "openrouter/deepseek/deepseek-v4-pro", "openai/gpt-6-luna"}},
-	}}
+	}, "reviewer_options": []map[string]any{{"agent": "codex", "model": "gpt-6.1-sol", "effort": "low"}, {"agent": "codex", "model": "gpt-6.1-luna", "effort": "medium"}}}
 	choices := reviewerChoices(detected)
-	if len(choices) != 4 || choices[0]["agent"] != "codex" || choices[1]["agent"] != "agy" || choices[2]["agent"] != "opencode" || choices[2]["model"] != "deepseek/deepseek-v4-pro" || choices[3]["agent"] != "none" {
+	if len(choices) != 5 || choices[0]["model"] != "gpt-6.1-sol" || choices[0]["effort"] != "low" || choices[1]["model"] != "gpt-6.1-luna" || choices[1]["effort"] != "medium" || choices[2]["agent"] != "agy" || choices[3]["agent"] != "opencode" || choices[3]["model"] != "deepseek/deepseek-v4-pro" || choices[4]["agent"] != "none" {
 		t.Fatalf("choices = %#v", choices)
 	}
 	detected["agents"].(map[string]any)["opencode"] = map[string]any{"available": true, "models": []any{"openai/gpt-6-luna"}}
 	choices = reviewerChoices(detected)
-	if len(choices) != 4 || choices[2]["agent"] != "opencode" || choices[2]["model"] != "openai/gpt-6-luna" {
+	if len(choices) != 5 || choices[3]["agent"] != "opencode" || choices[3]["model"] != "openai/gpt-6-luna" {
 		t.Fatalf("non-DeepSeek choices = %#v", choices)
 	}
 
 	detected["agents"].(map[string]any)["opencode"] = map[string]any{"available": true, "models": []any{"openrouter/deepseek/deepseek-v3-pro", "openrouter/deepseek/deepseek-v4-pro"}}
 	choices = reviewerChoices(detected)
-	if len(choices) != 4 || choices[2]["agent"] != "opencode" || choices[2]["model"] != "openrouter/deepseek/deepseek-v4-pro" {
+	if len(choices) != 5 || choices[3]["agent"] != "opencode" || choices[3]["model"] != "openrouter/deepseek/deepseek-v4-pro" {
 		t.Fatalf("fallback choices = %#v", choices)
 	}
 }

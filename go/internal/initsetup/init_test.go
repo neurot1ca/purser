@@ -124,6 +124,57 @@ func TestDetectAcceptsCodexModelWithoutModeOrEffort(t *testing.T) {
 	}
 }
 
+func TestCodexReviewerOptionsUseNewestTierModelsAndOmitMissingTier(t *testing.T) {
+	models := []map[string]any{
+		{"id": "gpt-6-sol"}, {"id": "gpt-6.1-sol"}, {"id": "gpt-6-luna"}, {"id": "gpt-6.1-luna"}, {"id": "gpt-6-astra"},
+	}
+	got := codexReviewerOptions(models)
+	if len(got) != 2 || got[0]["model"] != "gpt-6.1-sol" || got[0]["effort"] != "low" || got[1]["model"] != "gpt-6.1-luna" || got[1]["effort"] != "medium" {
+		t.Fatalf("reviewer options = %#v", got)
+	}
+	got = codexReviewerOptions(models[:2])
+	if len(got) != 1 || got[0]["model"] != "gpt-6.1-sol" || got[0]["effort"] != "low" {
+		t.Fatalf("reviewer options without Luna = %#v", got)
+	}
+}
+
+func TestReviewerEffortFlagWritesConfig(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	bin := t.TempDir()
+	raw, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "claude"
+	if strings.EqualFold(filepath.Ext(os.Args[0]), ".exe") {
+		name += ".exe"
+	}
+	claude := filepath.Join(bin, name)
+	if err := os.WriteFile(claude, raw, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	var output, errOutput bytes.Buffer
+	args := []string{"--apply", "--coder", "claude", "--reviewer", "claude", "--reviewer-model", "claude-haiku-5-5", "--reviewer-effort", "low"}
+	if code := Run(&output, &errOutput, args); code != 0 {
+		t.Fatalf("apply returned %d: %s", code, errOutput.String())
+	}
+	rolePath := profile.ProjectRolesPath(os.Getenv("PURSER_STATE_DIR"), root)
+	config, err := os.ReadFile(rolePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, _, err := profile.DecodeTOML(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := values["reviewer"].(map[string]any)["selected"].(map[string]any)
+	if selected["model"] != "claude-haiku-5-5" || selected["effort"] != "low" {
+		t.Fatalf("persisted reviewer selection = %#v (home %s)", selected, home)
+	}
+}
+
 func TestPlanAndApplyRejectInconsistentModelFlagsEqually(t *testing.T) {
 	_, _, restore := initTestEnvironment(t)
 	defer restore()

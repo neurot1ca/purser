@@ -70,7 +70,10 @@ func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 		if *model == "" {
 			switch *agentName {
 			case "codex":
-				*model = "gpt-6-luna"
+				*model = codexReviewerModel(detected, "luna")
+				if *model == "" {
+					*model = codexReviewerModel(detected, "sol")
+				}
 			case "claude":
 				*model = "claude-haiku-5-5"
 			case "agy":
@@ -180,7 +183,11 @@ func reviewerDefault(detected map[string]any, configuredModel, configuredEffort 
 			}
 			return map[string]any{"agent": name, "model": "claude-haiku-5-5", "effort": configuredEffort}
 		case "codex":
-			return map[string]any{"agent": name, "model": "gpt-6-luna", "effort": "low"}
+			model := codexReviewerModel(detected, "luna")
+			if model == "" {
+				model = codexReviewerModel(detected, "sol")
+			}
+			return map[string]any{"agent": name, "model": nullableString(model), "effort": "low"}
 		}
 	}
 	return map[string]any{"agent": "none"}
@@ -196,7 +203,10 @@ func reviewerChoices(detected map[string]any) []map[string]any {
 		}
 		switch name {
 		case "codex":
-			choices = append(choices, map[string]any{"agent": name, "model": "gpt-6-luna", "effort": "medium", "installed": true})
+			for _, option := range codexReviewerOptionsFromDetection(detected) {
+				option["installed"] = true
+				choices = append(choices, option)
+			}
 		case "claude":
 			choices = append(choices, map[string]any{"agent": name, "model": "claude-haiku-5-5", "effort": "medium", "installed": true})
 		case "agy":
@@ -241,6 +251,27 @@ func reviewerChoices(detected map[string]any) []map[string]any {
 		}
 	}
 	return append(choices, map[string]any{"agent": "none"})
+}
+
+func codexReviewerOptionsFromDetection(detected map[string]any) []map[string]any {
+	options, _ := detected["reviewer_options"].([]map[string]any)
+	choices := []map[string]any{}
+	for _, option := range options {
+		if option["agent"] == "codex" {
+			choices = append(choices, map[string]any{"agent": "codex", "model": option["model"], "effort": option["effort"]})
+		}
+	}
+	return choices
+}
+
+func codexReviewerModel(detected map[string]any, tier string) string {
+	for _, option := range codexReviewerOptionsFromDetection(detected) {
+		model, _ := option["model"].(string)
+		if strings.HasSuffix(model, "-"+tier) {
+			return model
+		}
+	}
+	return ""
 }
 
 func validateReviewerInstalled(detected map[string]any, agentName, model string) error {

@@ -18,6 +18,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/jobs"
+	modelversion "purser-hook/internal/models"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
@@ -50,6 +51,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 	fs.StringVar(&o.effort, "effort", "", "model effort")
 	fs.StringVar(&o.reviewer, "reviewer", "", "Reviewer-1 agent")
 	fs.StringVar(&o.reviewerModel, "reviewer-model", "", "Reviewer-1 model")
+	fs.StringVar(&o.reviewerEffort, "reviewer-effort", "", "Reviewer-1 effort")
 	var maintenance, noMaintenance, mechanical, noMechanical, autoCompact, noAutoCompact bool
 	fs.BoolVar(&maintenance, "maintenance", false, "enable maintenance reports")
 	fs.BoolVar(&noMaintenance, "no-maintenance", false, "disable maintenance reports")
@@ -105,17 +107,17 @@ func Run(stdout, stderr io.Writer, args []string) int {
 			fmt.Fprintln(stderr, "purser:init: unsupported coder")
 			return 2
 		}
-		if !o.jsonOutput || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil || (o.model != "" && o.coder == "") {
+		if !o.jsonOutput || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil || (o.model != "" && o.coder == "") {
 			fmt.Fprintln(stderr, "purser:init: --detect requires --json and accepts only optional --coder and --model")
 			return 2
 		}
 	}
-	if o.list && (!o.jsonOutput || !oneOf(o.coder, "codex", "opencode", "agy") || o.model != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil) {
+	if o.list && (!o.jsonOutput || !oneOf(o.coder, "codex", "opencode", "agy") || o.model != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil) {
 		fmt.Fprintln(stderr, "purser:init: --list-models requires --json and --coder codex, opencode, or agy")
 		return 2
 	}
 	if o.concise {
-		if o.jsonOutput || o.coder != "" || o.model != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil {
+		if o.jsonOutput || o.coder != "" || o.model != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil {
 			fmt.Fprintln(stderr, "purser:init: --enable-concise-style accepts no other options")
 			return 2
 		}
@@ -153,9 +155,16 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintln(stderr, "purser:init: invalid model or effort for selected mode")
 		return 2
 	}
-	if o.reviewer == "none" && o.reviewerModel != "" || o.reviewerModel != "" && o.reviewer == "" {
+	if o.reviewer == "none" && (o.reviewerModel != "" || o.reviewerEffort != "") || (o.reviewerModel != "" || o.reviewerEffort != "") && o.reviewer == "" {
 		fmt.Fprintln(stderr, "purser:init: reviewer model is incompatible with reviewer selection")
 		return 2
+	}
+	if o.reviewerEffort != "" {
+		allowed := o.reviewer == "codex" && oneOf(o.reviewerEffort, "low", "medium", "high", "xhigh") || o.reviewer == "claude" && oneOf(o.reviewerEffort, "low", "medium", "high", "xhigh", "max")
+		if !allowed {
+			fmt.Fprintln(stderr, "purser:init: reviewer effort is invalid for selected agent")
+			return 2
+		}
 	}
 	if oneOf(o.reviewer, "codex", "opencode", "claude") && o.reviewerModel == "" {
 		fmt.Fprintf(stderr, "purser:init: --reviewer %s requires --reviewer-model\n", o.reviewer)
@@ -319,6 +328,10 @@ func detect(home, root string, o options) (map[string]any, error) {
 	coderFamily := selectedFamily(data, o, providers)
 	reviewerOptions := []map[string]any{}
 	for _, name := range []string{"codex", "agy", "opencode"} {
+		if name == "codex" {
+			reviewerOptions = append(reviewerOptions, codexReviewerOptions(modelSets[name])...)
+			continue
+		}
 		for _, m := range modelSets[name] {
 			family := vendorFamily(asString(m["family"]))
 			entry := map[string]any{"agent": name, "model": m["id"], "label": m["id"], "family": family}
@@ -333,6 +346,25 @@ func detect(home, root string, o options) (map[string]any, error) {
 		familyValue = coderFamily
 	}
 	return map[string]any{"agents": agents, "reviewer_options": reviewerOptions, "coder_family": familyValue, "roles": defaultMap(roles), "trusted": trusted, "profile_exists": exists(filepath.Join(root, ".orchestrator", "profile.toml")), "maintenance_enabled": maintenanceEnabled, "auto_compact_enabled": autoCompactEnabled}, nil
+}
+
+func codexReviewerOptions(models []map[string]any) []map[string]any {
+	byTier := map[string][]string{"sol": {}, "luna": {}}
+	for _, model := range models {
+		id := asString(model["id"])
+		for _, tier := range []string{"sol", "luna"} {
+			if strings.HasSuffix(id, "-"+tier) {
+				byTier[tier] = append(byTier[tier], id)
+			}
+		}
+	}
+	options := []map[string]any{}
+	for _, tier := range []struct{ name, effort string }{{"sol", "low"}, {"luna", "medium"}} {
+		if id := modelversion.NewestVersion(byTier[tier.name]); id != "" {
+			options = append(options, map[string]any{"agent": "codex", "model": id, "label": id, "family": "openai", "effort": tier.effort})
+		}
+	}
+	return options
 }
 func defaultMap(v map[string]any) map[string]any {
 	if v == nil {
