@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.158 — 2026-10-16
+
+- **Added:** `codex_apply` returns a bounded `wait-validation` waiter that exits on every terminal host-validation status, so Claude no longer polls validation records itself.
+- **Fixed:** session start no longer asks Claude to fetch finished jobs older than 24 hours; they stay readable through `codex_result`.
+
 ## 0.1.157 — 2026-10-16
 
 - **Fixed:** a Codex reply whose thread has no worktree binding now runs in a fresh isolated worktree instead of the main checkout.
