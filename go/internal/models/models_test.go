@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,6 +20,14 @@ func setupDiscovery(t *testing.T, config map[string]any, listing func(string, ma
 
 func setupDiscoveryWithRouteOrder(t *testing.T, config map[string]any, routeOrder []string, listing func(string, map[string]map[string]json.RawMessage) listingResult) string {
 	t.Helper()
+	if config != nil && len(routeOrder) > 0 && !configUsesOpenCode(config) {
+		configured := make(map[string]any, len(config)+1)
+		for key, value := range config {
+			configured[key] = value
+		}
+		configured["mechanical_opencode_enabled"] = false
+		config = configured
+	}
 	state := t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", state)
 	oldConfig, oldCatalog, oldListing := loadConfig, loadCatalog, listModels
@@ -30,6 +39,21 @@ func setupDiscoveryWithRouteOrder(t *testing.T, config map[string]any, routeOrde
 	listModels = listing
 	t.Cleanup(func() { loadConfig, loadCatalog, listModels = oldConfig, oldCatalog, oldListing })
 	return state
+}
+
+func configUsesOpenCode(config map[string]any) bool {
+	if agent, _ := config["coder_agent"].(string); agent == "opencode" {
+		return true
+	}
+	if agent, _ := config["reviewer1_agent"].(string); agent == "opencode" {
+		return true
+	}
+	if fallback, _ := config["fallback"].(map[string]any); fallback != nil {
+		if agent, _ := fallback["agent"].(string); agent == "opencode" {
+			return true
+		}
+	}
+	return false
 }
 
 func routeNames(config map[string]any) []string {
@@ -457,6 +481,137 @@ func TestDiscoverChecksAgyReviewerAfterCoderModels(t *testing.T) {
 	}
 	if got := readStateJSON(t, root)["report"].(map[string]any)["current"]; got != current {
 		t.Fatalf("report current = %v", got)
+	}
+}
+
+func TestDiscoverListsOpenCodeForEveryRole(t *testing.T) {
+	cases := []struct {
+		name   string
+		config map[string]any
+	}{
+		{name: "race default", config: map[string]any{}},
+		{name: "coder", config: map[string]any{"coder_agent": "opencode", "routes": map[string]any{"normal": "openai/gpt-6-luna"}}},
+		{name: "reviewer1", config: map[string]any{"reviewer1_agent": "opencode", "reviewer1_model_requested": "openai/gpt-6-luna"}},
+		{name: "fallback", config: map[string]any{"fallback": map[string]any{"agent": "opencode", "model": "openai/gpt-6-luna"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			setupDiscovery(t, tc.config, func(agent string, _ map[string]map[string]json.RawMessage) listingResult {
+				if agent == "opencode" {
+					calls++
+					return listingResult{available: true, ids: []string{"openai/gpt-6.1-luna"}}
+				}
+				return listingResult{}
+			})
+			DiscoverModelVersion(t.TempDir())
+			if calls != 1 {
+				t.Fatalf("OpenCode listing calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestDiscoverExplicitlyDisablesDefaultOpenCodeRace(t *testing.T) {
+	calls := 0
+	setupDiscovery(t, map[string]any{"mechanical_opencode_enabled": false}, func(agent string, _ map[string]map[string]json.RawMessage) listingResult {
+		if agent == "opencode" {
+			calls++
+		}
+		return listingResult{}
+	})
+	DiscoverModelVersion(t.TempDir())
+	if calls != 0 {
+		t.Fatalf("OpenCode listing calls = %d, want none when explicitly disabled", calls)
+	}
+}
+
+func TestOpenCodeAttemptSharedAcrossConcurrentRepositories(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	setupDiscovery(t, map[string]any{"mechanical_opencode_enabled": true}, func(agent string, _ map[string]map[string]json.RawMessage) listingResult {
+		if agent == "opencode" {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			return listingResult{available: true, ids: []string{"openai/gpt-6.1-luna"}}
+		}
+		return listingResult{}
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			DiscoverModelVersion(t.TempDir())
+		}()
+	}
+	wg.Wait()
+	if calls != 1 {
+		t.Fatalf("OpenCode listing calls = %d, want one shared daily attempt", calls)
+	}
+}
+
+func TestFailedOpenCodeListingPreservesSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result listingResult
+	}{
+		{name: "failed", result: listingResult{}},
+		{name: "invalid empty snapshot", result: listingResult{available: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := setupDiscovery(t, map[string]any{"coder_agent": "opencode", "routes": map[string]any{"normal": "openai/gpt-6-luna"}}, func(string, map[string]map[string]json.RawMessage) listingResult {
+				return tc.result
+			})
+			yesterday := "2000-01-01"
+			before := resolutionCache{OpenCodeAttempted: yesterday, OpenCodeSnapshot: yesterday, Agents: map[string][]string{"opencode": {"openai/gpt-6.1-luna"}}}
+			if err := atomicJSON(filepath.Join(root, "model-resolution.json"), before); err != nil {
+				t.Fatal(err)
+			}
+			DiscoverModelVersion(t.TempDir())
+			after := readResolutionCache()
+			if !reflect.DeepEqual(after.Agents["opencode"], before.Agents["opencode"]) || after.OpenCodeSnapshot != yesterday {
+				t.Fatalf("failed refresh changed good snapshot: %#v", after)
+			}
+			if got := ResolveLatest("opencode", "openai/gpt-6-luna"); got != "openai/gpt-6.1-luna" {
+				t.Fatalf("prior successful snapshot resolved %q", got)
+			}
+			if after.OpenCodeAttempted != nowDate() {
+				t.Fatalf("attempt date = %q, want %q", after.OpenCodeAttempted, nowDate())
+			}
+		})
+	}
+}
+
+func TestOpenCodeListingOutputIsBounded(t *testing.T) {
+	output := &limitedOutput{limit: 3}
+	if _, err := output.Write([]byte("four")); err == nil {
+		t.Fatal("oversized listing output was accepted")
+	}
+	if len(output.data) != 3 {
+		t.Fatalf("captured %d bytes, want limit 3", len(output.data))
+	}
+}
+
+func TestOpenCodeSameFamilyUpgradeKeepsConfiguredFloor(t *testing.T) {
+	floor := "openai/gpt-6-luna"
+	config := map[string]any{"coder_agent": "opencode", "routes": map[string]any{"normal": floor}}
+	setupDiscovery(t, config, func(agent string, _ map[string]map[string]json.RawMessage) listingResult {
+		if agent != "opencode" {
+			t.Fatalf("listed %q, want opencode", agent)
+		}
+		return listingResult{available: true, ids: []string{"openai/gpt-6.1-luna"}}
+	})
+	current, newer, ok := DiscoverModelVersion(t.TempDir())
+	if !ok || current != floor || newer != "openai/gpt-6.1-luna" {
+		t.Fatalf("discovery = %q -> %q, %v", current, newer, ok)
+	}
+	if got := ResolveLatest("opencode", floor); got != newer {
+		t.Fatalf("resolved %q, want %q", got, newer)
+	}
+	if got := routeModel(config["routes"].(map[string]any)["normal"]); got != floor {
+		t.Fatalf("configured floor changed to %q, want %q", got, floor)
 	}
 }
 

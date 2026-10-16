@@ -23,6 +23,7 @@ import (
 )
 
 const maxCatalogBytes = 16 << 20
+const maxListingBytes = 1 << 20
 
 // ResolveLatest reads local caches only; configured IDs are family floors.
 func ResolveLatest(agent, model string) string {
@@ -37,7 +38,14 @@ func ResolveLatest(agent, model string) string {
 	case "agy", "opencode":
 		data, err := os.ReadFile(filepath.Join(stateRoot(), "model-resolution.json"))
 		var cache resolutionCache
-		if err != nil || json.Unmarshal(data, &cache) != nil || cache.CheckedOn != time.Now().UTC().Format("2006-01-02") {
+		if err != nil || json.Unmarshal(data, &cache) != nil {
+			return model
+		}
+		if agent == "opencode" {
+			if cache.OpenCodeSnapshot == "" && (cache.OpenCodeAttempted != "" || cache.CheckedOn != time.Now().UTC().Format("2006-01-02")) {
+				return model
+			}
+		} else if cache.CheckedOn != time.Now().UTC().Format("2006-01-02") {
 			return model
 		}
 		ids = cache.Agents[agent]
@@ -111,8 +119,10 @@ func NewestVersion(ids []string) string {
 }
 
 type resolutionCache struct {
-	CheckedOn string              `json:"checked_on"`
-	Agents    map[string][]string `json:"agents"`
+	CheckedOn         string              `json:"checked_on"`
+	OpenCodeAttempted string              `json:"opencode_attempted_on,omitempty"`
+	OpenCodeSnapshot  string              `json:"opencode_snapshot_on,omitempty"`
+	Agents            map[string][]string `json:"agents"`
 }
 
 var versionPattern = regexp.MustCompile(`^(.+?)(\d+(?:\.\d+)*)([^0-9]*)$`)
@@ -151,9 +161,6 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	}
 	defer unlock()
 	state := readNoticeState(statePath)
-	if state.CheckedOn != nil && *state.CheckedOn == time.Now().UTC().Format("2006-01-02") {
-		return "", "", false
-	}
 	loaded, err := loadConfig(repository)
 	if err != nil {
 		return "", "", false
@@ -193,22 +200,67 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 		}
 	}
 	if reviewer, valid := config["reviewer1_model_requested"].(string); valid {
-		checks = append(checks, modelCheck{agent: "agy", model: reviewer})
+		reviewerAgent, _ := config["reviewer1_agent"].(string)
+		if reviewerAgent == "" {
+			reviewerAgent = "agy"
+		}
+		checks = append(checks, modelCheck{agent: reviewerAgent, model: reviewer})
+	}
+	if fallback, valid := config["fallback"].(map[string]any); valid {
+		fallbackAgent, _ := fallback["agent"].(string)
+		fallbackModel, _ := fallback["model"].(string)
+		if fallbackAgent != "" && fallbackModel != "" {
+			checks = append(checks, modelCheck{agent: fallbackAgent, model: fallbackModel})
+		}
+	}
+	openCodeNeeded := false
+	for _, check := range checks {
+		if check.agent == "opencode" {
+			openCodeNeeded = true
+			break
+		}
+	}
+	if config["mechanical_opencode_enabled"] != false {
+		openCodeNeeded = true
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if openCodeNeeded {
+		refreshOpenCodeListing(cached.Providers, today)
+	}
+	if state.CheckedOn != nil && *state.CheckedOn == today {
+		return "", "", false
 	}
 	listed := map[string]listingResult{}
-	resolution := resolutionCache{CheckedOn: time.Now().UTC().Format("2006-01-02"), Agents: map[string][]string{}}
+	resolution := readResolutionCache()
+	if resolution.Agents == nil {
+		resolution.Agents = map[string][]string{}
+	}
 	for _, check := range checks {
 		if _, exists := listed[check.agent]; !exists {
-			result := listModels(check.agent, cached.Providers)
+			result := listingResult{}
+			if check.agent == "opencode" {
+				result.ids = resolution.Agents["opencode"]
+				result.available = resolution.OpenCodeSnapshot != "" && len(result.ids) > 0
+			} else {
+				result = listModels(check.agent, cached.Providers)
+			}
 			listed[check.agent] = result
-			if result.available && (check.agent == "agy" || check.agent == "opencode") {
+			if result.available && check.agent == "agy" {
 				resolution.Agents[check.agent] = result.ids
 			}
 		}
 	}
 	cachePath := filepath.Join(stateRoot(), "model-resolution.json")
-	if unlock, err := contextio.LockFile(cachePath + ".lock"); err == nil {
-		_ = atomicJSON(cachePath, resolution)
+	if unlock, lockErr := contextio.LockFile(cachePath + ".lock"); lockErr == nil {
+		latest := readResolutionCache()
+		if latest.Agents == nil {
+			latest.Agents = map[string][]string{}
+		}
+		latest.CheckedOn = today
+		if result := listed["agy"]; result.available {
+			latest.Agents["agy"] = result.ids
+		}
+		_ = atomicJSONRetry(cachePath, latest)
 		unlock()
 	}
 	for _, check := range checks {
@@ -247,6 +299,51 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	}
 	_ = recordCheck(statePath)
 	return "", "", false
+}
+
+func readResolutionCache() resolutionCache {
+	var cache resolutionCache
+	data, err := os.ReadFile(filepath.Join(stateRoot(), "model-resolution.json"))
+	if err == nil {
+		_ = json.Unmarshal(data, &cache)
+	}
+	return cache
+}
+
+func refreshOpenCodeListing(providers map[string]map[string]json.RawMessage, today string) {
+	path := filepath.Join(stateRoot(), "model-resolution.json")
+	unlock, err := contextio.LockFile(path + ".lock")
+	if err != nil {
+		return
+	}
+	defer unlock()
+	cache := readResolutionCache()
+	if cache.Agents == nil {
+		cache.Agents = map[string][]string{}
+	}
+	if cache.OpenCodeAttempted == today {
+		return
+	}
+	cache.OpenCodeAttempted = today
+	result := listModels("opencode", providers)
+	if result.available && len(result.ids) > 0 {
+		cache.Agents["opencode"] = result.ids
+		cache.OpenCodeSnapshot = today
+	}
+	_ = atomicJSONRetry(path, cache)
+}
+
+func atomicJSONRetry(path string, value any) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = atomicJSON(path, value); err == nil {
+			return nil
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+		}
+	}
+	return err
 }
 
 func newestCatalogModel(providers map[string]map[string]json.RawMessage) (family, model string) {
@@ -597,7 +694,30 @@ var loadCatalog = func() (catalog, error) {
 var lookPath = exec.LookPath
 var runListingCommand = func(command *exec.Cmd) ([]byte, error) {
 	proc.ConfigureProcessTreeKill(command)
-	return command.Output()
+	output := &limitedOutput{limit: maxListingBytes}
+	command.Stdout = output
+	err := command.Run()
+	if err != nil {
+		return nil, err
+	}
+	return output.data, nil
+}
+
+type limitedOutput struct {
+	data  []byte
+	limit int
+}
+
+func (output *limitedOutput) Write(data []byte) (int, error) {
+	remaining := output.limit - len(output.data)
+	if remaining <= 0 || len(data) > remaining {
+		if remaining > 0 {
+			output.data = append(output.data, data[:remaining]...)
+		}
+		return 0, errors.New("model listing exceeds output limit")
+	}
+	output.data = append(output.data, data...)
+	return len(data), nil
 }
 
 var listModels = func(agent string, providers map[string]map[string]json.RawMessage) listingResult {
@@ -657,11 +777,26 @@ func opencodeBinary() (string, error) {
 	variants := []string{}
 	switch runtime.GOOS {
 	case "windows":
-		variants = []string{"opencode-windows-x64", "opencode-windows-x64-baseline"}
+		switch runtime.GOARCH {
+		case "amd64":
+			variants = []string{"opencode-windows-x64", "opencode-windows-x64-baseline"}
+		case "arm64":
+			variants = []string{"opencode-windows-arm64"}
+		}
 	case "linux":
-		variants = []string{"opencode-linux-x64", "opencode-linux-arm64"}
+		switch runtime.GOARCH {
+		case "amd64":
+			variants = []string{"opencode-linux-x64"}
+		case "arm64":
+			variants = []string{"opencode-linux-arm64"}
+		}
 	case "darwin":
-		variants = []string{"opencode-darwin-x64", "opencode-darwin-arm64"}
+		switch runtime.GOARCH {
+		case "amd64":
+			variants = []string{"opencode-darwin-x64"}
+		case "arm64":
+			variants = []string{"opencode-darwin-arm64"}
+		}
 	}
 	for _, base := range packages {
 		for _, variant := range variants {
