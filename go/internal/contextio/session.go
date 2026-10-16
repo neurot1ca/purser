@@ -29,6 +29,7 @@ const handoffHeader = "Purser handoff (historical reference, written before the 
 const recentStart = "<!-- PURSER:RECENT:START -->"
 const recentEnd = "<!-- PURSER:RECENT:END -->"
 const maxHandoffContext = 6000
+const staleFinishedJobMaxAge = 24 * time.Hour
 
 var handoffLanguage = regexp.MustCompile(`(?i)^\s*User language:\s*(.*?)\s*$`)
 var systemReminder = regexp.MustCompile(`<system-reminder>[\s\S]*?(?:</system-reminder>|\z)`)
@@ -426,6 +427,14 @@ func followupHints(root, key, session string) string {
 		}
 		state, _ := job["state"].(string)
 		sameSession := prior == session
+		if contains([]string{"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}, state) {
+			if stamp, ok := numeric(job["finishedAt"]); ok && stamp > 0 {
+				finishedAt := time.Unix(0, int64(stamp*float64(time.Second))).UTC()
+				if time.Now().UTC().Sub(finishedAt) > staleFinishedJobMaxAge {
+					continue
+				}
+			}
+		}
 		if sameSession && state != "SUCCEEDED" && contains([]string{"FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN_OR_IN_PROGRESS", "EXPIRED"}, state) && job["waiterObservedTerminalState"] == state && job["waiterObservedTerminalAt"] != nil {
 			continue
 		}
