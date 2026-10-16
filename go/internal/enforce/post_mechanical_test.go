@@ -148,7 +148,7 @@ func TestMechanicalRefreshAndSampleShareInventoryLock(t *testing.T) {
 	go func() { wg.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("refresh/sample operations did not finish after lock release")
 	}
 	close(results)

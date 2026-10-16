@@ -640,7 +640,7 @@ func lockCandidateInventory(root string) (string, func(), error) {
 			return "", func() {}, err
 		}
 	}
-	deadline := time.Now().Add(100 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for contextio.TryLock(lock) != nil {
 		if time.Now().After(deadline) {
 			_ = lock.Close()

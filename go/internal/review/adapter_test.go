@@ -31,7 +31,7 @@ func TestAdapterGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			model := map[string]string{"agy": "gemini-3.8-flash-high", "opencode": "google/gemini-3.8-flash-high", "codex": "gpt-5"}[name]
-			executable, err := filepath.Abs(filepath.Join("tools", name+".exe"))
+			executable, err := filepath.Abs(filepath.Join("tools", name+executableSuffix()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -46,7 +46,11 @@ func TestAdapterGoldens(t *testing.T) {
 				}
 				command, err = adapter.BuildCommand(prompt, schema, config, CommandOptions{RepositoryRoot: repository})
 			} else {
-				cwd := t.TempDir()
+				var cwd string
+				cwd, err = resolveReviewerPath(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
 				command, err = adapter.BuildCommand(prompt, schema, config, CommandOptions{WorkingDirectory: cwd})
 				want.Argv[9] = cwd
 				if name == "codex" {

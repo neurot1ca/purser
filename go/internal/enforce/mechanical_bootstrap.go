@@ -31,6 +31,7 @@ func RunMechanicalNewcomerBracket(root string) error {
 		return err
 	}
 	jobs := make(chan string)
+	recordErrors := make(chan error, len(entrants)*len(mechanicalBootstrapTasks))
 	var workers sync.WaitGroup
 	count := len(entrants)
 	if count > 3 {
@@ -46,7 +47,9 @@ func RunMechanicalNewcomerBracket(root string) error {
 						continue
 					}
 					ok := mechanicalBootstrapRunner(context.Background(), root, model, mechanicalBootstrapTasks[task], mechanicalShadowTimeout)
-					_ = recordMechanicalBracketResult(root, model, task, ok)
+					if err := recordMechanicalBracketResult(root, model, task, ok); err != nil {
+						recordErrors <- err
+					}
 				}
 			}
 		}()
@@ -56,6 +59,10 @@ func RunMechanicalNewcomerBracket(root string) error {
 	}
 	close(jobs)
 	workers.Wait()
+	close(recordErrors)
+	for err := range recordErrors {
+		return err
+	}
 	return finishMechanicalBracket(root)
 }
 
