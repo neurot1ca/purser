@@ -17,6 +17,8 @@ jobs:
   test:
     env:
       GOTELEMETRY: off
+      DISABLE_AUTOUPDATER: '1'
+      DISABLE_TELEMETRY: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -41,4 +43,14 @@ jobs:
         with:
           node-version: '22'
 
-      # Claude Code CLI is not installed in CI, so plugin test/validate are omitted.
+      - name: Install Claude Code CLI
+        run: npm install --global @anthropic-ai/claude-code@2.1.300
+        shell: bash
+
+      - name: Validate Claude plugin
+        run: claude plugin validate . --strict
+        shell: bash
+
+      - name: Test Claude plugin
+        run: claude plugin test .
+        shell: bash

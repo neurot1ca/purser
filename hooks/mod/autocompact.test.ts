@@ -19,7 +19,7 @@ function engine(on, tokens: number, env: Record<string, string> = {}, failures =
   on('session.compact', async (_$, e) => {
     calls.compacts++
     if (calls.compacts <= failures) throw new Error('a turn is running')
-    return { messages: e.messages }
+    return { messages: [{ role: 'user', text: 'compacted', toolUses: [] }] }
   })
   return { calls, clock, reads }
 }
