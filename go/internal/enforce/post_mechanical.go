@@ -184,7 +184,10 @@ func recordMechanicalSample(root, model string, success bool) error {
 		if err != nil {
 			return err
 		}
-		return atomicWrite(path, data)
+		if err = atomicWrite(path, data); err != nil {
+			return err
+		}
+		return syncMechanicalRaceLeader(root, inventory, nil)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, _ := candidates[i].(map[string]any)
@@ -223,7 +226,7 @@ func recordMechanicalSample(root, model string, success bool) error {
 	if err = atomicWrite(path, data); err != nil {
 		return err
 	}
-	return nil
+	return syncMechanicalRaceLeader(root, inventory, nil)
 }
 
 // ReconcileMechanicalInventory applies a validated successful free-model snapshot.
@@ -580,6 +583,34 @@ func mechanicalRaceScore(inventory map[string]any, race map[string]any, model st
 }
 
 func syncMechanicalRaceLeader(root string, inventory, race map[string]any) error {
+	if race == nil {
+		race = map[string]any{}
+	}
+	leaderPath := filepath.Join(root, "opencode", "leader.json")
+	if data, err := os.ReadFile(leaderPath); err == nil {
+		var snapshot struct {
+			Model     string `json:"model"`
+			Announced bool   `json:"announced"`
+		}
+		if json.Unmarshal(data, &snapshot) == nil && snapshot.Model != "" {
+			if candidate := mechanicalCandidate(inventory, snapshot.Model); candidate != nil {
+				samples, _ := candidate["mechanical_samples"].([]any)
+				successes := 0
+				for _, sample := range samples {
+					if sample == true {
+						successes++
+					}
+				}
+				updated, marshalErr := json.Marshal(map[string]any{"model": snapshot.Model, "successes": successes, "sample_count": len(samples), "announced": snapshot.Announced})
+				if marshalErr != nil {
+					return marshalErr
+				}
+				if writeErr := atomicWrite(leaderPath, updated); writeErr != nil {
+					return writeErr
+				}
+			}
+		}
+	}
 	winner, _ := race["winner"].(string)
 	if winner == "" || race["finished"] != true {
 		return nil
@@ -619,7 +650,18 @@ func syncMechanicalRaceLeader(root string, inventory, race map[string]any) error
 	if err != nil {
 		return err
 	}
-	return atomicWrite(filepath.Join(root, "opencode", "leader.json"), data)
+	return atomicWrite(leaderPath, data)
+}
+
+func mechanicalCandidate(inventory map[string]any, model string) map[string]any {
+	candidates, _ := inventory["candidates"].([]any)
+	for _, raw := range candidates {
+		candidate, _ := raw.(map[string]any)
+		if candidate != nil && candidate["id"] == model {
+			return candidate
+		}
+	}
+	return nil
 }
 
 func lockCandidateInventory(root string) (string, func(), error) {

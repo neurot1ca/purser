@@ -121,6 +121,9 @@ func bootstrapIfUnmeasured(state string) error {
 	if err := runMechanicalNewcomerBracket(state); err != nil {
 		return fmt.Errorf("run mechanical newcomer bracket: %w", err)
 	}
+	if err := runMechanicalLeaderRace(state); err != nil {
+		return fmt.Errorf("run mechanical leader race: %w", err)
+	}
 	if err := bootstrapMechanicalRace(state); err != nil {
 		return fmt.Errorf("bootstrap mechanical race: %w", err)
 	}
@@ -128,6 +131,7 @@ func bootstrapIfUnmeasured(state string) error {
 }
 
 var runMechanicalNewcomerBracket = enforce.RunMechanicalNewcomerBracket
+var runMechanicalLeaderRace = enforce.RunMechanicalLeaderRace
 
 func tryCatalogRefreshLock(path string) (func() error, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {

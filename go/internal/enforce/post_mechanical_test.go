@@ -746,6 +746,37 @@ func TestMechanicalNewcomerUsesLeaderHistoryForStrictWin(t *testing.T) {
 	}
 }
 
+func TestMechanicalCandidateSamplesKeepLeaderSnapshotConsistent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "opencode"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	inventory := map[string]any{"candidates": []any{
+		map[string]any{"id": "leader", "status": "measured", "mechanical_samples": []any{true, true, true, false, false}},
+	}, "race": map[string]any{"started": true, "finished": true, "winner": "leader", "entrants": []any{"leader", "old-leader"}}}
+	data, _ := json.Marshal(inventory)
+	if err := os.WriteFile(filepath.Join(root, "opencode", "candidates.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opencode", "leader.json"), []byte(`{"model":"leader","successes":3,"sample_count":5,"announced":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordMechanicalSample(root, "leader", true); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "opencode", "leader.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot map[string]any
+	if err = json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot["sample_count"] != float64(6) || snapshot["successes"] != float64(4) {
+		t.Fatalf("leader snapshot=%v, want candidate history 4/6", snapshot)
+	}
+}
+
 func TestMechanicalBracketTieKeepsStableOrder(t *testing.T) {
 	inventory := map[string]any{"candidates": []any{map[string]any{"id": "leader", "status": "measured", "mechanical_samples": []any{true, true, true}}}}
 	samples := map[string]any{}

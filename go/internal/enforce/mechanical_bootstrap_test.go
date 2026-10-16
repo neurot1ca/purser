@@ -259,6 +259,31 @@ func TestMechanicalNewcomerBracketRecordsSamplesAndAdvances(t *testing.T) {
 	}
 }
 
+func TestMechanicalLeaderRaceUsesBuiltInTasks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "opencode"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	inventory := map[string]any{"candidates": []any{
+		map[string]any{"id": "leader", "status": "measured", "mechanical_samples": []any{true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}},
+		map[string]any{"id": "challenger", "status": "unmeasured", "mechanical_samples": []any{}},
+	}, "race": map[string]any{"started": true, "finished": false, "stage": "newcomer_vs_leader", "leader": "leader", "entrants": []any{"challenger", "leader"}, "samples": map[string]any{}, "session_claims": []any{}}}
+	data, _ := json.Marshal(inventory)
+	if err := os.WriteFile(filepath.Join(root, "opencode", "candidates.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := mechanicalBootstrapRunner
+	mechanicalBootstrapRunner = func(_ context.Context, _, model, _ string, _ time.Duration) bool { return model == "challenger" }
+	t.Cleanup(func() { mechanicalBootstrapRunner = old })
+	if err := RunMechanicalLeaderRace(root); err != nil {
+		t.Fatal(err)
+	}
+	got := readBracketInventory(t, root)["race"].(map[string]any)
+	if got["finished"] != true || got["winner"] != "challenger" || len(got["samples"].(map[string]any)["challenger"].([]any)) != mechanicalMinSamples {
+		t.Fatalf("built-in leader race did not decide: %#v", got)
+	}
+}
+
 func TestMechanicalNewcomerBracketAllFailKeepsLeader(t *testing.T) {
 	root := mechanicalBracketFixture(t)
 	old := mechanicalBootstrapRunner

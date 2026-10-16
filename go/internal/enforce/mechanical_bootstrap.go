@@ -66,6 +66,52 @@ func RunMechanicalNewcomerBracket(root string) error {
 	return finishMechanicalBracket(root)
 }
 
+// RunMechanicalLeaderRace supplies the built-in samples that finish a
+// newcomer-versus-leader race during detached catalog refreshes.
+func RunMechanicalLeaderRace(root string) error {
+	path, unlock, err := lockCandidateInventory(root)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		unlock()
+		return err
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		unlock()
+		return err
+	}
+	race, _ := inventory["race"].(map[string]any)
+	if race == nil || race["finished"] == true || race["stage"] != "newcomer_vs_leader" {
+		unlock()
+		return nil
+	}
+	leader := mechanicalRaceLeader(inventory, race)
+	entrants, _ := race["entrants"].([]any)
+	challenger := ""
+	for _, raw := range entrants {
+		if id, ok := raw.(string); ok && id != "" && id != leader {
+			challenger = id
+			break
+		}
+	}
+	samples, _ := race["samples"].(map[string]any)
+	values, _ := samples[challenger].([]any)
+	unlock()
+	if challenger == "" {
+		return fmt.Errorf("invalid mechanical leader race entrants")
+	}
+	for i := len(values); i < mechanicalMinSamples; i++ {
+		success := mechanicalBootstrapRunner(context.Background(), root, challenger, mechanicalBootstrapTasks[i%len(mechanicalBootstrapTasks)], mechanicalShadowTimeout)
+		if err := recordMechanicalRaceSample(root, challenger, success); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func prepareMechanicalBracket(root string) ([]string, map[string][]*bool, error) {
 	path, unlock, err := lockCandidateInventory(root)
 	if err != nil {

@@ -17,9 +17,9 @@ import (
 
 func saveCatalogRefreshHooks(t *testing.T) {
 	t.Helper()
-	oldDiscover, oldConfig, oldBootstrap := discoverCatalogModels, loadCatalogConfig, bootstrapMechanicalRace
+	oldDiscover, oldConfig, oldBootstrap, oldLeaderRace := discoverCatalogModels, loadCatalogConfig, bootstrapMechanicalRace, runMechanicalLeaderRace
 	t.Cleanup(func() {
-		discoverCatalogModels, loadCatalogConfig, bootstrapMechanicalRace = oldDiscover, oldConfig, oldBootstrap
+		discoverCatalogModels, loadCatalogConfig, bootstrapMechanicalRace, runMechanicalLeaderRace = oldDiscover, oldConfig, oldBootstrap, oldLeaderRace
 	})
 	bootstrapMechanicalRace = func(string) error { return nil }
 	state, home := t.TempDir(), t.TempDir()
@@ -209,6 +209,8 @@ func TestCatalogRefreshRunsBootstrapAfterReconciliationAndOnSameDate(t *testing.
 	discoverCatalogModels = func(string) (string, string, bool) { return "", "", false }
 	loadCatalogConfig = func(string) (map[string]any, error) { return map[string]any{}, nil }
 	calls := 0
+	leaderRaceCalls := 0
+	runMechanicalLeaderRace = func(string) error { leaderRaceCalls++; return nil }
 	bootstrapMechanicalRace = func(root string) error {
 		calls++
 		if _, err := os.Stat(filepath.Join(root, "opencode", "candidates.json")); err != nil {
@@ -224,6 +226,9 @@ func TestCatalogRefreshRunsBootstrapAfterReconciliationAndOnSameDate(t *testing.
 	}
 	if calls != 2 {
 		t.Fatalf("bootstrap calls=%d, want refresh each detached run", calls)
+	}
+	if leaderRaceCalls != 2 {
+		t.Fatalf("leader race calls=%d, want refresh each detached run", leaderRaceCalls)
 	}
 }
 
