@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.162 — 2026-10-16
+
+- **Fixed:** an OpenCode race inventory created before catalog baselines now gets one, and its unmeasured models enter the model race instead of never being raced.
+- **Changed:** when several new OpenCode models arrive, their bracket runs on built-in tasks in the background catalog refresh; only the winner races the leader on shadow runs, and the leader changes only on that race.
+
 ## 0.1.161 — 2026-10-16
 
 - **Fixed:** the detached catalog refresh gives the OpenCode model listing 30 seconds instead of 2, so a cold OpenCode start no longer leaves the catalog empty; a failed listing is recorded in `catalog-refresh-error.json` with its reason.
