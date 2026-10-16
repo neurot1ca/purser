@@ -214,6 +214,9 @@ var claudeReviewerEfforts = map[string]bool{"low": true, "medium": true, "high":
 var codexReviewerEfforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true}
 
 func (a reviewerAdapter) Environment(command []string) map[string]string {
+	if a.provider == "agy" && runtime.GOOS == "windows" {
+		return map[string]string{"AGY_CLI_DISABLE_AUTO_UPDATE": "1"}
+	}
 	if a.provider != "opencode" {
 		return map[string]string{}
 	}

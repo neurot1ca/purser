@@ -62,6 +62,9 @@ func TestAdapterGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			want.Argv[0] = executable
+			if name == "agy" && runtime.GOOS == "windows" {
+				want.EnvDelta = map[string]string{"AGY_CLI_DISABLE_AUTO_UPDATE": "1"}
+			}
 			if !equal(command, want.Argv) {
 				t.Fatalf("argv = %#v, want %#v", command, want.Argv)
 			}
