@@ -28,19 +28,21 @@ The coder can be Codex, Claude, Gemini through agy, or any model that OpenCode s
 | Claude Code | Purser coordinates work from inside Claude Code. |
 | Node.js | Launches the MCP server. |
 | Git | Workers use isolated Git worktrees. |
-| At least one installed and authenticated coding CLI, such as OpenAI Codex | Purser resolves the selected CLI from `PATH`. Install and authenticate `codex`, `agy`, or `opencode` separately. |
+| At least one installed and authenticated coding CLI, such as OpenAI Codex | Purser resolves the selected CLI from `PATH`. Install and authenticate `codex`, `agy`, or `opencode` separately. Purser can also run with Claude alone. |
 | Optional OpenCode or Antigravity (agy) CLI | Enables those coder lanes. |
-| Python | Not required. |
 
 Purser ships prebuilt binaries for Windows, macOS, and Linux on amd64 and arm64. Bundled Go binaries run the hooks and commands.
 
-<!-- TODO install command -->
-
-Restart Claude Code, then initialize settings:
+Run these commands inside Claude Code:
 
 ```text
-/purser:init
+/plugin marketplace add neurot1ca/purser-claude-orchestrator
+/plugin install purser@purser-claude-orchestrator
 ```
+
+Restart Claude Code, then run `/purser:init` to configure Purser.
+
+Update with `/plugin marketplace update purser-claude-orchestrator`.
 
 The setup marks an option recommended only when Purser has a reason. It can write global defaults to `~/.orchestrator/config.toml` and project settings to `.orchestrator/profile.toml`. It asks whether to trust the current project; project profile commands run only after that trust is accepted. Run `/purser:check` to inspect runtime binaries and CLI status. Purser stores runtime state under `~/.claude/purser` by default.
 

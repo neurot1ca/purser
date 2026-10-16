@@ -1,51 +1,63 @@
-# Purser Claude Code plugin (P6a)
+# Purser Claude Code plugin
 
-This repository is the plugin source. The local `purser-local` marketplace is
-generated outside the repository from the release commit and exposes one
-plugin, `purser`. Local releases therefore ship only committed files. The plugin registers the existing
-`codex-orchestrator` skill, the `codex-main` MCP bridge, and the same hooks as
-the manual installer.
-The MCP definition lives under `plugin/`, since a root `.mcp.json` would be
-loaded as project configuration before the plugin is enabled.
+## Install
 
-Hooks are registered through the mod in `hooks/hooks.json` and
-`hooks/register.ts`, which calls the bundled
-`bin/purser-hook-<os>-<arch>` binary.
+Requirements: Claude Code, Node.js, and Git. For delegated work, install and
+authenticate at least one coder CLI such as Codex. Purser can also run with
+Claude alone.
 
-## Local release marketplace
+Run these commands inside Claude Code:
 
-Switch the existing local marketplace registration once. Replace `<dir>` with
-the generated marketplace path (by default `~/.claude/purser/marketplace/`):
-
-```powershell
-claude plugin marketplace remove purser-local
-claude plugin marketplace add <dir>
-claude plugin install purser@purser-local
+```text
+/plugin marketplace add neurot1ca/purser-claude-orchestrator
+/plugin install purser@purser-claude-orchestrator
 ```
 
-For development, the Go release tool refreshes this marketplace from the
-release commit before running the plugin update commands. To refresh it
-without a version bump, run:
+Restart Claude Code after installation, then run `/purser:check`.
+Run `/purser:init` to configure Purser. Update with
+`/plugin marketplace update purser-claude-orchestrator`.
 
-```powershell
+## Release catalog
+
+A release tag starts the release workflow. The workflow builds and verifies
+the archive, publishes the GitHub Release, and emits a marketplace catalog
+entry containing the archive URL and SHA-256 digest. Copy that entry into
+`.claude-plugin/marketplace.json` and commit the catalog update to the default
+branch to publish the new marketplace pin.
+
+To roll back, replace the plugin entry in `.claude-plugin/marketplace.json`
+with the verified archive entry from an earlier release, then commit that
+change. Users can update the marketplace to install the pinned release.
+
+## Local development
+
+The release tool's export-only mode refreshes the local development marketplace
+from the committed tree at `HEAD`:
+
+```text
 go run ./go/cmd/purser-release --export-only
 ```
 
-Use `--marketplace-dir <dir>` to choose another local path.
+It writes `~/.claude/purser/marketplace/` with a local catalog that points to
+`./purser`. Use `--marketplace-dir <dir>` to choose another export directory.
 
-Restart Claude Code after switching the local marketplace, then run
-`/purser:check`. The check should report plugin-only registration.
+## Plugin structure
 
-Run `/purser:check` to read-only check the installation and see actionable next steps.
-Run `/purser:init` for guided role selection, project trust, and optional profile scaffolding.
+This repository is the plugin source. The plugin registers the
+`codex-orchestrator` skill, the `codex-main` MCP bridge, and the hooks. The MCP
+definition lives under `plugin/`, since a root `.mcp.json` would be loaded as
+project configuration before the plugin is enabled.
+
+Hooks are registered through `hooks/hooks.json` and `hooks/register.ts`, which
+calls the bundled `bin/purser-hook-<os>-<arch>` binary.
 
 ## Runtime
 
 The MCP server starts with Node.js through
 `bin/purser-launcher.js go-mcp`. Hooks and Purser commands run through the
 bundled platform Go binary. `/purser:check`, `/purser:init`,
-`/purser:optimize`, maintenance reports, and code-map generation use that binary.
-The check reports `Runtime | OK | purser-hook <version> (<GOOS>/<GOARCH>)`.
+`/purser:optimize`, maintenance reports, and code-map generation use that
+binary. The check reports `Runtime | OK | purser-hook <version> (<GOOS>/<GOARCH>)`.
 
 Plugin layout and scoped MCP tool names follow the [Claude Code plugin
 reference](https://code.claude.com/docs/en/plugins-reference). Local marketplace
