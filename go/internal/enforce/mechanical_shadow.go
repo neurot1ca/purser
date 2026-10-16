@@ -60,18 +60,27 @@ func runMechanicalShadowJob(ctx context.Context, jobPath, executable string, tim
 	lock := filepath.Join(filepath.Dir(jobPath), "running.lock")
 	_ = os.WriteFile(lock, []byte(strconv.Itoa(os.Getpid())), 0600)
 	outcome, err := runMechanicalShadow(ctx, mechanicalShadowJob{Model: job.Model, Prompt: job.Prompt, Repository: job.Repository, Scratch: job.Scratch}, executable, timeout)
-	success := false
-	if err == nil && outcome.ExitCode == 0 && !outcome.TimedOut {
-		if report, e := mechanicalShadowReport(outcome.Stdout); e == nil {
-			success = mechanicalReportsAgree(report, job.AcceptedReport)
-		}
+	success, valid := mechanicalShadowSample(outcome, err, job.AcceptedReport)
+	if valid {
+		_, _ = mechanicalShadowRecordSample(job.StateRoot, job.Model, success)
+		_ = recordMechanicalRaceSample(job.StateRoot, job.Model, success)
 	}
-	_, _ = mechanicalShadowRecordSample(job.StateRoot, job.Model, success)
 	_ = os.RemoveAll(job.Scratch)
 	_ = os.Remove(jobPath)
 	_ = os.Remove(lock)
 	emitMechanicalShadowObservation(job.StateRoot, job.ProjectKey, "MECHANICAL_SHADOW_FINISHED", map[string]any{"success": success})
 	return success
+}
+
+func mechanicalShadowSample(outcome mechanicalShadowOutcome, runErr error, accepted string) (bool, bool) {
+	if runErr != nil || outcome.ExitCode != 0 || outcome.TimedOut {
+		return false, false
+	}
+	report, err := mechanicalShadowReport(outcome.Stdout)
+	if err != nil {
+		return false, false
+	}
+	return mechanicalReportsAgree(report, accepted), true
 }
 
 func emitMechanicalShadowObservation(root, project, eventType string, payload map[string]any) {

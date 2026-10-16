@@ -8,27 +8,18 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/proc"
 )
 
-const mechanicalMinSamples = 5
-const mechanicalShadowTurnSpacing = 70
+const mechanicalMinSamples = 3
 
 // PostMechanicalLearning mirrors codex.py's optional, fail-open post processing.
-func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey string, pending, bundle map[string]any) {
+func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey, session string, pending, bundle map[string]any) {
 	if config["mechanical_opencode_enabled"] == false {
-		return
-	}
-	turn, eligible, unlock, err := advanceMechanicalShadowTurn(root, projectKey)
-	if err == nil {
-		defer unlock()
-	} else {
-		eligible = false
-	}
-	if pending["mechanical_opencode"] != true {
 		return
 	}
 	skipped, _ := bundle["reviewer1_skipped_reason"].(string)
@@ -43,7 +34,7 @@ func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey 
 	}
 	accepted = accepted && bundle["validation"] != "FAIL" && validation["status"] != "FAIL"
 	accepted = accepted && bundle["micro_repair"] == nil && bundle["micro_repair_cleared_review"] != true
-	if pending["agent"] == "opencode" {
+	if pending["mechanical_opencode"] == true && pending["agent"] == "opencode" {
 		if models, ok := pending["attempted_models"].([]any); ok {
 			for _, value := range models {
 				if model, ok := value.(string); ok && model != "" && model != pending["model"] {
@@ -60,9 +51,6 @@ func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey 
 	if !accepted {
 		return
 	}
-	if !eligible {
-		return
-	}
 	repository := pending["worktree_path"]
 	if repository == nil || repository == "" {
 		repository = pending["repo_root"]
@@ -71,83 +59,33 @@ func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey 
 	if pending["agent"] == "opencode" {
 		served = fmt.Sprint(pending["model"])
 	}
-	started, err := startMechanicalShadow(root, projectKey, fmt.Sprint(repository), fmt.Sprint(pending["shadow_prompt"]), fmt.Sprint(bundle["implementer_report"]), served)
-	if err == nil && started {
-		_ = setMechanicalShadowTurn(root, projectKey, turn)
+	prompt := fmt.Sprint(pending["shadow_prompt"])
+	if pending["mechanical_opencode"] != true {
+		prompt = mechanicalVerificationPrompt(bundle)
 	}
+	if session == "" {
+		session = stringValue(pending["thread_id"])
+	}
+	_, _ = startMechanicalShadow(root, projectKey, fmt.Sprint(repository), prompt, fmt.Sprint(bundle["implementer_report"]), served, session)
 }
 
-type mechanicalShadowCadence struct {
-	TurnCount      int `json:"turn_count"`
-	LastShadowTurn int `json:"last_shadow_turn"`
-}
-
-func advanceMechanicalShadowTurn(root, projectKey string) (int, bool, func(), error) {
-	dir := filepath.Join(root, "projects", projectKey, "telemetry")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return 0, false, func() {}, err
+// MechanicalScore returns the Laplace-smoothed success rate once measured.
+func MechanicalScore(samples []bool) (float64, bool) {
+	if len(samples) < mechanicalMinSamples {
+		return 0, false
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, "mechanical_shadow_cadence.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return 0, false, func() {}, err
-	}
-	if info, statErr := lock.Stat(); statErr != nil {
-		_ = lock.Close()
-		return 0, false, func() {}, statErr
-	} else if info.Size() == 0 {
-		_, _ = lock.WriteAt([]byte("\x00"), 0)
-	}
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for contextio.TryLock(lock) != nil {
-		if time.Now().After(deadline) {
-			_ = lock.Close()
-			return 0, false, func() {}, fmt.Errorf("mechanical shadow cadence lock unavailable")
+	successes := 0
+	for _, success := range samples {
+		if success {
+			successes++
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
-	unlock := func() { contextio.Unlock(lock); _ = lock.Close() }
-	path := filepath.Join(dir, "mechanical_shadow_cadence.json")
-	var state mechanicalShadowCadence
-	data, readErr := os.ReadFile(path)
-	if readErr == nil {
-		if json.Unmarshal(data, &state) != nil || state.TurnCount < 0 || state.LastShadowTurn < 0 || state.LastShadowTurn > state.TurnCount {
-			unlock()
-			return 0, false, func() {}, fmt.Errorf("invalid mechanical shadow cadence state")
-		}
-	} else if !os.IsNotExist(readErr) {
-		unlock()
-		return 0, false, func() {}, readErr
-	}
-	state.TurnCount++
-	data, err = json.Marshal(state)
-	if err == nil {
-		err = atomicWrite(path, data)
-	}
-	if err != nil {
-		unlock()
-		return 0, false, func() {}, err
-	}
-	eligible := state.TurnCount >= mechanicalShadowTurnSpacing &&
-		(state.LastShadowTurn == 0 || state.TurnCount-state.LastShadowTurn >= mechanicalShadowTurnSpacing)
-	return state.TurnCount, eligible, unlock, nil
+	return float64(successes+1) / float64(len(samples)+2), true
 }
 
-func setMechanicalShadowTurn(root, projectKey string, turn int) error {
-	path := filepath.Join(root, "projects", projectKey, "telemetry", "mechanical_shadow_cadence.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var state mechanicalShadowCadence
-	if err = json.Unmarshal(data, &state); err != nil {
-		return err
-	}
-	state.LastShadowTurn = turn
-	data, err = json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	return atomicWrite(path, data)
+func mechanicalVerificationPrompt(bundle map[string]any) string {
+	paths := anyStringList(bundle["changed_paths"])
+	return "Read-only mechanical verification. Inspect the accepted change and report whether it satisfies the implementer report. Do not modify files. Changed paths: " + strings.Join(paths, ", ") + "\nAccepted report:\n" + fmt.Sprint(bundle["implementer_report"])
 }
 
 func workerValidationPassed(validation map[string]any) bool {
@@ -202,7 +140,7 @@ func recordMechanicalSample(root, model string, success bool) error {
 	if !ok {
 		return fmt.Errorf("invalid candidate inventory")
 	}
-	oldLeader, varCandidate := "", map[string]any(nil)
+	varCandidate := map[string]any(nil)
 	retired := false
 	for _, item := range candidates {
 		c, ok := item.(map[string]any)
@@ -210,9 +148,6 @@ func recordMechanicalSample(root, model string, success bool) error {
 			continue
 		}
 		id, _ := c["id"].(string)
-		if oldLeader == "" && c["status"] == "measured" {
-			oldLeader = id
-		}
 		if id == model {
 			varCandidate = c
 		}
@@ -275,16 +210,9 @@ func recordMechanicalSample(root, model string, success bool) error {
 		}
 		x, _ := a["mechanical_samples"].([]any)
 		y, _ := b["mechanical_samples"].([]any)
-		count := func(s []any) int {
-			n := 0
-			for _, v := range s {
-				if v == true {
-					n++
-				}
-			}
-			return n
-		}
-		return count(x)*len(y) > count(y)*len(x)
+		xs, xMeasured := MechanicalScore(anyBools(x))
+		ys, yMeasured := MechanicalScore(anyBools(y))
+		return xMeasured && yMeasured && xs > ys
 	})
 	inventory["candidates"] = candidates
 	data, err = json.Marshal(inventory)
@@ -293,29 +221,6 @@ func recordMechanicalSample(root, model string, success bool) error {
 	}
 	if err = atomicWrite(path, data); err != nil {
 		return err
-	}
-	var leader map[string]any
-	for _, item := range candidates {
-		c, _ := item.(map[string]any)
-		if c == nil {
-			continue
-		}
-		if leader == nil && c["status"] == "measured" {
-			leader = c
-		}
-	}
-	if leader != nil && leader["id"] != oldLeader {
-		if s, ok := leader["mechanical_samples"].([]any); ok && boolSamples(s) {
-			count := 0
-			for _, v := range s {
-				if v == true {
-					count++
-				}
-			}
-			if d, e := json.Marshal(map[string]any{"model": leader["id"], "successes": count, "sample_count": len(s), "announced": false}); e == nil {
-				_ = atomicWrite(filepath.Join(filepath.Dir(path), "leader.json"), d)
-			}
-		}
 	}
 	return nil
 }
@@ -398,6 +303,7 @@ func ReconcileMechanicalInventory(root string, modelIDs []string, catalogDate st
 		}
 	}
 	newActive := make([]any, 0, len(modelIDs))
+	newcomers := make([]any, 0, len(modelIDs))
 	for _, id := range modelIDs {
 		candidate := activeByID[id]
 		if candidate == nil {
@@ -408,6 +314,9 @@ func ReconcileMechanicalInventory(root string, modelIDs []string, catalogDate st
 		}
 		if candidate == nil {
 			candidate = map[string]any{"id": id, "status": "unmeasured", "mechanical_samples": []any{}}
+			if _, hasBaseline := inventory["catalog_baseline"]; hasBaseline {
+				newcomers = append(newcomers, id)
+			}
 		}
 		newActive = append(newActive, candidate)
 	}
@@ -425,11 +334,217 @@ func ReconcileMechanicalInventory(root string, modelIDs []string, catalogDate st
 		}
 	}
 	inventory["candidates"], inventory["retired_candidates"], inventory["catalog_date"] = newActive, newHistory, catalogDate
+	if len(newcomers) > 0 {
+		if _, raceOpen := inventory["race"].(map[string]any); !raceOpen {
+			leader := measuredLeader(newActive)
+			if leader != "" {
+				entrants := append([]any{}, newcomers...)
+				stage := "newcomer_bracket"
+				if len(entrants) == 1 {
+					stage = "newcomer_vs_leader"
+					entrants = append(entrants, leader)
+				}
+				inventory["race"] = map[string]any{"started": true, "finished": false, "started_at": catalogDate, "entrants": entrants, "stage": stage, "samples": map[string]any{}, "winner": "", "session_claims": []any{}, "notice_claim_ids": []any{}}
+			}
+		}
+	}
 	data, err = json.Marshal(inventory)
 	if err != nil {
 		return err
 	}
-	return atomicWrite(path, data)
+	if err = atomicWrite(path, data); err != nil {
+		return err
+	}
+	if race, ok := inventory["race"].(map[string]any); ok {
+		_ = syncMechanicalRaceLeader(root, inventory, race)
+	}
+	return nil
+}
+
+func measuredLeader(candidates []any) string {
+	for _, raw := range candidates {
+		if c, ok := raw.(map[string]any); ok && c["status"] == "measured" {
+			if id, ok := c["id"].(string); ok {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+func recordMechanicalRaceSample(root, model string, success bool) error {
+	path, unlock, err := lockCandidateInventory(root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		return err
+	}
+	race, ok := inventory["race"].(map[string]any)
+	if !ok || race["finished"] == true {
+		return nil
+	}
+	entrants, _ := race["entrants"].([]any)
+	if race["stage"] == "newcomer_bracket" && len(entrants) > 2 {
+		entrants = entrants[:2]
+	}
+	if !containsAnyString(entrants, model) {
+		return nil
+	}
+	samples, _ := race["samples"].(map[string]any)
+	if samples == nil {
+		samples = map[string]any{}
+	}
+	values, _ := samples[model].([]any)
+	values = append(values, success)
+	if len(values) > 20 {
+		values = values[len(values)-20:]
+	}
+	samples[model], race["samples"] = values, samples
+	advanceMechanicalRace(root, inventory, race)
+	data, err = json.Marshal(inventory)
+	if err != nil {
+		return err
+	}
+	if err = atomicWrite(path, data); err != nil {
+		return err
+	}
+	_ = syncMechanicalRaceLeader(root, inventory, race)
+	return nil
+}
+
+func containsAnyString(values []any, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func advanceMechanicalRace(root string, inventory map[string]any, race map[string]any) {
+	entrants, _ := race["entrants"].([]any)
+	samples, _ := race["samples"].(map[string]any)
+	stage, _ := race["stage"].(string)
+	pair := entrants
+	if stage == "newcomer_bracket" && len(pair) > 2 {
+		pair = pair[:2]
+	}
+	if len(pair) != 2 {
+		return
+	}
+	left, _ := pair[0].(string)
+	right, _ := pair[1].(string)
+	lsScore, lok := mechanicalRaceScore(inventory, race, left)
+	rsScore, rok := mechanicalRaceScore(inventory, race, right)
+	if !lok || !rok {
+		return
+	}
+	winner, loser := left, right
+	if rsScore > lsScore {
+		winner, loser = right, left
+	}
+	if rsScore == lsScore {
+		winner = ""
+	}
+	race["pair_winner"] = winner
+	if stage == "newcomer_bracket" {
+		remaining := append([]any{}, entrants[2:]...)
+		if len(remaining) > 0 {
+			results, _ := race["completed_stages"].([]any)
+			race["completed_stages"] = append(results, map[string]any{"stage": stage, "entrants": append([]any{}, pair...), "samples": samples, "winner": winner})
+			if winner == "" {
+				winner = left
+			}
+			race["entrants"] = append([]any{winner}, remaining...)
+			race["samples"] = map[string]any{}
+			return
+		}
+		activeLeader := measuredLeader(inventory["candidates"].([]any))
+		if activeLeader == "" || activeLeader == winner {
+			activeLeader = loser
+		}
+		if winner == "" {
+			winner = left
+		}
+		if winner == activeLeader {
+			winner = loser
+		}
+		race["entrants"] = []any{winner, activeLeader}
+		race["stage"] = "newcomer_vs_leader"
+		race["samples"] = map[string]any{}
+		return
+	}
+	race["winner"], race["finished"], race["finished_at"] = winner, true, time.Now().UTC().Format(time.RFC3339)
+}
+
+func mechanicalRaceScore(inventory map[string]any, race map[string]any, model string) (float64, bool) {
+	stage, _ := race["stage"].(string)
+	samples, _ := race["samples"].(map[string]any)
+	if stage == "newcomer_vs_leader" {
+		leader := measuredLeader(inventory["candidates"].([]any))
+		if model == leader {
+			for _, raw := range inventory["candidates"].([]any) {
+				candidate, _ := raw.(map[string]any)
+				if candidate != nil && candidate["id"] == model {
+					history, _ := candidate["mechanical_samples"].([]any)
+					return MechanicalScore(anyBools(history))
+				}
+			}
+			return 0, false
+		}
+	}
+	values, _ := samples[model].([]any)
+	return MechanicalScore(anyBools(values))
+}
+
+func syncMechanicalRaceLeader(root string, inventory, race map[string]any) error {
+	winner, _ := race["winner"].(string)
+	if winner == "" || race["finished"] != true {
+		return nil
+	}
+	entrants, _ := race["entrants"].([]any)
+	var opponent string
+	for _, raw := range entrants {
+		if id, ok := raw.(string); ok && id != winner {
+			opponent = id
+			break
+		}
+	}
+	wScore, wMeasured := mechanicalRaceScore(inventory, race, winner)
+	oScore, oMeasured := mechanicalRaceScore(inventory, race, opponent)
+	if opponent == "" || !wMeasured || !oMeasured || wScore <= oScore {
+		return nil
+	}
+	candidates, _ := inventory["candidates"].([]any)
+	var candidate map[string]any
+	for _, raw := range candidates {
+		if c, ok := raw.(map[string]any); ok && c["id"] == winner && c["status"] == "measured" {
+			candidate = c
+			break
+		}
+	}
+	if candidate == nil || measuredLeader(candidates) != opponent {
+		return nil
+	}
+	candidateSamples, _ := candidate["mechanical_samples"].([]any)
+	successes := 0
+	for _, v := range candidateSamples {
+		if v == true {
+			successes++
+		}
+	}
+	data, err := json.Marshal(map[string]any{"model": winner, "successes": successes, "sample_count": len(candidateSamples), "announced": false})
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(root, "opencode", "leader.json"), data)
 }
 
 func lockCandidateInventory(root string) (string, func(), error) {
@@ -482,25 +597,89 @@ func shadowSpec(executable, job string) mechanicalShadowSpec {
 
 var startMechanicalShadowDetached = proc.StartDetached
 
-func startMechanicalShadow(root, projectKey, repository, prompt, report, served string) (bool, error) {
-	data, err := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+func anyBools(values []any) []bool {
+	out := make([]bool, 0, len(values))
+	for _, v := range values {
+		b, ok := v.(bool)
+		if !ok {
+			return nil
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+func startMechanicalShadow(root, projectKey, repository, prompt, report, served, session string) (bool, error) {
+	path, unlockInventory, err := lockCandidateInventory(root)
 	if err != nil {
 		return false, err
 	}
-	var inventory struct {
-		Candidates []map[string]any `json:"candidates"`
+	data, err := os.ReadFile(path)
+	var inventory map[string]any
+	if err == nil {
+		err = json.Unmarshal(data, &inventory)
 	}
-	if err = json.Unmarshal(data, &inventory); err != nil {
+	if err != nil {
+		unlockInventory()
 		return false, err
 	}
-	model := ""
-	for _, c := range inventory.Candidates {
-		id, _ := c["id"].(string)
-		s, _ := c["mechanical_samples"].([]any)
-		if id != "" && id != served && c["status"] != "failed" && len(s) < mechanicalMinSamples {
-			model = id
-			break
+	race, ok := inventory["race"].(map[string]any)
+	if !ok || race["finished"] == true {
+		unlockInventory()
+		return false, nil
+	}
+	if session == "" {
+		unlockInventory()
+		return false, nil
+	}
+	claims, _ := race["session_claims"].([]any)
+	for _, claimed := range claims {
+		if claimed == session {
+			unlockInventory()
+			return false, nil
 		}
+	}
+	entrants, _ := race["entrants"].([]any)
+	if race["stage"] == "newcomer_bracket" && len(entrants) > 2 {
+		entrants = entrants[:2]
+	}
+	model := ""
+	bestSamples := 0
+	bestSet := false
+	samples, _ := race["samples"].(map[string]any)
+	if race["stage"] == "newcomer_vs_leader" {
+		leader := measuredLeader(inventory["candidates"].([]any))
+		for _, raw := range entrants {
+			id, ok := raw.(string)
+			if ok && id != leader {
+				model = id
+				break
+			}
+		}
+	} else {
+		for _, raw := range entrants {
+			id, ok := raw.(string)
+			if !ok || id == served {
+				continue
+			}
+			values, _ := samples[id].([]any)
+			if !bestSet || len(values) < bestSamples {
+				model, bestSamples, bestSet = id, len(values), true
+			}
+		}
+	}
+	if model == "" {
+		unlockInventory()
+		return false, nil
+	}
+	race["session_claims"] = append(claims, session)
+	data, err = json.Marshal(inventory)
+	if err == nil {
+		err = atomicWrite(path, data)
+	}
+	unlockInventory()
+	if err != nil {
+		return false, err
 	}
 	if model == "" {
 		return false, nil

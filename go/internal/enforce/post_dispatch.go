@@ -176,7 +176,7 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 	finalizePostReview(bundle, pending, loaded, gate, classification, routeKnown,
 		bundle["force_full_review"] == true, mapValue(bundle["hook_checks"])["status"] == "FAIL", profileForcesFull)
 	PostImplementerObservations(event, pending, bundle, root)
-	PostMechanicalLearning(loaded, root, pluginRoot(), project, pending, bundle)
+	PostMechanicalLearning(loaded, root, pluginRoot(), project, stringValue(event["session_id"]), pending, bundle)
 	if err = finishPostSession(root, event, pending, bundle, intake.ThreadID, repoRoot, false, float64(time.Now().UnixNano())/1e9, numberOr(loaded["manifest_budget_seconds"], 3)); err != nil {
 		return nil, err
 	}
@@ -485,7 +485,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 	}
 	if bundle := postResponseBundle(response, loaded); bundle != nil {
 		PostImplementerObservations(original, pending, bundle, root)
-		PostMechanicalLearning(loaded, root, pluginRoot(), pendingProjectKey(pending), pending, bundle)
+		PostMechanicalLearning(loaded, root, pluginRoot(), pendingProjectKey(pending), stringValue(original["session_id"]), pending, bundle)
 		if receipt := queuePostCompletionReceipt(root, original, stringValue(pending["repo_root"]), bundle); receipt != nil {
 			response["completion_receipt"] = receipt
 		}

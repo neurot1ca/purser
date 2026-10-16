@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -256,7 +257,9 @@ func TestPostMechanicalPythonFixture(t *testing.T) {
 	if err := recordMechanicalSample(root, "served", true); err != nil {
 		t.Fatal(err)
 	}
-	assertMechanicalFiles(t, root, caseByName["sample_recorded_ranking_updated_launch_spec"])
+	wantFiles := caseByName["sample_recorded_ranking_updated_launch_spec"]
+	wantFiles.Leader = nil // Leader updates now require a completed strict race win.
+	assertMechanicalFiles(t, root, wantFiles)
 
 	executable, job := "__EXECUTABLE__", filepath.Join("opencode_shadows", "__JOB__")
 	spec := shadowSpec(executable, job)
@@ -278,21 +281,21 @@ func TestPostMechanicalPythonFixture(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(broken, "opencode", "candidates.json"), 0700); err != nil {
 			t.Fatal(err)
 		}
-		PostMechanicalLearning(map[string]any{}, broken, t.TempDir(), "project", mechanicalPending(), mechanicalBundle())
+		PostMechanicalLearning(map[string]any{}, broken, t.TempDir(), "project", "session-1", mechanicalPending(), mechanicalBundle())
 	})
 	t.Run("launch failure is swallowed", func(t *testing.T) {
 		state := t.TempDir()
 		writeMechanicalInventory(t, state)
 		startMechanicalShadowDetached = func([]string, []string, string) error { return errors.New("launch failed") }
 		t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
-		PostMechanicalLearning(map[string]any{}, state, filepath.Join(t.TempDir(), "missing"), "project", mechanicalPending(), mechanicalBundle())
-		if _, err := os.Stat(filepath.Join(state, "opencode", "leader.json")); err != nil {
-			t.Fatal(err)
+		PostMechanicalLearning(map[string]any{}, state, filepath.Join(t.TempDir(), "missing"), "project", "session-1", mechanicalPending(), mechanicalBundle())
+		if _, err := os.Stat(filepath.Join(state, "opencode", "leader.json")); !os.IsNotExist(err) {
+			t.Fatalf("launch failure changed leader: %v", err)
 		}
 	})
 	t.Run("feature disabled by config", func(t *testing.T) {
 		state := t.TempDir()
-		PostMechanicalLearning(map[string]any{"mechanical_opencode_enabled": false}, state, t.TempDir(), "project", mechanicalPending(), mechanicalBundle())
+		PostMechanicalLearning(map[string]any{"mechanical_opencode_enabled": false}, state, t.TempDir(), "project", "session-1", mechanicalPending(), mechanicalBundle())
 		entries, err := os.ReadDir(state)
 		if err != nil || len(entries) != 0 {
 			t.Fatalf("disabled feature touched state: entries=%v err=%v", entries, err)
@@ -303,9 +306,10 @@ func TestPostMechanicalPythonFixture(t *testing.T) {
 func TestStartMechanicalShadowLaunchFailureRemovesLock(t *testing.T) {
 	root := t.TempDir()
 	writeMechanicalInventory(t, root)
+	openMechanicalRace(t, root)
 	startMechanicalShadowDetached = func([]string, []string, string) error { return os.ErrNotExist }
 	t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
-	_, err := startMechanicalShadow(root, "project", "repo", "prompt", "report", "served")
+	_, err := startMechanicalShadow(root, "project", "repo", "prompt", "report", "served", "thread-1")
 	if err == nil {
 		t.Fatal("startMechanicalShadow() error = nil, want launch error")
 	}
@@ -318,7 +322,7 @@ func TestStartMechanicalShadowLaunchFailureRemovesLock(t *testing.T) {
 func TestStartMechanicalShadowLaunchesBundledCommand(t *testing.T) {
 	root := t.TempDir()
 	writeMechanicalInventory(t, root)
-	writeMechanicalCadence(t, root, "project", 69, 0)
+	openMechanicalRace(t, root)
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -332,11 +336,11 @@ func TestStartMechanicalShadowLaunchesBundledCommand(t *testing.T) {
 	t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
 	rejected := mechanicalBundle()
 	rejected["validation"] = "FAIL"
-	PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", mechanicalPending(), rejected)
+	PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", "session-1", mechanicalPending(), rejected)
 	if len(launched) != 0 {
 		t.Fatalf("rejected result launched shadow: %#v", launched)
 	}
-	PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", mechanicalPending(), mechanicalBundle())
+	PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", "session-1", mechanicalPending(), mechanicalBundle())
 	if len(launched) != 3 || launched[0] != executable || launched[1] != "mechanical-shadow" {
 		t.Fatalf("launch argv = %#v, want current executable mechanical-shadow <job>", launched)
 	}
@@ -376,7 +380,7 @@ func TestPostMechanicalAcceptanceUsesWorkerValidationAndReviewer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeMechanicalInventory(t, root)
-			writeMechanicalCadence(t, root, "project", 69, 0)
+			openMechanicalRace(t, root)
 			launches := 0
 			startMechanicalShadowDetached = func([]string, []string, string) error { launches++; return nil }
 			t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
@@ -384,7 +388,7 @@ func TestPostMechanicalAcceptanceUsesWorkerValidationAndReviewer(t *testing.T) {
 				"validation": "UNKNOWN", "worker_validation": tc.worker,
 				"reviewer1_result": tc.reviewer, "implementer_report": "accepted",
 			}
-			PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", mechanicalPending(), bundle)
+			PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", "session-1", mechanicalPending(), bundle)
 			if got := launches > 0; got != tc.want {
 				t.Fatalf("shadow launch = %v, want accepted=%v (launches=%d)", got, tc.want, launches)
 			}
@@ -412,37 +416,329 @@ func TestPostMechanicalAcceptanceUsesWorkerValidationAndReviewer(t *testing.T) {
 	}
 }
 
-func TestMechanicalShadowCadence(t *testing.T) {
+func TestMechanicalScoreThresholdAndSmoothing(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		turnCount int
-		want      bool
+		samples  []bool
+		score    float64
+		measured bool
 	}{
-		{name: "69 turns after last shadow", turnCount: 69, want: false},
-		{name: "70 turns after last shadow", turnCount: 70, want: true},
+		{[]bool{true, true}, 0, false},
+		{[]bool{true, true, true}, .8, true},
+		{[]bool{true, true, true, true, true}, 6.0 / 7.0, true},
+		{[]bool{true, true, true, true, true, true, true, true, true, false}, 10.0 / 12.0, true},
+	} {
+		got, measured := MechanicalScore(tc.samples)
+		if got != tc.score || measured != tc.measured {
+			t.Fatalf("MechanicalScore(%v) = %v,%v want %v,%v", tc.samples, got, measured, tc.score, tc.measured)
+		}
+	}
+	score33, _ := MechanicalScore([]bool{true, true, true})
+	score910, _ := MechanicalScore([]bool{true, true, true, true, true, true, true, true, true, false})
+	score55, _ := MechanicalScore([]bool{true, true, true, true, true})
+	if score33 >= score910 || score55 <= score910 {
+		t.Fatalf("smoothed ordering 3/3=%v 9/10=%v 5/5=%v", score33, score910, score55)
+	}
+}
+
+func TestReconcileMechanicalInventoryOpensOnlyPostBaselineRace(t *testing.T) {
+	root := t.TempDir()
+	if err := ReconcileMechanicalInventory(root, []string{"vendor/base-a", "vendor/base-b"}, "2026-10-16"); err != nil {
+		t.Fatal(err)
+	}
+	active, _ := readMechanicalCandidates(t, root)
+	if candidateByID(active, "vendor/base-a") == nil {
+		t.Fatal("baseline candidate missing")
+	}
+	data, _ := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+	var inventory map[string]any
+	_ = json.Unmarshal(data, &inventory)
+	if _, exists := inventory["race"]; exists {
+		t.Fatal("baseline population opened a race")
+	}
+	// Make a measured leader before the next catalog refresh.
+	if err := recordMechanicalSample(root, "vendor/base-a", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordMechanicalSample(root, "vendor/base-a", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordMechanicalSample(root, "vendor/base-a", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReconcileMechanicalInventory(root, []string{"vendor/base-a", "vendor/base-b", "vendor/new-a", "vendor/new-b"}, "2026-10-17"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+	_ = json.Unmarshal(data, &inventory)
+	race, ok := inventory["race"].(map[string]any)
+	if !ok || race["stage"] != "newcomer_bracket" {
+		t.Fatalf("race = %#v", inventory["race"])
+	}
+	if got := race["entrants"].([]any); !reflect.DeepEqual(got, []any{"vendor/new-a", "vendor/new-b"}) {
+		t.Fatalf("bracket entrants = %#v", got)
+	}
+}
+
+func TestMechanicalRaceSessionClaimAndBracketRecovery(t *testing.T) {
+	root := t.TempDir()
+	writeMechanicalInventory(t, root)
+	path := filepath.Join(root, "opencode", "candidates.json")
+	data, _ := os.ReadFile(path)
+	var inventory map[string]any
+	_ = json.Unmarshal(data, &inventory)
+	inventory["race"] = map[string]any{"started": true, "finished": false, "stage": "newcomer_bracket", "entrants": []any{"shadow", "runner-up", "served"}, "samples": map[string]any{}, "session_claims": []any{}, "notice_claim_ids": []any{}}
+	data, _ = json.Marshal(inventory)
+	_ = os.WriteFile(path, data, 0600)
+	launches := 0
+	startMechanicalShadowDetached = func([]string, []string, string) error { launches++; return nil }
+	t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
+	started, err := startMechanicalShadow(root, "project", "repo", "prompt", "report", "", "session-1")
+	if err != nil || !started {
+		t.Fatalf("first run = %v,%v", started, err)
+	}
+	started, err = startMechanicalShadow(root, "project", "repo", "prompt", "report", "", "session-1")
+	if err != nil || started || launches != 1 {
+		t.Fatalf("duplicate run = %v,%v launches=%d", started, err, launches)
+	}
+	_ = os.Remove(filepath.Join(root, "projects", "project", "opencode_shadows", "running.lock"))
+	if err = recordMechanicalRaceSample(root, "shadow", true); err != nil {
+		t.Fatal(err)
+	}
+	started, err = startMechanicalShadow(root, "project", "repo", "prompt", "report", "", "session-2")
+	if err != nil || !started || launches != 2 {
+		t.Fatalf("second entrant run = %v,%v launches=%d", started, err, launches)
+	}
+	jobs, err := filepath.Glob(filepath.Join(root, "projects", "project", "opencode_shadows", "*.json"))
+	if err != nil || len(jobs) != 2 {
+		t.Fatalf("shadow jobs = %v, err=%v", jobs, err)
+	}
+	models := make([]string, 0, len(jobs))
+	for _, jobPath := range jobs {
+		jobData, readErr := os.ReadFile(jobPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		var job map[string]any
+		if readErr = json.Unmarshal(jobData, &job); readErr != nil {
+			t.Fatal(readErr)
+		}
+		models = append(models, stringValue(job["model"]))
+	}
+	if len(models) != 2 || !((models[0] == "shadow" && models[1] == "runner-up") || (models[0] == "runner-up" && models[1] == "shadow")) {
+		t.Fatalf("bracket model order = %v", models)
+	}
+	for _, model := range []string{"shadow", "runner-up"} {
+		for i := 0; i < mechanicalMinSamples; i++ {
+			if err := recordMechanicalRaceSample(root, model, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	data, _ = os.ReadFile(path)
+	_ = json.Unmarshal(data, &inventory)
+	race, _ := inventory["race"].(map[string]any)
+	if got := race["entrants"].([]any); !reflect.DeepEqual(got, []any{"shadow", "served"}) {
+		t.Fatalf("recovered next bracket = %#v", got)
+	}
+	if samples, _ := race["samples"].(map[string]any); len(samples) != 0 {
+		t.Fatalf("next bracket retained old samples: %#v", samples)
+	}
+	if stages, _ := race["completed_stages"].([]any); len(stages) != 1 {
+		t.Fatalf("completed bracket samples were not retained: %#v", race["completed_stages"])
+	}
+}
+
+func TestStartMechanicalShadowNewcomerRaceAlwaysPicksChallenger(t *testing.T) {
+	root := t.TempDir()
+	writeMechanicalInventory(t, root)
+	path := filepath.Join(root, "opencode", "candidates.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	inventory["race"] = map[string]any{
+		"started": true, "finished": false, "stage": "newcomer_vs_leader",
+		"entrants":       []any{"shadow", "runner-up"},
+		"samples":        map[string]any{"shadow": []any{true}, "runner-up": []any{}},
+		"session_claims": []any{}, "notice_claim_ids": []any{},
+	}
+	data, err = json.Marshal(inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var launchedModel string
+	startMechanicalShadowDetached = func(argv, _ []string, _ string) error {
+		jobData, readErr := os.ReadFile(argv[2])
+		if readErr != nil {
+			return readErr
+		}
+		var job map[string]any
+		if readErr = json.Unmarshal(jobData, &job); readErr != nil {
+			return readErr
+		}
+		launchedModel = stringValue(job["model"])
+		return nil
+	}
+	t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
+	started, err := startMechanicalShadow(root, "project", "repo", "prompt", "report", "", "session-1")
+	if err != nil || !started {
+		t.Fatalf("start = %v, %v", started, err)
+	}
+	if launchedModel != "shadow" {
+		t.Fatalf("launched model = %q, want challenger shadow", launchedModel)
+	}
+}
+
+func TestMechanicalRaceTieDoesNotChangeWinner(t *testing.T) {
+	root := t.TempDir()
+	writeMechanicalInventory(t, root)
+	openMechanicalRace(t, root)
+	path := filepath.Join(root, "opencode", "candidates.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var initial map[string]any
+	if err = json.Unmarshal(data, &initial); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range initial["candidates"].([]any) {
+		candidate := raw.(map[string]any)
+		if candidate["id"] == "runner-up" {
+			candidate["mechanical_samples"] = []any{false, false, false}
+		}
+	}
+	data, _ = json.Marshal(initial)
+	if err = os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"shadow", "runner-up"} {
+		for i := 0; i < mechanicalMinSamples; i++ {
+			if err := recordMechanicalRaceSample(root, model, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	data, err = os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	race := inventory["race"].(map[string]any)
+	if race["finished"] != true || race["winner"] != "" {
+		t.Fatalf("tie state = %#v", race)
+	}
+	if _, err = os.Stat(filepath.Join(root, "opencode", "leader.json")); !os.IsNotExist(err) {
+		t.Fatalf("tie changed leader: %v", err)
+	}
+}
+
+func TestMechanicalNewcomerUsesLeaderHistoryForStrictWin(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		challenger []bool
+		wantWinner string
+	}{
+		{"challenger loses to leader history", []bool{true, true, true}, "leader"},
+		{"challenger beats leader history", []bool{true, true, true, true, true}, "challenger"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			writeMechanicalCadence(t, root, "project", tc.turnCount, 1)
-			_, eligible, unlock, err := advanceMechanicalShadowTurn(root, "project")
+			path := filepath.Join(root, "opencode", "candidates.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			leaderHistory := make([]any, 0, 10)
+			for i := 0; i < 9; i++ {
+				leaderHistory = append(leaderHistory, true)
+			}
+			leaderHistory = append(leaderHistory, false)
+			inventory := map[string]any{"candidates": []any{
+				map[string]any{"id": "leader", "status": "measured", "mechanical_samples": leaderHistory},
+				map[string]any{"id": "challenger", "status": "unmeasured", "mechanical_samples": []any{}},
+			}, "race": map[string]any{"started": true, "finished": false, "stage": "newcomer_vs_leader", "entrants": []any{"challenger", "leader"}, "samples": map[string]any{}, "session_claims": []any{}, "notice_claim_ids": []any{}}}
+			data, err := json.Marshal(inventory)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer unlock()
-			if eligible != tc.want {
-				t.Fatalf("eligible = %v, want %v", eligible, tc.want)
+			if err = os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			rawSamples := make([]any, 0, len(tc.challenger))
+			for _, success := range tc.challenger {
+				rawSamples = append(rawSamples, success)
+			}
+			race := inventory["race"].(map[string]any)
+			race["samples"] = map[string]any{"challenger": rawSamples}
+			advanceMechanicalRace(root, inventory, race)
+			if got := stringValue(race["winner"]); got != tc.wantWinner {
+				t.Fatalf("winner = %q, want %q; race=%#v", got, tc.wantWinner, race)
 			}
 		})
 	}
 }
 
-func writeMechanicalCadence(t *testing.T, root, project string, turns, lastShadow int) {
+func TestMechanicalVerificationPrompt(t *testing.T) {
+	prompt := mechanicalVerificationPrompt(map[string]any{"changed_paths": []any{"a.go", "b.go"}, "implementer_report": "report"})
+	for _, want := range []string{"Read-only", "a.go, b.go", "report", "Do not modify"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt %q lacks %q", prompt, want)
+		}
+	}
+}
+
+func TestPostMechanicalNonMechanicalRaceUsesReadOnlyPromptAndNoRaceDoesNothing(t *testing.T) {
+	t.Cleanup(func() { startMechanicalShadowDetached = proc.StartDetached })
+	for _, raceOpen := range []bool{false, true} {
+		root := t.TempDir()
+		writeMechanicalInventory(t, root)
+		if raceOpen {
+			openMechanicalRace(t, root)
+		}
+		var job map[string]any
+		startMechanicalShadowDetached = func(argv, _ []string, _ string) error {
+			data, err := os.ReadFile(argv[2])
+			if err != nil {
+				return err
+			}
+			return json.Unmarshal(data, &job)
+		}
+		pending := map[string]any{"agent": "codex", "thread_id": "thread-non-mechanical", "repo_root": "repo"}
+		bundle := map[string]any{"validation": "PASS", "worker_validation": mechanicalWorkerValidation("PASS", 0), "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "implementer_report": "accepted report", "changed_paths": []any{"change.go"}}
+		PostMechanicalLearning(map[string]any{}, root, "unused", "project", "session-non-mechanical", pending, bundle)
+		if raceOpen {
+			if job == nil || !strings.Contains(stringValue(job["prompt"]), "Read-only") || !strings.Contains(stringValue(job["prompt"]), "change.go") {
+				t.Fatalf("non-mechanical shadow job = %#v", job)
+			}
+		} else if job != nil {
+			t.Fatalf("no-race run created shadow job: %#v", job)
+		}
+	}
+}
+
+func openMechanicalRace(t *testing.T, root string) {
 	t.Helper()
-	path := filepath.Join(root, "projects", project, "telemetry", "mechanical_shadow_cadence.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	path := filepath.Join(root, "opencode", "candidates.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(map[string]int{"turn_count": turns, "last_shadow_turn": lastShadow})
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	inventory["race"] = map[string]any{"started": true, "finished": false, "stage": "newcomer_vs_leader", "entrants": []any{"shadow", "runner-up"}, "samples": map[string]any{}, "session_claims": []any{}, "notice_claim_ids": []any{}}
+	data, err = json.Marshal(inventory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,21 +789,23 @@ func assertMechanicalFiles(t *testing.T, root string, want struct {
 	if !reflect.DeepEqual(inventory, want.Inventory) {
 		t.Fatalf("inventory = %#v, want %#v", inventory, want.Inventory)
 	}
-	var leader map[string]any
-	data, err = os.ReadFile(filepath.Join(root, "opencode", "leader.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = json.Unmarshal(data, &leader); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(leader, want.Leader) {
-		t.Fatalf("leader = %#v, want %#v", leader, want.Leader)
+	if want.Leader != nil {
+		var leader map[string]any
+		data, err = os.ReadFile(filepath.Join(root, "opencode", "leader.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = json.Unmarshal(data, &leader); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(leader, want.Leader) {
+			t.Fatalf("leader = %#v, want %#v", leader, want.Leader)
+		}
 	}
 }
 
 func mechanicalPending() map[string]any {
-	return map[string]any{"mechanical_opencode": true, "agent": "opencode", "model": "served", "shadow_prompt": "prompt", "repo_root": "repo"}
+	return map[string]any{"mechanical_opencode": true, "agent": "opencode", "model": "served", "shadow_prompt": "prompt", "repo_root": "repo", "thread_id": "thread-1"}
 }
 func mechanicalBundle() map[string]any {
 	return map[string]any{"validation": "PASS", "worker_validation": mechanicalWorkerValidation("PASS", 0), "reviewer1_result": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "implementer_report": "accepted"}

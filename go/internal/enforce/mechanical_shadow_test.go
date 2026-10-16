@@ -125,7 +125,7 @@ func TestMechanicalShadowCompletionOracle(t *testing.T) {
 				}
 			}
 			data, _ := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
-			sample := "[true,true,true,true,false]"
+			sample := "[true,true,true,true]"
 			if tc.ok {
 				sample = "[true,true,true,true,true]"
 			}
