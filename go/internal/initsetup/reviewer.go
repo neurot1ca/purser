@@ -77,7 +77,7 @@ func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 			case "claude":
 				*model = "claude-haiku-5-5"
 			case "agy":
-				*model = agyReviewerModel()
+				*model = agyReviewerModelFromDetection(detected)
 			}
 		}
 		if *effort == "" {
@@ -85,6 +85,9 @@ func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 			case "codex", "claude":
 				*effort = "medium"
 			}
+		}
+		if err := validateReviewerInstalled(detected, *agentName, *model); err != nil {
+			return reviewerError(stdout, err)
 		}
 		if err := validateReviewerSelection(home, *agentName, *model, *effort); err != nil {
 			return reviewerError(stdout, err)
@@ -176,7 +179,7 @@ func reviewerDefault(detected map[string]any, configuredModel, configuredEffort 
 		}
 		switch name {
 		case "agy":
-			return map[string]any{"agent": name, "model": first(configuredModel, agyReviewerModel()), "effort": nil}
+			return map[string]any{"agent": name, "model": first(configuredModel, agyReviewerModelFromDetection(detected)), "effort": nil}
 		case "claude":
 			if !oneOf(configuredEffort, "low", "medium", "high", "xhigh", "max") {
 				configuredEffort = "medium"
@@ -210,7 +213,7 @@ func reviewerChoices(detected map[string]any) []map[string]any {
 		case "claude":
 			choices = append(choices, map[string]any{"agent": name, "model": "claude-haiku-5-5", "effort": "medium", "installed": true})
 		case "agy":
-			choices = append(choices, map[string]any{"agent": name, "model": agyReviewerModel(), "effort": nil, "installed": true})
+			choices = append(choices, map[string]any{"agent": name, "model": agyReviewerModelFromDetection(detected), "effort": nil, "installed": true})
 		case "opencode":
 			models, _ := info["models"].([]any)
 			ids := []string{}
@@ -283,8 +286,27 @@ func validateReviewerInstalled(detected map[string]any, agentName, model string)
 	if info["available"] != true {
 		return fmt.Errorf("reviewer agent %s is not installed", agentName)
 	}
-	if agentName == "agy" && model != "" && model != agyReviewerModel() {
-		return errors.New("selected Reviewer-1 model is not the pinned agy model")
+	if agentName == "agy" && model != "" {
+		if !strings.HasPrefix(model, "gemini-") {
+			return errors.New("selected Reviewer-1 model must be a Gemini model")
+		}
+		models, _ := info["models"].([]any)
+		if len(models) == 0 {
+			if model != agyReviewerModel() {
+				return errors.New("selected Reviewer-1 model is absent from agy models")
+			}
+		} else {
+			listed := false
+			for _, item := range models {
+				if id, ok := item.(string); ok && strings.HasPrefix(id, "gemini-") && id == model {
+					listed = true
+					break
+				}
+			}
+			if !listed {
+				return errors.New("selected Reviewer-1 model is absent from agy models")
+			}
+		}
 	}
 	return nil
 }
@@ -321,6 +343,22 @@ func validateReviewerSelection(home, agentName, model, effort string) error {
 func agyReviewerModel() string {
 	adapter, _ := review.ReviewerAdapter("agy")
 	return adapter.AllowedModel()
+}
+
+func agyReviewerModelFromDetection(detected map[string]any) string {
+	agents, _ := detected["agents"].(map[string]any)
+	info, _ := agents["agy"].(map[string]any)
+	listed, _ := info["models"].([]any)
+	ids := []string{}
+	for _, item := range listed {
+		if id, ok := item.(string); ok && strings.HasPrefix(id, "gemini-") {
+			ids = append(ids, id)
+		}
+	}
+	if newest := modelversion.NewestVersion(ids); newest != "" {
+		return newest
+	}
+	return agyReviewerModel()
 }
 
 func editReviewerConfig(text *string, values map[string]any, agentName, model, effort, nl string) error {

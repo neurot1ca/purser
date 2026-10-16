@@ -333,6 +333,9 @@ func detect(home, root string, o options) (map[string]any, error) {
 			continue
 		}
 		for _, m := range modelSets[name] {
+			if name == "agy" && !strings.HasPrefix(asString(m["id"]), "gemini-") {
+				continue
+			}
 			family := vendorFamily(asString(m["family"]))
 			entry := map[string]any{"agent": name, "model": m["id"], "label": m["id"], "family": family}
 			if family == "" {

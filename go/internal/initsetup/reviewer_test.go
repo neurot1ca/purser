@@ -36,6 +36,33 @@ func TestReviewerListInstalledOnly(t *testing.T) {
 	}
 }
 
+func TestAgyReviewerChoiceUsesNewestListedGemini(t *testing.T) {
+	detected := map[string]any{"agents": map[string]any{
+		"agy": map[string]any{"available": true, "models": []any{"claude-opus-5-5", "gemini-3.8-flash", "gemini-4-argon"}},
+	}}
+	choices := reviewerChoices(detected)
+	if choices[0]["agent"] != "agy" || choices[0]["model"] != "gemini-4-argon" {
+		t.Fatalf("agy choices = %#v", choices)
+	}
+	if got := reviewerDefault(detected, "", ""); got["model"] != "gemini-4-argon" {
+		t.Fatalf("agy default = %#v", got)
+	}
+}
+
+func TestValidateReviewerInstalledAcceptsOnlyListedGemini(t *testing.T) {
+	detected := map[string]any{"agents": map[string]any{
+		"agy": map[string]any{"available": true, "models": []any{"gemini-4-argon", "claude-opus-5-5"}},
+	}}
+	if err := validateReviewerInstalled(detected, "agy", "gemini-4-argon"); err != nil {
+		t.Fatalf("listed Gemini was rejected: %v", err)
+	}
+	for _, model := range []string{"claude-opus-5-5", "gemini-5-unlisted"} {
+		if err := validateReviewerInstalled(detected, "agy", model); err == nil {
+			t.Errorf("model %q was accepted", model)
+		}
+	}
+}
+
 func TestReviewerCurrentDefaultUsesNextInstalledAgent(t *testing.T) {
 	got, err := reviewerCurrent(filepath.Join(t.TempDir(), "missing.toml"), map[string]any{"agents": map[string]any{
 		"agy":    map[string]any{"available": false},

@@ -94,8 +94,8 @@ func (a reviewerAdapter) Family(model string) string {
 func (a reviewerAdapter) ValidateModel(model any) error {
 	switch a.provider {
 	case "agy":
-		if value, ok := model.(string); !ok || !models.AtLeast(pinnedModel, value) {
-			return fmt.Errorf("reviewer1_model_requested must equal the pinned id %s", pinnedModel)
+		if value, ok := model.(string); !ok || !strings.HasPrefix(value, "gemini-") {
+			return errors.New("reviewer1_model_requested must be a Gemini model id")
 		}
 	case "opencode":
 		value, ok := model.(string)

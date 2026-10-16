@@ -145,9 +145,9 @@ func TestAgyReviewerFamilyFloorAndResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, _ := ReviewerAdapter("agy")
-	for _, model := range []string{pinnedModel, "gemini-3.9-flash-high", "gemini-3.7-flash-high", "gemini-3.9-pro-high"} {
+	for _, model := range []string{pinnedModel, "gemini-3.9-flash-high", "gemini-3.7-flash-high", "gemini-3.9-pro-high", "gemini-4-argon", "claude-opus-5-5"} {
 		config := map[string]any{"reviewer1_model_requested": model, "reviewer1_timeout_seconds": 60, "reviewer1_packet_max_bytes": 200000, "reviewer1_executable": filepath.Join(root, "agy.exe")}
-		valid := model == pinnedModel || model == "gemini-3.9-flash-high"
+		valid := model != "claude-opus-5-5"
 		if err := a.ValidateModel(model); (err == nil) != valid {
 			t.Errorf("adapter %s: %v", model, err)
 		}
@@ -158,11 +158,15 @@ func TestAgyReviewerFamilyFloorAndResolution(t *testing.T) {
 			continue
 		}
 		command, err := a.BuildCommand("review", map[string]any{}, config, CommandOptions{})
-		if err != nil || flagValue(command, "--model") != "gemini-3.9-flash-high" {
+		want := model
+		if model == pinnedModel || model == "gemini-3.9-flash-high" || model == "gemini-3.7-flash-high" {
+			want = "gemini-3.9-flash-high"
+		}
+		if err != nil || flagValue(command, "--model") != want {
 			t.Errorf("adapter command: %v %v", command, err)
 		}
 		command, err = buildCommand(Request{Model: model, Executable: filepath.Join(root, "agy.exe")})
-		if err != nil || flagValue(command, "--model") != "gemini-3.9-flash-high" {
+		if err != nil || flagValue(command, "--model") != want {
 			t.Errorf("review command: %v %v", command, err)
 		}
 	}
