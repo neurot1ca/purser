@@ -98,7 +98,11 @@ func TestProjectRoleNonGitPathUsesAbsoluteDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clean := filepath.Clean(absolute)
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := filepath.Clean(resolved)
 	if runtime.GOOS == "windows" {
 		clean = strings.ToLower(clean)
 	}

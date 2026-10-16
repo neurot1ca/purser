@@ -33,6 +33,12 @@ func TestCancelHostProcessHelper(t *testing.T) {
 	}
 }
 
+func TestCancelDeadWorkerHelper(t *testing.T) {
+	if os.Getenv("PURSER_CANCEL_DEAD_PID_HELPER") == "1" {
+		os.Exit(0)
+	}
+}
+
 func TestCancelQueuedStopsOnlyMatchingHostProcess(t *testing.T) {
 	for _, mismatch := range []bool{false, true} {
 		t.Run(map[bool]string{false: "matching_identity", true: "identity_mismatch"}[mismatch], func(t *testing.T) {
@@ -291,6 +297,15 @@ func TestCancelFinishesWhenHostIsConfirmedDead(t *testing.T) {
 	if !valid {
 		createdAt = int64(created.(uint64))
 	}
+	child := exec.Command(os.Args[0], "-test.run=^TestCancelDeadWorkerHelper$")
+	child.Env = append(os.Environ(), "PURSER_CANCEL_DEAD_PID_HELPER=1")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadWorkerPID := child.Process.Pid
+	if err := child.Wait(); err != nil {
+		t.Fatalf("reap dead worker process: %v", err)
+	}
 	deadHost := os.Getpid()
 	path := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -298,7 +313,7 @@ func TestCancelFinishesWhenHostIsConfirmedDead(t *testing.T) {
 	}
 	writeHostTestJSON(t, path, map[string]any{
 		"jobId": jobID, "state": "RUNNING", "hostPid": deadHost, "hostCreatedAt": createdAt + 1,
-		"hostContained": true, "pid": deadHost + 1, "generation": 1,
+		"hostContained": true, "pid": deadWorkerPID, "generation": 1,
 	})
 	got := Cancel(root, map[string]any{"jobId": jobID})
 	value := got["structuredContent"].(map[string]any)

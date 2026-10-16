@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -284,18 +285,41 @@ func TestRunningJobWaitsForListenerSignal(t *testing.T) {
 }
 
 func TestDeadHostReportsGoRecoveryState(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
+	if os.Getenv("PURSER_WAIT_DEAD_PID_HELPER") == "1" {
+		os.Exit(0)
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestDeadHostReportsGoRecoveryState$")
+	child.Env = append(os.Environ(), "PURSER_WAIT_DEAD_PID_HELPER=1")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadWorkerPID := child.Process.Pid
+	if err := child.Wait(); err != nil {
+		t.Fatalf("reap dead worker process: %v", err)
+	}
 	root := t.TempDir()
 	path := writeWaitJob(t, root, "running", "closed", map[string]any{
 		"hostPid":        os.Getpid(),
 		"hostCreatedAt":  0,
 		"hostContained":  true,
-		"pid":            os.Getpid() + 1,
+		"pid":            deadWorkerPID,
 		"generation":     1,
 		"ownershipToken": "owner",
 		"deadlineAt":     float64(time.Now().Add(time.Hour).UnixNano()) / 1e9,
 	})
 
+	started := time.Now()
 	got := jobs.Wait(root, "closed")
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Wait took %s, want configured bound within 2s", elapsed)
+	}
+	if got.ExitCode != 1 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait closed FAILED" {
+		hostState, hostCreated := processIdentityDiagnostic(os.Getpid())
+		workerState, workerCreated := processIdentityDiagnostic(deadWorkerPID)
+		t.Logf("process identity host pid=%d state=%q created=%v; dead worker pid=%d state=%q created=%v", os.Getpid(), hostState, hostCreated, deadWorkerPID, workerState, workerCreated)
+		t.Logf("job record=%#v", readWaitJob(t, path))
+	}
 	requireWaitResult(t, got, 1, "purser-wait closed FAILED")
 	job := readWaitJob(t, path)
 	if job["state"] != "FAILED" || job["errorCode"] != "HOST_DIED" {
