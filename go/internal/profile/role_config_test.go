@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -97,7 +98,11 @@ func TestProjectRoleNonGitPathUsesAbsoluteDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(absolute))))
+	clean := filepath.Clean(absolute)
+	if runtime.GOOS == "windows" {
+		clean = strings.ToLower(clean)
+	}
+	key := sha256.Sum256([]byte(clean))
 	want := filepath.Join("state", "projects", hex.EncodeToString(key[:])[:16], "roles.toml")
 	if got := ProjectRolesPath("state", root); got != want {
 		t.Fatalf("path = %q, want %q", got, want)

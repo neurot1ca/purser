@@ -849,7 +849,16 @@ func TestConfigureCodexGoCacheWritableRootsIncludeTelemetryWhenPresent(t *testin
 	}
 }
 
+func isolateHostUserConfigDir(t *testing.T) {
+	t.Helper()
+	configRoot := t.TempDir()
+	t.Setenv("APPDATA", configRoot)
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("HOME", configRoot)
+}
+
 func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
+	isolateHostUserConfigDir(t)
 	t.Setenv("GOCACHE", "")
 	t.Setenv("GOTMPDIR", "")
 	root := t.TempDir()
@@ -931,6 +940,7 @@ func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 }
 
 func TestHostAddsSharedGoCacheWithoutWorktree(t *testing.T) {
+	isolateHostUserConfigDir(t)
 	t.Setenv("GOCACHE", "")
 	t.Setenv("GOTMPDIR", "")
 	root := t.TempDir()
@@ -995,6 +1005,7 @@ func TestHostAddsSharedGoCacheWithoutWorktree(t *testing.T) {
 }
 
 func TestHostPreservesExplicitGoCacheEnvironment(t *testing.T) {
+	isolateHostUserConfigDir(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
 	worktree := filepath.Join(root, "worktree")
