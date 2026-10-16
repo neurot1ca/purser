@@ -40,9 +40,17 @@ Run these commands inside Claude Code:
 /plugin install purser@purser-claude-orchestrator
 ```
 
-Restart Claude Code, then run `/purser:init` to configure Purser.
+Restart Claude Code, then configure Purser:
 
-Update with `/plugin marketplace update purser-claude-orchestrator`.
+```text
+/purser:init
+```
+
+To update:
+
+```text
+/plugin marketplace update purser-claude-orchestrator
+```
 
 The setup marks an option recommended only when Purser has a reason. It can write global defaults to `~/.orchestrator/config.toml` and project settings to `.orchestrator/profile.toml`. It asks whether to trust the current project; project profile commands run only after that trust is accepted. Run `/purser:check` to inspect runtime binaries and CLI status. Purser stores runtime state under `~/.claude/purser` by default.
 
