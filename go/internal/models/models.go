@@ -257,7 +257,7 @@ func discoverModelVersion(repository string, listingTimeout time.Duration) (curr
 				result.ids = resolution.Agents["opencode"]
 				result.available = resolution.OpenCodeSnapshot != "" && len(result.ids) > 0
 			} else {
-				result = listModels(check.agent, cached.Providers)
+				result = listModels(check.agent, cached.Providers, defaultListingTimeout)
 			}
 			listed[check.agent] = result
 			if result.available && check.agent == "agy" {
@@ -340,7 +340,7 @@ func refreshOpenCodeListing(providers map[string]map[string]json.RawMessage, tod
 		return
 	}
 	cache.OpenCodeAttempted = today
-	result := listModelsWithTimeout("opencode", providers, timeout)
+	result := listModels("opencode", providers, timeout)
 	if result.available && len(result.ids) > 0 {
 		cache.Agents["opencode"] = result.ids
 		cache.OpenCodeSnapshot = today
@@ -742,11 +742,7 @@ func (output *limitedOutput) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-var listModels = func(agent string, providers map[string]map[string]json.RawMessage) listingResult {
-	return listModelsWithTimeout(agent, providers, defaultListingTimeout)
-}
-
-func listModelsWithTimeout(agent string, providers map[string]map[string]json.RawMessage, timeout time.Duration) listingResult {
+var listModels = func(agent string, providers map[string]map[string]json.RawMessage, timeout time.Duration) listingResult {
 	binary, args := listingCommand(agent)
 	if binary == "" {
 		return listingResult{failure: agent + " executable not found"}

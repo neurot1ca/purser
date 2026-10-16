@@ -38,7 +38,9 @@ func setupDiscoveryWithRouteOrder(t *testing.T, config map[string]any, routeOrde
 		return loadedConfig{Values: config, RouteOrder: routeOrder}, nil
 	}
 	loadCatalog = func() (catalog, error) { return catalog{Providers: map[string]map[string]json.RawMessage{}}, nil }
-	listModels = listing
+	listModels = func(agent string, providers map[string]map[string]json.RawMessage, _ time.Duration) listingResult {
+		return listing(agent, providers)
+	}
 	t.Cleanup(func() { loadConfig, loadCatalog, listModels = oldConfig, oldCatalog, oldListing })
 	return state
 }
@@ -736,7 +738,7 @@ func TestListingUsesExpectedMockExecutableAndTwoSecondDeadline(t *testing.T) {
 		}
 		return []byte(`{"models":[{"slug":"gpt-6.1-luna","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}`), nil
 	}
-	result := listModels("codex", nil)
+	result := listModels("codex", nil, defaultListingTimeout)
 	if !result.available || !reflect.DeepEqual(result.ids, []string{"gpt-6.1-luna"}) {
 		t.Fatalf("listing = %#v", result)
 	}
@@ -761,7 +763,7 @@ func TestListingOverTwoSecondsSucceedsWithDetachedTimeout(t *testing.T) {
 		}
 		return []byte("openai/gpt-6.1-luna\n"), nil
 	}
-	result := listModelsWithTimeout("opencode", nil, 4*time.Second)
+	result := listModels("opencode", nil, 4*time.Second)
 	if !result.available || !reflect.DeepEqual(result.ids, []string{"openai/gpt-6.1-luna"}) {
 		t.Fatalf("detached listing = %#v", result)
 	}
@@ -772,7 +774,7 @@ func TestListingCommandFailureIsUnavailable(t *testing.T) {
 	t.Cleanup(func() { lookPath, runListingCommand = oldLookPath, oldRun })
 	lookPath = func(string) (string, error) { return filepath.Join(t.TempDir(), "mock-codex"), nil }
 	runListingCommand = func(context.Context, *exec.Cmd) ([]byte, error) { return nil, errors.New("listing failed") }
-	if result := listModels("codex", nil); result.available || len(result.ids) != 0 {
+	if result := listModels("codex", nil, defaultListingTimeout); result.available || len(result.ids) != 0 {
 		t.Fatalf("failed listing = %#v, want unavailable", result)
 	}
 }
