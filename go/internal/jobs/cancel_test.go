@@ -25,7 +25,20 @@ func TestCancelHostProcessHelper(t *testing.T) {
 		t.Fatal("host process identity unavailable")
 	}
 	data, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "created": created})
-	if err := os.WriteFile(marker, data, 0600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(marker), filepath.Base(marker)+".tmp-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		t.Fatal(err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmpName, marker); err != nil {
 		t.Fatal(err)
 	}
 	for {
