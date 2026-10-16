@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.164 — 2026-10-16
+
+- **Fixed:** hidden Windows child processes start with a windowless console, so Windows Terminal no longer flashes a window while Purser works.
+- **Changed:** an agy Reviewer can use any Gemini model that agy lists and defaults to the newest one.
+- **Changed:** the independent review role is called Reviewer in everything Purser shows.
+
 ## 0.1.163 — 2026-10-16
 
 - **Fixed:** `/purser:init` marks an option recommended only where Purser has a reason, and every setup question starts with ⚓.
