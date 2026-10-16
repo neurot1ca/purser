@@ -16,6 +16,7 @@ import (
 )
 
 const mechanicalMinSamples = 3
+const mechanicalMaxSamples = 10
 
 // PostMechanicalLearning mirrors codex.py's optional, fail-open post processing.
 func PostMechanicalLearning(config map[string]any, root, pluginRoot, projectKey, session string, pending, bundle map[string]any) {
@@ -403,8 +404,8 @@ func recordMechanicalRaceSample(root, model string, success bool) error {
 	}
 	values, _ := samples[model].([]any)
 	values = append(values, success)
-	if len(values) > 20 {
-		values = values[len(values)-20:]
+	if len(values) > mechanicalMaxSamples {
+		values = values[:mechanicalMaxSamples]
 	}
 	samples[model], race["samples"] = values, samples
 	advanceMechanicalRace(root, inventory, race)
@@ -441,16 +442,77 @@ func advanceMechanicalRace(root string, inventory map[string]any, race map[strin
 	}
 	left, _ := pair[0].(string)
 	right, _ := pair[1].(string)
+	if stage == "newcomer_vs_leader" {
+		leader := measuredLeader(inventory["candidates"].([]any))
+		challenger := left
+		if challenger == leader {
+			challenger = right
+		}
+		values, _ := samples[challenger].([]any)
+		leaderScore, leaderOK := mechanicalRaceScore(inventory, race, leader)
+		challengerScore, challengerOK := mechanicalRaceScore(inventory, race, challenger)
+		if !leaderOK || !challengerOK || len(values) < mechanicalMinSamples {
+			return
+		}
+		if challengerScore > leaderScore {
+			race["pair_winner"] = challenger
+			race["winner"], race["finished"], race["finished_at"] = challenger, true, time.Now().UTC().Format(time.RFC3339)
+			return
+		}
+		successes := 0
+		for _, sample := range values {
+			if sample == true {
+				successes++
+			}
+		}
+		maxScore := float64(successes+mechanicalMaxSamples-len(values)+1) / float64(mechanicalMaxSamples+2)
+		if len(values) >= mechanicalMaxSamples || maxScore < leaderScore {
+			race["pair_winner"] = leader
+			race["winner"], race["finished"], race["finished_at"] = leader, true, time.Now().UTC().Format(time.RFC3339)
+		}
+		return
+	}
 	lsScore, lok := mechanicalRaceScore(inventory, race, left)
 	rsScore, rok := mechanicalRaceScore(inventory, race, right)
 	if !lok || !rok {
 		return
 	}
+	leftSamples, _ := samples[left].([]any)
+	rightSamples, _ := samples[right].([]any)
+	if stage == "newcomer_bracket" {
+		if len(leftSamples) < mechanicalMinSamples || len(rightSamples) < mechanicalMinSamples {
+			return
+		}
+		winner := ""
+		if lsScore > rsScore {
+			winner = left
+		} else if rsScore > lsScore {
+			winner = right
+		}
+		if winner != "" {
+			other, otherSamples, winnerScore := left, leftSamples, rsScore
+			if winner == left {
+				other, otherSamples, winnerScore = right, rightSamples, lsScore
+			}
+			successes := 0
+			for _, sample := range otherSamples {
+				if sample == true {
+					successes++
+				}
+			}
+			maxScore := float64(successes+mechanicalMaxSamples-len(otherSamples)+1) / float64(mechanicalMaxSamples+2)
+			if (maxScore > winnerScore || (maxScore == winnerScore && other == left && winner == right)) && (len(leftSamples) < mechanicalMaxSamples || len(rightSamples) < mechanicalMaxSamples) {
+				return
+			}
+		} else if len(leftSamples) < mechanicalMaxSamples || len(rightSamples) < mechanicalMaxSamples {
+			return
+		}
+	}
 	winner, loser := left, right
 	if rsScore > lsScore {
 		winner, loser = right, left
 	}
-	if rsScore == lsScore {
+	if rsScore == lsScore && stage != "newcomer_bracket" {
 		winner = ""
 	}
 	race["pair_winner"] = winner

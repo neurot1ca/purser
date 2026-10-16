@@ -528,7 +528,7 @@ func TestMechanicalRaceSessionClaimAndBracketRecovery(t *testing.T) {
 		t.Fatalf("bracket model order = %v", models)
 	}
 	for _, model := range []string{"shadow", "runner-up"} {
-		for i := 0; i < mechanicalMinSamples; i++ {
+		for i := 0; i < mechanicalMaxSamples; i++ {
 			if err := recordMechanicalRaceSample(root, model, true); err != nil {
 				t.Fatal(err)
 			}
@@ -596,7 +596,7 @@ func TestStartMechanicalShadowNewcomerRaceAlwaysPicksChallenger(t *testing.T) {
 	}
 }
 
-func TestMechanicalRaceTieDoesNotChangeWinner(t *testing.T) {
+func TestMechanicalNewcomerLossKeepsLeader(t *testing.T) {
 	root := t.TempDir()
 	writeMechanicalInventory(t, root)
 	openMechanicalRace(t, root)
@@ -620,7 +620,7 @@ func TestMechanicalRaceTieDoesNotChangeWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, model := range []string{"shadow", "runner-up"} {
-		for i := 0; i < mechanicalMinSamples; i++ {
+		for i := 0; i < mechanicalMaxSamples; i++ {
 			if err := recordMechanicalRaceSample(root, model, false); err != nil {
 				t.Fatal(err)
 			}
@@ -635,8 +635,8 @@ func TestMechanicalRaceTieDoesNotChangeWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	race := inventory["race"].(map[string]any)
-	if race["finished"] != true || race["winner"] != "" {
-		t.Fatalf("tie state = %#v", race)
+	if race["finished"] != true || race["winner"] != "runner-up" {
+		t.Fatalf("loss state = %#v", race)
 	}
 	if _, err = os.Stat(filepath.Join(root, "opencode", "leader.json")); !os.IsNotExist(err) {
 		t.Fatalf("tie changed leader: %v", err)
@@ -645,12 +645,17 @@ func TestMechanicalRaceTieDoesNotChangeWinner(t *testing.T) {
 
 func TestMechanicalNewcomerUsesLeaderHistoryForStrictWin(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		challenger []bool
-		wantWinner string
+		name            string
+		leaderSuccesses int
+		leaderSamples   int
+		challenger      []bool
+		wantFinished    bool
+		wantWinner      string
 	}{
-		{"challenger loses to leader history", []bool{true, true, true}, "leader"},
-		{"challenger beats leader history", []bool{true, true, true, true, true}, "challenger"},
+		{"three of three stays open against nine of ten", 9, 10, []bool{true, true, true}, false, ""},
+		{"five of five beats nine of ten", 9, 10, []bool{true, true, true, true, true}, true, "challenger"},
+		{"ten samples without a win loses", 5, 10, []bool{true, false, false, true, true, false, false, false, false, false}, true, "leader"},
+		{"impossible to catch up loses early", 20, 20, []bool{true, true, true}, true, "leader"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -658,11 +663,13 @@ func TestMechanicalNewcomerUsesLeaderHistoryForStrictWin(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 				t.Fatal(err)
 			}
-			leaderHistory := make([]any, 0, 10)
-			for i := 0; i < 9; i++ {
+			leaderHistory := make([]any, 0, tc.leaderSamples)
+			for i := 0; i < tc.leaderSuccesses; i++ {
 				leaderHistory = append(leaderHistory, true)
 			}
-			leaderHistory = append(leaderHistory, false)
+			for i := tc.leaderSuccesses; i < tc.leaderSamples; i++ {
+				leaderHistory = append(leaderHistory, false)
+			}
 			inventory := map[string]any{"candidates": []any{
 				map[string]any{"id": "leader", "status": "measured", "mechanical_samples": leaderHistory},
 				map[string]any{"id": "challenger", "status": "unmeasured", "mechanical_samples": []any{}},
@@ -681,10 +688,30 @@ func TestMechanicalNewcomerUsesLeaderHistoryForStrictWin(t *testing.T) {
 			race := inventory["race"].(map[string]any)
 			race["samples"] = map[string]any{"challenger": rawSamples}
 			advanceMechanicalRace(root, inventory, race)
+			if got := race["finished"] == true; got != tc.wantFinished {
+				t.Fatalf("finished = %v, want %v; race=%#v", got, tc.wantFinished, race)
+			}
 			if got := stringValue(race["winner"]); got != tc.wantWinner {
 				t.Fatalf("winner = %q, want %q; race=%#v", got, tc.wantWinner, race)
 			}
 		})
+	}
+}
+
+func TestMechanicalBracketTieKeepsStableOrder(t *testing.T) {
+	inventory := map[string]any{"candidates": []any{map[string]any{"id": "leader", "status": "measured", "mechanical_samples": []any{true, true, true}}}}
+	samples := map[string]any{}
+	for _, model := range []string{"left", "right"} {
+		values := make([]any, mechanicalMaxSamples)
+		for i := range values {
+			values[i] = false
+		}
+		samples[model] = values
+	}
+	race := map[string]any{"stage": "newcomer_bracket", "entrants": []any{"left", "right", "next"}, "samples": samples}
+	advanceMechanicalRace(t.TempDir(), inventory, race)
+	if got := race["entrants"].([]any); !reflect.DeepEqual(got, []any{"left", "next"}) {
+		t.Fatalf("tie entrants = %#v", got)
 	}
 }
 
