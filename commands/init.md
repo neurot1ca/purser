@@ -1,6 +1,19 @@
 ---
 description: Set up Purser roles and optional project trust and profile.
-allowed-tools: Bash(*), AskUserQuestion
+allowed-tools:
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-windows-amd64.exe" init *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-windows-amd64.exe" maintenance run cleanup *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-windows-arm64.exe" init *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-windows-arm64.exe" maintenance run cleanup *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-darwin-amd64" init *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-darwin-amd64" maintenance run cleanup *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-darwin-arm64" init *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-darwin-arm64" maintenance run cleanup *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-linux-amd64" init *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-linux-amd64" maintenance run cleanup *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-linux-arm64" init *)'
+  - 'Bash("${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-linux-arm64" maintenance run cleanup *)'
+  - AskUserQuestion
 ---
 
 Flow rules:
@@ -9,16 +22,7 @@ Flow rules:
 - Start every message with ⚓ and use a receipt: a bold headline and short italic detail.
 - English is the master. Use the approved Turkish renderings below only when the user's language is Turkish; keep every question and option in one run in that language. Translate English into other languages without changing its meaning.
 
-Resolve and run the bundled Purser binary as in `commands/optimize.md`, using the `init` subcommand. Pass the existing arguments unchanged:
-
-```bash
-os="$(uname -s)"
-arch="$(uname -m)"
-case "$os" in MINGW*|MSYS*|CYGWIN*) os=windows ;; Darwin) os=darwin ;; Linux) os=linux ;; *) echo "Unsupported OS: $os" >&2; exit 1 ;; esac
-case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; amd64|arm64) ;; *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; esac
-suffix=""; [ "$os" = windows ] && suffix=".exe"
-"${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-${os}-${arch}${suffix}" init --detect --json
-```
+Choose the concrete bundled binary for the current OS and architecture and invoke its quoted path directly: `purser-hook-windows-amd64.exe`, `purser-hook-windows-arm64.exe`, `purser-hook-darwin-amd64`, `purser-hook-darwin-arm64`, `purser-hook-linux-amd64`, or `purser-hook-linux-arm64`. Run `"${CLAUDE_PLUGIN_ROOT}/bin/<selected-binary>" init --detect --json`, passing the existing arguments unchanged.
 
 1. Show installed agents and the current roles, trust, and profile state from `init --detect --json` in one ⚓ receipt. Read `maintenance_enabled`: `null` means no project choice has been saved; `true` or `false` means the user has already chosen, so do not offer maintenance again.
 2. In the user's language, show this intro as one ⚓ receipt, then say Claude Code is the orchestrator. Ask **⚓ Who writes the code?** in one `AskUserQuestion` picker. Put Codex first as “(recommended)”; add OpenCode only when detection reports it available, labelled exactly **Free OpenCode models**, and add Antigravity (agy) only when detection reports agy available. Show installed agents.
@@ -82,7 +86,7 @@ suffix=""; [ "$os" = windows ] && suffix=".exe"
 
    TR: *Sen boştayken kodlayıcınla (<coder>) yalnızca okuma yapan taramalar çalıştırır; bu, API kredisini kullanır; iş çalışırken devreye girmez:*
 
-   On yes, add `--maintenance` to both plan and apply; on no, add `--no-maintenance` to both. After a successful apply, if the user opted into maintenance, immediately run the bundled binary's synchronous cleanup command: `"${CLAUDE_PLUGIN_ROOT}/bin/purser-hook-${os}-${arch}${suffix}" maintenance run cleanup --repo "<repository-root>"`. It saves the report and cleanup `last-run.json` marker as part of the run, so the scheduler will not rerun cleanup for 56 hours. Read the report path printed by the command and present its findings in the same concise form as the SessionStart maintenance notice: finding count, the top five findings and evidence in a table, and the full report path (the full report retains any remaining findings). If the command fails, show the error in one ⚓ receipt and stop setup.
+   On yes, add `--maintenance` to both plan and apply; on no, add `--no-maintenance` to both. After a successful apply, if the user opted into maintenance, immediately run the bundled binary's synchronous cleanup command: `"${CLAUDE_PLUGIN_ROOT}/bin/<selected-binary>" maintenance run cleanup --repo "<repository-root>"`. It saves the report and cleanup `last-run.json` marker as part of the run, so the scheduler will not rerun cleanup for 56 hours. Read the report path printed by the command and present its findings in the same concise form as the SessionStart maintenance notice: finding count, the top five findings and evidence in a table, and the full report path (the full report retains any remaining findings). If the command fails, show the error in one ⚓ receipt and stop setup.
 8. Only when `auto_compact_enabled` is `null`, regardless of coder, ask once in the user's language with one `AskUserQuestion` picker. Put On first and mark it “(recommended)” in the user's language, followed by Off. Keep `--auto-compact` / `--no-auto-compact` in both plan and apply; if it is `true` or `false`, do not ask again.
 
    EN: ⚓ **Automatic compaction** *When this conversation passes about 250K tokens, Purser saves a handoff (decisions, open work and the next step), runs /compact for you and picks the task back up by itself, so every later message costs far less and nothing is lost. It applies to all your projects. You can turn it off anytime with `/purser:auto-compact off`.*
