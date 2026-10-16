@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.157 — 2026-10-16
+
+- **Fixed:** a Codex reply whose thread has no worktree binding now runs in a fresh isolated worktree instead of the main checkout.
+- **Fixed:** tests no longer depend on the host's TEMP length or user environment: ledger git fixtures use the short scratch root, and private-operation tests isolate HOME and leave no background host running.
+
 ## 0.1.156 — 2026-10-15
 
 - **Fixed:** host apply validation now ends when the `go test` process exits; a child that keeps the output pipe open no longer turns a pass into a timeout.
