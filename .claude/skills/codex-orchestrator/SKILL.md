@@ -9,9 +9,6 @@ description: Orchestrate bounded Codex work by deciding what to delegate, select
 skill supplies judgment; `.claude/hooks/orchestrator/` supplies mechanics.
 Delegation cannot create authority.
 
-For transport, recovery, or hook diagnosis, see non-authoritative
-[`operations guide`](../../../docs/ORCHESTRATOR_OPERATIONS.md).
-
 Language: user's language only in user replies; English in worker prompts and
 reports, commits, state, and repository documents. Other languages cost more
 tokens in every bundle.
