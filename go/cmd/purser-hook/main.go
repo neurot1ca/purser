@@ -14,6 +14,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "mcp-handoff" {
+		os.Exit(mcpHandoffMain())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "recover-state" {
 		os.Exit(recoverStateMain(os.Args[2:]))
 	}
