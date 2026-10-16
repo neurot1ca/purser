@@ -226,9 +226,6 @@ func (a reviewerAdapter) LaunchOptions() ProcessOptions {
 	if runtime.GOOS != "windows" {
 		return ProcessOptions{}
 	}
-	if a.provider == "agy" {
-		return ProcessOptions{CreationFlags: 0x10, HideWindow: true, NewConsole: true}
-	}
 	return ProcessOptions{CreationFlags: 0x08000000, HideWindow: true}
 }
 

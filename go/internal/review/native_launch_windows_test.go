@@ -17,7 +17,7 @@ func TestNativeLaunchOptionsPreserveTreeCancel(t *testing.T) {
 		flags    uint32
 		hide     bool
 	}{
-		{provider: "agy", flags: 0x10, hide: true},
+		{provider: "agy", flags: 0x08000000, hide: true},
 		{provider: "opencode", flags: 0x08000000, hide: true},
 		{provider: "codex", flags: 0x08000000, hide: true},
 	} {
@@ -27,9 +27,12 @@ func TestNativeLaunchOptionsPreserveTreeCancel(t *testing.T) {
 			command.SysProcAttr.CreationFlags |= 0x400
 			configureNativeLaunch(command, adapter.LaunchOptions())
 			proc.ConfigureProcessTreeKill(command)
-			wantFlags := uint32(0x610)
+			wantFlags := uint32(0x08000600)
 			if command.SysProcAttr == nil || command.SysProcAttr.CreationFlags != wantFlags || !command.SysProcAttr.HideWindow {
 				t.Fatalf("launch options = %#v, want merged hidden flags %#x (provider flags %#x)", command.SysProcAttr, wantFlags, tc.flags)
+			}
+			if command.SysProcAttr.CreationFlags&0x10 != 0 || command.SysProcAttr.CreationFlags&0x8 != 0 {
+				t.Fatalf("launch flags = %#x, want neither CREATE_NEW_CONSOLE nor DETACHED_PROCESS", command.SysProcAttr.CreationFlags)
 			}
 			if command.Cancel == nil {
 				t.Fatal("process-tree cancellation was not preserved")

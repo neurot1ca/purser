@@ -12,8 +12,8 @@ func TestConfigureBelowNormalPriorityPreservesHiddenConsole(t *testing.T) {
 	ConfigureProcessTreeKill(command)
 	ConfigureBelowNormalPriority(command)
 
-	if command.SysProcAttr.CreationFlags != 0x00004210 || !command.SysProcAttr.HideWindow {
-		t.Fatalf("process attributes = %#v, want flags 0x00004210 and hidden window", command.SysProcAttr)
+	if command.SysProcAttr.CreationFlags != 0x08004200 || !command.SysProcAttr.HideWindow {
+		t.Fatalf("process attributes = %#v, want CREATE_NO_WINDOW, priority/process-tree flags, and hidden window", command.SysProcAttr)
 	}
 }
 

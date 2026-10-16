@@ -58,7 +58,7 @@ func TestSupervisionHiddenConsole(t *testing.T) {
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000008 | 0x200}
 	configureGuard(command)
 	Hide(command)
-	if !command.SysProcAttr.HideWindow || command.SysProcAttr.CreationFlags != 0x210 {
+	if !command.SysProcAttr.HideWindow || command.SysProcAttr.CreationFlags != 0x08000200 {
 		t.Fatalf("final attributes: %+v", command.SysProcAttr)
 	}
 }
