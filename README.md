@@ -190,6 +190,26 @@ The Go module is `purser-hook`; contributions follow the repository's developmen
 | [Plugin setup](docs/PLUGIN.md) | Plugin source and local release marketplace setup. |
 | [Changelog](CHANGELOG.md) | Plugin release history. |
 
+## What Purser does on your machine
+
+Purser runs locally and has no server of its own.
+
+It runs a bundled Go binary, `purser-hook`, built for your operating system and architecture. Claude Code hooks and Purser's MCP server start it. It also runs the coder CLIs you set up in `/purser:init`: Codex, OpenCode, agy or Claude. Workers run in the background and open no windows.
+
+It reads the repository you work in, the Claude Code hook events of your session (tool calls, prompts, session and tool-use IDs), the session's usage and cost figures that it shows in its status band, and its own state files.
+
+It sends each worker's brief, and whatever repository content that worker reads, to the worker's provider, under that provider's terms. Its measurements stay on your machine. Its only network request of its own downloads the public model list from models.dev, which it uses to rank models.
+
+It writes job records, plans, handoff notes, logs and measurements under `~/.claude/purser/`, or under `PURSER_STATE_DIR` when you set it. Job worktrees live there too; Git records each one in your repository's `.git` folder. `/purser:init` saves the project's Purser settings to `.orchestrator/profile.toml` in your repository. A worker's patch reaches your checkout only after review and acceptance, and Purser never commits or pushes. If you name an Obsidian vault, Purser also writes telemetry notes there.
+
+It also deletes its own data so the state folder does not grow without limit. Raw tool outputs and review bundles go after 7 days, finished job worktrees once their job is closed, and other records when they pass an age or size cap. It also removes old Purser versions from Claude Code's plugin cache after an update. It deletes nothing outside its state folder and its own plugin cache folder, apart from removing the Git records of the worktrees it retires.
+
+It adds context to your session: the handoff note at session start, a reply-language reminder with each prompt, and a job board after Purser's tool calls.
+
+It can submit two kinds of prompts for you. With auto-compact turned on (it stays off unless you enable it in `/purser:init` or with `/purser:auto-compact`), Purser sends `/compact` when the conversation is large and idle. When a coder's quota resets, it sends "⚓ Codex quota renewed ✓" so held work resumes.
+
+Its PreToolUse hook checks tool calls against the Purser workflow. The hook can deny a call and tell Claude what to fix, but it never approves anything on your behalf and never changes a tool's input. Purser's MCP server applies the chosen route (model, effort and a code map line) to calls of Purser's own tools only.
+
 ## Telemetry
 
 Purser measures local job details such as route, model, duration, tokens, reviews, send-backs, queue waits, and stalls, and keeps the records on your machine. It uses them to update job time estimates; ETA estimates and free-model rankings learn from past runs. For more detail, it can write telemetry notes to an Obsidian vault when `PURSER_OBSIDIAN_VAULT` or `vault_root` is set to an absolute path, where you can inspect which jobs ran, how they were reviewed, and where time and tokens went.

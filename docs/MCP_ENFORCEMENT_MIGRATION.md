@@ -26,34 +26,24 @@ runs. Under `--continue`, the hook session was
 handoff must use the session ID captured from the hook together with the
 tool-use ID; the MCP environment session value is only a consistency signal.
 
-## Scope and open checks
+## Shipped in M2–M4
 
-The following were not exercised by these `-p` runs and remain checks for
-M2/M3/M5, rather than M1 blockers: a subagent call; two parallel calls inside
-one session; in-process MCP reconnect; `/clear`; and the Bash permission matrix
-(exact binary/subcommand, quoted paths with spaces, unrelated binary, another
-subcommand, and appended `&&`/`;`). Each `-p` run started a distinct MCP
-process, so those lifecycle cases require an interactive or SDK session.
+The PreToolUse hook publishes an identity handoff and then returns unchanged
+`next(e)`, or denies if publication fails. The handoff is joined to the MCP call
+by `_meta["claudecode/toolUseId"]` and contains the session ID captured by the
+hook, tool, caller identity, cwd, and original arguments. The MCP server claims
+that exact handoff before routing. A handoff may be claimed for 10 minutes;
+handoff publication sweeps artifacts older than 1 hour. Missing, expired,
+mismatched, duplicate, or already-claimed handoffs fail closed with an MCP
+error. The server performs routing and applies the main-Claude-only acceptance
+gate. The hook does not rewrite tool input or perform routing.
 
-The `--continue` environment mismatch is the observed reason not to key a
-handoff by environment session ID. Main/subagent caller identity and per-call
-cwd/arguments still need the remaining lifecycle checks. No Codex, OpenCode,
-agy, or worker calls were made.
+## Still unverified
 
-The fixture plugin passed:
-
-```text
-claude plugin validate <fixture/plugin> --strict --json
-```
-
-The directory validator was run locally; no directory-service acceptance check
-was available. Windows launchers used hidden child processes. Cross-platform
-environment propagation, path rendering, file locking, and antivirus sharing
-behavior remain M2 checks.
-
-## Decision
-
-The exact hook-to-MCP correlation contract is demonstrated. The migration may
-proceed to M2. Preserve the hook session ID and the exact
-`_meta["claudecode/toolUseId"]` in the durable handoff, and fail closed on a
-missing, duplicate, or mismatched pair.
+The M1 probe and M2–M4 implementation did not verify subagent calls, parallel
+calls within one session, an in-session MCP reconnect, or `/clear`. Those
+behaviors remain unverified. The `--continue` probe showed that the MCP
+environment session ID can be stale; the handoff therefore uses the session ID
+captured by the hook. Local validation does not establish acceptance by the
+Claude plugin directory service. No Codex, OpenCode, agy, or worker calls were
+made for the M1 probe.

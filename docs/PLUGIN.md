@@ -49,7 +49,11 @@ definition lives under `plugin/`, since a root `.mcp.json` would be loaded as
 project configuration before the plugin is enabled.
 
 Hooks are registered through `hooks/hooks.json` and `hooks/register.ts`, which
-calls the bundled `bin/purser-hook-<os>-<arch>` binary.
+calls the bundled `bin/purser-hook-<os>-<arch>` binary. The PreToolUse hook
+publishes a per-call identity handoff and then forwards the original event
+unchanged with `next(e)`; it denies the call if publishing fails. It does not
+rewrite tool input or route Purser tools. The MCP server claims the matching
+handoff, performs routing, and enforces main-Claude-only acceptance.
 
 ## Runtime
 
@@ -58,6 +62,38 @@ The MCP server starts with Node.js through
 bundled platform Go binary. `/purser:check`, `/purser:init`,
 `/purser:optimize`, maintenance reports, and code-map generation use that
 binary. The check reports `Runtime | OK | purser-hook <version> (<GOOS>/<GOARCH>)`.
+
+The hook and MCP launcher resolve their Go executable from the installed
+plugin's `bin/` directory. The plugin ships its own binaries, so both use the
+same plugin version. Mixing versions is unsupported. A new MCP binary paired
+with an old hook denies a call when its required handoff is missing. An old MCP
+binary paired with a new hook does not consume the new handoff protocol and
+does not provide the current server-side enforcement contract; keep the plugin
+components from the same installation together.
+
+## Command permissions
+
+Slash commands grant Bash access only to the quoted plugin-root binary for the
+listed subcommands, with one matching rule for each of the six shipped binary
+names (`windows-amd64.exe`, `windows-arm64.exe`, `darwin-amd64`,
+`darwin-arm64`, `linux-amd64`, and `linux-arm64`). Argument wildcards are only
+after the listed subcommand. The grants are:
+
+- `/purser:check`: `check`.
+- `/purser:init`: `init` and `maintenance run cleanup`.
+- `/purser:optimize`: `optimize`, `maintenance opt-in`,
+  `maintenance run cleanup`, and `maintenance opt-out`.
+- `/purser:plan`: `plan accept`, `plan status`, `plan complete-milestone`,
+  `plan stop`, `plan resume`, and `wait`.
+- `/purser:reviewer`: `reviewer list` and `reviewer set`.
+- `/purser:auto-compact`: `auto-compact`.
+- `/purser:coder-effort`: `coder-effort`.
+- `/purser:gear-up`: `gear up`.
+- `/purser:gear-down`: `gear down`.
+
+The `wait` grant also has an exact PowerShell form for the two Windows
+binaries. These rules do not grant arbitrary executables or other Purser
+subcommands.
 
 Plugin layout and scoped MCP tool names follow the [Claude Code plugin
 reference](https://code.claude.com/docs/en/plugins-reference). Local marketplace
