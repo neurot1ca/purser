@@ -19,6 +19,8 @@ Lightweight models that use very few tokens, such as gpt-6-luna, can handle smal
 
 You can also run Purser with Claude alone. Claude then writes the code as well, and each job still runs in the background with only the files it needs.
 
+The coder can be Codex, Claude, Gemini through agy, or any model that OpenCode supports.
+
 ## Install
 
 | Requirement | Why |
