@@ -303,10 +303,17 @@ func ReconcileMechanicalInventory(root string, modelIDs []string, catalogDate st
 			group.index[id] = candidate
 		}
 	}
+	_, hasBaseline := inventory["catalog_baseline"]
+	legacyInventory := !hasBaseline
+	if legacyInventory {
+		inventory["catalog_baseline"] = catalogDate
+		hasBaseline = true
+	}
 	newActive := make([]any, 0, len(modelIDs))
 	newcomers := make([]any, 0, len(modelIDs))
 	for _, id := range modelIDs {
 		candidate := activeByID[id]
+		existed := candidate != nil
 		if candidate == nil {
 			candidate = historyByID[id]
 			if candidate != nil {
@@ -315,7 +322,13 @@ func ReconcileMechanicalInventory(root string, modelIDs []string, catalogDate st
 		}
 		if candidate == nil {
 			candidate = map[string]any{"id": id, "status": "unmeasured", "mechanical_samples": []any{}}
-			if _, hasBaseline := inventory["catalog_baseline"]; hasBaseline {
+			if hasBaseline {
+				newcomers = append(newcomers, id)
+			}
+		}
+		if legacyInventory && existed && candidate["status"] == "unmeasured" {
+			samples, _ := candidate["mechanical_samples"].([]any)
+			if len(anyBools(samples)) == 0 {
 				newcomers = append(newcomers, id)
 			}
 		}
@@ -345,7 +358,7 @@ func ReconcileMechanicalInventory(root string, modelIDs []string, catalogDate st
 					stage = "newcomer_vs_leader"
 					entrants = append(entrants, leader)
 				}
-				inventory["race"] = map[string]any{"started": true, "finished": false, "started_at": catalogDate, "entrants": entrants, "stage": stage, "samples": map[string]any{}, "winner": "", "session_claims": []any{}, "notice_claim_ids": []any{}}
+				inventory["race"] = map[string]any{"started": true, "finished": false, "started_at": catalogDate, "entrants": entrants, "stage": stage, "leader": leader, "samples": map[string]any{}, "winner": "", "session_claims": []any{}, "notice_claim_ids": []any{}}
 			}
 		}
 	}
@@ -443,7 +456,7 @@ func advanceMechanicalRace(root string, inventory map[string]any, race map[strin
 	left, _ := pair[0].(string)
 	right, _ := pair[1].(string)
 	if stage == "newcomer_vs_leader" {
-		leader := measuredLeader(inventory["candidates"].([]any))
+		leader := mechanicalRaceLeader(inventory, race)
 		challenger := left
 		if challenger == leader {
 			challenger = right
@@ -528,7 +541,7 @@ func advanceMechanicalRace(root string, inventory map[string]any, race map[strin
 			race["samples"] = map[string]any{}
 			return
 		}
-		activeLeader := measuredLeader(inventory["candidates"].([]any))
+		activeLeader := mechanicalRaceLeader(inventory, race)
 		if activeLeader == "" || activeLeader == winner {
 			activeLeader = loser
 		}
@@ -550,7 +563,7 @@ func mechanicalRaceScore(inventory map[string]any, race map[string]any, model st
 	stage, _ := race["stage"].(string)
 	samples, _ := race["samples"].(map[string]any)
 	if stage == "newcomer_vs_leader" {
-		leader := measuredLeader(inventory["candidates"].([]any))
+		leader := mechanicalRaceLeader(inventory, race)
 		if model == leader {
 			for _, raw := range inventory["candidates"].([]any) {
 				candidate, _ := raw.(map[string]any)
@@ -592,7 +605,7 @@ func syncMechanicalRaceLeader(root string, inventory, race map[string]any) error
 			break
 		}
 	}
-	if candidate == nil || measuredLeader(candidates) != opponent {
+	if candidate == nil || mechanicalRaceLeader(inventory, race) != opponent {
 		return nil
 	}
 	candidateSamples, _ := candidate["mechanical_samples"].([]any)
@@ -690,6 +703,10 @@ func startMechanicalShadow(root, projectKey, repository, prompt, report, served,
 		unlockInventory()
 		return false, nil
 	}
+	if race["stage"] == "newcomer_bracket" {
+		unlockInventory()
+		return false, nil
+	}
 	if session == "" {
 		unlockInventory()
 		return false, nil
@@ -710,7 +727,7 @@ func startMechanicalShadow(root, projectKey, repository, prompt, report, served,
 	bestSet := false
 	samples, _ := race["samples"].(map[string]any)
 	if race["stage"] == "newcomer_vs_leader" {
-		leader := measuredLeader(inventory["candidates"].([]any))
+		leader := mechanicalRaceLeader(inventory, race)
 		for _, raw := range entrants {
 			id, ok := raw.(string)
 			if ok && id != leader {
@@ -799,6 +816,14 @@ func startMechanicalShadow(root, projectKey, repository, prompt, report, served,
 		return false, err
 	}
 	return true, nil
+}
+
+func mechanicalRaceLeader(inventory map[string]any, race map[string]any) string {
+	if leader, _ := race["leader"].(string); leader != "" {
+		return leader
+	}
+	candidates, _ := inventory["candidates"].([]any)
+	return measuredLeader(candidates)
 }
 
 func mechanicalID() (string, error) {

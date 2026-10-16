@@ -118,11 +118,16 @@ func catalogUsesOpenCode(config map[string]any) bool {
 var bootstrapMechanicalRace = enforce.BootstrapMechanicalRace
 
 func bootstrapIfUnmeasured(state string) error {
+	if err := runMechanicalNewcomerBracket(state); err != nil {
+		return fmt.Errorf("run mechanical newcomer bracket: %w", err)
+	}
 	if err := bootstrapMechanicalRace(state); err != nil {
 		return fmt.Errorf("bootstrap mechanical race: %w", err)
 	}
 	return nil
 }
+
+var runMechanicalNewcomerBracket = enforce.RunMechanicalNewcomerBracket
 
 func tryCatalogRefreshLock(path string) (func() error, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -221,4 +222,108 @@ func TestBootstrapMechanicalRaceResumesWithoutRepeatingRecordedSample(t *testing
 	if len(samples) != 3 {
 		t.Fatalf("mechanical samples=%v, want 3 unique results", samples)
 	}
+}
+
+func TestMechanicalNewcomerBracketRecordsSamplesAndAdvances(t *testing.T) {
+	root := mechanicalBracketFixture(t)
+	old := mechanicalBootstrapRunner
+	mechanicalBootstrapRunner = func(_ context.Context, _, model, task string, _ time.Duration) bool {
+		if model == "opencode/a-free" {
+			return true
+		}
+		return task == "rename_symbol"
+	}
+	t.Cleanup(func() { mechanicalBootstrapRunner = old })
+	if err := RunMechanicalNewcomerBracket(root); err != nil {
+		t.Fatal(err)
+	}
+	inventory := readBracketInventory(t, root)
+	race := inventory["race"].(map[string]any)
+	if race["stage"] != "newcomer_vs_leader" || !reflect.DeepEqual(race["entrants"], []any{"opencode/a-free", "opencode/leader-free"}) {
+		t.Fatalf("race=%#v", race)
+	}
+	if got := measuredLeader(inventory["candidates"].([]any)); got != "opencode/leader-free" {
+		t.Fatalf("bracket changed measured leader: %q", got)
+	}
+	for _, candidate := range inventory["candidates"].([]any) {
+		c := candidate.(map[string]any)
+		if c["id"] == "opencode/a-free" {
+			if c["status"] != "unmeasured" || len(c["mechanical_samples"].([]any)) != 0 {
+				t.Fatalf("bracket changed routing candidate=%v", c)
+			}
+		}
+	}
+	results := race["bootstrap_results"].(map[string]any)
+	if got := results["opencode/a-free"].([]any); len(got) != 3 || got[0] != true || got[1] != true || got[2] != true {
+		t.Fatalf("bracket results=%v", got)
+	}
+}
+
+func TestMechanicalNewcomerBracketAllFailKeepsLeader(t *testing.T) {
+	root := mechanicalBracketFixture(t)
+	old := mechanicalBootstrapRunner
+	mechanicalBootstrapRunner = func(_ context.Context, _, _, _ string, _ time.Duration) bool { return false }
+	t.Cleanup(func() { mechanicalBootstrapRunner = old })
+	if err := RunMechanicalNewcomerBracket(root); err != nil {
+		t.Fatal(err)
+	}
+	inventory := readBracketInventory(t, root)
+	race := inventory["race"].(map[string]any)
+	if race["finished"] != true || race["winner"] != "" || race["leader"] != "opencode/leader-free" || measuredLeader(inventory["candidates"].([]any)) != "opencode/leader-free" {
+		t.Fatalf("all-fail race=%#v leader=%q", race, measuredLeader(inventory["candidates"].([]any)))
+	}
+}
+
+func TestMechanicalNewcomerBracketResumesRecordedTask(t *testing.T) {
+	root := mechanicalBracketFixture(t)
+	if _, _, err := prepareMechanicalBracket(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordMechanicalBracketResult(root, "opencode/a-free", 0, true); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	old := mechanicalBootstrapRunner
+	mechanicalBootstrapRunner = func(_ context.Context, _, _, _ string, _ time.Duration) bool { calls.Add(1); return true }
+	t.Cleanup(func() { mechanicalBootstrapRunner = old })
+	if err := RunMechanicalNewcomerBracket(root); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 5 {
+		t.Fatalf("runner calls=%d, want 5", calls.Load())
+	}
+}
+
+func mechanicalBracketFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "opencode"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	inventory := map[string]any{
+		"candidates": []any{
+			map[string]any{"id": "opencode/leader-free", "status": "measured", "mechanical_samples": []any{true, true, true}},
+			map[string]any{"id": "opencode/a-free", "status": "unmeasured", "mechanical_samples": []any{}},
+			map[string]any{"id": "opencode/b-free", "status": "unmeasured", "mechanical_samples": []any{}},
+		},
+		"race": map[string]any{"started": true, "finished": false, "stage": "newcomer_bracket", "leader": "opencode/leader-free", "entrants": []any{"opencode/a-free", "opencode/b-free"}, "samples": map[string]any{}, "session_claims": []any{}},
+	}
+	data, _ := json.Marshal(inventory)
+	if err := os.WriteFile(filepath.Join(root, "opencode", "candidates.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func readBracketInventory(t *testing.T, root string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory map[string]any
+	if err := json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	return inventory
 }

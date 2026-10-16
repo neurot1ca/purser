@@ -24,6 +24,197 @@ var mechanicalBootstrapFiles embed.FS
 
 var mechanicalBootstrapTasks = []string{"rename_symbol", "config_value", "one_line_fix"}
 
+// RunMechanicalNewcomerBracket measures a pending catalog race with bootstrap tasks.
+func RunMechanicalNewcomerBracket(root string) error {
+	entrants, results, err := prepareMechanicalBracket(root)
+	if err != nil || entrants == nil {
+		return err
+	}
+	jobs := make(chan string)
+	var workers sync.WaitGroup
+	count := len(entrants)
+	if count > 3 {
+		count = 3
+	}
+	for i := 0; i < count; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for model := range jobs {
+				for task := range mechanicalBootstrapTasks {
+					if results[model][task] != nil {
+						continue
+					}
+					ok := mechanicalBootstrapRunner(context.Background(), root, model, mechanicalBootstrapTasks[task], mechanicalShadowTimeout)
+					_ = recordMechanicalBracketResult(root, model, task, ok)
+				}
+			}
+		}()
+	}
+	for _, model := range entrants {
+		jobs <- model
+	}
+	close(jobs)
+	workers.Wait()
+	return finishMechanicalBracket(root)
+}
+
+func prepareMechanicalBracket(root string) ([]string, map[string][]*bool, error) {
+	path, unlock, err := lockCandidateInventory(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer unlock()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		return nil, nil, err
+	}
+	race, _ := inventory["race"].(map[string]any)
+	if race == nil || race["finished"] == true || race["stage"] != "newcomer_bracket" {
+		return nil, nil, nil
+	}
+	entrants, _ := race["entrants"].([]any)
+	ids := make([]string, 0, len(entrants))
+	for _, raw := range entrants {
+		if id, ok := raw.(string); ok && id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil, fmt.Errorf("invalid mechanical bracket entrants")
+	}
+	results, _ := race["bootstrap_results"].(map[string]any)
+	if results == nil {
+		results = map[string]any{}
+	}
+	state := map[string][]*bool{}
+	for _, id := range ids {
+		if raw, ok := results[id]; ok {
+			encoded, _ := json.Marshal(raw)
+			var values []*bool
+			if err = json.Unmarshal(encoded, &values); err != nil || len(values) != len(mechanicalBootstrapTasks) {
+				return nil, nil, fmt.Errorf("invalid mechanical bracket results")
+			}
+			state[id] = values
+		} else {
+			state[id] = make([]*bool, len(mechanicalBootstrapTasks))
+			results[id] = state[id]
+		}
+	}
+	race["bootstrap_results"] = results
+	if err = writeBootstrapInventory(path, inventory); err != nil {
+		return nil, nil, err
+	}
+	return ids, state, nil
+}
+
+func recordMechanicalBracketResult(root, model string, task int, success bool) error {
+	path, unlock, err := lockCandidateInventory(root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		return err
+	}
+	race, _ := inventory["race"].(map[string]any)
+	if race == nil || race["stage"] != "newcomer_bracket" || race["finished"] == true {
+		return nil
+	}
+	results, _ := race["bootstrap_results"].(map[string]any)
+	state := map[string][]*bool{}
+	for id, raw := range results {
+		encoded, _ := json.Marshal(raw)
+		var values []*bool
+		_ = json.Unmarshal(encoded, &values)
+		state[id] = values
+	}
+	if task < 0 || task >= len(mechanicalBootstrapTasks) || state[model] == nil || state[model][task] != nil {
+		return nil
+	}
+	result := success
+	state[model][task] = &result
+	race["bootstrap_results"] = state
+	return writeBootstrapInventory(path, inventory)
+}
+
+func finishMechanicalBracket(root string) error {
+	path, unlock, err := lockCandidateInventory(root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var inventory map[string]any
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		return err
+	}
+	race, _ := inventory["race"].(map[string]any)
+	if race == nil || race["stage"] != "newcomer_bracket" || race["finished"] == true {
+		return nil
+	}
+	entrants, _ := race["entrants"].([]any)
+	results, _ := race["bootstrap_results"].(map[string]any)
+	order := map[string]int{}
+	if candidates, ok := inventory["candidates"].([]any); ok {
+		for i, raw := range candidates {
+			c, _ := raw.(map[string]any)
+			if c != nil {
+				if id, _ := c["id"].(string); id != "" {
+					order[id] = i
+				}
+			}
+		}
+	}
+	best, bestScore, bestSuccesses := "", -1.0, -1
+	for _, raw := range entrants {
+		id, _ := raw.(string)
+		var samples []*bool
+		encoded, _ := json.Marshal(results[id])
+		if err = json.Unmarshal(encoded, &samples); err != nil || len(samples) != len(mechanicalBootstrapTasks) {
+			return fmt.Errorf("mechanical bracket result incomplete")
+		}
+		successes := 0
+		for _, sample := range samples {
+			if sample == nil {
+				return fmt.Errorf("mechanical bracket result incomplete")
+			}
+			if *sample {
+				successes++
+			}
+		}
+		if successes == 0 {
+			continue
+		}
+		score := mechanicalBootstrapScore(successes, len(samples))
+		if score > bestScore || score == bestScore && (successes > bestSuccesses || successes == bestSuccesses && order[id] < order[best]) {
+			best, bestScore, bestSuccesses = id, score, successes
+		}
+	}
+	leader := mechanicalRaceLeader(inventory, race)
+	if best == "" {
+		race["winner"], race["finished"], race["finished_at"] = "", true, time.Now().UTC().Format(time.RFC3339)
+	} else {
+		if leader == "" || best == leader {
+			return fmt.Errorf("mechanical bracket leader missing")
+		}
+		race["entrants"], race["stage"], race["samples"], race["winner"] = []any{best, leader}, "newcomer_vs_leader", map[string]any{}, ""
+	}
+	return writeBootstrapInventory(path, inventory)
+}
+
 type mechanicalBootstrapState struct {
 	Status     string             `json:"status"`
 	StartedAt  string             `json:"started_at"`

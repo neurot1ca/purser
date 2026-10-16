@@ -479,14 +479,70 @@ func TestReconcileMechanicalInventoryOpensOnlyPostBaselineRace(t *testing.T) {
 	}
 }
 
-func TestMechanicalRaceSessionClaimAndBracketRecovery(t *testing.T) {
+func TestReconcileLegacyInventoryStartsBracketOnce(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "opencode"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := map[string]any{"catalog_date": "2026-10-15", "candidates": []any{
+		map[string]any{"id": "vendor/leader", "status": "measured", "mechanical_samples": []any{true, true, true}},
+		map[string]any{"id": "vendor/new-a", "status": "unmeasured", "mechanical_samples": []any{}},
+		map[string]any{"id": "vendor/new-b", "status": "unmeasured", "mechanical_samples": []any{}},
+	}, "retired_candidates": []any{}}
+	data, _ := json.Marshal(legacy)
+	if err := os.WriteFile(filepath.Join(root, "opencode", "candidates.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"vendor/leader", "vendor/new-a", "vendor/new-b"}
+	if err := ReconcileMechanicalInventory(root, ids, "2026-10-16"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+	var inventory map[string]any
+	if err := json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	race, _ := inventory["race"].(map[string]any)
+	if inventory["catalog_baseline"] != "2026-10-16" || race == nil || race["stage"] != "newcomer_bracket" || !reflect.DeepEqual(race["entrants"], []any{"vendor/new-a", "vendor/new-b"}) {
+		t.Fatalf("legacy migration baseline=%v race=%#v", inventory["catalog_baseline"], race)
+	}
+	if err := ReconcileMechanicalInventory(root, ids, "2026-10-17"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(root, "opencode", "candidates.json"))
+	_ = json.Unmarshal(data, &inventory)
+	race, _ = inventory["race"].(map[string]any)
+	if race == nil || !reflect.DeepEqual(race["entrants"], []any{"vendor/new-a", "vendor/new-b"}) {
+		t.Fatalf("second reconcile replaced race: %#v", race)
+	}
+}
+
+func TestMechanicalShadowSkipsPendingBracket(t *testing.T) {
 	root := t.TempDir()
 	writeMechanicalInventory(t, root)
 	path := filepath.Join(root, "opencode", "candidates.json")
 	data, _ := os.ReadFile(path)
 	var inventory map[string]any
 	_ = json.Unmarshal(data, &inventory)
-	inventory["race"] = map[string]any{"started": true, "finished": false, "stage": "newcomer_bracket", "entrants": []any{"shadow", "runner-up", "served"}, "samples": map[string]any{}, "session_claims": []any{}, "notice_claim_ids": []any{}}
+	inventory["race"] = map[string]any{"started": true, "finished": false, "stage": "newcomer_bracket", "entrants": []any{"shadow", "runner-up", "next"}, "samples": map[string]any{}, "session_claims": []any{}}
+	data, _ = json.Marshal(inventory)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	started, err := startMechanicalShadow(root, "project", "repo", "prompt", "report", "", "session-bracket")
+	if err != nil || started {
+		t.Fatalf("pending bracket shadow started=%v err=%v", started, err)
+	}
+}
+
+func TestMechanicalRaceSessionClaimAndShadowSampling(t *testing.T) {
+	root := t.TempDir()
+	writeMechanicalInventory(t, root)
+	path := filepath.Join(root, "opencode", "candidates.json")
+	data, _ := os.ReadFile(path)
+	var inventory map[string]any
+	_ = json.Unmarshal(data, &inventory)
+	inventory["race"] = map[string]any{"started": true, "finished": false, "stage": "newcomer_vs_leader", "leader": "runner-up", "entrants": []any{"shadow", "runner-up"}, "samples": map[string]any{}, "session_claims": []any{}, "notice_claim_ids": []any{}}
 	data, _ = json.Marshal(inventory)
 	_ = os.WriteFile(path, data, 0600)
 	launches := 0
@@ -506,7 +562,7 @@ func TestMechanicalRaceSessionClaimAndBracketRecovery(t *testing.T) {
 	}
 	started, err = startMechanicalShadow(root, "project", "repo", "prompt", "report", "", "session-2")
 	if err != nil || !started || launches != 2 {
-		t.Fatalf("second entrant run = %v,%v launches=%d", started, err, launches)
+		t.Fatalf("second shadow run = %v,%v launches=%d", started, err, launches)
 	}
 	jobs, err := filepath.Glob(filepath.Join(root, "projects", "project", "opencode_shadows", "*.json"))
 	if err != nil || len(jobs) != 2 {
@@ -524,27 +580,19 @@ func TestMechanicalRaceSessionClaimAndBracketRecovery(t *testing.T) {
 		}
 		models = append(models, stringValue(job["model"]))
 	}
-	if len(models) != 2 || !((models[0] == "shadow" && models[1] == "runner-up") || (models[0] == "runner-up" && models[1] == "shadow")) {
-		t.Fatalf("bracket model order = %v", models)
+	if len(models) != 2 || models[0] != "shadow" || models[1] != "shadow" {
+		t.Fatalf("shadow model = %v", models)
 	}
-	for _, model := range []string{"shadow", "runner-up"} {
-		for i := 0; i < mechanicalMaxSamples; i++ {
-			if err := recordMechanicalRaceSample(root, model, true); err != nil {
-				t.Fatal(err)
-			}
+	for i := 1; i < mechanicalMaxSamples; i++ {
+		if err := recordMechanicalRaceSample(root, "shadow", true); err != nil {
+			t.Fatal(err)
 		}
 	}
 	data, _ = os.ReadFile(path)
 	_ = json.Unmarshal(data, &inventory)
 	race, _ := inventory["race"].(map[string]any)
-	if got := race["entrants"].([]any); !reflect.DeepEqual(got, []any{"shadow", "served"}) {
-		t.Fatalf("recovered next bracket = %#v", got)
-	}
-	if samples, _ := race["samples"].(map[string]any); len(samples) != 0 {
-		t.Fatalf("next bracket retained old samples: %#v", samples)
-	}
-	if stages, _ := race["completed_stages"].([]any); len(stages) != 1 {
-		t.Fatalf("completed bracket samples were not retained: %#v", race["completed_stages"])
+	if race["finished"] != true || race["winner"] != "shadow" {
+		t.Fatalf("shadow race did not finish: %#v", race)
 	}
 }
 
