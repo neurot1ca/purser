@@ -208,7 +208,12 @@ jobs:
           set -euo pipefail
           archive="purser-${VERSION}.zip"
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${archive}"
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --method GET \
+            --jq "[.[] | select(.tag_name == env.TAG)] | first")"
+          if [[ -z "$release_json" || "$release_json" == null ]]; then
+            echo "::error::No draft release found for tag $TAG"
+            exit 1
+          fi
           if [[ "$(jq -r '.draft' <<<"$release_json")" != true ]]; then
             echo "::error::Release must remain a draft until all pre-publish checks pass"
             exit 1
