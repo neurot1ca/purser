@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.166 — 2026-10-16
+
+- **Fixed:** the agy Reviewer no longer flashes a console window on Windows; Purser turns off agy's background updater for review runs.
+- **Fixed:** on Linux, a process that exits while Purser scans /proc counts as gone, so check runs no longer report an unconfirmed teardown.
+
 ## 0.1.165 — 2026-10-16
 
 - **Fixed:** `reviewer set` and `init` replace an existing reviewer or route sub-table in `roles.toml` instead of writing a duplicate key that broke every job start.
