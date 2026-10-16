@@ -230,6 +230,7 @@ var registry = map[string]policy{
 	"async_jobs":                bounded("jobs-cleanup"),
 	"worktree_ownership":        {owner: "worktree-retirement", maxAgeDays: 3, maxFiles: -1, maxBytes: -1},
 	"pending":                   bounded("jobs-cleanup"),
+	"mcp-handoffs":              bounded("mcp-handoff-sweep"),
 	"sessions":                  limits(1024, 16*mib),
 	"threads":                   aged(90, 1024, 8*mib),
 	"context_io":                limits(256, 16*mib),

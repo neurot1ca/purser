@@ -383,6 +383,15 @@ func TestOwnerManagedStateIsUntouched(t *testing.T) {
 	}
 }
 
+func TestMCPHandoffsDoNotTriggerUnknownDirectoryWarning(t *testing.T) {
+	root := t.TempDir()
+	putFile(t, filepath.Join(root, "mcp-handoffs", "old.json"), []byte("owned"), 1000)
+	PruneState(root, 1000+31*86400, false)
+	if _, err := os.Stat(filepath.Join(root, "telemetry", "telemetry_health.json")); !os.IsNotExist(err) {
+		t.Fatalf("owner-managed MCP handoffs triggered a retention warning: %v", err)
+	}
+}
+
 func TestRetentionProjectsPreserveConfigurationWhenOverLimit(t *testing.T) {
 	root := t.TempDir()
 	profile := filepath.Join(root, "projects", "0123456789abcdef", "profile.toml")
