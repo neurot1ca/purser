@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.161 — 2026-10-16
+
+- **Fixed:** the detached catalog refresh gives the OpenCode model listing 30 seconds instead of 2, so a cold OpenCode start no longer leaves the catalog empty; a failed listing is recorded in `catalog-refresh-error.json` with its reason.
+
 ## 0.1.160 — 2026-10-16
 
 - **Fixed:** on Windows, an npm-installed OpenCode (`opencode.cmd` launcher) now resolves to its bundled `opencode.exe`, so OpenCode models are listed and the daily catalog refresh and model race run.
