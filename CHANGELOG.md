@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.159 — 2026-10-16
+
+- **Added:** the OpenCode model catalog refreshes once a day in a detached session-start child, keeping the free-model race inventory in step with OpenCode (new models added, vanished ones retired with their history).
+- **Added:** with no measured leader, Purser races every free OpenCode model on built-in tasks in the background and reports the winner.
+- **Changed:** a new OpenCode model races the leader's history on at most one shadow run per session, ranked by the smoothed score (successes+1)/(samples+2); it wins once strictly ahead after 3 samples and loses at 10 or when it can no longer catch up. Several new models race each other first.
+- **Added:** one-time notices when a model race starts, when it finishes, and when OpenCode adds a new model family.
+- **Changed:** any OpenCode model can be Reviewer-1; setup still suggests DeepSeek first.
+
 ## 0.1.158 — 2026-10-16
 
 - **Added:** `codex_apply` returns a bounded `wait-validation` waiter that exits on every terminal host-validation status, so Claude no longer polls validation records itself.
