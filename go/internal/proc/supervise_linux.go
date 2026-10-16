@@ -3,6 +3,7 @@
 package proc
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,7 +16,7 @@ func ProcessIdentity(pid int) (string, *uint64) {
 		return ProcessUnconfirmed, nil
 	}
 	fields, err := readProcStat(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
-	if os.IsNotExist(err) {
+	if procEntryVanished(err) {
 		return ProcessDead, nil
 	}
 	if err != nil || len(fields) <= 19 {
@@ -44,7 +45,7 @@ func GroupStopped(pid int) (bool, error) {
 			continue
 		}
 		fields, err := readProcStat(filepath.Join("/proc", entry.Name(), "stat"))
-		if os.IsNotExist(err) {
+		if procEntryVanished(err) {
 			continue
 		}
 		if err != nil {
@@ -62,6 +63,10 @@ func GroupStopped(pid int) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+func procEntryVanished(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, syscall.ESRCH)
 }
 
 func readProcStat(path string) ([]string, error) {
