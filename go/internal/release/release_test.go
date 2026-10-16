@@ -79,6 +79,61 @@ func TestVerifyTreeRequiresRuntimeAndRejectsPythonArtifacts(t *testing.T) {
 	}
 }
 
+func TestBuildHooksFindsBinaryWithRelativeRoot(t *testing.T) {
+	work := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWD); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	root := "stage"
+	if err = os.MkdirAll(filepath.Join(root, "go"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	tagsFile := filepath.Join(root, "go/internal/enforce/code_map_grammar_tags.go")
+	if err = os.MkdirAll(filepath.Dir(tagsFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(tagsFile, []byte("package enforce\nconst codeMapGrammarTags = \"test\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeDir := t.TempDir()
+	fakeSource := filepath.Join(fakeDir, "fake-go.go")
+	fakeGo := filepath.Join(fakeDir, "go")
+	if runtime.GOOS == "windows" {
+		fakeGo += ".exe"
+	}
+	program := "package main\nimport (\"os\"; \"path/filepath\")\nfunc main() { args := os.Args[1:]; for i, arg := range args { if arg == \"-o\" && i+1 < len(args) { if err := os.MkdirAll(filepath.Dir(args[i+1]), 0755); err != nil { os.Exit(2) }; if err := os.WriteFile(args[i+1], []byte(\"fake binary\"), 0700); err != nil { os.Exit(2) }; return } }; os.Exit(2) }\n"
+	if err = os.WriteFile(fakeSource, []byte(program), 0644); err != nil {
+		t.Fatal(err)
+	}
+	build := testutil.Hide(exec.Command("go", "build", "-o", fakeGo, fakeSource))
+	if out, buildErr := build.CombinedOutput(); buildErr != nil {
+		t.Fatalf("build fake go: %v: %s", buildErr, out)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	previousTargets := Targets
+	Targets = Targets[:1]
+	t.Cleanup(func() { Targets = previousTargets })
+	if err = buildHooks(root); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "bin", binaryName(Targets[0][0], Targets[0][1]))
+	if _, err = os.Stat(want); err != nil {
+		t.Fatalf("binary not found at expected path %s: %v", want, err)
+	}
+}
+
 func TestSafeExtractRejectsUnsafeMembersAndChecksExecutable(t *testing.T) {
 	for _, name := range []string{`nested\..\..\escape.txt`, `C:\escape.txt`, `/escape.txt`, `../escape.txt`, "symlink"} {
 		t.Run(strings.ReplaceAll(name, "/", "_"), func(t *testing.T) {

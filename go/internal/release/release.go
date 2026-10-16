@@ -228,13 +228,20 @@ func grammarTags(root string) (string, error) {
 	return strings.Join(strings.Fields(s[:j]), ","), nil
 }
 func buildHooks(root string) error {
+	root, e := filepath.Abs(root)
+	if e != nil {
+		return e
+	}
 	tags, e := grammarTags(root)
 	if e != nil {
 		return e
 	}
 	for _, t := range Targets {
 		name := binaryName(t[0], t[1])
-		out := filepath.Join(root, "bin", name)
+		out, e := filepath.Abs(filepath.Join(root, "bin", name))
+		if e != nil {
+			return e
+		}
 		if e = os.MkdirAll(filepath.Dir(out), 0755); e != nil {
 			return e
 		}
@@ -387,7 +394,11 @@ func Package(root, commit, output string) (string, error) {
 	if err := os.MkdirAll(output, 0755); err != nil {
 		return "", err
 	}
-	stage, err := os.MkdirTemp(output, "purser-release-stage-")
+	stageParent, err := filepath.Abs(output)
+	if err != nil {
+		return "", err
+	}
+	stage, err := os.MkdirTemp(stageParent, "purser-release-stage-")
 	if err != nil {
 		return "", err
 	}
