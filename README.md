@@ -1,8 +1,8 @@
 <div align="center">
-<h3>Purser</h3>
+<h1>Purser</h1>
 <h4>Purser coordinates delegated coding work for Claude Code.</h4>
 
-![Windows](https://img.shields.io/badge/Windows-supported-0078D6?logo=windows) ![Linux](https://img.shields.io/badge/Linux-supported-FCC624?logo=linux&logoColor=black) ![macOS](https://img.shields.io/badge/macOS-supported-000000?logo=apple) ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue) ![GitHub stars](https://img.shields.io/github/stars/neurot1ca/purser) ![GitHub release](https://img.shields.io/github/v/release/neurot1ca/purser)
+![Windows](https://img.shields.io/badge/Windows-supported-0078D6?logo=windows) ![Linux](https://img.shields.io/badge/Linux-supported-FCC624?logo=linux&logoColor=black) ![macOS](https://img.shields.io/badge/macOS-supported-000000?logo=apple) ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue) [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fneurot1ca%2Fpurser-claude-orchestrator%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](https://github.com/neurot1ca/purser-claude-orchestrator/releases)
 
 Purser keeps the workflow simple and focuses on saving Claude context and time.
 
@@ -158,13 +158,13 @@ Purser records job state and process identifiers on disk. If your terminal close
 
 ## Bug reporting
 
-Report bugs on [GitHub Issues](https://github.com/neurot1ca/purser/issues).
+Report bugs on [GitHub Issues](https://github.com/neurot1ca/purser-claude-orchestrator/issues).
 
 ## Develop and contribute
 
 ```bash
-git clone https://github.com/neurot1ca/purser.git
-cd purser/go && go test ./...
+git clone https://github.com/neurot1ca/purser-claude-orchestrator.git
+cd purser-claude-orchestrator/go && go test ./...
 ```
 
 The Go module is `purser-hook`; contributions follow the repository's development guidance.
