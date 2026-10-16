@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
-            -f head_sha="$CI_COMMIT" -f per_page=100 \
+            --method GET -f head_sha="$CI_COMMIT" -f per_page=100 \
             --jq '[.workflow_runs[] | select(.head_sha == env.CI_COMMIT and .conclusion == "success" and (.event == "push" or .event == "pull_request"))] | length')"
           if [[ "$runs" -lt 1 ]]; then
             echo "::error::No successful ci.yml run exists for commit $CI_COMMIT"
