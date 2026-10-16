@@ -17,6 +17,8 @@ Purser is a parallel coding agent orchestrator for Claude Code: it delegates cod
 
 Lightweight models that use very few tokens, such as gpt-6-luna, can handle small jobs with only the files needed for each step, without loading the full conversation history.
 
+You can also run Purser with Claude alone. Claude then writes the code as well, and each job still runs in the background with only the files it needs.
+
 ## Install
 
 | Requirement | Why |
