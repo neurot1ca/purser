@@ -108,6 +108,50 @@ func TestCatalogRefreshFailureLeavesDiagnostic(t *testing.T) {
 	}
 }
 
+func TestCatalogRefreshMissingOpenCodeSnapshotWritesDiagnostic(t *testing.T) {
+	saveCatalogRefreshHooks(t)
+	state := stateRoot()
+	repository := t.TempDir()
+	if output, err := testutil.Hide(exec.Command("git", "-C", repository, "init", "-q")).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	discoverCatalogModels = func(string) (string, string, bool) {
+		resolution, _ := json.Marshal(map[string]any{
+			"opencode_attempted_on": time.Now().UTC().Format("2006-01-02"),
+			"opencode_error":        "opencode model listing timed out",
+		})
+		if err := os.WriteFile(filepath.Join(state, "model-resolution.json"), resolution, 0600); err != nil {
+			t.Fatalf("write fake resolution: %v", err)
+		}
+		return "", "", false
+	}
+	loadCatalogConfig = func(string) (map[string]any, error) { return map[string]any{"mechanical_opencode_enabled": true}, nil }
+	code := catalogRefreshMain([]string{"--state-root", state, "--repo", repository})
+	if code != 1 {
+		t.Fatalf("exit code=%d, want 1", code)
+	}
+	diagnostic, err := os.ReadFile(filepath.Join(state, "catalog-refresh-error.json"))
+	if err != nil || !strings.Contains(string(diagnostic), "opencode model listing timed out") {
+		t.Fatalf("diagnostic=%q err=%v", diagnostic, err)
+	}
+}
+
+func TestCatalogRefreshWithoutOpenCodeWritesNoDiagnostic(t *testing.T) {
+	saveCatalogRefreshHooks(t)
+	state := stateRoot()
+	repository := t.TempDir()
+	discoverCatalogModels = func(string) (string, string, bool) { return "", "", false }
+	loadCatalogConfig = func(string) (map[string]any, error) {
+		return map[string]any{"mechanical_opencode_enabled": false}, nil
+	}
+	if err := refreshCatalog(state, repository); err != nil {
+		t.Fatalf("refreshCatalog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(state, "catalog-refresh-error.json")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected diagnostic stat error: %v", err)
+	}
+}
+
 func TestCatalogRefreshFreeModelRule(t *testing.T) {
 	got := freeOpenCodeModels([]string{"opencode/big-pickle", "opencode/model-free", "vendor/model-free", "opencode/model", "opencode/-free"})
 	want := []string{"opencode/big-pickle", "opencode/model-free", "opencode/-free"}

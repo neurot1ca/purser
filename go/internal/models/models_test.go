@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -107,7 +108,10 @@ func TestResolveLatestCachesWithoutProcess(t *testing.T) {
 	})
 	t.Setenv("CODEX_HOME", root)
 	oldRun := runListingCommand
-	runListingCommand = func(*exec.Cmd) ([]byte, error) { t.Fatal("dispatch launched a process"); return nil, nil }
+	runListingCommand = func(context.Context, *exec.Cmd) ([]byte, error) {
+		t.Fatal("dispatch launched a process")
+		return nil, nil
+	}
 	t.Cleanup(func() { runListingCommand = oldRun })
 	if err := os.WriteFile(filepath.Join(root, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-6.2-sol","visibility":"list"}]}`), 0600); err != nil {
 		t.Fatal(err)
@@ -719,12 +723,16 @@ func TestListingUsesExpectedMockExecutableAndTwoSecondDeadline(t *testing.T) {
 		}
 		return filepath.Join(t.TempDir(), "mock-codex"), nil
 	}
-	runListingCommand = func(command *exec.Cmd) ([]byte, error) {
+	runListingCommand = func(ctx context.Context, command *exec.Cmd) ([]byte, error) {
 		if !reflect.DeepEqual(command.Args[1:], []string{"debug", "models"}) {
 			t.Fatalf("args = %v", command.Args)
 		}
 		if command.Cancel == nil {
 			t.Fatal("listing command has no timeout cancellation")
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 2*time.Second || time.Until(deadline) < time.Second {
+			t.Fatalf("listing deadline = %v, want about two seconds", deadline)
 		}
 		return []byte(`{"models":[{"slug":"gpt-6.1-luna","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}`), nil
 	}
@@ -734,11 +742,36 @@ func TestListingUsesExpectedMockExecutableAndTwoSecondDeadline(t *testing.T) {
 	}
 }
 
+func TestListingOverTwoSecondsSucceedsWithDetachedTimeout(t *testing.T) {
+	oldLookPath, oldRun := lookPath, runListingCommand
+	t.Cleanup(func() { lookPath, runListingCommand = oldLookPath, oldRun })
+	launcher := "mock-opencode"
+	if runtime.GOOS == "windows" {
+		launcher += ".exe"
+	}
+	lookPath = func(string) (string, error) { return filepath.Join(t.TempDir(), launcher), nil }
+	runListingCommand = func(ctx context.Context, command *exec.Cmd) ([]byte, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 3*time.Second {
+			t.Fatalf("detached listing deadline = %v, want at least three seconds", deadline)
+		}
+		time.Sleep(2100 * time.Millisecond)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []byte("openai/gpt-6.1-luna\n"), nil
+	}
+	result := listModelsWithTimeout("opencode", nil, 4*time.Second)
+	if !result.available || !reflect.DeepEqual(result.ids, []string{"openai/gpt-6.1-luna"}) {
+		t.Fatalf("detached listing = %#v", result)
+	}
+}
+
 func TestListingCommandFailureIsUnavailable(t *testing.T) {
 	oldLookPath, oldRun := lookPath, runListingCommand
 	t.Cleanup(func() { lookPath, runListingCommand = oldLookPath, oldRun })
 	lookPath = func(string) (string, error) { return filepath.Join(t.TempDir(), "mock-codex"), nil }
-	runListingCommand = func(*exec.Cmd) ([]byte, error) { return nil, errors.New("listing failed") }
+	runListingCommand = func(context.Context, *exec.Cmd) ([]byte, error) { return nil, errors.New("listing failed") }
 	if result := listModels("codex", nil); result.available || len(result.ids) != 0 {
 		t.Fatalf("failed listing = %#v, want unavailable", result)
 	}

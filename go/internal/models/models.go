@@ -72,7 +72,7 @@ func CodexSupportsEffort(model, effort string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	command := proc.Hide(exec.CommandContext(ctx, binary, args...))
-	output, err := runListingCommand(command)
+	output, err := runListingCommand(ctx, command)
 	if err != nil {
 		return false
 	}
@@ -122,8 +122,14 @@ type resolutionCache struct {
 	CheckedOn         string              `json:"checked_on"`
 	OpenCodeAttempted string              `json:"opencode_attempted_on,omitempty"`
 	OpenCodeSnapshot  string              `json:"opencode_snapshot_on,omitempty"`
+	OpenCodeError     string              `json:"opencode_error,omitempty"`
 	Agents            map[string][]string `json:"agents"`
 }
+
+const (
+	defaultListingTimeout = 2 * time.Second
+	catalogListingTimeout = 30 * time.Second
+)
 
 var versionPattern = regexp.MustCompile(`^(.+?)(\d+(?:\.\d+)*)([^0-9]*)$`)
 var listingID = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
@@ -151,6 +157,15 @@ type loadedConfig struct {
 
 // DiscoverModelVersion checks configured models at most once per UTC day and records a newer version.
 func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
+	return discoverModelVersion(repository, defaultListingTimeout)
+}
+
+// DiscoverModelVersionForCatalogRefresh gives detached catalog work time for cold CLI startup.
+func DiscoverModelVersionForCatalogRefresh(repository string) (current, newer string, ok bool) {
+	return discoverModelVersion(repository, catalogListingTimeout)
+}
+
+func discoverModelVersion(repository string, listingTimeout time.Duration) (current, newer string, ok bool) {
 	if strings.TrimSpace(repository) == "" {
 		return "", "", false
 	}
@@ -225,7 +240,7 @@ func DiscoverModelVersion(repository string) (current, newer string, ok bool) {
 	}
 	today := time.Now().UTC().Format("2006-01-02")
 	if openCodeNeeded {
-		refreshOpenCodeListing(cached.Providers, today)
+		refreshOpenCodeListing(cached.Providers, today, listingTimeout)
 	}
 	if state.CheckedOn != nil && *state.CheckedOn == today {
 		return "", "", false
@@ -310,7 +325,7 @@ func readResolutionCache() resolutionCache {
 	return cache
 }
 
-func refreshOpenCodeListing(providers map[string]map[string]json.RawMessage, today string) {
+func refreshOpenCodeListing(providers map[string]map[string]json.RawMessage, today string, timeout time.Duration) {
 	path := filepath.Join(stateRoot(), "model-resolution.json")
 	unlock, err := contextio.LockFile(path + ".lock")
 	if err != nil {
@@ -325,10 +340,13 @@ func refreshOpenCodeListing(providers map[string]map[string]json.RawMessage, tod
 		return
 	}
 	cache.OpenCodeAttempted = today
-	result := listModels("opencode", providers)
+	result := listModelsWithTimeout("opencode", providers, timeout)
 	if result.available && len(result.ids) > 0 {
 		cache.Agents["opencode"] = result.ids
 		cache.OpenCodeSnapshot = today
+		cache.OpenCodeError = ""
+	} else {
+		cache.OpenCodeError = result.failure
 	}
 	_ = atomicJSONRetry(path, cache)
 }
@@ -583,6 +601,7 @@ type modelCheck struct{ agent, model string }
 type listingResult struct {
 	available bool
 	ids       []string
+	failure   string
 }
 
 // Variables keep the process and filesystem boundaries replaceable in package tests.
@@ -692,11 +711,14 @@ var loadCatalog = func() (catalog, error) {
 }
 
 var lookPath = exec.LookPath
-var runListingCommand = func(command *exec.Cmd) ([]byte, error) {
+var runListingCommand = func(ctx context.Context, command *exec.Cmd) ([]byte, error) {
 	proc.ConfigureProcessTreeKill(command)
 	output := &limitedOutput{limit: maxListingBytes}
 	command.Stdout = output
 	err := command.Run()
+	if err != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -721,20 +743,27 @@ func (output *limitedOutput) Write(data []byte) (int, error) {
 }
 
 var listModels = func(agent string, providers map[string]map[string]json.RawMessage) listingResult {
+	return listModelsWithTimeout(agent, providers, defaultListingTimeout)
+}
+
+func listModelsWithTimeout(agent string, providers map[string]map[string]json.RawMessage, timeout time.Duration) listingResult {
 	binary, args := listingCommand(agent)
 	if binary == "" {
-		return listingResult{}
+		return listingResult{failure: agent + " executable not found"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := proc.Hide(exec.CommandContext(ctx, binary, args...))
-	output, err := runListingCommand(command)
+	output, err := runListingCommand(ctx, command)
 	if err != nil {
-		return listingResult{}
+		if ctx.Err() == context.DeadlineExceeded {
+			return listingResult{failure: agent + " model listing timed out"}
+		}
+		return listingResult{failure: agent + " model listing failed: " + err.Error()}
 	}
 	ids, err := parseListing(agent, string(output))
 	if err != nil {
-		return listingResult{}
+		return listingResult{failure: agent + " model listing parse failed: " + err.Error()}
 	}
 	return listingResult{available: true, ids: ids}
 }

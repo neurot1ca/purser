@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
@@ -15,7 +16,7 @@ import (
 	"purser-hook/internal/models"
 )
 
-var discoverCatalogModels = models.DiscoverModelVersion
+var discoverCatalogModels = models.DiscoverModelVersionForCatalogRefresh
 var loadCatalogConfig = gearConfig
 
 func catalogRefreshMain(argv []string) int {
@@ -51,24 +52,38 @@ func catalogRefreshMain(argv []string) int {
 
 func refreshCatalog(state, repository string) error {
 	_, _, _ = discoverCatalogModels(repository)
+	config, err := loadCatalogConfig(repository)
+	if err != nil {
+		return fmt.Errorf("load coder config: %w", err)
+	}
+	openCodeUsed := catalogUsesOpenCode(config)
 	data, err := os.ReadFile(filepath.Join(state, "model-resolution.json"))
 	if err != nil {
-		return err
+		if openCodeUsed {
+			return fmt.Errorf("OpenCode model snapshot missing after today's listing attempt")
+		}
+		return nil
 	}
 	var snapshot struct {
-		Date  string              `json:"opencode_snapshot_on"`
-		Agent map[string][]string `json:"agents"`
+		Date      string              `json:"opencode_snapshot_on"`
+		Attempted string              `json:"opencode_attempted_on"`
+		Error     string              `json:"opencode_error"`
+		Agent     map[string][]string `json:"agents"`
 	}
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		return fmt.Errorf("read OpenCode snapshot: %w", err)
 	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if openCodeUsed && snapshot.Attempted == today && snapshot.Date != today {
+		reason := snapshot.Error
+		if reason == "" {
+			reason = "OpenCode listing produced no snapshot"
+		}
+		return fmt.Errorf("OpenCode model snapshot missing: %s", reason)
+	}
 	ids := freeOpenCodeModels(snapshot.Agent["opencode"])
 	if snapshot.Date == "" || len(ids) == 0 {
 		return nil
-	}
-	config, err := loadCatalogConfig(repository)
-	if err != nil {
-		return fmt.Errorf("load coder config: %w", err)
 	}
 	if config["mechanical_opencode_enabled"] == false {
 		return nil
@@ -80,6 +95,24 @@ func refreshCatalog(state, repository string) error {
 		return fmt.Errorf("reconcile mechanical inventory: %w", err)
 	}
 	return bootstrapIfUnmeasured(state)
+}
+
+func catalogUsesOpenCode(config map[string]any) bool {
+	if config["mechanical_opencode_enabled"] != false {
+		return true
+	}
+	if coder, _ := config["coder_agent"].(string); coder == "opencode" {
+		return true
+	}
+	if reviewer, _ := config["reviewer1_agent"].(string); reviewer == "opencode" {
+		return true
+	}
+	if fallback, ok := config["fallback"].(map[string]any); ok {
+		if agent, _ := fallback["agent"].(string); agent == "opencode" {
+			return true
+		}
+	}
+	return false
 }
 
 var bootstrapMechanicalRace = enforce.BootstrapMechanicalRace
