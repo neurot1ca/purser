@@ -403,6 +403,7 @@ func parseEventStream(stdout []byte, provider string, includeMetadata bool) (Par
 	textParts := []string{}
 	conversation, served := "UNAVAILABLE", "UNAVAILABLE"
 	completed := false
+	failedToolCalls := 0
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -458,7 +459,7 @@ func parseEventStream(stdout []byte, provider string, includeMetadata bool) (Par
 		part, _ := event["part"].(map[string]any)
 		state, _ := part["state"].(map[string]any)
 		if provider == "opencode" && typ == "tool_use" && state != nil && state["status"] == "error" {
-			return ParsedEnvelope{}, errors.New("OpenCode reported a failed tool")
+			failedToolCalls++
 		}
 	}
 	if len(textParts) == 0 {
@@ -475,7 +476,11 @@ func parseEventStream(stdout []byte, provider string, includeMetadata bool) (Par
 	if err != nil {
 		return ParsedEnvelope{}, err
 	}
-	return ParsedEnvelope{ConversationID: conversation, Response: response, ServedModelAttestation: served, IncludeMetadata: includeMetadata, Usage: map[string]any{}}, nil
+	usage := map[string]any{}
+	if failedToolCalls > 0 {
+		usage["reviewer_failed_tool_calls"] = failedToolCalls
+	}
+	return ParsedEnvelope{ConversationID: conversation, Response: response, ServedModelAttestation: served, IncludeMetadata: includeMetadata, Usage: usage}, nil
 }
 
 func structuredPayload(envelope map[string]any) (any, error) {

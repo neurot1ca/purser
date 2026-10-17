@@ -67,6 +67,45 @@ func TestCodexEventStreamParsesFinalAgentReview(t *testing.T) {
 	}
 }
 
+func TestOpenCodeEnvelopeFailedToolDoesNotInvalidateCompletedResponse(t *testing.T) {
+	valid := `{"result":"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE","validation":"PASS","findings":[]}`
+	failedTool := `{"type":"tool_use","part":{"state":{"status":"error"}}}`
+	completion := `{"type":"step_finish","part":{"reason":"stop"}}`
+	textEvent := func(text string) string {
+		data, _ := json.Marshal(map[string]any{"type": "text", "part": map[string]any{"text": text}})
+		return string(data)
+	}
+	tests := []struct {
+		name    string
+		stream  string
+		wantErr bool
+	}{
+		{name: "failed tool then valid completion", stream: failedTool + "\n" + textEvent(valid) + "\n" + completion},
+		{name: "failed tool without completion", stream: failedTool + "\n" + textEvent(valid), wantErr: true},
+		{name: "stream error remains invalid", stream: failedTool + "\n" + textEvent(valid) + "\n" + completion + "\n{\"type\":\"error\"}", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, err := ParseOpenCodeEnvelope([]byte(tt.stream), true)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected invalid envelope, got %#v", parsed)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Response["result"] != NoMaterialFinding {
+				t.Fatalf("response = %#v", parsed.Response)
+			}
+			if parsed.Usage["reviewer_failed_tool_calls"] != 1 {
+				t.Fatalf("usage = %#v", parsed.Usage)
+			}
+		})
+	}
+}
+
 func TestResultMappingsGolden(t *testing.T) {
 	data, err := os.ReadFile("testdata/results/mappings.json")
 	if err != nil {
