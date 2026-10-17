@@ -14,7 +14,7 @@ import (
 	"purser-hook/internal/profile"
 )
 
-func TestCursorSetupDiscoveryUsesAgentCLIAndListedChoices(t *testing.T) {
+func TestCursorReviewerSetupDiscoveryUsesAgentCLIAndListedChoices(t *testing.T) {
 	home, root, restore := initTestEnvironment(t)
 	defer restore()
 	bin := t.TempDir()
@@ -33,7 +33,7 @@ func TestCursorSetupDiscoveryUsesAgentCLIAndListedChoices(t *testing.T) {
 		t.Fatalf("Cursor CLI not detected: %#v", cursorAgent)
 	}
 	models := cursorAgent["models"].([]any)
-	if !containsStringValue(models, "gpt-5.6-codex-high") || containsStringValue(models, "auto") {
+	if !containsStringValue(models, "gpt-5.6-codex-high") || !containsStringValue(models, "auto") {
 		t.Fatalf("Cursor models = %#v", models)
 	}
 	options := cursorAgent["options"].([]any)
@@ -41,11 +41,11 @@ func TestCursorSetupDiscoveryUsesAgentCLIAndListedChoices(t *testing.T) {
 	for _, item := range options {
 		labels = append(labels, item.(map[string]any)["label"])
 	}
-	if !containsStringValue(models, "claude-opus-5-5-high") || len(labels) != 4 || !containsStringValue(labels, "latest:gpt-codex-high") {
+	if !containsStringValue(models, "claude-opus-5-5-high") || len(labels) != 5 || !containsStringValue(labels, "latest:gpt-codex-high") || labels[len(labels)-1] != "auto" {
 		t.Fatalf("Cursor options = %#v", options)
 	}
 	for _, label := range labels {
-		if label == "auto" || !strings.HasPrefix(label.(string), "latest:") {
+		if label != "auto" && !strings.HasPrefix(label.(string), "latest:") {
 			t.Fatalf("Cursor option was not a family selector: %#v", options)
 		}
 	}

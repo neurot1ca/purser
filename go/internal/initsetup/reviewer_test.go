@@ -36,24 +36,26 @@ func TestReviewerListInstalledOnly(t *testing.T) {
 	}
 }
 
-func TestCursorReviewerChoicesExcludeSameAndUnknownFamilies(t *testing.T) {
+func TestCursorReviewerChoicesIncludeSameFamilyAndAuto(t *testing.T) {
 	home, root, restore := initTestEnvironment(t)
 	defer restore()
 	bin := t.TempDir()
-	writeFakeCursorCLI(t, bin, "cursor-agent", "Available models\ngpt-5.6-sol-high - GPT\nclaude-opus-5-5-high - Claude\nmuse-spark-1.3-low - Muse\n")
+	writeFakeCursorCLI(t, bin, "cursor-agent", "Available models\ngpt-5.6-sol-high - GPT\nclaude-opus-5-5-high - Claude\nmuse-spark-1.3-low - Muse\nauto - Automatic\n")
 	t.Setenv("PATH", bin)
 	detected, err := detect(home, root, options{coder: "codex", model: "gpt-6-luna"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	choices := reviewerChoices(detected)
-	if len(choices) != 2 || choices[0]["agent"] != "cursor" || choices[0]["model"] != "latest:claude-opus-high" || choices[1]["agent"] != "none" {
+	if len(choices) != 4 || choices[0]["agent"] != "cursor" || choices[0]["model"] != "latest:gpt-sol-high" || choices[1]["model"] != "latest:claude-opus-high" || choices[2]["model"] != "auto" || choices[3]["agent"] != "none" {
 		t.Fatalf("Cursor reviewer choices = %#v", choices)
 	}
-	for _, choice := range choices {
-		if choice["model"] == "gpt-5.6-sol-high" || choice["model"] == "claude-opus-5-5-high" || choice["model"] == "muse-spark-1.3-low" {
-			t.Fatalf("ineligible Cursor reviewer choice = %#v", choice)
-		}
+	detected["agents"].(map[string]any)["cursor"].(map[string]any)["models"] = []any{"gpt-5.6-sol-high", "claude-opus-5-5-high", "muse-spark-1.3-low", "auto"}
+	if err := validateReviewerInstalled(detected, "cursor", "gpt-5.6-sol-high"); err != nil {
+		t.Fatalf("same-family reviewer rejected: %v", err)
+	}
+	if err := validateReviewerInstalled(detected, "cursor", "auto"); err != nil {
+		t.Fatalf("auto reviewer rejected: %v", err)
 	}
 }
 
@@ -61,7 +63,7 @@ func TestCursorReviewerChoicesUseSavedCoderFamily(t *testing.T) {
 	home, root, restore := initTestEnvironment(t)
 	defer restore()
 	bin := t.TempDir()
-	writeFakeCursorCLI(t, bin, "cursor-agent", "Available models\ngpt-5.6-sol-high - GPT\nclaude-opus-5-5-high - Claude\n")
+	writeFakeCursorCLI(t, bin, "cursor-agent", "Available models\ngpt-5.6-sol-high - GPT\nclaude-opus-5-5-high - Claude\nauto - Automatic\n")
 	t.Setenv("PATH", bin)
 	configPath := filepath.Join(home, ".orchestrator", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
@@ -75,10 +77,18 @@ func TestCursorReviewerChoicesUseSavedCoderFamily(t *testing.T) {
 		t.Fatal(err)
 	}
 	choices := reviewerChoices(detected)
+	foundGPT := false
+	foundAuto := false
 	for _, choice := range choices {
 		if choice["agent"] == "cursor" && choice["model"] == "latest:gpt-sol-high" {
-			t.Fatalf("saved Cursor coder family was offered as reviewer: %#v", choices)
+			foundGPT = true
 		}
+		if choice["agent"] == "cursor" && choice["model"] == "auto" {
+			foundAuto = true
+		}
+	}
+	if !foundGPT || !foundAuto {
+		t.Fatalf("same-family or auto Cursor reviewer was not offered: %#v", choices)
 	}
 	foundClaude := false
 	for _, choice := range choices {

@@ -77,6 +77,19 @@ func TestProjectProfileNonBooleanFullSuiteRequiredRejectsTier(t *testing.T) {
 	}
 }
 
+func TestReviewerRequireDifferentFamilyProfile(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+		ok    bool
+	}{{"true", true, true}, {"false", false, true}, {"1", false, false}} {
+		result := loadProjectProfileTest(t, "schema_version = 1\n[review]\nrequire_different_family = "+tc.value+"\n", "")
+		if (result.ProjectStatus == "ok") != tc.ok || result.RequireDifferentFamily != tc.want {
+			t.Errorf("value %s: status=%q require_different_family=%v", tc.value, result.ProjectStatus, result.RequireDifferentFamily)
+		}
+	}
+}
+
 func TestProjectProfileWorktreeValuesAndDefaults(t *testing.T) {
 	result := loadProjectProfileTest(t, `schema_version = 1
 [worktree]

@@ -22,7 +22,7 @@ var userSecurity = map[string]map[string]bool{
 
 var projectSecurity = map[string]map[string]bool{
 	"paths":  {"protected": true},
-	"review": {"force_full": true, "skip_max_lines": true, "skip_max_files": true, "full_suite_required": true},
+	"review": {"force_full": true, "skip_max_lines": true, "skip_max_files": true, "full_suite_required": true, "require_different_family": true},
 }
 
 // ValidateSecurityKey reports whether a key is a security value for the tier.
@@ -108,7 +108,7 @@ func ValidateSecurityValue(section, key string, value any) (bool, string) {
 		}
 		return false, fmt.Sprintf("[roles] %s has an invalid type or value", key)
 	case "review":
-		if key == "force_full" || key == "full_suite_required" {
+		if key == "force_full" || key == "full_suite_required" || key == "require_different_family" {
 			if _, ok := value.(bool); ok {
 				return true, ""
 			}

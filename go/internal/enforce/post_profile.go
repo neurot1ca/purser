@@ -10,24 +10,26 @@ import (
 )
 
 type postProfile struct {
-	Stored             bool                        `json:"stored"`
-	ProtectedPaths     []string                    `json:"protected_paths"`
-	ForceFullReview    bool                        `json:"force_full_review"`
-	SkipMaxLines       *int                        `json:"skip_max_lines"`
-	SkipMaxFiles       *int                        `json:"skip_max_files"`
-	ReviewerExecutable any                         `json:"reviewer_executable"`
-	Reviewer           any                         `json:"reviewer"`
-	ReviewerCandidates []profile.ReviewerCandidate `json:"reviewer_candidates"`
-	AuthoritySources   any                         `json:"authority_sources"`
-	Configured         *bool                       `json:"configured"`
-	UserStatus         any                         `json:"user_status"`
-	ProjectStatus      any                         `json:"project_status"`
-	FirstWarning       any                         `json:"first_warning"`
+	Stored                 bool                        `json:"stored"`
+	ProtectedPaths         []string                    `json:"protected_paths"`
+	ForceFullReview        bool                        `json:"force_full_review"`
+	RequireDifferentFamily bool                        `json:"require_different_family,omitempty"`
+	SkipMaxLines           *int                        `json:"skip_max_lines"`
+	SkipMaxFiles           *int                        `json:"skip_max_files"`
+	ReviewerExecutable     any                         `json:"reviewer_executable"`
+	Reviewer               any                         `json:"reviewer"`
+	ReviewerCandidates     []profile.ReviewerCandidate `json:"reviewer_candidates"`
+	AuthoritySources       any                         `json:"authority_sources"`
+	Configured             *bool                       `json:"configured"`
+	UserStatus             any                         `json:"user_status"`
+	ProjectStatus          any                         `json:"project_status"`
+	FirstWarning           any                         `json:"first_warning"`
 }
 
 func postProfileFromPending(pending, loadedConfig map[string]any) postProfile {
 	paths, pathsOK := postStringList(pending["protected_paths"])
 	forceFull, forceOK := pending["force_full_review"].(bool)
+	requireDifferentFamily, _ := pending["require_different_family"].(bool)
 	lines, linesOK := pythonInt(pending["skip_max_lines"])
 	files, filesOK := pythonInt(pending["skip_max_files"])
 	configured, configuredOK := pending["configured"].(bool)
@@ -51,7 +53,7 @@ func postProfileFromPending(pending, loadedConfig map[string]any) postProfile {
 		reviewer = "agy"
 	}
 	return postProfile{
-		Stored: true, ProtectedPaths: paths, ForceFullReview: forceFull,
+		Stored: true, ProtectedPaths: paths, ForceFullReview: forceFull, RequireDifferentFamily: requireDifferentFamily,
 		SkipMaxLines: &lines, SkipMaxFiles: &files,
 		ReviewerExecutable: pending["reviewer_executable"], Reviewer: reviewer,
 		ReviewerCandidates: candidates, AuthoritySources: pending["authority_sources"],

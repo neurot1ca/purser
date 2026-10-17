@@ -89,11 +89,11 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_ADAPTER_UNREGISTERED"})
 			continue
 		}
-		if !independentReviewer(stringValue(pending["agent"]), stringValue(pending["model"]), candidate) {
+		if resolved.RequireDifferentFamily && !independentReviewer(stringValue(pending["agent"]), stringValue(pending["model"]), candidate) {
 			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_NOT_INDEPENDENT", Reason: "REVIEWER_UNAVAILABLE"})
 			continue
 		}
-		if circuitDir != "" && time.Until(deadline) > 0 && hasEligibleReviewer(candidates[index+1:], stringValue(pending["agent"]), stringValue(pending["model"])) &&
+		if circuitDir != "" && time.Until(deadline) > 0 && hasEligibleReviewer(candidates[index+1:], stringValue(pending["agent"]), stringValue(pending["model"]), resolved.RequireDifferentFamily) &&
 			review.ReviewerCircuitOpen(circuitDir, candidate.Agent, candidate.Model, time.Now()) {
 			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "UNAVAILABLE", Reason: "REVIEWER_CIRCUIT_OPEN"})
 			continue
@@ -196,30 +196,23 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 }
 
 func independentReviewer(coderAgent, coderModel string, candidate profile.ReviewerCandidate) bool {
-	if coderAgent != cursorAgent && candidate.Agent != cursorAgent {
-		return true
-	}
 	var coderFamily, reviewerFamily string
-	if coderAgent == cursorAgent {
-		if adapter, err := review.ReviewerAdapter("cursor"); err == nil {
-			coderFamily = adapter.Family(coderModel)
-		}
+	if adapter, err := review.ReviewerAdapter(coderAgent); err == nil {
+		coderFamily = vendorFamily(adapter.Family(coderModel))
 	} else {
 		coderFamily = vendorFamily(modelFamily(coderModel))
 	}
-	if candidate.Agent == cursorAgent {
-		if adapter, err := review.ReviewerAdapter("cursor"); err == nil {
-			reviewerFamily = adapter.Family(candidate.Model)
-		}
-	} else if adapter, err := review.ReviewerAdapter(candidate.Agent); err == nil {
+	if adapter, err := review.ReviewerAdapter(candidate.Agent); err == nil {
 		reviewerFamily = vendorFamily(adapter.Family(candidate.Model))
+	} else {
+		reviewerFamily = vendorFamily(modelFamily(candidate.Model))
 	}
 	return coderFamily != "" && reviewerFamily != "" && coderFamily != reviewerFamily
 }
 
-func hasEligibleReviewer(candidates []profile.ReviewerCandidate, coderAgent, coderModel string) bool {
+func hasEligibleReviewer(candidates []profile.ReviewerCandidate, coderAgent, coderModel string, requireDifferentFamily bool) bool {
 	for _, candidate := range candidates {
-		if postReviewerAdapters[candidate.Agent] && independentReviewer(coderAgent, coderModel, candidate) {
+		if postReviewerAdapters[candidate.Agent] && (!requireDifferentFamily || independentReviewer(coderAgent, coderModel, candidate)) {
 			return true
 		}
 	}

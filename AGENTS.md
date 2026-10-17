@@ -16,7 +16,7 @@ review delegated AI coding work. This file binds every worker in this repository
 - Observability never takes enforcement down. A hook internal failure fails open
   with a visible marker and forces FULL review.
 - A skipped reviewer is never represented as a passing reviewer.
-- The reviewer's model family differs from the implementer's.
+- The reviewer's model family differs from the implementer's when the project sets `[review].require_different_family = true`; otherwise any reviewer may run.
 
 ## Write the least code
 

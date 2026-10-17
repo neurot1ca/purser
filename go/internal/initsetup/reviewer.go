@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	modelversion "purser-hook/internal/models"
-	cursormodel "purser-hook/internal/models/cursor"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
@@ -324,12 +323,8 @@ func validateReviewerInstalled(detected map[string]any, agentName, model string)
 				ids = append(ids, id)
 			}
 		}
-		family := cursorSelectionFamily(ids, model)
-		if !cursorSelectionListed(ids, model) || family == "" || cursormodel.VendorFamily(model) == "" {
-			return errors.New("selected Reviewer model is absent or has an unknown family in cursor-agent models")
-		}
-		if asString(detected["coder_family"]) == family {
-			return errors.New("Cursor Reviewer model family must differ from the coder")
+		if !cursorSelectionListed(ids, model) {
+			return errors.New("selected Reviewer model is absent from cursor-agent models")
 		}
 	}
 	return nil

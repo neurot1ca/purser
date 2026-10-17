@@ -41,26 +41,27 @@ type ResolvedProfile struct {
 	Configured bool    `json:"configured"`
 	ProjectID  *string `json:"project_id"`
 	// MeasurementLedger is configured as [project].measurement_ledger, optionally with #Heading.
-	MeasurementLedger  *string             `json:"measurement_ledger,omitempty"`
-	ValidationCommand  *string             `json:"validation_command,omitempty"`
-	ProtectedPaths     []string            `json:"protected_paths"`
-	ForceFullReview    bool                `json:"force_full_review"`
-	FullSuiteRequired  bool                `json:"full_suite_required"`
-	CoverageTargetPct  float64             `json:"-"`
-	SkipMaxLines       int                 `json:"skip_max_lines"`
-	SkipMaxFiles       int                 `json:"skip_max_files"`
-	Trusted            bool                `json:"trusted"`
-	ReviewerExecutable *string             `json:"reviewer_executable"`
-	ReviewerCandidates []ReviewerCandidate `json:"reviewer_candidates"`
-	Roles              Roles               `json:"roles"`
-	AuthoritySources   []AuthoritySource   `json:"authority_sources"`
-	Checks             []Check             `json:"checks"`
-	Worktree           WorktreeSetup       `json:"worktree"`
-	VaultRoot          *string             `json:"vault_root"`
-	LooseningsIgnored  int                 `json:"loosenings_ignored"`
-	UserStatus         string              `json:"user_status"`
-	ProjectStatus      string              `json:"project_status"`
-	Warnings           []string            `json:"warnings"`
+	MeasurementLedger      *string             `json:"measurement_ledger,omitempty"`
+	ValidationCommand      *string             `json:"validation_command,omitempty"`
+	ProtectedPaths         []string            `json:"protected_paths"`
+	ForceFullReview        bool                `json:"force_full_review"`
+	FullSuiteRequired      bool                `json:"full_suite_required"`
+	RequireDifferentFamily bool                `json:"require_different_family"`
+	CoverageTargetPct      float64             `json:"-"`
+	SkipMaxLines           int                 `json:"skip_max_lines"`
+	SkipMaxFiles           int                 `json:"skip_max_files"`
+	Trusted                bool                `json:"trusted"`
+	ReviewerExecutable     *string             `json:"reviewer_executable"`
+	ReviewerCandidates     []ReviewerCandidate `json:"reviewer_candidates"`
+	Roles                  Roles               `json:"roles"`
+	AuthoritySources       []AuthoritySource   `json:"authority_sources"`
+	Checks                 []Check             `json:"checks"`
+	Worktree               WorktreeSetup       `json:"worktree"`
+	VaultRoot              *string             `json:"vault_root"`
+	LooseningsIgnored      int                 `json:"loosenings_ignored"`
+	UserStatus             string              `json:"user_status"`
+	ProjectStatus          string              `json:"project_status"`
+	Warnings               []string            `json:"warnings"`
 }
 
 // ResolveProfile mirrors project_profile._resolve_profile for decoded tiers.
@@ -180,7 +181,7 @@ func ResolveProfile(projectRoot string, user, project Tier) ResolvedProfile {
 	if value, ok := projectValues["maintenance.coverage_target_pct"].(float64); ok {
 		coverageTarget = value
 	}
-	return ResolvedProfile{Configured: project.Status != "missing", ProjectID: profileOptionalString(projectValues["project.id"]), MeasurementLedger: profileOptionalString(projectValues["project.measurement_ledger"]), ValidationCommand: profileOptionalString(projectValues["validation.command"]), ProtectedPaths: protected, ForceFullReview: forceFull, FullSuiteRequired: profileBool(projectValues, "review.full_suite_required"), CoverageTargetPct: coverageTarget, SkipMaxLines: lines, SkipMaxFiles: files, Trusted: trusted, ReviewerExecutable: profileOptionalString(userValues["reviewer.executable"]), ReviewerCandidates: candidates, Roles: roles, AuthoritySources: sources, Checks: checks, Worktree: worktree, VaultRoot: profileOptionalString(userValues["telemetry.vault_root"]), LooseningsIgnored: ignored, UserStatus: user.Status, ProjectStatus: project.Status, Warnings: warnings}
+	return ResolvedProfile{Configured: project.Status != "missing", ProjectID: profileOptionalString(projectValues["project.id"]), MeasurementLedger: profileOptionalString(projectValues["project.measurement_ledger"]), ValidationCommand: profileOptionalString(projectValues["validation.command"]), ProtectedPaths: protected, ForceFullReview: forceFull, FullSuiteRequired: profileBool(projectValues, "review.full_suite_required"), RequireDifferentFamily: profileBool(projectValues, "review.require_different_family"), CoverageTargetPct: coverageTarget, SkipMaxLines: lines, SkipMaxFiles: files, Trusted: trusted, ReviewerExecutable: profileOptionalString(userValues["reviewer.executable"]), ReviewerCandidates: candidates, Roles: roles, AuthoritySources: sources, Checks: checks, Worktree: worktree, VaultRoot: profileOptionalString(userValues["telemetry.vault_root"]), LooseningsIgnored: ignored, UserStatus: user.Status, ProjectStatus: project.Status, Warnings: warnings}
 }
 
 // IsTrusted requires a canonical path equality, never a parent/child match.

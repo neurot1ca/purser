@@ -445,7 +445,7 @@ func parseCursorListing(raw string) []string {
 	for _, line := range strings.Split(raw, "\n") {
 		id, _, found := strings.Cut(strings.TrimSpace(line), " - ")
 		id = strings.TrimSpace(id)
-		if !found || id == "auto" || !cursormodel.ValidModel(id) || seen[id] {
+		if !found || id != "auto" && !cursormodel.ValidModel(id) || seen[id] {
 			continue
 		}
 		seen[id] = true
@@ -464,7 +464,7 @@ func readCursorModels() []string {
 	}
 	ids, seen := []string{}, map[string]bool{}
 	for _, id := range cache.Agents["cursor"] {
-		if cursormodel.ValidModel(id) && id != "auto" && !strings.HasPrefix(id, "latest:") && !seen[id] {
+		if (id == "auto" || cursormodel.ValidModel(id)) && !strings.HasPrefix(id, "latest:") && !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
 		}
@@ -539,6 +539,9 @@ func cursorModelOptions(ids []string) []any {
 		selector := "latest:" + family.key
 		options = append(options, map[string]any{"label": selector, "models": []string{selector}, "family": cursorFamilyVendor(ids, family.key), "recommended": false})
 	}
+	if contains(ids, "auto") {
+		options = append(options, map[string]any{"label": "auto", "models": []string{"auto"}, "family": nil, "recommended": false})
+	}
 	return options
 }
 
@@ -576,7 +579,7 @@ func cursorSelectionFamily(ids []string, model string) string {
 }
 
 func cursorSelectionListed(ids []string, model string) bool {
-	if !cursormodel.ValidModel(model) {
+	if model != "auto" && !cursormodel.ValidModel(model) {
 		return false
 	}
 	if strings.HasPrefix(model, "latest:") {
@@ -600,13 +603,10 @@ func cursorHasFamily(ids []string, family string) bool {
 }
 
 func cursorReviewerOptions(models []map[string]any, coderFamily string) []map[string]any {
-	if coderFamily == "" {
-		return nil
-	}
 	options, families, seen := []map[string]any{}, []string{}, map[string]bool{}
 	for _, model := range models {
 		id, family := asString(model["id"]), asString(model["family"])
-		if family == "" || family == coderFamily {
+		if family == "" {
 			continue
 		}
 		familyKey := cursormodel.Family(id)
@@ -634,9 +634,15 @@ func cursorReviewerOptions(models []map[string]any, coderFamily string) []map[st
 	}
 	for _, family := range ranked {
 		vendor := cursorFamilyVendorFromFacts(models, family.key)
-		if vendor != "" && vendor != coderFamily {
+		if vendor != "" {
 			selector := "latest:" + family.key
 			options = append(options, map[string]any{"agent": "cursor", "model": selector, "label": selector, "family": vendor})
+		}
+	}
+	for _, model := range models {
+		if asString(model["id"]) == "auto" {
+			options = append(options, map[string]any{"agent": "cursor", "model": "auto", "label": "auto", "family": nil})
+			break
 		}
 	}
 	return options
@@ -1070,10 +1076,6 @@ func validateSelection(o options, home string) error {
 			}
 		} else if o.reviewer == "cursor" {
 			ids := cursorAgentModels()
-			family := cursorSelectionFamily(ids, o.reviewerModel)
-			if family == "" || family == selectedFamily(nil, o, loadProviders(home)) {
-				return errors.New("selected Cursor Reviewer model must have a known family different from the coder")
-			}
 			if !cursorSelectionListed(ids, o.reviewerModel) {
 				return errors.New("selected Reviewer model is absent from cursor-agent models")
 			}
