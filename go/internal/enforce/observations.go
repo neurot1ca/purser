@@ -536,7 +536,7 @@ func prepareObservationRun(a map[string]any) (observationRun, error) {
 		return nil
 	}
 	for _, enum := range []struct{ key, allowed string }{
-		{"status", "UNKNOWN_OR_IN_PROGRESS IN_PROGRESS VERIFIED NOT_VERIFIED INCONCLUSIVE NO_CHANGE"},
+		{"status", "UNKNOWN_OR_IN_PROGRESS IN_PROGRESS FINISHED FAILED ACCEPTED REJECTED APPLIED VERIFIED NOT_VERIFIED INCONCLUSIVE NO_CHANGE"},
 		{"phase", "implementation operation"}, {"task_type", "implementation operation plan unknown"},
 		{"route", "mechanical subtle normal consequential escalated operation"}, {"effort", "low medium high xhigh"},
 		{"validation", "PASS FAIL UNKNOWN"}, {"claude_review_mode", "AUDIT FULL"},
@@ -1061,6 +1061,11 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 			usage["codex_call_count"] = numberOrZero(usage["codex_call_count"]) + 1
 			foldClaudeUsage(usage, payload, "start")
 		case "IMPLEMENTER_FINISHED", "IMPLEMENTER_FAILED":
+			if event["event_type"] == "IMPLEMENTER_FINISHED" {
+				aggregate["status"] = "FINISHED"
+			} else {
+				aggregate["status"] = "FAILED"
+			}
 			aggregate["ended_at"] = event["ts_utc"]
 			aggregate["duration_ms"] = addObservationNumber(aggregate["duration_ms"], payload["duration_ms"])
 			usage["codex_duration_ms"] = addObservationNumber(usage["codex_duration_ms"], payload["duration_ms"])
@@ -1130,6 +1135,11 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 		case "UNKNOWN_CONCURRENT_WRITER":
 			aggregate["concurrent_writer"] = true
 		case "CLAUDE_DECISION_RECORDED":
+			if payload["decision"] == "accepted" {
+				aggregate["status"] = "ACCEPTED"
+			} else if payload["decision"] == "rejected" {
+				aggregate["status"] = "REJECTED"
+			}
 			acceptance, _ := aggregate["claude_acceptance"].(map[string]any)
 			source, _ := payload["source"].(map[string]any)
 			sources, _ := acceptance["sources"].([]any)
@@ -1196,6 +1206,18 @@ func foldObservationAggregate(existing map[string]any, taskID, projectKey any, e
 			acceptance["outcome"] = outcome
 			acceptance["applied_as_is"] = outcome == "accepted" && numberOrZero(acceptance["send_backs"]) == 0
 			conflict = conflict || len(terminals) > 1 && len(terminalsBefore) <= 1
+		case "APPLY_RECORDED":
+			aggregate["status"] = "APPLIED"
+			aggregate["applied_at"] = event["ts_utc"]
+			if value, ok := payload["applied_paths_count"]; ok {
+				aggregate["applied_paths_count"] = value
+			}
+			if value, ok := payload["base_head"]; ok {
+				aggregate["apply_base_head"] = value
+			}
+			if value, ok := payload["validation_status"]; ok {
+				aggregate["validation_status"] = value
+			}
 		case "CLAUDE_TASK_USAGE_RECORDED":
 			foldClaudeTaskUsage(usage, payload)
 		case "CONTEXT_IO_TURN_RECORDED":
@@ -1412,7 +1434,7 @@ func fields(names string) map[string]bool {
 var (
 	callObservationFields  = fields("phase route model model_source effort routing_enforced fresh_thread reply_call reason reason_source previous_route new_route route_adjustment_reason eta_minutes worker_prompt_chars scope_path_count task_type suspected_route_mismatch agent provider")
 	startObservationFields = fields("implementer claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
-	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CODEX_RESULT_UNFETCHED": fields("route code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source reviewer1_valid_count reviewer1_false_count review_attribution review_finding_refs"), "READINESS_CHECK_OUTCOME": fields("verdict agent duration_ms"), "PLAN_REDIRECT": fields("route non_test_scope_count"), "MAINTENANCE_REPORT_FINISHED": fields("report_id report_type outcome reason_code elapsed_seconds quota_change_active_window_pct findings_high_count findings_medium_count findings_low_count line_coverage_pct")}
+	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CODEX_RESULT_UNFETCHED": fields("route code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source reviewer1_valid_count reviewer1_false_count review_attribution review_finding_refs"), "APPLY_RECORDED": fields("job_id applied_paths_count base_head validation_status"), "READINESS_CHECK_OUTCOME": fields("verdict agent duration_ms"), "PLAN_REDIRECT": fields("route non_test_scope_count"), "MAINTENANCE_REPORT_FINISHED": fields("report_id report_type outcome reason_code elapsed_seconds quota_change_active_window_pct findings_high_count findings_medium_count findings_low_count line_coverage_pct")}
 	observationID          = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	observationUUID        = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	unsafeObservationID    = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -2102,7 +2124,7 @@ var reviewerObservationFields = fields("reviewer1_retry_count reviewer1_retry_re
 var reviewerFinishedObservationFields = mergeFields(reviewerObservationFields, fields("reviewer1_result reviewer1_initial_finding_count reviewer1_finding_refs reviewer1_job_id"))
 var reviewerFailedObservationFields = mergeFields(reviewerObservationFields, fields("failure_code reviewer1_error_code reviewer1_result reviewer_stdout reviewer_stderr reviewer_exit reviewer_parse_error"))
 
-var observationEventTypes = fields("TASK_ROUTE_SELECTED IMPLEMENTER_STARTED IMPLEMENTER_FINISHED IMPLEMENTER_FAILED REVIEWER1_STARTED REVIEWER1_FINISHED COMPACTION_ADVICE_OUTCOME STOP_BLOCKED SCOPE_CONFLICT_OUTCOME REVIEWER1_SKIPPED REVIEWER1_FAILED ROUTING_PROTOCOL_VIOLATION THREAD_CONTINUITY_VIOLATION UNKNOWN_CONCURRENT_WRITER WORKFLOW_VERDICT_RECORDED TELEMETRY_WARNING CLAUDE_TASK_USAGE_RECORDED CONTEXT_IO_TURN_RECORDED CODEX_RESULT_UNFETCHED CLAUDE_DECISION_RECORDED WORKER_REPLAY_CONFLICT MECHANICAL_EDIT_OBSERVED MAINTENANCE_REPORT_FINISHED MAINTENANCE_REPORT_ACTED READINESS_CHECK_OUTCOME PLAN_REDIRECT")
+var observationEventTypes = fields("TASK_ROUTE_SELECTED IMPLEMENTER_STARTED IMPLEMENTER_FINISHED IMPLEMENTER_FAILED REVIEWER1_STARTED REVIEWER1_FINISHED COMPACTION_ADVICE_OUTCOME STOP_BLOCKED SCOPE_CONFLICT_OUTCOME REVIEWER1_SKIPPED REVIEWER1_FAILED ROUTING_PROTOCOL_VIOLATION THREAD_CONTINUITY_VIOLATION UNKNOWN_CONCURRENT_WRITER WORKFLOW_VERDICT_RECORDED TELEMETRY_WARNING CLAUDE_TASK_USAGE_RECORDED CONTEXT_IO_TURN_RECORDED CODEX_RESULT_UNFETCHED CLAUDE_DECISION_RECORDED APPLY_RECORDED WORKER_REPLAY_CONFLICT MECHANICAL_EDIT_OBSERVED MAINTENANCE_REPORT_FINISHED MAINTENANCE_REPORT_ACTED READINESS_CHECK_OUTCOME PLAN_REDIRECT")
 
 const claudeUsageSnapshotLimit = 16 << 10
 
@@ -2192,6 +2214,7 @@ func init() {
 	setObservationRule("bool", "routing_enforced fresh_thread reply_call claude_usage_known")
 	setObservationRule("number", "duration_ms longest_silent_gap_seconds")
 	setObservationRule("int", "worker_prompt_chars scope_path_count non_test_scope_count")
+	setObservationRule("int", "applied_paths_count")
 	setObservationRule("number", "queue_wait_ms claude_5h_start_pct claude_5h_end_pct claude_7d_start_pct claude_7d_end_pct claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms")
 	setObservationRule("enum:implementation operation plan", "phase")
 	setObservationRule("enum:mechanical subtle normal consequential escalated operation plan_standard", "route previous_route new_route")
@@ -2218,6 +2241,7 @@ func init() {
 	setObservationRule("enum:UNMET NO_UNMET_FOUND UNKNOWN UNAVAILABLE", "verdict")
 	setObservationRule("id", "code")
 	setObservationRule("id", "implementer agent provider claude_usage_session_id job_id reviewer1_job_id")
+	setObservationRule("id", "base_head validation_status")
 	setObservationRule("enum:denied queued promoted applied resolved_by_hand discarded expired", "action")
 	setObservationRule("time", "claude_usage_captured_at claude_5h_resets_at claude_7d_resets_at")
 	setObservationRule("scope", "claude_rate_limit_delta_scope")
@@ -2274,6 +2298,22 @@ func EmitMaintenanceReportObservation(stateRoot, repository, eventType string, p
 		return err
 	}
 	_, err = persistObservation(filepath.Join(stateRoot, "telemetry"), event)
+	return err
+}
+
+// EmitApplyObservation records a successful job apply through the shared
+// best-effort observation writer.
+func EmitApplyObservation(stateRoot, repository, taskID string, payload map[string]any) error {
+	project := contextio.ProjectKey(repository)
+	event, err := buildObservationAtStateRoot("APPLY_RECORDED", map[string]any{"project_key": project}, payload, taskID, stateRoot)
+	if err != nil {
+		return err
+	}
+	telemetryRoot := filepath.Join(stateRoot, "telemetry")
+	_, err = persistObservation(telemetryRoot, event)
+	if err == nil {
+		updateObservationTaskBestEffort(telemetryRoot, taskID, project)
+	}
 	return err
 }
 

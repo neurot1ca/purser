@@ -87,6 +87,7 @@ func TestPostImplementerObservationsP106(t *testing.T) {
 			}
 			wantTask := c.Task
 			wantTask["ended_at"] = gotEventTimestamp(t, line)
+			wantTask["status"] = "FINISHED"
 			if !reflect.DeepEqual(gotTask, wantTask) {
 				t.Fatalf("task projection mismatch\ngot:  %#v\nwant: %#v", gotTask, wantTask)
 			}

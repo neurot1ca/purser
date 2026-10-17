@@ -569,9 +569,10 @@ func TestApplyFreshSuccessPersistsReviewerDecisionCountsOnce(t *testing.T) {
 	}
 	write(t, filepath.Join(worktree, "tracked.txt"), "worker change\n")
 	jobID := strings.Repeat("a", 64)
+	head := strings.TrimSpace(string(gitOutput(t, repo, "rev-parse", "HEAD")))
 	job := map[string]any{
 		"jobId": jobID, "state": "SUCCEEDED", "taskId": "decision-task", "jobPhase": "implementation",
-		"repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot,
+		"repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot, "head": head,
 	}
 	encoded, err := json.Marshal(job)
 	if err != nil {
@@ -620,6 +621,21 @@ func TestApplyFreshSuccessPersistsReviewerDecisionCountsOnce(t *testing.T) {
 	payload, _ := event["payload"].(map[string]any)
 	if payload["reviewer1_valid_count"] != float64(3) || payload["reviewer1_false_count"] != float64(1) {
 		t.Fatalf("reviewer counts were not persisted from fresh codex_apply: %#v", payload)
+	}
+	var applyPayload map[string]any
+	applyEvents := 0
+	for _, line := range lines {
+		var candidate map[string]any
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			t.Fatal(err)
+		}
+		if candidate["event_type"] == "APPLY_RECORDED" {
+			applyEvents++
+			applyPayload, _ = candidate["payload"].(map[string]any)
+		}
+	}
+	if applyEvents != 1 || applyPayload["job_id"] != jobID || applyPayload["applied_paths_count"] != float64(1) || applyPayload["base_head"] != head || applyPayload["validation_status"] == "" {
+		t.Fatalf("apply outcome telemetry missing or incomplete: count=%d payload=%#v", applyEvents, applyPayload)
 	}
 	result = Apply(state, args)
 	if structured, _ := result["structuredContent"].(map[string]any); structured["applied"] != true {

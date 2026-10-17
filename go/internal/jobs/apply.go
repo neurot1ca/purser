@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
@@ -229,6 +230,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		addReadyPlanMilestones(stateRoot, values, value)
 		recordScopeOutcome(opt, stateRoot, recordMap(job), "applied")
 		recordApplyDecision(opt, stateRoot, recordMap(job), "accepted", "apply", jobID, args["reviewer1Valid"], args["reviewer1False"])
+		recordApplyObservation(stateRoot, recordMap(job), value)
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 		dispatchWorktreeRetirement(stateRoot, jobID)
 	}
@@ -272,6 +274,26 @@ func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]
 	dispatchWorktreeRetirement(stateRoot, jobID)
 	supersedeEarlierTaskJobs(stateRoot, jobID, recordMap(job))
 	return applyToolResult(value)
+}
+
+func recordApplyObservation(stateRoot string, job, value map[string]any) {
+	taskID, _ := job["taskId"].(string)
+	jobID, _ := job["jobId"].(string)
+	repository, _ := job["repoRoot"].(string)
+	paths, _ := value["paths"].([]string)
+	if taskID == "" || jobID == "" || repository == "" || value["applied"] != true {
+		return
+	}
+	payload := map[string]any{"job_id": jobID, "applied_paths_count": len(paths)}
+	if head, ok := job["head"].(string); ok && head != "" {
+		payload["base_head"] = head
+	}
+	if validation, ok := value["validation"].(map[string]any); ok {
+		if status, ok := validation["status"].(string); ok && status != "" {
+			payload["validation_status"] = status
+		}
+	}
+	_ = enforce.EmitApplyObservation(stateRoot, repository, taskID, payload)
 }
 
 func addReadyPlanMilestones(stateRoot string, job, value map[string]any) {

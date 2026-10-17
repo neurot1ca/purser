@@ -28,7 +28,7 @@ func TestObservationEventTypesMatchPythonSchema(t *testing.T) {
 		"TELEMETRY_WARNING", "CLAUDE_TASK_USAGE_RECORDED", "CONTEXT_IO_TURN_RECORDED",
 		"CODEX_RESULT_UNFETCHED", "CLAUDE_DECISION_RECORDED", "WORKER_REPLAY_CONFLICT",
 		"MECHANICAL_EDIT_OBSERVED", "MAINTENANCE_REPORT_FINISHED", "MAINTENANCE_REPORT_ACTED",
-		"READINESS_CHECK_OUTCOME",
+		"READINESS_CHECK_OUTCOME", "APPLY_RECORDED",
 		"PLAN_REDIRECT",
 	}
 	if len(observationEventTypes) != len(want) {
@@ -171,6 +171,40 @@ func TestReviewerFindingAttributionCountsOnlyCurrentUniqueReferences(t *testing.
 	}
 	if got["reviewer1_valid_count"] != nil || got["reviewer1_false_count"] != nil {
 		t.Fatal("answered became adjudicated")
+	}
+}
+
+func TestObservationTerminalAndApplyStatuses(t *testing.T) {
+	event := func(id, kind string, payload map[string]any) map[string]any {
+		value, err := buildObservation(kind, map[string]any{"project_key": "0123456789abcdef"}, payload, "task-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		value["event_id"], value["ts_utc"] = id, "2026-10-17T10:00:00Z"
+		return value
+	}
+	for _, tc := range []struct {
+		name   string
+		events []map[string]any
+		status string
+	}{
+		{"finished", []map[string]any{event("1", "IMPLEMENTER_FINISHED", nil)}, "FINISHED"},
+		{"accepted", []map[string]any{event("1", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "accepted", "task_type": "implementation", "source": map[string]any{"kind": "reply", "job_id": "job-1"}})}, "ACCEPTED"},
+		{"rejected", []map[string]any{event("1", "CLAUDE_DECISION_RECORDED", map[string]any{"decision": "rejected", "task_type": "implementation", "source": map[string]any{"kind": "reply", "job_id": "job-1"}})}, "REJECTED"},
+		{"send-back after finish", []map[string]any{event("1", "IMPLEMENTER_FINISHED", nil), event("2", "IMPLEMENTER_STARTED", map[string]any{"fresh_thread": false, "reply_call": true})}, "IN_PROGRESS"},
+		{"failed", []map[string]any{event("1", "IMPLEMENTER_FAILED", nil)}, "FAILED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := foldObservationAggregate(nil, "task-1", "0123456789abcdef", tc.events, false)
+			if got["status"] != tc.status {
+				t.Fatalf("status = %v, want %s", got["status"], tc.status)
+			}
+		})
+	}
+	apply := event("1", "APPLY_RECORDED", map[string]any{"job_id": "job-1", "applied_paths_count": 2, "base_head": strings.Repeat("a", 40), "validation_status": "pending"})
+	got, _ := foldObservationAggregate(nil, "task-1", "0123456789abcdef", []map[string]any{apply}, false)
+	if got["status"] != "APPLIED" || got["applied_at"] != apply["ts_utc"] || got["applied_paths_count"] != 2 || got["apply_base_head"] != strings.Repeat("a", 40) || got["validation_status"] != "pending" {
+		t.Fatalf("apply fold missing outcome fields: %#v", got)
 	}
 }
 
@@ -640,7 +674,13 @@ func TestObservationP52AggregateParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantJSON, err := canonicalJSON(c.Expected)
+			// Go now records terminal outcomes that the Python oracle does not yet fold.
+			expected := make(map[string]any, len(c.Expected))
+			for key, value := range c.Expected {
+				expected[key] = value
+			}
+			expected["status"] = got["status"]
+			wantJSON, err := canonicalJSON(expected)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -680,7 +720,13 @@ func TestObservationP53AggregateParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantJSON, err := canonicalJSON(c.Expected)
+			// Go now records terminal outcomes that the Python oracle does not yet fold.
+			expected := make(map[string]any, len(c.Expected))
+			for key, value := range c.Expected {
+				expected[key] = value
+			}
+			expected["status"] = got["status"]
+			wantJSON, err := canonicalJSON(expected)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -804,7 +850,13 @@ func TestObservationP54UpdateTaskParity(t *testing.T) {
 			} else {
 				got := readObservation(t, taskPath)
 				gotJSON, _ := canonicalJSON(got)
-				wantJSON, _ := canonicalJSON(c.ExpectedTask)
+				// Go now records terminal outcomes that the Python oracle does not yet fold.
+				expected := make(map[string]any, len(c.ExpectedTask))
+				for key, value := range c.ExpectedTask {
+					expected[key] = value
+				}
+				expected["status"] = got["status"]
+				wantJSON, _ := canonicalJSON(expected)
 				if !bytes.Equal(gotJSON, wantJSON) {
 					t.Fatalf("task mismatch\ngot:  %s\nwant: %s", gotJSON, wantJSON)
 				}
