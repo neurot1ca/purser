@@ -106,7 +106,9 @@ func BuildPendingCall(in PendingCallInput) (map[string]any, map[string]any) {
 		}
 		pending["profile_checks"], pending["protected_paths"] = checks, p.ProtectedPaths
 		pending["force_full_review"], pending["skip_max_lines"] = p.ForceFullReview, p.SkipMaxLines
-		pending["require_different_family"] = p.RequireDifferentFamily
+		if p.RequireDifferentFamily {
+			pending["require_different_family"] = true
+		}
 		pending["skip_max_files"], pending["reviewer_executable"] = p.SkipMaxFiles, p.ReviewerExecutable
 		pending["reviewer"], pending["reviewer_candidates"] = p.Roles.Reviewer, candidates
 		pending["authority_sources"], pending["vault_root"] = sources, p.VaultRoot
