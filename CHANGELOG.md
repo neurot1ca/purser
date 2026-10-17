@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.168 — 2026-10-17
+
+- **Added:** once a day Purser checks GitHub for a newer release and tells you at session start (`PURSER_NO_UPDATE_CHECK=1` turns it off).
+- **Fixed:** an OpenCode review whose model tried a denied tool but still returned a valid answer is kept instead of failing.
+- **Fixed:** task telemetry records finished, failed, accepted, rejected and applied states and each apply.
+- **Fixed:** the Obsidian projection no longer writes undated run notes and removes the ones left in `Runs/0000/00`.
+
 ## 0.1.167 — 2026-10-17
 
 - **Changed:** Purser's PreToolUse hook no longer rewrites tool input; it records a per-call handoff and only denies or passes, and the MCP server applies routing and the main-Claude-only acceptance check.
