@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.169 — 2026-10-17
+
+- **Added:** Cursor Agent CLI (`cursor-agent`) can be the coder or the reviewer; `init` and `/purser:reviewer` offer it when it is installed, with `latest:<family>` model choices and `auto` for Cursor free plans.
+- **Changed:** a reviewer from a different model family than the coder is optional; set `[review].require_different_family = true` in the project profile to require it.
+
 ## 0.1.168 — 2026-10-17
 
 - **Added:** once a day Purser checks GitHub for a newer release and tells you at session start (`PURSER_NO_UPDATE_CHECK=1` turns it off).
