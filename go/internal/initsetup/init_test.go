@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,6 +13,95 @@ import (
 	"purser-hook/internal/policy"
 	"purser-hook/internal/profile"
 )
+
+func TestCursorSetupDiscoveryUsesAgentCLIAndListedChoices(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	bin := t.TempDir()
+	writeFakeCursorCLI(t, bin, "cursor-agent", "Available models\ngpt-5.6-codex-high - GPT\nclaude-opus-5-5-high - Claude\ngemini-3.8-flash-high - Gemini\ngrok-4.7-high - Grok\ncomposer-2.5 - Composer\nauto - Automatic\n")
+	t.Setenv("PATH", bin)
+	got, err := detect(home, root, options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := got["agents"].(map[string]any)
+	cursorAgent, ok := agents["cursor"].(map[string]any)
+	if !ok {
+		t.Fatalf("Cursor CLI not detected: %#v", agents["cursor"])
+	}
+	if cursorAgent["available"] != true {
+		t.Fatalf("Cursor CLI not detected: %#v", cursorAgent)
+	}
+	models := cursorAgent["models"].([]any)
+	if !containsStringValue(models, "gpt-5.6-codex-high") || containsStringValue(models, "auto") {
+		t.Fatalf("Cursor models = %#v", models)
+	}
+	options := cursorAgent["options"].([]any)
+	labels := []any{}
+	for _, item := range options {
+		labels = append(labels, item.(map[string]any)["label"])
+	}
+	if !containsStringValue(models, "claude-opus-5-5-high") || len(labels) != 4 || !containsStringValue(labels, "latest:gpt-codex-high") {
+		t.Fatalf("Cursor options = %#v", options)
+	}
+	for _, label := range labels {
+		if label == "auto" || !strings.HasPrefix(label.(string), "latest:") {
+			t.Fatalf("Cursor option was not a family selector: %#v", options)
+		}
+	}
+}
+
+func TestCursorSetupDoesNotTreatEditorLauncherAsAgentCLI(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	bin := t.TempDir()
+	writeFakeCursorCLI(t, bin, "cursor", "Available models\ngpt-5.6-sol-high - GPT\n")
+	t.Setenv("PATH", bin)
+	got, err := detect(home, root, options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got["agents"].(map[string]any)["cursor"]; present {
+		t.Fatalf("editor launcher enabled Cursor: %#v", got["agents"])
+	}
+}
+
+func TestCursorSetupListingFailureIsUnavailable(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	bin := t.TempDir()
+	writeFakeCursorCLI(t, bin, "cursor-agent", "")
+	t.Setenv("PATH", bin)
+	got, err := detect(home, root, options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got["agents"].(map[string]any)["cursor"]; present {
+		t.Fatalf("failed Cursor listing was shown: %#v", got["agents"])
+	}
+	if len(got["reviewer_options"].([]map[string]any)) != 0 {
+		t.Fatalf("failed Cursor listing offered reviewer choices: %#v", got["reviewer_options"])
+	}
+}
+
+func writeFakeCursorCLI(t *testing.T, dir, name, output string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		body := "@echo off\r\nif \"%1\"==\"models\" (\r\necho " + strings.ReplaceAll(output, "\n", "\necho ") + "\r\n)\r\n"
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	body := "#!/bin/sh\nprintf '%s' " + shellQuote(output) + "\n"
+	if err := os.WriteFile(path, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 
 func TestClaudeCoderPlanAndApply(t *testing.T) {
 	shippedConfig, err := filepath.Abs(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json"))

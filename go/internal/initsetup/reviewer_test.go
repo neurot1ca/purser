@@ -36,6 +36,61 @@ func TestReviewerListInstalledOnly(t *testing.T) {
 	}
 }
 
+func TestCursorReviewerChoicesExcludeSameAndUnknownFamilies(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	bin := t.TempDir()
+	writeFakeCursorCLI(t, bin, "cursor-agent", "Available models\ngpt-5.6-sol-high - GPT\nclaude-opus-5-5-high - Claude\nmuse-spark-1.3-low - Muse\n")
+	t.Setenv("PATH", bin)
+	detected, err := detect(home, root, options{coder: "codex", model: "gpt-6-luna"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	choices := reviewerChoices(detected)
+	if len(choices) != 2 || choices[0]["agent"] != "cursor" || choices[0]["model"] != "latest:claude-opus-high" || choices[1]["agent"] != "none" {
+		t.Fatalf("Cursor reviewer choices = %#v", choices)
+	}
+	for _, choice := range choices {
+		if choice["model"] == "gpt-5.6-sol-high" || choice["model"] == "claude-opus-5-5-high" || choice["model"] == "muse-spark-1.3-low" {
+			t.Fatalf("ineligible Cursor reviewer choice = %#v", choice)
+		}
+	}
+}
+
+func TestCursorReviewerChoicesUseSavedCoderFamily(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	bin := t.TempDir()
+	writeFakeCursorCLI(t, bin, "cursor-agent", "Available models\ngpt-5.6-sol-high - GPT\nclaude-opus-5-5-high - Claude\n")
+	t.Setenv("PATH", bin)
+	configPath := filepath.Join(home, ".orchestrator", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("schema_version = 1\n\n[roles]\ncoder = \"cursor\"\n\n[coding.routes.normal]\nmodel = \"gpt-5.6-sol-high\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detected, err := detect(home, root, options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	choices := reviewerChoices(detected)
+	for _, choice := range choices {
+		if choice["agent"] == "cursor" && choice["model"] == "latest:gpt-sol-high" {
+			t.Fatalf("saved Cursor coder family was offered as reviewer: %#v", choices)
+		}
+	}
+	foundClaude := false
+	for _, choice := range choices {
+		if choice["agent"] == "cursor" && choice["model"] == "latest:claude-opus-high" {
+			foundClaude = true
+		}
+	}
+	if !foundClaude {
+		t.Fatalf("different-family Cursor reviewer was not offered: %#v", choices)
+	}
+}
+
 func TestAgyReviewerChoiceUsesNewestListedGemini(t *testing.T) {
 	detected := map[string]any{"agents": map[string]any{
 		"agy": map[string]any{"available": true, "models": []any{"claude-opus-5-5", "gemini-3.8-flash", "gemini-4-argon"}},

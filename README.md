@@ -19,7 +19,7 @@ Lightweight models that use very few tokens, such as gpt-6-luna, can handle smal
 
 You can also run Purser with Claude alone. Claude then writes the code as well, and each job still runs in the background with only the files it needs.
 
-The coder can be Codex, Claude, Gemini through agy, or any model that OpenCode supports.
+The coder can be Codex, Claude, Gemini through agy, Cursor, or any model that OpenCode supports.
 
 ## Install
 
@@ -28,7 +28,7 @@ The coder can be Codex, Claude, Gemini through agy, or any model that OpenCode s
 | Claude Code | Purser coordinates work from inside Claude Code. |
 | Node.js | Launches the MCP server. |
 | Git | Workers use isolated Git worktrees. |
-| At least one installed and authenticated coding CLI, such as OpenAI Codex | Purser resolves the selected CLI from `PATH`. Install and authenticate `codex`, `agy`, or `opencode` separately. Purser can also run with Claude alone. |
+| At least one installed and authenticated coding CLI, such as OpenAI Codex | Purser resolves the selected CLI from `PATH`. Install and authenticate `codex`, `agy`, `opencode`, or `cursor-agent` separately. Purser can also run with Claude alone. |
 | Optional OpenCode or Antigravity (agy) CLI | Enables those coder lanes. |
 
 Purser ships prebuilt binaries for Windows, macOS, and Linux on amd64 and arm64. Bundled Go binaries run the hooks and commands.

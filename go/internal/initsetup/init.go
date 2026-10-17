@@ -13,12 +13,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/jobs"
 	modelversion "purser-hook/internal/models"
+	cursormodel "purser-hook/internal/models/cursor"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
@@ -103,7 +106,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		return 2
 	}
 	if o.detect {
-		if o.coder != "" && !oneOf(o.coder, "codex", "claude", "opencode", "agy") {
+		if o.coder != "" && !oneOf(o.coder, "codex", "claude", "opencode", "agy", "cursor") {
 			fmt.Fprintln(stderr, "purser:init: unsupported coder")
 			return 2
 		}
@@ -112,8 +115,8 @@ func Run(stdout, stderr io.Writer, args []string) int {
 			return 2
 		}
 	}
-	if o.list && (!o.jsonOutput || !oneOf(o.coder, "codex", "opencode", "agy") || o.model != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil) {
-		fmt.Fprintln(stderr, "purser:init: --list-models requires --json and --coder codex, opencode, or agy")
+	if o.list && (!o.jsonOutput || !oneOf(o.coder, "codex", "opencode", "agy", "cursor") || o.model != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil) {
+		fmt.Fprintln(stderr, "purser:init: --list-models requires --json and --coder codex, opencode, agy, or cursor")
 		return 2
 	}
 	if o.concise {
@@ -127,7 +130,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintln(stderr, "purser:init: --plan requires --coder and --reviewer without --json; --apply requires --coder and --reviewer")
 		return 2
 	}
-	if !o.detect && !o.list && (!oneOf(o.coder, "codex", "claude", "opencode", "agy") || !oneOf(o.reviewer, "agy", "opencode", "codex", "claude", "none")) {
+	if !o.detect && !o.list && (!oneOf(o.coder, "codex", "claude", "opencode", "agy", "cursor") || !oneOf(o.reviewer, "agy", "opencode", "codex", "claude", "cursor", "none")) {
 		fmt.Fprintln(stderr, "purser:init: unsupported coder or reviewer")
 		return 2
 	}
@@ -151,7 +154,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintln(stderr, "purser:init: --mode manual requires --model")
 		return 2
 	}
-	if !o.detect && (oneOf(o.mode, "balanced", "maximum") && (o.model != "" || o.effort != "") || o.mode == "" && o.effort != "" || o.mode == "" && o.model != "" && !oneOf(o.coder, "opencode", "agy")) {
+	if !o.detect && (oneOf(o.mode, "balanced", "maximum") && (o.model != "" || o.effort != "") || o.mode == "" && o.effort != "" || o.mode == "" && o.model != "" && !oneOf(o.coder, "opencode", "agy", "cursor")) {
 		fmt.Fprintln(stderr, "purser:init: invalid model or effort for selected mode")
 		return 2
 	}
@@ -166,7 +169,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 			return 2
 		}
 	}
-	if oneOf(o.reviewer, "codex", "opencode", "claude") && o.reviewerModel == "" {
+	if oneOf(o.reviewer, "codex", "opencode", "claude", "cursor") && o.reviewerModel == "" {
 		fmt.Fprintf(stderr, "purser:init: --reviewer %s requires --reviewer-model\n", o.reviewer)
 		return 2
 	}
@@ -227,8 +230,18 @@ func writeIndented(w io.Writer, v any) int {
 }
 
 func executable(name string) string { p, _ := exec.LookPath(name); return p }
+func agentCommandName(name string) string {
+	if name == "cursor" && runtime.GOOS == "windows" {
+		return "cursor-agent.cmd"
+	}
+	if name == "cursor" {
+		return "cursor-agent"
+	}
+	return name
+}
+
 func agent(name string) map[string]any {
-	p := executable(name)
+	p := executable(agentCommandName(name))
 	if name == "opencode" {
 		if prefix, e := jobs.ResolveAgentPrefix(name, nil); e == nil && len(prefix) > 0 {
 			p = prefix[0]
@@ -239,7 +252,11 @@ func agent(name string) map[string]any {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := proc.Hide(exec.CommandContext(ctx, p, "--version"))
+	cmd := exec.CommandContext(ctx, p, "--version")
+	if name == "cursor" {
+		cmd = cursorCommand(ctx, p, "--version")
+	}
+	proc.Hide(cmd)
 	proc.ConfigureNoWindow(cmd)
 	proc.ConfigureProcessTreeKill(cmd)
 	var b bytes.Buffer
@@ -264,7 +281,18 @@ func detect(home, root string, o options) (map[string]any, error) {
 	providers := loadProviders(home)
 	agents := map[string]any{}
 	modelSets := map[string][]map[string]any{}
-	for _, name := range []string{"codex", "claude", "opencode", "agy"} {
+	for _, name := range []string{"codex", "claude", "opencode", "agy", "cursor"} {
+		if name == "cursor" {
+			a := cursorAgent()
+			if a["available"] == true {
+				models, _ := a["models"].([]string)
+				modelSets[name] = cursorModelFacts(models)
+				a["options"] = cursorModelOptions(models)
+				a["models"] = stringsToAny(models)
+				agents[name] = a
+			}
+			continue
+		}
 		a := agent(name)
 		if name == "claude" {
 			agents[name] = a
@@ -327,7 +355,13 @@ func detect(home, root string, o options) (map[string]any, error) {
 	}
 	coderFamily := selectedFamily(data, o, providers)
 	reviewerOptions := []map[string]any{}
-	for _, name := range []string{"codex", "agy", "opencode"} {
+	for _, name := range []string{"codex", "agy", "opencode", "cursor"} {
+		if name == "cursor" {
+			for _, option := range cursorReviewerOptions(modelSets[name], coderFamily) {
+				reviewerOptions = append(reviewerOptions, option)
+			}
+			continue
+		}
 		if name == "codex" {
 			reviewerOptions = append(reviewerOptions, codexReviewerOptions(modelSets[name])...)
 			continue
@@ -369,6 +403,254 @@ func codexReviewerOptions(models []map[string]any) []map[string]any {
 	}
 	return options
 }
+
+func cursorCommand(ctx context.Context, path string, args ...string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		shell := os.Getenv("COMSPEC")
+		if shell == "" {
+			shell = filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
+		}
+		return exec.CommandContext(ctx, shell, append([]string{"/d", "/c", path}, args...)...)
+	}
+	return exec.CommandContext(ctx, path, args...)
+}
+
+func cursorAgent() map[string]any {
+	path := executable(agentCommandName("cursor"))
+	if path == "" {
+		return map[string]any{"available": false, "path": nil, "version": nil}
+	}
+	ids := readCursorModels()
+	if len(ids) == 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := proc.Hide(cursorCommand(ctx, path, "models"))
+		proc.ConfigureNoWindow(cmd)
+		proc.ConfigureProcessTreeKill(cmd)
+		raw, err := cmd.Output()
+		if err != nil || ctx.Err() != nil {
+			return map[string]any{"available": false, "path": nil, "version": nil}
+		}
+		ids = parseCursorListing(string(raw))
+		if len(ids) == 0 {
+			return map[string]any{"available": false, "path": nil, "version": nil}
+		}
+		writeCursorModels(ids)
+	}
+	return map[string]any{"available": true, "path": path, "version": nil, "models": ids}
+}
+
+func parseCursorListing(raw string) []string {
+	ids, seen := []string{}, map[string]bool{}
+	for _, line := range strings.Split(raw, "\n") {
+		id, _, found := strings.Cut(strings.TrimSpace(line), " - ")
+		id = strings.TrimSpace(id)
+		if !found || id == "auto" || !cursormodel.ValidModel(id) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func readCursorModels() []string {
+	var cache struct {
+		Agents map[string][]string `json:"agents"`
+	}
+	raw, err := os.ReadFile(filepath.Join(stateRootPath(), "model-resolution.json"))
+	if err != nil || json.Unmarshal(raw, &cache) != nil {
+		return nil
+	}
+	ids, seen := []string{}, map[string]bool{}
+	for _, id := range cache.Agents["cursor"] {
+		if cursormodel.ValidModel(id) && id != "auto" && !strings.HasPrefix(id, "latest:") && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func writeCursorModels(ids []string) {
+	path := filepath.Join(stateRootPath(), "model-resolution.json")
+	var cache struct {
+		CheckedOn         string              `json:"checked_on"`
+		OpenCodeAttempted string              `json:"opencode_attempted_on,omitempty"`
+		OpenCodeSnapshot  string              `json:"opencode_snapshot_on,omitempty"`
+		OpenCodeError     string              `json:"opencode_error,omitempty"`
+		Agents            map[string][]string `json:"agents"`
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(raw, &cache)
+	}
+	if cache.Agents == nil {
+		cache.Agents = map[string][]string{}
+	}
+	cache.Agents["cursor"] = ids
+	if raw, err := json.Marshal(cache); err == nil {
+		_ = atomicWrite(path, raw, false)
+	}
+}
+
+func stringsToAny(values []string) []any {
+	result := make([]any, len(values))
+	for i, value := range values {
+		result[i] = value
+	}
+	return result
+}
+
+func cursorModelFacts(ids []string) []map[string]any {
+	facts := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		facts = append(facts, map[string]any{"id": id, "family": cursormodel.VendorFamily(id)})
+	}
+	return facts
+}
+
+func cursorModelOptions(ids []string) []any {
+	options, families, seen := []any{}, []string{}, map[string]bool{}
+	for _, id := range ids {
+		family := cursormodel.Family(id)
+		if family != "" && !seen[family] {
+			seen[family] = true
+			families = append(families, family)
+		}
+	}
+	type rankedFamily struct{ key, newest string }
+	ranked := make([]rankedFamily, 0, len(families))
+	for _, family := range families {
+		members := []string{}
+		for _, id := range ids {
+			if cursormodel.Family(id) == family {
+				members = append(members, id)
+			}
+		}
+		ranked = append(ranked, rankedFamily{family, modelversion.NewestVersion(members)})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return ranked[i].newest != ranked[j].newest && modelversion.NewestVersion([]string{ranked[i].newest, ranked[j].newest}) == ranked[i].newest
+	})
+	if len(ranked) > 4 {
+		ranked = ranked[:4]
+	}
+	for _, family := range ranked {
+		selector := "latest:" + family.key
+		options = append(options, map[string]any{"label": selector, "models": []string{selector}, "family": cursorFamilyVendor(ids, family.key), "recommended": false})
+	}
+	return options
+}
+
+func cursorFamilyVendor(ids []string, family string) string {
+	for _, id := range ids {
+		if cursormodel.Family(id) == family {
+			return cursormodel.VendorFamily(id)
+		}
+	}
+	return ""
+}
+
+func cursorAgentModels() []string {
+	info := cursorAgent()
+	ids, _ := info["models"].([]string)
+	return ids
+}
+
+func cursorSelectionFamily(ids []string, model string) string {
+	if strings.HasPrefix(model, "latest:") {
+		family := strings.TrimPrefix(model, "latest:")
+		for _, id := range ids {
+			if cursormodel.Family(id) == family {
+				return cursormodel.VendorFamily(id)
+			}
+		}
+		return ""
+	}
+	for _, id := range ids {
+		if id == model {
+			return cursormodel.VendorFamily(id)
+		}
+	}
+	return ""
+}
+
+func cursorSelectionListed(ids []string, model string) bool {
+	if !cursormodel.ValidModel(model) {
+		return false
+	}
+	if strings.HasPrefix(model, "latest:") {
+		return cursorSelectionFamily(ids, model) != "" || cursorHasFamily(ids, strings.TrimPrefix(model, "latest:"))
+	}
+	for _, id := range ids {
+		if id == model {
+			return true
+		}
+	}
+	return false
+}
+
+func cursorHasFamily(ids []string, family string) bool {
+	for _, id := range ids {
+		if cursormodel.Family(id) == family {
+			return true
+		}
+	}
+	return false
+}
+
+func cursorReviewerOptions(models []map[string]any, coderFamily string) []map[string]any {
+	if coderFamily == "" {
+		return nil
+	}
+	options, families, seen := []map[string]any{}, []string{}, map[string]bool{}
+	for _, model := range models {
+		id, family := asString(model["id"]), asString(model["family"])
+		if family == "" || family == coderFamily {
+			continue
+		}
+		familyKey := cursormodel.Family(id)
+		if familyKey != "" && !seen[familyKey] {
+			seen[familyKey] = true
+			families = append(families, familyKey)
+		}
+	}
+	type rankedFamily struct{ key, newest string }
+	ranked := make([]rankedFamily, 0, len(families))
+	for _, familyKey := range families {
+		members := []string{}
+		for _, model := range models {
+			if cursormodel.Family(asString(model["id"])) == familyKey {
+				members = append(members, asString(model["id"]))
+			}
+		}
+		ranked = append(ranked, rankedFamily{familyKey, modelversion.NewestVersion(members)})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return ranked[i].newest != ranked[j].newest && modelversion.NewestVersion([]string{ranked[i].newest, ranked[j].newest}) == ranked[i].newest
+	})
+	if len(ranked) > 4 {
+		ranked = ranked[:4]
+	}
+	for _, family := range ranked {
+		vendor := cursorFamilyVendorFromFacts(models, family.key)
+		if vendor != "" && vendor != coderFamily {
+			selector := "latest:" + family.key
+			options = append(options, map[string]any{"agent": "cursor", "model": selector, "label": selector, "family": vendor})
+		}
+	}
+	return options
+}
+
+func cursorFamilyVendorFromFacts(models []map[string]any, familyKey string) string {
+	for _, model := range models {
+		if cursormodel.Family(asString(model["id"])) == familyKey {
+			return asString(model["family"])
+		}
+	}
+	return ""
+}
+
 func defaultMap(v map[string]any) map[string]any {
 	if v == nil {
 		return map[string]any{}
@@ -383,6 +665,14 @@ func samePath(a, b string) bool {
 }
 
 func listModels(agent string) (map[string]any, error) {
+	if agent == "cursor" {
+		info := cursorAgent()
+		if info["available"] != true {
+			return map[string]any{"status": "unavailable", "models": []any{}, "source": "cursor-agent models"}, nil
+		}
+		ids, _ := info["models"].([]string)
+		return map[string]any{"status": "available", "models": cursorModelFacts(ids), "source": "cursor-agent models"}, nil
+	}
 	listing := discoverModels(agent, loadProviders(mustHome()))
 	return modelList(listing, routeRecommendations()), nil
 }
@@ -672,9 +962,6 @@ func selectedFamily(data map[string]any, o options, providers map[string]map[str
 	if coder == "claude" {
 		return "anthropic"
 	}
-	if !oneOf(coder, "codex", "agy", "opencode") {
-		return ""
-	}
 	model := o.model
 	if model == "" && roles["coder"] == coder {
 		routes, _ := coding["routes"].(map[string]any)
@@ -684,6 +971,12 @@ func selectedFamily(data map[string]any, o options, providers map[string]map[str
 		} else {
 			model = asString(route)
 		}
+	}
+	if coder == "cursor" {
+		return cursormodel.VendorFamily(model)
+	}
+	if !oneOf(coder, "codex", "agy", "opencode") {
+		return ""
 	}
 	if model == "" && coder == "codex" {
 		var cfg map[string]any
@@ -701,6 +994,12 @@ func validateSelection(o options, home string) error {
 	}
 	if o.mode == "maximum" && o.coder != "codex" {
 		return fmt.Errorf("maximum mode has no reviewed model policy for %s", o.coder)
+	}
+	if o.coder == "cursor" {
+		ids := cursorAgentModels()
+		if !cursorSelectionListed(ids, o.model) {
+			return errors.New("selected Cursor model is absent from cursor-agent models")
+		}
 	}
 	if o.mode == "manual" || o.mode == "maximum" || o.coder == "opencode" || o.coder == "agy" {
 		listing := discoverModels(o.coder, loadProviders(home))
@@ -768,6 +1067,15 @@ func validateSelection(o options, home string) error {
 		if o.reviewer == "claude" {
 			if executable("claude") == "" || !strings.HasPrefix(o.reviewerModel, "claude-") {
 				return errors.New("selected Reviewer model is absent from claude models")
+			}
+		} else if o.reviewer == "cursor" {
+			ids := cursorAgentModels()
+			family := cursorSelectionFamily(ids, o.reviewerModel)
+			if family == "" || family == selectedFamily(nil, o, loadProviders(home)) {
+				return errors.New("selected Cursor Reviewer model must have a known family different from the coder")
+			}
+			if !cursorSelectionListed(ids, o.reviewerModel) {
+				return errors.New("selected Reviewer model is absent from cursor-agent models")
 			}
 		} else {
 			listing := discoverModels(o.reviewer, loadProviders(home))
@@ -1225,7 +1533,7 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 			}
 		}
 	}
-	if o.coder == "opencode" || o.coder == "agy" || o.coder == "claude" || o.mode != "" || before["coding"] != nil {
+	if o.coder == "opencode" || o.coder == "agy" || o.coder == "claude" || o.coder == "cursor" || o.mode != "" || before["coding"] != nil {
 		c, ok := before["coding"].(map[string]any)
 		if !ok {
 			if before["coding"] != nil {
@@ -1235,7 +1543,7 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 			before["coding"] = c
 		}
 		agentName := o.coder
-		if !oneOf(agentName, "opencode", "agy", "claude") {
+		if !oneOf(agentName, "opencode", "agy", "claude", "cursor") {
 			agentName = "codex"
 		}
 		c["coder_agent"] = agentName
@@ -1274,6 +1582,8 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 					routes[name] = map[string]any{"model": o.model, "effort": "medium"}
 				} else if o.coder == "opencode" {
 					routes[name] = o.model
+				} else if o.coder == "cursor" {
+					routes[name] = map[string]any{"model": o.model, "effort": "none"}
 				} else {
 					routes[name] = map[string]any{"model": o.model, "effort": o.effort}
 				}
@@ -1538,6 +1848,9 @@ func reviewerExecutable(agent string) string {
 			return prefix[0]
 		}
 		return ""
+	}
+	if agent == "cursor" {
+		return executable(agentCommandName("cursor"))
 	}
 	if oneOf(agent, "agy", "codex", "claude") {
 		return executable(agent)

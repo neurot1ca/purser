@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	modelversion "purser-hook/internal/models"
+	cursormodel "purser-hook/internal/models/cursor"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/review"
 )
@@ -199,7 +200,7 @@ func reviewerDefault(detected map[string]any, configuredModel, configuredEffort 
 func reviewerChoices(detected map[string]any) []map[string]any {
 	agents, _ := detected["agents"].(map[string]any)
 	choices := []map[string]any{}
-	for _, name := range []string{"codex", "claude", "agy", "opencode"} {
+	for _, name := range []string{"codex", "claude", "agy", "opencode", "cursor"} {
 		info, _ := agents[name].(map[string]any)
 		if info["available"] != true {
 			continue
@@ -251,6 +252,13 @@ func reviewerChoices(detected map[string]any) []map[string]any {
 			if id := modelversion.NewestVersion(preferred); id != "" {
 				choices = append(choices, map[string]any{"agent": name, "model": id, "effort": nil, "installed": true})
 			}
+		case "cursor":
+			options, _ := detected["reviewer_options"].([]map[string]any)
+			for _, option := range options {
+				if option["agent"] == "cursor" {
+					choices = append(choices, map[string]any{"agent": name, "model": option["model"], "effort": nil, "installed": true})
+				}
+			}
 		}
 	}
 	return append(choices, map[string]any{"agent": "none"})
@@ -278,7 +286,7 @@ func codexReviewerModel(detected map[string]any, tier string) string {
 }
 
 func validateReviewerInstalled(detected map[string]any, agentName, model string) error {
-	if !oneOf(agentName, "agy", "claude", "codex", "opencode") {
+	if !oneOf(agentName, "agy", "claude", "codex", "opencode", "cursor") {
 		return errors.New("unsupported reviewer agent")
 	}
 	agents, _ := detected["agents"].(map[string]any)
@@ -308,6 +316,22 @@ func validateReviewerInstalled(detected map[string]any, agentName, model string)
 			}
 		}
 	}
+	if agentName == "cursor" && model != "" {
+		models, _ := info["models"].([]any)
+		ids := make([]string, 0, len(models))
+		for _, item := range models {
+			if id, ok := item.(string); ok {
+				ids = append(ids, id)
+			}
+		}
+		family := cursorSelectionFamily(ids, model)
+		if !cursorSelectionListed(ids, model) || family == "" || cursormodel.VendorFamily(model) == "" {
+			return errors.New("selected Reviewer model is absent or has an unknown family in cursor-agent models")
+		}
+		if asString(detected["coder_family"]) == family {
+			return errors.New("Cursor Reviewer model family must differ from the coder")
+		}
+	}
 	return nil
 }
 
@@ -316,10 +340,10 @@ func validateReviewerSelection(home, agentName, model, effort string) error {
 		return nil
 	}
 	o := options{reviewer: agentName, reviewerModel: model}
-	if !oneOf(agentName, "agy", "claude", "codex", "opencode") {
+	if !oneOf(agentName, "agy", "claude", "codex", "opencode", "cursor") {
 		return errors.New("unsupported reviewer agent")
 	}
-	if model == "" && oneOf(agentName, "claude", "codex", "opencode") {
+	if model == "" && oneOf(agentName, "claude", "codex", "opencode", "cursor") {
 		return fmt.Errorf("reviewer model is required for %s", agentName)
 	}
 	if err := validateSelection(o, home); err != nil {
@@ -327,7 +351,7 @@ func validateReviewerSelection(home, agentName, model, effort string) error {
 	}
 	allowedEffort := false
 	switch agentName {
-	case "agy", "opencode":
+	case "agy", "opencode", "cursor":
 		allowedEffort = effort == ""
 	case "codex":
 		allowedEffort = oneOf(effort, "low", "medium", "high", "xhigh")
