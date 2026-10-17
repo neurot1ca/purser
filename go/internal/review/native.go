@@ -308,6 +308,9 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	if adapterErr != nil {
 		return bridgeOutcome(Unavailable("REVIEWER_ADAPTER_UNAVAILABLE", "No reviewer adapter is registered for "+provider+".", config, provider))
 	}
+	if provider == "cursor" && config["reviewer1_internal_cursor_enabled"] != true {
+		return bridgeOutcome(Unavailable("REVIEWER_CURSOR_CONFINEMENT_UNVERIFIED", "Cursor Reviewer-1 is unavailable until live confinement is verified.", config, provider))
+	}
 	budget := defaultPacketBudget
 	if n, ok := finiteNumber(config["reviewer1_packet_max_bytes"]); ok && n > 0 {
 		budget = int(n)
@@ -351,7 +354,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer response or configuration was invalid (ValueError): "+err.Error(), config, provider))
 	}
 	packetName := ""
-	if provider == "opencode" {
+	if provider == "opencode" || provider == "cursor" {
 		packetName = "review-packet.json"
 	}
 	packetPath, err := WritePacket(working, packetName, ready.Encoded)
@@ -359,6 +362,16 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer response or configuration was invalid ("+errorType(err)+"): "+err.Error(), config, provider))
 	}
 	defer os.Remove(packetPath)
+	if provider == "cursor" {
+		configName, configData := adapter.ConfinementConfig(nil)
+		configPath := filepath.Join(working, configName)
+		if err := os.MkdirAll(filepath.Dir(configPath), 0700); err == nil {
+			err = os.WriteFile(configPath, configData, 0600)
+		}
+		if err != nil {
+			return bridgeOutcome(Unavailable("REVIEWER_CURSOR_CONFINEMENT_UNAVAILABLE", "Cursor reviewer permissions could not be configured.", config, provider))
+		}
+	}
 	if err := adapter.ValidateModel(config["reviewer1_model_requested"]); err != nil {
 		return bridgeOutcome(Unavailable(ResponseInvalid, "Reviewer response or configuration was invalid (ValueError): "+err.Error(), config, provider))
 	}
@@ -366,10 +379,15 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	prompt := ReviewPrompt(packetPath)
 	if provider == "agy" || provider == "codex" {
 		prompt = reviewerPromptWithPacket(ready.Encoded)
+	} else if provider == "cursor" {
+		prompt = "You are Reviewer-1. Read only the JSON packet at the exact path below. Return only JSON matching the supplied schema file. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. Report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + packetPath + "\nREVIEW_SCHEMA_PATH=" + filepath.Join(working, "reviewer1-output-schema.json")
 	}
 	command, err := adapter.BuildCommand(prompt, reviewSchema, config, options)
 	if err != nil {
 		code := ResponseInvalid
+		if provider == "cursor" {
+			code = "REVIEWER_CURSOR_CONFINEMENT_UNAVAILABLE"
+		}
 		var refused *CommandRefused
 		if errors.As(err, &refused) {
 			code = "REVIEWER_COMMAND_REFUSED"
@@ -525,6 +543,8 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, pro
 			cmd.Stdin = bytes.NewReader(append(input, '\n'))
 		} else if adapter.Provider() == "codex" && len(command) > 1 && command[len(command)-1] == "-" {
 			cmd.Stdin = bytes.NewReader([]byte(prompt))
+		} else if adapter.Provider() == "cursor" {
+			cmd.Stdin = bytes.NewReader([]byte(prompt))
 		}
 		for key, value := range adapter.Environment(command) {
 			cmd.Env = append(cmd.Env, key+"="+value)
@@ -581,7 +601,7 @@ func invokePacket(parent context.Context, adapter Adapter, command []string, pro
 			return stdout.Bytes(), StderrValue(stderr.Bytes()), elapsed, retried, ResponseInvalid, 0, evidence
 		}
 		left := timeout - elapsed
-		if retried == 0 && elapsed < time.Duration(fastProcessFailureRetrySeconds*float64(time.Second)) && left > time.Duration(minRetryRemainingSeconds*float64(time.Second)) {
+		if adapter.Provider() != "cursor" && retried == 0 && elapsed < time.Duration(fastProcessFailureRetrySeconds*float64(time.Second)) && left > time.Duration(minRetryRemainingSeconds*float64(time.Second)) {
 			retried = 1
 			continue
 		}

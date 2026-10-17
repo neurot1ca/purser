@@ -177,6 +177,8 @@ func (p ParsedEnvelope) Map() map[string]any {
 
 func ParseEnvelope(adapter string, stdout []byte, includeMetadata bool) (ParsedEnvelope, error) {
 	switch adapter {
+	case "cursor":
+		return ParseCursorEnvelope(stdout, includeMetadata)
 	case "agy":
 		return ParseAgyEnvelope(stdout, includeMetadata)
 	case "opencode":
@@ -214,6 +216,25 @@ func ParseEnvelope(adapter string, stdout []byte, includeMetadata bool) (ParsedE
 	default:
 		return ParsedEnvelope{}, fmt.Errorf("unknown reviewer adapter %q", adapter)
 	}
+}
+
+// ParseCursorEnvelope accepts the CLI result envelope only after validating its
+// session identity and the JSON review response carried in result.
+func ParseCursorEnvelope(stdout []byte, includeMetadata bool) (ParsedEnvelope, error) {
+	var envelope map[string]any
+	if err := decodeJSON(stdout, &envelope); err != nil {
+		return ParsedEnvelope{}, err
+	}
+	session, sessionOK := envelope["session_id"].(string)
+	result, resultOK := envelope["result"].(string)
+	if !sessionOK || strings.TrimSpace(session) == "" || !resultOK || strings.TrimSpace(result) == "" {
+		return ParsedEnvelope{}, errors.New("Cursor envelope has no session or result")
+	}
+	response, err := ParseBareOrFencedResponse(result)
+	if err != nil {
+		return ParsedEnvelope{}, err
+	}
+	return ParsedEnvelope{ConversationID: session, Response: response, ServedModelAttestation: "UNAVAILABLE", IncludeMetadata: includeMetadata, Usage: map[string]any{}}, nil
 }
 
 func ParseAgyEnvelope(stdout []byte, includeMetadata bool) (ParsedEnvelope, error) {

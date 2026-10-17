@@ -13,7 +13,7 @@ import (
 	"purser-hook/internal/models"
 )
 
-var reviewerCommands = map[string]string{"agy": "agy", "opencode": "opencode", "codex": "codex", "claude": "claude"}
+var reviewerCommands = map[string]string{"agy": "agy", "opencode": "opencode", "codex": "codex", "claude": "claude", "cursor": "cursor-agent"}
 
 const agyInlinePromptLimit = 12 * 1024
 
@@ -52,7 +52,7 @@ func (e *CommandRefused) Error() string { return e.Message }
 
 type reviewerAdapter struct{ provider string }
 
-var reviewerAdapters = map[string]Adapter{"agy": reviewerAdapter{"agy"}, "opencode": reviewerAdapter{"opencode"}, "codex": reviewerAdapter{"codex"}, "claude": reviewerAdapter{"claude"}}
+var reviewerAdapters = map[string]Adapter{"agy": reviewerAdapter{"agy"}, "opencode": reviewerAdapter{"opencode"}, "codex": reviewerAdapter{"codex"}, "claude": reviewerAdapter{"claude"}, "cursor": reviewerAdapter{"cursor"}}
 
 func ReviewerAdapter(provider string) (Adapter, error) {
 	a, ok := reviewerAdapters[provider]
@@ -83,6 +83,8 @@ func (a reviewerAdapter) Family(model string) string {
 		return "openai"
 	case "claude":
 		return "anthropic"
+	case "cursor":
+		return vendorFamily(model)
 	case "opencode":
 		p, _, ok := strings.Cut(model, "/")
 		if ok {
@@ -114,6 +116,11 @@ func (a reviewerAdapter) ValidateModel(model any) error {
 		value, ok := model.(string)
 		if !ok || !claudeReviewerModel.MatchString(value) {
 			return errors.New("Claude reviewer model is invalid")
+		}
+	case "cursor":
+		value, ok := model.(string)
+		if !ok || strings.TrimSpace(value) != value || vendorFamily(value) == "" || strings.EqualFold(value, "auto") {
+			return errors.New("Cursor reviewer model must be a concrete model id with a known family")
 		}
 	}
 	return nil
@@ -205,6 +212,23 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 		}
 		return []string{executable, "--setting-sources", "", "--restricted", "--print", "--output-format", "json", "--json-schema", string(encoded),
 			"--model", model.(string), "--effort", effort, prompt, "--tools", "Read,Glob,Grep"}, nil
+	case "cursor":
+		if config["reviewer1_internal_cursor_enabled"] != true {
+			return nil, errors.New("Cursor Reviewer-1 is unavailable until confinement is verified")
+		}
+		cwd, err := resolveReviewerPath(options.WorkingDirectory)
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := canonicalJSON(schema)
+		if err != nil {
+			return nil, err
+		}
+		schemaPath := filepath.Join(cwd, "reviewer1-output-schema.json")
+		if err := os.WriteFile(schemaPath, encoded, 0600); err != nil {
+			return nil, err
+		}
+		return []string{executable, "--print", "--output-format", "json", "--model", model.(string), "--mode", "ask"}, nil
 	}
 	return nil, fmt.Errorf("unknown reviewer adapter %q", a.provider)
 }
@@ -232,9 +256,29 @@ func (a reviewerAdapter) LaunchOptions() ProcessOptions {
 	return ProcessOptions{CreationFlags: 0x08000000, HideWindow: true}
 }
 
-// Python adapters pass OpenCode confinement as OPENCODE_CONFIG_CONTENT; none writes a separate file.
-func (reviewerAdapter) ConfinementConfig([]string) (string, []byte) { return "", nil }
+// Python adapters pass OpenCode confinement as OPENCODE_CONFIG_CONTENT.
+func (a reviewerAdapter) ConfinementConfig([]string) (string, []byte) {
+	if a.provider != "cursor" {
+		return "", nil
+	}
+	config, _ := canonicalJSON(map[string]any{
+		"version": 1,
+		"editor":  map[string]any{"vimMode": false},
+		"permissions": map[string]any{
+			"allow": []string{"Read(**)"},
+			"deny":  []string{"Shell(**)", "Write(**)", "WebFetch(**)", "Mcp(**)"},
+		},
+	})
+	return filepath.Join(".cursor", "cli.json"), config
+}
 func (a reviewerAdapter) ParseEnvelope(stdout string) (map[string]any, error) {
+	if a.provider == "cursor" {
+		parsed, err := ParseCursorEnvelope([]byte(stdout), true)
+		if err != nil {
+			return nil, err
+		}
+		return parsed.Map(), nil
+	}
 	parsed, err := ParseEnvelope(a.provider, []byte(stdout), true)
 	if err != nil {
 		return nil, err
@@ -251,6 +295,9 @@ func ReviewerExecutable(config map[string]any, provider string) (string, error) 
 	if executable, ok := config["reviewer1_executable"].(string); ok && filepath.IsAbs(executable) {
 		name := strings.ToLower(filepath.Base(executable))
 		name = strings.TrimSuffix(name, ".exe")
+		if provider == "cursor" && runtime.GOOS == "windows" {
+			name = strings.TrimSuffix(name, ".cmd")
+		}
 		if name == command {
 			return executable, nil
 		}
