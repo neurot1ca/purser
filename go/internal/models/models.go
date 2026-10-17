@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/models/cursor"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
 	"purser-hook/internal/proc"
@@ -49,7 +50,15 @@ func ResolveLatest(agent, model string) string {
 			return model
 		}
 		ids = cache.Agents[agent]
+	case "cursor":
+		ids = readResolutionCache().Agents[agent]
 	default:
+		return model
+	}
+	if agent == "cursor" {
+		if strings.HasPrefix(model, "latest:") {
+			return cursor.ResolveLatest(ids, strings.TrimPrefix(model, "latest:"))
+		}
 		return model
 	}
 	if newer := newerVersion(model, ids); newer != "" {
@@ -228,6 +237,12 @@ func discoverModelVersion(repository string, listingTimeout time.Duration) (curr
 			checks = append(checks, modelCheck{agent: fallbackAgent, model: fallbackModel})
 		}
 	}
+	if config["coder_agent"] == "cursor" || config["reviewer1_agent"] == "cursor" {
+		checks = append(checks, modelCheck{agent: "cursor"})
+	}
+	if fallback, valid := config["fallback"].(map[string]any); valid && fallback["agent"] == "cursor" {
+		checks = append(checks, modelCheck{agent: "cursor"})
+	}
 	openCodeNeeded := false
 	for _, check := range checks {
 		if check.agent == "opencode" {
@@ -251,6 +266,18 @@ func discoverModelVersion(repository string, listingTimeout time.Duration) (curr
 		resolution.Agents = map[string][]string{}
 	}
 	for _, check := range checks {
+		if check.model == "" {
+			if check.agent == "cursor" {
+				if _, exists := listed[check.agent]; !exists {
+					result := listModels(check.agent, cached.Providers, defaultListingTimeout)
+					listed[check.agent] = result
+					if result.available {
+						resolution.Agents[check.agent] = result.ids
+					}
+				}
+				continue
+			}
+		}
 		if _, exists := listed[check.agent]; !exists {
 			result := listingResult{}
 			if check.agent == "opencode" {
@@ -275,15 +302,31 @@ func discoverModelVersion(repository string, listingTimeout time.Duration) (curr
 		if result := listed["agy"]; result.available {
 			latest.Agents["agy"] = result.ids
 		}
+		if result := listed["cursor"]; result.available {
+			latest.Agents["cursor"] = result.ids
+		}
 		_ = atomicJSONRetry(cachePath, latest)
 		unlock()
 	}
 	for _, check := range checks {
+		if check.model == "" {
+			continue
+		}
 		result := listed[check.agent]
 		if !result.available {
 			continue
 		}
 		candidate := ResolveLatest(check.agent, check.model)
+		if check.agent == "cursor" {
+			family := cursor.Family(check.model)
+			candidate = cursor.ResolveLatest(result.ids, family)
+			if candidate == "" && !strings.HasPrefix(check.model, "latest:") {
+				candidate = check.model
+			}
+		}
+		if candidate == "" {
+			continue
+		}
 		if candidate == check.model || (state.Report != nil && state.Report.Current == check.model && state.Report.New == candidate && state.Report.Delivered) {
 			continue
 		}
@@ -772,6 +815,13 @@ func listingCommand(agent string) (string, []string) {
 	case "agy":
 		binary, _ := lookPath("agy")
 		return binary, []string{"models"}
+	case "cursor":
+		name := "cursor-agent"
+		if runtime.GOOS == "windows" {
+			name += ".cmd"
+		}
+		binary, _ := lookPath(name)
+		return binary, []string{"models"}
 	case "opencode":
 		binary, _ := opencodeBinary()
 		return binary, []string{"models"}
@@ -891,6 +941,17 @@ func parseListing(agent, output string) ([]string, error) {
 				}
 			}
 			ids = appendUnique(ids, id)
+		}
+	case "cursor":
+		if !strings.Contains(output, "Available models") {
+			return nil, errors.New("invalid Cursor listing header")
+		}
+		for _, line := range strings.Split(output, "\n") {
+			parts := strings.SplitN(line, " - ", 2)
+			if len(parts) != 2 || parts[0] == "auto" || !listingID.MatchString(parts[0]) {
+				continue
+			}
+			ids = appendUnique(ids, parts[0])
 		}
 	default:
 		return nil, errors.New("unsupported coder agent")

@@ -191,7 +191,9 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 	}
 	if !reply {
-		*route.Model = models.ResolveLatest(stringValue(config["coder_agent"]), *route.Model)
+		if resolved := models.ResolveLatest(stringValue(config["coder_agent"]), *route.Model); resolved != "" {
+			*route.Model = resolved
+		}
 	} else if liveModel := stringValue(live["model"]); models.SameFamily(*route.Model, liveModel) {
 		*route.Model = liveModel
 	}
@@ -367,6 +369,14 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if !fallbackActive && strings.Index(efforts, "|"+selection.Effort+"|") < strings.Index(efforts, "|"+*route.Effort+"|") {
 			selection.Effort = *route.Effort
 		}
+	}
+	if !reply && selection.Agent == "cursor" {
+		requestedModel := selection.Model
+		selection.Model = models.ResolveLatest("cursor", requestedModel)
+		if selection.Model == "" {
+			return denyPre("INVALID_REQUEST", "Cursor model "+requestedModel+" is not resolved yet; Purser lists Cursor models at session start, or set a concrete model id."), nil
+		}
+		selection.Effort = "none"
 	}
 	prof := profile.ResolvedProfile{FullSuiteRequired: false}
 	if root != nil {

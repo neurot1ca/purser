@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"purser-hook/internal/models"
+	"purser-hook/internal/models/cursor"
 )
 
 var reviewerCommands = map[string]string{"agy": "agy", "opencode": "opencode", "codex": "codex", "claude": "claude", "cursor": "cursor-agent"}
@@ -84,7 +85,7 @@ func (a reviewerAdapter) Family(model string) string {
 	case "claude":
 		return "anthropic"
 	case "cursor":
-		return vendorFamily(model)
+		return cursor.VendorFamily(model)
 	case "opencode":
 		p, _, ok := strings.Cut(model, "/")
 		if ok {
@@ -119,7 +120,7 @@ func (a reviewerAdapter) ValidateModel(model any) error {
 		}
 	case "cursor":
 		value, ok := model.(string)
-		if !ok || strings.TrimSpace(value) != value || vendorFamily(value) == "" || strings.EqualFold(value, "auto") {
+		if !ok || strings.TrimSpace(value) != value || !cursor.ValidModel(value) || cursor.VendorFamily(value) == "" {
 			return errors.New("Cursor reviewer model must be a concrete model id with a known family")
 		}
 	}
@@ -136,6 +137,9 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 	}
 	if value, ok := model.(string); ok {
 		model = models.ResolveLatest(a.provider, value)
+		if a.provider == "cursor" && model == "" {
+			return nil, errors.New("Cursor model selector did not resolve to a listed model")
+		}
 	}
 	switch a.provider {
 	case "agy":

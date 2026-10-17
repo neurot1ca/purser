@@ -12,6 +12,7 @@ import (
 
 	"path/filepath"
 
+	"purser-hook/internal/models/cursor"
 	"purser-hook/internal/profile"
 )
 
@@ -105,6 +106,8 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 				validModel = validModel && strings.TrimSpace(text) != ""
 			case "opencode":
 				validModel = validModel && opencodeModel.MatchString(text)
+			case "cursor":
+				validModel = validModel && cursor.ValidModel(text)
 			}
 			if !validModel {
 				return nil, fmt.Errorf("[coding] reviewer1_model_requested is invalid")
@@ -113,7 +116,7 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 		}
 		if raw, exists := table["reviewer1_agent"]; exists {
 			agent, valid := raw.(string)
-			if !valid || (agent != "agy" && agent != "claude" && agent != "codex" && agent != "opencode") {
+			if !valid || (agent != "agy" && agent != "claude" && agent != "codex" && agent != "opencode" && agent != "cursor") {
 				return nil, fmt.Errorf("[coding] reviewer1_agent is invalid")
 			}
 			config["reviewer1_agent"] = agent
@@ -123,6 +126,8 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 			allowed := claudeEfforts[effort]
 			if table["reviewer1_agent"] == "codex" {
 				allowed = codexReviewerEfforts[effort]
+			} else if table["reviewer1_agent"] == "cursor" {
+				allowed = effort == "none"
 			}
 			if !valid || !allowed {
 				return nil, fmt.Errorf("[coding] reviewer1_effort is invalid")
@@ -142,7 +147,7 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 	if value, exists := table["coder_agent"]; exists {
 		var valid bool
 		agent, valid = value.(string)
-		if !valid || (agent != "codex" && agent != "opencode" && agent != "agy" && agent != "claude") {
+		if !valid || (agent != "codex" && agent != "opencode" && agent != "agy" && agent != "claude" && agent != "cursor") {
 			return nil, fmt.Errorf("[coding] coder_agent is invalid")
 		}
 	}
@@ -208,6 +213,21 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 				converted[name] = map[string]any{"model": raw, "effort": "none"}
 			}
 			routeMap = converted
+		}
+		config["routes"] = routeMap
+	} else if agent == "cursor" {
+		routeMap, valid := routes.(map[string]any)
+		required, _ := config["required_routes"].([]any)
+		if role != "cursor" || !routesExist || !valid || len(routeMap) != len(required) || !hasRouteKeys(routeMap, required) {
+			return nil, fmt.Errorf("[coding] coder routes or role are invalid")
+		}
+		for _, route := range required {
+			entry, valid := routeMap[route.(string)].(map[string]any)
+			model, modelOK := entry["model"].(string)
+			effort, effortOK := entry["effort"].(string)
+			if !valid || len(entry) != 2 || !modelOK || !cursor.ValidModel(model) || !effortOK || effort != "none" {
+				return nil, fmt.Errorf("[coding] Cursor route model or effort is invalid")
+			}
 		}
 		config["routes"] = routeMap
 	} else if agent == "claude" {
@@ -278,10 +298,10 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 		if raw, exists := table["effort"]; exists {
 			effort, effortOK = raw.(string)
 		}
-		if !agentOK || (fallbackAgent != "codex" && fallbackAgent != "opencode" && fallbackAgent != "agy" && fallbackAgent != "claude") || !modelOK || !familyOK || !effortOK || !coderFamily.MatchString(family) {
+		if !agentOK || (fallbackAgent != "codex" && fallbackAgent != "opencode" && fallbackAgent != "agy" && fallbackAgent != "claude" && fallbackAgent != "cursor") || !modelOK || !familyOK || !effortOK || !coderFamily.MatchString(family) {
 			return nil, fmt.Errorf("[fallback] agent, model, or family is invalid")
 		}
-		if effort != "" && (fallbackAgent != "claude" || !claudeEfforts[effort]) {
+		if effort != "" && ((fallbackAgent != "claude" || !claudeEfforts[effort]) && (fallbackAgent != "cursor" || effort != "none")) {
 			return nil, fmt.Errorf("[fallback] effort is unsupported for this agent")
 		}
 		if fallbackAgent == "claude" && family != "anthropic" && family != "claude" {
@@ -298,7 +318,11 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 				return nil, fmt.Errorf("[fallback] Claude effort is invalid")
 			}
 		}
-		if !pattern.MatchString(model) {
+		validModel := pattern.MatchString(model)
+		if fallbackAgent == "cursor" {
+			validModel = cursor.ValidModel(model)
+		}
+		if !validModel {
 			return nil, fmt.Errorf("[fallback] model is invalid")
 		}
 		routes, _ := config["routes"].(map[string]any)
@@ -478,7 +502,7 @@ func ValidateConfig(config map[string]any) error {
 	if !exists {
 		agent = "codex"
 	}
-	if agent != "codex" && agent != "opencode" && agent != "agy" && agent != "claude" {
+	if agent != "codex" && agent != "opencode" && agent != "agy" && agent != "claude" && agent != "cursor" {
 		return configError("INVALID_CONFIG_FIELD", "coder_agent must be codex, opencode or agy")
 	}
 	allowedEffortSet := stringSet(allowedEfforts)
@@ -513,11 +537,14 @@ func ValidateConfig(config map[string]any) error {
 		if agent == "claude" && !claudeModel.MatchString(model) {
 			return configError("INVALID_ROUTE_ENTRY", "route "+pythonRepr(route)+" Claude model must be a tier alias or Claude model id")
 		}
+		if agent == "cursor" && (!cursor.ValidModel(model) || effort != "none") {
+			return configError("INVALID_ROUTE_ENTRY", "route "+pythonRepr(route)+" Cursor model or effort is invalid")
+		}
 		effortText, effortOK := effort.(string)
 		if !effortOK || (agent == "codex" && !allowedEffortSet[effortText]) ||
 			(agent == "opencode" && effortText != "none" && !opencodeEffort.MatchString(effortText)) ||
 			(agent == "agy" && effortText != "low" && effortText != "medium" && effortText != "high" && effortText != "max") ||
-			(agent == "claude" && effortText != "none" && !claudeEfforts[effortText]) {
+			(agent == "claude" && effortText != "none" && !claudeEfforts[effortText]) || (agent == "cursor" && effortText != "none") {
 			return configError("INVALID_ROUTE_EFFORT", "route "+pythonRepr(route)+" names unsupported effort "+pythonRepr(effort))
 		}
 	}

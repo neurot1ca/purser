@@ -584,6 +584,48 @@ func TestPreLatestModelDispatchAndRepliesKeepRoute(t *testing.T) {
 	}
 }
 
+func TestPreCursorUnresolvedLatestModelDenied(t *testing.T) {
+	scratch := preTempDir(t)
+	repo, state := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	home := filepath.Join(scratch, "home")
+	if err := os.MkdirAll(filepath.Join(home, ".orchestrator"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"HOME": home, "USERPROFILE": home, "HOMEDRIVE": "", "HOMEPATH": "", "PURSER_STATE_DIR": state, "CLAUDE_PLUGIN_ROOT": pluginRoot, "CODEX_HOME": filepath.Join(scratch, "codex")} {
+		t.Setenv(key, value)
+	}
+	routes := ""
+	for _, name := range []string{"mechanical", "operation", "subtle", "normal", "consequential", "plan_standard", "escalated"} {
+		routes += "[coding.routes." + name + "]\nmodel = \"latest:claude-opus-high\"\neffort = \"none\"\n"
+	}
+	config := "[roles]\ncoder = \"cursor\"\n[coding]\ncoder_agent = \"cursor\"\n" + routes
+	if err := os.WriteFile(filepath.Join(home, ".orchestrator", "config.toml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	event := map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start", "tool_use_id": "cursor-unresolved", "session_id": "cursor-session", "cwd": repo,
+		"tool_input": map[string]any{"mode": "new", "cwd": repo, "prompt": "ORCH|task=cursor-unresolved|phase=implementation|route=normal|reason=new_task|basis=design:bounded change|scope=src/a.go\nImplement."},
+	}
+	got, err := Pre(event, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := mapValue(got["hookSpecificOutput"])
+	if output["permissionDecision"] != "deny" || !strings.Contains(stringValue(output["permissionDecisionReason"]), "Cursor model latest:claude-opus-high is not resolved yet") {
+		t.Fatalf("unresolved Cursor selector was not denied clearly: %#v", got)
+	}
+}
+
 func TestPreCodexStartRejectsFinishedTaskID(t *testing.T) {
 	scratch := preTempDir(t)
 	repo, runtimeRoot := filepath.Join(scratch, "repo"), filepath.Join(scratch, "state")

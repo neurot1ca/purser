@@ -38,6 +38,16 @@ func TestCursorReviewerIsUnavailableUntilInternallyEnabled(t *testing.T) {
 	}
 }
 
+func TestCursorUnknownVendorReviewerIsRejected(t *testing.T) {
+	adapter, err := ReviewerAdapter("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.ValidateModel("muse-spark-1.3-low"); err == nil {
+		t.Fatal("unknown-vendor Cursor reviewer was accepted")
+	}
+}
+
 func TestCursorReviewerConfinementAndEnvelope(t *testing.T) {
 	adapter, err := ReviewerAdapter("cursor")
 	if err != nil {

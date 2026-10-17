@@ -53,9 +53,9 @@ func ValidateSecurityValue(section, key string, value any) (bool, string) {
 		valid := false
 		switch key {
 		case "coder_agent":
-			valid = oneOf(value, "codex", "opencode", "agy", "claude")
+			valid = oneOf(value, "codex", "opencode", "agy", "claude", "cursor")
 		case "reviewer1_agent":
-			valid = oneOf(value, "codex", "opencode", "agy", "claude")
+			valid = oneOf(value, "codex", "opencode", "agy", "claude", "cursor")
 		case "reviewer1_model_requested":
 			if value == nil {
 				valid = true
@@ -63,7 +63,7 @@ func ValidateSecurityValue(section, key string, value any) (bool, string) {
 				valid = model != ""
 			}
 		case "reviewer1_effort":
-			valid = oneOf(value, "low", "medium", "high", "xhigh", "max")
+			valid = oneOf(value, "low", "medium", "high", "xhigh", "max", "none")
 		case "reviewer1_executable":
 			if executable, ok := value.(string); ok {
 				valid = isHostAbsolute(executable)
@@ -100,8 +100,8 @@ func ValidateSecurityValue(section, key string, value any) (bool, string) {
 	case "roles":
 		allowed := map[string][]string{
 			"orchestrator": {"claude-code"},
-			"coder":        {"codex", "claude", "opencode", "agy"},
-			"reviewer":     {"agy", "opencode", "codex", "claude", "none"},
+			"coder":        {"codex", "claude", "opencode", "agy", "cursor"},
+			"reviewer":     {"agy", "opencode", "codex", "claude", "cursor", "none"},
 		}
 		if choices, ok := allowed[key]; ok && valueIsOneOf(value, choices) {
 			return true, ""

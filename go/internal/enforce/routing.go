@@ -110,7 +110,9 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 		}
 	}
 	if newCall && !replyCall && !mechanicalCandidate {
-		selection.Model = models.ResolveLatest(selection.Agent, selection.Model)
+		if resolved := models.ResolveLatest(selection.Agent, selection.Model); resolved != "" {
+			selection.Model = resolved
+		}
 	}
 	return selection
 }
