@@ -25,9 +25,20 @@ func TestCursorAgentCommandUsesStdinAndResumes(t *testing.T) {
 	}
 }
 
+func TestCursorAutoModelIsPassedToAgent(t *testing.T) {
+	for _, sandbox := range []*string{nil, stringPointer("read-only")} {
+		got, err := BuildAgentCommand(AgentCommandInput{Agent: "cursor", Prefix: []string{"cursor-agent"}, Tool: "codex", Model: "auto", Sandbox: sandbox})
+		if err != nil {
+			t.Fatalf("BuildAgentCommand(auto, sandbox=%v): %v", sandbox, err)
+		}
+		if !reflect.DeepEqual(got[4:6], []string{"--model", "auto"}) {
+			t.Fatalf("Cursor argv = %#v, want --model auto", got)
+		}
+	}
+}
+
 func TestCursorRejectsUnsupportedOptions(t *testing.T) {
 	for _, in := range []AgentCommandInput{
-		{Agent: "cursor", Prefix: []string{"cursor-agent"}, Tool: "codex", Model: "auto"},
 		{Agent: "cursor", Prefix: []string{"cursor-agent"}, Tool: "codex", Model: "claude-4.5-sonnet", Sandbox: stringPointer("workspace-write")},
 		{Agent: "cursor", Prefix: []string{"cursor-agent"}, Tool: "codex", Model: "claude-4.5-sonnet", ConfigArgs: []string{`model_reasoning_effort="high"`}},
 	} {
@@ -70,11 +81,11 @@ func TestCursorEventAcceptsOnlySuccessfulTerminalOutput(t *testing.T) {
 	}
 }
 
-func TestCursorStartRejectsUnsupportedModelBeforeLaunch(t *testing.T) {
+func TestCursorStartAcceptsAutoModelBeforeLaunch(t *testing.T) {
 	args := map[string]any{"call": "00000000-0000-0000-0000-000000000001", "prompt": "work", "cwd": t.TempDir(), "model": "auto"}
 	_, failure := ValidateStart(args, StartValidationOptions{Agent: "cursor", FixedAgent: true})
-	if failure == nil {
-		t.Fatal("Cursor start accepted an automatic model")
+	if failure != nil {
+		t.Fatalf("Cursor start rejected an automatic model: %#v", failure)
 	}
 }
 

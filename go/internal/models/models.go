@@ -948,7 +948,7 @@ func parseListing(agent, output string) ([]string, error) {
 		}
 		for _, line := range strings.Split(output, "\n") {
 			parts := strings.SplitN(line, " - ", 2)
-			if len(parts) != 2 || parts[0] == "auto" || !listingID.MatchString(parts[0]) {
+			if len(parts) != 2 || !listingID.MatchString(parts[0]) {
 				continue
 			}
 			ids = appendUnique(ids, parts[0])

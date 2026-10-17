@@ -38,6 +38,22 @@ func TestCursorReviewerIsUnavailableUntilInternallyEnabled(t *testing.T) {
 	}
 }
 
+func TestCursorAutoReviewerModel(t *testing.T) {
+	adapter, err := ReviewerAdapter("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursorPath := filepath.Join(t.TempDir(), "cursor-agent")
+	config := map[string]any{"reviewer1_model_requested": "auto", "reviewer1_internal_cursor_enabled": true, "reviewer1_executable": cursorPath}
+	command, err := adapter.BuildCommand("review", reviewSchema, config, CommandOptions{WorkingDirectory: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Cursor auto reviewer command rejected: %v", err)
+	}
+	if !hasFlag(command, "--model", "auto") || !hasFlag(command, "--mode", "ask") || !hasFlag(command, "--trust", "") {
+		t.Fatalf("Cursor auto reviewer argv = %#v", command)
+	}
+}
+
 func TestCursorUnknownVendorReviewerIsRejected(t *testing.T) {
 	adapter, err := ReviewerAdapter("cursor")
 	if err != nil {

@@ -120,7 +120,7 @@ func (a reviewerAdapter) ValidateModel(model any) error {
 		}
 	case "cursor":
 		value, ok := model.(string)
-		if !ok || strings.TrimSpace(value) != value || !cursor.ValidModel(value) || cursor.VendorFamily(value) == "" {
+		if !ok || strings.TrimSpace(value) != value || !cursor.ValidModel(value) || value != "auto" && cursor.VendorFamily(value) == "" {
 			return errors.New("Cursor reviewer model must be a concrete model id with a known family")
 		}
 	}

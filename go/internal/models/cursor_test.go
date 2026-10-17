@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/models/cursor"
 	"purser-hook/internal/policy"
 )
 
@@ -51,15 +52,21 @@ func TestCursorRealListingIDsAcceptedByConfig(t *testing.T) {
 	}
 }
 
-func TestCursorAutoRejectedByConfig(t *testing.T) {
+func TestCursorAutoModelAndLatestSelector(t *testing.T) {
+	if !cursor.ValidModel("auto") || cursor.VendorFamily("auto") != "" || cursor.Family("auto") != "" {
+		t.Fatal("Cursor auto model should be valid without a vendor family")
+	}
+	if cursor.ValidModel("latest:auto") || ResolveLatest("cursor", "latest:auto") != "" {
+		t.Fatal("Cursor latest:auto should remain invalid and unresolvable")
+	}
 	root := t.TempDir()
 	userPath := filepath.Join(root, "roles.toml")
 	configPath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json")
-	if err := os.WriteFile(userPath, []byte(cursorConfigTOML("auto", "cursor", "claude-opus-5-5-high")), 0600); err != nil {
+	if err := os.WriteFile(userPath, []byte(cursorConfigTOML("auto", "cursor", "auto")), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policy.LoadCoderConfig(configPath, userPath); err == nil {
-		t.Fatal("Cursor auto model was accepted")
+	if _, err := policy.LoadCoderConfig(configPath, userPath); err != nil {
+		t.Fatalf("Cursor auto model rejected by config: %v", err)
 	}
 }
 
@@ -153,11 +160,11 @@ func TestCursorDailyDiscoveryOnlyWhenConfiguredAndFailureKeepsExactModel(t *test
 
 func TestParseCursorListingSampleIgnoresDisplayNames(t *testing.T) {
 	got, err := parseListing("cursor", cursorListingSample)
-	want := []string{"gpt-5.3-codex", "gpt-5.3-codex-high-fast", "gpt-5.6-sol-high", "claude-opus-5-5-high", "claude-opus-5-thinking-high", "claude-4.6-opus-high", "claude-sonnet-5-5-medium", "gemini-3.8-flash-high", "gemini-3.1-pro", "grok-4.7-high", "cursor-grok-4.6-high-fast", "composer-2.5", "kimi-k3-high", "muse-spark-1.3-low"}
+	want := []string{"gpt-5.3-codex", "gpt-5.3-codex-high-fast", "gpt-5.6-sol-high", "claude-opus-5-5-high", "claude-opus-5-thinking-high", "claude-4.6-opus-high", "claude-sonnet-5-5-medium", "gemini-3.8-flash-high", "gemini-3.1-pro", "grok-4.7-high", "cursor-grok-4.6-high-fast", "composer-2.5", "kimi-k3-high", "muse-spark-1.3-low", "auto"}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("parse Cursor listing = %v, %v; want %v", got, err, want)
 	}
-	if _, err := parseListing("cursor", "Available models\nauto - Automatic\n"); err == nil {
-		t.Fatal("auto-only listing accepted")
+	if got, err := parseListing("cursor", "Available models\nauto - Automatic\n"); err != nil || !reflect.DeepEqual(got, []string{"auto"}) {
+		t.Fatalf("auto-only listing = %v, %v; want [auto]", got, err)
 	}
 }

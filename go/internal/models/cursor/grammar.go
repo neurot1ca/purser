@@ -13,9 +13,10 @@ var kimiVersionToken = regexp.MustCompile(`^k[0-9]+(?:\.[0-9]+)*$`)
 // ValidModel accepts concrete Cursor listing IDs and explicit family selectors.
 func ValidModel(model string) bool {
 	if strings.HasPrefix(model, "latest:") {
-		return strings.TrimPrefix(model, "latest:") != "" && listingID.MatchString(strings.TrimPrefix(model, "latest:"))
+		family := strings.TrimPrefix(model, "latest:")
+		return family != "" && family != "auto" && listingID.MatchString(family)
 	}
-	return model != "auto" && listingID.MatchString(model)
+	return model == "auto" || listingID.MatchString(model)
 }
 
 // VendorFamily returns the known vendor family for a Cursor model or selector.
@@ -45,6 +46,9 @@ func VendorFamily(model string) string {
 
 // Family returns the model family key after removing version tokens.
 func Family(model string) string {
+	if model == "auto" {
+		return ""
+	}
 	model = strings.TrimPrefix(model, "latest:")
 	model = strings.TrimPrefix(model, "cursor-")
 	parts := strings.Split(model, "-")

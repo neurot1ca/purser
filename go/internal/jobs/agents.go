@@ -110,7 +110,7 @@ type AgentCommandInput struct {
 func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 	switch in.Agent {
 	case "cursor":
-		if in.Model == "" || strings.EqualFold(in.Model, "auto") || !cursorModel.MatchString(in.Model) {
+		if in.Model == "" || in.Model != "auto" && !cursorModel.MatchString(in.Model) {
 			return nil, errors.New("Cursor model must be a concrete model ID")
 		}
 		if in.Sandbox != nil && *in.Sandbox != "read-only" {
