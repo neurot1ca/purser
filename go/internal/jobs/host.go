@@ -444,7 +444,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 		command.Dir = args.Cwd
 		command.Stdin = strings.NewReader(prompt)
-		stream := NewEventStream(agent)
+		stream := NewEventStream(agent, args.ThreadID)
 		activity := NewLivenessActivity(job, agent, StallThreshold(dir, job), now)
 		activityMu := &sync.Mutex{}
 		command.Stdout = eventWriter{stream: stream, activity: activity, activityMu: activityMu}

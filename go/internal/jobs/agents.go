@@ -12,6 +12,7 @@ import (
 )
 
 var agyModel = regexp.MustCompile(`^gemini-[A-Za-z0-9._-]+$`)
+var cursorModel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
 // ResolveAgentPrefix mirrors Python's alternate-agent binary override rules.
 func ResolveAgentPrefix(agent string, override any) ([]string, error) {
@@ -48,7 +49,14 @@ func ResolveAgentPrefix(agent string, override any) ([]string, error) {
 		}
 		return nil, errors.New("invalid agent binary override")
 	}
-	launcher, err := exec.LookPath(agent)
+	lookup := agent
+	if agent == "cursor" {
+		lookup = "cursor-agent"
+		if runtime.GOOS == "windows" {
+			lookup += ".cmd"
+		}
+	}
+	launcher, err := exec.LookPath(lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +109,30 @@ type AgentCommandInput struct {
 // BuildAgentCommand maps the OpenCode and Antigravity bridge options to argv.
 func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 	switch in.Agent {
+	case "cursor":
+		if in.Model == "" || strings.EqualFold(in.Model, "auto") || !cursorModel.MatchString(in.Model) {
+			return nil, errors.New("Cursor model must be a concrete model ID")
+		}
+		if in.Sandbox != nil && *in.Sandbox != "read-only" {
+			return nil, errors.New("Cursor sandbox has no verified equivalent")
+		}
+		if len(in.ConfigArgs) > 1 || len(in.ConfigArgs) == 1 && in.ConfigArgs[0] != `model_reasoning_effort="none"` {
+			return nil, errors.New("unsupported Cursor config")
+		}
+		command := append([]string{}, in.Prefix...)
+		command = append(command, "--print", "--output-format", "stream-json", "--model", in.Model)
+		if in.Sandbox != nil {
+			command = append(command, "--mode", "ask")
+		} else {
+			command = append(command, "--force")
+		}
+		if in.Tool == "codex-reply" {
+			if in.ThreadID == "" {
+				return nil, errors.New("Cursor reply requires a thread ID")
+			}
+			command = append(command, "--resume", in.ThreadID)
+		}
+		return command, nil
 	case "agy":
 		if !agyModel.MatchString(in.Model) {
 			return nil, errors.New("Antigravity model must be a Gemini model from agy models")
@@ -215,6 +247,9 @@ func ValidateAgentResume(agent, recordedAgent, requestedThread, resumedIdentity 
 	}
 	if agent == "agy" && resumedIdentity != requestedThread {
 		return errors.New("Antigravity did not resume the requested conversation; start a fresh call")
+	}
+	if agent == "cursor" && resumedIdentity != requestedThread {
+		return errors.New("Cursor did not resume the requested session; start a fresh call")
 	}
 	return nil
 }

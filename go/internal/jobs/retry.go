@@ -56,6 +56,7 @@ func RetryAfterSeconds(value any) *float64 {
 // LaunchFailureEvidence classifies a launch and proves retry safety only for empty pre-work failures.
 func LaunchFailureEvidence(agent string, events []map[string]any, stderr string, started, stdout, output bool, code *int) map[string]any {
 	evidence := func(kind string, after any, proof bool) map[string]any {
+		proof = proof && agent != "cursor"
 		return map[string]any{"type": kind, "retryAfterSeconds": after, "noWorkProof": proof}
 	}
 	if !started {

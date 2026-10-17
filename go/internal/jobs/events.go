@@ -24,15 +24,20 @@ type EventResult struct {
 // EventStream consumes output as it arrives so ThreadID is available before
 // the child exits, including when a later event fails.
 type EventStream struct {
-	agent   string
-	pending []byte
-	result  EventResult
-	text    []string
-	events  []map[string]any
+	agent          string
+	expectedThread string
+	pending        []byte
+	result         EventResult
+	text           []string
+	events         []map[string]any
 }
 
-func NewEventStream(agent string) *EventStream {
-	return &EventStream{agent: agent, result: EventResult{Status: "incomplete"}}
+func NewEventStream(agent string, expectedThread ...string) *EventStream {
+	stream := &EventStream{agent: agent, result: EventResult{Status: "incomplete"}}
+	if len(expectedThread) > 0 {
+		stream.expectedThread = expectedThread[0]
+	}
+	return stream
 }
 
 // Write accepts arbitrary stdout chunks. A final unterminated JSON line is
@@ -125,6 +130,26 @@ func (s *EventStream) consume(line []byte) {
 			success = event["is_error"] != true && event["subtype"] == "success"
 			if !success {
 				failure = firstString(event["result"], "Claude completion failed")
+			}
+		}
+	case "cursor":
+		session = nonemptyString(event["session_id"])
+		if session != "" && s.result.ThreadID != "" && session != s.result.ThreadID {
+			failure = "Cursor session identity mismatch"
+		}
+		if kind == "result" {
+			message, messageOK := event["result"].(string)
+			valid := event["subtype"] == "success" && event["is_error"] == false && messageOK && session != ""
+			if s.expectedThread != "" && session != s.expectedThread {
+				failure = "Cursor did not resume the requested session"
+				valid = false
+			}
+			terminal = true
+			success = valid && failure == ""
+			if success {
+				s.text = append(s.text, message)
+			} else if failure == "" {
+				failure = "Cursor completion is missing valid terminal fields"
 			}
 		}
 	}
@@ -368,6 +393,9 @@ func (s *EventStream) Result(interrupted bool, exitCode int, stderr string) Even
 	s.result.Final = strings.Join(s.text, "")
 	if s.agent == "codex" && len(s.text) > 0 {
 		s.result.Final = s.text[len(s.text)-1]
+	}
+	if s.agent == "cursor" && s.result.Status != "success" {
+		s.result.Final = ""
 	}
 	if interrupted {
 		s.result.Final = ""

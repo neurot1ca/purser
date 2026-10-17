@@ -160,7 +160,7 @@ func pythonQuote(v any) string {
 }
 
 func validStartAgent(s string) bool {
-	return s == "codex" || s == "opencode" || s == "agy" || s == "claude"
+	return s == "codex" || s == "opencode" || s == "agy" || s == "claude" || s == "cursor"
 }
 func validStartUUID(s string) bool {
 	s = strings.ReplaceAll(s, "urn:", "")
@@ -194,6 +194,27 @@ func validateStartLaunch(a map[string]any, agent, mode, name string, opt StartVa
 		}
 	}
 	if mode != "new" {
+		if agent == "cursor" {
+			if value, exists := a["sandbox"]; exists && value != nil {
+				if _, ok := value.(string); !ok {
+					return strconv.ErrSyntax
+				}
+			}
+			cfg := a["config"]
+			if cfg == nil {
+				cfg = map[string]any{}
+			}
+			configArgs, err := FlattenConfig(cfg)
+			if err != nil {
+				return err
+			}
+			var sandbox *string
+			if value, ok := a["sandbox"].(string); ok {
+				sandbox = &value
+			}
+			_, err = BuildAgentCommand(AgentCommandInput{Agent: agent, Tool: name, Model: stringArg(a["model"]), ConfigArgs: configArgs, Sandbox: sandbox, ThreadID: stringArg(a["threadId"]), Prompt: stringArg(a["prompt"])})
+			return err
+		}
 		return nil
 	}
 	cwdText, _ := os.Getwd()
@@ -263,6 +284,14 @@ func validateStartLaunch(a map[string]any, agent, mode, name string, opt StartVa
 			sandbox = &value
 		}
 		_, err = BuildAgentCommand(AgentCommandInput{Agent: agent, Tool: name, CWD: cwdText, Model: stringArg(a["model"]), ConfigArgs: configArgs, Sandbox: sandbox, Prompt: stringArg(a["prompt"])})
+		return err
+	}
+	if agent == "cursor" {
+		var sandbox *string
+		if value, ok := a["sandbox"].(string); ok {
+			sandbox = &value
+		}
+		_, err = BuildAgentCommand(AgentCommandInput{Agent: agent, Tool: name, Model: stringArg(a["model"]), ConfigArgs: configArgs, Sandbox: sandbox, ThreadID: stringArg(a["threadId"]), Prompt: stringArg(a["prompt"])})
 		return err
 	}
 	return nil
