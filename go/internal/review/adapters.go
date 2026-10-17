@@ -232,7 +232,7 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 		if err := os.WriteFile(schemaPath, encoded, 0600); err != nil {
 			return nil, err
 		}
-		return []string{executable, "--print", "--output-format", "json", "--model", model.(string), "--mode", "ask"}, nil
+		return []string{executable, "--print", "--output-format", "json", "--model", model.(string), "--mode", "ask", "--trust"}, nil
 	}
 	return nil, fmt.Errorf("unknown reviewer adapter %q", a.provider)
 }

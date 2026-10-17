@@ -14,6 +14,15 @@ func TestCursorAgentCommandUsesStdinAndResumes(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Cursor argv = %#v, want %#v", got, want)
 	}
+
+	got, err = BuildAgentCommand(AgentCommandInput{Agent: "cursor", Prefix: []string{"cursor-agent.cmd"}, Tool: "codex", Model: "claude-4.5-sonnet", Sandbox: stringPointer("read-only")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"cursor-agent.cmd", "--print", "--output-format", "stream-json", "--model", "claude-4.5-sonnet", "--mode", "ask", "--trust"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sandboxed Cursor argv = %#v, want %#v", got, want)
+	}
 }
 
 func TestCursorRejectsUnsupportedOptions(t *testing.T) {

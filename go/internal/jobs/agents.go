@@ -122,7 +122,7 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 		command := append([]string{}, in.Prefix...)
 		command = append(command, "--print", "--output-format", "stream-json", "--model", in.Model)
 		if in.Sandbox != nil {
-			command = append(command, "--mode", "ask")
+			command = append(command, "--mode", "ask", "--trust")
 		} else {
 			command = append(command, "--force")
 		}

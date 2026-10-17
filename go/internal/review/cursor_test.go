@@ -30,7 +30,7 @@ func TestCursorReviewerIsUnavailableUntilInternallyEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(command, "\x00")
-	if !strings.Contains(joined, "--mode\x00ask") || strings.Contains(joined, "--force") || strings.Contains(joined, "--yolo") {
+	if !strings.Contains(joined, "--mode\x00ask\x00--trust") || strings.Contains(joined, "--force") || strings.Contains(joined, "--yolo") {
 		t.Fatalf("unsafe Cursor reviewer command: %#v", command)
 	}
 	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(command[0]), ".cmd") {
