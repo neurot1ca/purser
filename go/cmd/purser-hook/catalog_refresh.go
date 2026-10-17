@@ -51,6 +51,7 @@ func catalogRefreshMain(argv []string) int {
 }
 
 func refreshCatalog(state, repository string) error {
+	contextio.CheckPurserUpdate()
 	_, _, _ = discoverCatalogModels(repository)
 	config, err := loadCatalogConfig(repository)
 	if err != nil {

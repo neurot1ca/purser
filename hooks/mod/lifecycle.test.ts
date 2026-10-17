@@ -78,3 +78,23 @@ test('Codex enforcement Stop block survives the Go Stop result', async ($, on) =
   on('classic.Stop', () => ({ block: 'Codex enforcement block' }))
   expect((await $.classic.Stop({ session_id: 's3', stop_hook_active: false })).block).toBe('Codex enforcement block')
 })
+
+test('SessionStart systemMessage is toasted without entering additionalContext', async ($, on) => {
+  const toasts: string[] = []
+  on('env.get', (_$, e) => ({ value: e.name === 'OS' ? 'Windows_NT' : e.name === 'PROCESSOR_ARCHITECTURE' ? 'AMD64' : undefined }))
+  on('process.run', () => ({ value: {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: '' },
+      systemMessage: '⚓ Purser 1.3.0 is available',
+    }),
+    stderr: '',
+  } }))
+  on('ui.toast', (_$, e) => { toasts.push(e.text); return { value: undefined } })
+  on('classic.SessionStart', () => ({ additionalContext: ['prior session'] }))
+
+  const result = await $.classic.SessionStart({ session_id: 's4', cwd: '/repo', source: 'resume' })
+
+  expect(result.additionalContext).toEqual(['prior session'])
+  expect(toasts).toEqual(['⚓ Purser 1.3.0 is available'])
+})

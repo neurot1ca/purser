@@ -153,10 +153,15 @@ func SessionStart(event map[string]any) []byte {
 			additional = joinContext(additional, compactAccuracyHint(root, projectKey))
 		}
 	}
-	if additional == "" {
+	systemMessage := TakePurserUpdateNotice()
+	if additional == "" && systemMessage == "" {
 		return nil
 	}
-	output := `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ` + jsonString(additional) + `}}`
+	output := `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ` + jsonString(additional) + `}`
+	if systemMessage != "" {
+		output += `, "systemMessage": ` + jsonString(systemMessage)
+	}
+	output += `}`
 	if validSession && statePath != "" {
 		if delivered != "" {
 			markLifecycleDelivered(state)

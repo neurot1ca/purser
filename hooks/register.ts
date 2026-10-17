@@ -48,6 +48,10 @@ async function lifecycle($, e, next, name: LifecycleEvent) {
     })
     if (result.exitCode !== 0) throw new Error(`Go ${name} helper exited ${result.exitCode}`)
     mapped = mapHookOutput(name, result.stdout)
+    if (mapped.systemMessage) {
+      try { await $.ui.toast(mapped.systemMessage) }
+      catch { /* Toast delivery must not discard the mapped lifecycle result. */ }
+    }
   } catch {
     const key = e.session_id || '<unknown>'
     if (!lifecycleReported.has(key)) {

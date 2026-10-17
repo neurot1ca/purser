@@ -198,7 +198,7 @@ It runs a bundled Go binary, `purser-hook`, built for your operating system and 
 
 It reads the repository you work in, the Claude Code hook events of your session (tool calls, prompts, session and tool-use IDs), the session's usage and cost figures that it shows in its status band, and its own state files.
 
-It sends each worker's brief, and whatever repository content that worker reads, to the worker's provider, under that provider's terms. Its measurements stay on your machine. Its only network request of its own downloads the public model list from models.dev, which it uses to rank models.
+It sends each worker's brief, and whatever repository content that worker reads, to the worker's provider, under that provider's terms. Its measurements stay on your machine. It makes two network requests of its own: it downloads the public model list from models.dev to rank models, and once a day it checks GitHub for a newer Purser release (no data sent; set `PURSER_NO_UPDATE_CHECK=1` to turn this off).
 
 It writes job records, plans, handoff notes, logs and measurements under `~/.claude/purser/`, or under `PURSER_STATE_DIR` when you set it. Job worktrees live there too; Git records each one in your repository's `.git` folder. `/purser:init` saves the project's Purser settings to `.orchestrator/profile.toml` in your repository. A worker's patch reaches your checkout only after review and acceptance, and Purser never commits or pushes. If you name an Obsidian vault, Purser also writes telemetry notes there.
 

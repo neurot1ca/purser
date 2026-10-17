@@ -3,6 +3,7 @@ export type LifecycleEvent = 'UserPromptSubmit' | 'SessionStart' | 'PreCompact' 
 export function mapHookOutput(event: LifecycleEvent, stdout: string): {
   additionalContext?: string[]
   block?: string
+  systemMessage?: string
 } {
   if (!stdout.trim()) return {}
   const output = JSON.parse(stdout)
@@ -12,8 +13,11 @@ export function mapHookOutput(event: LifecycleEvent, stdout: string): {
   if ((event === 'UserPromptSubmit' || event === 'SessionStart') &&
       output?.hookSpecificOutput?.hookEventName === event &&
       typeof output.hookSpecificOutput.additionalContext === 'string' &&
-      output.hookSpecificOutput.additionalContext) {
-    return { additionalContext: [output.hookSpecificOutput.additionalContext] }
+      (output.hookSpecificOutput.additionalContext || (typeof output.systemMessage === 'string' && output.systemMessage))) {
+    return {
+      ...(output.hookSpecificOutput.additionalContext ? { additionalContext: [output.hookSpecificOutput.additionalContext] } : {}),
+      ...(typeof output.systemMessage === 'string' && output.systemMessage ? { systemMessage: output.systemMessage } : {}),
+    }
   }
   throw new Error(`invalid Go ${event} output`)
 }
