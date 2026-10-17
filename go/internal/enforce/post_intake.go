@@ -55,7 +55,7 @@ func postIntake(event map[string]any, root string) (intake postIntakeResult, ear
 	if served := decodedCodexObjects(event["tool_response"]); len(served) > 0 {
 		first := served[0]
 		agent, model := stringValue(first["servedAgent"]), stringValue(first["servedModel"])
-		if (agent == "codex" || agent == "opencode" || agent == "agy") && model != "" {
+		if (agent == "codex" || agent == "opencode" || agent == "agy" || agent == "cursor") && model != "" {
 			pending["agent"], pending["model"], pending["attempted_models"] = agent, model, first["attemptedModels"]
 			if path, pathErr := pendingPath(root, event); pathErr == nil {
 				if data, marshalErr := canonicalJSON(pending); marshalErr == nil {

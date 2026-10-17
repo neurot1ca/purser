@@ -59,7 +59,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			return nil, err
 		}
 	}
-	if agent := stringValue(value["servedAgent"]); agent == "codex" || agent == "opencode" || agent == "agy" {
+	if agent := stringValue(value["servedAgent"]); agent == "codex" || agent == "opencode" || agent == "agy" || agent == "cursor" {
 		if model := stringValue(value["servedModel"]); model != "" {
 			pending["agent"], pending["model"], pending["attempted_models"] = agent, model, value["attemptedModels"]
 			if err := writeAsyncObject(pendingPathForAsync(root, original), pending); err != nil {

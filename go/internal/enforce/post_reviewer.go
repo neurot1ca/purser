@@ -15,6 +15,8 @@ import (
 	"purser-hook/internal/review"
 )
 
+const cursorAgent = "cursor"
+
 type postReviewerAttempt struct {
 	Agent   string `json:"agent"`
 	Model   string `json:"model"`
@@ -87,7 +89,11 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_ADAPTER_UNREGISTERED"})
 			continue
 		}
-		if circuitDir != "" && time.Until(deadline) > 0 && hasEligibleReviewer(candidates[index+1:]) &&
+		if !independentReviewer(stringValue(pending["agent"]), stringValue(pending["model"]), candidate) {
+			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "SKIPPED_NOT_INDEPENDENT", Reason: "REVIEWER_UNAVAILABLE"})
+			continue
+		}
+		if circuitDir != "" && time.Until(deadline) > 0 && hasEligibleReviewer(candidates[index+1:], stringValue(pending["agent"]), stringValue(pending["model"])) &&
 			review.ReviewerCircuitOpen(circuitDir, candidate.Agent, candidate.Model, time.Now()) {
 			attempts = append(attempts, postReviewerAttempt{Agent: candidate.Agent, Model: candidate.Model, Outcome: "UNAVAILABLE", Reason: "REVIEWER_CIRCUIT_OPEN"})
 			continue
@@ -152,10 +158,13 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 			lastAttempt = attempts[len(attempts)-1]
 		}
 		reason := "REVIEWER1_UNAVAILABLE"
-		if lastAttempt.Outcome == "SKIPPED_ADAPTER_UNREGISTERED" {
+		if lastAttempt.Reason == "REVIEWER_UNAVAILABLE" {
+			reason = "REVIEWER_UNAVAILABLE"
+		} else if lastAttempt.Outcome == "SKIPPED_ADAPTER_UNREGISTERED" {
 			reason = "REVIEWER_ADAPTER_UNAVAILABLE"
 		}
 		bundle["reviewer1_skipped_reason"] = reason
+		bundle["claude_review_mode"] = review.Full
 		last = review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{
 			"review_status": "UNAVAILABLE", "provider": lastAttempt.Agent,
 			"reviewer1_model_requested": lastAttempt.Model, "result": "REVIEWER1_UNAVAILABLE",
@@ -186,9 +195,31 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	return last, nil
 }
 
-func hasEligibleReviewer(candidates []profile.ReviewerCandidate) bool {
+func independentReviewer(coderAgent, coderModel string, candidate profile.ReviewerCandidate) bool {
+	if coderAgent != cursorAgent && candidate.Agent != cursorAgent {
+		return true
+	}
+	var coderFamily, reviewerFamily string
+	if coderAgent == cursorAgent {
+		if adapter, err := review.ReviewerAdapter("cursor"); err == nil {
+			coderFamily = adapter.Family(coderModel)
+		}
+	} else {
+		coderFamily = vendorFamily(modelFamily(coderModel))
+	}
+	if candidate.Agent == cursorAgent {
+		if adapter, err := review.ReviewerAdapter("cursor"); err == nil {
+			reviewerFamily = adapter.Family(candidate.Model)
+		}
+	} else if adapter, err := review.ReviewerAdapter(candidate.Agent); err == nil {
+		reviewerFamily = vendorFamily(adapter.Family(candidate.Model))
+	}
+	return coderFamily != "" && reviewerFamily != "" && coderFamily != reviewerFamily
+}
+
+func hasEligibleReviewer(candidates []profile.ReviewerCandidate, coderAgent, coderModel string) bool {
 	for _, candidate := range candidates {
-		if postReviewerAdapters[candidate.Agent] {
+		if postReviewerAdapters[candidate.Agent] && independentReviewer(coderAgent, coderModel, candidate) {
 			return true
 		}
 	}
@@ -234,7 +265,7 @@ func firstNonempty(values ...string) string {
 	return ""
 }
 
-var postReviewerAdapters = map[string]bool{"agy": true, "opencode": true, "codex": true, "claude": true}
+var postReviewerAdapters = map[string]bool{"agy": true, "opencode": true, "codex": true, "claude": true, "cursor": true}
 
 var postReviewerBridge = review.RunBridge
 

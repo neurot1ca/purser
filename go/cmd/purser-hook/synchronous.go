@@ -37,13 +37,13 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	if value, exists := args["agent"]; exists {
 		var ok bool
 		agent, ok = value.(string)
-		if !ok || (agent != "codex" && agent != "opencode" && agent != "agy") {
-			return legacyError(nil, "agent must be codex, opencode or agy"), nil
+		if !ok || (agent != "codex" && agent != "opencode" && agent != "agy" && agent != "cursor") {
+			return legacyError(nil, "agent must be codex, opencode, agy or cursor"), nil
 		}
 	} else if configured := os.Getenv("PURSER_AGENT"); configured != "" {
 		agent = configured
-		if agent != "codex" && agent != "opencode" && agent != "agy" {
-			return legacyError(nil, "agent must be codex, opencode or agy"), nil
+		if agent != "codex" && agent != "opencode" && agent != "agy" && agent != "cursor" {
+			return legacyError(nil, "agent must be codex, opencode, agy or cursor"), nil
 		}
 	}
 	prompt, ok := args["prompt"].(string)
@@ -213,7 +213,7 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	}
 	command := proc.Hide(exec.Command(commandArgs[0], commandArgs[1:]...))
 	command.Dir = cwd
-	if agent == "codex" {
+	if agent == "codex" || agent == "cursor" {
 		command.Stdin = strings.NewReader(prompt)
 	}
 	var input, inputWriter *os.File
@@ -308,15 +308,19 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	}
 	exitCode := supervised.RootExit
 	eventResult := stream.Result(false, exitCode, tail.String())
-	if agent == "agy" && name == "codex-reply" && eventResult.ThreadID != threadID {
-		eventResult.Failure = strings.TrimSpace(eventResult.Failure + "\nAntigravity did not resume the requested conversation; start a fresh call")
+	if (agent == "agy" || agent == "cursor") && name == "codex-reply" && eventResult.ThreadID != threadID {
+		message := "Antigravity did not resume the requested conversation; start a fresh call"
+		if agent == "cursor" {
+			message = "Cursor did not resume the requested conversation; start a fresh call"
+		}
+		eventResult.Failure = strings.TrimSpace(eventResult.Failure + "\n" + message)
 	}
 	completed := eventResult.Status == "success"
 	failed := eventResult.Failure != ""
-	if exitCode != 0 || eventResult.ThreadID == "" || failed || ((agent == "opencode" || agent == "agy") && !completed) {
+	if exitCode != 0 || eventResult.ThreadID == "" || failed || ((agent == "opencode" || agent == "agy" || agent == "cursor") && !completed) {
 		detail := eventResult.Failure
 		if detail == "" {
-			if (agent == "opencode" || agent == "agy") && !completed {
+			if (agent == "opencode" || agent == "agy" || agent == "cursor") && !completed {
 				detail = "turn completion event missing"
 			} else if tail.String() != "" {
 				detail = tail.String()

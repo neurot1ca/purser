@@ -81,6 +81,38 @@ func TestRunPostReviewerSameFamilyAndDeadline(t *testing.T) {
 	}
 }
 
+func TestRunPostReviewerRejectsCursorSameOrUnknownFamilyBeforeLaunch(t *testing.T) {
+	tests := []struct {
+		name, coder, model, reviewer, reviewerModel string
+	}{
+		{"cursor coder same family", "cursor", "gpt-5.6-sol-high", "codex", "gpt-6-luna"},
+		{"cursor coder unknown family", "cursor", "opaque-model", "codex", "gpt-6-luna"},
+		{"cursor reviewer same family", "codex", "gpt-6-luna", "cursor", "gpt-5.6-sol-high"},
+		{"cursor reviewer unknown family", "codex", "opaque-model", "cursor", "claude-4.5-sonnet"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			oldBridge := postReviewerBridge
+			t.Cleanup(func() { postReviewerBridge = oldBridge })
+			calls := 0
+			postReviewerBridge = func(context.Context, string, map[string]any, time.Duration) (review.BridgeOutcome, error) {
+				calls++
+				return review.BridgeOutcome{Outcome: "completed"}, nil
+			}
+			bundle := map[string]any{"findings": []any{}, "claude_review_mode": review.Full}
+			outcome, err := runPostReviewer("", "", map[string]any{"agent": tc.coder, "model": tc.model}, bundle,
+				postProfile{ReviewerCandidates: []profile.ReviewerCandidate{{Agent: tc.reviewer, Model: tc.reviewerModel}}},
+				map[string]any{}, nil, nil, time.Now(), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 0 || outcome.Outcome != "unavailable" || bundle["reviewer1_skipped_reason"] != "REVIEWER_UNAVAILABLE" || bundle["claude_review_mode"] != review.Full {
+				t.Fatalf("family rejection launched reviewer or failed to require FULL review: calls=%d outcome=%#v bundle=%#v", calls, outcome, bundle)
+			}
+		})
+	}
+}
+
 func TestRunPostReviewerAllowsSameVendorCodexReviewer(t *testing.T) {
 	oldBridge := postReviewerBridge
 	t.Cleanup(func() { postReviewerBridge = oldBridge })
@@ -258,6 +290,39 @@ func TestPostReviewerCircuitRunsWhenLastReviewer(t *testing.T) {
 		map[string]any{}, nil, nil, time.Now(), time.Minute)
 	if err != nil || !called {
 		t.Fatalf("last reviewer called=%t err=%v, want it to run", called, err)
+	}
+}
+
+func TestPostReviewerCursorCircuitKeepsLastIndependentReviewer(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	stateRoot, repoRoot := t.TempDir(), t.TempDir()
+	projectKey := contextio.ProjectKey(repoRoot)
+	circuitDir := filepath.Join(stateRoot, "projects", projectKey, "telemetry")
+	for i := 0; i < 3; i++ {
+		review.RecordReviewerCircuitOutcome(circuitDir, "agy", "gemini-3.8-flash-high", "REVIEWER_TIMEOUT", time.Now())
+	}
+	var agents []string
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		agents = append(agents, stringValue(args["reviewer_agent"]))
+		return review.BridgeOutcome{Outcome: "unavailable"}, nil
+	}
+	bundle := map[string]any{}
+	_, err := runPostReviewer("", stateRoot,
+		map[string]any{"agent": "cursor", "model": "gpt-5.6-sol-high", "repo_root": repoRoot, "project_key": projectKey},
+		bundle, postProfile{ReviewerCandidates: []profile.ReviewerCandidate{
+			{Agent: "agy", Model: "gemini-3.8-flash-high"},
+			{Agent: "codex", Model: "gpt-6-luna"},
+			{Agent: "cursor", Model: "opaque-model"},
+		}}, map[string]any{}, nil, nil, time.Now(), time.Second)
+	if err != nil || len(agents) != 1 || agents[0] != "agy" {
+		t.Fatalf("last independent reviewer skipped: agents=%v err=%v", agents, err)
+	}
+	attempts := bundle["reviewer1_attempts"].([]postReviewerAttempt)
+	for _, attempt := range attempts[1:] {
+		if attempt.Outcome != "SKIPPED_NOT_INDEPENDENT" || attempt.Reason != "REVIEWER_UNAVAILABLE" {
+			t.Fatalf("family rejection mislabeled: %#v", attempts)
+		}
 	}
 }
 
