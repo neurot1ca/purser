@@ -32,6 +32,8 @@ const (
 	observationYAMLMarkerPrefix = "# orchestrator projection v1 sha256="
 )
 
+var errObservationRunNoteUndated = errors.New("run note has no anchor time")
+
 var observationMarker = regexp.MustCompile(`(?m)^(?:<!-- orchestrator projection v1 sha256=([0-9a-f]{64}) -->|# orchestrator projection v1 sha256=([0-9a-f]{64}))\n`)
 
 // observationProjectionSettings mirrors telemetry._projection_settings and
@@ -161,6 +163,9 @@ func observationWithMarker(prefix, body string, yamlComment bool) string {
 // renderObservationRunNote mirrors obsidian_projection.render_run_note and
 // project_task's path calculation. It renders only; callers own all IO.
 func renderObservationRunNote(aggregate map[string]any, vaultRoot string) (string, string, error) {
+	if aggregate["started_at"] == nil && aggregate["ended_at"] == nil {
+		return "", "", errObservationRunNoteUndated
+	}
 	p, err := prepareObservationRun(aggregate)
 	if err != nil {
 		return "", "", err
@@ -171,10 +176,11 @@ func renderObservationRunNote(aggregate map[string]any, vaultRoot string) (strin
 	if anchor == nil {
 		anchor = p.ended
 	}
-	if anchor != nil {
-		local := anchor.In(zone)
-		year, month = fmt.Sprintf("%04d", local.Year()), fmt.Sprintf("%02d", local.Month())
+	if anchor == nil {
+		return "", "", errObservationRunNoteUndated
 	}
+	local := anchor.In(zone)
+	year, month = fmt.Sprintf("%04d", local.Year()), fmt.Sprintf("%02d", local.Month())
 	path, ok := observationSafeRunPath(vaultRoot, year, month, p.taskID)
 	if !ok {
 		return "", "", errors.New("run note path escaped the Runs tree")
@@ -182,6 +188,49 @@ func renderObservationRunNote(aggregate map[string]any, vaultRoot string) (strin
 	fm := observationRunFrontmatter(p)
 	body := observationRunBody(p)
 	return observationWithMarker(fm, body, false), path, nil
+}
+
+func cleanupObservationUndatedRunNotes(vaultRoot string) {
+	placeholder, ok := observationSafeRunPath(vaultRoot, "0000", "00", "cleanup")
+	if !ok {
+		return
+	}
+	dir := filepath.Dir(placeholder)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		taskID := strings.TrimSuffix(name, ".md")
+		candidate, safe := observationSafeRunPath(vaultRoot, "0000", "00", taskID)
+		if !safe {
+			continue
+		}
+		content, readErr := os.ReadFile(candidate)
+		if readErr == nil && bytes.Contains(content, []byte(observationMarkerPrefix)) {
+			_ = os.Remove(candidate)
+		}
+	}
+	entries, err = os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		return
+	}
+	if !observationWithin(filepath.Join(vaultRoot, "Runs"), dir) {
+		return
+	}
+	_ = os.Remove(dir)
+	parent := filepath.Dir(dir)
+	if !observationWithin(filepath.Join(vaultRoot, "Runs"), parent) {
+		return
+	}
+	entries, err = os.ReadDir(parent)
+	if err == nil && len(entries) == 0 {
+		_ = os.Remove(parent)
+	}
 }
 
 // renderObservationHealthNote mirrors project_health's read and render path.
@@ -1741,8 +1790,14 @@ func projectObservationTask(root, taskID, projectKey, configPath string, envVaul
 		_ = decoder.Decode(&aggregate)
 	}
 	content, path, err := renderObservationRunNote(aggregate, vault)
+	if errors.Is(err, errObservationRunNoteUndated) {
+		return
+	}
 	if err == nil {
 		err = atomicObservationNote(path, content)
+		if err == nil {
+			cleanupObservationUndatedRunNotes(vault)
+		}
 	}
 	var now string
 	if err == nil {

@@ -3,6 +3,7 @@ package enforce
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1103,6 +1104,12 @@ func TestObservationP56RunNoteRendering(t *testing.T) {
 				t.Fatal(err)
 			}
 			content, path, renderErr := renderObservationRunNote(tc.Aggregate, vault)
+			if errors.Is(renderErr, errObservationRunNoteUndated) {
+				if content != "" || path != "" {
+					t.Fatalf("undated aggregate returned content or path: %q %q", content, path)
+				}
+				return
+			}
 			if tc.Invalid {
 				if renderErr == nil {
 					t.Fatal("invalid aggregate rendered")
@@ -1343,6 +1350,119 @@ func TestObservationP58ProjectionWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestObservationRunNoteProjectionSkipsUndatedAggregate(t *testing.T) {
+	caseRoot := t.TempDir()
+	state := filepath.Join(caseRoot, "state")
+	root := filepath.Join(state, "telemetry")
+	vault := filepath.Join(caseRoot, "vault")
+	projectTasks := filepath.Join(state, "projects", "project", "telemetry", "tasks")
+	if err := os.MkdirAll(projectTasks, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	healthPath := filepath.Join(root, "telemetry_health.json")
+	if err := os.WriteFile(healthPath, []byte(`{"schema_version":1,"status":"OK","failure_count":0,"last_error_code":null}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(caseRoot, "config.json")
+	config, _ := json.Marshal(map[string]any{"obsidian_projection": map[string]any{"enabled": true, "vault_root": vault}})
+	if err := os.WriteFile(configPath, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	projectObservationTask(root, "task", "project", configPath, nil)
+	if _, err := os.Stat(filepath.Join(vault, "Runs", "0000", "00", "task.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("undated run note exists or could not be checked: %v", err)
+	}
+	data, err := os.ReadFile(healthPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	if health["status"] != "OK" || health["failure_count"] != float64(0) {
+		t.Fatalf("health changed after undated aggregate: %#v", health)
+	}
+}
+
+func TestObservationDatedRunNoteCleansMarkedUndatedNotes(t *testing.T) {
+	caseRoot := t.TempDir()
+	state := filepath.Join(caseRoot, "state")
+	root := filepath.Join(state, "telemetry")
+	vault := filepath.Join(caseRoot, "vault")
+	projectTasks := filepath.Join(state, "projects", "project", "telemetry", "tasks")
+	if err := os.MkdirAll(projectTasks, 0700); err != nil {
+		t.Fatal(err)
+	}
+	aggregate, _ := json.Marshal(map[string]any{"task_id": "task", "started_at": "2025-04-02T10:00:00Z", "ended_at": "2025-04-02T10:01:00Z", "status": "VERIFIED"})
+	if err := os.WriteFile(filepath.Join(projectTasks, "task.json"), aggregate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(caseRoot, "config.json")
+	config, _ := json.Marshal(map[string]any{"obsidian_projection": map[string]any{"enabled": true, "vault_root": vault}})
+	if err := os.WriteFile(configPath, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	undatedDir := filepath.Join(vault, "Runs", "0000", "00")
+	if err := os.MkdirAll(undatedDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	markedPath := filepath.Join(undatedDir, "orphan.md")
+	if err := os.WriteFile(markedPath, []byte(observationWithMarker("", "generated", false)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	userPath := filepath.Join(undatedDir, "user.md")
+	if err := os.WriteFile(userPath, []byte("user note"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	projectObservationTask(root, "task", "project", configPath, nil)
+	if _, err := os.Stat(markedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("marked orphan remains: %v", err)
+	}
+	if got, err := os.ReadFile(userPath); err != nil || string(got) != "user note" {
+		t.Fatalf("user note changed or missing: %q, %v", got, err)
+	}
+	if info, err := os.Stat(undatedDir); err != nil || !info.IsDir() {
+		t.Fatalf("undated directory should remain for unmarked note: %v", err)
+	}
+}
+
+func TestObservationDatedRunNoteRemovesEmptyUndatedDirectories(t *testing.T) {
+	caseRoot := t.TempDir()
+	state := filepath.Join(caseRoot, "state")
+	root := filepath.Join(state, "telemetry")
+	vault := filepath.Join(caseRoot, "vault")
+	projectTasks := filepath.Join(state, "projects", "project", "telemetry", "tasks")
+	if err := os.MkdirAll(projectTasks, 0700); err != nil {
+		t.Fatal(err)
+	}
+	aggregate, _ := json.Marshal(map[string]any{"task_id": "task", "started_at": "2025-04-02T10:00:00Z", "ended_at": "2025-04-02T10:01:00Z", "status": "VERIFIED"})
+	if err := os.WriteFile(filepath.Join(projectTasks, "task.json"), aggregate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(caseRoot, "config.json")
+	config, _ := json.Marshal(map[string]any{"obsidian_projection": map[string]any{"enabled": true, "vault_root": vault}})
+	if err := os.WriteFile(configPath, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	undatedDir := filepath.Join(vault, "Runs", "0000", "00")
+	if err := os.MkdirAll(undatedDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(undatedDir, "orphan.md"), []byte(observationWithMarker("", "generated", false)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	projectObservationTask(root, "task", "project", configPath, nil)
+	for _, path := range []string{undatedDir, filepath.Dir(undatedDir)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("empty undated directory remains at %s: %v", path, err)
+		}
 	}
 }
 
